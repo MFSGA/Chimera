@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "run-p -r tauri:dev",
+    "dev": "run-p -r  web:devtools tauri:dev",
     "tauri:dev": "tauri dev -c ./backend/tauri/tauri.conf.json",
     "web:devtools": "pnpm react-devtools",
     "web:dev": "pnpm --filter=chimera-ui dev",
