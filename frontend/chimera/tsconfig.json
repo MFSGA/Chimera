@@ -20,6 +20,6 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  "include": ["frontend/chimera/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

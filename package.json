@@ -4,29 +4,23 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "cross-env RUST_BACKTRACE=1 tauri dev",
-    "web:dev": "vite",
+    "dev": "run-p -r tauri:dev",
+    "tauri:dev": "tauri dev -c ./backend/tauri/tauri.conf.json",
+    "web:devtools": "pnpm react-devtools",
+    "web:dev": "pnpm --filter=chimera-ui dev",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
-  "dependencies": {
-    "@tauri-apps/api": "^2",
-    "@tauri-apps/plugin-opener": "^2",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "cross-env": "^7.0.3",
-    "@tauri-apps/cli": "^2",
-    "@types/react": "^18.3.1",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.4",
-    "typescript": "~5.6.2",
-    "vite": "^6.0.3"
+    "@tauri-apps/cli": "2.3.1",
+    "npm-run-all2": "7.0.2",
+    "react-devtools": "6.1.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
+      "electron",
       "esbuild"
     ]
   }

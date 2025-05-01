@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.chimera.app",
   "build": {
-    "beforeDevCommand": "pnpm web:dev",
+    "beforeDevCommand": "pnpm run web:dev",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
