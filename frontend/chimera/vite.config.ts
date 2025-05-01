@@ -15,20 +15,38 @@ const devtools = () => {
   }
 }
 
+const IS_NIGHTLY = process.env.NIGHTLY?.toLowerCase() === 'true'
+
 // https://vitejs.dev/config/
 export default defineConfig(async ({ command }) => {
   const isDev = command === 'serve'
 
   const config = {
-    root: "src",
+    // root: "src",
     server: { port: 3000 },
 
-    plugins: [react(), isDev && devtools(),],
+    plugins: [react({}), isDev && devtools(),],
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
     //
     // 1. prevent vite from obscuring rust errors
     clearScreen: false,
+
+    build: {
+      outDir: '../../backend/tauri/tmp/dist',
+      rollupOptions: {
+        output: {
+         /*  manualChunks: {
+            jsonWorker: [`monaco-editor/esm/vs/language/json/json.worker`],
+            tsWorker: [`monaco-editor/esm/vs/language/typescript/ts.worker`],
+            editorWorker: [`monaco-editor/esm/vs/editor/editor.worker`],
+            yamlWorker: [`monaco-yaml/yaml.worker`],
+          }, */
+        },
+      },
+      emptyOutDir: true,
+      sourcemap: isDev || IS_NIGHTLY ? 'inline' : false,
+    },
   } satisfies UserConfig
   return config
 });
