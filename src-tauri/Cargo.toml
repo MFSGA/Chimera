@@ -2,7 +2,7 @@
 name = "chimera"
 version = "0.1.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["chimera_rust@proton.me"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
