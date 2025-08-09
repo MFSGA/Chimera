@@ -15,8 +15,7 @@ function IndexPage() {
       to:
         memorizedNavigate && memorizedNavigate !== '/'
           ? memorizedNavigate
-          // todo: change the path
-          : '/',
+          : '/dashboard',
     })
   }, [memorizedNavigate, navigate])
   return null
