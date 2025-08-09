@@ -1,5 +1,7 @@
 import { defineConfig, UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
+
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -25,7 +27,8 @@ export default defineConfig(async ({ command }) => {
     // root: "src",
     server: { port: 3000 },
 
-    plugins: [react({}), isDev && devtools(),],
+    plugins: [react({}), isDev && devtools(), TanStackRouterVite(),
+    ],
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
     //
@@ -36,12 +39,12 @@ export default defineConfig(async ({ command }) => {
       outDir: '../../backend/tauri/tmp/dist',
       rollupOptions: {
         output: {
-         /*  manualChunks: {
-            jsonWorker: [`monaco-editor/esm/vs/language/json/json.worker`],
-            tsWorker: [`monaco-editor/esm/vs/language/typescript/ts.worker`],
-            editorWorker: [`monaco-editor/esm/vs/editor/editor.worker`],
-            yamlWorker: [`monaco-yaml/yaml.worker`],
-          }, */
+          /*  manualChunks: {
+             jsonWorker: [`monaco-editor/esm/vs/language/json/json.worker`],
+             tsWorker: [`monaco-editor/esm/vs/language/typescript/ts.worker`],
+             editorWorker: [`monaco-editor/esm/vs/editor/editor.worker`],
+             yamlWorker: [`monaco-yaml/yaml.worker`],
+           }, */
         },
       },
       emptyOutDir: true,
