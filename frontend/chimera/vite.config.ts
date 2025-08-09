@@ -1,6 +1,7 @@
 import { defineConfig, UserConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
+import path from 'node:path'
 
 
 const host = process.env.TAURI_DEV_HOST;
@@ -29,6 +30,13 @@ export default defineConfig(async ({ command }) => {
 
     plugins: [TanStackRouterVite(), react({}), isDev && devtools(),
     ],
+
+    resolve: {
+      alias: {
+        // todo: will deleete
+        '@': path.resolve(__dirname, './src'),
+      },
+    },
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
     //

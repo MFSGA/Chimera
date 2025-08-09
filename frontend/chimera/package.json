@@ -22,7 +22,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "cross-env": "^7.0.3",
     "typescript": "~5.6.2",
-    "vite": "^6.0.3",
+    "vite": "7.1.1",
     "@emotion/babel-plugin": "11.13.5",
     "@emotion/react": "11.14.0",
     "@tanstack/router-plugin": "1.114.29",
