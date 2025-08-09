@@ -11,37 +11,60 @@
 // Import Routes
 
 import { Route as rootRoute } from './pages/__root'
+import { Route as LayoutImport } from './pages/_layout'
 
 // Create/Update Routes
+
+const LayoutRoute = LayoutImport.update({
+  id: '/_layout',
+  getParentRoute: () => rootRoute,
+} as any)
 
 // Populate the FileRoutesByPath interface
 
 declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {}
+  interface FileRoutesByPath {
+    '/_layout': {
+      id: '/_layout'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof LayoutImport
+      parentRoute: typeof rootRoute
+    }
+  }
 }
 
 // Create and export the route tree
 
-export interface FileRoutesByFullPath {}
+export interface FileRoutesByFullPath {
+  '': typeof LayoutRoute
+}
 
-export interface FileRoutesByTo {}
+export interface FileRoutesByTo {
+  '': typeof LayoutRoute
+}
 
 export interface FileRoutesById {
   __root__: typeof rootRoute
+  '/_layout': typeof LayoutRoute
 }
 
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: never
+  fullPaths: ''
   fileRoutesByTo: FileRoutesByTo
-  to: never
-  id: '__root__'
+  to: ''
+  id: '__root__' | '/_layout'
   fileRoutesById: FileRoutesById
 }
 
-export interface RootRouteChildren {}
+export interface RootRouteChildren {
+  LayoutRoute: typeof LayoutRoute
+}
 
-const rootRouteChildren: RootRouteChildren = {}
+const rootRouteChildren: RootRouteChildren = {
+  LayoutRoute: LayoutRoute,
+}
 
 export const routeTree = rootRoute
   ._addFileChildren(rootRouteChildren)
@@ -52,7 +75,12 @@ export const routeTree = rootRoute
   "routes": {
     "__root__": {
       "filePath": "__root.tsx",
-      "children": []
+      "children": [
+        "/_layout"
+      ]
+    },
+    "/_layout": {
+      "filePath": "_layout.tsx"
     }
   }
 }

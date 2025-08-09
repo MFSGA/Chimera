@@ -1,25 +1,48 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "baseUrl": ".",
+    "target": "ESNext",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ESNext"
+    ],
+    "allowJs": false,
     "skipLibCheck": true,
-
-    /* Bundler mode */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true,
     "jsx": "preserve",
-
-    /* Linting */
-    "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "composite": true,
+    "paths": {
+      "@root/*": [
+        "../../*"
+      ],
+      "@/*": [
+        "./src/*"
+      ],
+      "~/*": [
+        "./*"
+      ],
+    },
+    "jsxImportSource": "@emotion/react",
+    "customConditions": [
+      "source"
+    ]
   },
-  "include": ["frontend/chimera/src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": [
+    "src",
+    "./auto-imports.d.ts"
+  ],
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    },
+  ],
 }

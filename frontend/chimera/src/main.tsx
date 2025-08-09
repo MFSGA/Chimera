@@ -1,8 +1,10 @@
-import React from "react";
+// import React from "react";
 import ReactDOM, { createRoot } from "react-dom/client";
 // import App from "./App";
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from './routeTree.gen'
+import React from "react";
+// import React from "react";
 
 const container = document.getElementById("root")!;
 
