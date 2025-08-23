@@ -1,5 +1,5 @@
 import { createRootRoute } from "@tanstack/react-router";
-import React from "react";
+import { check } from "@tauri-apps/plugin-updater";
 
 export const Route = createRootRoute({
   component: App,
@@ -7,7 +7,22 @@ export const Route = createRootRoute({
   // pendingComponent: Pending,
 });
 
+async function getVersion() {
+  const update = await check();
+  console.log(update);
+  if (update) {
+    console.log("Update available:");
+
+    // await update.downloadAndInstall();
+    // await relaunch();
+  }
+}
+
 export default function App() {
-  const [count, setCount] = React.useState(0);
-  return <div>App is {count}</div>;
+  return (
+    <div>
+      <h1>Hello World</h1>
+      <div onClick={getVersion}>get version</div>
+    </div>
+  );
 }
