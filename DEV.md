@@ -32,6 +32,19 @@ file name is static -- update.json
 
 ### test the settings
 
+## front end routes
+### use the `tanstack` router
+"@tanstack/router-plugin": "1.114.29",
+"@tanstack/react-router": "1.114.29"
+
+pay attention to the `Component` -- `<Outlet />`
+### use the dev tools for router
+`"@tanstack/react-router-devtools": "1.131.35"`
+
+### important files
+`__root.tsx`: rendered root.
+`_layout.tsx`: render layout.
+
 # problems
 ## `[vite] Internal server error: Failed to resolve import "@/store" from "src/pages/index.tsx?tsr-split=component". Does the file exist?`
 set the `alias` in vite.config.ts

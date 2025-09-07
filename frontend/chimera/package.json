@@ -27,6 +27,7 @@
     "@emotion/babel-plugin": "11.13.5",
     "@emotion/react": "11.14.0",
     "@tanstack/router-plugin": "1.114.29",
-    "@tanstack/react-router": "1.114.29"
+    "@tanstack/react-router": "1.114.29",
+    "@tanstack/react-router-devtools": "1.131.35"
   }
 }
