@@ -11,13 +11,24 @@
     "build": "tauri build",
     "web:build": "pnpm --filter=chimera-ui build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "lint": "run-s lint:*",
+    "lint:eslint": "eslint --cache .",
+    "lint:fix": "eslint --cache --fix ."
   },
   "dependencies": {},
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",
     "npm-run-all2": "7.0.2",
-    "react-devtools": "6.1.1"
+    "react-devtools": "6.1.1",
+    "eslint": "^9.35.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.4",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "@eslint/js": "^9.35.0",
+    "@typescript-eslint/eslint-plugin": "^8.43.0",
+    "@typescript-eslint/parser": "^8.43.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
