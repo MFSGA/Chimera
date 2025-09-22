@@ -2,12 +2,12 @@ import {
   createFileRoute,
   ErrorComponentProps,
   Outlet,
-} from "@tanstack/react-router";
+} from '@tanstack/react-router';
 // import React from "react";
 
 const Catch = ({ error }: ErrorComponentProps) => {
   return (
-    <div style={{ backgroundColor: "#fff" }}>
+    <div style={{ backgroundColor: '#fff' }}>
       <h1>Oops!</h1>
       <p>Something went wrong... Caught at _layout error boundary.</p>
       <pre>{error.message}</pre>
@@ -17,7 +17,7 @@ const Catch = ({ error }: ErrorComponentProps) => {
 
 const Pending = () => <div>Loading from _layout...</div>;
 
-export const Route = createFileRoute("/_layout")({
+export const Route = createFileRoute('/_layout')({
   component: Layout,
   errorComponent: Catch,
   pendingComponent: Pending,

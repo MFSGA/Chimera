@@ -1,6 +1,6 @@
-import { FileRouteTypes } from "@/routeTree.gen";
-import { atomWithStorage } from "jotai/utils";
+import { FileRouteTypes } from '@/routeTree.gen';
+import { atomWithStorage } from 'jotai/utils';
 
 export const memorizedRoutePathAtom = atomWithStorage<
-    FileRouteTypes['fullPaths'] | null
->('memorizedRoutePathAtom', null)
+  FileRouteTypes['fullPaths'] | null
+>('memorizedRoutePathAtom', null);

@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useEffect, useRef } from 'react';
 
 export const AppContainer = ({
   children,
