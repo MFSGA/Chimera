@@ -27,3 +27,7 @@ dist-ssr
 .tauri
 
 .eslintcache
+
+# build scripts
+build.ps1
+release.sh
