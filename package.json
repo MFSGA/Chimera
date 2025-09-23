@@ -14,7 +14,10 @@
     "tauri": "tauri",
     "lint": "run-s lint:*",
     "lint:eslint": "eslint --cache .",
+    "lint:prettier": "prettier --check .",
+    "lint:styles": "stylelint --cache --allow-empty-input \"**/*.{css,scss}\"",
     "fmt": "run-p fmt:*",
+    "fmt:backend": "cargo fmt --manifest-path ./backend/Cargo.toml --all",
     "fmt:prettier": "prettier --write ."
   },
   "dependencies": {},
@@ -32,7 +35,15 @@
     "@typescript-eslint/parser": "^8.43.0",
     "@ianvs/prettier-plugin-sort-imports": "4.7.0",
     "prettier-plugin-tailwindcss": "0.6.14",
-    "prettier-plugin-toml": "2.0.6"
+    "prettier-plugin-toml": "2.0.6",
+    "postcss-scss": "^4.0.9",
+    "stylelint": "16.24.0",
+    "stylelint-config-html": "1.1.0",
+    "stylelint-config-recess-order": "7.3.0",
+    "stylelint-config-standard": "39.0.0",
+    "stylelint-declaration-block-no-ignored-properties": "2.8.0",
+    "stylelint-order": "7.0.0",
+    "stylelint-scss": "6.12.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
