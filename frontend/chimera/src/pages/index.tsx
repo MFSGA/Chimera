@@ -1,7 +1,7 @@
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useAtomValue } from 'jotai';
 import { useEffect } from 'react';
 import { memorizedRoutePathAtom } from '@/store';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/')({
   component: IndexPage,

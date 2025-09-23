@@ -1,7 +1,7 @@
-import { AppContainer } from '@/components/app/app-container';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { check } from '@tauri-apps/plugin-updater';
 import { lazy } from 'react';
+import { AppContainer } from '@/components/app/app-container';
 
 const TanStackRouterDevtools = import.meta.env.PROD
   ? () => null // Render nothing in production

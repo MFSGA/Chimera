@@ -1,7 +1,7 @@
-import { defineConfig, UserConfig } from 'vite';
-import react from '@vitejs/plugin-react';
-import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import path from 'node:path';
+import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
+import react from '@vitejs/plugin-react';
+import { defineConfig, UserConfig } from 'vite';
 
 const host = process.env.TAURI_DEV_HOST;
 
