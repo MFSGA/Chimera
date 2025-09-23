@@ -10,3 +10,5 @@ frontend/chimera/src/routeTree.gen.ts
 frontend/chimera/auto-imports.d.ts
 # todo 
 # backend/tauri/gen/schemas/
+# note: prettier should only format the frontend source codes. All backend files are ignored.
+backend/
