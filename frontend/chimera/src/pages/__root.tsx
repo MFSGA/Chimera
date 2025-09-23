@@ -38,6 +38,7 @@ export default function App() {
       <div onClick={getVersion}>get version</div>
 
       <AppContainer>
+        <Outlet />
         <TanStackRouterDevtools />
       </AppContainer>
     </div>
