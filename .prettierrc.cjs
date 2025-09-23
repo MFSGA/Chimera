@@ -18,7 +18,7 @@ module.exports = {
   importOrderParserPlugins: ['typescript', 'jsx', 'decorators-legacy'],
   importOrderTypeScriptVersion: '5.0.0',
   plugins: [
-    //'@ianvs/prettier-plugin-sort-imports',
+    '@ianvs/prettier-plugin-sort-imports',
     'prettier-plugin-tailwindcss',
     'prettier-plugin-toml',
   ],
