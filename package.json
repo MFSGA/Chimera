@@ -43,12 +43,14 @@
     "stylelint-config-standard": "39.0.0",
     "stylelint-declaration-block-no-ignored-properties": "2.8.0",
     "stylelint-order": "7.0.0",
-    "stylelint-scss": "6.12.1"
+    "stylelint-scss": "6.12.1",
+    "knip": "5.63.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
-      "esbuild"
+      "esbuild",
+      "oxc-resolver"
     ]
   }
 }
