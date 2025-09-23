@@ -6,7 +6,7 @@ dist/
 pnpm-lock.yaml
 *.lock
 *.wxs
-frontend/nyanpasu/src/routeTree.gen.ts
-frontend/nyanpasu/auto-imports.d.ts
+frontend/chimera/src/routeTree.gen.ts
+frontend/chimera/auto-imports.d.ts
 # todo 
 # backend/tauri/gen/schemas/
