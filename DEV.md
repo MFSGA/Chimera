@@ -1,20 +1,27 @@
 # project deps
+
 ## ``
 
 # frontend deps
+
 ## ``
 
 # about start order
+
 ## dev
-`pnpm dev` -> 
+
+`pnpm dev` ->
 `pnpm run web:dev` ->
 `pnpm --filter=chimera-ui dev`
 
 ## build
+
 `pnpm build`
 
 ## lint
+
 ### eslint settings
+
     "eslint": "^9.35.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -25,38 +32,47 @@
     "@typescript-eslint/parser": "^8.43.0"
 
 ## update process
+
 ### local
+
 1. install the dependency
 
 2. generate the key pair.
 
 3. set the `tauri.conf.json`
-including the `plugins.updater`
-pay attention to the `version` field in tauri.conf.json
+   including the `plugins.updater`
+   pay attention to the `version` field in tauri.conf.json
 
 4. set the permission in `capabilities` directory
-    "updater:default"
+   "updater:default"
 
 ### remote( update server )
+
 5. set the json for update info.
-file name is static -- update.json
+   file name is static -- update.json
 
 ### test the settings
 
 ## front end routes
+
 ### use the `tanstack` router
+
 "@tanstack/router-plugin": "1.114.29",
 "@tanstack/react-router": "1.114.29"
 
 pay attention to the `Component` -- `<Outlet />`
+
 ### use the dev tools for router
+
 `"@tanstack/react-router-devtools": "1.131.35"`
 
 ### important files
+
 `__root.tsx`: rendered root.
 `_layout.tsx`: render layout.
 
 # build workflow
+
 Lint Success
 Setup Environment
 Install Dependency
@@ -67,31 +83,32 @@ Build Frontend
 
 ## 项目管理和依赖配置
 
-**package.json** - 这是项目的核心配置文件，定义了项目信息、依赖包、脚本命令等。它配置了这是一个名为"@nyanpasu/monorepo"的monorepo项目，包含了开发、构建、测试、代码检查等各种npm脚本。 [1](#0-0) 
+**package.json** - 这是项目的核心配置文件，定义了项目信息、依赖包、脚本命令等。它配置了这是一个名为"@nyanpasu/monorepo"的monorepo项目，包含了开发、构建、测试、代码检查等各种npm脚本。 [1](#0-0)
 
-**renovate.json** - 自动化依赖更新工具Renovate的配置文件，用于自动检测和更新项目依赖。它配置了不同类型包的更新策略，比如npm包采用固定版本，cargo包更新lockfile等。 [2](#0-1) 
+**renovate.json** - 自动化依赖更新工具Renovate的配置文件，用于自动检测和更新项目依赖。它配置了不同类型包的更新策略，比如npm包采用固定版本，cargo包更新lockfile等。 [2](#0-1)
 
 ## 代码质量和格式化工具
 
-**.prettierrc.cjs** - Prettier代码格式化工具的配置文件，定义了代码格式化规则，如使用单引号、行末不加分号、使用LF换行符等。还配置了导入语句的排序规则和各种插件。 [3](#0-2) 
+**.prettierrc.cjs** - Prettier代码格式化工具的配置文件，定义了代码格式化规则，如使用单引号、行末不加分号、使用LF换行符等。还配置了导入语句的排序规则和各种插件。 [3](#0-2)
 
-**eslint.config.js** - ESLint代码检查工具的配置文件，用于检查JavaScript/TypeScript代码质量。它配置了针对React、TypeScript等的代码规则，以及针对不同文件类型的检查规则。 [4](#0-3) 
+**eslint.config.js** - ESLint代码检查工具的配置文件，用于检查JavaScript/TypeScript代码质量。它配置了针对React、TypeScript等的代码规则，以及针对不同文件类型的检查规则。 [4](#0-3)
 
-**.stylelintrc.js** - Stylelint CSS/SCSS代码检查工具的配置文件，用于检查样式文件的代码质量和格式。它支持SCSS语法，并配置了针对Tailwind CSS的特殊规则。 [5](#0-4) 
+**.stylelintrc.js** - Stylelint CSS/SCSS代码检查工具的配置文件，用于检查样式文件的代码质量和格式。它支持SCSS语法，并配置了针对Tailwind CSS的特殊规则。 [5](#0-4)
 
-**.lintstagedrc.js** - lint-staged工具的配置文件，用于在Git提交前自动运行代码检查和格式化。它配置了针对不同文件类型（JS/TS、Rust、CSS等）的预提交钩子。 [6](#0-5) 
+**.lintstagedrc.js** - lint-staged工具的配置文件，用于在Git提交前自动运行代码检查和格式化。它配置了针对不同文件类型（JS/TS、Rust、CSS等）的预提交钩子。 [6](#0-5)
 
-**commitlint.config.js** - commitlint工具的配置文件，用于检查Git提交信息的格式，确保提交信息符合约定式提交规范。 [7](#0-6) 
+**commitlint.config.js** - commitlint工具的配置文件，用于检查Git提交信息的格式，确保提交信息符合约定式提交规范。 [7](#0-6)
 
 ## 开发工具配置
 
-**knip.config.ts** - Knip工具的配置文件，用于检测项目中未使用的代码、依赖和配置。它定义了项目的入口点和要检查的文件范围。 [8](#0-7) 
+**knip.config.ts** - Knip工具的配置文件，用于检测项目中未使用的代码、依赖和配置。它定义了项目的入口点和要检查的文件范围。 [8](#0-7)
 
-**cliff.toml** - git-cliff工具的配置文件，用于自动生成changelog（变更日志）。它配置了如何解析Git提交信息并生成格式化的变更日志，支持按提交类型分组和GitHub集成。 [9](#0-8) 
+**cliff.toml** - git-cliff工具的配置文件，用于自动生成changelog（变更日志）。它配置了如何解析Git提交信息并生成格式化的变更日志，支持按提交类型分组和GitHub集成。 [9](#0-8)
 
 ## Notes
 
 这些配置文件形成了一个完整的现代前端开发工具链：
+
 - **代码质量保证**：通过ESLint、Stylelint、Prettier确保代码质量和一致性
 - **自动化流程**：通过lint-staged、commitlint、renovate实现开发流程自动化
 - **项目维护**：通过knip检测无用代码，通过cliff自动生成变更日志
@@ -102,6 +119,7 @@ Build Frontend
 ### Citations
 
 **File:** package.json (L1-10)
+
 ```json
 {
   "name": "@nyanpasu/monorepo",
@@ -116,6 +134,7 @@ Build Frontend
 ```
 
 **File:** renovate.json (L1-20)
+
 ```json
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
@@ -142,6 +161,7 @@ Build Frontend
 ```
 
 **File:** .prettierrc.cjs (L2-15)
+
 ```javascript
 module.exports = {
   endOfLine: 'lf',
@@ -160,6 +180,7 @@ module.exports = {
 ```
 
 **File:** eslint.config.js (L36-70)
+
 ```javascript
 export default tseslint.config(
   includeIgnoreFile(gitignorePath),
@@ -199,6 +220,7 @@ export default tseslint.config(
 ```
 
 **File:** .stylelintrc.js (L3-20)
+
 ```javascript
 export default {
   root: true,
@@ -221,6 +243,7 @@ export default {
 ```
 
 **File:** .lintstagedrc.js (L1-10)
+
 ```javascript
 export default {
   '*.{js,cjs,.mjs,jsx}': ['prettier --write', 'eslint --cache --fix'],
@@ -235,11 +258,13 @@ export default {
 ```
 
 **File:** commitlint.config.js (L1-1)
+
 ```javascript
-export default { extends: ['@commitlint/config-conventional'] }
+export default { extends: ['@commitlint/config-conventional'] };
 ```
 
 **File:** knip.config.ts (L3-10)
+
 ```typescript
 export default {
   entry: [
@@ -248,10 +273,11 @@ export default {
     'scripts/*.{js,ts}',
   ],
   project: ['frontend/**/*.{ts,js,jsx,tsx}', 'scripts/**/*.{js,ts}'],
-} satisfies KnipConfig
+} satisfies KnipConfig;
 ```
 
 **File:** cliff.toml (L4-20)
+
 ```text
 [changelog]
 # changelog header
@@ -272,7 +298,8 @@ body = """
     ### {{ group | upper_first }}
 ```
 
-
 # problems
+
 ## `[vite] Internal server error: Failed to resolve import "@/store" from "src/pages/index.tsx?tsr-split=component". Does the file exist?`
+
 set the `alias` in vite.config.ts

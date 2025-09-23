@@ -20,9 +20,7 @@ export default [
   },
   js.configs.recommended,
   {
-    files: [
-      'frontend/chimera/**/*.{ts,tsx,js,jsx}',
-    ],
+    files: ['frontend/chimera/**/*.{ts,tsx,js,jsx}'],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -52,7 +50,11 @@ export default [
       'react/react-in-jsx-scope': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       'no-undef': 'off',
-      quotes: ['warn', 'single', { avoidEscape: true, allowTemplateLiterals: false }],
+      quotes: [
+        'warn',
+        'single',
+        { avoidEscape: true, allowTemplateLiterals: false },
+      ],
     },
     settings: {
       react: { version: 'detect' },

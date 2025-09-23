@@ -3,11 +3,7 @@
     "baseUrl": ".",
     "target": "ESNext",
     "useDefineForClassFields": true,
-    "lib": [
-      "DOM",
-      "DOM.Iterable",
-      "ESNext"
-    ],
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
     "allowJs": false,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -21,28 +17,17 @@
     "jsx": "preserve",
     "composite": true,
     "paths": {
-      "@root/*": [
-        "../../*"
-      ],
-      "@/*": [
-        "./src/*"
-      ],
-      "~/*": [
-        "./*"
-      ],
+      "@root/*": ["../../*"],
+      "@/*": ["./src/*"],
+      "~/*": ["./*"],
     },
     "jsxImportSource": "@emotion/react",
-    "customConditions": [
-      "source"
-    ]
+    "customConditions": ["source"],
   },
-  "include": [
-    "src",
-    "./auto-imports.d.ts"
-  ],
+  "include": ["src", "./auto-imports.d.ts"],
   "references": [
     {
-      "path": "./tsconfig.node.json"
+      "path": "./tsconfig.node.json",
     },
   ],
 }
