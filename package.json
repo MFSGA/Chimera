@@ -18,7 +18,8 @@
     "lint:styles": "stylelint --cache --allow-empty-input \"**/*.{css,scss}\"",
     "fmt": "run-p fmt:*",
     "fmt:backend": "cargo fmt --manifest-path ./backend/Cargo.toml --all",
-    "fmt:prettier": "prettier --write ."
+    "fmt:prettier": "prettier --write .",
+    "knip": "knip"
   },
   "dependencies": {},
   "devDependencies": {
