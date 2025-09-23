@@ -1,0 +1,15 @@
+[workspace]
+members = ["tauri"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+authors = ["zzzgydi", "keiko233", "chimera_rust@proton.me"]
+license = "GPL-3.0"
+
+[profile.release]
+panic = "unwind"
+codegen-units = 1
+lto = true
+opt-level = "s"
