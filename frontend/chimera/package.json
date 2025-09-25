@@ -13,7 +13,7 @@
     "react": "19.1.1",
     "@emotion/styled": "11.14.1",
     "react-dom": "19.1.1",
-    "jotai": "2.13.0",
+    "jotai": "2.14.0",
     "@tauri-apps/plugin-updater": "2.9.0"
   },
   "devDependencies": {
