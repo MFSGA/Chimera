@@ -16,6 +16,7 @@
     "lint:eslint": "eslint --cache .",
     "lint:prettier": "prettier --check .",
     "lint:styles": "stylelint --cache --allow-empty-input \"**/*.{css,scss}\"",
+    "lint:clippy": "cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features",
     "fmt": "run-p fmt:*",
     "fmt:backend": "cargo fmt --manifest-path ./backend/Cargo.toml --all",
     "fmt:prettier": "prettier --write .",
