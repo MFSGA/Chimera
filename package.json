@@ -25,7 +25,7 @@
   "dependencies": {},
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",
-    "npm-run-all2": "7.0.2",
+    "npm-run-all2": "8.0.4",
     "react-devtools": "6.1.5",
     "eslint": "9.36.0",
     "eslint-config-prettier": "10.1.8",
@@ -47,7 +47,7 @@
     "stylelint-declaration-block-no-ignored-properties": "2.8.0",
     "stylelint-order": "7.0.0",
     "stylelint-scss": "6.12.1",
-    "knip": "5.63.1"
+    "knip": "5.64.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
