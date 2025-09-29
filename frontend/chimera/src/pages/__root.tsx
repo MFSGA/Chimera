@@ -2,6 +2,7 @@ import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { check } from '@tauri-apps/plugin-updater';
 import { lazy } from 'react';
+import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
 
 const TanStackRouterDevtools = import.meta.env.PROD
@@ -34,8 +35,14 @@ async function getVersion() {
 
 export default function App() {
   return (
-    /* the following is just for test tailwin */
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
+    <SWRConfig
+      value={{
+        errorRetryCount: 5,
+        revalidateOnMount: true,
+        revalidateOnFocus: true,
+        refreshInterval: 5000,
+      }}
+    >
       <div
         className="cursor-pointer px-3 py-2 text-sm font-semibold text-blue-600 transition hover:text-blue-700"
         onClick={getVersion}
@@ -48,6 +55,6 @@ export default function App() {
           <TanStackRouterDevtools />
         </AppContainer>
       </StyledEngineProvider>
-    </div>
+    </SWRConfig>
   );
 }
