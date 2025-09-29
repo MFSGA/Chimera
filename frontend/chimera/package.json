@@ -14,7 +14,11 @@
     "@emotion/styled": "11.14.1",
     "react-dom": "19.1.1",
     "jotai": "2.14.0",
-    "@tauri-apps/plugin-updater": "2.9.0"
+    "@tauri-apps/plugin-updater": "2.9.0",
+    "@material/material-color-utilities": "^0.3.0",
+    "@mui/icons-material": "7.3.2",
+    "@mui/lab": "7.0.0-beta.17",
+    "@mui/material": "7.3.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",

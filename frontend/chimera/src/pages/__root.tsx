@@ -1,3 +1,4 @@
+import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { check } from '@tauri-apps/plugin-updater';
 import { lazy } from 'react';
@@ -34,13 +35,13 @@ async function getVersion() {
 export default function App() {
   return (
     <div>
-      <h1>Hello World</h1>
       <div onClick={getVersion}>get version</div>
-
-      <AppContainer>
-        <Outlet />
-        <TanStackRouterDevtools />
-      </AppContainer>
+      <StyledEngineProvider injectFirst>
+        <AppContainer>
+          <Outlet />
+          <TanStackRouterDevtools />
+        </AppContainer>
+      </StyledEngineProvider>
     </div>
   );
 }
