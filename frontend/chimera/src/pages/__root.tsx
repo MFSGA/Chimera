@@ -34,8 +34,14 @@ async function getVersion() {
 
 export default function App() {
   return (
-    <div>
-      <div onClick={getVersion}>get version</div>
+    /* the following is just for test tailwin */
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
+      <div
+        className="cursor-pointer px-3 py-2 text-sm font-semibold text-blue-600 transition hover:text-blue-700"
+        onClick={getVersion}
+      >
+        get version
+      </div>
       <StyledEngineProvider injectFirst>
         <AppContainer>
           <Outlet />
