@@ -1,8 +1,11 @@
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
-import { lazy } from 'react';
+import { useAtomValue } from 'jotai';
+import { lazy, useEffect } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
+import i18n from '@/services/i18n';
+import { languageAtom } from '@/store';
 
 const TanStackRouterDevtools = import.meta.env.PROD
   ? () => null // Render nothing in production
@@ -15,12 +18,24 @@ const TanStackRouterDevtools = import.meta.env.PROD
       })),
     );
 
+const LanguageSync = () => {
+  const language = useAtomValue(languageAtom);
+
+  useEffect(() => {
+    i18n.changeLanguage(language);
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = language;
+    }
+  }, [language]);
+
+  return null;
+};
+
 export const Route = createRootRoute({
   component: App,
   // errorComponent: Catch,
   // pendingComponent: Pending,
 });
-
 
 export default function App() {
   return (
@@ -33,6 +48,7 @@ export default function App() {
       }}
     >
       <StyledEngineProvider injectFirst>
+        <LanguageSync />
         <AppContainer>
           <Outlet />
           <TanStackRouterDevtools />
