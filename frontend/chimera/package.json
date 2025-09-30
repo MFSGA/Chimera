@@ -20,7 +20,8 @@
     "@mui/lab": "7.0.0-beta.17",
     "@mui/material": "7.3.2",
     "@tailwindcss/postcss": "^4.1.13",
-    "swr": "2.3.6"
+    "swr": "2.3.6",
+    "@chimera/ui": "workspace:^"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",

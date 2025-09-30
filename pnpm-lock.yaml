@@ -87,6 +87,9 @@ importers:
 
   frontend/chimera:
     dependencies:
+      '@chimera/ui':
+        specifier: workspace:^
+        version: link:../ui
       '@emotion/styled':
         specifier: 11.14.1
         version: 11.14.1(@emotion/react@11.14.0(@types/react@19.1.13)(react@19.1.1))(@types/react@19.1.13)(react@19.1.1)
@@ -169,6 +172,8 @@ importers:
       vite:
         specifier: 7.1.7
         version: 7.1.7(@types/node@22.15.3)(jiti@2.6.0)(lightningcss@1.30.1)(tsx@4.19.4)
+
+  frontend/ui: {}
 
 packages:
 

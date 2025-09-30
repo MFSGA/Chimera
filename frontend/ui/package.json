@@ -1,0 +1,13 @@
+﻿{
+  "name": "@chimera/ui",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {},
+  "dependencies": {},
+  "devDependencies": {}
+}

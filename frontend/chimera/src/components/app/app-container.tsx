@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef } from 'react';
+import getSystem from '@/utils/get-system';
 
 export const AppContainer = ({
   children,
@@ -7,5 +8,13 @@ export const AppContainer = ({
   children?: ReactNode;
   isDrawer?: boolean;
 }) => {
-  return <div>{children}</div>;
+  const str = getSystem();
+  console.log(str);
+
+  return (
+    <div>
+      <p>{str}</p>
+      {children}
+    </div>
+  );
 };
