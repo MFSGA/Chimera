@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
+import { NodePackageImporter } from 'sass-embedded';
 import { defineConfig, UserConfig } from 'vite';
+import sassDts from 'vite-plugin-sass-dts';
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -27,7 +29,21 @@ export default defineConfig(async ({ command }) => {
     // root: "src",
     server: { port: 3000 },
 
-    plugins: [TanStackRouterVite(), react({}), isDev && devtools()],
+    css: {
+      preprocessorOptions: {
+        scss: {
+          api: 'modern-compiler',
+
+          importer: [new NodePackageImporter()],
+        },
+      },
+    },
+    plugins: [
+      TanStackRouterVite(),
+      react({}),
+      sassDts({ esmExport: true }),
+      isDev && devtools(),
+    ],
 
     resolve: {
       alias: {

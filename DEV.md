@@ -71,6 +71,17 @@ pay attention to the `Component` -- `<Outlet />`
 `__root.tsx`: rendered root.
 `_layout.tsx`: render layout.
 
+## about css style
+### use scss
+pay attention to the code
+```className={styles.layout}```
+```
+"vite-plugin-sass-dts": "1.3.31",
+"sass-embedded": "1.93.2"
+```
+### tailwindcss
+
+
 # build workflow
 
 Lint Success
