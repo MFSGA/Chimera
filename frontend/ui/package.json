@@ -9,5 +9,8 @@
   ],
   "scripts": {},
   "dependencies": {},
-  "devDependencies": {}
+  "devDependencies": {
+    "tailwind-merge": "3.3.1",
+    "clsx": "2.1.1"
+  }
 }
