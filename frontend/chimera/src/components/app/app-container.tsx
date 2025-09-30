@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef } from 'react';
-import getSystem from '@/utils/get-system';
+import { DrawerContent } from './drawer-content';
 
 export const AppContainer = ({
   children,
@@ -8,13 +8,14 @@ export const AppContainer = ({
   children?: ReactNode;
   isDrawer?: boolean;
 }) => {
-  const str = getSystem();
-  console.log(str);
-
   return (
     <div>
-      <p>{str}</p>
-      {children}
+      {!isDrawer && (
+        <div>
+          <DrawerContent />
+        </div>
+      )}
+      <div>{children}</div>
     </div>
   );
 };
