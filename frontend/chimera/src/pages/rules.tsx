@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 
 export const Route = createFileRoute('/rules')({
   component: RulesPage,
 });
 
 function RulesPage() {
-  // todo: use i18n
-  // const { t } = useTranslation()
+  const { t } = useTranslation();
 
-  return <div>rules</div>;
+  return <div>{t('page_rules')}</div>;
 }

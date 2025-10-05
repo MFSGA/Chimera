@@ -72,15 +72,26 @@ pay attention to the `Component` -- `<Outlet />`
 `_layout.tsx`: render layout.
 
 ## about css style
+
 ### use scss
+
 pay attention to the code
-```className={styles.layout}```
+`className={styles.layout}`
+
 ```
 "vite-plugin-sass-dts": "1.3.31",
 "sass-embedded": "1.93.2"
 ```
+
 ### tailwindcss
 
+## i18n support
+
+### Stack Overview
+
+- `i18next` and `react-i18next` provide the translation runtime.
+- `frontend/chimera/src/main.tsx` imports `./services/i18n` so the translations are ready before the router renders.
+- All resources are statically imported JSON files; there is no lazy loading or runtime fetch.
 
 # build workflow
 

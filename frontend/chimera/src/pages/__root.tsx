@@ -21,7 +21,6 @@ export const Route = createRootRoute({
   // pendingComponent: Pending,
 });
 
-
 export default function App() {
   return (
     <SWRConfig

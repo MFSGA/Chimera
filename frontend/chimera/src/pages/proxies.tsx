@@ -1,12 +1,12 @@
 import { createFileRoute } from '@tanstack/react-router';
+import { useTranslation } from 'react-i18next';
 
 export const Route = createFileRoute('/proxies')({
   component: ProxyPage,
 });
 
 function ProxyPage() {
-  // todo: use i18n
-  // const { t } = useTranslation()
+  const { t } = useTranslation();
 
-  return <div>proxies</div>;
+  return <div>{t('page_proxies')}</div>;
 }

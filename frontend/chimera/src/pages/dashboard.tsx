@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { check } from '@tauri-apps/plugin-updater';
+import { useTranslation } from 'react-i18next';
 
 export const Route = createFileRoute('/dashboard')({
   component: Dashboard,
@@ -16,8 +17,7 @@ async function getVersion() {
   }
 }
 function Dashboard() {
-  // todo: use i18n
-  // const { t } = useTranslation()
+  const { t } = useTranslation();
 
   return (
     <div>
@@ -25,9 +25,9 @@ function Dashboard() {
         className="cursor-pointer px-3 py-2 text-sm font-semibold text-blue-600 transition hover:text-blue-700"
         onClick={getVersion}
       >
-        get version
+        {t('action_get_version')}
       </div>
-      <div>dashboard</div>
+      <div>{t('page_dashboard')}</div>
     </div>
   );
 }

@@ -21,7 +21,9 @@
     "@mui/material": "7.3.2",
     "@tailwindcss/postcss": "^4.1.13",
     "swr": "2.3.6",
-    "@chimera/ui": "workspace:^"
+    "@chimera/ui": "workspace:^",
+    "i18next": "25.5.2",
+    "react-i18next": "15.7.3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",
