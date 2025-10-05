@@ -1,0 +1,20 @@
+﻿name: Renovate Artifacts
+on:
+  workflow_call:
+
+jobs:
+  artifacts:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_HOME: ${{ runner.temp }}/cargo-home
+    steps:
+      - name: Ensure CARGO_HOME
+        shell: bash
+        run: |
+          if [ -e "$CARGO_HOME" ] && [ ! -d "$CARGO_HOME" ]; then rm -f "$CARGO_HOME"; fi
+          mkdir -p "$CARGO_HOME"
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
