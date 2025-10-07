@@ -21,7 +21,8 @@
     "fmt:backend": "cargo fmt --manifest-path ./backend/Cargo.toml --all",
     "fmt:prettier": "prettier --write .",
     "knip": "knip",
-    "prepare": "husky"
+    "prepare": "husky",
+    "check": "tsx scripts/check.ts"
   },
   "dependencies": {
     "husky": "9.1.7"
@@ -53,7 +54,9 @@
     "knip": "5.64.0",
     "lint-staged": "16.2.1",
     "@commitlint/cli": "19.8.1",
-    "@commitlint/config-conventional": "19.8.1"
+    "@commitlint/config-conventional": "19.8.1",
+    "tsx": "4.20.6",
+    "@types/node": "24.5.2"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
