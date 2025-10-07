@@ -1,4 +1,5 @@
 import { SIDECAR_HOST } from './utils/consts';
+import { colorize, consola } from './utils/logger';
 
 // force download
 const FORCE = process.argv.includes('--force');
@@ -12,12 +13,9 @@ const ARCH = process.argv.includes('--arch')
 
 // cross platform build support
 if (!SIDECAR_HOST) {
-  // todo
-  // consola.fatal(colorize`{red.bold SIDECAR_HOST} not found`)
-  console.log('de1');
+  consola.fatal(colorize`{red.bold SIDECAR_HOST} not found`);
 
   process.exit(1);
 } else {
-  console.log('de2');
-  // consola.debug(colorize`sidecar-host {yellow ${SIDECAR_HOST}}`)
+  consola.debug(colorize`sidecar-host {yellow ${SIDECAR_HOST}}`);
 }

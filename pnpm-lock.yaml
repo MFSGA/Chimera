@@ -216,6 +216,18 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
 
+  scripts:
+    devDependencies:
+      colorize-template:
+        specifier: 1.0.0
+        version: 1.0.0
+      consola:
+        specifier: 3.4.2
+        version: 3.4.2
+      picocolors:
+        specifier: 1.1.1
+        version: 1.1.1
+
 packages:
 
   '@alloc/quick-lru@5.2.0':
@@ -1959,6 +1971,9 @@ packages:
   colorette@2.0.20:
     resolution: {integrity: sha512-IfEDxwoWIjkeXL1eXcDiow4UbKjhLdq6/EuSVR9GMN7KVH3r9gQ83e73hsz1Nd1T3ijd5xv1wcWRYO+D6kCI2w==}
 
+  colorize-template@1.0.0:
+    resolution: {integrity: sha512-beJ9v9RjpbYZ8OdwJgIRZD3YUkZPXmi1MK+yX0J24UupKVHa9yk0jiARgt2i6MBX6AKjYA0SNsBn65bUPuVQiw==}
+
   colorjs.io@0.5.2:
     resolution: {integrity: sha512-twmVoizEW7ylZSN32OgKdXRmo1qg+wT5/6C3xu5b9QsWzSFAhHLn2xd8ro0diCsKfCj1RdaTP/nrcW+vAoQPIw==}
 
@@ -1975,6 +1990,10 @@ packages:
   configstore@3.1.5:
     resolution: {integrity: sha512-nlOhI4+fdzoK5xmJ+NY+1gZK56bwEaWZr8fYuXohZ9Vkc1o3a4T/R3M+yE/w7x/ZVJ1zF8c+oaOvF0dztdUgmA==}
     engines: {node: '>=4'}
+
+  consola@3.4.2:
+    resolution: {integrity: sha512-5IKcdX0nnYavi6G7TtOhwkYzyjfJlatbjMjuLSfE2kYT5pMDOilZ4OvMhi637CcDICTmz3wARPoyhqyX1Y+XvA==}
+    engines: {node: ^14.18.0 || >=16.10.0}
 
   conventional-changelog-angular@7.0.0:
     resolution: {integrity: sha512-ROjNchA9LgfNMTTFSIWPzebCwOGFdgkEq45EnvvrmSLvCtAw0HSmrCs7/ty+wAeYUZyNay0YMUNYFTRL72PkBQ==}
@@ -6250,6 +6269,8 @@ snapshots:
 
   colorette@2.0.20: {}
 
+  colorize-template@1.0.0: {}
+
   colorjs.io@0.5.2: {}
 
   commander@14.0.1: {}
@@ -6269,6 +6290,8 @@ snapshots:
       unique-string: 1.0.0
       write-file-atomic: 2.4.3
       xdg-basedir: 3.0.0
+
+  consola@3.4.2: {}
 
   conventional-changelog-angular@7.0.0:
     dependencies:

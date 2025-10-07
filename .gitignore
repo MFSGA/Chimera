@@ -32,3 +32,5 @@ dist-ssr
 # build scripts
 build.ps1
 release.sh
+
+*.tsbuildinfo
