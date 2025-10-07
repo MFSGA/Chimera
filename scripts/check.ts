@@ -1,3 +1,4 @@
+import { archCheck } from './utils/arch-check';
 import { SIDECAR_HOST } from './utils/consts';
 import { colorize, consola } from './utils/logger';
 
@@ -19,3 +20,11 @@ if (!SIDECAR_HOST) {
 } else {
   consola.debug(colorize`sidecar-host {yellow ${SIDECAR_HOST}}`);
 }
+
+const platform = process.platform;
+
+const arch = (ARCH || process.arch) as NodeJS.Architecture | 'armel';
+
+console.log(platform);
+
+archCheck(platform, arch);
