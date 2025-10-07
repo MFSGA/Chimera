@@ -1,20 +1,37 @@
-﻿name: Renovate Artifacts
+name: Renovate Artifacts
 on:
   workflow_call:
+    inputs:
+      commands:
+        description: JSON encoded list of commands Renovate will execute.
+        required: true
+        type: string
 
 jobs:
   artifacts:
+    name: Run Renovate command ${{ matrix.command }}
     runs-on: ubuntu-latest
-    env:
-      CARGO_HOME: ${{ runner.temp }}/cargo-home
+    strategy:
+      fail-fast: false
+      matrix:
+        command: ${{ fromJson(inputs.commands) }}
     steps:
-      - name: Ensure CARGO_HOME
+      - name: Prepare Cargo home
         shell: bash
         run: |
-          if [ -e "$CARGO_HOME" ] && [ ! -d "$CARGO_HOME" ]; then rm -f "$CARGO_HOME"; fi
-          mkdir -p "$CARGO_HOME"
+          cargo_home="$RUNNER_TEMP/cargo-home"
+          if [ -e "$cargo_home" ] && [ ! -d "$cargo_home" ]; then rm -f "$cargo_home"; fi
+          mkdir -p "$cargo_home"
+          echo "CARGO_HOME=$cargo_home" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          key: cargo-home-${{ hashFiles('**/Cargo.lock') }}
+          root: ${{ github.workspace }}
+      - name: Run Renovate command
+        shell: bash
+        run: ${{ matrix.command }}
