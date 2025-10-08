@@ -20,10 +20,9 @@ jobs:
       arch: 'x86_64'
       tag: ${{ github.event.release.tag_name }}
     secrets: inherit
-#  updater:
-#    name: Create Updater
-#    uses: ./.github/workflows/deps-create-updater.yaml
-#    needs: [windows_build, linux_build, macos_amd64_build, macos_aarch64_build]
-#    with:
-#      nightly: false
-
+  updater:
+    name: Create Updater
+    uses: ./.github/workflows/deps-create-updater.yaml
+    needs: [windows_build]
+    with:
+      nightly: false
