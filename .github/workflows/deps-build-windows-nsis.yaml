@@ -128,7 +128,7 @@ jobs:
           echo "Download finished, attempting to extract"
           expand.exe $outfile -F:* ./backend/tauri
           echo "Extraction finished"
-
+      # todo: optimize the prepare script
       - name: Prepare (Windows NSIS and Portable) with fixed WebView
         if: ${{ inputs.fixed-webview == true }}
         run: ${{ inputs.nightly == true && 'pnpm prepare:nightly --nsis --fixed-webview' || 'pnpm prepare:release --nsis --fixed-webview' }}

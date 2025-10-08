@@ -2,10 +2,14 @@
   "name": "@chimera/scripts",
   "type": "module",
   "version": "0.0.1",
-  "dependencies": {},
+  "dependencies": {
+    "yargs": "18.0.0",
+    "@actions/github": "6.0.1"
+  },
   "devDependencies": {
     "colorize-template": "1.0.0",
     "consola": "3.4.2",
-    "picocolors": "1.1.1"
+    "picocolors": "1.1.1",
+    "@types/yargs": "17.0.33"
   }
 }

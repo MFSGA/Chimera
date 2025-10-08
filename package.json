@@ -22,7 +22,8 @@
     "fmt:prettier": "prettier --write .",
     "knip": "knip",
     "prepare": "husky",
-    "check": "tsx scripts/check.ts"
+    "check": "tsx scripts/check.ts",
+    "updater": "tsx scripts/updater.ts"
   },
   "dependencies": {
     "husky": "9.1.7"
