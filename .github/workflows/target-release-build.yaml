@@ -17,6 +17,7 @@ jobs:
       nightly: false
       # todo:
       fixed-webview: false
+      arch: 'x86_64'
       tag: ${{ github.event.release.tag_name }}
     secrets: inherit
 #  updater:
