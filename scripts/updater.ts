@@ -1,3 +1,5 @@
+import fs from 'fs/promises';
+import path from 'path';
 import { context, getOctokit } from '@actions/github';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
@@ -113,7 +115,7 @@ async function resolveUpdater() {
     if (value.url) {
       updateDataNew.platforms[key as keyof typeof updateData.platforms].url =
         value.url;
-      //todo getGithubUrl(value.url)
+      // getGithubUrl(value.url);
     } else {
       consola.error(`updateDataNew.platforms.${key} is null`);
     }
@@ -149,6 +151,46 @@ async function resolveUpdater() {
           consola.error(err);
         }); // do not break the pipeline
     }
+  }
+
+  // upload new assets
+  await github.rest.repos.uploadReleaseAsset({
+    ...options,
+    release_id: updateRelease.id,
+    name: argv.fixedWebview ? UPDATE_FIXED_WEBVIEW_FILE : UPDATE_JSON_FILE,
+    data: JSON.stringify(updateData, null, 2),
+  });
+
+  // cache the files if cache path is provided
+  await saveToCache(
+    argv.fixedWebview ? UPDATE_FIXED_WEBVIEW_FILE : UPDATE_JSON_FILE,
+    JSON.stringify(updateData, null, 2),
+  );
+
+  await github.rest.repos.uploadReleaseAsset({
+    ...options,
+    release_id: updateRelease.id,
+    name: argv.fixedWebview ? UPDATE_FIXED_WEBVIEW_PROXY : UPDATE_JSON_PROXY,
+    data: JSON.stringify(updateDataNew, null, 2),
+  });
+
+  // cache the proxy file if cache path is provided
+  await saveToCache(
+    argv.fixedWebview ? UPDATE_FIXED_WEBVIEW_PROXY : UPDATE_JSON_PROXY,
+    JSON.stringify(updateDataNew, null, 2),
+  );
+}
+
+async function saveToCache(fileName: string, content: string) {
+  if (!argv.cachePath) return;
+
+  try {
+    await fs.mkdir(argv.cachePath, { recursive: true });
+    const filePath = path.join(argv.cachePath, fileName);
+    await fs.writeFile(filePath, content, 'utf-8');
+    consola.success(colorize`cached file saved to: {gray.bold ${filePath}}`);
+  } catch (err) {
+    consola.error(`Failed to save cache file: ${err}`);
   }
 }
 
