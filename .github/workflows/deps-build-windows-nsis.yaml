@@ -99,19 +99,9 @@ jobs:
         run: |
           pnpm i
       - name: Prepare sidecars and resources
+        # todo
         run: |
           $condition = '${{ inputs.arch }}'
-          switch ($condition) {
-            'x86_64' {
-              pnpm check
-            }
-            'i686' {
-              pnpm check --arch ia32 --sidecar-host i686-pc-windows-msvc
-            }
-            'aarch64' {
-              pnpm check --arch arm64 --sidecar-host aarch64-pc-windows-msvc
-            }
-          }
 
       - name: Download fixed WebView
         if: ${{ inputs.fixed-webview == true }}
@@ -137,10 +127,6 @@ jobs:
           echo "Download finished, attempting to extract"
           expand.exe $outfile -F:* ./backend/tauri
           echo "Extraction finished"
-
-      - name: Prepare (Windows NSIS and Portable)
-        if: ${{ inputs.fixed-webview == false }}
-        run: ${{ inputs.nightly == true && 'pnpm prepare:nightly --nsis' || 'pnpm prepare:release --nsis' }}
 
       - name: Prepare (Windows NSIS and Portable) with fixed WebView
         if: ${{ inputs.fixed-webview == true }}
