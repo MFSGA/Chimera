@@ -13,7 +13,8 @@ jobs:
     name: Windows Build
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
     with:
-      portable: true
+      # todo
+      portable: false
       nightly: false
       tag: ${{ github.event.release.tag_name }}
     secrets: inherit
