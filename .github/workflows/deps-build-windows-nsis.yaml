@@ -150,7 +150,7 @@ jobs:
 
       - name: Upload to release
         run: |
-          $files = Get-ChildItem -Path "./backend/target" -Recurse -Include "*.exe", "*.zip", "*.zip.sig" | Where-Object { $_.FullName -like "*\bundle\*" }
+          $files = Get-ChildItem -Path "./backend/target" -Recurse -Include "*.exe", "*.zip", "*.zip.sig", "*.sig" | Where-Object { $_.FullName -like "*\bundle\*" }
           foreach ($file in $files) {
             echo "Uploading $file"
             gh release upload ${{ inputs.tag }} "$file" --clobber

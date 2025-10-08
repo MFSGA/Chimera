@@ -81,12 +81,14 @@ async function resolveUpdater() {
     }
 
     // win64 url
-    if (isMatch(name, '.nsis.zip', 'x64')) {
+    // todo
+    if (isMatch(name, '.exe', 'x64')) {
       updateData.platforms.win64.url = browserDownloadUrl;
       updateData.platforms['windows-x86_64'].url = browserDownloadUrl;
     }
     // win64 signature
-    if (isMatch(name, '.nsis.zip.sig', 'x64')) {
+    // todo
+    if (isMatch(name, '.sig', 'x64')) {
       const sig = await getSignature(browserDownloadUrl);
       updateData.platforms.win64.signature = sig;
       updateData.platforms['windows-x86_64'].signature = sig;
