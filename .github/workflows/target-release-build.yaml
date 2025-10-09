@@ -1,0 +1,28 @@
+name: '[Entire] Build Release Version'
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  windows_build:
+    name: Windows Build
+    uses: ./.github/workflows/deps-build-windows-nsis.yaml
+    with:
+      portable: false
+      nightly: false
+      # todo:
+      fixed-webview: false
+      arch: 'x86_64'
+      tag: ${{ github.event.release.tag_name }}
+    secrets: inherit
+  updater:
+    name: Create Updater
+    uses: ./.github/workflows/deps-create-updater.yaml
+    needs: [windows_build]
+    with:
+      nightly: false
