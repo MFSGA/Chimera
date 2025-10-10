@@ -1,3 +1,5 @@
+import { BinInfo } from 'types';
+import { resolveSidecar } from './download';
 import { NodeArch } from './manifest';
 
 export class Resolve {
@@ -20,5 +22,21 @@ export class Resolve {
       arch: this.options.arch,
       sidecarHost: this.options.sidecarHost,
     };
+  }
+
+  private sidecar(binInfo: BinInfo | PromiseLike<BinInfo>) {
+    return resolveSidecar(binInfo, this.options.platform, {
+      force: this.options.force,
+    });
+  }
+
+  public async clashMeta() {
+    // todo
+    // return await this.sidecar(getClashMetaInfo(this.infoOption));
+  }
+
+  public async clashRust() {
+    // todo
+    // return await this.sidecar(getClashRustInfo(this.infoOption));
   }
 }

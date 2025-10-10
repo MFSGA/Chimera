@@ -1,3 +1,4 @@
+import os from 'node:os';
 import { archCheck } from './utils/arch-check';
 import { SIDECAR_HOST } from './utils/consts';
 import { colorize, consola } from './utils/logger';
@@ -36,4 +37,65 @@ const resolve = new Resolve({
   sidecarHost: SIDECAR_HOST!,
   // todo: should delete in the future
   force: FORCE,
+});
+
+const tasks: {
+  name: string;
+  func: () => Promise<void>;
+  retry: number;
+  winOnly?: boolean;
+}[] = [
+  { name: 'mihomo', func: () => resolve.clashMeta(), retry: 5 },
+  // { name: 'mihomo-alpha', func: () => resolve.clashMetaAlpha(), retry: 5 },
+  { name: 'clash-rs', func: () => resolve.clashRust(), retry: 5 },
+  // { name: 'clash-rs-alpha', func: () => resolve.clashRustAlpha(), retry: 5 },
+];
+
+async function runTask() {
+  const task = tasks.shift();
+
+  if (!task) return;
+
+  if (task.winOnly && process.platform !== 'win32') return runTask();
+
+  for (let i = 0; i < task.retry; i++) {
+    try {
+      await task.func();
+
+      break;
+    } catch (err) {
+      consola.warn(`task::${task.name} try ${i} ==`, err);
+
+      if (i === task.retry - 1) {
+        consola.fatal(`task::${task.name} failed`, err);
+        process.exit(1);
+      }
+    }
+  }
+
+  return runTask();
+}
+
+consola.start('start check and download resources...');
+
+const jobs = new Array(Math.ceil(os.cpus.length / 2) || 2)
+  .fill(0)
+  .map(() => runTask());
+
+Promise.all(jobs).then(() => {
+  // todo: printNyanpasu()
+
+  consola.success('all resources download finished\n');
+
+  const commands = [
+    'pnpm dev - development with react dev tools',
+    'pnpm dev:diff - deadlock development with react dev tools (recommend)',
+    'pnpm tauri:diff - deadlock development',
+  ];
+
+  consola.log('  next command:\n');
+
+  commands.forEach((text) => {
+    consola.log(`    ${text}`);
+  });
 });
