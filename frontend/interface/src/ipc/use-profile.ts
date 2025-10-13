@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import { commands } from './bindings';
+import { commands, Profile, RemoteProfileOptionsBuilder } from './bindings';
 import { RROFILES_QUERY_KEY } from './consts';
 
 type URLImportParams = Parameters<typeof commands.importProfile>;
@@ -19,6 +19,12 @@ type CreateParams = {
       fileData: ManualImportParams[1]
     }
   } */
+
+type ProfileHelperFn = {
+  view: () => Promise<null | undefined>;
+  // todo update: (option: RemoteProfileOptionsBuilder) => Promise<null | undefined>
+  // todo drop: () => Promise<null | undefined>
+};
 
 /**
  * A custom hook for managing profiles with various operations including creation, updating, sorting, and deletion.
@@ -100,5 +106,47 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
-  return { create };
+  /**
+   * Retrieves and processes a list of profiles.
+   *
+   * This query uses the `useQuery` hook to fetch profile data by invoking the `commands.getProfiles()` command.
+   * The raw result is first unwrapped using `unwrapResult`, and then each profile item is augmented with additional
+   * helper functions:
+   *
+   * - view: Invokes `commands.viewProfile` with the profile's UID.
+   * - update: Executes the update mutation by passing an object containing the UID and the new profile data.
+   * - drop: Executes the drop mutation using the profile's UID.
+   *
+   * @returns A promise resolving to an object containing the profile list along with the extended helper functions.
+   */
+  const query = useQuery({
+    queryKey: [RROFILES_QUERY_KEY],
+    queryFn: async () => {
+      const result = unwrapResult(await commands.getProfiles());
+
+      // Skip helper functions if without_helper_fn is set
+      if (options?.without_helper_fn) {
+        return result;
+      }
+
+      return {
+        ...result,
+        items: result?.items?.map((item) => {
+          return addHelperFn(item);
+        }),
+      };
+    },
+  });
+
+  function addHelperFn(item: Profile): Profile & ProfileHelperFn {
+    return {
+      ...item,
+      view: async () => unwrapResult(await commands.viewProfile(item.uid)),
+      /* update: async (option: RemoteProfileOptionsBuilder) =>
+        await update.mutateAsync({ uid: item.uid, option }),
+      drop: async () => await drop.mutateAsync(item.uid), */
+    };
+  }
+
+  return { create, query };
 };

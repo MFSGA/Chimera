@@ -4,3 +4,4 @@ export * from './use-profile';
 export * from './consts';
 
 export { commands } from './bindings';
+export type * from './bindings';
