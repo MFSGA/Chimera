@@ -1,4 +1,4 @@
-// import { useProfile } from '@chimera/interface';
+import { useProfile } from '@chimera/interface';
 import { alpha } from '@chimera/ui';
 import {
   ClearRounded,
@@ -23,7 +23,7 @@ export const QuickImport = () => {
 
   const [loading, setLoading] = useState(false);
 
-  // const { create } = useProfile();
+  const { create } = useProfile();
 
   const onCopyLink = async () => {
     const text = 'todo';
@@ -69,13 +69,13 @@ export const QuickImport = () => {
     try {
       setLoading(true);
 
-      /* todo: await create.mutateAsync({
+      await create.mutateAsync({
         type: 'url',
         data: {
           url,
           option: null,
         },
-      }); */
+      });
     } finally {
       setUrl('');
       setLoading(false);

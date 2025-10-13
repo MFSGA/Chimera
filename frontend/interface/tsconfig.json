@@ -16,24 +16,14 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "composite": true,
+    "declaration": true,
     "paths": {
-      "@root/*": ["../../*"],
       "@/*": ["./src/*"],
-      "~/*": ["./*"],
     },
-    "jsxImportSource": "@emotion/react",
-    "customConditions": ["source"],
-    // to solve the eroor
+    "outDir": "./dist",
+    "sourceMap": true,
+    // to solve the error
     // "ignoreDeprecations": "6.0",
   },
-  "include": ["src", "./auto-imports.d.ts"],
-  "references": [
-    {
-      "path": "./tsconfig.node.json",
-    },
-    // to import types from interface correctly in the local env.
-    {
-      "path": "../interface",
-    },
-  ],
+  "include": ["src"],
 }

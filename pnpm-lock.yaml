@@ -102,6 +102,9 @@ importers:
 
   frontend/chimera:
     dependencies:
+      '@chimera/interface':
+        specifier: workspace:^
+        version: link:../interface
       '@chimera/ui':
         specifier: workspace:^
         version: link:../ui
@@ -199,6 +202,15 @@ importers:
       vite-plugin-sass-dts:
         specifier: 1.3.31
         version: 1.3.31(postcss@8.5.6)(prettier@3.6.2)(sass-embedded@1.93.2)(vite@7.1.7(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(tsx@4.20.6)(yaml@2.8.1))
+
+  frontend/interface:
+    dependencies:
+      '@tanstack/react-query':
+        specifier: 5.90.2
+        version: 5.90.2(react@19.1.1)
+      '@tauri-apps/api':
+        specifier: 2.8.0
+        version: 2.8.0
 
   frontend/ui:
     dependencies:
@@ -1494,6 +1506,14 @@ packages:
   '@tanstack/history@1.132.0':
     resolution: {integrity: sha512-GG2R9I6QSlbNR9fEuX2sQCigY6K28w51h2634TWmkaHXlzQw+rWuIWr4nAGM9doA+kWRi1LFSFMvAiG3cOqjXQ==}
     engines: {node: '>=12'}
+
+  '@tanstack/query-core@5.90.2':
+    resolution: {integrity: sha512-k/TcR3YalnzibscALLwxeiLUub6jN5EDLwKDiO7q5f4ICEoptJ+n9+7vcEFy5/x/i6Q+Lb/tXrsKCggf5uQJXQ==}
+
+  '@tanstack/react-query@5.90.2':
+    resolution: {integrity: sha512-CLABiR+h5PYfOWr/z+vWFt5VsOA2ekQeRQBFSKlcoW6Ndx/f8rfyVmq4LbgOM4GG2qtxAxjLYLOpCNTYm4uKzw==}
+    peerDependencies:
+      react: ^18 || ^19
 
   '@tanstack/react-router-devtools@1.132.6':
     resolution: {integrity: sha512-NwcStEA5ePPGvuogDONuQX5oDL+Wl3NI7N5HiI9rqcOSY5kF85DfaMrTBADS8r1CCY7NMjRrjULEfgR8Z1CrxA==}
@@ -5814,6 +5834,13 @@ snapshots:
       tailwindcss: 4.1.13
 
   '@tanstack/history@1.132.0': {}
+
+  '@tanstack/query-core@5.90.2': {}
+
+  '@tanstack/react-query@5.90.2(react@19.1.1)':
+    dependencies:
+      '@tanstack/query-core': 5.90.2
+      react: 19.1.1
 
   '@tanstack/react-router-devtools@1.132.6(@tanstack/react-router@1.132.6(react-dom@19.1.1(react@19.1.1))(react@19.1.1))(@tanstack/router-core@1.132.6)(@types/node@24.5.2)(csstype@3.1.3)(jiti@2.6.0)(lightningcss@1.30.1)(react-dom@19.1.1(react@19.1.1))(react@19.1.1)(sass-embedded@1.93.2)(sass@1.93.2)(solid-js@1.9.9)(tiny-invariant@1.3.3)(tsx@4.20.6)(yaml@2.8.1)':
     dependencies:

@@ -23,7 +23,8 @@
     "swr": "2.3.6",
     "@chimera/ui": "workspace:^",
     "i18next": "25.5.2",
-    "react-i18next": "15.7.3"
+    "react-i18next": "15.7.3",
+    "@chimera/interface": "workspace:^"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",
