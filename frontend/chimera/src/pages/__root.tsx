@@ -1,3 +1,4 @@
+import { RootProvider } from '@chimera/interface';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { lazy } from 'react';
@@ -23,20 +24,22 @@ export const Route = createRootRoute({
 
 export default function App() {
   return (
-    <SWRConfig
-      value={{
-        errorRetryCount: 5,
-        revalidateOnMount: true,
-        revalidateOnFocus: true,
-        refreshInterval: 5000,
-      }}
-    >
-      <StyledEngineProvider injectFirst>
-        <AppContainer>
-          <Outlet />
-          <TanStackRouterDevtools />
-        </AppContainer>
-      </StyledEngineProvider>
-    </SWRConfig>
+    <RootProvider>
+      <SWRConfig
+        value={{
+          errorRetryCount: 5,
+          revalidateOnMount: true,
+          revalidateOnFocus: true,
+          refreshInterval: 5000,
+        }}
+      >
+        <StyledEngineProvider injectFirst>
+          <AppContainer>
+            <Outlet />
+            <TanStackRouterDevtools />
+          </AppContainer>
+        </StyledEngineProvider>
+      </SWRConfig>
+    </RootProvider>
   );
 }
