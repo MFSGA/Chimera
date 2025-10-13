@@ -10,7 +10,8 @@
   "scripts": {},
   "dependencies": {
     "react": "19.1.1",
-    "@types/react": "19.1.12"
+    "@types/react": "19.1.12",
+    "react-error-boundary": "6.0.0"
   },
   "devDependencies": {
     "tailwind-merge": "3.3.1",
