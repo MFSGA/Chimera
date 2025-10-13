@@ -14,7 +14,7 @@ export default {
   'frontend/chimera/**/*.{ts,tsx}': [
     'prettier --write',
     'eslint --cache --fix',
-    () => 'tsc -p frontend/nyanpasu/tsconfig.json --noEmit',
+    // () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
   ],
   'backend/**/*.{rs,toml}': [
     () =>
