@@ -1,6 +1,7 @@
 import { BinInfo } from 'types';
 import { resolveSidecar } from './download';
 import { NodeArch } from './manifest';
+import { getClashMetaInfo } from './resource';
 
 export class Resolve {
   private infoOption: {
@@ -31,8 +32,7 @@ export class Resolve {
   }
 
   public async clashMeta() {
-    // todo
-    // return await this.sidecar(getClashMetaInfo(this.infoOption));
+    return await this.sidecar(getClashMetaInfo(this.infoOption));
   }
 
   public async clashRust() {
