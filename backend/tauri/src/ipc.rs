@@ -24,7 +24,5 @@ impl From<IpcError> for tauri::ipc::InvokeError {
 #[tauri::command]
 #[specta::specta]
 pub fn get_profiles() -> Result<Profiles> {
-    let p = Config::profiles();
-    // Ok(Profiles {})
-    todo!()
+    Ok(Config::profiles().data().clone())
 }

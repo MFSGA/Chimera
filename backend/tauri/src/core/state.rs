@@ -1,6 +1,9 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    ops::Deref,
+    sync::{atomic::AtomicBool, Arc},
+};
 
-use parking_lot::RwLock;
+use parking_lot::{lock_api::RwLockReadGuard, MappedRwLockReadGuard, RwLock};
 
 /// State manager for the application
 /// It provides a way to manage the application state, draft and persist it
@@ -24,6 +27,17 @@ where
     }
 }
 
+impl<T> Deref for ManagedState<T>
+where
+    T: Clone + Sync + Send,
+{
+    type Target = ManagedStateInner<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
 pub struct ManagedStateInner<T>
 where
     T: Clone + Sync + Send,
@@ -44,5 +58,10 @@ where
             draft: RwLock::new(None),
             is_dirty: AtomicBool::new(false),
         }
+    }
+
+    /// Get the committed state
+    pub fn data(&self) -> MappedRwLockReadGuard<'_, T> {
+        RwLockReadGuard::map(self.inner.read(), |guard| guard)
     }
 }
