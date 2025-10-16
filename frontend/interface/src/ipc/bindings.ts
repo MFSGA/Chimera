@@ -5,7 +5,10 @@ import { invoke as TAURI_INVOKE } from '@tauri-apps/api/core';
 export const commands = {
   async getGreet(greetmsg: string): Promise<Result<string, string>> {
     try {
-      return { status: 'ok', data: await TAURI_INVOKE('greet', { name: greetmsg }) };
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('greet', { name: greetmsg }),
+      };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: 'error', error: e as any };
