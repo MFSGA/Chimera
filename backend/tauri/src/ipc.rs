@@ -1,5 +1,7 @@
 use std::result::Result as StdResult;
 
+use anyhow::Context;
+
 use crate::config::{
     core::Config,
     profile::{item::remote::RemoteProfileOptionsBuilder, profiles::Profiles},
@@ -7,20 +9,27 @@ use crate::config::{
 
 type Result<T = ()> = StdResult<T, IpcError>;
 
-pub enum IpcError {}
+#[derive(Debug, thiserror::Error)]
+pub enum IpcError {
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
+}
 
-impl specta::Type for IpcError {
-    fn inline(
-        _type_map: &mut specta::TypeMap,
-        _generics: specta::Generics,
-    ) -> specta::datatype::DataType {
-        specta::datatype::DataType::Primitive(specta::datatype::PrimitiveType::String)
+impl serde::Serialize for IpcError {
+    fn serialize<S>(&self, serializer: S) -> StdResult<S::Ok, S::Error>
+    where
+        S: serde::ser::Serializer,
+    {
+        serializer.serialize_str(format!("{self:#?}").as_str())
     }
 }
 
-impl From<IpcError> for tauri::ipc::InvokeError {
-    fn from(value: IpcError) -> Self {
-        match value {}
+impl specta::Type for IpcError {
+    fn inline(
+        type_map: &mut specta::TypeMap,
+        generics: specta::Generics,
+    ) -> specta::datatype::DataType {
+        specta::datatype::DataType::Primitive(specta::datatype::PrimitiveType::String)
     }
 }
 
@@ -34,7 +43,7 @@ pub fn get_profiles() -> Result<Profiles> {
 #[specta::specta]
 /// later: check in the frontend
 pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
-    // let url = url::Url::parse(&url).context("failed to parse the url")?;
+    let url = url::Url::parse(&url).context("failed to parse the url")?;
     // let mut builder = crate::config::profile::item::RemoteProfileBuilder::default();
     todo!()
 }

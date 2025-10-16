@@ -43,6 +43,12 @@ parking_lot = { version = "0.12.1" }
 # for builder pattern
 derive_builder = "0.20"
 
+url = "2"
+
+anyhow = "1.0"
+
+thiserror = { workspace = true }
+
 [features]
 default = ["default-meta"]
 nightly = []

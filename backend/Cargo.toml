@@ -13,3 +13,7 @@ panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
+
+[workspace.dependencies]
+thiserror = "2"
+
