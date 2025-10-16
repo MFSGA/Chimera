@@ -1,6 +1,6 @@
 use std::result::Result as StdResult;
 
-use crate::config::profile::profiles::Profiles;
+use crate::config::{core::Config, profile::profiles::Profiles};
 
 type Result<T = ()> = StdResult<T, IpcError>;
 
@@ -24,5 +24,7 @@ impl From<IpcError> for tauri::ipc::InvokeError {
 #[tauri::command]
 #[specta::specta]
 pub fn get_profiles() -> Result<Profiles> {
-    Ok(Profiles {})
+    let p = Config::profiles();
+    // Ok(Profiles {})
+    todo!()
 }

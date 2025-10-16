@@ -3,6 +3,9 @@ use tauri_specta::collect_commands;
 mod ipc;
 
 mod config;
+/// 3
+mod core;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {

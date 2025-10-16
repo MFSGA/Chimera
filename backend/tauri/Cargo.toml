@@ -37,6 +37,10 @@ specta = { version = "=2.0.0-rc.22", features = [
   "function",
 ] }
 
+once_cell = "1.19.0"
+
+parking_lot = { version = "0.12.1" }
+
 [features]
 default = ["default-meta"]
 nightly = []
