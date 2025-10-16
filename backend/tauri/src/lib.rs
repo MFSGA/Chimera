@@ -8,6 +8,7 @@ mod core;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
+#[specta::specta]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -19,16 +20,16 @@ pub fn run() {
         // profile
         ipc::get_profiles,
         // ipc::import_profile,
-
+        greet,
         // ipc::view_profile,
         // updater layer
         // todo ipc::check_update,
     ]);
 
     tauri::Builder::default()
+        .invoke_handler(specta_builder.invoke_handler())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
