@@ -40,6 +40,8 @@ specta = { version = "=2.0.0-rc.22", features = [
 once_cell = "1.19.0"
 
 parking_lot = { version = "0.12.1" }
+# for builder pattern
+derive_builder = "0.20"
 
 [features]
 default = ["default-meta"]

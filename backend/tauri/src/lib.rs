@@ -17,10 +17,11 @@ fn greet(name: &str) -> String {
 pub fn run() {
     // setup specta
     let specta_builder = tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
+        // demo
+        greet,
         // profile
         ipc::get_profiles,
-        // ipc::import_profile,
-        greet,
+        ipc::import_profile,
         // ipc::view_profile,
         // updater layer
         // todo ipc::check_update,
