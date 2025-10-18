@@ -3,7 +3,10 @@ use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::{config::profile::item_type::ProfileItemType, utils::dirs::app_profiles_dir};
+use crate::{
+    config::profile::{item::ProfileMetaGetter, item_type::ProfileItemType},
+    utils::dirs::app_profiles_dir,
+};
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Builder, BuilderUpdate, specta::Type)]
 #[builder(
@@ -94,5 +97,11 @@ impl ProfileFileIo for ProfileShared {
             .open(&file)
             .await?;
         tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes()).await
+    }
+}
+
+impl ProfileMetaGetter for ProfileShared {
+    fn uid(&self) -> &str {
+        &self.uid
     }
 }

@@ -3,7 +3,10 @@ use std::{
     sync::{Arc, atomic::AtomicBool},
 };
 
-use parking_lot::{MappedRwLockReadGuard, RwLock, lock_api::RwLockReadGuard};
+use parking_lot::{
+    MappedRwLockReadGuard, MappedRwLockWriteGuard, RwLock, RwLockWriteGuard,
+    lock_api::RwLockReadGuard,
+};
 
 /// State manager for the application
 /// It provides a way to manage the application state, draft and persist it
@@ -63,5 +66,29 @@ where
     /// Get the committed state
     pub fn data(&self) -> MappedRwLockReadGuard<'_, T> {
         RwLockReadGuard::map(self.inner.read(), |guard| guard)
+    }
+
+    /// whether the state is dirty, i.e. a draft is present, and not yet committed or discarded
+    pub fn is_dirty(&self) -> bool {
+        self.is_dirty.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// You can modify the draft state, and then commit it
+    pub fn draft(&self) -> MappedRwLockWriteGuard<'_, T> {
+        if self.is_dirty() {
+            let guard = self.draft.write();
+            if guard.is_some() {
+                return RwLockWriteGuard::map(guard, |g| g.as_mut().unwrap());
+            }
+        }
+
+        let state = self.inner.read().clone();
+        self.is_dirty
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        RwLockWriteGuard::map(self.draft.write(), move |guard| {
+            *guard = Some(state);
+            guard.as_mut().unwrap()
+        })
     }
 }

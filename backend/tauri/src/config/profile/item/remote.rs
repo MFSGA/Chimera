@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use ambassador::Delegate;
 use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,10 @@ use url::Url;
 
 use crate::{
     config::profile::{
-        item::shared::{ProfileFileIo, ProfileShared, ProfileSharedBuilder},
+        item::{
+            ProfileMetaGetter, ambassador_impl_ProfileMetaGetter,
+            shared::{ProfileFileIo, ProfileShared, ProfileSharedBuilder},
+        },
         item_type::ProfileItemType,
     },
     utils::help,
@@ -57,9 +61,10 @@ impl RemoteProfileOptions {
     }
 }
 
-#[derive(Debug, Deserialize, Builder, Type, Clone)]
+#[derive(Debug, Deserialize, Builder, Type, Clone, Delegate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder(build_fn(skip, error = "RemoteProfileBuilderError"))]
+#[delegate(ProfileMetaGetter, target = "shared")]
 pub struct RemoteProfile {
     /// subscription url
     pub url: Url,

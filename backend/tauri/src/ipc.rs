@@ -5,7 +5,10 @@ use anyhow::Context;
 use crate::config::{
     core::Config,
     profile::{
-        item::remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
+        item::{
+            ProfileMetaGetter,
+            remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
+        },
         profiles::Profiles,
     },
 };
@@ -57,5 +60,15 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
         .build_no_blocking()
         .await
         .context("failed to build a remote profile")?;
+
+    // 根据是否为 Some(uid) 来判断是否要激活配置
+    let profile_id = {
+        if Config::profiles().draft().current.is_empty() {
+            Some(profile.uid().to_string())
+        } else {
+            None
+        }
+    };
+
     todo!()
 }
