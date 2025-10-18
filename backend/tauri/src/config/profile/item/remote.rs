@@ -24,7 +24,7 @@ use backon::Retryable;
 
 const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
 
-#[derive(Debug, Deserialize, Builder, Type, Clone, BuilderUpdate)]
+#[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, BuilderUpdate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder_update(patch_fn = "apply", getter)]
 pub struct RemoteProfileOptions {
@@ -61,7 +61,7 @@ impl RemoteProfileOptions {
     }
 }
 
-#[derive(Debug, Deserialize, Builder, Type, Clone, Delegate)]
+#[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, Delegate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder(build_fn(skip, error = "RemoteProfileBuilderError"))]
 #[delegate(ProfileMetaGetter, target = "shared")]

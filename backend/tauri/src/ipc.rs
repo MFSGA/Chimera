@@ -69,6 +69,10 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
             None
         }
     };
+    {
+        let committer = Config::profiles().auto_commit();
+        (committer.draft().append_item(profile.into()))?;
+    }
 
     todo!()
 }

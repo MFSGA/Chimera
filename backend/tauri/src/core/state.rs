@@ -41,6 +41,38 @@ where
     }
 }
 
+impl<T> ManagedState<T>
+where
+    T: Clone + Sync + Send,
+{
+    /// to auto commit the state when it is dropped
+    pub fn auto_commit(&self) -> ManagedStateAutoCommit<T> {
+        ManagedStateAutoCommit(self)
+    }
+}
+
+pub struct ManagedStateAutoCommit<'a, T: Clone + Send + Sync>(&'a ManagedState<T>);
+
+impl<T> Deref for ManagedStateAutoCommit<'_, T>
+where
+    T: Clone + Send + Sync,
+{
+    type Target = ManagedState<T>;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+impl<T: Clone + Send + Sync> Drop for ManagedStateAutoCommit<'_, T> {
+    fn drop(&mut self) {
+        println!("Auto committing state triggered the drop...");
+        if self.0.is_dirty() {
+            self.0.apply();
+        }
+    }
+}
+
 pub struct ManagedStateInner<T>
 where
     T: Clone + Sync + Send,
@@ -90,5 +122,26 @@ where
             *guard = Some(state);
             guard.as_mut().unwrap()
         })
+    }
+
+    /// commit the draft state, and make it the new state
+    pub fn apply(&self) -> Option<T> {
+        if !self.is_dirty() {
+            return None;
+        }
+
+        let mut draft = self.draft.write();
+        let mut inner = self.inner.write();
+        let old_value = inner.to_owned();
+        if let Some(draft_value) = draft.take() {
+            *inner = draft_value;
+            self.is_dirty
+                .store(false, std::sync::atomic::Ordering::Release);
+            Some(old_value)
+        } else {
+            self.is_dirty
+                .store(false, std::sync::atomic::Ordering::Release);
+            None
+        }
     }
 }

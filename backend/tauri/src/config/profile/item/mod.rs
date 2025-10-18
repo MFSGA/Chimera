@@ -1,4 +1,7 @@
 use ambassador::delegatable_trait;
+use chimera_macro::EnumWrapperCombined;
+
+use crate::config::profile::item::remote::RemoteProfile;
 
 /// 1
 pub mod remote;
@@ -12,4 +15,9 @@ pub mod utils;
 #[delegatable_trait]
 pub trait ProfileMetaGetter {
     fn uid(&self) -> &str;
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, EnumWrapperCombined, specta::Type)]
+pub enum Profile {
+    Remote(RemoteProfile),
 }
