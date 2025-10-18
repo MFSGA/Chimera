@@ -3,7 +3,10 @@ use serde::Deserialize;
 use specta::Type;
 use url::Url;
 
-use crate::config::profile::item::shared::{ProfileShared, ProfileSharedBuilder};
+use crate::config::profile::{
+    item::shared::{ProfileShared, ProfileSharedBuilder},
+    item_type::ProfileItemType,
+};
 
 #[derive(Debug, Deserialize, Builder, Type, Clone)]
 #[builder(derive(Debug, Deserialize, Type))]
@@ -54,7 +57,8 @@ impl RemoteProfileBuilder {
     pub async fn build_no_blocking(&mut self) -> Result<RemoteProfile, RemoteProfileBuilderError> {
         self.validate()?;
         if self.shared.get_uid().is_none() {
-            todo!()
+            self.shared
+                .uid(super::utils::generate_uid(&ProfileItemType::Remote));
         }
         todo!()
     }

@@ -5,6 +5,8 @@ mod ipc;
 mod config;
 /// 3
 mod core;
+/// 4
+mod utils;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]

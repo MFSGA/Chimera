@@ -51,6 +51,8 @@ thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
 
+nanoid = "0.4.0"
+
 [features]
 default = ["default-meta"]
 nightly = []
