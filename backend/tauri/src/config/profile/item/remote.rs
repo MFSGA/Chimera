@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     config::profile::{
-        item::shared::{ProfileShared, ProfileSharedBuilder},
+        item::shared::{ProfileFileIo, ProfileShared, ProfileSharedBuilder},
         item_type::ProfileItemType,
     },
     utils::help,
@@ -84,6 +84,9 @@ pub enum RemoteProfileBuilderError {
     /// 2
     #[error("subscribe failed: {0}")]
     SubscribeFailed(#[from] SubscribeError),
+    /// 3
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 impl RemoteProfileBuilder {
@@ -132,7 +135,15 @@ impl RemoteProfileBuilder {
             option: self.option.build().unwrap(),
             // chain: self.chain.take().unwrap_or_default(),
         };
-        todo!()
+        // write the profile to the file
+        profile
+            .shared
+            .write_file(
+                serde_yaml::to_string(&subscription.data)
+                    .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?,
+            )
+            .await?;
+        Ok(profile)
     }
 }
 

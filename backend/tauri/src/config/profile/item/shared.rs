@@ -1,8 +1,9 @@
+use ambassador::delegatable_trait;
 use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::config::profile::item_type::ProfileItemType;
+use crate::{config::profile::item_type::ProfileItemType, utils::dirs::app_profiles_dir};
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Builder, BuilderUpdate, specta::Type)]
 #[builder(
@@ -73,5 +74,25 @@ impl ProfileSharedBuilder {
                 .updated
                 .unwrap_or_else(|| chrono::Local::now().timestamp() as usize), */
         })
+    }
+}
+
+#[delegatable_trait]
+pub trait ProfileFileIo {
+    // async fn read_file(&self) -> std::io::Result<String>;
+    async fn write_file(&self, content: String) -> std::io::Result<()>;
+}
+
+impl ProfileFileIo for ProfileShared {
+    async fn write_file(&self, content: String) -> std::io::Result<()> {
+        let path = app_profiles_dir().map_err(std::io::Error::other)?;
+        let file = path.join(&self.file);
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&file)
+            .await?;
+        tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes()).await
     }
 }

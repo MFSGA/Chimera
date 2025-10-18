@@ -63,6 +63,14 @@ percent-encoding = "2.3.1"
 # todo: use another crate.
 serde_yaml = { version = "0.9" }
 
+ambassador = "0.4.1"                                                      # for trait delegation
+
+# Common Utilities
+tokio = { workspace = true }
+
+# System Utilities
+dunce = "1.0.4"   
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 

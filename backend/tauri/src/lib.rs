@@ -3,6 +3,8 @@ use tauri_specta::collect_commands;
 mod ipc;
 
 mod config;
+/// 5
+mod consts;
 /// 3
 mod core;
 /// 4

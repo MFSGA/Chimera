@@ -1,9 +1,9 @@
 use std::{
     ops::Deref,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
-use parking_lot::{lock_api::RwLockReadGuard, MappedRwLockReadGuard, RwLock};
+use parking_lot::{MappedRwLockReadGuard, RwLock, lock_api::RwLockReadGuard};
 
 /// State manager for the application
 /// It provides a way to manage the application state, draft and persist it
