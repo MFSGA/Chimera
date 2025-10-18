@@ -10,23 +10,28 @@ use crate::config::profile::{
     item_type::ProfileItemType,
 };
 
+use crate::utils::dirs::APP_VERSION;
+
 #[derive(Debug, Deserialize, Builder, Type, Clone)]
 #[builder(derive(Debug, Deserialize, Type))]
-pub struct RemoteProfileOptions {}
+pub struct RemoteProfileOptions {
+    pub user_agent: Option<String>,
+}
 
 impl Default for RemoteProfileOptions {
     fn default() -> Self {
-        Self {}
+        Self { user_agent: None }
     }
 }
 
 impl RemoteProfileOptions {
     pub fn apply_default(&self) -> Self {
         let mut options = self.clone();
-        /* todo: RemoteProfileOptions
-         if options.user_agent.is_none() {
-            options.user_agent = Some(format!("clash-nyanpasu/v{APP_VERSION}"));
+        if options.user_agent.is_none() {
+            options.user_agent = Some(format!("clash-chimera/v{APP_VERSION}"));
         }
+        /* todo: RemoteProfileOptions
+
         if options.with_proxy.is_none() {
             options.with_proxy = Some(false);
         }
@@ -113,6 +118,8 @@ async fn subscribe_url(
         .use_rustls_tls()
         .no_proxy()
         .timeout(Duration::from_secs(30));
+
+    builder = builder.user_agent(options.user_agent.unwrap());
 
     // todo: proxy add the proxy client support
     todo!()
