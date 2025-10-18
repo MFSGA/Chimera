@@ -11,6 +11,7 @@ use crate::config::profile::{
 };
 
 use crate::utils::dirs::APP_VERSION;
+use backon::Retryable;
 
 #[derive(Debug, Deserialize, Builder, Type, Clone)]
 #[builder(derive(Debug, Deserialize, Type))]
@@ -104,7 +105,14 @@ impl RemoteProfileBuilder {
 struct Subscription {}
 
 #[derive(thiserror::Error, Debug)]
-pub enum SubscribeError {}
+pub enum SubscribeError {
+    #[error("network issue at {url}: {source}")]
+    Network {
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+}
 
 /// perform a subscription
 /// todo: tracing -> add tracing suupport
@@ -118,9 +126,35 @@ async fn subscribe_url(
         .use_rustls_tls()
         .no_proxy()
         .timeout(Duration::from_secs(30));
+    // todo: proxy add the proxy client support
 
     builder = builder.user_agent(options.user_agent.unwrap());
 
-    // todo: proxy add the proxy client support
+    let client = builder.build().map_err(|e| SubscribeError::Network {
+        url: url.to_string(),
+        source: e,
+    })?;
+
+    let perform_req = || async { client.get(url.as_str()).send().await?.error_for_status() };
+    let resp = perform_req
+        .retry(backon::ExponentialBuilder::default())
+        // Only retry on network errors or server errors
+        .when(|result| {
+            !result.is_status()
+                || result.status().is_some_and(|status_code| {
+                    !matches!(
+                        status_code,
+                        reqwest::StatusCode::FORBIDDEN
+                            | reqwest::StatusCode::NOT_FOUND
+                            | reqwest::StatusCode::UNAUTHORIZED
+                    )
+                })
+        })
+        .await
+        .map_err(|e| SubscribeError::Network {
+            url: url.to_string(),
+            source: e,
+        })?;
+
     todo!()
 }
