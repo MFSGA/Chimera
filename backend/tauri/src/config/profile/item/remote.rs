@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
 use specta::Type;
 use url::Url;
 
@@ -20,11 +21,17 @@ use backon::Retryable;
 #[builder(derive(Debug, Deserialize, Type))]
 pub struct RemoteProfileOptions {
     pub user_agent: Option<String>,
+    /// subscription update interval
+    #[builder(default = "120")]
+    pub update_interval: u64,
 }
 
 impl Default for RemoteProfileOptions {
     fn default() -> Self {
-        Self { user_agent: None }
+        Self {
+            user_agent: None,
+            update_interval: 120, // 2 hours
+        }
     }
 }
 
@@ -105,7 +112,13 @@ impl RemoteProfileBuilder {
 }
 
 #[derive(Debug)]
-struct Subscription {}
+struct Subscription {
+    pub url: Url,
+    pub filename: Option<String>,
+    pub data: Mapping,
+    pub info: SubscriptionInfo,
+    pub opts: Option<RemoteProfileOptions>,
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum SubscribeError {
@@ -115,6 +128,16 @@ pub enum SubscribeError {
         #[source]
         source: reqwest::Error,
     },
+
+    #[error("yaml parse error at {url}: {source}")]
+    Parse {
+        url: String,
+        #[source]
+        source: serde_yaml::Error,
+    },
+
+    #[error("invalid profile at {url}: {reason}")]
+    ValidationFailed { url: String, reason: String },
 }
 
 /// perform a subscription
@@ -185,7 +208,56 @@ async fn subscribe_url(
     // `Profile-Title` -> `Content-Disposition`
     let filename = utils::parse_profile_title_header(resp.headers())
         .or_else(|| utils::parse_filename_from_content_disposition(resp.headers()));
-    todo!()
+
+    // parse the profile-update-interval
+    let opts = match header
+        .get("profile-update-interval")
+        .or(header.get("Profile-Update-Interval"))
+    {
+        Some(value) => {
+            // tracing::debug!("profile-update-interval: {:?}", value);
+            match value.to_str().unwrap_or("").parse::<u64>() {
+                Ok(val) => Some(RemoteProfileOptions {
+                    update_interval: val * 60, // hour -> min
+                    ..RemoteProfileOptions::default()
+                }),
+                Err(_) => None,
+            }
+        }
+        None => None,
+    };
+
+    let data = resp
+        .text_with_charset("utf-8")
+        .await
+        .map_err(|e| SubscribeError::Network {
+            url: url.to_string(),
+            source: e,
+        })?;
+
+    // process the charset "UTF-8 with BOM"
+    let data = data.trim_start_matches('\u{feff}');
+
+    // check the data whether the valid yaml format
+    let yaml = serde_yaml::from_str::<Mapping>(data).map_err(|e| SubscribeError::Parse {
+        url: url.to_string(),
+        source: e,
+    })?;
+
+    if !yaml.contains_key("proxies") && !yaml.contains_key("proxy-providers") {
+        return Err(SubscribeError::ValidationFailed {
+            url: url.to_string(),
+            reason: "profile does not contain `proxies` or `proxy-providers`".to_string(),
+        });
+    }
+
+    Ok(Subscription {
+        url: url.clone(),
+        filename,
+        data: yaml,
+        info: extra.unwrap_or_default(),
+        opts,
+    })
 }
 
 #[derive(Default, Debug, Clone, Copy, Deserialize, Serialize, Type)]
