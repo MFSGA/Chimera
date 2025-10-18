@@ -17,3 +17,11 @@ opt-level = "s"
 [workspace.dependencies]
 thiserror = "2"
 
+reqwest = { version = "0.12", default-features = false, features = [
+  "charset",
+  "http2",
+  "system-proxy",
+  "json",
+  "stream",
+  "rustls-tls",
+] }

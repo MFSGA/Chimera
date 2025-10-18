@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use derive_builder::Builder;
 use serde::Deserialize;
 use specta::Type;
@@ -107,6 +109,11 @@ async fn subscribe_url(
     options: &RemoteProfileOptions,
 ) -> Result<Subscription, SubscribeError> {
     let options = options.apply_default();
+    let mut builder = reqwest::ClientBuilder::new()
+        .use_rustls_tls()
+        .no_proxy()
+        .timeout(Duration::from_secs(30));
 
+    // todo: proxy add the proxy client support
     todo!()
 }

@@ -53,6 +53,8 @@ chimera-macro = { path = "../chimera-macro" }
 
 nanoid = "0.4.0"
 
+reqwest = { workspace = true }
+
 [features]
 default = ["default-meta"]
 nightly = []
