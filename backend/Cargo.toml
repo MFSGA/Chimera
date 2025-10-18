@@ -1,5 +1,5 @@
 [workspace]
-members = ["tauri"]
+members = ["chimera-macro","tauri"]
 resolver = "2"
 
 [workspace.package]

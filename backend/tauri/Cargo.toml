@@ -48,6 +48,8 @@ url = "2"
 anyhow = "1.0"
 
 thiserror = { workspace = true }
+# 
+chimera-macro = { path = "../chimera-macro" }
 
 [features]
 default = ["default-meta"]

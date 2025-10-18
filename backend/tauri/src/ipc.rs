@@ -53,5 +53,9 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
         builder.option(option.clone());
     }
 
+    let profile = builder
+        .build_no_blocking()
+        .await
+        .context("failed to build a remote profile")?;
     todo!()
 }

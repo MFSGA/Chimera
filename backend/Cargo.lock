@@ -488,6 +488,7 @@ name = "chimera"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chimera-macro",
  "derive_builder",
  "once_cell",
  "parking_lot",
@@ -501,6 +502,15 @@ dependencies = [
  "tauri-specta",
  "thiserror 2.0.16",
  "url",
+]
+
+[[package]]
+name = "chimera-macro"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
