@@ -180,6 +180,11 @@ async fn subscribe_url(
         }
         None => None,
     };
+
+    // Try to parse filename from headers
+    // `Profile-Title` -> `Content-Disposition`
+    let filename = utils::parse_profile_title_header(resp.headers())
+        .or_else(|| utils::parse_filename_from_content_disposition(resp.headers()));
     todo!()
 }
 
@@ -189,4 +194,58 @@ pub struct SubscriptionInfo {
     pub download: usize,
     pub total: usize,
     pub expire: usize,
+}
+
+mod utils {
+    use base64::{engine::general_purpose, Engine};
+    use reqwest::header::{self, HeaderMap};
+
+    /// parse profile title from headers
+    pub fn parse_profile_title_header(headers: &HeaderMap) -> Option<String> {
+        headers
+            .get("profile-title")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| {
+                if v.starts_with("base64:") {
+                    let encoded = v.trim_start_matches("base64:");
+                    general_purpose::STANDARD
+                        .decode(encoded)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                } else {
+                    Some(v.to_string())
+                }
+            })
+    }
+
+    pub fn parse_filename_from_content_disposition(headers: &HeaderMap) -> Option<String> {
+        let filename = crate::utils::help::parse_str::<String>(
+            headers
+                .get(header::CONTENT_DISPOSITION)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+            "filename",
+        )?;
+        // tracing::debug!("Content-Disposition: {:?}", filename);
+
+        let filename = format!("{filename:?}");
+        let filename = filename.trim_matches('"');
+        match crate::utils::help::parse_str::<String>(filename, "filename*") {
+            Some(filename) => {
+                let iter = percent_encoding::percent_decode(filename.as_bytes());
+                let filename = iter.decode_utf8().unwrap_or_default();
+                filename
+                    .split("''")
+                    .last()
+                    .map(|s| s.trim_matches('"').to_string())
+            }
+            None => match crate::utils::help::parse_str::<String>(filename, "filename") {
+                Some(filename) => {
+                    let filename = filename.trim_matches('"');
+                    Some(filename.to_string())
+                }
+                None => None,
+            },
+        }
+    }
 }

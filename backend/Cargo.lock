@@ -500,11 +500,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "backon",
+ "base64 0.22.1",
  "chimera-macro",
  "derive_builder",
  "nanoid",
  "once_cell",
  "parking_lot",
+ "percent-encoding",
  "reqwest",
  "semver",
  "serde",
