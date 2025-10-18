@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
@@ -17,8 +18,11 @@ use crate::{
 use crate::utils::dirs::APP_VERSION;
 use backon::Retryable;
 
-#[derive(Debug, Deserialize, Builder, Type, Clone)]
+const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
+
+#[derive(Debug, Deserialize, Builder, Type, Clone, BuilderUpdate)]
 #[builder(derive(Debug, Deserialize, Type))]
+#[builder_update(patch_fn = "apply", getter)]
 pub struct RemoteProfileOptions {
     pub user_agent: Option<String>,
     /// subscription update interval
@@ -105,8 +109,29 @@ impl RemoteProfileBuilder {
             .build()
             .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?;
         let mut subscription = subscribe_url(&url, &options).await?;
-        // let extra = subscription.info;
 
+        let extra = subscription.info;
+
+        if self.shared.get_name().is_none()
+            && let Some(filename) = subscription.filename.take()
+        {
+            self.shared.name(filename);
+        }
+        if self.option.get_update_interval().is_none() && subscription.opts.is_some() {
+            self.option
+                .update_interval(subscription.opts.take().unwrap().update_interval);
+        }
+
+        let profile = RemoteProfile {
+            shared: self
+                .shared
+                .build(&PROFILE_TYPE)
+                .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?,
+            url,
+            // extra,
+            option: self.option.build().unwrap(),
+            // chain: self.chain.take().unwrap_or_default(),
+        };
         todo!()
     }
 }
@@ -269,7 +294,7 @@ pub struct SubscriptionInfo {
 }
 
 mod utils {
-    use base64::{engine::general_purpose, Engine};
+    use base64::{Engine, engine::general_purpose};
     use reqwest::header::{self, HeaderMap};
 
     /// parse profile title from headers
