@@ -1,13 +1,16 @@
 use std::time::Duration;
 
 use derive_builder::Builder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use url::Url;
 
-use crate::config::profile::{
-    item::shared::{ProfileShared, ProfileSharedBuilder},
-    item_type::ProfileItemType,
+use crate::{
+    config::profile::{
+        item::shared::{ProfileShared, ProfileSharedBuilder},
+        item_type::ProfileItemType,
+    },
+    utils::help,
 };
 
 use crate::utils::dirs::APP_VERSION;
@@ -156,5 +159,34 @@ async fn subscribe_url(
             source: e,
         })?;
 
+    let header = resp.headers();
+    // tracing::debug!("headers: {:#?}", header);
+
+    // parse the Subscription UserInfo
+    let extra = match header
+        .get("subscription-userinfo")
+        .or(header.get("Subscription-Userinfo"))
+    {
+        Some(value) => {
+            // tracing::debug!("Subscription-Userinfo: {:?}", value);
+            let sub_info = value.to_str().unwrap_or("");
+
+            Some(SubscriptionInfo {
+                upload: help::parse_str(sub_info, "upload").unwrap_or(0),
+                download: help::parse_str(sub_info, "download").unwrap_or(0),
+                total: help::parse_str(sub_info, "total").unwrap_or(0),
+                expire: help::parse_str(sub_info, "expire").unwrap_or(0),
+            })
+        }
+        None => None,
+    };
     todo!()
+}
+
+#[derive(Default, Debug, Clone, Copy, Deserialize, Serialize, Type)]
+pub struct SubscriptionInfo {
+    pub upload: usize,
+    pub download: usize,
+    pub total: usize,
+    pub expire: usize,
 }

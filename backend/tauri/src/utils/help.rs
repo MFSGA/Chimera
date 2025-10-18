@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use nanoid::nanoid;
 
 const ALPHABET: [char; 62] = [
@@ -11,4 +13,16 @@ const ALPHABET: [char; 62] = [
 pub fn get_uid(prefix: &str) -> String {
     let id = nanoid!(11, &ALPHABET);
     format!("{prefix}{id}")
+}
+
+/// parse the string
+/// xxx=123123; => 123123
+pub fn parse_str<T: FromStr>(target: &str, key: &str) -> Option<T> {
+    target.split(';').map(str::trim).find_map(|s| {
+        let mut parts = s.splitn(2, '=');
+        match (parts.next(), parts.next()) {
+            (Some(k), Some(v)) if k == key => v.parse::<T>().ok(),
+            _ => None,
+        }
+    })
 }
