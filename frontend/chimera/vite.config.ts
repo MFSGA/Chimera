@@ -3,6 +3,7 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { NodePackageImporter } from 'sass-embedded';
 import { defineConfig, UserConfig } from 'vite';
+import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
 
 const host = process.env.TAURI_DEV_HOST;
@@ -22,7 +23,7 @@ const devtools = () => {
 const IS_NIGHTLY = process.env.NIGHTLY?.toLowerCase() === 'true';
 
 // https://vitejs.dev/config/
-export default defineConfig(async ({ command }) => {
+export default defineConfig(async ({ command, mode }) => {
   const isDev = command === 'serve';
 
   const config = {
@@ -40,6 +41,17 @@ export default defineConfig(async ({ command }) => {
     },
     plugins: [
       TanStackRouterVite(),
+      createHtmlPlugin({
+        inject: {
+          data: {
+            title: 'Clash Nyanpasu',
+            injectScript:
+              mode === 'development'
+                ? '<script src="https://unpkg.com/react-scan/dist/auto.global.js"></script>'
+                : '',
+          },
+        },
+      }),
       react({}),
       sassDts({ esmExport: true }),
       isDev && devtools(),
