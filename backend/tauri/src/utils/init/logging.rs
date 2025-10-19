@@ -8,7 +8,7 @@ use std::{
     thread,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use parking_lot::Mutex;
 use tracing::error;
 use tracing_appender::{
@@ -19,7 +19,7 @@ use tracing_log::log_tracer;
 use tracing_subscriber::{EnvFilter, filter, fmt, layer::SubscriberExt, reload};
 
 use crate::{
-    config::{self, chimera::logging::LoggingLevel},
+    config::{self, chimera::logging::LoggingLevel, core::Config},
     utils::dirs,
 };
 
@@ -120,7 +120,13 @@ pub fn init() -> Result<()> {
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|x| anyhow!("setup logging error: {}", x))?;
 
-    // todo: logging
+    // reload the log level
+    std::thread::spawn(move || {
+        let config = Config::verge();
+        let log_level = config.latest().get_log_level();
+        let log_max_files = config.latest().max_log_files;
+        let _ = refresh_logger((Some(log_level), log_max_files));
+    });
     Ok(())
 }
 
@@ -133,4 +139,15 @@ fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
         .max_log_files(max_files)
         .build(log_dir)?;
     Ok(tracing_appender::non_blocking(file_appender))
+}
+
+pub fn refresh_logger(signal: ReloadSignal) -> Result<()> {
+    let channel = Channel::globals().lock();
+    match &channel.0 {
+        Some(sender) => {
+            let _ = sender.send(signal);
+            Ok(())
+        }
+        None => bail!("no logger channel"),
+    }
 }

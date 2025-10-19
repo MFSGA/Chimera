@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 use tracing_subscriber::filter;
 
+use super::IVerge;
+
 #[derive(Deserialize, Serialize, Debug, Clone, specta::Type, Display)]
 pub enum LoggingLevel {
     #[serde(rename = "silent", alias = "off")]
@@ -18,6 +20,18 @@ pub enum LoggingLevel {
     Error,
 }
 
+impl Default for LoggingLevel {
+    #[cfg(debug_assertions)]
+    fn default() -> Self {
+        Self::Trace
+    }
+
+    #[cfg(not(debug_assertions))]
+    fn default() -> Self {
+        Self::Info
+    }
+}
+
 impl From<LoggingLevel> for filter::LevelFilter {
     fn from(level: LoggingLevel) -> Self {
         match level {
@@ -28,5 +42,12 @@ impl From<LoggingLevel> for filter::LevelFilter {
             LoggingLevel::Warn => filter::LevelFilter::WARN,
             LoggingLevel::Error => filter::LevelFilter::ERROR,
         }
+    }
+}
+
+/// todo: logging migrate to the def location.
+impl IVerge {
+    pub fn get_log_level(&self) -> LoggingLevel {
+        self.app_log_level.clone().unwrap_or_default()
     }
 }

@@ -30,6 +30,8 @@ pub static APP_DIR_PLACEHOLDER: Lazy<Cow<'static, str>> = Lazy::new(|| {
     }
 });
 
+pub const CHIMERA_CONFIG: &str = "chimera-config.yaml";
+
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
@@ -141,4 +143,8 @@ pub fn app_logs_dir() -> Result<PathBuf> {
         log_err!(create_dir_all(&path));
     });
     Ok(path)
+}
+
+pub fn chimera_config_path() -> Result<PathBuf> {
+    Ok(app_config_dir()?.join(CHIMERA_CONFIG))
 }
