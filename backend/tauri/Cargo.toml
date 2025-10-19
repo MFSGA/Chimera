@@ -73,8 +73,13 @@ dunce = "1.0.4"
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
 
+convert_case = "0.8.0"
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = { version = "0.55", features = ["transactions"] }
 
 [features]
 default = ["default-meta"]

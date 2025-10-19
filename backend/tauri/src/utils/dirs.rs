@@ -1,4 +1,5 @@
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use std::{borrow::Cow, path::PathBuf};
 
 pub static APP_VERSION: &str = env!("CHIMERA_VERSION");
@@ -9,6 +10,20 @@ pub const APP_NAME: &str = "clash-chimera";
 pub const APP_NAME: &str = "clash-chimera-dev";
 
 pub const PROFILE_YAML: &str = "profiles.yaml";
+
+/// App Dir placeholder
+/// It is used to create the config and data dir in the filesystem
+/// For windows, the style should be similar to `C:/Users/nyanapasu/AppData/Roaming/Clash Nyanpasu`
+/// For macos, it should be similar to `/Users/nyanpasu/Library/Application Support/Clash Nyanpasu`
+/// For other platforms, it should be similar to `/home/nyanpasu/.config/clash-nyanpasu`
+pub static APP_DIR_PLACEHOLDER: Lazy<Cow<'static, str>> = Lazy::new(|| {
+    use convert_case::{Case, Casing};
+    if cfg!(any(target_os = "windows", target_os = "macos")) {
+        Cow::Owned(APP_NAME.to_case(Case::Title))
+    } else {
+        Cow::Borrowed(APP_NAME)
+    }
+});
 
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
