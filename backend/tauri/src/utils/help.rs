@@ -6,7 +6,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use nanoid::nanoid;
-use serde::de::DeserializeOwned;
+use serde::{Serialize, de::DeserializeOwned};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
@@ -120,4 +120,24 @@ pub fn open_file(app: tauri::AppHandle, path: PathBuf) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// save the data to the file
+/// can set `prefix` string to add some comments
+pub fn save_yaml<T: Serialize, P: AsRef<Path>>(
+    path: P,
+    data: &T,
+    prefix: Option<&str>,
+) -> Result<()> {
+    let path = path.as_ref();
+    let data_str = serde_yaml::to_string(data)?;
+
+    let yaml_str = match prefix {
+        Some(prefix) => format!("{prefix}\n\n{data_str}"),
+        None => data_str,
+    };
+
+    let path_str = path.as_os_str().to_string_lossy().to_string();
+    fs::write(path, yaml_str.as_bytes())
+        .with_context(|| format!("failed to save file \"{path_str}\""))
 }

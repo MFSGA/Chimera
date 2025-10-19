@@ -31,6 +31,7 @@ pub static APP_DIR_PLACEHOLDER: Lazy<Cow<'static, str>> = Lazy::new(|| {
 });
 
 pub const CHIMERA_CONFIG: &str = "chimera-config.yaml";
+pub const CLASH_CFG_GUARD_OVERRIDES: &str = "clash-guard-overrides.yaml";
 
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
@@ -72,8 +73,7 @@ pub fn app_profiles_dir() -> Result<PathBuf> {
     let path = app_config_dir()?.join("profiles");
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
-        todo!();
-        // log_err!(create_dir_all(&path));
+        log_err!(create_dir_all(&path));
     });
     Ok(path)
 }
@@ -147,4 +147,8 @@ pub fn app_logs_dir() -> Result<PathBuf> {
 
 pub fn chimera_config_path() -> Result<PathBuf> {
     Ok(app_config_dir()?.join(CHIMERA_CONFIG))
+}
+
+pub fn clash_guard_overrides_path() -> Result<PathBuf> {
+    Ok(app_config_dir()?.join(CLASH_CFG_GUARD_OVERRIDES))
 }
