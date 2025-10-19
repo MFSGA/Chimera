@@ -2,7 +2,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    config::profile::{item::Profile, item_type::ProfileUid},
+    config::profile::{
+        item::{Profile, ProfileMetaGetter},
+        item_type::ProfileUid,
+    },
     utils::{dirs, help},
 };
 
@@ -52,5 +55,18 @@ impl Profiles {
             self,
             Some("# Profiles Config for Clash Nyanpasu"),
         ) */
+    }
+
+    /// get items ref
+    pub fn get_items(&self) -> &[Profile] {
+        &self.items
+    }
+
+    /// find the item by the uid
+    pub fn get_item(&self, uid: &str) -> Result<&Profile> {
+        self.get_items()
+            .iter()
+            .find(|e| e.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))
     }
 }

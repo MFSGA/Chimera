@@ -1,4 +1,4 @@
-use ambassador::delegatable_trait;
+use ambassador::{Delegate, delegatable_trait};
 use chimera_macro::EnumWrapperCombined;
 
 use crate::config::profile::item::remote::RemoteProfile;
@@ -17,7 +17,18 @@ pub trait ProfileMetaGetter {
     fn uid(&self) -> &str;
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone, EnumWrapperCombined, specta::Type)]
+#[derive(
+    serde::Deserialize, serde::Serialize, Debug, Clone, EnumWrapperCombined, specta::Type, Delegate,
+)]
+#[delegate(ProfileMetaGetter)]
 pub enum Profile {
     Remote(RemoteProfile),
+}
+
+impl Profile {
+    pub fn file(&self) -> &str {
+        match self {
+            Profile::Remote(profile) => &profile.shared.file,
+        }
+    }
 }

@@ -144,4 +144,20 @@ where
             None
         }
     }
+
+    /// get the current state, it will return the ManagedStateLocker for the state
+    pub fn latest(&self) -> MappedRwLockReadGuard<'_, T> {
+        if self.is_dirty() {
+            let draft = self.draft.read();
+            if draft.is_some() {
+                RwLockReadGuard::map(draft, |guard| guard.as_ref().unwrap())
+            } else {
+                let state = self.inner.read();
+                RwLockReadGuard::map(state, |guard| guard)
+            }
+        } else {
+            let state = self.inner.read();
+            RwLockReadGuard::map(state, |guard| guard)
+        }
+    }
 }

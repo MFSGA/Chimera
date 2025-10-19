@@ -82,3 +82,17 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
     }
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
+    let file = {
+        Config::profiles()
+            .latest()
+            .get_item(&uid)?
+            .file()
+            .to_string()
+    };
+
+    todo!()
+}
