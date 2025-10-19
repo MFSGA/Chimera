@@ -1,13 +1,36 @@
-use std::fs;
+use std::{
+    fs,
+    io::IsTerminal,
+    sync::{
+        OnceLock,
+        mpsc::{self, Sender},
+    },
+    thread,
+};
 
 use anyhow::Result;
+use parking_lot::Mutex;
+use tracing::error;
 use tracing_appender::{
     non_blocking::{NonBlocking, WorkerGuard},
     rolling::Rotation,
 };
 use tracing_subscriber::{EnvFilter, filter, fmt, layer::SubscriberExt, reload};
 
-use crate::{config::chimera::logging::LoggingLevel, utils::dirs};
+use crate::{
+    config::{self, chimera::logging::LoggingLevel},
+    utils::dirs,
+};
+
+pub type ReloadSignal = (Option<config::chimera::LoggingLevel>, Option<usize>);
+
+struct Channel(Option<Sender<ReloadSignal>>);
+impl Channel {
+    fn globals() -> &'static Mutex<Channel> {
+        static CHANNEL: OnceLock<Mutex<Channel>> = OnceLock::new();
+        CHANNEL.get_or_init(|| Mutex::new(Channel(None)))
+    }
+}
 
 /// initial instance global logger
 pub fn init() -> Result<()> {
@@ -37,7 +60,47 @@ pub fn init() -> Result<()> {
             .with_file(true),
     );
 
-    todo!();
+    // spawn a thread to handle the reload signal
+    thread::spawn(move || {
+        let mut _guard = _guard; // just hold here to keep the file open
+        let (sender, receiver) = mpsc::channel::<ReloadSignal>();
+        {
+            let mut channel = Channel::globals().lock();
+            channel.0 = Some(sender);
+        }
+        loop {
+            let signal = receiver.recv().unwrap();
+            if let Some(level) = signal.0 {
+                filter_handle
+                    .reload(
+                        EnvFilter::builder()
+                            .with_default_directive(
+                                std::convert::Into::<filter::LevelFilter>::into(LoggingLevel::Warn)
+                                    .into(),
+                            )
+                            .from_env_lossy()
+                            .add_directive(format!("nyanpasu={level}").parse().unwrap())
+                            .add_directive(format!("clash_nyanpasu={level}").parse().unwrap()),
+                    )
+                    .unwrap(); // panic if error
+            }
+
+            if let Some(max_files) = signal.1 {
+                let (appender, guard) = match get_file_appender(max_files) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        error!("failed to create file appender: {}", e);
+                        continue;
+                    }
+                };
+                _guard = guard;
+                if let Err(e) = file_handle.modify(|layer| *layer.writer_mut() = appender) {
+                    error!("failed to modify file appender: {}", e);
+                }
+            }
+        }
+    });
+
     let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
 
     todo!()

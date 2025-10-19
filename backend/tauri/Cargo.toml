@@ -93,7 +93,7 @@ tracing-subscriber = { version = "0.3", features = [
   "parking_lot",
 ] }
 tracing-appender = { version = "0.2", features = ["parking_lot"] }
-
+tracing = { workspace = true }
 
 strum = { version = "0.27", features = ["derive"] }                       # for enum string conversion
 
