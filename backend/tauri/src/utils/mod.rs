@@ -3,4 +3,7 @@ pub mod dirs;
 /// 1
 pub mod help;
 /// 3
+#[cfg(windows)]
 pub mod winreg;
+
+pub mod open;

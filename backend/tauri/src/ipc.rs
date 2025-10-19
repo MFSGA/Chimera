@@ -1,16 +1,19 @@
 use std::result::Result as StdResult;
 
-use anyhow::Context;
+use anyhow::{Context, anyhow};
 
-use crate::config::{
-    core::Config,
-    profile::{
-        item::{
-            ProfileMetaGetter,
-            remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
+use crate::{
+    config::{
+        core::Config,
+        profile::{
+            item::{
+                ProfileMetaGetter,
+                remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
+            },
+            profiles::Profiles,
         },
-        profiles::Profiles,
     },
+    utils::{dirs, help},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
@@ -94,5 +97,11 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
             .to_string()
     };
 
-    todo!()
+    let path = (dirs::app_profiles_dir())?.join(file);
+    if !path.exists() {
+        return Err(anyhow!("file not exists: {:#?}", path).into());
+    }
+
+    help::open_file(app_handle, path)?;
+    Ok(())
 }
