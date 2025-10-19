@@ -8,6 +8,8 @@ pub const APP_NAME: &str = "clash-chimera";
 #[cfg(feature = "verge-dev")]
 pub const APP_NAME: &str = "clash-chimera-dev";
 
+pub const PROFILE_YAML: &str = "profiles.yaml";
+
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
@@ -54,4 +56,8 @@ pub fn app_install_dir() -> Result<PathBuf> {
         .parent()
         .ok_or(anyhow::anyhow!("failed to get the app install dir"))?;
     Ok(PathBuf::from(dir))
+}
+
+pub fn profiles_path() -> Result<PathBuf> {
+    Ok(app_config_dir()?.join(PROFILE_YAML))
 }

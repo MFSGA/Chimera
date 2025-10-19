@@ -73,6 +73,12 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
         let committer = Config::profiles().auto_commit();
         (committer.draft().append_item(profile.into()))?;
     }
-
-    todo!()
+    // TODO: 使用 activate_profile 来激活配置
+    if let Some(profile_id) = profile_id {
+        todo!()
+        /* let mut builder = ProfilesBuilder::default();
+        builder.current(vec![profile_id]);
+        patch_profiles_config(builder).await?; */
+    }
+    Ok(())
 }

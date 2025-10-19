@@ -517,6 +517,7 @@ dependencies = [
  "chimera-macro",
  "derive_builder",
  "dunce",
+ "fs-err",
  "nanoid",
  "once_cell",
  "parking_lot",
@@ -1178,6 +1179,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ad492b2cf1d89d568a43508ab24f98501fe03f2f31c01e1d0fe7366a71745d2"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]

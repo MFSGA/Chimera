@@ -71,6 +71,8 @@ tokio = { workspace = true }
 # System Utilities
 dunce = "1.0.4"   
 
+fs-err = { version = "3.1.2", features = ["tokio"] }
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 
