@@ -34,3 +34,5 @@ build.ps1
 release.sh
 
 *.tsbuildinfo
+
+docs/
