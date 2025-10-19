@@ -8,5 +8,5 @@ pub fn init_config() -> Result<()> {
     // init log
     logging::init().unwrap();
 
-    todo!()
+    Ok(())
 }

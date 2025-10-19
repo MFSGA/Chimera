@@ -8,13 +8,14 @@ use std::{
     thread,
 };
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use parking_lot::Mutex;
 use tracing::error;
 use tracing_appender::{
     non_blocking::{NonBlocking, WorkerGuard},
     rolling::Rotation,
 };
+use tracing_log::log_tracer;
 use tracing_subscriber::{EnvFilter, filter, fmt, layer::SubscriberExt, reload};
 
 use crate::{
@@ -101,9 +102,26 @@ pub fn init() -> Result<()> {
         }
     });
 
-    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
+    // if debug build, log to stdout and stderr with all levels
+    #[cfg(debug_assertions)]
+    let terminal_layer = fmt::Layer::new()
+        .with_ansi(std::io::stdout().is_terminal())
+        .compact()
+        .with_target(false)
+        .with_file(true)
+        .with_line_number(true)
+        .with_writer(std::io::stdout);
 
-    todo!()
+    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
+    #[cfg(debug_assertions)]
+    let subscriber = subscriber.with(terminal_layer);
+
+    log_tracer::LogTracer::init()?;
+    tracing::subscriber::set_global_default(subscriber)
+        .map_err(|x| anyhow!("setup logging error: {}", x))?;
+
+    // todo: logging
+    Ok(())
 }
 
 fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
