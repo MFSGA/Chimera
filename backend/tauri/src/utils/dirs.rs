@@ -1,5 +1,8 @@
 use anyhow::Result;
+use fs_err as fs;
+use nyanpasu_utils::dirs::suggest_config_dir;
 use once_cell::sync::Lazy;
+
 use std::{borrow::Cow, path::PathBuf};
 
 pub static APP_VERSION: &str = env!("CHIMERA_VERSION");
@@ -49,7 +52,15 @@ pub fn app_config_dir() -> Result<PathBuf> {
         }
     };
 
-    todo!()
+    match path {
+        Some(path) => Ok(path),
+        None => suggest_config_dir(&APP_DIR_PLACEHOLDER)
+            .ok_or(anyhow::anyhow!("failed to get the app config dir")),
+    }
+    .and_then(|dir| {
+        create_dir_all(&dir)?;
+        Ok(dir)
+    })
 }
 
 /// profiles dir
@@ -75,4 +86,19 @@ pub fn app_install_dir() -> Result<PathBuf> {
 
 pub fn profiles_path() -> Result<PathBuf> {
     Ok(app_config_dir()?.join(PROFILE_YAML))
+}
+
+fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
+    let meta = fs::metadata(dir);
+    if let Ok(meta) = meta {
+        if !meta.is_dir() {
+            fs_err::remove_file(dir)?;
+        } else {
+            return Ok(());
+        }
+    }
+    fs_extra::dir::create_all(dir, false).map_err(|e| {
+        std::io::Error::other(format!("failed to create dir: {:?}, kind: {:?}", e, e.kind))
+    })?;
+    Ok(())
 }
