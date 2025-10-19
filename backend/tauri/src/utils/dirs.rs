@@ -1,9 +1,11 @@
 use anyhow::Result;
 use fs_err as fs;
-use nyanpasu_utils::dirs::suggest_config_dir;
+use nyanpasu_utils::dirs::{suggest_config_dir, suggest_data_dir};
 use once_cell::sync::Lazy;
 
 use std::{borrow::Cow, path::PathBuf};
+
+use crate::log_err;
 
 pub static APP_VERSION: &str = env!("CHIMERA_VERSION");
 
@@ -101,4 +103,42 @@ fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
         std::io::Error::other(format!("failed to create dir: {:?}, kind: {:?}", e, e.kind))
     })?;
     Ok(())
+}
+
+pub fn app_data_dir() -> Result<PathBuf> {
+    let path: Option<PathBuf> = {
+        #[cfg(target_os = "windows")]
+        {
+            if get_portable_flag() {
+                let app_dir = app_install_dir()?;
+                Some(app_dir.join(".data").join(APP_NAME))
+            } else {
+                None
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    };
+
+    match path {
+        Some(path) => Ok(path),
+        None => suggest_data_dir(&APP_DIR_PLACEHOLDER)
+            .ok_or(anyhow::anyhow!("failed to get the app data dir")),
+    }
+    .and_then(|dir| {
+        create_dir_all(&dir)?;
+        Ok(dir)
+    })
+}
+
+/// logs dir
+pub fn app_logs_dir() -> Result<PathBuf> {
+    let path = app_data_dir()?.join("logs");
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        log_err!(create_dir_all(&path));
+    });
+    Ok(path)
 }

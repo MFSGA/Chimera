@@ -1,5 +1,7 @@
 use tauri_specta::collect_commands;
 
+use crate::utils::init;
+
 mod ipc;
 
 mod config;
@@ -19,6 +21,8 @@ fn greet(name: &str) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::log_err!(init::init_config());
+
     // setup specta
     let specta_builder = tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
         // demo

@@ -17,6 +17,30 @@ const ALPHABET: [char; 62] = [
     'V', 'W', 'X', 'Y', 'Z',
 ];
 
+#[macro_export]
+macro_rules! trace_err {
+    ($result: expr, $err_str: expr) => {
+        if let Err(err) = $result {
+            log::trace!(target: "app", "{}, err {:?}", $err_str, err);
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! log_err {
+    ($result: expr) => {
+        if let Err(err) = $result {
+            log::error!(target: "app", "{:#?}", err);
+        }
+    };
+
+    ($result: expr, $label: expr) => {
+        if let Err(err) = $result {
+            log::error!(target: "app", "{}: {:#?}", $label, err);
+        }
+    };
+}
+
 /// generate the uid
 pub fn get_uid(prefix: &str) -> String {
     let id = nanoid!(11, &ALPHABET);
@@ -51,15 +75,6 @@ pub fn read_yaml<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T> {
             path.display()
         )
     })
-}
-
-#[macro_export]
-macro_rules! trace_err {
-    ($result: expr, $err_str: expr) => {
-        if let Err(err) = $result {
-            log::trace!(target: "app", "{}, err {:?}", $err_str, err);
-        }
-    }
 }
 
 /// open file
