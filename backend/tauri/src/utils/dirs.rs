@@ -18,9 +18,9 @@ pub const PROFILE_YAML: &str = "profiles.yaml";
 
 /// App Dir placeholder
 /// It is used to create the config and data dir in the filesystem
-/// For windows, the style should be similar to `C:/Users/nyanapasu/AppData/Roaming/Clash Nyanpasu`
-/// For macos, it should be similar to `/Users/nyanpasu/Library/Application Support/Clash Nyanpasu`
-/// For other platforms, it should be similar to `/home/nyanpasu/.config/clash-nyanpasu`
+/// For windows, the style should be similar to `C:/Users/nyanapasu/AppData/Roaming/Clash Chimera`
+/// For macos, it should be similar to `/Users/chimera/Library/Application Support/Clash Chimera`
+/// For other platforms, it should be similar to `/home/chimera/.config/clash-chimera`
 pub static APP_DIR_PLACEHOLDER: Lazy<Cow<'static, str>> = Lazy::new(|| {
     use convert_case::{Case, Casing};
     if cfg!(any(target_os = "windows", target_os = "macos")) {

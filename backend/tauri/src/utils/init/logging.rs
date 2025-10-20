@@ -43,11 +43,12 @@ pub fn init() -> Result<()> {
     let (filter, filter_handle) = reload::Layer::new(
         EnvFilter::builder()
             .with_default_directive(
-                std::convert::Into::<filter::LevelFilter>::into(LoggingLevel::Warn).into(),
+                std::convert::Into::<filter::LevelFilter>::into(LoggingLevel::Debug).into(),
             )
             .from_env_lossy()
-            .add_directive(format!("nyanpasu={log_level}").parse().unwrap())
-            .add_directive(format!("clash_nyanpasu={log_level}").parse().unwrap()),
+            .add_directive(format!("chimera={log_level}").parse().unwrap())
+            .add_directive(format!("clash_chimera={log_level}").parse().unwrap())
+            .add_directive(format!("chimera_lib={log_level}").parse().unwrap()),
     );
 
     // register the logger
@@ -80,8 +81,9 @@ pub fn init() -> Result<()> {
                                     .into(),
                             )
                             .from_env_lossy()
-                            .add_directive(format!("nyanpasu={level}").parse().unwrap())
-                            .add_directive(format!("clash_nyanpasu={level}").parse().unwrap()),
+                            .add_directive(format!("chimera={level}").parse().unwrap())
+                            .add_directive(format!("chimera_lib={level}").parse().unwrap())
+                            .add_directive(format!("clash_chimera={level}").parse().unwrap()),
                     )
                     .unwrap(); // panic if error
             }
@@ -133,7 +135,7 @@ pub fn init() -> Result<()> {
 fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
     let log_dir = dirs::app_logs_dir().unwrap();
     let file_appender = tracing_appender::rolling::Builder::new()
-        .filename_prefix("clash-nyanpasu")
+        .filename_prefix("clash-chimera")
         .filename_suffix("app.log")
         .rotation(Rotation::DAILY)
         .max_log_files(max_files)

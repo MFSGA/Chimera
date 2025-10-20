@@ -34,7 +34,6 @@ export default defineConfig(async ({ command, mode }) => {
       preprocessorOptions: {
         scss: {
           api: 'modern-compiler',
-
           importer: [new NodePackageImporter()],
         },
       },
@@ -44,7 +43,7 @@ export default defineConfig(async ({ command, mode }) => {
       createHtmlPlugin({
         inject: {
           data: {
-            title: 'Clash Nyanpasu',
+            title: 'Clash Chimera',
             injectScript:
               mode === 'development'
                 ? '<script src="https://unpkg.com/react-scan/dist/auto.global.js"></script>'

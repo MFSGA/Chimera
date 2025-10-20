@@ -37,7 +37,7 @@ impl Profiles {
         match dirs::profiles_path().and_then(|path| help::read_yaml::<Self, _>(&path)) {
             Ok(profiles) => profiles,
             Err(err) => {
-                // todo: import_profile log::error!(target: "app", "{err:?}\n - use the default profiles");
+                log::error!(target: "app", "{err:?}\n - use the default profiles");
                 Self::default()
             }
         }
@@ -53,7 +53,7 @@ impl Profiles {
         /* help::save_yaml(
             &dirs::profiles_path()?,
             self,
-            Some("# Profiles Config for Clash Nyanpasu"),
+            Some("# Profiles Config for Clash Chimera"),
         ) */
     }
 
