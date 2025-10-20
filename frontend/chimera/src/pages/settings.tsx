@@ -1,12 +1,20 @@
+import { BasePage } from '@chimera/ui';
 import { createFileRoute } from '@tanstack/react-router';
+import { lazy } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export const Route = createFileRoute('/settings')({
   component: SettingPage,
 });
 
 function SettingPage() {
-  // todo: use i18n
-  // const { t } = useTranslation()
+  const { t } = useTranslation();
+  // vital
+  const Component = lazy(() => import('@/components/setting/setting-page'));
 
-  return <div>settings</div>;
+  return (
+    <BasePage title={t('Settings')}>
+      <Component />
+    </BasePage>
+  );
 }
