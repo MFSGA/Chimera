@@ -136,6 +136,10 @@ jobs:
       - name: Build UI
         run: |
           pnpm -F ui build
+      # todo: will delete the step in the future
+      - name: Build Interface
+        run: |
+          pnpm -F interface build
       # TODO: optimize strategy
       - name: Tauri build x86_64
         if: ${{ inputs.arch == 'x86_64' }}
