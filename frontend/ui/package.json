@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "@chimera/ui",
   "version": "2.0.0",
   "type": "module",
@@ -7,11 +7,15 @@
     "dist",
     "src"
   ],
-  "scripts": {},
+  "scripts": {
+    "build": "tsc"
+  },
   "dependencies": {
     "react": "19.1.1",
     "@types/react": "19.1.12",
-    "react-error-boundary": "6.0.0"
+    "react-error-boundary": "6.0.0",
+    "framer-motion": "12.23.24",
+    "@mui/material": "7.3.4"
   },
   "devDependencies": {
     "tailwind-merge": "3.3.1",
