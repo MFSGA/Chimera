@@ -33,7 +33,28 @@ const TunModeButton = () => {
 };
 
 const SystemProxyButton = () => {
-  return <div>SystemProxyButton</div>;
+  const { t } = useTranslation();
+
+  const systemProxy = useSetting('enable_system_proxy');
+
+  const handleSystemProxy = useLockFn(async () => {
+    try {
+      await systemProxy.upsert(!systemProxy.value);
+    } catch (error) {
+      message(`Activation System Proxy failed!`, {
+        title: t('Error'),
+        kind: 'error',
+      });
+    }
+  });
+
+  return (
+    <PaperSwitchButton
+      label={t('System Proxy')}
+      checked={Boolean(systemProxy.value)}
+      onClick={handleSystemProxy}
+    />
+  );
 };
 
 export const SettingSystemProxy = () => {
