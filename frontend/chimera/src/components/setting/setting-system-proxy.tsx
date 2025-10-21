@@ -1,11 +1,35 @@
+import { useSetting } from '@chimera/interface';
 import { BaseCard } from '@chimera/ui';
 import { Grid } from '@mui/material';
+import { useLockFn } from 'ahooks';
 import { useTranslation } from 'react-i18next';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
+import { PaperSwitchButton } from './modules/system-proxy';
 
 const TunModeButton = () => {
   const { t } = useTranslation();
 
-  return <div>TunModeButton</div>;
+  const tunMode = useSetting('enable_tun_mode');
+
+  const handleTunMode = useLockFn(async () => {
+    try {
+      await tunMode.upsert(!tunMode.value);
+    } catch (error) {
+      message(`Activation TUN Mode failed! \n Error: ${formatError(error)}`, {
+        title: t('Error'),
+        kind: 'error',
+      });
+    }
+  });
+
+  return (
+    <PaperSwitchButton
+      label={t('TUN Mode')}
+      checked={Boolean(tunMode.value)}
+      onClick={handleTunMode}
+    />
+  );
 };
 
 const SystemProxyButton = () => {

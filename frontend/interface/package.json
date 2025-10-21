@@ -13,9 +13,11 @@
   "dependencies": {
     "@tanstack/react-query": "5.90.2",
     "@tauri-apps/api": "2.8.0",
-    "react": "19.1.1"
+    "react": "19.1.1",
+    "lodash-es": "4.17.21"
   },
   "devDependencies": {
-    "@types/react": "19.1.14"
+    "@types/react": "19.1.14",
+    "@types/lodash-es": "4.17.12"
   }
 }

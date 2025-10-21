@@ -5,3 +5,4 @@ export * from './consts';
 
 export { commands } from './bindings';
 export type * from './bindings';
+export * from './use-settings';
