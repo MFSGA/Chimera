@@ -23,10 +23,12 @@
     "knip": "knip",
     "prepare": "husky",
     "check": "tsx scripts/check.ts",
-    "updater": "tsx scripts/updater.ts"
+    "updater": "tsx scripts/updater.ts",
+    "publish": "tsx scripts/publish.ts"
   },
   "dependencies": {
-    "husky": "9.1.7"
+    "husky": "9.1.7",
+    "@prettier/plugin-oxc": "0.0.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",
@@ -58,7 +60,8 @@
     "@commitlint/config-conventional": "19.8.1",
     "tsx": "4.20.6",
     "@types/node": "24.5.2",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "prettier-plugin-ember-template-tag": "2.1.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
