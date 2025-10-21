@@ -100,6 +100,7 @@ strum = { version = "0.27", features = ["derive"] }                       # for 
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55", features = ["transactions"] }

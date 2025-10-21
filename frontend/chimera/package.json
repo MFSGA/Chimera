@@ -26,7 +26,8 @@
     "react-i18next": "15.7.3",
     "@chimera/interface": "workspace:^",
     "ahooks": "3.9.5",
-    "@tauri-apps/plugin-dialog": "2.4.0"
+    "@tauri-apps/plugin-dialog": "2.4.0",
+    "@tauri-apps/plugin-process": "2.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.3.1",

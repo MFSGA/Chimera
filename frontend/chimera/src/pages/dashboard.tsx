@@ -1,6 +1,7 @@
 import { commands, unwrapResult } from '@chimera/interface';
 import { Button } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
+import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,10 +14,31 @@ async function getVersion() {
   const update = await check();
   console.log(update);
   if (update) {
+    console.log(
+      `found update ${update.version} from ${update.date} with notes ${update.body}`,
+    );
+    let downloaded = 0;
+    let contentLength = 0;
     console.log('Update available:');
 
-    // await update.downloadAndInstall();
-    // await relaunch();
+    await update.downloadAndInstall((event) => {
+      switch (event.event) {
+        case 'Started':
+          contentLength = event.data.contentLength ?? 0;
+          console.log(`started downloading ${event.data.contentLength} bytes`);
+          break;
+        case 'Progress':
+          downloaded += event.data.chunkLength;
+          console.log(`downloaded ${downloaded} from ${contentLength}`);
+          break;
+        case 'Finished':
+          console.log('download finished');
+          break;
+      }
+    });
+
+    console.log('update installed');
+    await relaunch();
   }
 }
 function Dashboard() {
