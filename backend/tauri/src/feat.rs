@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use crate::config::{chimera::IVerge, core::Config};
+use crate::{
+    config::{chimera::IVerge, core::Config},
+    core::service::ipc::get_ipc_state,
+};
 
 /// 修改verge的配置
 /// 一般都是一个个的修改
@@ -12,6 +15,43 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
         }
     }
     Config::verge().draft().patch_config(patch.clone());
+    let tun_mode = patch.enable_tun_mode;
 
+    let system_proxy = patch.enable_system_proxy;
+    let log_level = patch.app_log_level;
+    let log_max_files = patch.max_log_files;
+
+    let res = || async move {
+        // let service_mode = patch.enable_service_mode;
+        let ipc_state = get_ipc_state();
+        /*  if service_mode.is_some() && ipc_state.is_connected() {
+            log::debug!(target: "app", "change service mode to {}", service_mode.unwrap());
+
+            Config::generate().await?;
+            CoreManager::global().run_core().await?;
+        } */
+
+        if tun_mode.is_some() {
+            log::debug!(target: "app", "toggle tun mode");
+            #[allow(unused_mut)]
+            let mut flag = false;
+            /* #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                use crate::utils::dirs::check_core_permission;
+                let current_core = Config::verge().data().clash_core.unwrap_or_default();
+                let current_core: nyanpasu_utils::core::CoreType = (&current_core).into();
+                let service_state = crate::core::service::ipc::get_ipc_state();
+                if !service_state.is_connected() && check_core_permission(&current_core).inspect_err(|e| {
+                    log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
+                }).is_ok_and(|v| !v) {
+                    log::debug!(target: "app", "grant core permission, and restart core");
+                    flag = true;
+                }
+            } */
+            // let (state, _, _) = CoreManager::global().status().await;
+        }
+
+        <Result<()>>::Ok(())
+    };
     todo!()
 }
