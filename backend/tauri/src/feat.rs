@@ -51,7 +51,7 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
             let (state, _, _) = CoreManager::global().status().await;
             todo!()
         }
-
+        todo!();
         <Result<()>>::Ok(())
     };
     match res().await {

@@ -21,6 +21,9 @@ pub struct IVerge {
     pub enable_tun_mode: Option<bool>,
     /// 5. set system proxy
     pub enable_system_proxy: Option<bool>,
+    /// 6. windows service mode
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable_service_mode: Option<bool>,
 }
 
 impl IVerge {

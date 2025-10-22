@@ -11,6 +11,12 @@ pub enum IpcState {
     Disconnected,
 }
 
+impl IpcState {
+    pub fn is_connected(&self) -> bool {
+        *self == IpcState::Connected
+    }
+}
+
 static IPC_STATE: AtomicIpcState = AtomicIpcState::new(IpcState::Disconnected);
 
 pub fn get_ipc_state() -> IpcState {

@@ -102,6 +102,10 @@ export type IVerge = {
    * 5. set system proxy
    */
   enable_system_proxy: boolean | null;
+  /**
+   * 6. windows service mode
+   */
+  enable_service_mode?: boolean | null;
 };
 export type LoggingLevel =
   | 'silent'

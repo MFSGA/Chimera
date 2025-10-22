@@ -4,6 +4,8 @@ use nyanpasu_ipc::api::status::CoreState;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
+use crate::config::core::Config;
+
 #[derive(Debug, Clone, Copy)]
 pub enum RunType {
     /// Run as child process directly
@@ -17,7 +19,20 @@ pub enum RunType {
 
 impl Default for RunType {
     fn default() -> Self {
-        todo!()
+        let enable_service = {
+            *Config::verge()
+                .latest()
+                .enable_service_mode
+                .as_ref()
+                .unwrap_or(&false)
+        };
+        if enable_service && crate::core::service::ipc::get_ipc_state().is_connected() {
+            tracing::info!("run core as service");
+            RunType::Service
+        } else {
+            tracing::info!("run core as child process");
+            RunType::Normal
+        }
     }
 }
 
