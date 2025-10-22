@@ -4,6 +4,7 @@ use anyhow::{Context, anyhow};
 
 use crate::{
     config::{
+        chimera::IVerge,
         core::Config,
         profile::{
             item::{
@@ -104,4 +105,10 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
 
     help::open_file(app_handle, path)?;
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_verge_config() -> Result<IVerge> {
+    Ok(Config::verge().data().clone())
 }
