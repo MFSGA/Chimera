@@ -30,7 +30,9 @@ pub fn run() {
         // profile
         ipc::get_profiles,
         ipc::import_profile,
-        // ipc::view_profile,
+        ipc::view_profile,
+        // verge
+        ipc::get_verge_config,
         // updater layer
         // todo ipc::check_update,
     ]);
