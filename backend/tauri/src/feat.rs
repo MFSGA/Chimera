@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use crate::{
     config::{chimera::IVerge, core::Config},
-    core::service::ipc::get_ipc_state,
+    core::{clash::core::CoreManager, service::ipc::get_ipc_state},
 };
 
 /// 修改verge的配置
@@ -48,10 +48,18 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
                     flag = true;
                 }
             } */
-            // let (state, _, _) = CoreManager::global().status().await;
+            let (state, _, _) = CoreManager::global().status().await;
+            todo!()
         }
 
         <Result<()>>::Ok(())
     };
-    todo!()
+    match res().await {
+        Ok(()) => {
+            todo!()
+        }
+        Err(err) => {
+            todo!()
+        }
+    }
 }
