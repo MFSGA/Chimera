@@ -40,6 +40,41 @@ pub fn run() {
         // todo ipc::check_update,
     ]);
 
+    #[cfg(debug_assertions)]
+    {
+        const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+
+        match specta_builder.export(
+            specta_typescript::Typescript::default()
+                .formatter(specta_typescript::formatter::prettier)
+                .formatter(|file| {
+                    let npx_command = if cfg!(target_os = "windows") {
+                        "npx.cmd"
+                    } else {
+                        "npx"
+                    };
+
+                    std::process::Command::new(npx_command)
+                        .arg("prettier")
+                        .arg("--write")
+                        .arg(file)
+                        .output()
+                        .map(|_| ())
+                        .map_err(std::io::Error::other)
+                })
+                .bigint(specta_typescript::BigIntExportBehavior::Number)
+                .header("/* eslint-disable */\n// @ts-nocheck"),
+            SPECTA_BINDINGS_PATH,
+        ) {
+            Ok(_) => {
+                log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
+            }
+            Err(e) => {
+                panic!("Failed to export typescript bindings: {e}");
+            }
+        };
+    }
+
     tauri::Builder::default()
         .invoke_handler(specta_builder.invoke_handler())
         .plugin(tauri_plugin_opener::init())
