@@ -9,6 +9,8 @@ mod config;
 mod consts;
 /// 3
 mod core;
+/// 6
+mod feat;
 /// 4
 mod utils;
 
@@ -33,6 +35,7 @@ pub fn run() {
         ipc::view_profile,
         // verge
         ipc::get_verge_config,
+        ipc::patch_verge_config,
         // updater layer
         // todo ipc::check_update,
     ]);

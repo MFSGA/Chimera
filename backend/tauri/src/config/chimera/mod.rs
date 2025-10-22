@@ -1,11 +1,13 @@
 pub mod logging;
 
+use chimera_macro::VergePatch;
 pub use logging::LoggingLevel;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::{dirs, help};
 
-#[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize)]
+#[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
+#[verge(patch_fn = "patch_config")]
 // TODO: use new managedState and builder pattern instead
 pub struct IVerge {
     /// 1. 日记轮转时间，单位：天
