@@ -102,6 +102,12 @@ strum = { version = "0.27", features = ["derive"] }                       # for 
 
 atomic_enum = "0.3.0"                                                     # for atomic enum
 
+# Local Dependencies
+nyanpasu-ipc = { git = "https://github.com/libnyanpasu/nyanpasu-service.git", features = [
+  "client",
+  "specta",
+] } # IPC bridge between the UI process and service process
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
