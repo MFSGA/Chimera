@@ -1,3 +1,15 @@
+## [0.2.1] - 2025-10-22 07:50:31
+
+### ✨ Features
+
+- **settings:** Optimize the BasePage component 5 by @MFSGA
+
+- **settings:** Completed the SystemProxyButton 4 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.2.0...v0.2.1
+
 ## [0.2.0] - 2025-10-21
 
 ### ✨ Features
