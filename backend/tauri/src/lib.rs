@@ -9,6 +9,8 @@ mod config;
 mod consts;
 /// 3
 mod core;
+/// 7
+mod enhance;
 /// 6
 mod feat;
 /// 4

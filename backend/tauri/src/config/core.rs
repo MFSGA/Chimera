@@ -1,8 +1,10 @@
+use anyhow::Result;
 use once_cell::sync::OnceCell;
 
 use crate::{
     config::{chimera::IVerge, draft::Draft, profile::profiles::Profiles},
     core::state::ManagedState,
+    enhance,
 };
 
 pub struct Config {
@@ -26,5 +28,18 @@ impl Config {
 
     pub fn verge() -> Draft<IVerge> {
         Self::global().verge_config.clone()
+    }
+
+    /// 生成配置存好
+    pub async fn generate() -> Result<()> {
+        let (config, exists_keys, postprocessing_outputs) = enhance::enhance().await;
+        todo!()
+        /*  *Config::runtime().draft() = IRuntime {
+            config: Some(config),
+            exists_keys,
+            postprocessing_output: postprocessing_outputs,
+        };
+
+        Ok(()) */
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use nyanpasu_ipc::api::status::CoreState;
 
 use crate::{
     config::{chimera::IVerge, core::Config},
@@ -49,7 +50,18 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
                 }
             } */
             let (state, _, _) = CoreManager::global().status().await;
-            todo!()
+            if flag || matches!(state.as_ref(), CoreState::Stopped(_)) {
+                log::debug!(target: "app", "core is stopped, restart core");
+                Config::generate().await?;
+                todo!()
+                // CoreManager::global().run_core().await?;
+            } else {
+                log::debug!(target: "app", "update core config");
+                #[cfg(target_os = "macos")]
+                log::debug!("todo");
+                todo!()
+                // update_core_config().await?;
+            }
         }
         todo!();
         <Result<()>>::Ok(())
