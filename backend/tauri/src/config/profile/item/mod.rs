@@ -21,6 +21,7 @@ pub trait ProfileMetaGetter {
     serde::Deserialize, serde::Serialize, Debug, Clone, EnumWrapperCombined, specta::Type, Delegate,
 )]
 #[delegate(ProfileMetaGetter)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Profile {
     Remote(RemoteProfile),
 }

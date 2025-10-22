@@ -36,6 +36,8 @@ specta = { version = "=2.0.0-rc.22", features = [
   "indexmap",
   "function",
 ] }
+# Strong typed api binding between typescript and rust
+specta-typescript = "0.0.9"
 
 once_cell = "1.19.0"
 

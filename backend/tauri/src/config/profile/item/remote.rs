@@ -74,10 +74,12 @@ pub struct RemoteProfile {
         build = "self.option.build().map_err(Into::into)?"
     ))]
     pub option: RemoteProfileOptions,
+    #[serde(flatten)]
     #[builder(field(
         ty = "ProfileSharedBuilder",
         build = "self.shared.build().map_err(Into::into)?"
     ))]
+    // #[builder_field_attr(serde(flatten))]
     pub shared: ProfileShared,
 }
 
