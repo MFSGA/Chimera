@@ -1,3 +1,21 @@
+## [0.2.2] - 2025-10-22 12:13:23
+
+### ✨ Features
+
+- **get_verge_config:** Completed the backend cmd 1 by @MFSGA
+
+- **patch_verge_config:** Completed the VergePatch macro 1 by @MFSGA
+
+- **specta:** Support TypeScript binding by @MFSGA
+
+### 🐛 Bug Fixes
+
+- Add the member in IVerge for patch_verge_config by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.2.1...v0.2.2
+
 ## [0.2.1] - 2025-10-22 07:50:31
 
 ### ✨ Features
