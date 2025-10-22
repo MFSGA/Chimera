@@ -47,8 +47,8 @@ function Dashboard() {
 
   const handleGreet = async () => {
     try {
-      const res = await commands.getGreet('test');
-      setGreetMessage(unwrapResult(res) ?? 'errored msg');
+      const res = await commands.greet('test');
+      setGreetMessage(res);
     } catch (error) {
       console.error('Failed to call greet command', error);
       setGreetMessage('Failed to reach backend greet command.');
