@@ -14,6 +14,7 @@ use crate::{
             profiles::Profiles,
         },
     },
+    feat,
     utils::{dirs, help},
 };
 
@@ -111,4 +112,11 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
 #[specta::specta]
 pub fn get_verge_config() -> Result<IVerge> {
     Ok(Config::verge().data().clone())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_verge_config(payload: IVerge) -> Result {
+    (feat::patch_verge(payload).await)?;
+    Ok(())
 }
