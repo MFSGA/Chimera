@@ -17,6 +17,10 @@ pub struct IVerge {
     pub app_log_level: Option<logging::LoggingLevel>,
     /// 3. theme setting
     pub theme_color: Option<String>,
+    /// 4. clash tun mode
+    pub enable_tun_mode: Option<bool>,
+    /// 5. set system proxy
+    pub enable_system_proxy: Option<bool>,
 }
 
 impl IVerge {

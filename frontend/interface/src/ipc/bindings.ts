@@ -94,6 +94,14 @@ export type IVerge = {
    * 3. theme setting
    */
   theme_color: string | null;
+  /**
+   * 4. clash tun mode
+   */
+  enable_tun_mode: boolean | null;
+  /**
+   * 5. set system proxy
+   */
+  enable_system_proxy: boolean | null;
 };
 export type LoggingLevel =
   | 'silent'
