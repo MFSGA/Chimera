@@ -2,14 +2,17 @@ use anyhow::Result;
 use once_cell::sync::OnceCell;
 
 use crate::{
-    config::{chimera::IVerge, draft::Draft, profile::profiles::Profiles},
+    config::{chimera::IVerge, clash::IClashTemp, draft::Draft, profile::profiles::Profiles},
     core::state::ManagedState,
     enhance,
 };
 
+/// whole config
 pub struct Config {
     profiles_config: ManagedState<Profiles>,
     verge_config: Draft<IVerge>,
+    /// 3
+    clash_config: Draft<IClashTemp>,
 }
 
 impl Config {
@@ -19,6 +22,7 @@ impl Config {
         CONFIG.get_or_init(|| Config {
             profiles_config: ManagedState::from(Profiles::new()),
             verge_config: Draft::from(IVerge::new()),
+            clash_config: Draft::from(IClashTemp::new()),
         })
     }
 
@@ -41,5 +45,9 @@ impl Config {
         };
 
         Ok(()) */
+    }
+
+    pub fn clash() -> Draft<IClashTemp> {
+        Self::global().clash_config.clone()
     }
 }
