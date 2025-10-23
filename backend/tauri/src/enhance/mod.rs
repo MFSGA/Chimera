@@ -1,15 +1,18 @@
+use futures_util::future::join_all;
 use indexmap::IndexMap;
 use serde_yaml::Mapping;
 
 use crate::{
     config::{core::Config, profile::item::ProfileMetaGetter},
-    enhance::{chain::PostProcessingOutput, field::use_valid_fields},
+    enhance::{chain::PostProcessingOutput, field::use_valid_fields, utils::process_chain},
 };
 
 /// 1
 mod chain;
 /// 3
 mod field;
+/// 4
+mod script;
 /// 2
 mod utils;
 
@@ -76,6 +79,14 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
     let mut postprocessing_output = PostProcessingOutput::default();
 
     let valid = use_valid_fields(&valid);
+
+    // 执行 scoped chain
+    let profiles_outputs = join_all(profiles.into_iter().map(|(uid, mapping)| async {
+        let chain = profile_chain.get(&uid).map_or(&[] as &[_], |v| v);
+        let output = process_chain(mapping, chain).await;
+        (uid, output)
+    }))
+    .await;
 
     todo!()
 }
