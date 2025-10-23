@@ -80,6 +80,12 @@ export const commands = {
 
 /** user-defined types **/
 
+export type ClashCore =
+  | 'clash'
+  | 'clash-rs'
+  | 'mihomo'
+  | 'mihomo-alpha'
+  | 'clash-rs-alpha';
 export type IVerge = {
   /**
    * 1. 日记轮转时间，单位：天
@@ -106,6 +112,18 @@ export type IVerge = {
    * 6. windows service mode
    */
   enable_service_mode?: boolean | null;
+  /**
+   * 7. 是否使用内部的脚本支持，默认为真
+   */
+  enable_builtin_enhanced: boolean | null;
+  /**
+   * 8. clash core path
+   */
+  clash_core?: ClashCore | null;
+  /**
+   * 9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
+   */
+  enable_clash_fields: boolean | null;
 };
 export type LoggingLevel =
   | 'silent'
@@ -121,6 +139,14 @@ export type Profiles = {
    * profile list
    */
   items?: Profile[];
+  /**
+   * record valid fields for clash
+   */
+  valid?: string[];
+  /**
+   * same as PrfConfig.chain
+   */
+  chain: string[];
 };
 export type RemoteProfile = {
   /**
@@ -145,6 +171,7 @@ export type RemoteProfile = {
    */
   url: string;
   option: RemoteProfileOptions;
+  chain: string[];
 };
 export type RemoteProfileOptions = {
   user_agent: string | null;

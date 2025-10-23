@@ -1,10 +1,29 @@
 pub mod logging;
 
 use chimera_macro::VergePatch;
+use enumflags2::bitflags;
 pub use logging::LoggingLevel;
 use serde::{Deserialize, Serialize};
+use specta::Type;
 
 use crate::utils::{dirs, help};
+
+// TODO: when support sing-box, remove this struct
+#[bitflags]
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Type)]
+pub enum ClashCore {
+    #[serde(rename = "clash", alias = "clash-premium")]
+    ClashPremium = 0b0001,
+    #[serde(rename = "clash-rs")]
+    ClashRs,
+    #[serde(rename = "mihomo", alias = "clash-meta")]
+    Mihomo,
+    #[serde(rename = "mihomo-alpha")]
+    MihomoAlpha,
+    #[serde(rename = "clash-rs-alpha")]
+    ClashRsAlpha,
+}
 
 #[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
 #[verge(patch_fn = "patch_config")]
@@ -24,6 +43,13 @@ pub struct IVerge {
     /// 6. windows service mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_service_mode: Option<bool>,
+    /// 7. 是否使用内部的脚本支持，默认为真
+    pub enable_builtin_enhanced: Option<bool>,
+    /// 8. clash core path
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clash_core: Option<ClashCore>,
+    /// 9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
+    pub enable_clash_fields: Option<bool>,
 }
 
 impl IVerge {

@@ -1,5 +1,7 @@
 use anyhow::Result;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
 
 use crate::{
     config::profile::{
@@ -15,18 +17,23 @@ pub struct Profiles {
     #[serde(default)]
     /// profile list
     pub items: Vec<Profile>,
+    #[serde(default)]
+    /// record valid fields for clash
+    pub valid: Vec<String>,
+    /// same as PrfConfig.chain
+    pub chain: Vec<ProfileUid>,
 }
 
 impl Default for Profiles {
     fn default() -> Self {
         Self {
             current: vec![],
-            /* chain: vec![],
+            chain: vec![],
             valid: vec![
                 "dns".into(),
                 "unified-delay".into(),
                 "tcp-concurrent".into(),
-            ], */
+            ],
             items: vec![],
         }
     }
@@ -68,5 +75,14 @@ impl Profiles {
             .iter()
             .find(|e| e.uid() == uid)
             .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))
+    }
+
+    pub fn get_current(&self) -> &[ProfileUid] {
+        &self.current
+    }
+
+    /// 获取current指向的配置内容
+    pub fn current_mappings(&self) -> Result<IndexMap<&str, Mapping>> {
+        todo!()
     }
 }
