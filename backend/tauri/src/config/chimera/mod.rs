@@ -1,5 +1,9 @@
 pub mod logging;
 
+mod clash_strategy;
+
+pub use self::clash_strategy::{ClashStrategy, ExternalControllerPortStrategy};
+
 use chimera_macro::VergePatch;
 use enumflags2::bitflags;
 pub use logging::LoggingLevel;
@@ -50,6 +54,8 @@ pub struct IVerge {
     pub clash_core: Option<ClashCore>,
     /// 9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
     pub enable_clash_fields: Option<bool>,
+    /// 10. Clash 相关策略
+    pub clash_strategy: Option<ClashStrategy>,
 }
 
 impl IVerge {

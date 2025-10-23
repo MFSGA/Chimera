@@ -53,8 +53,7 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
             if flag || matches!(state.as_ref(), CoreState::Stopped(_)) {
                 log::debug!(target: "app", "core is stopped, restart core");
                 Config::generate().await?;
-                todo!()
-                // CoreManager::global().run_core().await?;
+                CoreManager::global().run_core().await?;
             } else {
                 log::debug!(target: "app", "update core config");
                 #[cfg(target_os = "macos")]
