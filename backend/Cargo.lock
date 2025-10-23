@@ -637,6 +637,7 @@ dependencies = [
  "open",
  "parking_lot",
  "percent-encoding",
+ "port_scanner",
  "rayon",
  "reqwest",
  "semver",
@@ -3486,6 +3487,12 @@ dependencies = [
  "rustix 1.1.2",
  "windows-sys 0.61.0",
 ]
+
+[[package]]
+name = "port_scanner"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "325a6d2ac5dee293c3b2612d4993b98aec1dff096b0a2dae70ed7d95784a05da"
 
 [[package]]
 name = "potential_utf"

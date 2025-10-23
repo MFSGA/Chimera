@@ -1,8 +1,19 @@
-use std::{net::SocketAddr, str::FromStr};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    str::FromStr,
+};
 
+use anyhow::Result;
 use serde_yaml::{Mapping, Value};
+use tracing::instrument;
 
-use crate::utils::{dirs, help};
+use crate::{
+    config::core::Config,
+    utils::{
+        dirs,
+        help::{self, get_clash_external_port},
+    },
+};
 
 #[derive(Default, Debug, Clone)]
 pub struct IClashTemp(pub Mapping);
@@ -87,4 +98,56 @@ impl IClashTemp {
             })
             .unwrap_or("127.0.0.1:9090".into())
     }
+
+    #[instrument]
+    pub fn prepare_external_controller_port(&mut self) -> Result<()> {
+        let strategy = Config::verge()
+            .latest()
+            .get_external_controller_port_strategy();
+
+        let server = self.get_client_info().server;
+        let (server_ip, server_port) = server.split_once(':').unwrap_or(("127.0.0.1", "9090"));
+        let server_port = server_port.parse::<u16>().unwrap_or(9090);
+        let port = get_clash_external_port(&strategy, server_port)?;
+
+        todo!()
+    }
+
+    pub fn get_client_info(&self) -> ClashInfo {
+        let config = &self.0;
+
+        ClashInfo {
+            port: Self::guard_mixed_port(config),
+            server: Self::guard_client_ctrl(config),
+            secret: config.get("secret").and_then(|value| match value {
+                Value::String(val_str) => Some(val_str.clone()),
+                Value::Bool(val_bool) => Some(val_bool.to_string()),
+                Value::Number(val_num) => Some(val_num.to_string()),
+                _ => None,
+            }),
+        }
+    }
+
+    pub fn guard_client_ctrl(config: &Mapping) -> String {
+        let value = Self::guard_server_ctrl(config);
+        match SocketAddr::from_str(value.as_str()) {
+            Ok(mut socket) => {
+                if socket.ip().is_unspecified() {
+                    socket.set_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+                }
+                socket.to_string()
+            }
+            Err(_) => "127.0.0.1:9090".into(),
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, specta::Type)]
+pub struct ClashInfo {
+    /// clash core port
+    pub port: u16,
+    /// same as `external-controller`
+    pub server: String,
+    /// clash secret
+    pub secret: Option<String>,
 }

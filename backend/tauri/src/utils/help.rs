@@ -11,6 +11,8 @@ use serde_yaml::{Mapping, Value};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
+use crate::config::chimera::ExternalControllerPortStrategy;
+
 const ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
     'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B',
@@ -156,4 +158,28 @@ pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
             path.display()
         ))?
         .to_owned())
+}
+
+pub fn get_clash_external_port(
+    strategy: &ExternalControllerPortStrategy,
+    port: u16,
+) -> anyhow::Result<u16> {
+    match strategy {
+        ExternalControllerPortStrategy::Fixed => {
+            if !port_scanner::local_port_available(port) {
+                bail!("Port {} is not available", port);
+            }
+        }
+        ExternalControllerPortStrategy::Random | ExternalControllerPortStrategy::AllowFallback => {
+            if ExternalControllerPortStrategy::AllowFallback == *strategy
+                && port_scanner::local_port_available(port)
+            {
+                return Ok(port);
+            }
+            let new_port = port_scanner::request_open_port()
+                .ok_or_else(|| anyhow!("Can't find an open port"))?;
+            return Ok(new_port);
+        }
+    }
+    Ok(port)
 }

@@ -86,6 +86,13 @@ export type ClashCore =
   | 'mihomo'
   | 'mihomo-alpha'
   | 'clash-rs-alpha';
+export type ClashStrategy = {
+  external_controller_port_strategy: ExternalControllerPortStrategy;
+};
+export type ExternalControllerPortStrategy =
+  | 'fixed'
+  | 'random'
+  | 'allow_fallback';
 export type IVerge = {
   /**
    * 1. 日记轮转时间，单位：天
@@ -124,6 +131,10 @@ export type IVerge = {
    * 9. 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
    */
   enable_clash_fields: boolean | null;
+  /**
+   * 10. Clash 相关策略
+   */
+  clash_strategy: ClashStrategy | null;
 };
 export type LoggingLevel =
   | 'silent'
