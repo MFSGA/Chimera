@@ -1,3 +1,5 @@
+use serde_yaml::Mapping;
+
 pub const DEFAULT_FIELDS: [&str; 5] = [
     "proxies",
     "proxy-groups",
@@ -49,5 +51,17 @@ pub fn use_valid_fields(valid: &[String]) -> Vec<String> {
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| others.contains(&s.as_str()))
         .chain(DEFAULT_FIELDS.iter().map(|s| s.to_string()))
+        .collect()
+}
+
+pub fn use_keys(config: &Mapping) -> Vec<String> {
+    config
+        .iter()
+        .filter_map(|(key, _)| key.as_str())
+        .map(|s| {
+            let mut s = s.to_string();
+            s.make_ascii_lowercase();
+            s
+        })
         .collect()
 }
