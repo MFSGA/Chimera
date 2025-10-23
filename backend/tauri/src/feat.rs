@@ -3,7 +3,7 @@ use nyanpasu_ipc::api::status::CoreState;
 
 use crate::{
     config::{chimera::IVerge, core::Config},
-    core::{clash::core::CoreManager, service::ipc::get_ipc_state},
+    core::{clash::core::CoreManager, service::ipc::get_ipc_state, sysopt},
 };
 
 /// 修改verge的配置
@@ -19,6 +19,8 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
     let tun_mode = patch.enable_tun_mode;
 
     let system_proxy = patch.enable_system_proxy;
+    let proxy_bypass = patch.system_proxy_bypass;
+
     let log_level = patch.app_log_level;
     let log_max_files = patch.max_log_files;
 
@@ -62,12 +64,20 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
                 // update_core_config().await?;
             }
         }
-        todo!();
+
+        if system_proxy.is_some() || proxy_bypass.is_some() {
+            sysopt::Sysopt::global().update_sysproxy()?;
+            sysopt::Sysopt::global().guard_proxy();
+        }
+
+        // todo!();
         <Result<()>>::Ok(())
     };
     match res().await {
         Ok(()) => {
-            todo!()
+            Config::verge().apply();
+            Config::verge().data().save_file()?;
+            Ok(())
         }
         Err(err) => {
             Config::verge().discard();

@@ -4,6 +4,7 @@ mod clash_strategy;
 
 pub use self::clash_strategy::{ClashStrategy, ExternalControllerPortStrategy};
 
+use anyhow::Result;
 use chimera_macro::VergePatch;
 use enumflags2::bitflags;
 pub use logging::LoggingLevel;
@@ -78,6 +79,15 @@ pub struct IVerge {
     pub enable_clash_fields: Option<bool>,
     /// 10. Clash 相关策略
     pub clash_strategy: Option<ClashStrategy>,
+    /// 11. set system proxy bypass
+    pub system_proxy_bypass: Option<String>,
+    /// 12. verge mixed port 用于覆盖 clash 的 mixed port
+    pub verge_mixed_port: Option<u16>,
+    /// 13. enable proxy guard
+    pub enable_proxy_guard: Option<bool>,
+    /// 14. proxy guard interval
+    #[serde(alias = "proxy_guard_duration")]
+    pub proxy_guard_interval: Option<u64>,
 }
 
 impl IVerge {
@@ -117,6 +127,15 @@ impl IVerge {
         }
 
         config
+    }
+
+    /// Save IVerge App Config
+    pub fn save_file(&self) -> Result<()> {
+        help::save_yaml(
+            &dirs::chimera_config_path()?,
+            &self,
+            Some("# Clash Chimera"),
+        )
     }
 }
 

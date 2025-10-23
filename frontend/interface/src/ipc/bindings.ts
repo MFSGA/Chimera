@@ -135,6 +135,22 @@ export type IVerge = {
    * 10. Clash 相关策略
    */
   clash_strategy: ClashStrategy | null;
+  /**
+   * 11. set system proxy bypass
+   */
+  system_proxy_bypass: string | null;
+  /**
+   * 12. verge mixed port 用于覆盖 clash 的 mixed port
+   */
+  verge_mixed_port: number | null;
+  /**
+   * 13. enable proxy guard
+   */
+  enable_proxy_guard: boolean | null;
+  /**
+   * 14. proxy guard interval
+   */
+  proxy_guard_interval: number | null;
 };
 export type LoggingLevel =
   | 'silent'
