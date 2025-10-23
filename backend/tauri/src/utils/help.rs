@@ -3,10 +3,11 @@ use std::{
     str::FromStr,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
+use serde_yaml::{Mapping, Value};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 
@@ -140,4 +141,19 @@ pub fn save_yaml<T: Serialize, P: AsRef<Path>>(
     let path_str = path.as_os_str().to_string_lossy().to_string();
     fs::write(path, yaml_str.as_bytes())
         .with_context(|| format!("failed to save file \"{path_str}\""))
+}
+
+/// read mapping from yaml fix #165
+pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
+    let mut val: Value = read_yaml(path)?;
+    val.apply_merge()
+        .with_context(|| format!("failed to apply merge \"{}\"", path.display()))?;
+
+    Ok(val
+        .as_mapping()
+        .ok_or(anyhow!(
+            "failed to transform to yaml mapping \"{}\"",
+            path.display()
+        ))?
+        .to_owned())
 }
