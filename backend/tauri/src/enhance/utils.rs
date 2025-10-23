@@ -4,5 +4,8 @@ use crate::{
 };
 
 pub fn convert_uids_to_scripts(profiles: &Profiles, uids: &[ProfileUid]) -> Vec<ChainItem> {
-    todo!()
+    uids.iter()
+        .filter_map(|uid| profiles.get_item(uid).ok())
+        .filter_map(<Option<ChainItem>>::from)
+        .collect::<Vec<ChainItem>>()
 }

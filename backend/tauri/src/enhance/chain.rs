@@ -28,3 +28,15 @@ impl TryFrom<&Profile> for ChainItem {
         Ok(Self { uid })
     }
 }
+
+impl From<&Profile> for Option<ChainItem> {
+    fn from(item: &Profile) -> Self {
+        let uid = item.uid().to_string();
+        // let data = ChainTypeWrapper::try_from(item);
+        Some(ChainItem { uid })
+        /* match data {
+            Err(_) => None,
+            Ok(data) => Some(ChainItem { uid }),
+        } */
+    }
+}
