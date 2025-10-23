@@ -1,3 +1,41 @@
+## [0.2.3] - 2025-10-23 15:58:10
+
+### ✨ Features
+
+- **patch_verge_config:** Optimize patch_verge and enable system_proxy feature completed 16 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> run_core and patch_verge completed 15 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> run_core completed 14 by @MFSGA
+
+- **patch_verge_config:** Config::generate completed 13 by @MFSGA
+
+- **patch_verge_config:** Enhance enhance merge_profiles merge_profiles completed 12 by @MFSGA
+
+- **patch_verge_config:** Enhance -> process_chain completed 11 by @MFSGA
+
+- **patch_verge_config:** Enhance -> convert_uids_to_scripts completed 10 by @MFSGA
+
+- **patch_verge_config:** Enhance -> convert_uids_to_scripts completed 9 by @MFSGA
+
+- **patch_verge_config:** Enhance -> current_mappings completed 8 by @MFSGA
+
+- **patch_verge_config:** Optimize enhance 7 by @MFSGA
+
+- **patch_verge_config:** Generate -> enhance add IClashTemp to be used for the core 6 by @MFSGA
+
+- **patch_verge_config:** Prepare to support enhance 5 by @MFSGA
+
+- **patch_verge_config:** Support enable_service_mode 4 by @MFSGA
+
+- **patch_verge_config:** Use CoreManager and RunType to provide same abstract interface 3 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> get_ipc_state finished 2 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.2.2...v0.2.3
+
 ## [0.2.2] - 2025-10-22 12:13:23
 
 ### ✨ Features
