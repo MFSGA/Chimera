@@ -152,3 +152,7 @@ pub fn chimera_config_path() -> Result<PathBuf> {
 pub fn clash_guard_overrides_path() -> Result<PathBuf> {
     Ok(app_config_dir()?.join(CLASH_CFG_GUARD_OVERRIDES))
 }
+
+pub fn clash_pid_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join("clash.pid"))
+}

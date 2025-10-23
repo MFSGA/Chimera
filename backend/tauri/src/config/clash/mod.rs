@@ -110,7 +110,15 @@ impl IClashTemp {
         let server_port = server_port.parse::<u16>().unwrap_or(9090);
         let port = get_clash_external_port(&strategy, server_port)?;
 
-        todo!()
+        if port != server_port {
+            let new_server = format!("{server_ip}:{port}");
+            log::warn!("The external controller port has been changed to {new_server}");
+            let mut map = Mapping::new();
+            map.insert("external-controller".into(), new_server.into());
+            todo!()
+            // self.patch_config(map);
+        }
+        Ok(())
     }
 
     pub fn get_client_info(&self) -> ClashInfo {
