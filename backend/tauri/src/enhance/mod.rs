@@ -4,7 +4,11 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::{core::Config, profile::item::ProfileMetaGetter},
-    enhance::{chain::PostProcessingOutput, field::use_valid_fields, utils::process_chain},
+    enhance::{
+        chain::PostProcessingOutput,
+        field::{use_keys, use_valid_fields},
+        utils::{merge_profiles, process_chain},
+    },
 };
 
 /// 1
@@ -88,5 +92,19 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
     }))
     .await;
 
-    todo!()
+    let mut profiles = IndexMap::new();
+    for (uid, (config, output)) in profiles_outputs {
+        postprocessing_output.scopes.insert(uid.to_string(), output);
+        profiles.insert(uid.to_string(), config);
+    }
+
+    // 合并多个配置
+    // TODO: 此步骤需要提供针对每个配置的 Meta 信息
+    // TODO: 需要支持自定义合并逻辑
+    let config = merge_profiles(profiles);
+
+    // 记录当前配置包含的键
+    let mut exists_keys = use_keys(&config);
+
+    (config, exists_keys, postprocessing_output)
 }

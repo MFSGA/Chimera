@@ -1,11 +1,21 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 
-use crate::config::profile::item::{Profile, ProfileMetaGetter};
+use crate::{
+    config::profile::{
+        item::{Profile, ProfileMetaGetter},
+        item_type::ProfileUid,
+    },
+    enhance::utils::Logs,
+};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, specta::Type)]
 /// 后处理输出
-pub struct PostProcessingOutput {}
+pub struct PostProcessingOutput {
+    /// 1. 局部链的输出
+    pub scopes: IndexMap<ProfileUid, IndexMap<ProfileUid, Logs>>,
+}
 
 #[derive(Debug, Clone)]
 pub enum ChainTypeWrapper {
