@@ -119,6 +119,8 @@ futures-util = "0.3"
 
 port_scanner = "0.1.5"
 
+camino = { version = "1.1.9", features = ["serde1"] }
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

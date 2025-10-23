@@ -619,6 +619,7 @@ dependencies = [
  "atomic_enum",
  "backon",
  "base64 0.22.1",
+ "camino",
  "chimera-macro",
  "convert_case 0.8.0",
  "derive_builder",

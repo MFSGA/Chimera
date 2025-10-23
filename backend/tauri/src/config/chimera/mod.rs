@@ -29,6 +29,28 @@ pub enum ClashCore {
     ClashRsAlpha,
 }
 
+impl From<&ClashCore> for nyanpasu_utils::core::CoreType {
+    fn from(core: &ClashCore) -> Self {
+        match core {
+            ClashCore::ClashPremium => nyanpasu_utils::core::CoreType::Clash(
+                nyanpasu_utils::core::ClashCoreType::ClashPremium,
+            ),
+            ClashCore::ClashRs => nyanpasu_utils::core::CoreType::Clash(
+                nyanpasu_utils::core::ClashCoreType::ClashRust,
+            ),
+            ClashCore::Mihomo => {
+                nyanpasu_utils::core::CoreType::Clash(nyanpasu_utils::core::ClashCoreType::Mihomo)
+            }
+            ClashCore::MihomoAlpha => nyanpasu_utils::core::CoreType::Clash(
+                nyanpasu_utils::core::ClashCoreType::MihomoAlpha,
+            ),
+            ClashCore::ClashRsAlpha => nyanpasu_utils::core::CoreType::Clash(
+                nyanpasu_utils::core::ClashCoreType::ClashRustAlpha,
+            ),
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
 #[verge(patch_fn = "patch_config")]
 // TODO: use new managedState and builder pattern instead
