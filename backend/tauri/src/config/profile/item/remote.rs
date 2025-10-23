@@ -14,7 +14,7 @@ use crate::{
             ProfileMetaGetter, ambassador_impl_ProfileMetaGetter,
             shared::{ProfileFileIo, ProfileShared, ProfileSharedBuilder},
         },
-        item_type::ProfileItemType,
+        item_type::{ProfileItemType, ProfileUid},
     },
     utils::help,
 };
@@ -81,6 +81,8 @@ pub struct RemoteProfile {
     ))]
     // #[builder_field_attr(serde(flatten))]
     pub shared: ProfileShared,
+
+    pub chain: Vec<ProfileUid>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -140,7 +142,7 @@ impl RemoteProfileBuilder {
             url,
             // extra,
             option: self.option.build().unwrap(),
-            // chain: self.chain.take().unwrap_or_default(),
+            chain: self.chain.take().unwrap_or_default(),
         };
         // write the profile to the file
         profile
