@@ -2,10 +2,17 @@ use std::{borrow::Cow, sync::Arc};
 
 use anyhow::Result;
 use nyanpasu_ipc::api::status::CoreState;
+use nyanpasu_utils::core::instance::CoreInstanceBuilder;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
-use crate::config::core::Config;
+use crate::{
+    config::{
+        chimera::ClashCore,
+        core::{Config, ConfigType},
+    },
+    utils::dirs,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum RunType {
@@ -65,7 +72,50 @@ impl Instance {
     }
 
     pub fn try_new(run_type: RunType) -> Result<Self> {
-        todo!()
+        let core_type: nyanpasu_utils::core::CoreType = {
+            (Config::verge()
+                .latest()
+                .clash_core
+                .as_ref()
+                .unwrap_or(&ClashCore::ClashPremium))
+            .into()
+        };
+
+        let data_dir = camino::Utf8PathBuf::from_path_buf(dirs::app_data_dir()?)
+            .map_err(|e| anyhow::anyhow!("failed to convert data dir to utf8 path: {:?}", e))?;
+        let binary = camino::Utf8PathBuf::from_path_buf(find_binary_path(&core_type)?)
+            .map_err(|e| anyhow::anyhow!("failed to convert binary path to utf8 path: {:?}", e))?;
+        let config_path = camino::Utf8PathBuf::from_path_buf(Config::generate_file(
+            ConfigType::Run,
+        )?)
+        .map_err(|e| anyhow::anyhow!("failed to convert config path to utf8 path: {:?}", e))?;
+
+        let pid_path = camino::Utf8PathBuf::from_path_buf(dirs::clash_pid_path()?)
+            .map_err(|e| anyhow::anyhow!("failed to convert pid path to utf8 path: {:?}", e))?;
+        match run_type {
+            RunType::Normal => {
+                let instance = Arc::new(
+                    CoreInstanceBuilder::default()
+                        .core_type(core_type)
+                        .app_dir(data_dir)
+                        .binary_path(binary)
+                        .config_path(config_path.clone())
+                        .pid_path(pid_path)
+                        .build()?,
+                );
+                Ok(Instance::Child {
+                    // child: Mutex::new(instance),
+                    // kill_flag: Arc::new(AtomicBool::new(false)),
+                    // stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
+                })
+            }
+            RunType::Service => {
+                todo!()
+            }
+            RunType::Elevated => {
+                todo!()
+            }
+        }
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -140,4 +190,28 @@ impl CoreManager {
         }
         instance.start().await
     }
+}
+
+// TODO: support system path search via a config or flag
+// FIXME: move this fn to nyanpasu-utils
+/// Search the binary path of the core: Data Dir -> Sidecar Dir
+pub fn find_binary_path(
+    core_type: &nyanpasu_utils::core::CoreType,
+) -> std::io::Result<std::path::PathBuf> {
+    let data_dir = dirs::app_data_dir()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
+    let binary_path = data_dir.join(core_type.get_executable_name());
+    if binary_path.exists() {
+        return Ok(binary_path);
+    }
+    let app_dir = dirs::app_install_dir()
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
+    let binary_path = app_dir.join(core_type.get_executable_name());
+    if binary_path.exists() {
+        return Ok(binary_path);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!("{} not found", core_type.get_executable_name()),
+    ))
 }

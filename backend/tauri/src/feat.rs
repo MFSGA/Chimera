@@ -70,7 +70,8 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
             todo!()
         }
         Err(err) => {
-            todo!()
+            Config::verge().discard();
+            Err(err)
         }
     }
 }
