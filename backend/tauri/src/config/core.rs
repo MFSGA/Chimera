@@ -2,7 +2,10 @@ use anyhow::Result;
 use once_cell::sync::OnceCell;
 
 use crate::{
-    config::{chimera::IVerge, clash::IClashTemp, draft::Draft, profile::profiles::Profiles},
+    config::{
+        chimera::IVerge, clash::IClashTemp, draft::Draft, profile::profiles::Profiles,
+        runtime::IRuntime,
+    },
     core::state::ManagedState,
     enhance,
 };
@@ -13,6 +16,8 @@ pub struct Config {
     verge_config: Draft<IVerge>,
     /// 3
     clash_config: Draft<IClashTemp>,
+    /// 4
+    runtime_config: Draft<IRuntime>,
 }
 
 impl Config {
@@ -23,6 +28,7 @@ impl Config {
             profiles_config: ManagedState::from(Profiles::new()),
             verge_config: Draft::from(IVerge::new()),
             clash_config: Draft::from(IClashTemp::new()),
+            runtime_config: Draft::from(IRuntime::new()),
         })
     }
 
@@ -37,17 +43,17 @@ impl Config {
     /// 生成配置存好
     pub async fn generate() -> Result<()> {
         let (config, exists_keys, postprocessing_outputs) = enhance::enhance().await;
-        todo!()
-        /*  *Config::runtime().draft() = IRuntime {
-            config: Some(config),
-            exists_keys,
-            postprocessing_output: postprocessing_outputs,
-        };
 
-        Ok(()) */
+        *Config::runtime().draft() = IRuntime {};
+
+        Ok(())
     }
 
     pub fn clash() -> Draft<IClashTemp> {
         Self::global().clash_config.clone()
+    }
+
+    pub fn runtime() -> Draft<IRuntime> {
+        Self::global().runtime_config.clone()
     }
 }
