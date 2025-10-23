@@ -148,6 +148,10 @@ impl IClashTemp {
             Err(_) => "127.0.0.1:9090".into(),
         }
     }
+
+    pub fn get_mixed_port(&self) -> u16 {
+        Self::guard_mixed_port(&self.0)
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, specta::Type)]
