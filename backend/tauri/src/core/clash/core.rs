@@ -1,5 +1,6 @@
 use std::{borrow::Cow, sync::Arc};
 
+use anyhow::Result;
 use nyanpasu_ipc::api::status::CoreState;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -54,6 +55,22 @@ impl Instance {
             Instance::Service { .. } => RunType::Service,
         }
     }
+
+    pub async fn state<'a>(&self) -> Cow<'a, CoreState> {
+        todo!()
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        todo!()
+    }
+
+    pub fn try_new(run_type: RunType) -> Result<Self> {
+        todo!()
+    }
+
+    pub async fn start(&self) -> Result<()> {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -84,5 +101,43 @@ impl CoreManager {
                 RunType::default(),
             )
         }
+    }
+
+    /// 启动核心
+    pub async fn run_core(&self) -> Result<()> {
+        {
+            let instance = {
+                let instance = self.instance.lock();
+                instance.as_ref().cloned()
+            };
+            if let Some(instance) = instance.as_ref()
+                && matches!(instance.state().await.as_ref(), CoreState::Running)
+            {
+                log::debug!(target: "app", "core is already running, stop it first...");
+                instance.stop().await?;
+            }
+        }
+
+        // 检查端口是否可用
+        Config::clash()
+            .latest()
+            .prepare_external_controller_port()?;
+        let run_type = RunType::default();
+        let instance = Arc::new(Instance::try_new(run_type)?);
+
+        #[cfg(target_os = "macos")]
+        {
+            let enable_tun = Config::verge().latest().enable_tun_mode.unwrap_or(false);
+            let _ = self
+                .change_default_network_dns(enable_tun)
+                .await
+                .inspect_err(|e| log::error!(target: "app", "failed to set system dns: {:?}", e));
+        }
+
+        {
+            let mut this = self.instance.lock();
+            *this = Some(instance.clone());
+        }
+        instance.start().await
     }
 }
