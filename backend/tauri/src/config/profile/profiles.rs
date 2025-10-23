@@ -1,5 +1,6 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use indexmap::IndexMap;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 
@@ -83,6 +84,28 @@ impl Profiles {
 
     /// 获取current指向的配置内容
     pub fn current_mappings(&self) -> Result<IndexMap<&str, Mapping>> {
-        todo!()
+        let current = self
+            .items
+            .iter()
+            .filter(|e| self.current.iter().any(|uid| uid == e.uid()))
+            .collect::<Vec<_>>();
+        let (successes, failures): (Vec<(&str, Mapping)>, Vec<anyhow::Error>) = current
+            .par_iter()
+            .map(|item| {
+                let file_path = dirs::app_profiles_dir()?.join(item.file());
+                if !file_path.exists() {
+                    return Err(anyhow::anyhow!("failed to find the file: {:?}", file_path));
+                }
+                help::read_merge_mapping(&file_path).map(|mapping| (item.uid(), mapping))
+            })
+            .partition_map(|item| match item {
+                Ok(item) => itertools::Either::Left(item),
+                Err(err) => itertools::Either::Right(err),
+            });
+        if !failures.is_empty() {
+            bail!("failed to read the file: {:#?}", failures);
+        }
+        let map = IndexMap::from_iter(successes);
+        Ok(map)
     }
 }
