@@ -3,11 +3,13 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::{core::Config, profile::item::ProfileMetaGetter},
-    enhance::chain::PostProcessingOutput,
+    enhance::{chain::PostProcessingOutput, field::use_valid_fields},
 };
 
 /// 1
 mod chain;
+/// 3
+mod field;
 /// 2
 mod utils;
 
@@ -70,5 +72,10 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
 
         (current_mappings, profile_chain_mapping, global_chain, valid)
     };
+
+    let mut postprocessing_output = PostProcessingOutput::default();
+
+    let valid = use_valid_fields(&valid);
+
     todo!()
 }
