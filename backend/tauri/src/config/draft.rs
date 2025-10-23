@@ -1,7 +1,7 @@
 use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
 use std::sync::Arc;
 
-use crate::config::{chimera::IVerge, clash::IClashTemp};
+use crate::config::{chimera::IVerge, clash::IClashTemp, runtime::IRuntime};
 
 #[derive(Debug, Clone)]
 pub struct Draft<T: Clone + ToOwned> {
@@ -69,3 +69,5 @@ macro_rules! draft_define {
 draft_define!(IVerge);
 /// 2
 draft_define!(IClashTemp);
+/// 3
+draft_define!(IRuntime);
