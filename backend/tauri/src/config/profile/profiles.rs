@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use derive_builder::Builder;
 use indexmap::IndexMap;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use serde::{Deserialize, Serialize};
@@ -12,7 +13,8 @@ use crate::{
     utils::{dirs, help},
 };
 
-#[derive(Serialize, Deserialize, specta::Type, Clone)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Builder)]
+#[builder(derive(Serialize, Deserialize, specta::Type))]
 pub struct Profiles {
     pub current: Vec<ProfileUid>,
     #[serde(default)]
@@ -57,12 +59,11 @@ impl Profiles {
     }
 
     pub fn save_file(&self) -> Result<()> {
-        todo!()
-        /* help::save_yaml(
+        help::save_yaml(
             &dirs::profiles_path()?,
             self,
             Some("# Profiles Config for Clash Chimera"),
-        ) */
+        )
     }
 
     /// get items ref

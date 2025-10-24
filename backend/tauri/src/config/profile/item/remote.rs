@@ -28,6 +28,9 @@ const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder_update(patch_fn = "apply", getter)]
 pub struct RemoteProfileOptions {
+    /// see issue #13. must set the builder attr for build the user_agent for client
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(default, setter(strip_option))]
     pub user_agent: Option<String>,
     /// subscription update interval
     #[builder(default = "120")]

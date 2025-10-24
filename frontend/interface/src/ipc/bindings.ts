@@ -53,6 +53,22 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * 修改profiles的
+   */
+  async patchProfilesConfig(
+    profiles: ProfilesBuilder,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('patch_profiles_config', { profiles }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getVergeConfig(): Promise<Result<IVerge, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_verge_config') };
@@ -175,6 +191,25 @@ export type Profiles = {
    */
   chain: string[];
 };
+/**
+ * Builder for [`Profiles`](struct.Profiles.html).
+ *
+ */
+export type ProfilesBuilder = {
+  current: string[] | null;
+  /**
+   * profile list
+   */
+  items: Profile[] | null;
+  /**
+   * record valid fields for clash
+   */
+  valid: string[] | null;
+  /**
+   * same as PrfConfig.chain
+   */
+  chain: string[] | null;
+};
 export type RemoteProfile = {
   /**
    * Profile ID
@@ -201,7 +236,10 @@ export type RemoteProfile = {
   chain: string[];
 };
 export type RemoteProfileOptions = {
-  user_agent: string | null;
+  /**
+   * see issue #13. must set the builder attr for build the user_agent for client
+   */
+  user_agent?: string | null;
   /**
    * subscription update interval
    */
@@ -212,6 +250,9 @@ export type RemoteProfileOptions = {
  *
  */
 export type RemoteProfileOptionsBuilder = {
+  /**
+   * see issue #13. must set the builder attr for build the user_agent for client
+   */
   user_agent: string | null;
   /**
    * subscription update interval
