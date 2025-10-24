@@ -35,6 +35,7 @@ pub fn run() {
         ipc::get_profiles,
         ipc::import_profile,
         ipc::view_profile,
+        ipc::patch_profiles_config,
         // verge
         ipc::get_verge_config,
         ipc::patch_verge_config,
