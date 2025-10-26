@@ -1,16 +1,19 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
+use camino::Utf8PathBuf;
 use nyanpasu_ipc::api::status::CoreState;
 use nyanpasu_utils::core::instance::CoreInstanceBuilder;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
+use tokio::time::sleep;
 
 use crate::{
     config::{
         chimera::ClashCore,
         core::{Config, ConfigType},
     },
+    core::clash::api,
     utils::dirs,
 };
 
@@ -189,6 +192,65 @@ impl CoreManager {
             *this = Some(instance.clone());
         }
         instance.start().await
+    }
+
+    /// 更新proxies那些
+    /// 如果涉及端口和外部控制则需要重启
+    pub async fn update_config(&self) -> Result<()> {
+        log::debug!(target: "app", "try to update clash config");
+
+        // 更新配置
+        Config::generate().await?;
+
+        // 检查配置是否正常
+        self.check_config().await?;
+
+        // 更新运行时配置
+        let path = Config::generate_file(ConfigType::Run)?;
+        let path = dirs::path_to_str(&path)?;
+
+        // 发送请求 发送5次
+        for i in 0..5 {
+            match api::put_configs(path).await {
+                Ok(_) => break,
+                Err(err) => {
+                    if i < 4 {
+                        log::info!(target: "app", "{err:?}");
+                    } else {
+                        bail!(err);
+                    }
+                }
+            }
+            sleep(Duration::from_millis(250)).await;
+        }
+
+        Ok(())
+    }
+
+    /// 检查配置是否正确
+    pub async fn check_config(&self) -> Result<()> {
+        use nyanpasu_utils::core::instance::CoreInstance;
+        let config_path = Config::generate_file(ConfigType::Check)?;
+        let config_path = Utf8PathBuf::from_path_buf(config_path)
+            .map_err(|_| anyhow::anyhow!("failed to convert config path to utf8 path"))?;
+
+        let clash_core = { Config::verge().latest().clash_core };
+        let clash_core = clash_core.unwrap_or(ClashCore::ClashPremium);
+        let clash_core: nyanpasu_utils::core::CoreType = (&clash_core).into();
+
+        let app_dir = dirs::app_data_dir()?;
+        let app_dir = Utf8PathBuf::from_path_buf(app_dir)
+            .map_err(|_| anyhow::anyhow!("failed to convert app dir to utf8 path"))?;
+        let binary_path = find_binary_path(&clash_core)?;
+        let binary_path = Utf8PathBuf::from_path_buf(binary_path)
+            .map_err(|_| anyhow::anyhow!("failed to convert binary path to utf8 path"))?;
+        log::debug!(target: "app", "check config in `{clash_core}`");
+        CoreInstance::check_config_(&clash_core, &config_path, &binary_path, &app_dir)
+            .await
+            .context("failed to check config")
+            .inspect_err(|e| log::error!(target: "app", "failed to check config: {e:?}"))?;
+
+        Ok(())
     }
 }
 

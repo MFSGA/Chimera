@@ -14,6 +14,7 @@ use crate::{
             profiles::{Profiles, ProfilesBuilder},
         },
     },
+    core::clash::core::CoreManager,
     feat,
     utils::{dirs, help},
 };
@@ -60,12 +61,11 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
     if let Some(option) = option {
         builder.option(option.clone());
     }
-
     let profile = builder
         .build_no_blocking()
         .await
         .context("failed to build a remote profile")?;
-
+    log::debug!("import_profile 3");
     // 根据是否为 Some(uid) 来判断是否要激活配置
     let profile_id = {
         if Config::profiles().draft().current.is_empty() {
@@ -124,5 +124,18 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
-    todo!()
+    Config::profiles().draft().apply(profiles);
+
+    match CoreManager::global().update_config().await {
+        Ok(_) => {
+            todo!()
+        }
+        Err(err) => {
+            log::debug!(target: "app", "{err:?}");
+
+            Config::profiles().discard();
+
+            Err(IpcError::from(err))
+        }
+    }
 }
