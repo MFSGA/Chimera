@@ -160,4 +160,12 @@ where
             RwLockReadGuard::map(state, |guard| guard)
         }
     }
+
+    /// discard the draft state
+    pub fn discard(&self) -> Option<T> {
+        let v = self.draft.write().take();
+        self.is_dirty
+            .store(false, std::sync::atomic::Ordering::Release);
+        v
+    }
 }

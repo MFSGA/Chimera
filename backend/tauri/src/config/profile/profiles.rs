@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use indexmap::IndexMap;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -13,8 +14,9 @@ use crate::{
     utils::{dirs, help},
 };
 
-#[derive(Serialize, Deserialize, specta::Type, Clone, Builder)]
+#[derive(Serialize, Deserialize, specta::Type, Clone, Builder, BuilderUpdate)]
 #[builder(derive(Serialize, Deserialize, specta::Type))]
+#[builder_update(patch_fn = "apply")]
 pub struct Profiles {
     pub current: Vec<ProfileUid>,
     #[serde(default)]
