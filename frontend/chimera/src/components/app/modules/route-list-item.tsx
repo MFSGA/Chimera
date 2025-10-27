@@ -3,6 +3,7 @@ import { SvgIconComponent } from '@mui/icons-material';
 import { Box, ListItemButton, ListItemIcon, Tooltip } from '@mui/material';
 import { useMatch, useNavigate } from '@tanstack/react-router';
 import { createElement } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export const RouteListItem = ({
   name,
@@ -15,6 +16,8 @@ export const RouteListItem = ({
   icon: SvgIconComponent;
   onlyIcon?: boolean;
 }) => {
+  const { t } = useTranslation();
+
   const match = useMatch({
     strict: false,
     shouldThrow: false,
@@ -59,7 +62,7 @@ export const RouteListItem = ({
             color: match ? 'red' : undefined,
           })}
         >
-          {`label_${name}`}
+          t( {`label_${name}`})
         </Box>
       )}
     </ListItemButton>
