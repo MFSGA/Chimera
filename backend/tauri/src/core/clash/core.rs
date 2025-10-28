@@ -27,6 +27,7 @@ use crate::{
         core::{Config, ConfigType},
     },
     core::{clash::api, logger::Logger},
+    log_err,
     utils::dirs,
 };
 
@@ -443,6 +444,15 @@ impl CoreManager {
                 })
             });
         }
+
+        Ok(())
+    }
+
+    pub fn init(&self) -> Result<()> {
+        tauri::async_runtime::spawn(async {
+            // 启动clash
+            log_err!(Self::global().run_core().await);
+        });
 
         Ok(())
     }
