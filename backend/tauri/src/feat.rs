@@ -60,8 +60,8 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
                 log::debug!(target: "app", "update core config");
                 #[cfg(target_os = "macos")]
                 log::debug!("todo");
-                todo!()
-                // update_core_config().await?;
+
+                update_core_config().await?;
             }
         }
 
@@ -82,6 +82,23 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
         Err(err) => {
             Config::verge().discard();
             Err(err)
+        }
+    }
+}
+
+/// 更新配置
+async fn update_core_config() -> Result<()> {
+    match CoreManager::global().update_config().await {
+        Ok(_) => {
+            todo!()
+            /* handle::Handle::refresh_clash();
+            handle::Handle::notice_message(&Message::SetConfig(Ok(())));
+            Ok(()) */
+        }
+        Err(err) => {
+            todo!()
+            /* handle::Handle::notice_message(&Message::SetConfig(Err(format!("{err:?}"))));
+            Err(err) */
         }
     }
 }

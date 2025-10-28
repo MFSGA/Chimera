@@ -1,9 +1,22 @@
-use std::{borrow::Cow, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicI64, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use camino::Utf8PathBuf;
-use nyanpasu_ipc::api::status::CoreState;
-use nyanpasu_utils::core::instance::CoreInstanceBuilder;
+use nyanpasu_ipc::{api::status::CoreState, utils::get_current_ts};
+use nyanpasu_utils::{
+    core::{
+        CommandEvent,
+        instance::{CoreInstance, CoreInstanceBuilder},
+    },
+    runtime::{block_on, spawn},
+};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use tokio::time::sleep;
@@ -13,7 +26,7 @@ use crate::{
         chimera::ClashCore,
         core::{Config, ConfigType},
     },
-    core::clash::api,
+    core::{clash::api, logger::Logger},
     utils::dirs,
 };
 
@@ -49,14 +62,40 @@ impl Default for RunType {
 
 #[derive(Debug)]
 enum Instance {
-    Child {},
+    Child {
+        child: Mutex<Arc<CoreInstance>>,
+        stated_changed_at: Arc<AtomicI64>,
+        kill_flag: Arc<AtomicBool>,
+    },
     Service {},
 }
 
 impl Instance {
     /// get core state with state changed timestamp
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64) {
-        todo!()
+        match self {
+            Instance::Child {
+                child,
+                stated_changed_at,
+                ..
+            } => {
+                let this = child.lock();
+                (
+                    Cow::Borrowed(match this.state() {
+                        nyanpasu_utils::core::instance::CoreInstanceState::Running => {
+                            &CoreState::Running
+                        }
+                        nyanpasu_utils::core::instance::CoreInstanceState::Stopped => {
+                            &CoreState::Stopped(None)
+                        }
+                    }),
+                    stated_changed_at.load(Ordering::Relaxed),
+                )
+            }
+            Instance::Service { .. } => {
+                todo!()
+            }
+        }
     }
 
     pub fn run_type(&self) -> RunType {
@@ -80,7 +119,7 @@ impl Instance {
                 .latest()
                 .clash_core
                 .as_ref()
-                .unwrap_or(&ClashCore::ClashPremium))
+                .unwrap_or(&ClashCore::Mihomo))
             .into()
         };
 
@@ -107,9 +146,9 @@ impl Instance {
                         .build()?,
                 );
                 Ok(Instance::Child {
-                    // child: Mutex::new(instance),
-                    // kill_flag: Arc::new(AtomicBool::new(false)),
-                    // stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
+                    child: Mutex::new(instance),
+                    kill_flag: Arc::new(AtomicBool::new(false)),
+                    stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
                 })
             }
             RunType::Service => {
@@ -122,7 +161,127 @@ impl Instance {
     }
 
     pub async fn start(&self) -> Result<()> {
-        todo!()
+        match self {
+            Instance::Child {
+                child,
+                kill_flag,
+                stated_changed_at,
+            } => {
+                let instance = {
+                    let child = child.lock();
+                    child.clone()
+                };
+                let (is_premium, core_type) = {
+                    let child = child.lock();
+                    (
+                        matches!(
+                            child.core_type,
+                            nyanpasu_utils::core::CoreType::Clash(
+                                nyanpasu_utils::core::ClashCoreType::ClashPremium
+                            )
+                        ),
+                        child.core_type.clone(),
+                    )
+                };
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<()>>(1); // use mpsc channel just to avoid type moved error, though it never fails
+                let stated_changed_at = stated_changed_at.clone();
+                let kill_flag = kill_flag.clone();
+                // This block below is to handle the stdio from the core process
+                tokio::spawn(async move {
+                    match instance.run().await {
+                        Ok((_, mut rx)) => {
+                            kill_flag.store(false, Ordering::Release); // reset kill flag
+                            let mut err_buf: Vec<String> = Vec::with_capacity(6);
+                            loop {
+                                if let Some(event) = rx.recv().await {
+                                    match event {
+                                        CommandEvent::Stdout(line) => {
+                                            if is_premium {
+                                                let log = api::parse_log(line.clone());
+                                                log::info!(target: "app", "[{core_type}]: {log}");
+                                            } else {
+                                                log::info!(target: "app", "[{core_type}]: {line}");
+                                            }
+                                            Logger::global().set_log(line);
+                                        }
+                                        CommandEvent::Stderr(line) => {
+                                            log::error!(target: "app", "[{core_type}]: {line}");
+                                            err_buf.push(line.clone());
+                                            Logger::global().set_log(line);
+                                        }
+                                        CommandEvent::Error(e) => {
+                                            log::error!(target: "app", "[{core_type}]: {e}");
+                                            let err = anyhow::anyhow!(format!(
+                                                "{}\n{}",
+                                                e,
+                                                err_buf.join("\n")
+                                            ));
+                                            Logger::global().set_log(e);
+                                            let _ = tx.send(Err(err)).await;
+                                            stated_changed_at
+                                                .store(get_current_ts(), Ordering::Relaxed);
+                                            break;
+                                        }
+                                        CommandEvent::Terminated(status) => {
+                                            log::error!(
+                                                target: "app",
+                                                "core terminated with status: {status:?}"
+                                            );
+                                            stated_changed_at
+                                                .store(get_current_ts(), Ordering::Relaxed);
+                                            if status.code != Some(0)
+                                                || !matches!(status.signal, Some(9) | Some(15))
+                                            {
+                                                let err = anyhow::anyhow!(format!(
+                                                    "core terminated with status: {:?}\n{}",
+                                                    status,
+                                                    err_buf.join("\n")
+                                                ));
+                                                tracing::error!("{}\n{}", err, err_buf.join("\n"));
+                                                if tx.send(Err(err)).await.is_err()
+                                                    && !kill_flag.load(Ordering::Acquire)
+                                                {
+                                                    std::thread::spawn(move || {
+                                                        block_on(async {
+                                                            tracing::info!(
+                                                                "Trying to recover core."
+                                                            );
+                                                            let _ = CoreManager::global()
+                                                                .recover_core()
+                                                                .await;
+                                                        });
+                                                    });
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        CommandEvent::DelayCheckpointPass => {
+                                            tracing::debug!("delay checkpoint pass");
+                                            stated_changed_at
+                                                .store(get_current_ts(), Ordering::Relaxed);
+                                            tx.send(Ok(())).await.unwrap();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            spawn(async move {
+                                tx.send(Err(err.into())).await.unwrap();
+                            });
+                        }
+                    }
+                });
+                rx.recv().await.unwrap()?;
+                Ok(())
+            }
+            Instance::Service {
+                // config_path,
+                // core_type,
+            } => {
+                todo!()
+            }
+        }
     }
 }
 
@@ -235,7 +394,7 @@ impl CoreManager {
             .map_err(|_| anyhow::anyhow!("failed to convert config path to utf8 path"))?;
 
         let clash_core = { Config::verge().latest().clash_core };
-        let clash_core = clash_core.unwrap_or(ClashCore::ClashPremium);
+        let clash_core = clash_core.unwrap_or(ClashCore::Mihomo);
         let clash_core: nyanpasu_utils::core::CoreType = (&clash_core).into();
 
         let app_dir = dirs::app_data_dir()?;
@@ -256,6 +415,36 @@ impl CoreManager {
     #[cfg(target_os = "macos")]
     pub async fn change_default_network_dns(&self, enabled: bool) -> Result<()> {
         todo!()
+    }
+
+    /// 重启内核
+    pub async fn recover_core(&'static self) -> Result<()> {
+        // 清除原来的实例
+        {
+            let instance = {
+                let mut this = self.instance.lock();
+                this.take()
+            };
+            if let Some(instance) = instance
+                && matches!(instance.state().await.as_ref(), CoreState::Running)
+            {
+                log::debug!(target: "app", "core is running, stop it first...");
+                instance.stop().await?;
+            }
+        }
+
+        if let Err(err) = self.run_core().await {
+            log::error!(target: "app", "failed to recover clash core");
+            log::error!(target: "app", "{err:?}");
+            tokio::time::sleep(Duration::from_secs(5)).await; // sleep 5s
+            std::thread::spawn(move || {
+                block_on(async {
+                    let _ = CoreManager::global().recover_core().await;
+                })
+            });
+        }
+
+        Ok(())
     }
 }
 
