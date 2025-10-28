@@ -97,8 +97,8 @@ jobs:
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
       # TODO: preapre the js script file
-      #- name: Prepare sidecar and resources
-      #  run: pnpm check
+      - name: Prepare sidecar and resources
+        run: pnpm check
       - name: Lint
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm lint # Lint
@@ -181,8 +181,8 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       # todo: prepare the js script file
-      #- name: Prepare sidecar and resources
-      #  run: pnpm check
+      - name: Prepare sidecar and resources
+        run: pnpm check
 
       - name: Prepare frontend
         run: pnpm -r build
