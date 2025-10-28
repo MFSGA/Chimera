@@ -3,8 +3,9 @@ use nyanpasu_ipc::api::status::CoreState;
 
 use crate::{
     config::{chimera::IVerge, core::Config},
-    core::{clash::core::CoreManager, service::ipc::get_ipc_state, sysopt},
+    core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
 };
+use handle::Message;
 
 /// 修改verge的配置
 /// 一般都是一个个的修改
@@ -90,15 +91,13 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
 async fn update_core_config() -> Result<()> {
     match CoreManager::global().update_config().await {
         Ok(_) => {
-            todo!()
-            /* handle::Handle::refresh_clash();
+            handle::Handle::refresh_clash();
             handle::Handle::notice_message(&Message::SetConfig(Ok(())));
-            Ok(()) */
+            Ok(())
         }
         Err(err) => {
-            todo!()
-            /* handle::Handle::notice_message(&Message::SetConfig(Err(format!("{err:?}"))));
-            Err(err) */
+            handle::Handle::notice_message(&Message::SetConfig(Err(format!("{err:?}"))));
+            Err(err)
         }
     }
 }
