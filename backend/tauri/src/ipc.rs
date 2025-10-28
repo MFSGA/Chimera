@@ -5,6 +5,7 @@ use anyhow::{Context, anyhow};
 use crate::{
     config::{
         chimera::IVerge,
+        clash::ClashInfo,
         core::Config,
         profile::{
             item::{
@@ -138,4 +139,10 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
             Err(IpcError::from(err))
         }
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_clash_info() -> Result<ClashInfo> {
+    Ok(Config::clash().latest().get_client_info())
 }
