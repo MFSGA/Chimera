@@ -1,6 +1,6 @@
 use tauri_specta::collect_commands;
 
-use crate::utils::init;
+use crate::utils::{init, resolve};
 
 mod ipc;
 
@@ -87,6 +87,13 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            specta_builder.mount_events(app);
+
+            resolve::resolve_setup(app);
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
