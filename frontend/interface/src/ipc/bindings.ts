@@ -88,6 +88,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getClashInfo(): Promise<Result<ClashInfo, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_clash_info') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -102,6 +110,20 @@ export type ClashCore =
   | 'mihomo'
   | 'mihomo-alpha'
   | 'clash-rs-alpha';
+export type ClashInfo = {
+  /**
+   * clash core port
+   */
+  port: number;
+  /**
+   * same as `external-controller`
+   */
+  server: string;
+  /**
+   * clash secret
+   */
+  secret: string | null;
+};
 export type ClashStrategy = {
   external_controller_port_strategy: ExternalControllerPortStrategy;
 };

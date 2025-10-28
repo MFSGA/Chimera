@@ -2,7 +2,7 @@ import {
   ProfileQueryResultItem,
   RemoteProfile,
   RemoteProfileOptionsBuilder,
-  // useClashConnections,
+  useClashConnections,
   useProfile,
 } from '@chimera/interface';
 import { alpha, cleanDeepClickEvent, cn } from '@chimera/ui';
@@ -56,9 +56,9 @@ export const ProfileItem = memo(function ProfileItem({
 }: ProfileItemProps) {
   const { t } = useTranslation();
 
-  // const { deleteConnections } = useClashConnections();
+  const { deleteConnections } = useClashConnections();
 
-  // const { upsert } = useProfile();
+  const { upsert } = useProfile();
 
   // const globalUpdatePending = use(GlobalUpdatePendingContext);
 
@@ -101,10 +101,9 @@ export const ProfileItem = memo(function ProfileItem({
     try {
       setLoading({ card: true });
 
-      // await upsert.mutateAsync({ current: [item.uid] });
-      // todo
-      // await deleteConnections.mutateAsync(undefined);
-      console.log('todo');
+      await upsert.mutateAsync({ current: [item.uid] });
+
+      await deleteConnections.mutateAsync(undefined);
     } catch (err) {
       // This FetchError was triggered by the `DELETE /connections` API
       const isFetchError = err instanceof Error && err.name === 'FetchError';
