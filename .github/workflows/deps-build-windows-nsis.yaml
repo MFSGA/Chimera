@@ -103,6 +103,11 @@ jobs:
         # todo
         run: |
           $condition = '${{ inputs.arch }}'
+          switch ($condition) {
+            'x86_64' {
+              pnpm check
+            }
+          }
 
       - name: Download fixed WebView
         if: ${{ inputs.fixed-webview == true }}
