@@ -252,6 +252,11 @@ impl CoreManager {
 
         Ok(())
     }
+
+    #[cfg(target_os = "macos")]
+    pub async fn change_default_network_dns(&self, enabled: bool) -> Result<()> {
+        todo!()
+    }
 }
 
 // TODO: support system path search via a config or flag
