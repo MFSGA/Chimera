@@ -4,6 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
+use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 use tracing::instrument;
 
@@ -154,7 +155,7 @@ impl IClashTemp {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, specta::Type)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, specta::Type, Serialize)]
 pub struct ClashInfo {
     /// clash core port
     pub port: u16,

@@ -1,6 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import { commands, Profile, RemoteProfileOptionsBuilder } from './bindings';
+import {
+  commands,
+  Profile,
+  ProfilesBuilder,
+  RemoteProfileOptionsBuilder,
+} from './bindings';
 import { RROFILES_QUERY_KEY } from './consts';
 
 type URLImportParams = Parameters<typeof commands.importProfile>;
@@ -150,5 +155,28 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     };
   }
 
-  return { create, query };
+  /**
+   * Mutation hook for upserting profile configurations.
+   *
+   * @remarks
+   * This mutation handles the update/insert of profile configurations and invalidates
+   * the profiles query cache on success.
+   *
+   * @returns A mutation object that:
+   * - Accepts a ProfilesBuilder parameter for the mutation
+   * - Returns the unwrapped result from patchProfilesConfig command
+   * - Automatically invalidates the 'profiles' query cache on successful mutation
+   */
+  const upsert = useMutation({
+    mutationFn: async (options: Partial<ProfilesBuilder>) => {
+      return unwrapResult(
+        await commands.patchProfilesConfig(options as ProfilesBuilder),
+      );
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  return { create, query, upsert };
 };

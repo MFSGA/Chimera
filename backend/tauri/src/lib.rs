@@ -39,6 +39,8 @@ pub fn run() {
         // verge
         ipc::get_verge_config,
         ipc::patch_verge_config,
+        // clash
+        ipc::get_clash_info,
         // updater layer
         // todo ipc::check_update,
     ]);
