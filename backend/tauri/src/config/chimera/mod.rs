@@ -30,6 +30,12 @@ pub enum ClashCore {
     ClashRsAlpha,
 }
 
+impl Default for ClashCore {
+    fn default() -> Self {
+        Self::Mihomo
+    }
+}
+
 impl From<&ClashCore> for nyanpasu_utils::core::CoreType {
     fn from(core: &ClashCore) -> Self {
         match core {
@@ -113,8 +119,10 @@ impl IVerge {
 
     pub fn template() -> Self {
         Self {
+            clash_core: Some(ClashCore::default()),
             max_log_files: Some(7), // 7 days
             app_log_level: Some(logging::LoggingLevel::default()),
+
             ..Self::default()
         }
     }
@@ -124,6 +132,9 @@ impl IVerge {
 
         if config.max_log_files.is_none() {
             config.max_log_files = template.max_log_files;
+        }
+        if config.clash_core.is_none() {
+            config.clash_core = template.clash_core;
         }
 
         config
