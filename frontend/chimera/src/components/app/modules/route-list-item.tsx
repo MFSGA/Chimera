@@ -62,7 +62,7 @@ export const RouteListItem = ({
             color: match ? 'red' : undefined,
           })}
         >
-          t( {`label_${name}`})
+          {t(`label_${name}`)}
         </Box>
       )}
     </ListItemButton>
