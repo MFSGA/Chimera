@@ -1,3 +1,39 @@
+## [0.2.4] - 2025-10-28 15:23:01
+
+### ✨ Features
+
+- **patch_verge_config:** Patch_verge -> update_core_config completed 25 by @MFSGA
+
+- **patch_verge_config:** Optimize the workflow 24 by @MFSGA
+
+- **patch_verge_config:** Backend patch_verge -> update_core_config completed 23 by @MFSGA
+
+- **patch_verge_config:** Frontend ProfileItem -> handleSelect completed 22 by @MFSGA
+
+- **patch_verge_config:** Add frontend ProfileItem components 21 by @MFSGA
+
+- **patch_verge_config:** Set the permission for notification.ts 19 by @MFSGA
+
+- **patch_verge_config:** Import_profile -> patch_profiles_config 18 by @MFSGA
+
+- **patch_verge_config:** Optimize user_agent in RemoteProfileOptions ipc::patch_profiles_config 17 by @MFSGA
+
+- **resolve_setup:** Init_config launch core 1 by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **i18n:** Use the t for i18n by @MFSGA
+
+- **i18n:** Use the t for i18n by @MFSGA
+
+- **patch_verge_config:** Fix macos compiler error because of feat 14 by @MFSGA
+
+- Fix the lint and build workflow by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.2.3...v0.2.4
+
 ## [0.2.3] - 2025-10-23 15:58:10
 
 ### ✨ Features
