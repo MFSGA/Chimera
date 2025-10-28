@@ -26,6 +26,8 @@ type ProfileHelperFn = {
   // todo drop: () => Promise<null | undefined>
 };
 
+export type ProfileQueryResultItem = Profile & Partial<ProfileHelperFn>;
+
 /**
  * A custom hook for managing profiles with various operations including creation, updating, sorting, and deletion.
  *
