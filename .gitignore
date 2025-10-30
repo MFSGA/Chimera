@@ -36,3 +36,5 @@ release.sh
 *.tsbuildinfo
 
 docs/
+# new rust-analyzer
+target/
