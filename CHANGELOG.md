@@ -1,3 +1,17 @@
+## [0.3.0] - 2025-10-30 14:52:38
+
+### ✨ Features
+
+- **patch_verge_config:** Optimize enhance and patch_profiles_config for changing profile 26 by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **renovate:** Fix the renovate settings by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.2.4...v0.3.0
+
 ## [0.2.4] - 2025-10-28 15:23:01
 
 ### ✨ Features
