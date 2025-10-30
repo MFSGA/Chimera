@@ -1,4 +1,16 @@
-use serde_yaml::Mapping;
+use serde_yaml::{Mapping, Value};
+
+pub const HANDLE_FIELDS: [&str; 9] = [
+    "mode",
+    "port",
+    "socks-port",
+    "mixed-port",
+    "allow-lan",
+    "log-level",
+    "ipv6",
+    "secret",
+    "external-controller",
+];
 
 pub const DEFAULT_FIELDS: [&str; 5] = [
     "proxies",
@@ -64,4 +76,22 @@ pub fn use_keys(config: &Mapping) -> Vec<String> {
             s
         })
         .collect()
+}
+
+/// 使用白名单过滤配置字段
+pub fn use_whitelist_fields_filter(config: Mapping, filter: &[String], enable: bool) -> Mapping {
+    if !enable {
+        return config;
+    }
+
+    let mut ret = Mapping::new();
+
+    for (key, value) in config.into_iter() {
+        if let Some(key) = key.as_str()
+            && filter.contains(&key.to_string())
+        {
+            ret.insert(Value::from(key), value);
+        }
+    }
+    ret
 }
