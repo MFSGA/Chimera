@@ -15,7 +15,7 @@ use crate::{
             profiles::{Profiles, ProfilesBuilder},
         },
     },
-    core::clash::core::CoreManager,
+    core::{clash::core::CoreManager, handle},
     feat,
     utils::{dirs, help},
 };
@@ -129,7 +129,12 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
 
     match CoreManager::global().update_config().await {
         Ok(_) => {
-            todo!()
+            handle::Handle::refresh_clash();
+            Config::profiles().apply();
+            (Config::profiles().data().save_file())?;
+
+            log::debug!("todo: delete the connections before changing profiles");
+            Ok(())
         }
         Err(err) => {
             log::debug!(target: "app", "{err:?}");

@@ -6,7 +6,7 @@ use crate::{
     config::{core::Config, profile::item::ProfileMetaGetter},
     enhance::{
         chain::PostProcessingOutput,
-        field::{use_keys, use_valid_fields},
+        field::{HANDLE_FIELDS, use_keys, use_valid_fields, use_whitelist_fields_filter},
         utils::{merge_profiles, process_chain},
     },
 };
@@ -38,7 +38,7 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
         )
     };
 
-    // 从profiles里拿东西
+    // 从profiles里拿东西·
     let (profiles, profile_chain, global_chain, valid) = {
         let profiles = Config::profiles();
         let profiles = profiles.latest();
@@ -101,10 +101,24 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
     // 合并多个配置
     // TODO: 此步骤需要提供针对每个配置的 Meta 信息
     // TODO: 需要支持自定义合并逻辑
-    let config = merge_profiles(profiles);
+    let mut config = merge_profiles(profiles);
+
+    // 执行全局 chain
+    // let (mut config, global_chain_output) = process_chain(config, &global_chain).await;
+    // postprocessing_output.global = global_chain_output;
 
     // 记录当前配置包含的键
-    let mut exists_keys = use_keys(&config);
+    let exists_keys = use_keys(&config);
+    config = use_whitelist_fields_filter(config, &valid, enable_filter);
+
+    // 合并默认的config
+    clash_config
+        .iter()
+        // only guarded fields should be overwritten
+        .filter(|(k, _)| HANDLE_FIELDS.contains(&k.as_str().unwrap_or_default()))
+        .for_each(|(key, value)| {
+            config.insert(key.to_owned(), value.clone());
+        });
 
     (config, exists_keys, postprocessing_output)
 }

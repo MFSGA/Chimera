@@ -116,8 +116,7 @@ impl IClashTemp {
             log::warn!("The external controller port has been changed to {new_server}");
             let mut map = Mapping::new();
             map.insert("external-controller".into(), new_server.into());
-            todo!()
-            // self.patch_config(map);
+            self.patch_config(map);
         }
         Ok(())
     }
@@ -152,6 +151,12 @@ impl IClashTemp {
 
     pub fn get_mixed_port(&self) -> u16 {
         Self::guard_mixed_port(&self.0)
+    }
+
+    pub fn patch_config(&mut self, patch: Mapping) {
+        for (key, value) in patch.into_iter() {
+            self.0.insert(key, value);
+        }
     }
 }
 
