@@ -1,6 +1,7 @@
 use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
+use tauri::Manager;
 
 use crate::{
     config::{
@@ -150,4 +151,87 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
 #[specta::specta]
 pub fn get_clash_info() -> Result<ClashInfo> {
     Ok(Config::clash().latest().get_client_info())
+}
+
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+// TODO: a copied from updater metadata, and should be moved a separate updater module
+pub struct UpdateWrapper {
+    rid: tauri::ResourceId,
+    available: bool,
+    current_version: String,
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+    raw_json: serde_json::Value,
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrapper>> {
+    use crate::utils::config::{get_self_proxy, get_system_proxy};
+    use std::cmp::Ordering;
+    use tauri_plugin_updater::UpdaterExt;
+
+    let build_time = time::OffsetDateTime::parse(
+        crate::consts::BUILD_INFO.build_date,
+        &time::format_description::well_known::Rfc3339,
+    )
+    .context("failed to parse build time")?;
+
+    let mut builder = webview
+        .updater_builder()
+        .version_comparator(move |_, remote| {
+            use semver::Version;
+            let local = Version::parse(crate::consts::BUILD_INFO.pkg_version).ok();
+            log::trace!("[check] local: {:?}, remote: {:?}", local, remote.version);
+            match local {
+                Some(local) => {
+                    if !local.build.is_empty() && !remote.version.build.is_empty() {
+                        // ignore build info to compare the version directly
+                        match local.cmp_precedence(&remote.version) {
+                            Ordering::Less => true,
+                            Ordering::Equal => match remote.pub_date {
+                                // prefer newer build if pub_date is available
+                                Some(pub_date) => {
+                                    local.build != remote.version.build && pub_date > build_time
+                                }
+                                None => local.build != remote.version.build,
+                            },
+                            Ordering::Greater => false,
+                        }
+                    } else {
+                        local < remote.version
+                    }
+                }
+                None => false,
+            }
+        });
+
+    // apply proxy
+    if let Ok(proxy) = get_self_proxy() {
+        builder = builder.proxy(proxy.parse().context("failed to parse proxy")?);
+    }
+
+    if let Ok(Some(proxy)) = get_system_proxy() {
+        builder = builder.proxy(proxy.parse().context("failed to parse system proxy")?);
+    }
+
+    let updater = builder.build().context("failed to build updater")?;
+    let update = updater.check().await.context("failed to check update")?;
+    Ok(update.map(|u| {
+        let mut wrapper = UpdateWrapper {
+            available: true,
+            current_version: u.current_version.clone(),
+            version: u.version.clone(),
+            date: u.date.and_then(|d| {
+                d.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            }),
+            body: u.body.clone(),
+            raw_json: u.raw_json.clone(),
+            ..Default::default()
+        };
+        wrapper.rid = webview.resources_table().add(u);
+        wrapper
+    }))
 }

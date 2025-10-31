@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 serde = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 semver = "1.0"
+chrono = "0.4"
+rustc_version = "0.4"
 
 [dependencies]
 tauri = { version = "2", features = [] }
@@ -126,6 +128,9 @@ sysproxy = { git = "https://github.com/libnyanpasu/sysproxy-rs.git", version = "
 tauri-plugin-dialog = "2.2"
 
 oneshot = "0.1"
+
+time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
+semver = "1.0"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
