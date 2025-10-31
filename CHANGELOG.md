@@ -1,3 +1,25 @@
+## [0.5.0] - 2025-10-31 10:36:09
+
+### ✨ Features
+
+- **check_update:** Complete the frontend 5 by @MFSGA
+
+- **check_update:** Complete the backend command 2 by @MFSGA
+
+- **check_update:** Prepare for the command 1 by @MFSGA
+
+- **is_appimage:** Add the command for check_update 3 by @MFSGA
+
+- **open_that:** Add the command for check_update 4 by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update react monorepo by @renovate-bot
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.4.0...v0.5.0
+
 ## [0.4.0] - 2025-10-31 07:45:19
 
 ### ✨ Features
