@@ -15,7 +15,10 @@
     "@types/react": "19.2.2",
     "react-error-boundary": "6.0.0",
     "framer-motion": "12.23.24",
-    "@mui/material": "7.3.4"
+    "@mui/material": "7.3.4",
+    "@radix-ui/react-portal": "1.1.9",
+    "ahooks": "3.9.6",
+    "react-i18next": "15.7.4"
   },
   "devDependencies": {
     "tailwind-merge": "3.3.1",

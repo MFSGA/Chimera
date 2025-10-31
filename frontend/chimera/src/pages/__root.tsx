@@ -4,6 +4,7 @@ import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { lazy } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
+import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
 
 const TanStackRouterDevtools = import.meta.env.PROD
   ? () => null // Render nothing in production
@@ -34,6 +35,8 @@ export default function App() {
         }}
       >
         <StyledEngineProvider injectFirst>
+          <UpdaterDialog />
+
           <AppContainer>
             <Outlet />
             <TanStackRouterDevtools />
