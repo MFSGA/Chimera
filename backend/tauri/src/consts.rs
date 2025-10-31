@@ -39,3 +39,5 @@ pub static BUILD_INFO: Lazy<BuildInfo> = Lazy::new(|| BuildInfo {
     rustc_version: env!("RUSTC_VERSION"),
     llvm_version: env!("LLVM_VERSION"),
 });
+
+pub static IS_APPIMAGE: Lazy<bool> = Lazy::new(|| std::env::var("APPIMAGE").is_ok());
