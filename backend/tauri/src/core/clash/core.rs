@@ -107,11 +107,48 @@ impl Instance {
     }
 
     pub async fn state<'a>(&self) -> Cow<'a, CoreState> {
-        todo!()
+        match self {
+            Instance::Child { child, .. } => {
+                let this = child.lock();
+                Cow::Borrowed(match this.state() {
+                    nyanpasu_utils::core::instance::CoreInstanceState::Running => {
+                        &CoreState::Running
+                    }
+                    nyanpasu_utils::core::instance::CoreInstanceState::Stopped => {
+                        &CoreState::Stopped(None)
+                    }
+                })
+            }
+            Instance::Service { .. } => {
+                todo!()
+            }
+        }
     }
 
     pub async fn stop(&self) -> Result<()> {
-        todo!()
+        let state = self.state().await;
+        match self {
+            Instance::Child {
+                child,
+                stated_changed_at,
+                kill_flag,
+            } => {
+                if matches!(state.as_ref(), CoreState::Stopped(_)) {
+                    anyhow::bail!("core is already stopped");
+                }
+                kill_flag.store(true, Ordering::Release);
+                let child = {
+                    let child = child.lock();
+                    child.clone()
+                };
+                child.kill().await?;
+                stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
+                Ok(())
+            }
+            Instance::Service { .. } => {
+                todo!()
+            }
+        }
     }
 
     pub fn try_new(run_type: RunType) -> Result<Self> {
@@ -454,6 +491,23 @@ impl CoreManager {
             log_err!(Self::global().run_core().await);
         });
 
+        Ok(())
+    }
+
+    /// 停止核心运行
+    pub async fn stop_core(&self) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        let _ = self
+            .change_default_network_dns(false)
+            .await
+            .inspect_err(|e| log::error!(target: "app", "failed to set system dns: {:?}", e));
+        let instance = {
+            let instance = self.instance.lock();
+            instance.as_ref().cloned()
+        };
+        if let Some(instance) = instance.as_ref() {
+            instance.stop().await?;
+        }
         Ok(())
     }
 }
