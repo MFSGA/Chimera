@@ -48,6 +48,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::check_update,
         // utils
         ipc::is_appimage,
+        ipc::open_that,
     ]);
 
     #[cfg(debug_assertions)]

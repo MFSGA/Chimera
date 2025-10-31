@@ -27,6 +27,9 @@ type Result<T = ()> = StdResult<T, IpcError>;
 pub enum IpcError {
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
+    /// first used for open_that
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
 impl serde::Serialize for IpcError {
@@ -240,4 +243,11 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
 #[specta::specta]
 pub fn is_appimage() -> Result<bool> {
     Ok(*crate::consts::IS_APPIMAGE)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_that(path: String) -> Result {
+    (crate::utils::open::that(path))?;
+    Ok(())
 }
