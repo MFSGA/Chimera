@@ -137,3 +137,5 @@ default = ["default-meta"]
 nightly = []
 verge-dev = []
 default-meta = []
+deadlock-detection = ["parking_lot/deadlock_detection"]
+
