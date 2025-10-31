@@ -1,3 +1,23 @@
+## [0.4.0] - 2025-10-31 07:45:19
+
+### ✨ Features
+
+- **AppHandle:** Handle the RunEvent by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Pin dependencies by @renovate-bot
+
+- **renovate:** Indicate the specific version by @MFSGA
+
+---
+
+## New Contributors
+
+- @renovate-bot made their first contribution
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.3.0...v0.4.0
+
 ## [0.3.0] - 2025-10-30 14:52:38
 
 ### ✨ Features
