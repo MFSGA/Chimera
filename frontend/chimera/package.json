@@ -29,7 +29,8 @@
     "@tauri-apps/plugin-dialog": "2.4.0",
     "@tauri-apps/plugin-process": "2.3.0",
     "dayjs": "1.11.18",
-    "framer-motion": "12.23.24"
+    "framer-motion": "12.23.24",
+    "react-fast-marquee": "1.6.5"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.9.2",

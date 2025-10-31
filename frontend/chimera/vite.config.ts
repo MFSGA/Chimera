@@ -60,6 +60,7 @@ export default defineConfig(async ({ command, mode }) => {
       alias: {
         // todo: will deleete
         '@': path.resolve(__dirname, './src'),
+        '@root': path.resolve(__dirname, '../..'),
       },
     },
 
