@@ -8,10 +8,12 @@ use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml::{Mapping, Value};
+use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
+use tracing::instrument;
 
-use crate::config::chimera::ExternalControllerPortStrategy;
+use crate::{config::chimera::ExternalControllerPortStrategy, core::clash::core::CoreManager};
 
 const ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -182,4 +184,20 @@ pub fn get_clash_external_port(
         }
     }
     Ok(port)
+}
+
+#[instrument(skip(app_handle))]
+pub fn cleanup_processes(app_handle: &AppHandle) {
+    // let _ = super::resolve::save_window_state(app_handle, true);
+    // super::resolve::resolve_reset();
+    /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
+    let _ = nyanpasu_utils::runtime::block_on(async {
+        /* if let Err(e) = widget_manager.stop().await {
+            log::error!("failed to stop widget manager: {e:?}");
+        }; */
+        CoreManager::global().stop_core().await
+    });
+    // crate::core::CoreManager::global().stop_core().await
+    #[cfg(windows)]
+    crate::shutdown_hook::set_ready_for_shutdown();
 }

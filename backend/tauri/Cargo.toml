@@ -125,12 +125,22 @@ sysproxy = { git = "https://github.com/libnyanpasu/sysproxy-rs.git", version = "
 
 tauri-plugin-dialog = "2.2"
 
+oneshot = "0.1"
+
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55", features = ["transactions"] }
+windows-sys = { version = "0.60", features = [
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_System_Shutdown",
+  "Win32_Graphics_Gdi",
+] }
+windows-core = "0.61"
 
 [features]
 default = ["default-meta"]

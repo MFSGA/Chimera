@@ -13,6 +13,9 @@ mod core;
 mod enhance;
 /// 6
 mod feat;
+/// 8
+#[cfg(windows)]
+mod shutdown_hook;
 /// 4
 mod utils;
 
@@ -24,7 +27,7 @@ fn greet(name: &str) -> String {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> std::io::Result<()> {
     crate::log_err!(init::init_config());
 
     // setup specta
@@ -80,7 +83,8 @@ pub fn run() {
         };
     }
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .invoke_handler(specta_builder.invoke_handler())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -93,7 +97,20 @@ pub fn run() {
             resolve::resolve_setup(app);
 
             Ok(())
-        })
-        .run(tauri::generate_context!())
+        });
+
+    let app = builder
+        .build(tauri::generate_context!())
         .expect("error while running tauri application");
+
+    app.run(|app_handle, e| match e {
+        tauri::RunEvent::ExitRequested { .. } => {
+            utils::help::cleanup_processes(app_handle);
+        }
+        e => {
+            log::debug!("Tauri Event: {:?}", e);
+        }
+    });
+
+    Ok(())
 }
