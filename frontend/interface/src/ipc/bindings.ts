@@ -112,6 +112,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async openThat(path: string): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('open_that', { path }) };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
