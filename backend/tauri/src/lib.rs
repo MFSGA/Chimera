@@ -49,6 +49,7 @@ pub fn run() -> std::io::Result<()> {
         // utils
         ipc::is_appimage,
         ipc::open_that,
+        ipc::cleanup_processes,
     ]);
 
     #[cfg(debug_assertions)]

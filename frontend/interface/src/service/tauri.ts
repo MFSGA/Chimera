@@ -7,3 +7,7 @@ export const isAppImage = async () => {
 export const openThat = async (path: string) => {
   return await invoke<void>('open_that', { path });
 };
+
+export const cleanupProcesses = async () => {
+  return await invoke<void>('cleanup_processes');
+};

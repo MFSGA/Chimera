@@ -1,7 +1,7 @@
 use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 
 use crate::{
     config::{
@@ -249,5 +249,12 @@ pub fn is_appimage() -> Result<bool> {
 #[specta::specta]
 pub fn open_that(path: String) -> Result {
     (crate::utils::open::that(path))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn cleanup_processes(app_handle: AppHandle) -> Result {
+    crate::utils::help::cleanup_processes(&app_handle);
     Ok(())
 }
