@@ -235,3 +235,9 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
         wrapper
     }))
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn is_appimage() -> Result<bool> {
+    Ok(*crate::consts::IS_APPIMAGE)
+}

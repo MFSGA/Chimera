@@ -46,6 +46,8 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_clash_info,
         // updater layer
         ipc::check_update,
+        // utils
+        ipc::is_appimage,
     ]);
 
     #[cfg(debug_assertions)]
