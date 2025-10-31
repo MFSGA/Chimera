@@ -230,8 +230,8 @@ importers:
         specifier: 3.2.2
         version: 3.2.2(vite@7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1))
       vite-plugin-sass-dts:
-        specifier: 1.3.31
-        version: 1.3.31(postcss@8.5.6)(prettier@3.6.2)(sass-embedded@1.93.2)(vite@7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1))
+        specifier: 1.3.34
+        version: 1.3.34(postcss@8.5.6)(prettier@3.6.2)(sass-embedded@1.93.2)(vite@7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1))
 
   frontend/interface:
     dependencies:
@@ -4882,14 +4882,14 @@ packages:
     peerDependencies:
       vite: '>=2.0.0'
 
-  vite-plugin-sass-dts@1.3.31:
-    resolution: {integrity: sha512-9egcHbUZdnCr2l1g9X2bHl6LjXv2mXb9xWRX3CVXHt/t4Io+HL5dYsBimlY4QImzbSeH26d7Bw6v0NUrQfwEDA==}
+  vite-plugin-sass-dts@1.3.34:
+    resolution: {integrity: sha512-+m7SJX5Jm+50IxbutY4aptEjKpAfjY4okwNe05AHDodEYr8LZY3tsIFQ/rXG12WSytYWDnipJKb6xZrvqWGckA==}
     engines: {node: '>=20'}
     peerDependencies:
       postcss: ^8
       prettier: ^2.7 || ^3
       sass-embedded: ^1.78.0
-      vite: '>=3'
+      vite: ^7
 
   vite@7.1.12:
     resolution: {integrity: sha512-ZWyE8YXEXqJrrSLvYgrRP7p62OziLW7xI5HYGWFzOvupfAlrLvURSzv/FyGyy0eidogEM3ujU+kUG1zuHgb6Ug==}
@@ -9811,7 +9811,7 @@ snapshots:
       pathe: 0.2.0
       vite: 7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1)
 
-  vite-plugin-sass-dts@1.3.31(postcss@8.5.6)(prettier@3.6.2)(sass-embedded@1.93.2)(vite@7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1)):
+  vite-plugin-sass-dts@1.3.34(postcss@8.5.6)(prettier@3.6.2)(sass-embedded@1.93.2)(vite@7.1.12(@types/node@24.5.2)(jiti@2.6.0)(lightningcss@1.30.1)(sass-embedded@1.93.2)(sass@1.93.2)(terser@5.44.0)(tsx@4.20.6)(yaml@2.8.1)):
     dependencies:
       postcss: 8.5.6
       postcss-js: 4.1.0(postcss@8.5.6)
