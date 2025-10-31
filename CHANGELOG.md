@@ -1,3 +1,15 @@
+## [0.5.1] - 2025-10-31 13:31:15
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency jotai to v2.15.0 by @renovate-bot
+
+- **deps:** Update dependency ofetch to v1.5.0 by @renovate-bot
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.5.0...v0.5.1
+
 ## [0.5.0] - 2025-10-31 10:36:09
 
 ### ✨ Features
