@@ -3,3 +3,5 @@ export * from './basePage';
 export * from './baseCard';
 /** 4 */
 export * from './loadingSwitch';
+/** 5 */
+export * from './baseDialog';
