@@ -30,7 +30,8 @@
     "@tauri-apps/plugin-process": "2.3.1",
     "dayjs": "1.11.18",
     "framer-motion": "12.23.24",
-    "react-fast-marquee": "1.6.5"
+    "react-fast-marquee": "1.6.5",
+    "react-markdown": "10.1.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.9.2",
