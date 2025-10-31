@@ -1,7 +1,7 @@
 {
   "name": "chimera",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
   "scripts": {
     "dev": "run-p -r  web:devtools tauri:dev",
