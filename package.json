@@ -63,7 +63,7 @@
     "@commitlint/config-conventional": "19.8.1",
     "tsx": "4.20.6",
     "@types/node": "24.5.2",
-    "typescript": "5.9.2",
+    "typescript": "5.9.3",
     "prettier-plugin-ember-template-tag": "2.1.0"
   },
   "pnpm": {
