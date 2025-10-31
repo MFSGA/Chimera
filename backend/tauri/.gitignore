@@ -9,3 +9,5 @@
 # useful folder for local development.
 resources
 sidecar
+# real target is git-info
+tmp/

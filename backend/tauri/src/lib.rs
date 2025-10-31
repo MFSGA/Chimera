@@ -45,7 +45,7 @@ pub fn run() -> std::io::Result<()> {
         // clash
         ipc::get_clash_info,
         // updater layer
-        // todo ipc::check_update,
+        ipc::check_update,
     ]);
 
     #[cfg(debug_assertions)]

@@ -1,3 +1,5 @@
+/// 7
+pub mod config;
 /// 2
 pub mod dirs;
 /// 1

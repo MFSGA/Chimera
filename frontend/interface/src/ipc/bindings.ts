@@ -96,6 +96,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('check_update') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -190,6 +198,13 @@ export type IVerge = {
    */
   proxy_guard_interval: number | null;
 };
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | Partial<{ [key in string]: JsonValue }>;
 export type LoggingLevel =
   | 'silent'
   | 'trace'
@@ -280,6 +295,15 @@ export type RemoteProfileOptionsBuilder = {
    * subscription update interval
    */
   update_interval: number | null;
+};
+export type UpdateWrapper = {
+  rid: number;
+  available: boolean;
+  current_version: string;
+  version: string;
+  date: string | null;
+  body: string | null;
+  raw_json: JsonValue;
 };
 
 type __EventObj__<T> = {
