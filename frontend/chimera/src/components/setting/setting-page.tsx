@@ -1,4 +1,5 @@
 import Masonry from '@mui/lab/Masonry';
+import SettingNyanpasuVersion from './setting-chimera-version';
 import SettingSystemProxy from './setting-system-proxy';
 
 export const SettingPage = () => {
@@ -16,6 +17,8 @@ export const SettingPage = () => {
       sequential
     >
       <SettingSystemProxy />
+
+      <SettingNyanpasuVersion />
     </Masonry>
   );
 };

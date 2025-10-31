@@ -213,6 +213,10 @@ export type IVerge = {
    * 14. proxy guard interval
    */
   proxy_guard_interval: number | null;
+  /**
+   * 15. Check update when app launch
+   */
+  enable_auto_check_update: boolean | null;
 };
 export type JsonValue =
   | null
