@@ -10,7 +10,7 @@
     "colorize-template": "1.0.0",
     "consola": "3.4.2",
     "picocolors": "1.1.1",
-    "@types/yargs": "17.0.33",
+    "@types/yargs": "17.0.34",
     "fs-extra": "11.3.2",
     "@types/adm-zip": "0.5.7",
     "adm-zip": "0.5.16",
