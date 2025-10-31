@@ -94,6 +94,8 @@ pub struct IVerge {
     /// 14. proxy guard interval
     #[serde(alias = "proxy_guard_duration")]
     pub proxy_guard_interval: Option<u64>,
+    /// 15. Check update when app launch
+    pub enable_auto_check_update: Option<bool>,
 }
 
 impl IVerge {
