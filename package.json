@@ -57,7 +57,7 @@
     "stylelint-order": "7.0.0",
     "stylelint-scss": "6.12.1",
     "knip": "5.64.0",
-    "lint-staged": "16.2.1",
+    "lint-staged": "16.2.6",
     "@commitlint/cli": "19.8.1",
     "@commitlint/config-conventional": "19.8.1",
     "tsx": "4.20.6",
