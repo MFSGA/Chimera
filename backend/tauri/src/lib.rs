@@ -44,6 +44,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::patch_verge_config,
         // clash
         ipc::get_clash_info,
+        ipc::patch_clash_config,
         // updater layer
         ipc::check_update,
         // utils

@@ -33,7 +33,42 @@ export const useClashAPI = () => {
     });
   };
 
+  /**
+   * Fetches Clash configurations from the server.
+   */
+  const configs = async () => {
+    return await request<ClashConfig>('/configs');
+  };
+
+  /**
+   * Update basic configuration; data must be sent in the format '{"mixed-port": 7890}',
+   * modified as needed for the configuration items to be updated.
+   */
+  const patchConfigs = async (config: Partial<ClashConfig>) => {
+    return await request<ClashConfig>('/configs', {
+      method: 'PATCH',
+      body: config,
+    });
+  };
+
   return {
     deleteConnections,
+    configs,
+    patchConfigs,
   };
 };
+
+export interface ClashConfig {
+  port: number;
+  mode: string;
+  ipv6: boolean;
+  'socket-port': number;
+  'allow-lan': boolean;
+  'log-level': string;
+  'mixed-port': number;
+  'redir-port': number;
+  'socks-port': number;
+  'tproxy-port': number;
+  'external-controller': string;
+  secret: string;
+}
