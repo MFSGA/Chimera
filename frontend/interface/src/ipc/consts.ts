@@ -17,3 +17,8 @@ export const CLASH_CONNECTIONS_QUERY_KEY = 'clash-connections';
  * Clash info query key, used by useClashInfo hook
  */
 export const CLASH_INFO_QUERY_KEY = 'clash-info';
+
+/**
+ * Clash config query key, used by useClashConfig hook
+ */
+export const CLASH_CONFIG_QUERY_KEY = 'clash-config';

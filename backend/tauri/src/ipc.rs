@@ -15,6 +15,7 @@ use crate::{
             },
             profiles::{Profiles, ProfilesBuilder},
         },
+        runtime::PatchRuntimeConfig,
     },
     core::{clash::core::CoreManager, handle},
     feat,
@@ -257,4 +258,13 @@ pub fn open_that(path: String) -> Result {
 pub fn cleanup_processes(app_handle: AppHandle) -> Result {
     crate::utils::help::cleanup_processes(&app_handle);
     Ok(())
+}
+
+// #[tracing_attributes::instrument]
+// patch clash runtime config
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
+    tracing::debug!("patch_clash_config: {payload:?}");
+    todo!("implement the patch_clash_config ipc command");
 }
