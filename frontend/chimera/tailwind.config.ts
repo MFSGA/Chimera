@@ -1,20 +1,24 @@
+import { MUI_BREAKPOINTS } from '@chimera/ui/src/materialYou/themeConsts.mjs';
 import type { Config } from 'tailwindcss';
-import plugin from 'tailwindcss/plugin';
+import createPlugin from 'tailwindcss/plugin';
 
-const MUI_BREAKPOINTS: Record<string, number> = {
-  xs: 0,
-  sm: 600,
-  md: 900,
-  lg: 1200,
-  xl: 1536,
+const getMUIScreen = () => {
+  const breakpoints = MUI_BREAKPOINTS.values as Record<string, number>;
+
+  const result = {} as Record<string, string>;
+
+  for (const key in breakpoints) {
+    if (Object.prototype.hasOwnProperty.call(breakpoints, key)) {
+      result[key] = `${breakpoints[key]}px`;
+    }
+  }
+
+  return result;
 };
 
-const muiScreens = Object.fromEntries(
-  Object.entries(MUI_BREAKPOINTS).map(([key, value]) => [key, `${value}px`]),
-) as Record<string, string>;
-
-const config: Config = {
-  content: ['./index.html', './src/**/*.{ts,tsx,js,jsx}'],
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ['./src/**/*.{tsx,ts}', '../ui/**/*.{tsx,ts}'],
   darkMode: 'selector',
   theme: {
     extend: {
@@ -38,10 +42,10 @@ const config: Config = {
         container: 'var(--background-color)',
       },
     },
-    screens: muiScreens,
+    screen: getMUIScreen(),
   },
   plugins: [
-    plugin(({ addBase }) => {
+    createPlugin(({ addBase }) => {
       addBase({
         '.scrollbar-hidden::-webkit-scrollbar': {
           width: '0px',
@@ -49,6 +53,4 @@ const config: Config = {
       });
     }),
   ],
-};
-
-export default config;
+} satisfies Config;
