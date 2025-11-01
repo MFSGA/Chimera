@@ -268,3 +268,15 @@ pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
     tracing::debug!("patch_clash_config: {payload:?}");
     todo!("implement the patch_clash_config ipc command");
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
+    todo!()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn select_proxy(group: String, name: String) -> Result<()> {
+    todo!()
+}

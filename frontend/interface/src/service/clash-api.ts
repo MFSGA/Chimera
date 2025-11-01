@@ -51,10 +51,36 @@ export const useClashAPI = () => {
     });
   };
 
+  const proxiesDelay = async (name: string, options?: ClashDelayOptions) => {
+    return await request<{ delay: number }>(
+      `/proxies/${encodeURIComponent(name)}/delay`,
+      {
+        params: {
+          timeout: options?.timeout || 10000,
+          url: options?.url || 'http://www.gstatic.com/generate_204',
+        },
+      },
+    );
+  };
+
+  const groupDelay = async (group: string, options?: ClashDelayOptions) => {
+    return await request<Record<string, number>>(
+      `/group/${encodeURIComponent(group)}/delay`,
+      {
+        params: {
+          timeout: options?.timeout || 10000,
+          url: options?.url || 'http://www.gstatic.com/generate_204',
+        },
+      },
+    );
+  };
+
   return {
     deleteConnections,
     configs,
     patchConfigs,
+    proxiesDelay,
+    groupDelay,
   };
 };
 
@@ -72,3 +98,8 @@ export interface ClashConfig {
   'external-controller': string;
   secret: string;
 }
+
+export type ClashDelayOptions = {
+  url?: string;
+  timeout?: number;
+};
