@@ -7,3 +7,5 @@ export { commands } from './bindings';
 export type * from './bindings';
 export * from './use-settings';
 export * from './use-clash-connections';
+/** 7 */
+export * from './use-proxy-mode';
