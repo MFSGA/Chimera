@@ -1,3 +1,13 @@
+## [0.5.3] - 2025-11-01 10:09:56
+
+### ✨ Features
+
+- **check_update:** Can open the update dialog repeatly and support release notes 7 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.5.2...v0.5.3
+
 ## [0.5.2] - 2025-11-01 09:13:35
 
 ### ✨ Features
