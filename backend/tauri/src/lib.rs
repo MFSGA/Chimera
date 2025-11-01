@@ -45,6 +45,8 @@ pub fn run() -> std::io::Result<()> {
         // clash
         ipc::get_clash_info,
         ipc::patch_clash_config,
+        ipc::get_proxies,
+        ipc::select_proxy,
         // updater layer
         ipc::check_update,
         // utils

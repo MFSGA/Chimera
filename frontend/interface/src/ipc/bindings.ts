@@ -109,6 +109,28 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getProxies(): Promise<Result<Proxies, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_proxies') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async selectProxy(
+    group: string,
+    name: string,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('select_proxy', { group, name }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('check_update') };
@@ -289,6 +311,37 @@ export type ProfilesBuilder = {
    */
   chain: string[] | null;
 };
+export type Proxies = {
+  groups: ProxyGroupItem[];
+  /**
+   * 2
+   */
+  name: string;
+  /**
+   * 3
+   */
+  global: ProxyGroupItem;
+};
+export type ProxyGroupItem = {
+  /**
+   * 1
+   */
+  hidden?: boolean;
+  /**
+   * 2
+   */
+  name: string;
+  /**
+   * 3
+   */
+  all: ProxyItem[];
+  /**
+   * 4
+   */
+  history: ProxyItemHistory[];
+};
+export type ProxyItem = { name: string; history: ProxyItemHistory[] };
+export type ProxyItemHistory = { time: string; delay: number };
 export type RemoteProfile = {
   /**
    * Profile ID

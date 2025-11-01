@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use reqwest::{Method, StatusCode};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use tauri::http::HeaderMap;
 use tracing::instrument;
 
@@ -156,4 +157,18 @@ pub fn parse_log(log: String) -> String {
         return log[9..].to_owned();
     }
     log
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyItemHistory {
+    pub time: String,
+    pub delay: i64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyItem {
+    pub name: String,
+    pub history: Vec<ProxyItemHistory>,
 }

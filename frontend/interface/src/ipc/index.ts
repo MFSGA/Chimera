@@ -9,3 +9,5 @@ export * from './use-settings';
 export * from './use-clash-connections';
 /** 7 */
 export * from './use-proxy-mode';
+/** 8 */
+export * from './use-clash-proxies';
