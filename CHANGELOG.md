@@ -1,3 +1,37 @@
+## [0.5.2] - 2025-11-01 09:13:35
+
+### ✨ Features
+
+- **check_update:** Update the style for UpdaterDialog 6 by @MFSGA
+
+- **cleanup_processes:** Complete the frontend component 7 by @MFSGA
+
+- **cleanup_processes:** Complete the command 6 by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency i18next to v25.6.0 by @renovate-bot
+
+- **deps:** Update dependency dayjs to v1.11.19 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-process to v2.3.1 by @renovate-bot
+
+- **deps:** Update dependency ahooks to v3.9.6 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.4 by @renovate-bot
+
+- **deps:** Update dependency react-i18next to v15.7.4 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-opener to v2.5.2 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-dialog to v2.4.2 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.5 by @renovate-bot
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.5.1...v0.5.2
+
 ## [0.5.1] - 2025-10-31 13:31:15
 
 ### 🐛 Bug Fixes
