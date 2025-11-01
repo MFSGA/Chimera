@@ -42,6 +42,7 @@ export default function UpdaterDialog({
       : undefined);
 
   console.info(date);
+  console.info(update);
 
   const onDownloadEvent = useCallback((e: DownloadEvent) => {
     switch (e.event) {
@@ -141,7 +142,7 @@ export default function UpdaterDialog({
                 },
               }}
             >
-              {update.body || 'New version available.'}
+              {(update.rawJson.notes as string) || 'New version available.'}
             </Markdown>
           </Suspense>
         </div>
