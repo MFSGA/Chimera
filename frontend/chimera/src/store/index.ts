@@ -1,5 +1,6 @@
 import { atom } from 'jotai';
 import { atomWithStorage } from 'jotai/utils';
+import { SortType } from '@/components/proxies/utils';
 import { FileRouteTypes } from '@/routeTree.gen';
 
 const atomWithLocalStorage = <T>(key: string, initialValue: T) => {
@@ -37,3 +38,8 @@ export const proxyGroupAtom = atomWithLocalStorage<{
 }>('proxyGroupAtom', {
   selector: 0,
 });
+
+export const proxyGroupSortAtom = atomWithLocalStorage<SortType>(
+  'proxyGroupSortAtom',
+  SortType.Default,
+);
