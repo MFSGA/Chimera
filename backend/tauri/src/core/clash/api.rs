@@ -175,6 +175,9 @@ pub struct ProxyItem {
     pub all: Option<Vec<String>>,
     #[serde(default)]
     pub hidden: bool, // Mihomo Only
+    pub now: Option<String>, // 当前选中的代理
+    pub r#type: String,      // TODO: 考虑改成枚举
+    pub udp: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Type)]

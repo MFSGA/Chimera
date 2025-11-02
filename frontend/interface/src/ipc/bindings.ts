@@ -343,12 +343,27 @@ export type ProxyGroupItem = {
    * 4
    */
   history: ProxyItemHistory[];
+  /**
+   * 5
+   */
+  now: string | null;
+  /**
+   * 6
+   */
+  type: string;
+  /**
+   * 7
+   */
+  udp: boolean;
 };
 export type ProxyItem = {
   name: string;
   history: ProxyItemHistory[];
   all: string[] | null;
   hidden?: boolean;
+  now: string | null;
+  type: string;
+  udp: boolean;
 };
 export type ProxyItemHistory = { time: string; delay: number };
 export type RemoteProfile = {

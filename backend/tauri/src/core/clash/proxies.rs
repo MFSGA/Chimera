@@ -20,6 +20,12 @@ pub struct ProxyGroupItem {
     pub all: Vec<api::ProxyItem>,
     /// 4
     pub history: Vec<api::ProxyItemHistory>,
+    /// 5
+    pub now: Option<String>, // 当前选中的代理
+    /// 6
+    pub r#type: String, // TODO: 考虑改成枚举
+    /// 7
+    pub udp: bool,
 }
 
 impl From<api::ProxyItem> for ProxyGroupItem {
@@ -31,6 +37,9 @@ impl From<api::ProxyItem> for ProxyGroupItem {
             all,
 
             hidden: item.hidden,
+            now: item.now,
+            r#type: item.r#type,
+            udp: item.udp,
         }
     }
 }
