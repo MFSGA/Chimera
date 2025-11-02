@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -171,4 +172,23 @@ pub struct ProxyItemHistory {
 pub struct ProxyItem {
     pub name: String,
     pub history: Vec<ProxyItemHistory>,
+    pub all: Option<Vec<String>>,
+    #[serde(default)]
+    pub hidden: bool, // Mihomo Only
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxiesRes {
+    #[serde(default)]
+    pub proxies: IndexMap<String, ProxyItem>,
+}
+
+/// GET /proxies
+/// 获取代理列表
+#[instrument]
+pub async fn get_proxies() -> Result<ProxiesRes> {
+    let path = "/proxies";
+    let resp: ProxiesRes = perform_request((Method::GET, path)).await?.json().await?;
+    Ok(resp)
 }
