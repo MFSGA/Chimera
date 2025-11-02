@@ -294,3 +294,9 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
 pub async fn select_proxy(group: String, name: String) -> Result<()> {
     todo!()
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_server_port() -> Result<u16> {
+    Ok(*crate::core::server::SERVER_PORT)
+}

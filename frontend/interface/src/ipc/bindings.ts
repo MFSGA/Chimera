@@ -163,6 +163,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getServerPort(): Promise<Result<number, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_server_port') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/

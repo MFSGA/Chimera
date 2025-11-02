@@ -53,6 +53,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::is_appimage,
         ipc::open_that,
         ipc::cleanup_processes,
+        ipc::get_server_port,
     ]);
 
     #[cfg(debug_assertions)]

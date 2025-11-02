@@ -5,3 +5,5 @@ export * from './baseCard';
 export * from './loadingSwitch';
 /** 5 */
 export * from './baseDialog';
+/** 6 */
+export * from './lazyImage';
