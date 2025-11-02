@@ -224,6 +224,8 @@ impl ProxiesGuardExt for ProxiesGuardSingleton {
     }
 
     async fn select_proxy(&self, group: &str, name: &str) -> Result<()> {
-        todo!()
+        api::update_proxy(group, name).await?;
+        self.update().await?;
+        Ok(())
     }
 }

@@ -138,7 +138,9 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
             Config::profiles().apply();
             (Config::profiles().data().save_file())?;
 
-            log::debug!("todo: delete the connections before changing profiles");
+            // Interrupt connections based on configuration
+            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
+
             Ok(())
         }
         Err(err) => {
@@ -292,7 +294,14 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
 #[tauri::command]
 #[specta::specta]
 pub async fn select_proxy(group: String, name: String) -> Result<()> {
-    todo!()
+    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+    (ProxiesGuard::global().select_proxy(&group, &name).await)?;
+
+    // Interrupt connections based on configuration
+    let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change()
+        .await;
+
+    Ok(())
 }
 
 #[tauri::command]

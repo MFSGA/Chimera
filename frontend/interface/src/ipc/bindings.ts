@@ -179,6 +179,7 @@ export const commands = {
 
 /** user-defined types **/
 
+export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 export type ClashCore =
   | 'clash'
   | 'clash-rs'
@@ -268,6 +269,25 @@ export type IVerge = {
    * 15. Check update when app launch
    */
   enable_auto_check_update: boolean | null;
+  /**
+   * 16. 切换代理时中断连接
+   * None: 不中断
+   * Chain: 仅中断使用该代理链的连接
+   * All: 中断所有连接
+   */
+  break_when_proxy_change: BreakWhenProxyChange | null;
+  /**
+   * 17. 切换配置时中断连接
+   * true: 中断所有连接
+   * false: 不中断连接
+   */
+  break_when_profile_change: boolean | null;
+  /**
+   * 18. 切换模式时中断连接
+   * true: 中断所有连接
+   * false: 不中断连接
+   */
+  break_when_mode_change: boolean | null;
 };
 export type JsonValue =
   | null

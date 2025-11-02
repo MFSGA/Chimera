@@ -195,3 +195,31 @@ pub async fn get_proxies() -> Result<ProxiesRes> {
     let resp: ProxiesRes = perform_request((Method::GET, path)).await?.json().await?;
     Ok(resp)
 }
+
+/// DELETE /connections
+/// Close all connections or a specific connection by ID
+#[instrument]
+pub async fn delete_connections(id: Option<&str>) -> Result<()> {
+    let path = match id {
+        Some(id) => format!("/connections/{}", id),
+        None => "/connections".to_string(),
+    };
+
+    let _ = perform_request((Method::DELETE, path.as_str())).await?;
+    Ok(())
+}
+
+/// PUT /proxies/{group}
+/// 选择代理
+/// group: 代理分组名称
+/// name: 代理名称
+#[instrument]
+pub async fn update_proxy(group: &str, name: &str) -> Result<()> {
+    let path = format!("/proxies/{group}");
+
+    let mut data = HashMap::new();
+    data.insert("name", name);
+
+    let _ = perform_request((Method::PUT, path.as_str(), Data(data))).await?;
+    Ok(())
+}
