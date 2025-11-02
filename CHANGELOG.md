@@ -1,3 +1,29 @@
+## [0.5.4] - 2025-11-02 08:17:44
+
+### ✨ Features
+
+- **ProxyPage:** Complete the NodeList component for frontend 6 by @MFSGA
+
+- **ProxyPage:** Complete the GroupList component for frontend 5 by @MFSGA
+
+- **ProxyPage:** Complete the SidePage component for frontend 4 by @MFSGA
+
+- **ProxyPage:** Complete the get_proxies command 3 by @MFSGA
+
+- **ProxyPage:** Add get_proxies select_proxy commands and useClashProxies 2 by @MFSGA
+
+- **ProxyPage:** Add the patch_clash_config command and relative interface in the frontend 1 by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency ofetch to v1.5.1 by @renovate-bot
+
+- **deps:** Update tailwindcss monorepo to v4.1.16 by @renovate-bot
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.5.3...v0.5.4
+
 ## [0.5.3] - 2025-11-01 10:09:56
 
 ### ✨ Features
