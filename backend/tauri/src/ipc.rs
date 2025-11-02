@@ -272,7 +272,21 @@ pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
-    todo!()
+    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+    {
+        let guard = ProxiesGuard::global().read();
+        if guard.is_updated() {
+            return Ok(guard.inner().clone());
+        }
+    }
+
+    match ProxiesGuard::global().update().await {
+        Ok(_) => {
+            let proxies = ProxiesGuard::global().read().inner().clone();
+            Ok(proxies)
+        }
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[tauri::command]
