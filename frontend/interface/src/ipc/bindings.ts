@@ -316,10 +316,6 @@ export type Proxies = {
   /**
    * 2
    */
-  name: string;
-  /**
-   * 3
-   */
   global: ProxyGroupItem;
 };
 export type ProxyGroupItem = {
@@ -340,7 +336,12 @@ export type ProxyGroupItem = {
    */
   history: ProxyItemHistory[];
 };
-export type ProxyItem = { name: string; history: ProxyItemHistory[] };
+export type ProxyItem = {
+  name: string;
+  history: ProxyItemHistory[];
+  all: string[] | null;
+  hidden?: boolean;
+};
 export type ProxyItemHistory = { time: string; delay: number };
 export type RemoteProfile = {
   /**
