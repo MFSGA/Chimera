@@ -96,6 +96,19 @@ pub struct IVerge {
     pub proxy_guard_interval: Option<u64>,
     /// 15. Check update when app launch
     pub enable_auto_check_update: Option<bool>,
+    /// 16. 切换代理时中断连接
+    /// None: 不中断
+    /// Chain: 仅中断使用该代理链的连接
+    /// All: 中断所有连接
+    pub break_when_proxy_change: Option<BreakWhenProxyChange>,
+    /// 17. 切换配置时中断连接
+    /// true: 中断所有连接
+    /// false: 不中断连接
+    pub break_when_profile_change: Option<bool>,
+    /// 18. 切换模式时中断连接
+    /// true: 中断所有连接
+    /// false: 不中断连接
+    pub break_when_mode_change: Option<bool>,
 }
 
 impl IVerge {
@@ -159,4 +172,13 @@ pub fn is_hex_color(color: &str) -> bool {
     }
 
     color[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum BreakWhenProxyChange {
+    #[default]
+    None,
+    Chain,
+    All,
 }
