@@ -1,3 +1,13 @@
+## [0.6.0] - 2025-11-02 17:33:16
+
+### ✨ Features
+
+- **ProxyPage:** Complete the select_proxy command 7 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.5.4...v0.6.0
+
 ## [0.5.4] - 2025-11-02 08:17:44
 
 ### ✨ Features
