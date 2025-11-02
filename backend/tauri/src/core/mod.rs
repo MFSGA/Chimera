@@ -4,6 +4,8 @@ pub mod clash;
 pub mod handle;
 /// 5
 pub mod logger;
+/// 7
+pub mod server;
 /// 2
 pub mod service;
 /// 1 todo: will use v2

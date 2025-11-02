@@ -11,3 +11,7 @@ export const openThat = async (path: string) => {
 export const cleanupProcesses = async () => {
   return await invoke<void>('cleanup_processes');
 };
+
+export const getServerPort = async () => {
+  return await invoke<number>('get_server_port');
+};
