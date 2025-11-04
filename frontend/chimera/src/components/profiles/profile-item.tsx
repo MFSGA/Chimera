@@ -226,7 +226,7 @@ export const ProfileItem = memo(function ProfileItem({
           },
           (theme) => ({
             backgroundColor: selected
-              ? alpha(theme.palette.primary.main, 0.2)
+              ? alpha(theme.vars.palette.primary.main, 0.2)
               : null,
           }),
         ]}
@@ -248,7 +248,7 @@ export const ProfileItem = memo(function ProfileItem({
               <FiberManualRecord
                 className="top-0 mr-auto !size-3 animate-bounce"
                 sx={(theme) => ({
-                  fill: theme.palette.success.main,
+                  fill: theme.vars.palette.success.main,
                 })}
               />
             )}

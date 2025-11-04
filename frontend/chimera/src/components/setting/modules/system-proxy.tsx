@@ -50,12 +50,12 @@ export const PaperSwitchButton = memo(function PaperSwitchButton({
       sxPaper={mergeSxProps(
         (theme: Theme) => ({
           backgroundColor: checked
-            ? alpha(theme.palette.primary.main, 0.1)
-            : theme.palette.grey[100],
+            ? alpha(theme.vars.palette.primary.main, 0.1)
+            : theme.vars.palette.grey[100],
           ...theme.applyStyles('dark', {
             backgroundColor: checked
-              ? alpha(theme.palette.primary.main, 0.1)
-              : theme.palette.common.black,
+              ? alpha(theme.vars.palette.primary.main, 0.1)
+              : theme.vars.palette.common.black,
           }),
         }),
         sxPaper,
