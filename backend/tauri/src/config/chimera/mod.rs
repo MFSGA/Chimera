@@ -109,6 +109,8 @@ pub struct IVerge {
     /// true: 中断所有连接
     /// false: 不中断连接
     pub break_when_mode_change: Option<bool>,
+    /// 19. `light` or `dark` or `system`
+    pub theme_mode: Option<String>,
 }
 
 impl IVerge {
