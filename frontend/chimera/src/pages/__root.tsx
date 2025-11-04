@@ -1,9 +1,10 @@
-import { RootProvider } from '@chimera/interface';
+import { RootProvider, useSettings } from '@chimera/interface';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
-import { lazy } from 'react';
+import { lazy, PropsWithChildren } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
+import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
 import { UpdaterProvider } from '@/hooks/use-updater';
 
@@ -24,6 +25,14 @@ export const Route = createRootRoute({
   // pendingComponent: Pending,
 });
 
+const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
+  const {
+    query: { isLoading },
+  } = useSettings();
+
+  return isLoading ? null : children;
+};
+
 export default function App() {
   return (
     <RootProvider>
@@ -35,15 +44,19 @@ export default function App() {
           refreshInterval: 5000,
         }}
       >
-        <StyledEngineProvider injectFirst>
-          <UpdaterDialog />
-          <UpdaterProvider />
+        <QueryLoaderProvider>
+          <StyledEngineProvider injectFirst>
+            <ThemeModeProvider>
+              <UpdaterDialog />
+              <UpdaterProvider />
 
-          <AppContainer>
-            <Outlet />
-            <TanStackRouterDevtools />
-          </AppContainer>
-        </StyledEngineProvider>
+              <AppContainer>
+                <Outlet />
+                <TanStackRouterDevtools />
+              </AppContainer>
+            </ThemeModeProvider>
+          </StyledEngineProvider>
+        </QueryLoaderProvider>
       </SWRConfig>
     </RootProvider>
   );

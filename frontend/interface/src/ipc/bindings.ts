@@ -288,6 +288,10 @@ export type IVerge = {
    * false: 不中断连接
    */
   break_when_mode_change: boolean | null;
+  /**
+   * 19. `light` or `dark` or `system`
+   */
+  theme_mode: string | null;
 };
 export type JsonValue =
   | null
