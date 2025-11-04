@@ -3,6 +3,13 @@
   "version": "0.6.0",
   "type": "module",
   "main": "./src/index.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./src/materialYou/themeConsts.ts": "./src/materialYou/themeConsts.ts"
+  },
   "files": [
     "dist",
     "src"
@@ -20,7 +27,8 @@
     "ahooks": "3.9.6",
     "react-i18next": "15.7.4",
     "@radix-ui/react-scroll-area": "1.2.10",
-    "tailwindcss": "4.1.16"
+    "tailwindcss": "4.1.16",
+    "@material/material-color-utilities": "0.3.0"
   },
   "devDependencies": {
     "tailwind-merge": "3.3.1",

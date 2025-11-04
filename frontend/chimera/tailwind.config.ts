@@ -1,6 +1,6 @@
-import { MUI_BREAKPOINTS } from '@chimera/ui/src/materialYou/themeConsts.mjs';
 import type { Config } from 'tailwindcss';
 import createPlugin from 'tailwindcss/plugin';
+import { MUI_BREAKPOINTS } from '../ui/src/materialYou/themeConsts';
 
 const getMUIScreen = () => {
   const breakpoints = MUI_BREAKPOINTS.values as Record<string, number>;

@@ -43,3 +43,8 @@ export const proxyGroupSortAtom = atomWithLocalStorage<SortType>(
   'proxyGroupSortAtom',
   SortType.Default,
 );
+
+export const themeMode = atomWithLocalStorage<'light' | 'dark'>(
+  'themeMode',
+  'light',
+);

@@ -1,5 +1,7 @@
+import { BreakpointsOptions } from '@mui/material/styles';
+
 /** @type {import("@mui/material/styles").BreakpointsOptions} */
-export const MUI_BREAKPOINTS = {
+export const MUI_BREAKPOINTS: BreakpointsOptions = {
   values: {
     xs: 0,
     sm: 400,
