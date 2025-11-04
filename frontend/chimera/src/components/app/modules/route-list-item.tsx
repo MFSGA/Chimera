@@ -27,7 +27,7 @@ export const RouteListItem = ({
 
   const navigate = useNavigate();
 
-  // const { value: language } = useSetting('language');
+  const { value: language } = useSetting('language');
 
   const listItemButton = (
     <ListItemButton
@@ -66,7 +66,7 @@ export const RouteListItem = ({
         <Box
           className={cn(
             'w-full text-nowrap pb-1 pt-1',
-            // language && languageQuirks[language].drawer.itemClassNames,
+            language && languageQuirks[language].drawer.itemClassNames,
           )}
           sx={(theme) => ({
             color: match ? theme.vars.palette.primary.main : undefined,

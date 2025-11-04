@@ -111,6 +111,8 @@ pub struct IVerge {
     pub break_when_mode_change: Option<bool>,
     /// 19. `light` or `dark` or `system`
     pub theme_mode: Option<String>,
+    /// 20. i18n
+    pub language: Option<String>,
 }
 
 impl IVerge {

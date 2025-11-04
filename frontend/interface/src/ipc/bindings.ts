@@ -292,6 +292,10 @@ export type IVerge = {
    * 19. `light` or `dark` or `system`
    */
   theme_mode: string | null;
+  /**
+   * 20. i18n
+   */
+  language: string | null;
 };
 export type JsonValue =
   | null
