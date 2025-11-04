@@ -1,9 +1,11 @@
+import { useSetting } from '@chimera/interface';
 import { alpha, cn } from '@chimera/ui';
 import { SvgIconComponent } from '@mui/icons-material';
 import { Box, ListItemButton, ListItemIcon, Tooltip } from '@mui/material';
 import { useMatch, useNavigate } from '@tanstack/react-router';
 import { createElement } from 'react';
 import { useTranslation } from 'react-i18next';
+import { languageQuirks } from '@/utils/language';
 
 export const RouteListItem = ({
   name,
@@ -17,7 +19,6 @@ export const RouteListItem = ({
   onlyIcon?: boolean;
 }) => {
   const { t } = useTranslation();
-
   const match = useMatch({
     strict: false,
     shouldThrow: false,
@@ -26,6 +27,8 @@ export const RouteListItem = ({
 
   const navigate = useNavigate();
 
+  // const { value: language } = useSetting('language');
+
   const listItemButton = (
     <ListItemButton
       className={cn(
@@ -33,11 +36,15 @@ export const RouteListItem = ({
       )}
       sx={[
         (theme) => ({
-          backgroundColor: match ? alpha('red', 0.3) : alpha('orange', 0.15),
+          backgroundColor: match
+            ? alpha(theme.vars.palette.primary.main, 0.3)
+            : alpha(theme.vars.palette.background.paper, 0.15),
         }),
         (theme) => ({
           '&:hover': {
-            backgroundColor: match ? alpha('red', 0.5) : null,
+            backgroundColor: match
+              ? alpha(theme.vars.palette.primary.main, 0.5)
+              : null,
           },
         }),
       ]}
@@ -50,16 +57,19 @@ export const RouteListItem = ({
       <ListItemIcon>
         {createElement(icon, {
           sx: (theme) => ({
-            fill: match ? 'yellow' : undefined,
+            fill: match ? theme.vars.palette.primary.main : undefined,
           }),
           className: onlyIcon ? '!size-8' : undefined,
         })}
       </ListItemIcon>
       {!onlyIcon && (
         <Box
-          className={cn('w-full text-nowrap pb-1 pt-1')}
+          className={cn(
+            'w-full text-nowrap pb-1 pt-1',
+            // language && languageQuirks[language].drawer.itemClassNames,
+          )}
           sx={(theme) => ({
-            color: match ? 'red' : undefined,
+            color: match ? theme.vars.palette.primary.main : undefined,
           })}
         >
           {t(`label_${name}`)}
@@ -69,7 +79,7 @@ export const RouteListItem = ({
   );
 
   return onlyIcon ? (
-    <Tooltip title={`label_${name}`}>{listItemButton}</Tooltip>
+    <Tooltip title={t(`label_${name}`)}>{listItemButton}</Tooltip>
   ) : (
     listItemButton
   );

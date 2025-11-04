@@ -66,8 +66,8 @@ export const LabelSwitch = ({
         justifyContent: 'space-between',
         padding: 2,
         borderRadius: 6,
-        // todo: theme mode adapt
-        backgroundColor: alpha(theme.palette.primary.main, 0.1),
+
+        backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
       })}
       elevation={0}
     >
@@ -123,8 +123,8 @@ export const ClashFieldItem = ({
         elevation={0}
         sx={(theme) => ({
           borderRadius: 6,
-          // todo: theme mode adapt
-          backgroundColor: alpha(theme.palette.primary.main, 0.1),
+
+          backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
         })}
       >
         <ButtonBase

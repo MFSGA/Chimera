@@ -43,13 +43,12 @@ export const NodeCard = memo(function NodeCard({
       className={cn(styles.Card, delay === -1 && styles.NoDelay)}
       sxPaper={(theme) => ({
         backgroundColor: checked
-          ? // todo
-            alpha(theme.palette.primary.main, 0.3)
-          : theme.palette.grey[100],
+          ? alpha(theme.vars.palette.primary.main, 0.3)
+          : theme.vars.palette.grey[100],
         ...theme.applyStyles('dark', {
           backgroundColor: checked
-            ? alpha(theme.palette.primary.main, 0.3)
-            : theme.palette.grey[900],
+            ? alpha(theme.vars.palette.primary.main, 0.3)
+            : theme.vars.palette.grey[900],
         }),
       })}
     >
