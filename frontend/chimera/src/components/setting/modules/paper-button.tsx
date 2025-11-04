@@ -30,7 +30,7 @@ export const PaperButton = memo(function PaperButton({
       sx={mergeSxProps(
         (theme: Theme) => ({
           borderRadius: 6,
-          backgroundColor: alpha(theme.palette.primary.main, 0.1),
+          backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
         }),
         sxPaper,
       )}

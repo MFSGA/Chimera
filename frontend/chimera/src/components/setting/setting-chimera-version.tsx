@@ -70,8 +70,8 @@ export const SettingNyanpasuVersion = () => {
             sx={(theme) => ({
               mt: 1,
               padding: 2,
-              // todo: fix color
-              backgroundColor: alpha(theme.palette.primary.main, 0.1),
+
+              backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
               borderRadius: 6,
               width: '100%',
             })}

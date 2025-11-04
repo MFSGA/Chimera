@@ -136,8 +136,7 @@ export const BaseDialog = ({
                 OS === 'linux' ||
                   ((theme) => ({
                     backgroundColor: alpha(
-                      // todo
-                      theme.palette.primary.main,
+                      theme.vars.palette.primary.main,
                       0.1,
                     ),
                   })),
@@ -160,8 +159,7 @@ export const BaseDialog = ({
               mode === 'dark' ? 'text-white shadow-zinc-900' : 'text-black',
             )}
             sx={(theme) => ({
-              // todo: fix color
-              backgroundColor: theme.palette.background.default,
+              backgroundColor: theme.vars.palette.background.default,
             })}
             animate={open ? 'open' : 'closed'}
             initial={{
