@@ -1,3 +1,17 @@
+## [0.6.2] - 2025-11-10 12:08:35
+
+### ✨ Features
+
+- **css:** Support CssBaseline by @MFSGA
+
+- **i18n:** Validate the change changeLanguage function by @MFSGA
+
+- Prepare for clash-rs core by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.6.1...v0.6.2
+
 ## [0.6.1] - 2025-11-10 02:40:39
 
 ### ✨ Features
