@@ -1,9 +1,11 @@
 import { RootProvider, useSettings } from '@chimera/interface';
+// import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { lazy, PropsWithChildren } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
+import LocalesProvider from '@/components/app/locales-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
 import { UpdaterProvider } from '@/hooks/use-updater';
@@ -47,6 +49,9 @@ export default function App() {
         <QueryLoaderProvider>
           <StyledEngineProvider injectFirst>
             <ThemeModeProvider>
+              {/* <CssBaseline /> */}
+              <LocalesProvider />
+
               <UpdaterDialog />
               <UpdaterProvider />
 
