@@ -1,3 +1,25 @@
+## [0.6.1] - 2025-11-10 02:40:39
+
+### ✨ Features
+
+- **i18n:** Prepare to change lanuage 2 by @MFSGA
+
+- **theme:** Add the ThemeModeProvider for frontend 1 by @MFSGA
+
+- Support language in Iverge and user interface by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.7 by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.15.1 by @renovate-bot
+
+- **theme:** Fix the heme.vars.palette error 2 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.6.0...v0.6.1
+
 ## [0.6.0] - 2025-11-02 17:33:16
 
 ### ✨ Features
