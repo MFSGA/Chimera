@@ -48,3 +48,8 @@ export const themeMode = atomWithLocalStorage<'light' | 'dark'>(
   'themeMode',
   'light',
 );
+
+export const atomIsDrawerOnlyIcon = atomWithStorage<boolean>(
+  'atomIsDrawerOnlyIcon',
+  true,
+);
