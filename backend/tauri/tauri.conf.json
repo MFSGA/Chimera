@@ -33,7 +33,9 @@
     ],
     "createUpdaterArtifacts": true,
     "externalBin": [
-      "sidecar/mihomo"
+      "sidecar/mihomo",
+      "sidecar/clash-rs",
+      "sidecar/clash-rs-alpha"
     ]
   },
   "plugins": {
