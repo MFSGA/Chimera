@@ -1,5 +1,5 @@
 import { RootProvider, useSettings } from '@chimera/interface';
-// import { CssBaseline } from '@mui/material';
+import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
 import { lazy, PropsWithChildren } from 'react';
@@ -49,7 +49,9 @@ export default function App() {
         <QueryLoaderProvider>
           <StyledEngineProvider injectFirst>
             <ThemeModeProvider>
-              {/* <CssBaseline /> */}
+              {/* 4 */}
+              <CssBaseline />
+              {/* 3*/}
               <LocalesProvider />
 
               <UpdaterDialog />
