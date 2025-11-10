@@ -62,7 +62,7 @@ export const SettingNyanpasuVersion = () => {
   });
 
   return (
-    <BaseCard label={t('Nyanpasu Version')}>
+    <BaseCard label={t('Chimera Version')}>
       <List disablePadding>
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <Paper
