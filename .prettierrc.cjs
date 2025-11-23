@@ -1,3 +1,12 @@
+const sortAndTailwindPlugins = [
+  '@ianvs/prettier-plugin-sort-imports',
+  'prettier-plugin-tailwindcss',
+];
+
+const tailwindOnlyPlugins = ['prettier-plugin-tailwindcss'];
+
+const tomlPlugins = ['prettier-plugin-toml'];
+
 /** @type {import("prettier").Config} */
 module.exports = {
   endOfLine: 'lf',
@@ -13,13 +22,26 @@ module.exports = {
         parser: 'jsonc',
       },
     },
-  ],
-  importOrder: ['^@root/(.*)$', '^@/(.*)$', '^~/(.*)$', '^[./]'],
-  importOrderParserPlugins: ['typescript', 'jsx', 'decorators-legacy'],
-  importOrderTypeScriptVersion: '5.0.0',
-  plugins: [
-    '@ianvs/prettier-plugin-sort-imports',
-    'prettier-plugin-tailwindcss',
-    'prettier-plugin-toml',
+    {
+      files: ['*.{js,jsx,ts,tsx,cjs,mjs,cts,mts}'],
+      options: {
+        plugins: sortAndTailwindPlugins,
+        importOrder: ['^@root/(.*)$', '^@/(.*)$', '^~/(.*)$', '^[./]'],
+        importOrderParserPlugins: ['typescript', 'jsx', 'decorators-legacy'],
+        importOrderTypeScriptVersion: '5.0.0',
+      },
+    },
+    {
+      files: ['*.{html,htm,mdx,astro,vue,svelte}'],
+      options: {
+        plugins: tailwindOnlyPlugins,
+      },
+    },
+    {
+      files: ['*.toml'],
+      options: {
+        plugins: tomlPlugins,
+      },
+    },
   ],
 };

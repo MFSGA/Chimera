@@ -65,7 +65,7 @@ export const RouteListItem = ({
       {!onlyIcon && (
         <Box
           className={cn(
-            'w-full text-nowrap pb-1 pt-1',
+            'w-full pt-1 pb-1 text-nowrap',
             language && languageQuirks[language].drawer.itemClassNames,
           )}
           sx={(theme) => ({
