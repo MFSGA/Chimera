@@ -53,7 +53,7 @@ function ProxyPage() {
               value={key}
               selected={enabled}
             >
-              {enabled && <Check className="-ml-2 mr-[0.1rem] scale-75" />}
+              {enabled && <Check className="mr-[0.1rem] -ml-2 scale-75" />}
               {t(key)}
             </ToggleButton>
           ))}
