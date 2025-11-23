@@ -32,7 +32,7 @@ export const DrawerContent = ({
       ]}
       data-tauri-drag-region
     >
-      <div className="scrollbar-hidden flex flex-col gap-2 overflow-y-auto !overflow-x-hidden">
+      <div className="scrollbar-hidden flex flex-col gap-2 !overflow-x-hidden overflow-y-auto">
         {Object.entries(routes).map(([name, { path, icon }]) => {
           return (
             <RouteListItem
