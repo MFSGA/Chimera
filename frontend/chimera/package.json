@@ -8,7 +8,7 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@tauri-apps/api": "2.9.0",
+    "@tauri-apps/api": "2.9.1",
     "@tauri-apps/plugin-opener": "2.5.2",
     "react": "19.2.0",
     "@emotion/styled": "11.14.1",
@@ -36,7 +36,7 @@
     "mui-color-input": "7.0.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.9.4",
+    "@tauri-apps/cli": "2.9.5",
     "@types/react": "19.2.5",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "5.1.0",
