@@ -34,7 +34,7 @@
     "@prettier/plugin-oxc": "0.0.4"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "2.9.5",
+    "@tauri-apps/cli": "2.9.6",
     "npm-run-all2": "8.0.4",
     "react-devtools": "6.1.5",
     "eslint": "9.39.1",
