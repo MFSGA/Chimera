@@ -20,6 +20,7 @@ use nyanpasu_utils::{
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use tokio::time::sleep;
+use tracing::instrument;
 
 use crate::{
     config::{
@@ -261,7 +262,7 @@ impl Instance {
                                             break;
                                         }
                                         CommandEvent::Terminated(status) => {
-                                            log::error!(
+                                                log::error!(
                                                 target: "app",
                                                 "core terminated with status: {status:?}"
                                             );
@@ -509,6 +510,41 @@ impl CoreManager {
             instance.stop().await?;
         }
         Ok(())
+    }
+
+    /// 切换核心
+    #[instrument(skip(self))]
+    pub async fn change_core(&self, clash_core: Option<ClashCore>) -> Result<()> {
+        let clash_core = clash_core.ok_or(anyhow::anyhow!("clash core is null"))?;
+
+        log::debug!(target: "app", "change core to `{clash_core}`");
+
+        Config::verge().draft().clash_core = Some(clash_core);
+
+        // 更新配置
+        Config::generate().await?;
+
+        self.check_config().await?;
+
+        // 清掉旧日志
+        Logger::global().clear_log();
+
+        match self.run_core().await {
+            Ok(_) => {
+                tracing::info!("change core success");
+                Config::verge().apply();
+                Config::runtime().apply();
+                log_err!(Config::verge().latest().save_file());
+                Ok(())
+            }
+            Err(err) => {
+                tracing::error!("failed to change core: {err:?}");
+                Config::verge().discard();
+                Config::runtime().discard();
+                self.run_core().await?;
+                Err(err)
+            }
+        }
     }
 }
 
