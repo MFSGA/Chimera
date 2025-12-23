@@ -131,6 +131,19 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async changeClashCore(
+    clashCore: ClashCore | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('change_clash_core', { clashCore }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('check_update') };
@@ -166,6 +179,52 @@ export const commands = {
   async getServerPort(): Promise<Result<number, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_server_port') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async getCoreVersion(coreType: ClashCore): Promise<Result<string, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_core_version', { coreType }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async updateCore(coreType: ClashCore): Promise<Result<number, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('update_core', { coreType }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  /**
+   * restart the sidecar
+   */
+  async restartSidecar(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('restart_sidecar') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async fetchLatestCoreVersions(): Promise<
+    Result<ManifestVersionLatest, string>
+  > {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('fetch_latest_core_versions'),
+      };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: 'error', error: e as any };
@@ -311,6 +370,13 @@ export type LoggingLevel =
   | 'info'
   | 'warn'
   | 'error';
+export type ManifestVersionLatest = {
+  mihomo: string;
+  mihomo_alpha: string;
+  clash_rs: string;
+  clash_rs_alpha: string;
+  clash_premium: string;
+};
 export type PatchRuntimeConfig = { mode?: string | null };
 export type Profile = { type: 'remote' } & RemoteProfile;
 export type Profiles = {

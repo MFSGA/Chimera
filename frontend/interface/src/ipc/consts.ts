@@ -27,3 +27,13 @@ export const CLASH_CONFIG_QUERY_KEY = 'clash-config';
  * Clash proxies query key, used by useClashProxies hook
  */
 export const CLASH_PROXIES_QUERY_KEY = 'clash-proxies';
+
+/**
+ * Clash core query key, used by useClashCores hook
+ */
+export const CLASH_CORE_QUERY_KEY = 'clash-core';
+
+/**
+ * Clash version query key, used to fetch clash version from query
+ */
+export const CLASH_VERSION_QUERY_KEY = 'clash-version';
