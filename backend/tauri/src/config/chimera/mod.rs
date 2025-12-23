@@ -58,6 +58,18 @@ impl From<&ClashCore> for nyanpasu_utils::core::CoreType {
     }
 }
 
+impl std::fmt::Display for ClashCore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClashCore::ClashPremium => write!(f, "clash"),
+            ClashCore::ClashRs => write!(f, "clash-rs"),
+            ClashCore::Mihomo => write!(f, "mihomo"),
+            ClashCore::MihomoAlpha => write!(f, "mihomo-alpha"),
+            ClashCore::ClashRsAlpha => write!(f, "clash-rs-alpha"),
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
 #[verge(patch_fn = "patch_config")]
 // TODO: use new managedState and builder pattern instead
