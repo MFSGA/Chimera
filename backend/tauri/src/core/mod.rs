@@ -14,3 +14,5 @@ pub mod service;
 pub mod state;
 /// 4
 pub mod sysopt;
+/// 9
+pub mod updater;

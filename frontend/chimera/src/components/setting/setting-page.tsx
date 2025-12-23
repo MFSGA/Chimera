@@ -1,6 +1,7 @@
 import Masonry from '@mui/lab/Masonry';
 import SettingChimerauUI from './setting-chimera-ui';
 import SettingNyanpasuVersion from './setting-chimera-version';
+import SettingClashCore from './setting-clash-core';
 import SettingSystemProxy from './setting-system-proxy';
 
 export const SettingPage = () => {
@@ -21,6 +22,8 @@ export const SettingPage = () => {
       <SettingSystemProxy />
       {/* 3 */}
       <SettingChimerauUI />
+      {/* 4 */}
+      <SettingClashCore />
       {/* 2 */}
       <SettingNyanpasuVersion />
     </Masonry>

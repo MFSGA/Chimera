@@ -47,6 +47,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::patch_clash_config,
         ipc::get_proxies,
         ipc::select_proxy,
+        ipc::change_clash_core,
         // updater layer
         ipc::check_update,
         // utils
@@ -54,6 +55,11 @@ pub fn run() -> std::io::Result<()> {
         ipc::open_that,
         ipc::cleanup_processes,
         ipc::get_server_port,
+        // updater
+        ipc::get_core_version,
+        ipc::update_core,
+        ipc::restart_sidecar,
+        ipc::fetch_latest_core_versions
     ]);
 
     #[cfg(debug_assertions)]

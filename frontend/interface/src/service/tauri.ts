@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { InspectUpdater } from './types';
 
 export const isAppImage = async () => {
   return await invoke<boolean>('is_appimage');
@@ -14,4 +15,8 @@ export const cleanupProcesses = async () => {
 
 export const getServerPort = async () => {
   return await invoke<number>('get_server_port');
+};
+
+export const inspectUpdater = async (updaterId: number) => {
+  return await invoke<InspectUpdater>('inspect_updater', { updaterId });
 };

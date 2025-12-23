@@ -11,3 +11,7 @@ export * from './use-clash-connections';
 export * from './use-proxy-mode';
 /** 8 */
 export * from './use-clash-proxies';
+/** 9 */
+export * from './use-clash-cores';
+/** 10 */
+export * from './use-clash-version';

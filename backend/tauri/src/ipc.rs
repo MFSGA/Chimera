@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::{
     config::{
-        chimera::IVerge,
+        chimera::{self, IVerge},
         clash::ClashInfo,
         core::Config,
         profile::{
@@ -17,9 +17,9 @@ use crate::{
         },
         runtime::PatchRuntimeConfig,
     },
-    core::{clash::core::CoreManager, handle},
+    core::{clash::core::CoreManager, handle, updater::ManifestVersionLatest},
     feat,
-    utils::{dirs, help},
+    utils::{dirs, help, resolve},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
@@ -308,4 +308,43 @@ pub async fn select_proxy(group: String, name: String) -> Result<()> {
 #[specta::specta]
 pub fn get_server_port() -> Result<u16> {
     Ok(*crate::core::server::SERVER_PORT)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_core_version(
+    app_handle: AppHandle,
+    core_type: chimera::ClashCore,
+) -> Result<String> {
+    match resolve::resolve_core_version(&app_handle, &core_type).await {
+        Ok(version) => Ok(version),
+        Err(err) => Err(IpcError::from(err)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
+    log::warn!("update_core: {core_type:?}");
+    todo!()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn change_clash_core(clash_core: Option<chimera::ClashCore>) -> Result {
+    todo!()
+}
+
+/// restart the sidecar
+#[tauri::command]
+#[specta::specta]
+pub async fn restart_sidecar() -> Result {
+    (CoreManager::global().run_core().await)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
+    todo!()
 }

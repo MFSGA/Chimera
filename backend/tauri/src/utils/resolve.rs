@@ -1,6 +1,11 @@
-use tauri::App;
+use anyhow::Result;
+use tauri::{App, AppHandle};
 
-use crate::{config::core::Config, core::clash::core::CoreManager, log_err};
+use crate::{
+    config::{chimera::ClashCore, core::Config},
+    core::clash::core::CoreManager,
+    log_err,
+};
 
 /// handle something when start app
 pub fn resolve_setup(app: &mut App) {
@@ -10,4 +15,9 @@ pub fn resolve_setup(app: &mut App) {
 
     log::trace!("launch core");
     log_err!(CoreManager::global().init());
+}
+
+/// resolve core version
+pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore) -> Result<String> {
+    todo!()
 }

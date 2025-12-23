@@ -75,12 +75,17 @@ export const useClashAPI = () => {
     );
   };
 
+  const version = async () => {
+    return await request<ClashVersion>('/version');
+  };
+
   return {
     deleteConnections,
     configs,
     patchConfigs,
     proxiesDelay,
     groupDelay,
+    version,
   };
 };
 
@@ -102,4 +107,10 @@ export interface ClashConfig {
 export type ClashDelayOptions = {
   url?: string;
   timeout?: number;
+};
+
+export type ClashVersion = {
+  premium?: boolean;
+  meta?: boolean;
+  version: string;
 };
