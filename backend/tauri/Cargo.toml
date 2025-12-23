@@ -140,6 +140,8 @@ adler = "1.0.2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
+semver = "1.0"
+
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55", features = ["transactions"] }
 windows-sys = { version = "0.60", features = [
