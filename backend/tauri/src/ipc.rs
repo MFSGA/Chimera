@@ -332,7 +332,9 @@ pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
 #[tauri::command]
 #[specta::specta]
 pub async fn change_clash_core(clash_core: Option<chimera::ClashCore>) -> Result {
-    todo!()
+    log::debug!("change_clash_core: {clash_core:?}");
+    (CoreManager::global().change_core(clash_core).await)?;
+    Ok(())
 }
 
 /// restart the sidecar
