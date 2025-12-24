@@ -69,6 +69,20 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async updateProfile(
+    uid: string,
+    option: RemoteProfileOptionsBuilder | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('update_profile', { uid, option }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getVergeConfig(): Promise<Result<IVerge, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_verge_config') };
@@ -481,6 +495,10 @@ export type RemoteProfile = {
    * profile description
    */
   desc: string | null;
+  /**
+   * update time
+   */
+  updated: number;
 } & {
   /**
    * subscription url
@@ -488,6 +506,10 @@ export type RemoteProfile = {
   url: string;
   option: RemoteProfileOptions;
   chain: string[];
+  /**
+   * subscription user info
+   */
+  extra?: SubscriptionInfo;
 };
 export type RemoteProfileOptions = {
   /**
@@ -512,6 +534,12 @@ export type RemoteProfileOptionsBuilder = {
    * subscription update interval
    */
   update_interval: number | null;
+};
+export type SubscriptionInfo = {
+  upload: number;
+  download: number;
+  total: number;
+  expire: number;
 };
 export type UpdateWrapper = {
   rid: number;

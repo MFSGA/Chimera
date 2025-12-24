@@ -350,3 +350,10 @@ pub async fn restart_sidecar() -> Result {
 pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
     todo!()
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
+    (feat::update_profile(uid, option).await)?;
+    Ok(())
+}
