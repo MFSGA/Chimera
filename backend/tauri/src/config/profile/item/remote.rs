@@ -11,8 +11,11 @@ use url::Url;
 use crate::{
     config::profile::{
         item::{
-            ProfileMetaGetter, ambassador_impl_ProfileMetaGetter,
-            shared::{ProfileFileIo, ProfileShared, ProfileSharedBuilder},
+            ProfileMetaGetter, ProfileMetaSetter, ambassador_impl_ProfileMetaGetter,
+            ambassador_impl_ProfileMetaSetter,
+            shared::{
+                ProfileFileIo, ProfileShared, ProfileSharedBuilder, ambassador_impl_ProfileFileIo,
+            },
         },
         item_type::{ProfileItemType, ProfileUid},
     },
@@ -23,6 +26,10 @@ use crate::utils::dirs::APP_VERSION;
 use backon::Retryable;
 
 const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
+
+pub trait RemoteProfileSubscription {
+    async fn subscribe(&mut self, opts: Option<RemoteProfileOptionsBuilder>) -> anyhow::Result<()>;
+}
 
 #[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, BuilderUpdate)]
 #[builder(derive(Debug, Deserialize, Type))]
@@ -67,7 +74,10 @@ impl RemoteProfileOptions {
 #[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, Delegate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder(build_fn(skip, error = "RemoteProfileBuilderError"))]
+// #[builder_update(patch_fn = "apply")]
 #[delegate(ProfileMetaGetter, target = "shared")]
+#[delegate(ProfileMetaSetter, target = "shared")]
+#[delegate(ProfileFileIo, target = "shared")]
 pub struct RemoteProfile {
     /// subscription url
     pub url: Url,
@@ -82,10 +92,35 @@ pub struct RemoteProfile {
         ty = "ProfileSharedBuilder",
         build = "self.shared.build().map_err(Into::into)?"
     ))]
-    // #[builder_field_attr(serde(flatten))]
+    #[builder_field_attr(serde(flatten))]
+    // #[builder_update(nested)]
     pub shared: ProfileShared,
 
     pub chain: Vec<ProfileUid>,
+    /// subscription user info
+    #[builder(default)]
+    #[serde(default)]
+    pub extra: SubscriptionInfo,
+}
+
+impl RemoteProfileSubscription for RemoteProfile {
+    #[tracing::instrument]
+    async fn subscribe(
+        &mut self,
+        partial: Option<RemoteProfileOptionsBuilder>,
+    ) -> anyhow::Result<()> {
+        let mut opts = self.option.clone();
+        if let Some(partial) = partial {
+            opts.apply(partial);
+        }
+        let subscription = subscribe_url(&self.url, &opts).await?;
+        self.extra = subscription.info;
+
+        let content = serde_yaml::to_string(&subscription.data)?;
+        self.write_file(content).await?;
+        self.set_updated(chrono::Local::now().timestamp() as usize);
+        Ok(())
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -143,7 +178,7 @@ impl RemoteProfileBuilder {
                 .build(&PROFILE_TYPE)
                 .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?,
             url,
-            // extra,
+            extra,
             option: self.option.build().unwrap(),
             chain: self.chain.take().unwrap_or_default(),
         };

@@ -1,8 +1,10 @@
+use std::borrow::Borrow;
+
 use anyhow::Result;
 use nyanpasu_ipc::api::status::CoreState;
 
 use crate::{
-    config::{chimera::IVerge, core::Config},
+    config::{chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder},
     core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
 };
 use handle::Message;
@@ -100,4 +102,17 @@ async fn update_core_config() -> Result<()> {
             Err(err)
         }
     }
+}
+
+/// 更新某个profile
+/// 如果更新当前配置就激活配置
+pub async fn update_profile<T: Borrow<String>>(
+    uid: T,
+    opts: Option<RemoteProfileOptionsBuilder>,
+) -> Result<()> {
+    let uid = uid.borrow();
+    let profile_item = Config::profiles().latest().get_item(uid)?.clone();
+    let is_remote = profile_item.is_remote();
+
+    todo!()
 }

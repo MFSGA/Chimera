@@ -26,6 +26,9 @@ pub struct ProfileShared {
     /// profile description
     #[builder(default, setter(strip_option))]
     pub desc: Option<String>,
+    #[builder(default = "chrono::Local::now().timestamp() as usize")]
+    /// update time
+    pub updated: usize,
 }
 
 impl ProfileSharedBuilder {
@@ -72,10 +75,7 @@ impl ProfileSharedBuilder {
             name: builder.name.unwrap(),
             file: builder.file.unwrap(),
             desc: builder.desc.clone().unwrap_or_default(),
-            /* todo
-            updated: builder
-                .updated
-                .unwrap_or_else(|| chrono::Local::now().timestamp() as usize), */
+            updated: builder.updated.unwrap(),
         })
     }
 }
@@ -103,5 +103,27 @@ impl ProfileFileIo for ProfileShared {
 impl ProfileMetaGetter for ProfileShared {
     fn uid(&self) -> &str {
         &self.uid
+    }
+}
+
+impl super::ProfileMetaSetter for ProfileShared {
+    fn set_uid(&mut self, uid: String) {
+        self.uid = uid;
+    }
+
+    fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    fn set_desc(&mut self, desc: Option<String>) {
+        self.desc = desc;
+    }
+
+    fn set_file(&mut self, file: String) {
+        self.file = file;
+    }
+
+    fn set_updated(&mut self, updated: usize) {
+        self.updated = updated;
     }
 }

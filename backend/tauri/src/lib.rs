@@ -39,6 +39,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::import_profile,
         ipc::view_profile,
         ipc::patch_profiles_config,
+        ipc::update_profile,
         // verge
         ipc::get_verge_config,
         ipc::patch_verge_config,

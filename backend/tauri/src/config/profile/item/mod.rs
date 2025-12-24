@@ -33,3 +33,15 @@ impl Profile {
         }
     }
 }
+
+/// Profile Setter Helper
+/// It is intended to be used in the default trait implementation, so it is PRIVATE.
+/// NOTE: this just a setter for fields, NOT do any file operation.
+#[delegatable_trait]
+trait ProfileMetaSetter {
+    fn set_uid(&mut self, uid: String);
+    fn set_name(&mut self, name: String);
+    fn set_desc(&mut self, desc: Option<String>);
+    fn set_file(&mut self, file: String);
+    fn set_updated(&mut self, updated: usize);
+}
