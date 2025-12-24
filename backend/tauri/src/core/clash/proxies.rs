@@ -50,6 +50,8 @@ pub struct Proxies {
     pub groups: Vec<ProxyGroupItem>,
     /// 2
     pub global: ProxyGroupItem,
+    /// 3
+    pub direct: api::ProxyItem,
 }
 
 /// todo: fetch proxies and ProvidersProxiesRes
@@ -149,7 +151,7 @@ impl Proxies {
 
         Ok(Proxies {
             global: global.unwrap_or_default(),
-            // direct,
+            direct,
             groups,
             // records: inner_proxies,
         })
