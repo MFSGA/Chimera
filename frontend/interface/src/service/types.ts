@@ -15,10 +15,7 @@ export interface InspectUpdater {
       | 'waiting_for_merge'
       | 'merging'
       | { failed: string }
-      | 'finished'
-      // toddo: delete in the future
-      | any
-      | 'failed';
+      | 'finished';
     downloaded: number;
     total: number;
     speed: number;

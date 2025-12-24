@@ -122,7 +122,7 @@ pub fn run() -> std::io::Result<()> {
             utils::help::cleanup_processes(app_handle);
         }
         e => {
-            log::debug!("Tauri Event: {:?}", e);
+            // log::debug!("Tauri Event: {:?}", e);
         }
     });
 

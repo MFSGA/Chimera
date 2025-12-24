@@ -419,6 +419,10 @@ export type Proxies = {
    * 2
    */
   global: ProxyGroupItem;
+  /**
+   * 3
+   */
+  direct: ProxyItem;
 };
 export type ProxyGroupItem = {
   /**
