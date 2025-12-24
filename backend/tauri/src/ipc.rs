@@ -357,3 +357,24 @@ pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuil
     (feat::update_profile(uid, option).await)?;
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn read_profile_file(uid: String) -> Result<String> {
+    todo!()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
+    /* if file_data.is_none() {
+        return Ok(());
+    }
+
+    let profiles = Config::profiles();
+    let profiles = profiles.latest();
+    let item = (profiles.get_item(&uid))?;
+    (item.save_file(file_data.unwrap()))?;
+    Ok(()) */
+    todo!()
+}

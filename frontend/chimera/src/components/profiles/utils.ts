@@ -37,3 +37,8 @@ export function filterProfiles<T extends Profile>(items?: T[]) {
 }
 
 export type ClashProfile = Extract<Profile, { type: 'remote' | 'local' }>;
+
+export type ClashProfileBuilder = Extract<
+  ProfileBuilder,
+  { type: 'remote' | 'local' }
+>;

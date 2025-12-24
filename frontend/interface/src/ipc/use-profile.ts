@@ -178,5 +178,33 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
-  return { create, query, upsert };
+  /**
+   * Mutation hook for updating a profile.
+   * Uses React Query's useMutation to handle the update operation.
+   *
+   * @param {Object} params - The parameters for the update operation
+   * @param {string} params.uid - The unique identifier of the profile to update
+   * @param {RemoteProfileOptionsBuilder} params.profile - The profile data to update
+   *
+   * @returns {UseMutationResult} A mutation result object containing the update operation status and methods
+   *
+   * @remarks
+   * On successful update, it invalidates the profiles query cache
+   */
+  const update = useMutation({
+    mutationFn: async ({
+      uid,
+      option,
+    }: {
+      uid: string;
+      option: RemoteProfileOptionsBuilder;
+    }) => {
+      return unwrapResult(await commands.updateProfile(uid, option));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  return { create, query, upsert, update };
 };

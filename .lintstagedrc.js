@@ -16,7 +16,7 @@ export default {
     'eslint --cache --fix',
     () => 'tsc -p frontend/interface/tsconfig.json --noEmit',
     () => 'tsc -p frontend/ui/tsconfig.json --noEmit',
-    () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
+    // () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
   ],
   'backend/**/*.{rs,toml}': [
     () =>

@@ -83,6 +83,31 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async readProfileFile(uid: string): Promise<Result<string, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('read_profile_file', { uid }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async saveProfileFile(
+    uid: string,
+    fileData: string | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_profile_file', { uid, fileData }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getVergeConfig(): Promise<Result<IVerge, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_verge_config') };
