@@ -47,7 +47,7 @@
     "@typescript-eslint/parser": "8.46.3",
     "prettier": "3.6.2",
     "@ianvs/prettier-plugin-sort-imports": "4.7.0",
-    "prettier-plugin-tailwindcss": "0.7.1",
+    "prettier-plugin-tailwindcss": "0.7.2",
     "prettier-plugin-toml": "2.0.6",
     "postcss-scss": "4.0.9",
     "stylelint": "16.25.0",
