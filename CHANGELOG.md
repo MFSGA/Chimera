@@ -1,3 +1,39 @@
+## [0.7.0] - 2025-12-24 09:07:29
+
+### ✨ Features
+
+- **change_clash_core:** Support the change_clash_core cmd 3 by @MFSGA
+
+- **change_clash_core:** Support the change_clash_core cmd 1 by @MFSGA
+
+- **prxoies_page:** Optimize the view for the page by @MFSGA
+
+- **resolve_core_version:** Support the resolve_core_version cmd 2 by @MFSGA
+
+- **window:** Support right size fow window by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency i18next to v25.7.3 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.6 by @renovate-bot
+
+- **deps:** Update react monorepo to v19.2.3 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.12 by @renovate-bot
+
+- **deps:** Update react monorepo by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.15.2 by @renovate-bot
+
+- **deps:** Update react monorepo by @renovate-bot
+
+- **prettier:** Fix the dep problem in prettier by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.6.2...v0.7.0
+
 ## [0.6.2] - 2025-11-10 12:08:35
 
 ### ✨ Features
