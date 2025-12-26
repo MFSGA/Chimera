@@ -1,6 +1,7 @@
 use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
+use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -10,9 +11,10 @@ use crate::{
         core::Config,
         profile::{
             item::{
-                ProfileMetaGetter,
+                ProfileKindGetter, ProfileMetaGetter,
                 remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
             },
+            item_type::ProfileItemType,
             profiles::{Profiles, ProfilesBuilder},
         },
         runtime::PatchRuntimeConfig,
@@ -31,6 +33,9 @@ pub enum IpcError {
     /// first used for open_that
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    /// first used for read_profile_file
+    #[error(transparent)]
+    SerdeYaml(#[from] serde_yaml::Error),
 }
 
 impl serde::Serialize for IpcError {
@@ -355,5 +360,36 @@ pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
 #[specta::specta]
 pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
     (feat::update_profile(uid, option).await)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn read_profile_file(uid: String) -> Result<String> {
+    let profiles = Config::profiles();
+    let profiles = profiles.latest();
+    let item = (profiles.get_item(&uid))?;
+    let data = match item.kind() {
+        ProfileItemType::Local | ProfileItemType::Remote => {
+            let raw = (item.read_file())?;
+            let data = (serde_yaml::from_str::<Mapping>(&raw))?;
+            (serde_yaml::to_string(&data).context("failed to convert yaml to string"))?
+        }
+        _ => (item.read_file())?,
+    };
+    Ok(data)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
+    if file_data.is_none() {
+        return Ok(());
+    }
+
+    let profiles = Config::profiles();
+    let profiles = profiles.latest();
+    let item = (profiles.get_item(&uid))?;
+    (item.save_file(file_data.unwrap()))?;
     Ok(())
 }
