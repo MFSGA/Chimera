@@ -1,4 +1,4 @@
-import type { Profile } from '@chimera/interface';
+import type { Profile, ProfileBuilder } from '@chimera/interface';
 
 /**
  * Filters an array of profiles into two categories: clash and chain profiles.
@@ -37,3 +37,8 @@ export function filterProfiles<T extends Profile>(items?: T[]) {
 }
 
 export type ClashProfile = Extract<Profile, { type: 'remote' | 'local' }>;
+
+export type ClashProfileBuilder = Extract<
+  ProfileBuilder,
+  { type: 'remote' | 'local' }
+>;

@@ -32,7 +32,7 @@ import { useTranslation } from 'react-i18next';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import parseTraffic from '@/utils/parse-traffic';
-// import { ProfileDialog } from './profile-dialog';
+import { ProfileDialog } from './profile-dialog';
 // import { GlobalUpdatePendingContext } from './provider';
 import { ClashProfile } from './utils';
 
@@ -358,11 +358,11 @@ export const ProfileItem = memo(function ProfileItem({
         </motion.div>
       </Paper>
       {MenuComp}
-      {/* <ProfileDialog
+      <ProfileDialog
         open={open}
         onClose={() => setOpen(false)}
         profile={item}
-      /> */}
+      />
     </>
   );
 });

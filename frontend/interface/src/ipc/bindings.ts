@@ -108,6 +108,23 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * create a new profile
+   */
+  async createProfile(
+    item: ProfileBuilder,
+    fileData: string | null,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('create_profile', { item, fileData }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getVergeConfig(): Promise<Result<IVerge, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_verge_config') };
@@ -418,6 +435,7 @@ export type ManifestVersionLatest = {
 };
 export type PatchRuntimeConfig = { mode?: string | null };
 export type Profile = { type: 'remote' } & RemoteProfile;
+export type ProfileBuilder = { type: 'remote' } & RemoteProfileBuilder;
 export type Profiles = {
   current: string[];
   /**
@@ -535,6 +553,43 @@ export type RemoteProfile = {
    * subscription user info
    */
   extra?: SubscriptionInfo;
+};
+/**
+ * Builder for [`RemoteProfile`](struct.RemoteProfile.html).
+ *
+ */
+export type RemoteProfileBuilder = {
+  /**
+   * Profile ID
+   */
+  uid: string | null;
+  /**
+   * profile name
+   */
+  name: string | null;
+  /**
+   * profile holds the file
+   */
+  file: string | null;
+  /**
+   * profile description
+   */
+  desc: string | null;
+  /**
+   * update time
+   */
+  updated: number | null;
+} & {
+  /**
+   * subscription url
+   */
+  url: string | null;
+  option: RemoteProfileOptionsBuilder;
+  chain: string[] | null;
+  /**
+   * subscription user info
+   */
+  extra: SubscriptionInfo | null;
 };
 export type RemoteProfileOptions = {
   /**

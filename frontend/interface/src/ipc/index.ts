@@ -15,3 +15,5 @@ export * from './use-clash-proxies';
 export * from './use-clash-cores';
 /** 10 */
 export * from './use-clash-version';
+/** 11 */
+export * from './use-profile-content';
