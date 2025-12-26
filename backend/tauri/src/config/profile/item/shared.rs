@@ -39,7 +39,7 @@ impl ProfileSharedBuilder {
     pub fn default_name(kind: &ProfileItemType) -> &'static str {
         match kind {
             ProfileItemType::Remote => "Remote Profile",
-            // ProfileItemType::Local => "Local Profile",
+            ProfileItemType::Local => "Local Profile",
             // ProfileItemType::Merge => "Merge Profile",
             // ProfileItemType::Script(_) => "Script Profile",
         }
@@ -48,7 +48,7 @@ impl ProfileSharedBuilder {
     pub fn default_file_name(kind: &ProfileItemType, uid: &str) -> String {
         match kind {
             ProfileItemType::Remote => format!("{uid}.yaml"),
-            // ProfileItemType::Local => format!("{uid}.yaml"),
+            ProfileItemType::Local => format!("{uid}.yaml"),
             // ProfileItemType::Merge => format!("{uid}.yaml"),
             // ProfileItemType::Script(ScriptType::JavaScript) => format!("{uid}.js"),
             // ProfileItemType::Script(ScriptType::Lua) => format!("{uid}.lua"),
