@@ -11,8 +11,8 @@ use url::Url;
 use crate::{
     config::profile::{
         item::{
-            ProfileMetaGetter, ProfileMetaSetter, ambassador_impl_ProfileMetaGetter,
-            ambassador_impl_ProfileMetaSetter,
+            ProfileKindGetter, ProfileMetaGetter, ProfileMetaSetter,
+            ambassador_impl_ProfileMetaGetter, ambassador_impl_ProfileMetaSetter,
             shared::{
                 ProfileFileIo, ProfileShared, ProfileSharedBuilder, ambassador_impl_ProfileFileIo,
             },
@@ -101,6 +101,12 @@ pub struct RemoteProfile {
     #[builder(default)]
     #[serde(default)]
     pub extra: SubscriptionInfo,
+}
+
+impl ProfileKindGetter for RemoteProfile {
+    fn kind(&self) -> ProfileItemType {
+        PROFILE_TYPE
+    }
 }
 
 impl RemoteProfileSubscription for RemoteProfile {
