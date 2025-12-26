@@ -10,6 +10,7 @@ use crate::{
         clash::ClashInfo,
         core::Config,
         profile::{
+            builder::ProfileBuilder,
             item::{
                 ProfileKindGetter, ProfileMetaGetter,
                 remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
@@ -392,4 +393,11 @@ pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
     let item = (profiles.get_item(&uid))?;
     (item.save_file(file_data.unwrap()))?;
     Ok(())
+}
+
+/// create a new profile
+#[tauri::command]
+#[specta::specta]
+pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> Result {
+    todo!()
 }

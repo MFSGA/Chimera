@@ -42,6 +42,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::update_profile,
         ipc::read_profile_file,
         ipc::save_profile_file,
+        ipc::create_profile,
         // verge
         ipc::get_verge_config,
         ipc::patch_verge_config,
