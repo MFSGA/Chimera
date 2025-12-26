@@ -1,12 +1,15 @@
 import { useProfile } from '@chimera/interface';
 import { SidePage } from '@chimera/ui';
-import { Box, Grid } from '@mui/material';
+import { Badge, Box, Button, Grid, IconButton } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAtom } from 'jotai';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { atomChainsSelected } from '@/components/profiles/modules/store';
+import {
+  atomChainsSelected,
+  atomGlobalChainCurrent,
+} from '@/components/profiles/modules/store';
 import ProfileItem from '@/components/profiles/profile-item';
 import { QuickImport } from '@/components/profiles/quick-import';
 import { ClashProfile, filterProfiles } from '@/components/profiles/utils';
@@ -31,8 +34,58 @@ function ProfilePage() {
 
   const [chainsSelected, setChainsSelected] = useAtom(atomChainsSelected);
 
+  const [globalChain, setGlobalChain] = useAtom(atomGlobalChainCurrent);
+
+  const hasSide = globalChain || chainsSelected;
+
+  const handleSideClose = () => {
+    setChainsSelected(undefined);
+    setGlobalChain(false);
+  };
+
+  const [runtimeConfigViewerOpen, setRuntimeConfigViewerOpen] = useState(false);
+
   return (
-    <SidePage>
+    <SidePage
+      title={t('Profiles')}
+      flexReverse
+      header={
+        <div className="flex items-center gap-2">
+          {/* <RuntimeConfigDiffDialog
+            open={runtimeConfigViewerOpen}
+            onClose={() => setRuntimeConfigViewerOpen(false)}
+          /> */}
+          <IconButton
+            className="h-10 w-10"
+            color="inherit"
+            title={t('Runtime Config')}
+            onClick={() => {
+              setRuntimeConfigViewerOpen(true);
+            }}
+          ></IconButton>
+          <Badge
+            variant="dot"
+            // color={
+            //   maxLogLevelTriggered.global === 'error'
+            //     ? 'error'
+            //     : maxLogLevelTriggered.global === 'warn'
+            //       ? 'warning'
+            //       : 'primary'
+            // }
+            // invisible={!maxLogLevelTriggered.global}
+          >
+            {/* <Button
+              size="small"
+              variant={globalChain ? 'contained' : 'outlined'}
+              onClick={handleGlobalChainClick}
+              startIcon={<Public />}
+            >
+              {t('Global Proxy Chains')}
+            </Button> */}
+          </Badge>
+        </div>
+      }
+    >
       <AnimatePresence initial={false} mode="sync">
         <div className="flex flex-col gap-4 p-6">
           <QuickImport />
