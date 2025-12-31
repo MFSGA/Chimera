@@ -95,6 +95,10 @@ export const GroupList = ({
               onClick={() => handleSelect(index)}
               sx={[
                 (theme) => ({
+                  // note: beautify the css
+                  borderRadius: 4,
+                  margin: theme.spacing(0.5, 1),
+                  padding: theme.spacing(1, 1.25),
                   backgroundColor: selected
                     ? `${alpha(theme.vars.palette.primary.main, 0.3)} !important`
                     : null,
