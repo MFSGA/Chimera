@@ -286,6 +286,42 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getStorageItem(key: string): Promise<Result<string | null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_storage_item', { key }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async setStorageItem(
+    key: string,
+    value: string,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('set_storage_item', { key, value }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async removeStorageItem(key: string): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('remove_storage_item', { key }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
