@@ -67,6 +67,9 @@
     "prettier-plugin-ember-template-tag": "2.1.0"
   },
   "pnpm": {
+    "overrides": {
+      "material-react-table": "npm:@greenhat616/material-react-table@4.0.0"
+    },
     "onlyBuiltDependencies": [
       "@parcel/watcher",
       "@tailwindcss/oxide",
