@@ -63,7 +63,11 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_core_version,
         ipc::update_core,
         ipc::restart_sidecar,
-        ipc::fetch_latest_core_versions
+        ipc::fetch_latest_core_versions,
+        // storage
+        ipc::get_storage_item,
+        ipc::set_storage_item,
+        ipc::remove_storage_item
     ]);
 
     #[cfg(debug_assertions)]
