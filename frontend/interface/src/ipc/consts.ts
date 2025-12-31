@@ -37,3 +37,38 @@ export const CLASH_CORE_QUERY_KEY = 'clash-core';
  * Clash version query key, used to fetch clash version from query
  */
 export const CLASH_VERSION_QUERY_KEY = 'clash-version';
+
+/**
+ * Clash log query key, used by clash ws provider to mutate logs via clash logs ws api
+ */
+export const CLASH_LOGS_QUERY_KEY = 'clash-logs';
+
+/**
+ * Clash traffic query key, used by clash ws provider to mutate memory via clash traffic ws api
+ */
+export const CLASH_TRAAFFIC_QUERY_KEY = 'clash-traffic';
+
+/**
+ * Clash memory query key, used by clash ws provider to mutate memory via clash memory ws api
+ */
+export const CLASH_MEMORY_QUERY_KEY = 'clash-memory';
+
+/**
+ * Maximum connections history length, used by clash ws provider to limit connections history length
+ */
+export const MAX_CONNECTIONS_HISTORY = 32;
+
+/**
+ * Maximum memory history length, used by clash ws provider to limit memory history length
+ */
+export const MAX_MEMORY_HISTORY = 32;
+
+/**
+ * Maximum traffic history length, used by clash ws provider to limit traffic history length
+ */
+export const MAX_TRAFFIC_HISTORY = 32;
+
+/**
+ * Maximum logs history length, used by clash ws provider to limit logs history length
+ */
+export const MAX_LOGS_HISTORY = 1024;

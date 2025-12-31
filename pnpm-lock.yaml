@@ -304,6 +304,12 @@ importers:
       '@tauri-apps/api':
         specifier: 2.9.1
         version: 2.9.1
+      ahooks:
+        specifier: 3.9.6
+        version: 3.9.6(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      dayjs:
+        specifier: 1.11.19
+        version: 1.11.19
       lodash-es:
         specifier: 4.17.21
         version: 4.17.21
