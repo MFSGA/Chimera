@@ -1,11 +1,11 @@
 use anyhow::Result;
 use semver::Version;
-use tauri::{App, AppHandle};
+use tauri::{App, AppHandle, Manager};
 use tauri_plugin_shell::ShellExt;
 
 use crate::{
     config::{chimera::ClashCore, core::Config},
-    core::clash::core::CoreManager,
+    core::{clash::core::CoreManager, storage::Storage},
     log_err,
 };
 
@@ -17,6 +17,19 @@ pub fn resolve_setup(app: &mut App) {
 
     log::trace!("launch core");
     log_err!(CoreManager::global().init());
+
+    log::trace!("init storage");
+    log_err!(crate::core::storage::setup(app));
+
+    // setup jobs
+    /* log::trace!("setup jobs");
+    {
+        let storage = app.state::<Storage>();
+        let storage = (*storage).clone();
+        log_err!(crate::core::tasks::setup(app, storage));
+    } */
+
+    crate::core::storage::register_web_storage_listener(app.app_handle());
 }
 
 /// resolve core version

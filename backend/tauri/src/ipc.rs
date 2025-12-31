@@ -20,7 +20,12 @@ use crate::{
         },
         runtime::PatchRuntimeConfig,
     },
-    core::{clash::core::CoreManager, handle, updater::ManifestVersionLatest},
+    core::{
+        clash::core::CoreManager,
+        handle,
+        storage::{Storage, StorageOperationError, WebStorage},
+        updater::ManifestVersionLatest,
+    },
     feat,
     utils::{dirs, help, resolve},
 };
@@ -37,6 +42,8 @@ pub enum IpcError {
     /// first used for read_profile_file
     #[error(transparent)]
     SerdeYaml(#[from] serde_yaml::Error),
+    #[error(transparent)]
+    Storage(#[from] StorageOperationError),
 }
 
 impl serde::Serialize for IpcError {
@@ -400,4 +407,28 @@ pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
 #[specta::specta]
 pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> Result {
     todo!()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<String>> {
+    let storage = app_handle.state::<Storage>();
+    let value = (storage.get_item(&key))?;
+    Ok(value)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Result {
+    let storage = app_handle.state::<Storage>();
+    (storage.set_item(&key, &value))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
+    let storage = app_handle.state::<Storage>();
+    (storage.remove_item(&key))?;
+    Ok(())
 }

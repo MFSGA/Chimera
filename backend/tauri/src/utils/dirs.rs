@@ -33,6 +33,8 @@ pub static APP_DIR_PLACEHOLDER: Lazy<Cow<'static, str>> = Lazy::new(|| {
 pub const CHIMERA_CONFIG: &str = "chimera-config.yaml";
 pub const CLASH_CFG_GUARD_OVERRIDES: &str = "clash-guard-overrides.yaml";
 
+pub const STORAGE_DB: &str = "storage.db";
+
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
@@ -163,4 +165,8 @@ pub fn path_to_str(path: &PathBuf) -> Result<&str> {
         .to_str()
         .ok_or(anyhow::anyhow!("failed to get path from {:?}", path))?;
     Ok(path_str)
+}
+
+pub fn storage_path() -> Result<PathBuf> {
+    Ok(app_data_dir()?.join(STORAGE_DB))
 }
