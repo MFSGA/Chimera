@@ -20,3 +20,15 @@ export const getServerPort = async () => {
 export const inspectUpdater = async (updaterId: number) => {
   return await invoke<InspectUpdater>('inspect_updater', { updaterId });
 };
+
+export const getStorageItem = async (key: string) => {
+  return await invoke<string | null>('get_storage_item', { key });
+};
+
+export const setStorageItem = async (key: string, value: string) => {
+  return await invoke<void>('set_storage_item', { key, value });
+};
+
+export const removeStorageItem = async (key: string) => {
+  return await invoke<void>('remove_storage_item', { key });
+};

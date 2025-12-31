@@ -1,7 +1,8 @@
 import { atom } from 'jotai';
-import { atomWithStorage } from 'jotai/utils';
+import { atomWithStorage, createJSONStorage } from 'jotai/utils';
 import { SortType } from '@/components/proxies/utils';
 import { FileRouteTypes } from '@/routeTree.gen';
+import { ChimeraStorage } from '@/services/storage';
 
 const atomWithLocalStorage = <T>(key: string, initialValue: T) => {
   const getInitialValue = (): T => {
@@ -52,4 +53,27 @@ export const themeMode = atomWithLocalStorage<'light' | 'dark'>(
 export const atomIsDrawerOnlyIcon = atomWithStorage<boolean>(
   'atomIsDrawerOnlyIcon',
   true,
+);
+
+// TODO: generate default columns based on COLUMNS
+export const connectionTableColumnsAtom = atomWithStorage<
+  Array<[string, boolean]>
+>(
+  'connections_table_columns',
+  [
+    'host',
+    'process',
+    'downloaded',
+    'uploaded',
+    'dl_speed',
+    'ul_speed',
+    'chains',
+    'rule',
+    'time',
+    'source',
+    'destination_ip',
+    'destination_asn',
+    'type',
+  ].map((key) => [key, true]),
+  createJSONStorage(() => ChimeraStorage),
 );

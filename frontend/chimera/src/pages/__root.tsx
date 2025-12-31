@@ -9,6 +9,15 @@ import LocalesProvider from '@/components/app/locales-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
 import { UpdaterProvider } from '@/hooks/use-updater';
+import 'dayjs/locale/ru';
+import 'dayjs/locale/zh-cn';
+import 'dayjs/locale/zh-tw';
+import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+import relativeTime from 'dayjs/plugin/relativeTime';
+
+dayjs.extend(relativeTime);
+dayjs.extend(customParseFormat);
 
 const TanStackRouterDevtools = import.meta.env.PROD
   ? () => null // Render nothing in production
