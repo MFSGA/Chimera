@@ -432,3 +432,17 @@ pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
     (storage.remove_item(&key))?;
     Ok(())
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_runtime_yaml() -> Result<String> {
+    let runtime = Config::runtime();
+    let runtime = runtime.latest();
+    let config = runtime.config.as_ref();
+    let mapping = (config
+        .ok_or(anyhow::anyhow!("failed to parse config to yaml file"))
+        .and_then(|config| {
+            serde_yaml::to_string(config).context("failed to convert config to yaml")
+        }))?;
+    Ok(mapping)
+}
