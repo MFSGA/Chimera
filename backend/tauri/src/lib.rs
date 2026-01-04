@@ -52,6 +52,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_proxies,
         ipc::select_proxy,
         ipc::change_clash_core,
+        ipc::get_runtime_yaml,
         // updater layer
         ipc::check_update,
         // utils

@@ -1,7 +1,7 @@
 import {
   useProfile,
   useProfileContent,
-  // useRuntimeProfile,
+  useRuntimeProfile,
 } from '@chimera/interface';
 import { BaseDialog, cn } from '@chimera/ui';
 import { useCreation } from 'ahooks';
@@ -11,7 +11,7 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { themeMode } from '@/store';
 
-// const MonacoDiffEditor = lazy(() => import('./profile-monaco-diff-viewer'));
+const MonacoDiffEditor = lazy(() => import('./profile-monaco-diff-viewer'));
 
 export type RuntimeConfigDiffDialogProps = {
   open: boolean;
@@ -33,8 +33,7 @@ export default function RuntimeConfigDiffDialog({
   // need manual refetch
   contentFn.query.refetch();
 
-  // todo
-  // const runtimeProfile = useRuntimeProfile();
+  const runtimeProfile = useRuntimeProfile();
 
   const loaded = !contentFn.query.isLoading && !query.isLoading;
 
@@ -63,7 +62,21 @@ export default function RuntimeConfigDiffDialog({
         </div>
         <div className="h-[75vh] w-full">
           <Suspense fallback={null}>
-            {loaded && <div>hello todoo</div>}
+            {loaded && (
+              <MonacoDiffEditor
+                language="yaml"
+                theme={mode === 'light' ? 'vs' : 'vs-dark'}
+                original={contentFn.query.data}
+                originalModelPath={originalModelPath}
+                modified={runtimeProfile.data}
+                modifiedModelPath={modifiedModelPath}
+                options={{
+                  minimap: { enabled: false },
+                  automaticLayout: true,
+                  readOnly: true,
+                }}
+              />
+            )}
           </Suspense>
         </div>
       </div>
