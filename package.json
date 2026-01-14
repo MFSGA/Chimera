@@ -57,7 +57,7 @@
     "stylelint-declaration-block-no-ignored-properties": "2.8.0",
     "stylelint-order": "7.0.0",
     "stylelint-scss": "6.12.1",
-    "knip": "5.77.0",
+    "knip": "5.80.2",
     "lint-staged": "16.2.6",
     "@commitlint/cli": "20.3.1",
     "@commitlint/config-conventional": "20.3.1",
