@@ -13,7 +13,7 @@
     "react": "19.2.3",
     "@emotion/styled": "11.14.1",
     "react-dom": "19.2.3",
-    "jotai": "2.16.1",
+    "jotai": "2.17.0",
     "@tauri-apps/plugin-updater": "2.9.0",
     "@material/material-color-utilities": "0.3.0",
     "@mui/icons-material": "7.3.6",
