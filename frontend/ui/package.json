@@ -18,8 +18,8 @@
     "build": "tsc"
   },
   "dependencies": {
-    "react": "19.2.3",
-    "@types/react": "19.2.7",
+    "react": "19.2.4",
+    "@types/react": "19.2.10",
     "react-error-boundary": "6.0.0",
     "framer-motion": "12.23.24",
     "@mui/material": "7.3.6",
