@@ -154,7 +154,7 @@ windows-sys = { version = "0.60", features = [
   "Win32_System_Shutdown",
   "Win32_Graphics_Gdi",
 ] }
-windows-core = "0.61"
+windows-core = "0.62"
 
 [features]
 default = ["default-meta"]
