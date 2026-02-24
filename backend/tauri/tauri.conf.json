@@ -35,7 +35,8 @@
     "externalBin": [
       "sidecar/mihomo",
       "sidecar/clash-rs",
-      "sidecar/clash-rs-alpha"
+      "sidecar/clash-rs-alpha",
+      "sidecar/nyanpasu-service"
     ]
   },
   "plugins": {
