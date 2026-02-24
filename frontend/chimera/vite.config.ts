@@ -5,6 +5,7 @@ import { NodePackageImporter } from 'sass-embedded';
 import { defineConfig, UserConfig } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -39,6 +40,7 @@ export default defineConfig(async ({ command, mode }) => {
       },
     },
     plugins: [
+      tsconfigPaths(),
       TanStackRouterVite(),
       createHtmlPlugin({
         inject: {
@@ -58,8 +60,6 @@ export default defineConfig(async ({ command, mode }) => {
 
     resolve: {
       alias: {
-        // todo: will deleete
-        '@': path.resolve(__dirname, './src'),
         '@root': path.resolve(__dirname, '../..'),
       },
     },
