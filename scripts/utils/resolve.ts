@@ -5,6 +5,7 @@ import {
   getClashMetaInfo,
   getClashRustAlphaInfo,
   getClashRustInfo,
+  getNyanpasuServiceInfo,
 } from './resource';
 
 export class Resolve {
@@ -45,5 +46,9 @@ export class Resolve {
 
   public async clashRustAlpha() {
     return await this.sidecar(getClashRustAlphaInfo(this.infoOption));
+  }
+
+  public async service() {
+    return await this.sidecar(getNyanpasuServiceInfo(this.infoOption));
   }
 }

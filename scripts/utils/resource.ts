@@ -10,6 +10,8 @@ import { getProxyAgent } from './';
 import { SIDECAR_HOST } from './consts';
 import { consola } from './logger';
 
+const SERVICE_REPO = 'libnyanpasu/nyanpasu-service';
+
 type NodeArch = NodeJS.Architecture | 'armel';
 
 function mappingArch(platform: NodeJS.Platform, arch: NodeArch): SupportedArch {
@@ -166,4 +168,64 @@ export const getClashRsAlphaLatestVersion = async () => {
 
     process.exit(1);
   }
+};
+
+export const getNyanpasuServiceLatestVersion = async () => {
+  try {
+    const opts = {} as Partial<RequestInit>;
+
+    const httpProxy = getProxyAgent();
+    if (httpProxy) {
+      opts.dispatcher = httpProxy;
+    }
+
+    const url = new URL('https://github.com');
+    url.pathname = `/${SERVICE_REPO}/releases/latest`;
+    const response = await fetch(url, {
+      method: 'GET',
+      redirect: 'manual',
+      ...opts,
+    });
+
+    const location = response.headers.get('location');
+    if (!location) {
+      throw new Error('Cannot find location from the response header');
+    }
+
+    const tag = location.split('/').pop();
+    if (!tag) {
+      throw new Error('Cannot find tag from the location');
+    }
+
+    consola.info(`Nyanpasu Service latest release version: ${tag}`);
+
+    return tag.trim();
+  } catch (error) {
+    console.error('Error fetching latest release version:', error);
+
+    process.exit(1);
+  }
+};
+
+export const getNyanpasuServiceInfo = async ({
+  sidecarHost,
+}: {
+  sidecarHost: string;
+}): Promise<BinInfo> => {
+  const name = `nyanpasu-service`;
+  const isWin = SIDECAR_HOST?.includes('windows');
+  const urlExt = isWin ? 'zip' : 'tar.gz';
+  // first we had to get the latest tag
+  const version = await getNyanpasuServiceLatestVersion();
+  const downloadURL = `https://github.com/${SERVICE_REPO}/releases/download/${version}/${name}-${sidecarHost}.${urlExt}`;
+  const exeFile = `${name}${isWin ? '.exe' : ''}`;
+  const tmpFile = `${name}-${sidecarHost}.${urlExt}`;
+  const targetFile = `nyanpasu-service-${sidecarHost}${isWin ? '.exe' : ''}`;
+  return {
+    name: 'nyanpasu-service',
+    targetFile,
+    exeFile,
+    tmpFile,
+    downloadURL,
+  };
 };

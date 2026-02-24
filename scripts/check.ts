@@ -49,6 +49,7 @@ const tasks: {
   // { name: 'mihomo-alpha', func: () => resolve.clashMetaAlpha(), retry: 5 },
   { name: 'clash-rs', func: () => resolve.clashRust(), retry: 5 },
   { name: 'clash-rs-alpha', func: () => resolve.clashRustAlpha(), retry: 5 },
+  { name: 'nyanpasu-service', func: () => resolve.service(), retry: 5 },
 ];
 
 async function runTask() {
