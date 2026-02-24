@@ -75,6 +75,7 @@
       "@tailwindcss/oxide",
       "electron",
       "esbuild",
+      "meta-json-schema",
       "oxc-resolver"
     ]
   }
