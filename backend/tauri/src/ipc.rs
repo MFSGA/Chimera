@@ -275,6 +275,104 @@ pub fn cleanup_processes(app_handle: AppHandle) -> Result {
     Ok(())
 }
 
+pub mod service {
+    use super::Result;
+    use crate::core::service;
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn status_service<'a>() -> Result<nyanpasu_ipc::types::StatusInfo<'a>> {
+        Ok(service::control::status().await?)
+    }
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn install_service() -> Result {
+        service::control::install_service().await?;
+        Ok(())
+    }
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn uninstall_service() -> Result {
+        service::control::uninstall_service().await?;
+        Ok(())
+    }
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn start_service() -> Result {
+        let result = service::control::start_service().await;
+        let enabled_service = *crate::config::core::Config::verge()
+            .latest()
+            .enable_service_mode
+            .as_ref()
+            .unwrap_or(&false);
+        if enabled_service
+            && let Err(err) = crate::core::clash::core::CoreManager::global()
+                .run_core()
+                .await
+        {
+            log::error!(target: "app", "{err}");
+        }
+        Ok(result?)
+    }
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn stop_service() -> Result {
+        let result = service::control::stop_service().await;
+        let enabled_service = *crate::config::core::Config::verge()
+            .latest()
+            .enable_service_mode
+            .as_ref()
+            .unwrap_or(&false);
+        if enabled_service
+            && let Err(err) = crate::core::clash::core::CoreManager::global()
+                .run_core()
+                .await
+        {
+            log::error!(target: "app", "{err}");
+        }
+        Ok(result?)
+    }
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn restart_service() -> Result {
+        let result = service::control::restart_service().await;
+        let enabled_service = *crate::config::core::Config::verge()
+            .latest()
+            .enable_service_mode
+            .as_ref()
+            .unwrap_or(&false);
+        if enabled_service
+            && let Err(err) = crate::core::clash::core::CoreManager::global()
+                .run_core()
+                .await
+        {
+            log::error!(target: "app", "{err}");
+        }
+        Ok(result?)
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_service_install_prompt() -> Result<String> {
+    let args = crate::core::service::control::get_service_install_args()
+        .await?
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut prompt = format!("./nyanpasu-service {args}");
+    if cfg!(not(windows)) {
+        prompt = format!("sudo {prompt}");
+    }
+    Ok(prompt)
+}
+
 // #[tracing_attributes::instrument]
 // patch clash runtime config
 #[tauri::command]
@@ -321,6 +419,17 @@ pub async fn select_proxy(group: String, name: String) -> Result<()> {
 #[specta::specta]
 pub fn get_server_port() -> Result<u16> {
     Ok(*crate::core::server::SERVER_PORT)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_core_dir() -> Result<String> {
+    let core_dir = tauri::utils::platform::current_exe()?;
+    let core_dir = core_dir
+        .parent()
+        .ok_or_else(|| anyhow!("failed to get core dir"))?;
+    let core_dir = dunce::canonicalize(core_dir)?;
+    Ok(core_dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]

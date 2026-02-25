@@ -60,6 +60,8 @@ pub fn run() -> std::io::Result<()> {
         ipc::open_that,
         ipc::cleanup_processes,
         ipc::get_server_port,
+        ipc::get_core_dir,
+        ipc::get_service_install_prompt,
         // updater
         ipc::get_core_version,
         ipc::update_core,
@@ -68,7 +70,14 @@ pub fn run() -> std::io::Result<()> {
         // storage
         ipc::get_storage_item,
         ipc::set_storage_item,
-        ipc::remove_storage_item
+        ipc::remove_storage_item,
+        // service mode
+        ipc::service::status_service,
+        ipc::service::install_service,
+        ipc::service::uninstall_service,
+        ipc::service::start_service,
+        ipc::service::stop_service,
+        ipc::service::restart_service
     ]);
 
     #[cfg(debug_assertions)]
