@@ -1,4 +1,5 @@
 import { BinInfo } from 'types';
+import { getChimeraServiceInfo } from './chimera-service-resource';
 import { resolveSidecar } from './download';
 import { NodeArch } from './manifest';
 import {
@@ -46,6 +47,10 @@ export class Resolve {
 
   public async clashRustAlpha() {
     return await this.sidecar(getClashRustAlphaInfo(this.infoOption));
+  }
+
+  public async chimeraService() {
+    return await this.sidecar(getChimeraServiceInfo(this.infoOption));
   }
 
   public async service() {
