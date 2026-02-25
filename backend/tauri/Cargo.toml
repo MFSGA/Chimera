@@ -76,6 +76,8 @@ tokio = { workspace = true }
 dunce = "1.0.4"   
 which = "8"
 open = "5.0.1"
+runas = { git = "https://github.com/libnyanpasu/rust-runas.git" }
+whoami = "1.5.1"
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
 
@@ -162,4 +164,3 @@ nightly = []
 verge-dev = []
 default-meta = []
 deadlock-detection = ["parking_lot/deadlock_detection"]
-
