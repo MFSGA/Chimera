@@ -19,3 +19,5 @@ export * from './use-clash-version';
 export * from './use-profile-content';
 /** 12 */
 export * from './use-runtime-profile';
+
+export * from './use-system-service';

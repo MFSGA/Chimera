@@ -248,6 +248,25 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getCoreDir(): Promise<Result<string, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_core_dir') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async getServiceInstallPrompt(): Promise<Result<string, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_service_install_prompt'),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getCoreVersion(coreType: ClashCore): Promise<Result<string, string>> {
     try {
       return {
@@ -330,6 +349,54 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async statusService(): Promise<Result<StatusInfo, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('status_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async installService(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('install_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async uninstallService(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('uninstall_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async startService(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('start_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async stopService(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('stop_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async restartService(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('restart_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
 };
 
 /** user-defined events **/
@@ -345,6 +412,12 @@ export type ClashCore =
   | 'mihomo'
   | 'mihomo-alpha'
   | 'clash-rs-alpha';
+export type ClashCoreType =
+  | 'mihomo'
+  | 'mihomo-alpha'
+  | 'clash-rs'
+  | 'clash-rs-alpha'
+  | 'clash';
 export type ClashInfo = {
   /**
    * clash core port
@@ -362,6 +435,14 @@ export type ClashInfo = {
 export type ClashStrategy = {
   external_controller_port_strategy: ExternalControllerPortStrategy;
 };
+export type CoreInfos = {
+  type: CoreType | null;
+  state: CoreState;
+  state_changed_at: number;
+  config_path: string | null;
+};
+export type CoreState = 'Running' | { Stopped: string | null };
+export type CoreType = { clash: ClashCoreType } | 'singbox';
 export type ExternalControllerPortStrategy =
   | 'fixed'
   | 'random'
@@ -658,6 +739,24 @@ export type RemoteProfileOptionsBuilder = {
    * subscription update interval
    */
   update_interval: number | null;
+};
+export type RuntimeInfos = {
+  service_data_dir: string;
+  service_config_dir: string;
+  nyanpasu_config_dir: string;
+  nyanpasu_data_dir: string;
+};
+export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
+export type StatusInfo = {
+  name: string;
+  version: string;
+  status: ServiceStatus;
+  server: StatusResBody | null;
+};
+export type StatusResBody = {
+  version: string;
+  core_infos: CoreInfos;
+  runtime_infos: RuntimeInfos;
 };
 export type SubscriptionInfo = {
   upload: number;
