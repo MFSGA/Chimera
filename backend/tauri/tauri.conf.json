@@ -36,7 +36,8 @@
       "sidecar/mihomo",
       "sidecar/clash-rs",
       "sidecar/clash-rs-alpha",
-      "sidecar/nyanpasu-service"
+      "sidecar/nyanpasu-service",
+      "sidecar/chimera-service"
     ]
   },
   "plugins": {
