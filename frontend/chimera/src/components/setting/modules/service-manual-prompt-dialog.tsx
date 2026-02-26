@@ -2,6 +2,7 @@ import { getCoreDir, getServiceInstallPrompt } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import { IconButton, Tooltip, useColorScheme } from '@mui/material';
+import { useAsyncEffect } from 'ahooks';
 import { useAtom, useSetAtom } from 'jotai';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +10,7 @@ import useSWR from 'swr';
 import { OS } from '@/consts';
 import { serviceManualPromptDialogAtom } from '@/store/service';
 import { notification } from '@/utils/notification';
+import { getShikiSingleton } from '@/utils/shiki';
 import styles from './service-manual-prompt-dialog.module.scss';
 
 type CopyToClipboardButtonProps = {
@@ -73,7 +75,7 @@ export default function ServerManualPromptDialog({
   }, [operation, serviceInstallPrompt, coreDir]);
   const [codes, setCodes] = useState<string | null>(null);
 
-  /*   useAsyncEffect(async () => {
+  useAsyncEffect(async () => {
     const shiki = await getShikiSingleton();
     const code = await shiki.codeToHtml(commands, {
       lang: 'shell',
@@ -83,7 +85,7 @@ export default function ServerManualPromptDialog({
       },
     });
     setCodes(code);
-  }, [serviceInstallPrompt, operation, coreDir, commands]);*/
+  }, [serviceInstallPrompt, operation, coreDir, commands]);
 
   const handleCopyToClipboard = useCallback(() => {
     if (commands) {
