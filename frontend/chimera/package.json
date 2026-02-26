@@ -71,6 +71,7 @@
     "meta-json-schema": "1.19.17",
     "nanoid": "5.1.6",
     "@monaco-editor/react": "4.7.0",
-    "monaco-yaml": "5.4.0"
+    "monaco-yaml": "5.4.0",
+    "shiki": "2.5.0"
   }
 }
