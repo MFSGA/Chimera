@@ -70,6 +70,20 @@ pub fn get_profiles() -> Result<Profiles> {
     Ok(Config::profiles().data().clone())
 }
 
+#[cfg(target_os = "windows")]
+#[tauri::command]
+#[specta::specta]
+pub fn is_portable() -> Result<bool> {
+    Ok(crate::utils::dirs::get_portable_flag())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+#[specta::specta]
+pub fn is_portable() -> Result<bool> {
+    Ok(false)
+}
+
 #[tauri::command]
 #[specta::specta]
 /// later: check in the frontend

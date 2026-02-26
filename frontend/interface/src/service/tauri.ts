@@ -87,3 +87,7 @@ export const getCoreDir = async () => {
 export const restartSidecar = async () => {
   return await invoke<void>('restart_sidecar');
 };
+
+export const isPortable = async () => {
+  return await invoke<boolean>('is_portable');
+};

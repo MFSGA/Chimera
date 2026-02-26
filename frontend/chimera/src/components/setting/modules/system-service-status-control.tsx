@@ -41,6 +41,7 @@ export const ServiceStatusControl = () => {
   const { t } = useTranslation();
   const { query, upsert } = useSystemService();
   const status = query.data?.status;
+  // todo use enum
   const isDisabled = status === 'not_installed';
   const promptDialog = useServerManualPromptDialog();
 

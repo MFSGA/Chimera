@@ -1,13 +1,49 @@
 import { getCoreDir, getServiceInstallPrompt } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
-import { useColorScheme } from '@mui/material';
+import ContentPasteIcon from '@mui/icons-material/ContentPaste';
+import { IconButton, Tooltip, useColorScheme } from '@mui/material';
 import { useAtom, useSetAtom } from 'jotai';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 import { OS } from '@/consts';
 import { serviceManualPromptDialogAtom } from '@/store/service';
+import { notification } from '@/utils/notification';
 import styles from './service-manual-prompt-dialog.module.scss';
+
+type CopyToClipboardButtonProps = {
+  onClick: () => void;
+};
+
+function CopyToClipboardButton({ onClick }: CopyToClipboardButtonProps) {
+  const { t } = useTranslation();
+  return (
+    <Tooltip
+      title={t('Copy to clipboard')}
+      placement="top"
+      slotProps={{
+        popper: {
+          modifiers: [
+            {
+              name: 'offset',
+              options: {
+                offset: [0, -8],
+              },
+            },
+          ],
+        },
+      }}
+    >
+      <IconButton
+        size="small"
+        className="!absolute top-1 right-1"
+        onClick={onClick}
+      >
+        <ContentPasteIcon fontSize="small" color="primary" />
+      </IconButton>
+    </Tooltip>
+  );
+}
 
 export type ServerManualPromptDialogProps = Omit<BaseDialogProps, 'title'> & {
   operation: 'uninstall' | 'install' | 'start' | 'stop' | null;
@@ -47,7 +83,7 @@ export default function ServerManualPromptDialog({
       },
     });
     setCodes(code);
-  }, [serviceInstallPrompt, operation, coreDir, commands]);
+  }, [serviceInstallPrompt, operation, coreDir, commands]);*/
 
   const handleCopyToClipboard = useCallback(() => {
     if (commands) {
@@ -59,20 +95,20 @@ export default function ServerManualPromptDialog({
         .then(() => {
           console.log('copied');
           notification({
-            title: `Clash Nyanpasu - ${t('Service Manual Tips')}`,
+            title: `Clash Chimera - ${t('Service Manual Tips')}`,
             body: t('Copied to clipboard'),
           });
         })
         .catch((error) => {
           console.error(error);
           notification({
-            title: `Clash Nyanpasu - ${t('Service Manual Tips')}`,
+            title: `Clash Chimera - ${t('Service Manual Tips')}`,
             body: t('Failed to copy to clipboard'),
           });
         });
     }
   }, [commands, t]);
- */
+
   return (
     <BaseDialog
       title={t('Service Manual Tips')}
@@ -99,7 +135,7 @@ export default function ServerManualPromptDialog({
                 __html: codes,
               }}
             />
-            {/* todo <CopyToClipboardButton onClick={handleCopyToClipboard} /> */}
+            <CopyToClipboardButton onClick={handleCopyToClipboard} />
           </div>
         )}
       </div>
