@@ -56,6 +56,7 @@ pub fn run() -> std::io::Result<()> {
         // updater layer
         ipc::check_update,
         // utils
+        ipc::is_portable,
         ipc::is_appimage,
         ipc::open_that,
         ipc::cleanup_processes,
@@ -123,6 +124,7 @@ pub fn run() -> std::io::Result<()> {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
             specta_builder.mount_events(app);
 

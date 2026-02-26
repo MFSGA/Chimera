@@ -90,6 +90,7 @@ nyanpasu-utils = { git = "https://github.com/libnyanpasu/nyanpasu-utils.git", fe
 fs_extra = "1.3.0"
 
 tauri-plugin-shell = "2.2"
+tauri-plugin-notification = "2.2"
 
 # Logging & Tracing
 log = "0.4.20"
