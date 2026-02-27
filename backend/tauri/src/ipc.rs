@@ -558,6 +558,23 @@ pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
+pub fn save_window_size_state(app_handle: AppHandle, label: String) -> Result {
+    match label.as_str() {
+        crate::consts::LEGACY_WINDOW_LABEL => {
+            resolve::save_legacy_window_state(&app_handle, true)?;
+        }
+        // "main" => resolve::save_main_window_state(&app_handle, true)?,
+        _ => {
+            todo!()
+            // log::warn!(target: "app", "Unknown window label: {}", label);
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_runtime_yaml() -> Result<String> {
     let runtime = Config::runtime();
     let runtime = runtime.latest();
