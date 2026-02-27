@@ -42,7 +42,8 @@
     "react-hook-form-mui": "8.2.0",
     "material-react-table": "3.2.1",
     "change-case": "5.4.4",
-    "@tauri-apps/plugin-notification": "2.3.3"
+    "@tauri-apps/plugin-notification": "2.3.3",
+    "@tauri-apps/plugin-os": "2.3.2"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.9.6",

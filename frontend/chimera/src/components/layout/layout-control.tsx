@@ -1,5 +1,5 @@
-import { useSetting } from '@chimera/interface';
-import { alpha, cn } from '@chimera/ui';
+import { commands, useSetting } from '@chimera/interface';
+import { alpha, cn, getSystem } from '@chimera/ui';
 import {
   CloseRounded,
   CropSquareRounded,
@@ -12,7 +12,7 @@ import { Button, ButtonProps } from '@mui/material';
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { listen, TauriEvent, UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-// import { platform as getPlatform } from '@tauri-apps/plugin-os';
+import { platform as getPlatform } from '@tauri-apps/plugin-os';
 import { useMemoizedFn } from 'ahooks';
 import { useEffect, useRef } from 'react';
 
@@ -32,9 +32,7 @@ const CtrlButton = (props: ButtonProps) => {
 };
 
 export const LayoutControl = ({ className }: { className?: string }) => {
-  // todo: in the future, use the setting
-  // const { value: alwaysOnTop, upsert } = useSetting('always_on_top');
-  const alwaysOnTop = false;
+  const { value: alwaysOnTop, upsert } = useSetting('always_on_top');
 
   const { data: isMaximized } = useSuspenseQuery({
     queryKey: ['isMaximized'],
@@ -42,8 +40,7 @@ export const LayoutControl = ({ className }: { className?: string }) => {
   });
   const queryClient = useQueryClient();
   const unlistenRef = useRef<UnlistenFn | null>(null);
-  // todo
-  // const platform = useRef(getPlatform());
+  const platform = useRef(getPlatform());
 
   useEffect(() => {
     listen(TauriEvent.WINDOW_RESIZED, () => {
@@ -58,7 +55,7 @@ export const LayoutControl = ({ className }: { className?: string }) => {
   }, [queryClient]);
 
   const toggleAlwaysOnTop = useMemoizedFn(async () => {
-    // await upsert(!alwaysOnTop);
+    await upsert(!alwaysOnTop);
     await appWindow.setAlwaysOnTop(!alwaysOnTop);
   });
 
@@ -81,7 +78,7 @@ export const LayoutControl = ({ className }: { className?: string }) => {
 
       <CtrlButton
         onClick={() => {
-          appWindow.toggleMaximize().then((isMaximized) => {
+          appWindow.toggleMaximize().then(() => {
             queryClient.invalidateQueries({ queryKey: ['isMaximized'] });
           });
         }}
@@ -100,12 +97,13 @@ export const LayoutControl = ({ className }: { className?: string }) => {
 
       <CtrlButton
         onClick={() => {
-          /* if (platform.current === 'windows') {
-            saveWindowSizeState().finally(() => {
+          if (platform.current === 'windows') {
+            commands.saveWindowSizeState(appWindow.label).finally(() => {
               appWindow.close();
             });
-          } else { */
-          appWindow.close();
+          } else {
+            appWindow.close();
+          }
         }}
       >
         <CloseRounded fontSize="small" />

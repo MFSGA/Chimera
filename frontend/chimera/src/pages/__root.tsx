@@ -2,6 +2,9 @@ import { RootProvider, useSettings } from '@chimera/interface';
 import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createRootRoute, Outlet } from '@tanstack/react-router';
+import { emit } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { useMount } from 'ahooks';
 import { lazy, PropsWithChildren } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
@@ -45,6 +48,23 @@ const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
 };
 
 export default function App() {
+  useMount(() => {
+    const appWindow = getCurrentWebviewWindow();
+    Promise.all([
+      appWindow.show(),
+      appWindow.unminimize(),
+      appWindow.setFocus(),
+    ])
+      .catch((error) => {
+        console.error(error);
+      })
+      .finally(() => {
+        emit('react_app_mounted').catch((error) => {
+          console.error(error);
+        });
+      });
+  });
+
   return (
     <RootProvider>
       <SWRConfig
