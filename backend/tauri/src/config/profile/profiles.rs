@@ -36,6 +36,7 @@ impl Default for Profiles {
             chain: vec![],
             valid: vec![
                 "dns".into(),
+                "bind_address".into(),
                 "unified-delay".into(),
                 "tcp-concurrent".into(),
             ],

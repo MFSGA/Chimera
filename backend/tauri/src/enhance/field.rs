@@ -1,26 +1,33 @@
 use serde_yaml::{Mapping, Value};
 
-pub const HANDLE_FIELDS: [&str; 9] = [
+pub const HANDLE_FIELDS: [&str; 12] = [
     "mode",
     "port",
     "socks-port",
     "mixed-port",
     "allow-lan",
     "log-level",
+    "log_level",
     "ipv6",
     "secret",
     "external-controller",
+    "bind-address",
+    "bind_address",
 ];
 
-pub const DEFAULT_FIELDS: [&str; 5] = [
+pub const DEFAULT_FIELDS: [&str; 9] = [
     "proxies",
     "proxy-groups",
     "proxy-providers",
     "rules",
     "rule-providers",
+    "profile",
+    "log_level",
+    "bind_address",
+    "bind-address",
 ];
 
-pub const OTHERS_FIELDS: [&str; 31] = [
+pub const OTHERS_FIELDS: [&str; 33] = [
     "dns",
     "tun",
     "ebpf",
@@ -37,7 +44,10 @@ pub const OTHERS_FIELDS: [&str; 31] = [
     "tproxy-port",
     "iptables",
     "external-ui",
+    "log_level",
     "bind-address",
+    // todo
+    "bind_address",
     "authentication",
     "tls",                       // meta
     "sniffer",                   // meta
