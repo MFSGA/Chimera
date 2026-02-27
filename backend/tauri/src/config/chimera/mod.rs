@@ -38,27 +38,27 @@ impl Default for ClashCore {
     }
 }
 
-impl From<&ClashCore> for nyanpasu_utils::core::CoreType {
+impl From<&ClashCore> for chimera_utils::core::CoreType {
     fn from(core: &ClashCore) -> Self {
         match core {
-            ClashCore::ClashPremium => nyanpasu_utils::core::CoreType::Clash(
-                nyanpasu_utils::core::ClashCoreType::ClashPremium,
+            ClashCore::ClashPremium => chimera_utils::core::CoreType::Clash(
+                chimera_utils::core::ClashCoreType::ClashPremium,
             ),
-            ClashCore::ClashRs => nyanpasu_utils::core::CoreType::Clash(
-                nyanpasu_utils::core::ClashCoreType::ClashRust,
-            ),
-            ClashCore::Mihomo => {
-                nyanpasu_utils::core::CoreType::Clash(nyanpasu_utils::core::ClashCoreType::Mihomo)
+            ClashCore::ClashRs => {
+                chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::ClashRust)
             }
-            ClashCore::MihomoAlpha => nyanpasu_utils::core::CoreType::Clash(
-                nyanpasu_utils::core::ClashCoreType::MihomoAlpha,
+            ClashCore::Mihomo => {
+                chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::Mihomo)
+            }
+            ClashCore::MihomoAlpha => chimera_utils::core::CoreType::Clash(
+                chimera_utils::core::ClashCoreType::MihomoAlpha,
             ),
-            ClashCore::ClashRsAlpha => nyanpasu_utils::core::CoreType::Clash(
-                nyanpasu_utils::core::ClashCoreType::ClashRustAlpha,
+            ClashCore::ClashRsAlpha => chimera_utils::core::CoreType::Clash(
+                chimera_utils::core::ClashCoreType::ClashRustAlpha,
             ),
             // Chimera client currently follows clash-rs core protocol.
-            ClashCore::ChimeraClient => nyanpasu_utils::core::CoreType::Clash(
-                nyanpasu_utils::core::ClashCoreType::ClashRust,
+            ClashCore::ChimeraClient => chimera_utils::core::CoreType::Clash(
+                chimera_utils::core::ClashCoreType::ChimeraClient,
             ),
         }
     }
