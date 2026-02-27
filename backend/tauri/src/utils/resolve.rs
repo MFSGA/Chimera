@@ -116,7 +116,9 @@ pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore)
         ClashCore::ClashPremium | ClashCore::Mihomo | ClashCore::MihomoAlpha => {
             shell.sidecar(core)?.args(["-v"])
         }
-        ClashCore::ClashRs | ClashCore::ClashRsAlpha => shell.sidecar(core)?.args(["-V"]),
+        ClashCore::ClashRs | ClashCore::ClashRsAlpha | ClashCore::ChimeraClient => {
+            shell.sidecar(core)?.args(["-V"])
+        }
     };
     let out = cmd.output().await?;
     if !out.status.success() {
@@ -133,7 +135,7 @@ pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore)
             || Version::parse(item).is_ok()
         {
             match core_type {
-                ClashCore::ClashRs => return Ok(format!("v{}", item)),
+                ClashCore::ClashRs | ClashCore::ChimeraClient => return Ok(format!("v{}", item)),
                 _ => return Ok(item.to_string()),
             }
         }

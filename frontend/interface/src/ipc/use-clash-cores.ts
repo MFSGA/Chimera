@@ -13,6 +13,7 @@ export const ClashCores = {
   mihomo: 'Mihomo',
   // 'mihomo-alpha': 'Mihomo Alpha',
   'clash-rs': 'Clash Rust',
+  'chimera-client': 'Chimera Client',
   'clash-rs-alpha': 'Clash Rust Alpha',
 } as Record<ClashCore, string>;
 

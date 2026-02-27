@@ -31,6 +31,7 @@ export const getImage = (core: ClashCore) => {
     }
 
     case 'clash-rs':
+    case 'chimera-client':
     case 'clash-rs-alpha': {
       return ClashRs;
     }

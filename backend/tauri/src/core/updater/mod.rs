@@ -7,6 +7,7 @@ pub struct ManifestVersionLatest {
     mihomo: String,
     mihomo_alpha: String,
     clash_rs: String,
+    chimera_client: String,
     clash_rs_alpha: String,
     clash_premium: String,
 }
