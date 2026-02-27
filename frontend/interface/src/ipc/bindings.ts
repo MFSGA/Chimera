@@ -357,6 +357,17 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async saveWindowSizeState(label: string): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_window_size_state', { label }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async statusService(): Promise<Result<StatusInfo, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('status_service') };
@@ -482,6 +493,14 @@ export type IVerge = {
    */
   enable_service_mode?: boolean | null;
   /**
+   * 6.1. window always on top
+   */
+  always_on_top?: boolean | null;
+  /**
+   * 6.2. window size and position
+   */
+  window_size_state?: WindowState | null;
+  /**
    * 7. 是否使用内部的脚本支持，默认为真
    */
   enable_builtin_enhanced: boolean | null;
@@ -544,6 +563,11 @@ export type IVerge = {
    * 20. i18n
    */
   language: string | null;
+  /**
+   * 21. Use legacy UI (original UI at "/" route)
+   * When true, opens legacy window; when false, opens new main window
+   */
+  use_legacy_ui: boolean | null;
 };
 export type JsonValue =
   | null
@@ -780,6 +804,14 @@ export type UpdateWrapper = {
   date: string | null;
   body: string | null;
   raw_json: JsonValue;
+};
+export type WindowState = {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+  maximized: boolean;
+  fullscreen: boolean;
 };
 
 type __EventObj__<T> = {
