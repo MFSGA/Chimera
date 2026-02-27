@@ -88,6 +88,12 @@ pub struct IVerge {
     /// 6. windows service mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_service_mode: Option<bool>,
+    /// 6.1. window always on top
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_on_top: Option<bool>,
+    /// 6.2. window size and position
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_size_state: Option<WindowState>,
     /// 7. 是否使用内部的脚本支持，默认为真
     pub enable_builtin_enhanced: Option<bool>,
     /// 8. clash core path
@@ -125,6 +131,19 @@ pub struct IVerge {
     pub theme_mode: Option<String>,
     /// 20. i18n
     pub language: Option<String>,
+    /// 21. Use legacy UI (original UI at "/" route)
+    /// When true, opens legacy window; when false, opens new main window
+    pub use_legacy_ui: Option<bool>,
+}
+
+#[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
+pub struct WindowState {
+    pub width: u32,
+    pub height: u32,
+    pub x: i32,
+    pub y: i32,
+    pub maximized: bool,
+    pub fullscreen: bool,
 }
 
 impl IVerge {
@@ -153,6 +172,7 @@ impl IVerge {
             clash_core: Some(ClashCore::default()),
             max_log_files: Some(7), // 7 days
             app_log_level: Some(logging::LoggingLevel::default()),
+            always_on_top: Some(false),
 
             ..Self::default()
         }
@@ -166,6 +186,9 @@ impl IVerge {
         }
         if config.clash_core.is_none() {
             config.clash_core = template.clash_core;
+        }
+        if config.always_on_top.is_none() {
+            config.always_on_top = template.always_on_top;
         }
 
         config
