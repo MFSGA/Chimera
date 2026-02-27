@@ -144,11 +144,11 @@ redb = "3.0.0"
 
 tracing-attributes = "0.1"
 
-[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-os = "2.2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
-semver = "1.0"
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 
 [target.'cfg(windows)'.dependencies]
 winreg = { version = "0.55", features = ["transactions"] }
