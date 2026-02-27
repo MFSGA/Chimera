@@ -18,6 +18,8 @@ mod feat;
 mod shutdown_hook;
 /// 4
 mod utils;
+/// 9
+mod window;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -72,6 +74,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_storage_item,
         ipc::set_storage_item,
         ipc::remove_storage_item,
+        ipc::save_window_size_state,
         // service mode
         ipc::service::status_service,
         ipc::service::install_service,
