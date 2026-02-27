@@ -9,14 +9,14 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use camino::Utf8PathBuf;
-use nyanpasu_ipc::{api::status::CoreState, utils::get_current_ts};
-use nyanpasu_utils::{
+use chimera_utils::{
     core::{
         CommandEvent,
         instance::{CoreInstance, CoreInstanceBuilder},
     },
     runtime::{block_on, spawn},
 };
+use nyanpasu_ipc::{api::status::CoreState, utils::get_current_ts};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use tokio::time::sleep;
@@ -84,10 +84,10 @@ impl Instance {
                 let this = child.lock();
                 (
                     Cow::Borrowed(match this.state() {
-                        nyanpasu_utils::core::instance::CoreInstanceState::Running => {
+                        chimera_utils::core::instance::CoreInstanceState::Running => {
                             &CoreState::Running
                         }
-                        nyanpasu_utils::core::instance::CoreInstanceState::Stopped => {
+                        chimera_utils::core::instance::CoreInstanceState::Stopped => {
                             &CoreState::Stopped(None)
                         }
                     }),
@@ -112,10 +112,10 @@ impl Instance {
             Instance::Child { child, .. } => {
                 let this = child.lock();
                 Cow::Borrowed(match this.state() {
-                    nyanpasu_utils::core::instance::CoreInstanceState::Running => {
+                    chimera_utils::core::instance::CoreInstanceState::Running => {
                         &CoreState::Running
                     }
-                    nyanpasu_utils::core::instance::CoreInstanceState::Stopped => {
+                    chimera_utils::core::instance::CoreInstanceState::Stopped => {
                         &CoreState::Stopped(None)
                     }
                 })
@@ -153,7 +153,7 @@ impl Instance {
     }
 
     pub fn try_new(run_type: RunType) -> Result<Self> {
-        let core_type: nyanpasu_utils::core::CoreType = {
+        let core_type: chimera_utils::core::CoreType = {
             (Config::verge()
                 .latest()
                 .clash_core
@@ -215,8 +215,8 @@ impl Instance {
                     (
                         matches!(
                             child.core_type,
-                            nyanpasu_utils::core::CoreType::Clash(
-                                nyanpasu_utils::core::ClashCoreType::ClashPremium
+                            chimera_utils::core::CoreType::Clash(
+                                chimera_utils::core::ClashCoreType::ClashPremium
                             )
                         ),
                         child.core_type.clone(),
@@ -427,14 +427,14 @@ impl CoreManager {
 
     /// 检查配置是否正确
     pub async fn check_config(&self) -> Result<()> {
-        use nyanpasu_utils::core::instance::CoreInstance;
+        use chimera_utils::core::instance::CoreInstance;
         let config_path = Config::generate_file(ConfigType::Check)?;
         let config_path = Utf8PathBuf::from_path_buf(config_path)
             .map_err(|_| anyhow::anyhow!("failed to convert config path to utf8 path"))?;
 
         let clash_core = { Config::verge().latest().clash_core };
         let clash_core = clash_core.unwrap_or(ClashCore::Mihomo);
-        let clash_core: nyanpasu_utils::core::CoreType = (&clash_core).into();
+        let clash_core: chimera_utils::core::CoreType = (&clash_core).into();
 
         let app_dir = dirs::app_data_dir()?;
         let app_dir = Utf8PathBuf::from_path_buf(app_dir)
@@ -552,7 +552,7 @@ impl CoreManager {
 // FIXME: move this fn to nyanpasu-utils
 /// Search the binary path of the core: Data Dir -> Sidecar Dir
 pub fn find_binary_path(
-    core_type: &nyanpasu_utils::core::CoreType,
+    core_type: &chimera_utils::core::CoreType,
 ) -> std::io::Result<std::path::PathBuf> {
     let data_dir = dirs::app_data_dir()
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;

@@ -662,6 +662,7 @@ dependencies = [
  "base64 0.22.1",
  "camino",
  "chimera-macro",
+ "chimera_utils",
  "chrono",
  "convert_case 0.8.0",
  "derive_builder",
@@ -728,6 +729,30 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "chimera_utils"
+version = "0.1.0"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#a189fcf81f86585c3263f511f9ca7e9a2def18c2"
+dependencies = [
+ "camino",
+ "constcat",
+ "derive_builder",
+ "encoding_rs",
+ "kill_tree",
+ "memchr",
+ "os-utils 0.1.0 (git+https://github.com/MFSGA/Chimera_Utils.git)",
+ "os_pipe",
+ "parking_lot",
+ "serde",
+ "shared_child",
+ "specta",
+ "sysinfo 0.38.2",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-attributes",
 ]
 
 [[package]]
@@ -3027,13 +3052,13 @@ dependencies = [
  "kill_tree",
  "memchr",
  "network-utils",
- "os-utils",
+ "os-utils 0.1.0 (git+https://github.com/libnyanpasu/nyanpasu-utils.git)",
  "os_pipe",
  "parking_lot",
  "serde",
  "shared_child",
  "specta",
- "sysinfo",
+ "sysinfo 0.37.2",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -3383,6 +3408,16 @@ version = "0.1.0"
 source = "git+https://github.com/libnyanpasu/nyanpasu-utils.git#cfc9befe8f0c5e7aee615830bd98990907e7778e"
 dependencies = [
  "nix 0.30.1",
+ "shared_child",
+ "windows 0.61.3",
+]
+
+[[package]]
+name = "os-utils"
+version = "0.1.0"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#a189fcf81f86585c3263f511f9ca7e9a2def18c2"
+dependencies = [
+ "nix 0.26.4",
  "shared_child",
  "windows 0.61.3",
 ]
@@ -5069,6 +5104,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sysinfo"
+version = "0.38.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1efc19935b4b66baa6f654ac7924c192f55b175c00a7ab72410fc24284dacda8"
+dependencies = [
+ "libc",
+ "memchr",
+ "ntapi",
+ "objc2-core-foundation",
+ "objc2-io-kit",
+ "windows 0.62.0",
+]
+
+[[package]]
 name = "sysproxy"
 version = "0.3.0"
 source = "git+https://github.com/libnyanpasu/sysproxy-rs.git#355d9c98e20f894e75f13049d0031d3794e9a74a"
@@ -6712,11 +6761,24 @@ version = "0.61.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
 dependencies = [
- "windows-collections",
+ "windows-collections 0.2.0",
  "windows-core 0.61.2",
- "windows-future",
+ "windows-future 0.2.1",
  "windows-link 0.1.3",
- "windows-numerics",
+ "windows-numerics 0.2.0",
+]
+
+[[package]]
+name = "windows"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9579d0e6970fd5250aa29aba5994052385ff55cf7b28a059e484bb79ea842e42"
+dependencies = [
+ "windows-collections 0.3.0",
+ "windows-core 0.62.0",
+ "windows-future 0.3.0",
+ "windows-link 0.2.1",
+ "windows-numerics 0.3.0",
 ]
 
 [[package]]
@@ -6726,6 +6788,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
  "windows-core 0.61.2",
+]
+
+[[package]]
+name = "windows-collections"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a90dd7a7b86859ec4cdf864658b311545ef19dbcf17a672b52ab7cefe80c336f"
+dependencies = [
+ "windows-core 0.62.0",
 ]
 
 [[package]]
@@ -6784,7 +6855,18 @@ checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
- "windows-threading",
+ "windows-threading 0.1.0",
+]
+
+[[package]]
+name = "windows-future"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2194dee901458cb79e1148a4e9aac2b164cc95fa431891e7b296ff0b2f1d8a6"
+dependencies = [
+ "windows-core 0.62.0",
+ "windows-link 0.2.1",
+ "windows-threading 0.2.1",
 ]
 
 [[package]]
@@ -6851,6 +6933,16 @@ checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
  "windows-core 0.61.2",
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-numerics"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ce3498fe0aba81e62e477408383196b4b0363db5e0c27646f932676283b43d8"
+dependencies = [
+ "windows-core 0.62.0",
+ "windows-link 0.2.1",
 ]
 
 [[package]]
@@ -7043,6 +7135,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b66463ad2e0ea3bbf808b7f1d371311c80e115c0b71d60efc142cafbcfb057a6"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-threading"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
+dependencies = [
+ "windows-link 0.2.1",
 ]
 
 [[package]]
