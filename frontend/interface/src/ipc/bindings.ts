@@ -429,6 +429,7 @@ export type ClashCore =
   | 'clash'
   | 'clash-rs'
   | 'mihomo'
+  | 'chimera-client'
   | 'mihomo-alpha'
   | 'clash-rs-alpha';
 export type ClashCoreType =
@@ -587,6 +588,7 @@ export type ManifestVersionLatest = {
   mihomo: string;
   mihomo_alpha: string;
   clash_rs: string;
+  chimera_client: string;
   clash_rs_alpha: string;
   clash_premium: string;
 };

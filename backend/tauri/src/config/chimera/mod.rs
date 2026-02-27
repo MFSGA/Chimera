@@ -24,6 +24,8 @@ pub enum ClashCore {
     ClashRs,
     #[serde(rename = "mihomo", alias = "clash-meta")]
     Mihomo,
+    #[serde(rename = "chimera-client", alias = "chimera", alias = "chimera_client")]
+    ChimeraClient,
     #[serde(rename = "mihomo-alpha")]
     MihomoAlpha,
     #[serde(rename = "clash-rs-alpha")]
@@ -54,6 +56,10 @@ impl From<&ClashCore> for nyanpasu_utils::core::CoreType {
             ClashCore::ClashRsAlpha => nyanpasu_utils::core::CoreType::Clash(
                 nyanpasu_utils::core::ClashCoreType::ClashRustAlpha,
             ),
+            // Chimera client currently follows clash-rs core protocol.
+            ClashCore::ChimeraClient => nyanpasu_utils::core::CoreType::Clash(
+                nyanpasu_utils::core::ClashCoreType::ClashRust,
+            ),
         }
     }
 }
@@ -66,6 +72,7 @@ impl std::fmt::Display for ClashCore {
             ClashCore::Mihomo => write!(f, "mihomo"),
             ClashCore::MihomoAlpha => write!(f, "mihomo-alpha"),
             ClashCore::ClashRsAlpha => write!(f, "clash-rs-alpha"),
+            ClashCore::ChimeraClient => write!(f, "chimera-client"),
         }
     }
 }

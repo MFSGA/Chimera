@@ -48,6 +48,7 @@ const tasks: {
   { name: 'mihomo', func: () => resolve.clashMeta(), retry: 5 },
   // { name: 'mihomo-alpha', func: () => resolve.clashMetaAlpha(), retry: 5 },
   { name: 'clash-rs', func: () => resolve.clashRust(), retry: 5 },
+  { name: 'chimera-client', func: () => resolve.chimeraClient(), retry: 5 },
   { name: 'clash-rs-alpha', func: () => resolve.clashRustAlpha(), retry: 5 },
   { name: 'nyanpasu-service', func: () => resolve.service(), retry: 5 },
   { name: 'chimera-service', func: () => resolve.chimeraService(), retry: 5 },

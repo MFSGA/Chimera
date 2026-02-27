@@ -4,6 +4,7 @@
     "mihomo": "v1.19.14",
     "mihomo_alpha": "alpha-da69b19",
     "clash_rs": "v0.9.1",
+    "chimera_client": "v0.3.0",
     "clash_premium": "2023-09-05-gdcc8d87",
     "clash_rs_alpha": "0.9.1-alpha+sha.f613a53"
   },
@@ -43,6 +44,18 @@
       "darwin-x64": "clash-x86_64-apple-darwin",
       "linux-armv7": "clash-armv7-unknown-linux-gnueabi",
       "linux-armv7hf": "clash-armv7-unknown-linux-gnueabihf"
+    },
+    "chimera_client": {
+      "windows-i386": "clash_chimera-i686-pc-windows-msvc.exe",
+      "windows-x86_64": "clash_chimera-x86_64-pc-windows-msvc.exe",
+      "windows-arm64": "clash_chimera-aarch64-pc-windows-msvc.exe",
+      "linux-aarch64": "clash_chimera-aarch64-unknown-linux-gnu",
+      "linux-amd64": "clash_chimera-x86_64-unknown-linux-gnu",
+      "linux-i386": "clash_chimera-i686-unknown-linux-musl",
+      "darwin-arm64": "clash_chimera-aarch64-unknown-linux-gnu",
+      "darwin-x64": "clash_chimera-x86_64-unknown-linux-gnu",
+      "linux-armv7": "clash_chimera-armv7-unknown-linux-gnueabi",
+      "linux-armv7hf": "clash_chimera-armv7-unknown-linux-gnueabihf"
     },
     "clash_premium": {
       "windows-i386": "clash-windows-386-n{}.zip",

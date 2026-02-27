@@ -3,6 +3,7 @@ import { getChimeraServiceInfo } from './chimera-service-resource';
 import { resolveSidecar } from './download';
 import { NodeArch } from './manifest';
 import {
+  getChimeraClientInfo,
   getClashMetaInfo,
   getClashRustAlphaInfo,
   getClashRustInfo,
@@ -43,6 +44,10 @@ export class Resolve {
 
   public async clashRust() {
     return await this.sidecar(getClashRustInfo(this.infoOption));
+  }
+
+  public async chimeraClient() {
+    return await this.sidecar(getChimeraClientInfo(this.infoOption));
   }
 
   public async clashRustAlpha() {

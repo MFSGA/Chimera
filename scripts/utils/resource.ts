@@ -1,5 +1,6 @@
 // import { ArchMapping } from 'utils/manifest';
 import { fetch, type RequestInit } from 'undici';
+import { CHIMERA_CLIENT_MANIFEST } from '../manifest/chimera-client';
 import { CLASH_META_MANIFEST } from '../manifest/clash-meta';
 import {
   CLASH_RS_ALPHA_MANIFEST,
@@ -101,6 +102,39 @@ export const getClashRustInfo = ({
 
   return {
     name: 'clash-rs',
+    targetFile,
+    exeFile,
+    tmpFile,
+    downloadURL,
+  };
+};
+
+export const getChimeraClientInfo = ({
+  platform,
+  arch,
+  sidecarHost,
+}: {
+  platform: string;
+  arch: string;
+  sidecarHost?: string;
+}): BinInfo => {
+  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_MANIFEST;
+
+  const archLabel = mappingArch(platform as NodeJS.Platform, arch as NodeArch);
+  const name = ARCH_MAPPING[archLabel].replace('{}', VERSION as string);
+
+  const isWin = platform === 'win32';
+
+  const exeFile = `${name}`;
+
+  const downloadURL = `${URL_PREFIX}${VERSION}/${name}`;
+
+  const tmpFile = `${name}`;
+
+  const targetFile = `chimera-client-${sidecarHost}${isWin ? '.exe' : ''}`;
+
+  return {
+    name: 'chimera-client',
     targetFile,
     exeFile,
     tmpFile,
