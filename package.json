@@ -27,7 +27,9 @@
     "publish": "tsx scripts/publish.ts",
     "dev:diff": "run-p -r web:devtools tauri:diff",
     "tauri:diff": "tauri dev -f verge-dev deadlock-detection -c ./backend/tauri/tauri.conf.json",
-    "generate:git-info": "tsx scripts/generate-git-info.ts"
+    "generate:git-info": "tsx scripts/generate-git-info.ts",
+    "generate:manifest": "run-p generate:manifest:*",
+    "generate:manifest:latest-version": "tsx scripts/generate-latest-version.ts"
   },
   "dependencies": {
     "husky": "9.1.7",

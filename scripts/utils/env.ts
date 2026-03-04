@@ -10,3 +10,6 @@ export const GIT_SUMMARY_INFO_PATH = path.join(
   TAURI_APP_TEMP_DIR,
   'git-info.json',
 );
+
+export const MANIFEST_DIR = path.join(cwd, 'manifest');
+export const MANIFEST_VERSION_PATH = path.join(MANIFEST_DIR, 'version.json');
