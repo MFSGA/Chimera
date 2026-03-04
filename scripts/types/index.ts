@@ -31,3 +31,18 @@ export interface ClashManifest {
   VERSION_URL?: string;
   ARCH_MAPPING: ArchMapping;
 }
+
+export enum SupportedCore {
+  Mihomo = 'mihomo',
+  MihomoAlpha = 'mihomo_alpha',
+  ClashRs = 'clash_rs',
+  ClashRsAlpha = 'clash_rs_alpha',
+  ClashPremium = 'clash_premium',
+}
+
+export interface ManifestVersion {
+  manifest_version: number;
+  latest: { [K in SupportedCore]: string };
+  arch_template: { [K in SupportedCore]: ArchMapping };
+  updated_at: string; // ISO 8601
+}
