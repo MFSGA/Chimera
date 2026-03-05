@@ -270,7 +270,8 @@
     "core_status": "内核状态：",
     "service_status": "服务状态：",
     "core_started_by": "通过{{by}}启动",
-    "last_status_changed_since": "上次状态变更：{{time}}"
+    "last_status_changed_since": "上次状态变更：{{time}}",
+    "loading": "正在加载服务状态..."
   },
   "service": "服务",
   "UI": "用户界面",
