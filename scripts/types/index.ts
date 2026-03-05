@@ -36,6 +36,7 @@ export enum SupportedCore {
   Mihomo = 'mihomo',
   MihomoAlpha = 'mihomo_alpha',
   ClashRs = 'clash_rs',
+  ChimeraClient = 'chimera_client',
   ClashRsAlpha = 'clash_rs_alpha',
   ClashPremium = 'clash_premium',
 }

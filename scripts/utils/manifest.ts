@@ -105,6 +105,38 @@ export const resolveClashRs = async (): LatestVersionResolver => {
   };
 };
 
+export const resolveChimeraClient = async (): LatestVersionResolver => {
+  const latestRelease = await octokit.rest.repos.getLatestRelease(
+    applyProxy({
+      owner: 'MFSGA',
+      repo: 'Chimera_Client',
+    }),
+  );
+
+  consola.debug(
+    `chimera-client latest release: ${latestRelease.data.tag_name}`,
+  );
+
+  const archMapping: ArchMapping = {
+    [SupportedArch.WindowsX86_32]: 'clash_chimera-i686-pc-windows-msvc.exe',
+    [SupportedArch.WindowsX86_64]: 'clash_chimera-x86_64-pc-windows-msvc.exe',
+    [SupportedArch.WindowsArm64]: 'clash_chimera-aarch64-pc-windows-msvc.exe',
+    [SupportedArch.LinuxAarch64]: 'clash_chimera-aarch64-unknown-linux-gnu',
+    [SupportedArch.LinuxAmd64]: 'clash_chimera-x86_64-unknown-linux-gnu',
+    [SupportedArch.LinuxI386]: 'clash_chimera-i686-unknown-linux-musl',
+    [SupportedArch.DarwinArm64]: 'clash_chimera-aarch64-unknown-linux-gnu',
+    [SupportedArch.DarwinX64]: 'clash_chimera-x86_64-unknown-linux-gnu',
+    [SupportedArch.LinuxArmv7]: 'clash_chimera-armv7-unknown-linux-gnueabi',
+    [SupportedArch.LinuxArmv7hf]: 'clash_chimera-armv7-unknown-linux-gnueabihf',
+  } satisfies ArchMapping;
+
+  return {
+    name: 'chimera_client',
+    version: latestRelease.data.tag_name,
+    archMapping,
+  };
+};
+
 export const resolveClashRsAlpha = async (): LatestVersionResolver => {
   const resp = await fetch(
     'https://github.com/Watfaq/clash-rs/releases/download/latest/version.txt',
