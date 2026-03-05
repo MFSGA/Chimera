@@ -270,7 +270,8 @@
     "core_status": "核心狀態：",
     "service_status": "服務狀態：",
     "core_started_by": "透過{{by}}啟動",
-    "last_status_changed_since": "上次狀態變更：{{time}}"
+    "last_status_changed_since": "上次狀態變更：{{time}}",
+    "loading": "正在載入服務狀態..."
   },
   "service": "服務",
   "UI": "使用者介面",

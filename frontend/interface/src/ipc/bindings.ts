@@ -208,6 +208,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async getCoreStatus(): Promise<Result<[CoreState, number, RunType], string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_core_status') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('check_update') };
@@ -774,6 +782,19 @@ export type RemoteProfileOptionsBuilder = {
    */
   update_interval: number | null;
 };
+export type RunType =
+  /**
+   * Run as child process directly
+   */
+  | 'normal'
+  /**
+   * Run by Nyanpasu Service via a ipc call
+   */
+  | 'service'
+  /**
+   * Run as elevated process, if profile advice to run as elevated
+   */
+  | 'elevated';
 export type RuntimeInfos = {
   service_data_dir: string;
   service_config_dir: string;
