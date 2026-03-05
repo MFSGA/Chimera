@@ -19,6 +19,8 @@ use chimera_utils::{
 use nyanpasu_ipc::{api::status::CoreState, utils::get_current_ts};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use specta::Type;
 use tokio::time::sleep;
 use tracing::instrument;
 
@@ -32,7 +34,8 @@ use crate::{
     utils::dirs,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
 pub enum RunType {
     /// Run as child process directly
     Normal,

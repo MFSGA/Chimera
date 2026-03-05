@@ -270,7 +270,8 @@
     "core_status": "Core Status: ",
     "service_status": "Service Status: ",
     "core_started_by": "Started by {{by}}",
-    "last_status_changed_since": "Last status changed: {{time}}"
+    "last_status_changed_since": "Last status changed: {{time}}",
+    "loading": "Loading service status..."
   },
   "service": "Service",
   "UI": "UI",

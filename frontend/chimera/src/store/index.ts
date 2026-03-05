@@ -77,3 +77,5 @@ export const connectionTableColumnsAtom = atomWithStorage<
   ].map((key) => [key, true]),
   createJSONStorage(() => ChimeraStorage),
 );
+
+export const atomIsDrawer = atom<boolean>();

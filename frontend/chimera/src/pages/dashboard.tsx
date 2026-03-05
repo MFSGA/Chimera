@@ -1,10 +1,12 @@
 import { commands, unwrapResult } from '@chimera/interface';
 import { Button } from '@mui/material';
+import Grid from '@mui/material/Grid';
 import { createFileRoute } from '@tanstack/react-router';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import ServiceShortcuts from '@/components/dashboard/service-shortcuts';
 
 export const Route = createFileRoute('/dashboard')({
   component: Dashboard,
@@ -56,18 +58,28 @@ function Dashboard() {
   };
 
   return (
-    <div>
-      <div
-        className="cursor-pointer px-3 py-2 text-sm font-semibold text-blue-600 transition hover:text-blue-700"
-        onClick={getVersion}
-      >
-        {t('action_get_version')}
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-3">
+        <div
+          className="cursor-pointer px-3 py-2 text-sm font-semibold text-blue-600 transition hover:text-blue-700"
+          onClick={getVersion}
+        >
+          {t('action_get_version')}
+        </div>
+
+        <div className="text-lg font-semibold">{t('page_dashboard')}</div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="contained" color="primary" onClick={handleGreet}>
+            send greet command
+          </Button>
+          <p className="text-sm text-neutral-600">{greetMessage}</p>
+        </div>
       </div>
-      <div>{t('page_dashboard')}</div>
-      <Button variant="contained" color="primary" onClick={handleGreet}>
-        send greet command
-      </Button>
-      <p>{greetMessage}</p>
+
+      <Grid container spacing={2}>
+        <ServiceShortcuts />
+      </Grid>
     </div>
   );
 }

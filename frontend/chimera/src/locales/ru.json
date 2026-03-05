@@ -270,7 +270,8 @@
     "core_status": "Статус ядра: ",
     "service_status": "Статус службы: ",
     "core_started_by": "Запущено {{by}}",
-    "last_status_changed_since": "Последнее изменение статуса: {{time}}"
+    "last_status_changed_since": "Последнее изменение статуса: {{time}}",
+    "loading": "Загрузка статуса службы..."
   },
   "service": "Служба",
   "UI": "Пользовательский интерфейс",

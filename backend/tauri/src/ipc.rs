@@ -1,6 +1,8 @@
 use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
+
+use nyanpasu_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
 
@@ -21,7 +23,7 @@ use crate::{
         runtime::PatchRuntimeConfig,
     },
     core::{
-        clash::core::CoreManager,
+        clash::core::{CoreManager, RunType},
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
         updater::ManifestVersionLatest,
@@ -444,6 +446,13 @@ pub fn get_core_dir() -> Result<String> {
         .ok_or_else(|| anyhow!("failed to get core dir"))?;
     let core_dir = dunce::canonicalize(core_dir)?;
     Ok(core_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_core_status() -> Result<(CoreState, i64, RunType)> {
+    let (state, ts, run_type) = CoreManager::global().status().await;
+    Ok((state.into_owned(), ts, run_type))
 }
 
 #[tauri::command]

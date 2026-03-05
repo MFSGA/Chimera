@@ -91,3 +91,9 @@ export const restartSidecar = async () => {
 export const isPortable = async () => {
   return await invoke<boolean>('is_portable');
 };
+
+export const getCoreStatus = async () => {
+  return await invoke<
+    ['Running' | { Stopped: string | null }, number, 'normal' | 'service']
+  >('get_core_status')
+}
