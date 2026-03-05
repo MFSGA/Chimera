@@ -3,6 +3,7 @@ import { ManifestVersion, SupportedCore } from './types/index';
 import { MANIFEST_DIR, MANIFEST_VERSION_PATH } from './utils/env';
 import { consola } from './utils/logger';
 import {
+  resolveChimeraClient,
   resolveClashPremium,
   resolveClashRs,
   resolveClashRsAlpha,
@@ -17,6 +18,7 @@ export async function generateLatestVersion() {
     resolveMihomo,
     resolveMihomoAlpha,
     resolveClashRs,
+    resolveChimeraClient,
     resolveClashPremium,
     resolveClashRsAlpha,
   ];
