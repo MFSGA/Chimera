@@ -36,6 +36,8 @@ pub fn run() -> std::io::Result<()> {
     let specta_builder = tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
         // demo
         greet,
+        // common
+        ipc::get_sys_proxy,
         // profile
         ipc::get_profiles,
         ipc::import_profile,
