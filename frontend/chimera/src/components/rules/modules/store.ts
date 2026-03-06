@@ -5,4 +5,5 @@ import type { RefObject } from 'react';
 export const atomRulePage = atom<{
   data?: ClashRule[];
   scrollRef?: RefObject<HTMLElement>;
+  searchText?: string;
 }>();
