@@ -75,6 +75,12 @@ export const useClashAPI = () => {
     );
   };
 
+  const rules = async () => {
+    return await request<{
+      rules: ClashRule[];
+    }>('/rules');
+  };
+
   const version = async () => {
     return await request<ClashVersion>('/version');
   };
@@ -85,6 +91,7 @@ export const useClashAPI = () => {
     patchConfigs,
     proxiesDelay,
     groupDelay,
+    rules,
     version,
   };
 };
@@ -113,4 +120,10 @@ export type ClashVersion = {
   premium?: boolean;
   meta?: boolean;
   version: string;
+};
+
+export type ClashRule = {
+  type: string;
+  payload: string;
+  proxy: string;
 };

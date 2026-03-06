@@ -1,8 +1,7 @@
-import { useUpdateEffect } from 'ahooks';
 import { useQuery } from '@tanstack/react-query';
-
-import { commands } from './bindings';
+import { useUpdateEffect } from 'ahooks';
 import { unwrapResult } from '../utils';
+import { commands } from './bindings';
 import { CHIMERA_SYSTEM_PROXY_QUERY_KEY } from './consts';
 import { useSetting } from './use-settings';
 
