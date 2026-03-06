@@ -73,6 +73,38 @@ impl Sysopt {
         Ok(())
     }
 
+    /// reset the sysproxy
+    pub fn reset_sysproxy(&self) -> Result<()> {
+        let mut cur_sysproxy = self.cur_sysproxy.lock();
+        let mut old_sysproxy = self.old_sysproxy.lock();
+
+        let cur_sysproxy = cur_sysproxy.take();
+
+        if let Some(mut old) = old_sysproxy.take() {
+            // If the original proxy points to the same port as Chimera's current
+            // proxy, disable it to avoid restoring our own local listener.
+            let port_same = cur_sysproxy.as_ref().is_none_or(|cur| old.port == cur.port);
+
+            if old.enable && port_same {
+                old.enable = false;
+                log::info!(target: "app", "reset proxy by disabling the original proxy");
+            } else {
+                log::info!(target: "app", "reset proxy to the original proxy");
+            }
+
+            old.set_system_proxy()?;
+        } else if let Some(mut cur @ Sysproxy { enable: true, .. }) = cur_sysproxy {
+            // No original proxy was captured, so disable the current one directly.
+            log::info!(target: "app", "reset proxy by disabling the current proxy");
+            cur.enable = false;
+            cur.set_system_proxy()?;
+        } else {
+            log::info!(target: "app", "reset proxy with no action");
+        }
+
+        Ok(())
+    }
+
     /// launch a system proxy guard
     /// read config from file directly
     pub fn guard_proxy(&self) {

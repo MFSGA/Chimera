@@ -10,7 +10,7 @@ use crate::{
         chimera::{ClashCore, IVerge, WindowState},
         core::Config,
     },
-    core::clash::core::CoreManager,
+    core::{clash::core::CoreManager, sysopt},
     log_err,
     window::{AppWindow, WindowConfig},
 };
@@ -102,9 +102,15 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(crate::core::tasks::setup(app, storage));
     } */
 
+    log_err!(sysopt::Sysopt::global().init_sysproxy());
     create_window(app.app_handle());
 
     crate::core::storage::register_web_storage_listener(app.app_handle());
+}
+
+/// reset runtime side effects before shutdown
+pub fn resolve_reset() {
+    log_err!(sysopt::Sysopt::global().reset_sysproxy());
 }
 
 /// resolve core version
