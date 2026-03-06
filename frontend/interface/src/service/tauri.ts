@@ -95,5 +95,5 @@ export const isPortable = async () => {
 export const getCoreStatus = async () => {
   return await invoke<
     ['Running' | { Stopped: string | null }, number, 'normal' | 'service']
-  >('get_core_status')
-}
+  >('get_core_status');
+};
