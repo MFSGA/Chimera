@@ -6,6 +6,7 @@ export * from './consts';
 export { commands } from './bindings';
 export type * from './bindings';
 export * from './use-settings';
+export * from './use-clash-config';
 export * from './use-clash-connections';
 /** 7 */
 export * from './use-proxy-mode';
@@ -21,3 +22,4 @@ export * from './use-profile-content';
 export * from './use-runtime-profile';
 
 export * from './use-system-service';
+export * from './use-system-proxy';

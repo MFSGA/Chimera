@@ -4,6 +4,7 @@ use anyhow::{Context, anyhow};
 
 use nyanpasu_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
+use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
 use crate::{
@@ -33,6 +34,15 @@ use crate::{
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
+
+#[derive(specta::Type, serde::Serialize)]
+pub struct GetSysProxyResponse {
+    pub enable: bool,
+    pub host: String,
+    pub port: u16,
+    pub bypass: String,
+    pub server: String,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
@@ -70,6 +80,21 @@ impl specta::Type for IpcError {
 #[specta::specta]
 pub fn get_profiles() -> Result<Profiles> {
     Ok(Config::profiles().data().clone())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
+    let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
+    let server = format!("{}:{}", current.host, current.port);
+
+    Ok(GetSysProxyResponse {
+        enable: current.enable,
+        host: current.host,
+        port: current.port,
+        bypass: current.bypass,
+        server,
+    })
 }
 
 #[cfg(target_os = "windows")]

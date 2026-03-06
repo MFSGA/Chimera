@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PropsWithChildren } from 'react';
-import { ClashWSProvider } from './clash-ws-provider';
+import { ClashWSProvider, useClashWSContext } from './clash-ws-provider';
 
 const queryClient = new QueryClient();
 
@@ -12,3 +12,5 @@ export const RootProvider: any = ({ children }: PropsWithChildren) => {
     </QueryClientProvider>
   );
 };
+
+export { useClashWSContext };

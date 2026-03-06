@@ -9,6 +9,11 @@ export const RROFILES_QUERY_KEY = 'profiles';
 export const CHIMERA_SETTING_QUERY_KEY = 'settings';
 
 /**
+ * Nyanpasu system proxy query key, used by useSystemProxy hook
+ */
+export const CHIMERA_SYSTEM_PROXY_QUERY_KEY = 'system-proxy';
+
+/**
  * Clash connections query key, used by clash ws provider to mutate connections via clash connections ws api
  */
 export const CLASH_CONNECTIONS_QUERY_KEY = 'clash-connections';

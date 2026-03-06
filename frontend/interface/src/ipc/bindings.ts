@@ -17,6 +17,14 @@ export const commands = {
   async greet(name: string): Promise<string> {
     return await TAURI_INVOKE('greet', { name });
   },
+  async getSysProxy(): Promise<Result<GetSysProxyResponse, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_sys_proxy') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getProfiles(): Promise<Result<Profiles, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_profiles') };
@@ -475,6 +483,13 @@ export type ExternalControllerPortStrategy =
   | 'fixed'
   | 'random'
   | 'allow_fallback';
+export type GetSysProxyResponse = {
+  enable: boolean;
+  host: string;
+  port: number;
+  bypass: string;
+  server: string;
+};
 export type IVerge = {
   /**
    * 1. 日记轮转时间，单位：天
