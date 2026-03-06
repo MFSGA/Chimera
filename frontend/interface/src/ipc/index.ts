@@ -8,6 +8,7 @@ export type * from './bindings';
 export * from './use-settings';
 export * from './use-clash-config';
 export * from './use-clash-connections';
+export * from './use-clash-rules';
 /** 7 */
 export * from './use-proxy-mode';
 /** 8 */
