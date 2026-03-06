@@ -124,8 +124,7 @@ impl Sysopt {
                 };
 
                 let sysproxy = Sysproxy {
-                    // todo: changed to true
-                    enable: false,
+                    enable: true,
                     host: "127.0.0.1".into(),
                     port,
                     bypass: bypass.unwrap_or(DEFAULT_BYPASS.into()),
