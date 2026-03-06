@@ -4,6 +4,7 @@ import { Box, type SxProps, type Theme } from '@mui/material';
 interface Props {
   index: number;
   value: ClashRule;
+  searchText?: string;
 }
 
 const COLOR = [
@@ -24,7 +25,7 @@ const COLOR = [
   }),
 ] satisfies SxProps<Theme>[];
 
-const RuleItem = ({ index, value }: Props) => {
+const RuleItem = ({ index, value, searchText }: Props) => {
   const parseColorSx = (text: string): SxProps<Theme> => {
     const typeMap = {
       reject: ['REJECT', 'REJECT-DROP'],
@@ -47,28 +48,60 @@ const RuleItem = ({ index, value }: Props) => {
     return COLOR[sum % COLOR.length];
   };
 
+  const renderHighlightedText = (text: string) => {
+    const keyword = searchText?.trim();
+    if (!keyword) {
+      return text;
+    }
+
+    const pattern = new RegExp(
+      `(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`,
+      'ig',
+    );
+    const parts = text.split(pattern);
+
+    return parts.map((part, index) => {
+      if (part.toLowerCase() === keyword.toLowerCase()) {
+        return (
+          <mark
+            key={`${part}-${index}`}
+            className="rounded-sm bg-amber-200/70 px-0.5 text-inherit dark:bg-amber-500/30"
+          >
+            {part}
+          </mark>
+        );
+      }
+
+      return part;
+    });
+  };
+
   return (
-    <div className="flex p-2 pr-7 pl-7 select-text">
+    <div className="grid grid-cols-[5rem_10rem_minmax(0,1fr)_10rem] items-start gap-4 border-b border-black/5 px-8 py-3 select-text last:border-b-0 dark:border-white/5">
       <Box
         sx={(theme) => ({ color: theme.vars.palette.text.secondary })}
-        className="min-w-14"
+        className="text-sm tabular-nums"
       >
         {index + 1}
       </Box>
 
-      <div className="flex flex-col gap-1">
-        <Box sx={(theme) => ({ color: theme.vars.palette.text.primary })}>
-          {value.payload || '-'}
-        </Box>
-
-        <div className="flex gap-8">
-          <div className="min-w-40 text-sm">{value.type}</div>
-
-          <Box className="text-s text-sm" sx={parseColorSx(value.proxy)}>
-            {value.proxy}
-          </Box>
-        </div>
+      <div className="min-w-0 text-sm font-medium">
+        {renderHighlightedText(value.type || '-')}
       </div>
+
+      <Box
+        sx={(theme) => ({ color: theme.vars.palette.text.primary })}
+        className="min-w-0 break-all"
+      >
+        {renderHighlightedText(value.payload || '-')}
+      </Box>
+
+      <Box
+        className="min-w-0 text-sm font-medium break-all"
+        sx={parseColorSx(value.proxy)}
+      >
+        {renderHighlightedText(value.proxy)}
+      </Box>
     </div>
   );
 };

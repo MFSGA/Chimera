@@ -4,7 +4,7 @@ import { TextField, type FilledInputProps } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useDebounceEffect } from 'ahooks';
 import { useSetAtom } from 'jotai';
-import { lazy, useRef, useState, type RefObject } from 'react';
+import { lazy, Suspense, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { atomRulePage } from '@/components/rules/modules/store';
 
@@ -21,9 +21,24 @@ function RulesPage() {
 
   useDebounceEffect(
     () => {
+      const search = filterText.trim().toLowerCase();
+
       setRule({
-        data: data?.rules.filter((each) => each.payload.includes(filterText)),
+        data: data?.rules.filter((each) => {
+          if (!search) {
+            return true;
+          }
+
+          return [each.type, each.payload, each.proxy].some((value) =>
+            value?.toLowerCase().includes(search),
+          );
+        }),
         scrollRef: viewportRef as RefObject<HTMLElement>,
+        searchText: filterText,
+      });
+
+      viewportRef.current?.scrollTo({
+        top: 0,
       });
     },
     [data, viewportRef.current, filterText],
@@ -63,7 +78,9 @@ function RulesPage() {
       }
       viewportRef={viewportRef}
     >
-      <Component />
+      <Suspense fallback={null}>
+        <Component />
+      </Suspense>
     </BasePage>
   );
 }
