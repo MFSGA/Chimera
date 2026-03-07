@@ -24,8 +24,18 @@ export const LogLevel = () => {
       <Button
         size="small"
         sx={(theme) => ({
+          minWidth: 78,
+          height: 36,
+          borderRadius: 10,
           textTransform: 'none',
+          fontSize: 13,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
           backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
+          color: theme.vars.palette.text.primary,
+          '&:hover': {
+            backgroundColor: alpha(theme.vars.palette.primary.main, 0.16),
+          },
         })}
         onClick={(event) => setAnchorEl(event.currentTarget)}
       >
@@ -36,6 +46,14 @@ export const LogLevel = () => {
         anchorEl={anchorEl}
         open={Boolean(anchorEl)}
         onClose={() => setAnchorEl(null)}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 1,
+              borderRadius: 3,
+            },
+          },
+        }}
       >
         {Object.entries(mapping).map(([key, value]) => {
           return (
