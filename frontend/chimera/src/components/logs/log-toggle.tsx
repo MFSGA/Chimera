@@ -1,4 +1,5 @@
 import { useClashLogs } from '@chimera/interface';
+import { alpha } from '@chimera/ui';
 import {
   PauseCircleOutlineRounded,
   PlayCircleOutlineRounded,
@@ -21,7 +22,33 @@ export const LogToggle = () => {
 
   return (
     <Tooltip title={t('Collect Logs')}>
-      <IconButton size="small" color="inherit" onClick={handleClick}>
+      <IconButton
+        size="small"
+        color="inherit"
+        onClick={handleClick}
+        sx={(theme) => ({
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          backgroundColor: alpha(
+            status
+              ? theme.vars.palette.success.main
+              : theme.vars.palette.primary.main,
+            status ? 0.16 : 0.1,
+          ),
+          color: status
+            ? theme.vars.palette.success.main
+            : theme.vars.palette.text.primary,
+          '&:hover': {
+            backgroundColor: alpha(
+              status
+                ? theme.vars.palette.success.main
+                : theme.vars.palette.primary.main,
+              status ? 0.22 : 0.16,
+            ),
+          },
+        })}
+      >
         {status ? <PauseCircleOutlineRounded /> : <PlayCircleOutlineRounded />}
       </IconButton>
     </Tooltip>
