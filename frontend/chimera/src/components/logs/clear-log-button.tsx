@@ -18,9 +18,20 @@ export const ClearLogButton = () => {
         color="default"
         size="medium"
         onClick={handleClean}
-        sx={{ position: 'absolute', right: 24, bottom: 24 }}
+        sx={(theme) => ({
+          position: 'absolute',
+          right: 24,
+          bottom: 24,
+          boxShadow: 'none',
+          border: `1px solid ${theme.vars.palette.divider}`,
+          backgroundColor: theme.vars.palette.background.paper,
+          '&:hover': {
+            boxShadow: 'none',
+            backgroundColor: theme.vars.palette.action.hover,
+          },
+        })}
       >
-        <Close />
+        <Close className="!size-7" />
       </Fab>
     </Tooltip>
   );
