@@ -47,5 +47,6 @@
 - Use `pnpm` (not npm/yarn). Update `pnpm-lock.yaml` when deps change.
 - Keep changes scoped; avoid touching generated files unless requested.
 - Prefer workspace filters (example: `pnpm --filter=chimera-ui <script>`).
+- Treat `ref/` as excluded by default. Only read it when the user explicitly asks for alignment, migration, or comparison against `ref/`.
 - For new features, first review `https://github.com/libnyanpasu/clash-nyanpasu` and keep code as consistent as possible.
 - When debugging bugs, prioritize referencing `https://github.com/libnyanpasu/clash-nyanpasu` in local ref/
