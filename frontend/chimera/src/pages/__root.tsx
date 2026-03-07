@@ -15,9 +15,11 @@ import { UpdaterProvider } from '@/hooks/use-updater';
 import 'dayjs/locale/ru';
 import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/zh-tw';
+import { cn } from '@chimera/ui';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import PageTransition from '@/components/layout/page-transition';
 
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
@@ -87,7 +89,13 @@ export default function App() {
               <UpdaterProvider />
 
               <AppContainer>
-                <Outlet />
+                <PageTransition
+                  className={cn(
+                    'absolute inset-4 top-10',
+                    // !isDrawer && 'left-0',
+                  )}
+                />
+
                 <TanStackRouterDevtools />
               </AppContainer>
             </ThemeModeProvider>
