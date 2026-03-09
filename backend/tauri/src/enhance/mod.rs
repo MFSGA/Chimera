@@ -17,6 +17,8 @@ mod chain;
 mod field;
 /// 4
 mod script;
+/// 5
+mod tun;
 /// 2
 mod utils;
 
@@ -119,6 +121,8 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
         .for_each(|(key, value)| {
             config.insert(key.to_owned(), value.clone());
         });
+
+    config = tun::use_tun(config, enable_tun);
 
     (config, exists_keys, postprocessing_output)
 }
