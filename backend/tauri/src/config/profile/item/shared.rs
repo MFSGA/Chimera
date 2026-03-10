@@ -75,7 +75,9 @@ impl ProfileSharedBuilder {
             name: builder.name.unwrap(),
             file: builder.file.unwrap(),
             desc: builder.desc.clone().unwrap_or_default(),
-            updated: builder.updated.unwrap(),
+            updated: builder
+                .updated
+                .unwrap_or_else(|| chrono::Local::now().timestamp() as usize),
         })
     }
 }
