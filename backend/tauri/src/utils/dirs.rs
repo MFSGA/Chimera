@@ -170,3 +170,29 @@ pub fn path_to_str(path: &PathBuf) -> Result<&str> {
 pub fn storage_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join(STORAGE_DB))
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub fn check_core_permission(core: &chimera_utils::core::CoreType) -> anyhow::Result<bool> {
+    #[cfg(target_os = "macos")]
+    const ROOT_GROUP: &str = "admin";
+    #[cfg(target_os = "linux")]
+    const ROOT_GROUP: &str = "root";
+
+    use anyhow::Context;
+    use nix::unistd::{Gid, Group as NixGroup, Uid, User};
+    use std::os::unix::fs::MetadataExt;
+
+    let core_path =
+        crate::core::clash::core::find_binary_path(core).context("clash core not found")?;
+    let metadata = std::fs::metadata(&core_path).context("failed to get core metadata")?;
+    let uid = metadata.uid();
+    let gid = metadata.gid();
+    let user = User::from_uid(Uid::from_raw(uid)).ok().flatten();
+    let group = NixGroup::from_gid(Gid::from_raw(gid)).ok().flatten();
+    if let (Some(user), Some(group)) = (user, group) {
+        if user.name == "root" && group.name == ROOT_GROUP {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}

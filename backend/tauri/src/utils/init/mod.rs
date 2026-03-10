@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod logging;
+pub use logging::refresh_logger;
 
 /// Initialize all the config files
 /// before tauri setup
