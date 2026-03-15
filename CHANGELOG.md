@@ -1,3 +1,117 @@
+## [0.8.0] - 2026-03-15 13:17:59
+
+### ✨ Features
+
+- **ConnectionDetailDialog:** Add the detail dialog by @MFSGA
+
+- **CoreState:** Add a new component ServiceShortcuts by @MFSGA
+
+- **LogPage:** Optimize the log item by @MFSGA
+
+- **LogPage:** Optimize the log item by @MFSGA
+
+- **LogPage:** Support logpage by @MFSGA
+
+- **PageTransition:** Fix the x-scroll bug by @MFSGA
+
+- **ProxyShortcuts:** Support ProxyShortcuts display by @MFSGA
+
+- **Sysopt:** Reset sysopt successfully by @MFSGA
+
+- **check:** Add a new core type by @MFSGA
+
+- **connections:** Add the ClashWSProvider as the data provider 3 by @MFSGA
+
+- **connections:** Complete the front main page view 2 by @MFSGA
+
+- **connections:** Add the backend storage support 1 by @MFSGA
+
+- **interface:** Expose window state ipc bindings by @MFSGA
+
+- **profiles:** Add the runtime diff viewer 24 by @MFSGA
+
+- **profiles:** Add the runtime icon 23 by @MFSGA
+
+- **profiles:** Complete the main features of ProfileDialog for view the configuration 22 by @MFSGA
+
+- **profiles:** Add the cmd read_profile_file save_profile_file 21 by @MFSGA
+
+- **profiles:** Add the cmd update_profile 20 by @MFSGA
+
+- **rule:** Optimize rule item by @MFSGA
+
+- **rule:** Support rule page by @MFSGA
+
+- **service:** Keep with the original impl by @MFSGA
+
+- **service:** Support commands and codes support by @MFSGA
+
+- **service:** Optimize ServerManualPromptDialog by @MFSGA
+
+- **service:** Add the ServerManualPromptDialogWrapper and ServiceStatusControl by @MFSGA
+
+- **service:** Add the service frontend view by @MFSGA
+
+- **service:** Support a new binary file for service by @MFSGA
+
+- **service:** Prepare the bin file by @MFSGA
+
+- **tauri:** Add managed legacy window lifecycle by @MFSGA
+
+- **tun:** Optimize the process for tun settings by @MFSGA
+
+- **tun:** Add tun support by @MFSGA
+
+- **utils:** Add a new utils crate by @MFSGA
+
+- Support full operation of LayoutControl by @MFSGA
+
+- Optimize the deps in install by @MFSGA
+
+- Add ref project by @MFSGA
+
+- Beautify the style for grouplist by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ClashWSProvider:** Optimize the provider by @MFSGA
+
+- **Sysopt:** Sysopt initialized correctly by @MFSGA
+
+- **check:** Changed the clash-rs-alpha name by @MFSGA
+
+- **deps:** Update dependency @tauri-apps/plugin-dialog to v2.6.0 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-opener to v2.5.3 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.7 by @renovate-bot
+
+- **deps:** Update dependency i18next to v25.8.0 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.16 by @renovate-bot
+
+- **deps:** Update dependency react-i18next to v16 by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.16.1 by @renovate-bot
+
+- **import:** Solve the updated field bug when import remote file by @MFSGA
+
+- **workflow:** Update the version by @MFSGA
+
+- Add the vite-tsconfig-paths to fix vite alias error by @MFSGA
+
+### 📚 Documentation
+
+- Add project agent guidance by @MFSGA
+
+---
+
+## New Contributors
+
+- @github-actions[bot] made their first contribution
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.7.0...v0.8.0
+
 ## [0.7.0] - 2025-12-24 09:07:29
 
 ### ✨ Features
