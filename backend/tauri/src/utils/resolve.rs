@@ -4,14 +4,16 @@ use anyhow::Result;
 use semver::Version;
 use tauri::{App, AppHandle, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
+use tracing::debug;
 
 use crate::{
     config::{
         chimera::{ClashCore, IVerge, WindowState},
         core::Config,
     },
-    core::{clash::core::CoreManager, sysopt},
+    core::{clash::core::CoreManager, handle, sysopt},
     log_err,
+    utils::init,
     window::{AppWindow, WindowConfig},
 };
 
@@ -84,6 +86,14 @@ pub fn resolve_setup(app: &mut App) {
         #[cfg(target_os = "macos")]
         todo!()
     }); */
+
+    handle::Handle::global().init(app.app_handle().clone());
+    debug!("todo init handle for widget");
+    // crate::consts::setup_app_handle(app.app_handle().clone());
+
+    log_err!(init::init_resources());
+    debug!("todo for service");
+
     // 启动核心
     log::trace!("init config");
     log_err!(Config::init_config());
