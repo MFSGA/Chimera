@@ -1,3 +1,19 @@
+## [0.8.3] - 2026-03-16 15:17:29
+
+### ✨ Features
+
+- **config:** Patch config by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **config:** For IClashTemp patch_config save_config optimized to guaranted non Null by @MFSGA
+
+- **resources:** For first time load resources by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.8.2...v0.8.3
+
 ## [0.8.2] - 2026-03-16 09:08:56
 
 ---
