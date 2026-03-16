@@ -40,6 +40,10 @@ impl Handle {
         })
     }
 
+    pub fn init(&self, app_handle: AppHandle) {
+        *self.app_handle.lock() = Some(app_handle);
+    }
+
     pub fn get_window(&self) -> Option<WebviewWindow<Wry>> {
         self.app_handle
             .lock()

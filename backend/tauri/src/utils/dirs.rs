@@ -2,10 +2,11 @@ use anyhow::Result;
 use fs_err as fs;
 use nyanpasu_utils::dirs::{suggest_config_dir, suggest_data_dir};
 use once_cell::sync::Lazy;
+use tauri::{Env, utils::platform::resource_dir};
 
 use std::{borrow::Cow, path::PathBuf};
 
-use crate::log_err;
+use crate::{core::handle, log_err};
 
 pub static APP_VERSION: &str = env!("CHIMERA_VERSION");
 
@@ -195,4 +196,17 @@ pub fn check_core_permission(core: &chimera_utils::core::CoreType) -> anyhow::Re
         }
     }
     Ok(false)
+}
+
+/// get the resources dir
+pub fn app_resources_dir() -> Result<PathBuf> {
+    let handle = handle::Handle::global();
+    let app_handle = handle.app_handle.lock();
+    if let Some(app_handle) = app_handle.as_ref() {
+        let res_dir = resource_dir(app_handle.package_info(), &Env::default())
+            .map_err(|_| anyhow::anyhow!("failed to get the resource dir 1"))?
+            .join("resources");
+        return Ok(res_dir);
+    };
+    Err(anyhow::anyhow!("failed to get the resource dir 2"))
 }
