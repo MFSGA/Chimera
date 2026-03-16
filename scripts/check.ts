@@ -52,6 +52,11 @@ const tasks: {
   { name: 'clash-rs-alpha', func: () => resolve.clashRustAlpha(), retry: 5 },
   { name: 'nyanpasu-service', func: () => resolve.service(), retry: 5 },
   { name: 'chimera-service', func: () => resolve.chimeraService(), retry: 5 },
+
+  { name: 'mmdb', func: () => resolve.mmdb(), retry: 5 },
+  { name: 'geoip', func: () => resolve.geoip(), retry: 5 },
+  { name: 'geosite', func: () => resolve.geosite(), retry: 5 },
+  { name: 'wintun', func: () => resolve.wintun(), retry: 5, winOnly: true },
 ];
 
 async function runTask() {

@@ -26,6 +26,7 @@
       "icons/icon.ico"
     ],
     "createUpdaterArtifacts": true,
+    "resources": ["resources"],
     "externalBin": [
       "sidecar/mihomo",
       "sidecar/clash-rs",
