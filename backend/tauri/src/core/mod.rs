@@ -18,3 +18,5 @@ pub mod storage;
 pub mod sysopt;
 /// 9
 pub mod updater;
+
+pub use self::clash::core::*;

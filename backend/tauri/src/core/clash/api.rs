@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
 use specta::Type;
 use tauri::http::HeaderMap;
 use tracing::instrument;
@@ -221,5 +222,13 @@ pub async fn update_proxy(group: &str, name: &str) -> Result<()> {
     data.insert("name", name);
 
     let _ = perform_request((Method::PUT, path.as_str(), Data(data))).await?;
+    Ok(())
+}
+
+/// PATCH /configs
+#[instrument]
+pub async fn patch_configs(config: &Mapping) -> Result<()> {
+    let path = "/configs";
+    let _ = perform_request((Method::PATCH, path, Data(config))).await?;
     Ok(())
 }

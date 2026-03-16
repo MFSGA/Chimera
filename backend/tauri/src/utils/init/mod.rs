@@ -15,7 +15,7 @@ pub use logging::refresh_logger;
 pub fn init_config() -> Result<()> {
     // init log
     logging::init().unwrap();
-
+    tracing::info!("initializing logging config...");
     crate::log_err!(dirs::app_profiles_dir().map(|profiles_dir| {
         if !profiles_dir.exists() {
             let _ = fs::create_dir_all(&profiles_dir);

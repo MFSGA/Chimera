@@ -615,7 +615,12 @@ export type ManifestVersionLatest = {
   clash_rs_alpha: string;
   clash_premium: string;
 };
-export type PatchRuntimeConfig = { mode?: string | null };
+export type PatchRuntimeConfig = {
+  allow_lan?: boolean | null;
+  ipv6?: boolean | null;
+  log_level?: string | null;
+  mode?: string | null;
+};
 export type Profile = { type: 'remote' } & RemoteProfile;
 export type ProfileBuilder = { type: 'remote' } & RemoteProfileBuilder;
 export type Profiles = {

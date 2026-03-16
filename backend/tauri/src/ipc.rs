@@ -56,6 +56,8 @@ pub enum IpcError {
     SerdeYaml(#[from] serde_yaml::Error),
     #[error(transparent)]
     Storage(#[from] StorageOperationError),
+    #[error("{0}")]
+    Custom(String),
 }
 
 impl serde::Serialize for IpcError {
@@ -419,8 +421,21 @@ pub async fn get_service_install_prompt() -> Result<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
-    tracing::debug!("patch_clash_config: {payload:?}");
-    todo!("implement the patch_clash_config ipc command");
+    tracing::debug!("todo: set for chimera_client core patch_clash_config: {payload:?}");
+    let mapping = match serde_yaml::to_value(&payload)? {
+        serde_yaml::Value::Mapping(m) => m,
+        _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
+    };
+
+    (crate::core::clash::api::patch_configs(&mapping).await)?;
+
+    if let Err(e) = feat::patch_clash(mapping).await {
+        tracing::error!("{e}");
+        return Err(IpcError::from(e));
+    }
+
+    feat::update_proxies_buff(None);
+    Ok(())
 }
 
 #[tauri::command]
