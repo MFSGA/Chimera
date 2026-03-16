@@ -9,17 +9,37 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  windows_build:
+    name: Windows Build
+    uses: ./.github/workflows/deps-build-windows-nsis.yaml
+    with:
+      portable: false
+      nightly: false
+      # todo:
+      fixed-webview: false
+      arch: 'x86_64'
+      tag: ${{ github.event.release.tag_name }}
+    secrets: inherit
   linux_build:
     name: Linux Build
     uses: ./.github/workflows/deps-build-linux.yaml
     with:
       nightly: false
       tag: ${{ github.event.release.tag_name }}
+      arch: 'x86_64'
     secrets: inherit
+
+  upload_release_assets:
+    name: Upload Release Assets
+    # todo windows_build
+    needs: [windows_build, linux_build]
+    uses: ./.github/workflows/deps-upload-release-assets.yaml
+    with:
+      tag: ${{ github.event.release.tag_name }}
   updater:
     name: Create Updater
     uses: ./.github/workflows/deps-create-updater.yaml
     # todo windows_build
-    needs: [linux_build]
+    needs: [upload_release_assets]
     with:
       nightly: false
