@@ -1,15 +1,98 @@
 use std::borrow::Borrow;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use nyanpasu_ipc::api::status::CoreState;
+use serde_yaml::Mapping;
 use tracing::debug;
 
 use crate::{
     config::{chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder},
     core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
-    utils,
+    log_err,
+    utils::{self, help::get_clash_external_port},
 };
 use handle::Message;
+
+/// 修改clash的配置
+pub async fn patch_clash(patch: Mapping) -> Result<()> {
+    Config::clash().draft().patch_config(patch.clone());
+
+    let run = move || async move {
+        let mixed_port = patch.get("mixed-port");
+        // let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
+        if mixed_port.is_some() {
+            let changed = mixed_port.unwrap()
+                != Config::verge()
+                    .latest()
+                    .verge_mixed_port
+                    .unwrap_or(Config::clash().data().get_mixed_port());
+            // 检查端口占用
+            if changed
+                && let Some(port) = mixed_port.unwrap().as_u64()
+                && !port_scanner::local_port_available(port as u16)
+            {
+                Config::clash().discard();
+                bail!("port already in use");
+            }
+        };
+
+        // 检测 external-controller port 是否修改
+        if let Some(external_controller) = patch.get("external-controller") {
+            let external_controller = external_controller.as_str().unwrap();
+            let changed = external_controller != Config::clash().data().get_client_info().server;
+            if changed {
+                let (_, port) = external_controller.split_once(':').unwrap();
+                let port = port.parse::<u16>()?;
+                let strategy = Config::verge()
+                    .latest()
+                    .get_external_controller_port_strategy();
+                let core_state = crate::core::CoreManager::global().status().await;
+                if matches!(core_state.0.as_ref(), &CoreState::Running)
+                    && get_clash_external_port(&strategy, port).is_err()
+                {
+                    Config::clash().discard();
+                    bail!("can not select fixed: current port is not available.");
+                }
+            }
+        }
+
+        // 激活配置
+        if mixed_port.is_some()
+            || patch.get("secret").is_some()
+            || patch.get("external-controller").is_some()
+        {
+            Config::generate().await?;
+            CoreManager::global().run_core().await?;
+            handle::Handle::refresh_clash();
+        }
+
+        // 更新系统代理
+        if mixed_port.is_some() {
+            log_err!(sysopt::Sysopt::global().init_sysproxy());
+        }
+
+        if patch.get("mode").is_some() {
+            crate::feat::update_proxies_buff(None);
+            debug!("todo: systray mode changed, update proxies buff");
+            // log_err!(handle::Handle::update_systray_part());
+        }
+
+        Config::runtime().latest().patch_config(patch);
+
+        <Result<()>>::Ok(())
+    };
+    match run().await {
+        Ok(()) => {
+            Config::clash().apply();
+            Config::clash().data().save_config()?;
+            Ok(())
+        }
+        Err(err) => {
+            Config::clash().discard();
+            Err(err)
+        }
+    }
+}
 
 /// 修改verge的配置
 /// 一般都是一个个的修改
@@ -136,4 +219,24 @@ pub async fn update_profile<T: Borrow<String>>(
     let is_remote = profile_item.is_remote();
 
     todo!()
+}
+
+pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
+    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+
+    tauri::async_runtime::spawn(async move {
+        if let Some(rx) = rx
+            && let Err(e) = rx.await
+        {
+            log::error!(target: "app::clash::proxies", "update proxies buff by rx failed: {e}");
+        }
+        match ProxiesGuard::global().update().await {
+            Ok(_) => {
+                log::debug!(target: "app::clash::proxies", "update proxies buff success");
+            }
+            Err(e) => {
+                log::error!(target: "app::clash::proxies", "update proxies buff failed: {e}");
+            }
+        }
+    });
 }
