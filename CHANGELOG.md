@@ -1,3 +1,13 @@
+## [0.8.1] - 2026-03-16 03:09:16
+
+### 🐛 Bug Fixes
+
+- **resource:** For pnpm check script by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.8.0...v0.8.1
+
 ## [0.8.0] - 2026-03-15 13:17:59
 
 ### ✨ Features
