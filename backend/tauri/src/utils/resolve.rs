@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 
 use anyhow::Result;
 use semver::Version;
-use tauri::{App, AppHandle, Listener, Manager};
+use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
 use tracing::debug;
 
@@ -11,7 +11,7 @@ use crate::{
         chimera::{ClashCore, IVerge, WindowState},
         core::Config,
     },
-    core::{clash::core::CoreManager, handle, sysopt},
+    core::{clash::core::CoreManager, handle, sysopt, tray},
     log_err,
     utils::init,
     window::{AppWindow, WindowConfig},
@@ -88,7 +88,7 @@ pub fn resolve_setup(app: &mut App) {
     }); */
 
     handle::Handle::global().init(app.app_handle().clone());
-    debug!("todo init handle for widget");
+    debug!("todo init handle for widget not tray");
     // crate::consts::setup_app_handle(app.app_handle().clone());
 
     log_err!(init::init_resources());
@@ -113,6 +113,22 @@ pub fn resolve_setup(app: &mut App) {
     } */
 
     log_err!(sysopt::Sysopt::global().init_sysproxy());
+
+    #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+    {
+        let app_handle = app.app_handle().clone();
+        app.listen("update_systray", move |_| {
+            let app_handle_clone = app_handle.clone();
+            log_err!(app_handle.run_on_main_thread(move || {
+                log_err!(
+                    tray::Tray::update_systray(&app_handle_clone),
+                    "failed to update systray"
+                );
+            }));
+        });
+        log_err!(app.emit("update_systray", ()));
+    }
+
     create_window(app.app_handle());
 
     crate::core::storage::register_web_storage_listener(app.app_handle());

@@ -1,4 +1,4 @@
-// use super::tray::Tray;
+use super::tray::Tray;
 use crate::log_err;
 use anyhow::{Result, bail};
 use once_cell::sync::OnceCell;
@@ -61,5 +61,29 @@ impl Handle {
         if let Some(window) = Self::global().get_window() {
             log_err!(window.emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
         }
+    }
+
+    pub fn update_systray() -> Result<()> {
+        Handle::emit("update_systray", ())?;
+        Ok(())
+    }
+
+    pub fn update_systray_part() -> Result<()> {
+        let app_handle = Self::global().app_handle.lock();
+        if app_handle.is_none() {
+            bail!("update_systray unhandled error");
+        }
+        Tray::update_part(app_handle.as_ref().unwrap())?;
+        Ok(())
+    }
+
+    pub fn emit<S: Serialize + Clone>(event: &str, payload: S) -> Result<()> {
+        let app_handle = Self::global().app_handle.lock();
+        if app_handle.is_none() {
+            bail!("app_handle is not exist");
+        }
+
+        app_handle.as_ref().unwrap().emit(event, payload)?;
+        Ok(())
     }
 }
