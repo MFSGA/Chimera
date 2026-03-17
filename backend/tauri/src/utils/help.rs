@@ -203,3 +203,8 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();
 }
+
+#[instrument(skip(app_handle))]
+pub fn quit_application(app_handle: &AppHandle) {
+    app_handle.exit(0);
+}
