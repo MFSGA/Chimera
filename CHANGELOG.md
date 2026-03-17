@@ -1,3 +1,13 @@
+## [0.8.4] - 2026-03-17 01:29:50
+
+### 🐛 Bug Fixes
+
+- Add the linux platform support by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.8.3...v0.8.4
+
 ## [0.8.3] - 2026-03-16 15:17:29
 
 ### ✨ Features
