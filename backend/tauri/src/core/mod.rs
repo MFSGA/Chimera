@@ -16,6 +16,8 @@ pub mod state;
 pub mod storage;
 /// 4
 pub mod sysopt;
+/// tray
+pub mod tray;
 /// 9
 pub mod updater;
 

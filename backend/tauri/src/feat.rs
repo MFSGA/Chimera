@@ -73,8 +73,8 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
 
         if patch.get("mode").is_some() {
             crate::feat::update_proxies_buff(None);
-            debug!("todo: systray mode changed, update proxies buff");
-            // log_err!(handle::Handle::update_systray_part());
+            debug!("systray mode changed, update proxies buff");
+            log_err!(handle::Handle::update_systray_part());
         }
 
         Config::runtime().latest().patch_config(patch);
@@ -114,8 +114,6 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
     // let language = patch.language;
     let log_level = patch.app_log_level;
     let log_max_files = patch.max_log_files;
-    // let enable_tray_selector = patch.clash_tray_selector;
-    // let enable_tray_text = patch.enable_tray_text;
     // let network_statistic_widget = patch.network_statistic_widget;
     let res = || async move {
         let service_mode = patch.enable_service_mode;
@@ -171,9 +169,9 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
             utils::init::refresh_logger((log_level, log_max_files))?;
         }
 
-        /* if enable_tray_selector.is_some() {
-            handle::Handle::update_systray()?;
-        } */
+        if system_proxy.or(tun_mode).is_some() {
+            handle::Handle::update_systray_part()?;
+        }
 
         debug!("todo: handle other fields");
 
