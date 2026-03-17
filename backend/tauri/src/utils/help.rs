@@ -11,7 +11,7 @@ use serde_yaml::{Mapping, Value};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 use crate::{
     config::chimera::ExternalControllerPortStrategy, core::clash::core::CoreManager, utils::resolve,
@@ -190,6 +190,7 @@ pub fn get_clash_external_port(
 
 #[instrument(skip(app_handle))]
 pub fn cleanup_processes(app_handle: &AppHandle) {
+    debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
     resolve::resolve_reset();
     /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
