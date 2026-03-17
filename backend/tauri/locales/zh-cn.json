@@ -1,0 +1,22 @@
+{
+  "_version": 1,
+  "tray": {
+    "dashboard": "打开",
+    "direct_mode": "直连模式",
+    "global_mode": "全局模式",
+    "rule_mode": "规则模式",
+    "system_proxy": "系统代理",
+    "tun_mode": "TUN 模式",
+    "quit": "退出",
+    "open_dir": {
+      "app_config_dir": "打开配置目录",
+      "app_data_dir": "打开数据目录",
+      "core_dir": "打开内核目录",
+      "log_dir": "打开日志目录"
+    },
+    "more": {
+      "restart_clash": "重启内核",
+      "restart_app": "重启应用"
+    }
+  }
+}

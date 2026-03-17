@@ -1,0 +1,22 @@
+{
+  "_version": 1,
+  "tray": {
+    "dashboard": "Open",
+    "direct_mode": "Direct Mode",
+    "global_mode": "Global Mode",
+    "rule_mode": "Rule Mode",
+    "system_proxy": "System Proxy",
+    "tun_mode": "TUN Mode",
+    "quit": "Quit",
+    "open_dir": {
+      "app_config_dir": "Open Config Dir",
+      "app_data_dir": "Open Data Dir",
+      "core_dir": "Open Core Dir",
+      "log_dir": "Open Logs Dir"
+    },
+    "more": {
+      "restart_clash": "Restart Core",
+      "restart_app": "Restart App"
+    }
+  }
+}

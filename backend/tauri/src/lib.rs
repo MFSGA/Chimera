@@ -1,6 +1,9 @@
 use tauri_specta::collect_commands;
 
-use crate::utils::{init, resolve};
+use crate::{
+    config::core::Config,
+    utils::{init, resolve},
+};
 
 mod ipc;
 
@@ -20,6 +23,7 @@ mod shutdown_hook;
 mod utils;
 /// 9
 mod window;
+rust_i18n::i18n!("./locales");
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -31,6 +35,9 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> std::io::Result<()> {
     crate::log_err!(init::init_config());
+    if let Some(lang) = Config::verge().latest().language.clone() {
+        rust_i18n::set_locale(lang.to_lowercase().as_str());
+    }
 
     // setup specta
     let specta_builder = tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
@@ -149,7 +156,7 @@ pub fn run() -> std::io::Result<()> {
             utils::help::cleanup_processes(app_handle);
         }
         e => {
-            // log::debug!("Tauri Event: {:?}", e);
+            tracing::debug!("Tauri Event: {:?}", e);
         }
     });
 

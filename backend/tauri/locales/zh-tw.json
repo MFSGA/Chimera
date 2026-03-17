@@ -1,0 +1,22 @@
+{
+  "_version": 1,
+  "tray": {
+    "dashboard": "打開",
+    "direct_mode": "直連模式",
+    "global_mode": "全域模式",
+    "rule_mode": "規則模式",
+    "system_proxy": "系統代理",
+    "tun_mode": "TUN 模式",
+    "quit": "退出",
+    "open_dir": {
+      "app_config_dir": "打開配置目錄",
+      "app_data_dir": "打開數據目錄",
+      "core_dir": "打開核心目錄",
+      "log_dir": "打開日誌目錄"
+    },
+    "more": {
+      "restart_clash": "重啟核心",
+      "restart_app": "重啟應用"
+    }
+  }
+}
