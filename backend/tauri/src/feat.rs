@@ -111,7 +111,7 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
 
     let system_proxy = patch.enable_system_proxy;
     let proxy_bypass = patch.system_proxy_bypass;
-    // let language = patch.language;
+    let language = patch.language.clone();
     let log_level = patch.app_log_level;
     let log_max_files = patch.max_log_files;
     // let network_statistic_widget = patch.network_statistic_widget;
@@ -236,5 +236,60 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
                 log::error!(target: "app::clash::proxies", "update proxies buff failed: {e}");
             }
         }
+    });
+}
+
+pub fn change_clash_mode(mode: String) {
+    tauri::async_runtime::spawn(async move {
+        let mut patch = Mapping::new();
+        patch.insert("mode".into(), mode.into());
+
+        if let Err(err) = crate::core::clash::api::patch_configs(&patch).await {
+            log::error!(target: "app", "failed to patch clash mode api: {err:?}");
+            return;
+        }
+
+        if let Err(err) = patch_clash(patch).await {
+            log::error!(target: "app", "failed to patch clash mode state: {err:?}");
+        }
+    });
+}
+
+pub fn toggle_system_proxy() {
+    let enabled = Config::verge()
+        .latest()
+        .enable_system_proxy
+        .unwrap_or(false);
+    tauri::async_runtime::spawn(async move {
+        let patch = IVerge {
+            enable_system_proxy: Some(!enabled),
+            ..IVerge::default()
+        };
+        if let Err(err) = patch_verge(patch).await {
+            log::error!(target: "app", "failed to toggle system proxy: {err:?}");
+        }
+    });
+}
+
+pub fn toggle_tun_mode() {
+    let enabled = Config::verge().latest().enable_tun_mode.unwrap_or(false);
+    tauri::async_runtime::spawn(async move {
+        let patch = IVerge {
+            enable_tun_mode: Some(!enabled),
+            ..IVerge::default()
+        };
+        if let Err(err) = patch_verge(patch).await {
+            log::error!(target: "app", "failed to toggle tun mode: {err:?}");
+        }
+    });
+}
+
+pub fn restart_clash_core() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = CoreManager::global().run_core().await {
+            log::error!(target: "app", "failed to restart clash core: {err:?}");
+            return;
+        }
+        log_err!(handle::Handle::update_systray_part());
     });
 }
