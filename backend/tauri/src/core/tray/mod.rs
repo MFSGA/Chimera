@@ -10,7 +10,7 @@ use tauri::{
 use crate::{
     config::core::Config,
     feat,
-    utils::{dirs, open, resolve},
+    utils::{dirs, help, open, resolve},
 };
 
 const TRAY_ID: &str = "main-tray";
@@ -179,8 +179,7 @@ impl Tray {
                 }
             }
             "quit" => {
-                crate::utils::help::cleanup_processes(app_handle);
-                app_handle.exit(0);
+                help::quit_application(app_handle);
             }
             _ => {}
         }
