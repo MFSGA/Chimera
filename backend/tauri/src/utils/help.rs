@@ -8,7 +8,7 @@ use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml::{Mapping, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, process::current_binary};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
@@ -207,4 +207,24 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
 #[instrument(skip(app_handle))]
 pub fn quit_application(app_handle: &AppHandle) {
     app_handle.exit(0);
+}
+
+#[instrument(skip(app_handle))]
+pub fn restart_application(app_handle: &AppHandle) {
+    cleanup_processes(app_handle);
+    let env = app_handle.env();
+    let path = current_binary(&env).unwrap();
+    let arg = std::env::args().collect::<Vec<String>>();
+    let mut args = vec!["launch".to_string(), "--".to_string()];
+    // filter out the first arg
+    if arg.len() > 1 {
+        args.extend(arg.iter().skip(1).cloned());
+    }
+    tracing::info!("restart app: {:#?} with args: {:#?}", path, args);
+    std::process::Command::new(path)
+        .args(args)
+        .spawn()
+        .expect("application failed to start");
+    app_handle.exit(0);
+    std::process::exit(0);
 }

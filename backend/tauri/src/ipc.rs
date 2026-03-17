@@ -635,3 +635,45 @@ pub fn get_runtime_yaml() -> Result<String> {
         }))?;
     Ok(mapping)
 }
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_app_config_dir() -> Result<()> {
+    let config_dir = (dirs::app_config_dir())?;
+    (crate::utils::open::that(config_dir))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_app_data_dir() -> Result<()> {
+    let data_dir = (dirs::app_data_dir())?;
+    (crate::utils::open::that(data_dir))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_core_dir() -> Result<()> {
+    let core_dir = (tauri::utils::platform::current_exe())?;
+    let core_dir = match core_dir
+        .parent()
+        .ok_or("failed to get core dir".to_string())
+    {
+        Ok(target) => target,
+        Err(err) => {
+            tracing::error!("{err}");
+            todo!()
+        }
+    };
+    (crate::utils::open::that(core_dir))?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn open_logs_dir() -> Result<()> {
+    let log_dir = (dirs::app_logs_dir())?;
+    (crate::utils::open::that(log_dir))?;
+    Ok(())
+}

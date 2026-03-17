@@ -9,8 +9,8 @@ use tauri::{
 
 use crate::{
     config::core::Config,
-    feat,
-    utils::{dirs, help, open, resolve},
+    feat, ipc,
+    utils::{help, resolve},
 };
 
 const TRAY_ID: &str = "main-tray";
@@ -139,45 +139,12 @@ impl Tray {
             "direct_mode" => feat::change_clash_mode("direct".to_string()),
             "system_proxy" => feat::toggle_system_proxy(),
             "tun_mode" => feat::toggle_tun_mode(),
+            "open_app_config_dir" => crate::log_err!(ipc::open_app_config_dir()),
+            "open_app_data_dir" => crate::log_err!(ipc::open_app_data_dir()),
+            "open_core_dir" => crate::log_err!(ipc::open_core_dir()),
+            "open_logs_dir" => crate::log_err!(ipc::open_logs_dir()),
             "restart_clash" => feat::restart_clash_core(),
-            "restart_app" => {
-                let app_handle = app_handle.clone();
-                tauri::async_runtime::spawn(async move {
-                    match std::env::current_exe() {
-                        Ok(exe) => {
-                            if let Err(err) = std::process::Command::new(exe).spawn() {
-                                log::error!(target: "app", "failed to spawn app for restart: {err:?}");
-                                return;
-                            }
-                            crate::utils::help::cleanup_processes(&app_handle);
-                            app_handle.exit(0);
-                        }
-                        Err(err) => {
-                            log::error!(target: "app", "failed to resolve current exe: {err:?}");
-                        }
-                    }
-                });
-            }
-            "open_app_config_dir" => {
-                if let Ok(path) = dirs::app_config_dir() {
-                    let _ = open::that(path.to_string_lossy().to_string());
-                }
-            }
-            "open_app_data_dir" => {
-                if let Ok(path) = dirs::app_data_dir() {
-                    let _ = open::that(path.to_string_lossy().to_string());
-                }
-            }
-            "open_core_dir" => {
-                if let Ok(path) = dirs::app_install_dir() {
-                    let _ = open::that(path.to_string_lossy().to_string());
-                }
-            }
-            "open_logs_dir" => {
-                if let Ok(path) = dirs::app_logs_dir() {
-                    let _ = open::that(path.to_string_lossy().to_string());
-                }
-            }
+            "restart_app" => help::restart_application(app_handle),
             "quit" => {
                 help::quit_application(app_handle);
             }
