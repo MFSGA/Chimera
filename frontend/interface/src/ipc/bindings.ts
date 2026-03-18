@@ -224,6 +224,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async invokeUwpTool(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('invoke_uwp_tool') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('check_update') };
@@ -592,6 +600,11 @@ export type IVerge = {
    * When true, opens legacy window; when false, opens new main window
    */
   use_legacy_ui: boolean | null;
+  /**
+   * Tun 堆栈选择
+   * TODO: 弃用此字段，转移到 clash config 里
+   */
+  tun_stack: TunStack | null;
 };
 export type JsonValue =
   | null
@@ -839,6 +852,7 @@ export type SubscriptionInfo = {
   total: number;
   expire: number;
 };
+export type TunStack = 'system' | 'gvisor' | 'mixed';
 export type UpdateWrapper = {
   rid: number;
   available: boolean;
