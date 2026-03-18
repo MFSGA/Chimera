@@ -1,6 +1,10 @@
 import os from 'node:os';
+import path from 'node:path';
+import { ensureDir, exists } from 'fs-extra';
 import { archCheck } from './utils/arch-check';
 import { SIDECAR_HOST } from './utils/consts';
+import { downloadFile } from './utils/download';
+import { TAURI_APP_DIR } from './utils/env';
 import { colorize, consola } from './utils/logger';
 import { Resolve } from './utils/resolve';
 
@@ -57,6 +61,20 @@ const tasks: {
   { name: 'geoip', func: () => resolve.geoip(), retry: 5 },
   { name: 'geosite', func: () => resolve.geosite(), retry: 5 },
   { name: 'wintun', func: () => resolve.wintun(), retry: 5, winOnly: true },
+  {
+    name: 'enableLoopback',
+    func: () =>
+      resolveResource(
+        {
+          file: 'enableLoopback.exe',
+          downloadURL:
+            'https://github.com/Kuingsmile/uwp-tool/releases/download/latest/enableLoopback.exe',
+        },
+        { force: FORCE },
+      ),
+    retry: 5,
+    winOnly: true,
+  },
 ];
 
 async function runTask() {
@@ -107,3 +125,21 @@ Promise.all(jobs).then(() => {
     consola.log(`    ${text}`);
   });
 });
+
+// === Resource Resolution ===
+
+async function resolveResource(
+  binInfo: { file: string; downloadURL: string },
+  options?: { force?: boolean },
+): Promise<void> {
+  const { file, downloadURL } = binInfo;
+  const resDir = path.join(TAURI_APP_DIR, 'resources');
+  const targetPath = path.join(resDir, file);
+
+  if (!options?.force && (await exists(targetPath))) return;
+
+  await ensureDir(resDir);
+  await downloadFile(downloadURL, targetPath);
+
+  consola.success(colorize`resolve {green ${file}} finished`);
+}
