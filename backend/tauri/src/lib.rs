@@ -65,6 +65,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::change_clash_core,
         ipc::get_runtime_yaml,
         ipc::get_core_status,
+        ipc::uwp::invoke_uwp_tool,
         // updater layer
         ipc::check_update,
         // utils
