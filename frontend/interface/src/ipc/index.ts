@@ -25,3 +25,6 @@ export * from './use-runtime-profile';
 
 export * from './use-system-service';
 export * from './use-system-proxy';
+
+// manually added
+export const openUWPTool = commands.invokeUwpTool

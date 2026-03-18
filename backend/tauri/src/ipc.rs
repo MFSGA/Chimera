@@ -677,3 +677,16 @@ pub fn open_logs_dir() -> Result<()> {
     (crate::utils::open::that(log_dir))?;
     Ok(())
 }
+
+#[cfg(windows)]
+pub mod uwp {
+    use super::Result;
+    use crate::core::win_uwp;
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn invoke_uwp_tool() -> Result {
+        (win_uwp::invoke_uwptools().await)?;
+        Ok(())
+    }
+}
