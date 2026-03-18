@@ -1,6 +1,9 @@
 use serde_yaml::{Mapping, Value};
 
-use crate::config::{chimera::ClashCore, core::Config};
+use crate::config::{
+    chimera::{ClashCore, TunStack},
+    core::Config,
+};
 
 macro_rules! revise {
     ($map: expr, $key: expr, $val: expr) => {
@@ -27,8 +30,8 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
         return config;
     }
 
-    let mut tun_val = tun_val.map_or(Mapping::new(), |value| {
-        value.as_mapping().cloned().unwrap_or(Mapping::new())
+    let mut tun_val = tun_val.map_or(Mapping::new(), |val| {
+        val.as_mapping().cloned().unwrap_or(Mapping::new())
     });
 
     revise!(tun_val, "enable", enable);
@@ -40,12 +43,25 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
                 .as_ref()
                 .unwrap_or(&ClashCore::default())
         };
-
-        if matches!(core, ClashCore::ClashRs | ClashCore::ChimeraClient) {
+        if matches!(
+            core,
+            // todo: solve the remote problem.
+            ClashCore::ClashRs | ClashCore::ChimeraClient | ClashCore::ClashRsAlpha
+        ) {
             append!(tun_val, "device-id", "dev://utun1989");
             append!(tun_val, "auto-route", true);
         } else {
-            append!(tun_val, "stack", "gvisor");
+            let mut tun_stack = {
+                *Config::verge()
+                    .latest()
+                    .tun_stack
+                    .as_ref()
+                    .unwrap_or(&TunStack::default())
+            };
+            if core == ClashCore::ClashPremium && tun_stack == TunStack::Mixed {
+                tun_stack = TunStack::Gvisor;
+            }
+            append!(tun_val, "stack", AsRef::<str>::as_ref(&tun_stack));
             append!(tun_val, "dns-hijack", vec!["any:53"]);
             append!(tun_val, "auto-route", true);
             append!(tun_val, "auto-detect-interface", true);

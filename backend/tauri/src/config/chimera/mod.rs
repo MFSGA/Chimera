@@ -141,6 +141,9 @@ pub struct IVerge {
     /// 21. Use legacy UI (original UI at "/" route)
     /// When true, opens legacy window; when false, opens new main window
     pub use_legacy_ui: Option<bool>,
+    /// Tun 堆栈选择
+    /// TODO: 弃用此字段，转移到 clash config 里
+    pub tun_stack: Option<TunStack>,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
@@ -227,4 +230,23 @@ pub enum BreakWhenProxyChange {
     None,
     Chain,
     All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TunStack {
+    System,
+    #[default]
+    Gvisor,
+    Mixed,
+}
+
+impl AsRef<str> for TunStack {
+    fn as_ref(&self) -> &str {
+        match self {
+            TunStack::System => "system",
+            TunStack::Gvisor => "gvisor",
+            TunStack::Mixed => "mixed",
+        }
+    }
 }

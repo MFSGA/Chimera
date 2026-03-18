@@ -2,6 +2,7 @@ import Masonry from '@mui/lab/Masonry';
 import { useIsAppImage } from '@/hooks/use-consts';
 import SettingChimerauUI from './setting-chimera-ui';
 import SettingNyanpasuVersion from './setting-chimera-version';
+import { SettingClashBase } from './setting-clash-base';
 import SettingClashCore from './setting-clash-core';
 import SettingSystemProxy from './setting-system-proxy';
 import SettingSystemService from './setting-system-service';
@@ -26,6 +27,8 @@ export const SettingPage = () => {
       <SettingSystemProxy />
       {/* 3 */}
       <SettingChimerauUI />
+      {/* 6 */}
+      <SettingClashBase />
       {/* 4 */}
       <SettingClashCore />
       {/* 5 */}

@@ -22,3 +22,6 @@ pub mod tray;
 pub mod updater;
 
 pub use self::clash::core::*;
+
+#[cfg(windows)]
+pub mod win_uwp;
