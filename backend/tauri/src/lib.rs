@@ -81,6 +81,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::update_core,
         ipc::restart_sidecar,
         ipc::fetch_latest_core_versions,
+        ipc::inspect_updater,
         // storage
         ipc::get_storage_item,
         ipc::set_storage_item,

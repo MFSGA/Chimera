@@ -27,7 +27,7 @@ use crate::{
         clash::core::{CoreManager, RunType},
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
-        updater::ManifestVersionLatest,
+        updater::{self, ManifestVersionLatest},
     },
     feat,
     utils::{dirs, help, resolve},
@@ -510,8 +510,12 @@ pub async fn get_core_version(
 #[tauri::command]
 #[specta::specta]
 pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
-    log::warn!("update_core: {core_type:?}");
-    todo!()
+    let event_id = updater::UpdaterManager::global()
+        .write()
+        .await
+        .update_core(&core_type)
+        .await?;
+    Ok(event_id)
 }
 
 #[tauri::command]
@@ -533,7 +537,21 @@ pub async fn restart_sidecar() -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
-    todo!()
+    let mut updater = updater::UpdaterManager::global().write().await; // It is intended to block here
+    (updater.fetch_latest().await)?;
+    // TODO: result key should be kebab-case
+    Ok(updater.get_latest_versions())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummary> {
+    let updater = updater::UpdaterManager::global()
+        .read()
+        .await
+        .inspect_updater(updater_id)
+        .ok_or_else(|| anyhow!("updater not found"))?;
+    Ok(updater)
 }
 
 #[tauri::command]
