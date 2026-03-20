@@ -345,6 +345,19 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async inspectUpdater(
+    updaterId: number,
+  ): Promise<Result<UpdaterSummary, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('inspect_updater', { updaterId }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getStorageItem(key: string): Promise<Result<string | null, string>> {
     try {
       return {
@@ -449,6 +462,14 @@ export const commands = {
 /** user-defined types **/
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
+export type ChunkStatus = {
+  state: ChunkThreadState;
+  start: number;
+  end: number;
+  downloaded: number;
+  speed: number;
+};
+export type ChunkThreadState = 'idle' | 'downloading' | 'finished';
 export type ClashCore =
   | 'clash'
   | 'clash-rs'
@@ -487,6 +508,21 @@ export type CoreInfos = {
 };
 export type CoreState = 'Running' | { Stopped: string | null };
 export type CoreType = { clash: ClashCoreType } | 'singbox';
+export type DownloadStatus = {
+  state: DownloaderState;
+  downloaded: number;
+  total: number;
+  speed: number;
+  chunks: ChunkStatus[];
+  now: number;
+};
+export type DownloaderState =
+  | 'idle'
+  | 'downloading'
+  | 'waiting_for_merge'
+  | 'merging'
+  | { failed: string }
+  | 'finished';
 export type ExternalControllerPortStrategy =
   | 'fixed'
   | 'random'
@@ -861,6 +897,19 @@ export type UpdateWrapper = {
   date: string | null;
   body: string | null;
   raw_json: JsonValue;
+};
+export type UpdaterState =
+  | 'idle'
+  | 'downloading'
+  | 'decompressing'
+  | 'replacing'
+  | 'restarting'
+  | 'done'
+  | { failed: string };
+export type UpdaterSummary = {
+  id: number;
+  state: UpdaterState;
+  downloader: DownloadStatus;
 };
 export type WindowState = {
   width: number;

@@ -1,7 +1,11 @@
 /// 7
+pub mod candy;
+/// 8
 pub mod config;
-/// 2
+/// 9
 pub mod dirs;
+/// 2
+pub mod downloader;
 /// 1
 pub mod help;
 /// 5
