@@ -708,3 +708,14 @@ pub mod uwp {
         Ok(())
     }
 }
+
+#[cfg(not(windows))]
+pub mod uwp {
+    use super::*;
+
+    #[tauri::command]
+    #[specta::specta]
+    pub async fn invoke_uwp_tool() -> Result {
+        Ok(())
+    }
+}
