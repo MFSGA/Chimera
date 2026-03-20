@@ -228,6 +228,7 @@ impl Instance {
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<()>>(1); // use mpsc channel just to avoid type moved error, though it never fails
                 let stated_changed_at = stated_changed_at.clone();
                 let kill_flag = kill_flag.clone();
+                tracing::trace!("todo: instance start and may use admin performs better.");
                 // This block below is to handle the stdio from the core process
                 tokio::spawn(async move {
                     match instance.run().await {
