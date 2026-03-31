@@ -247,7 +247,9 @@ impl Updater {
                     }
                     #[cfg(not(target_os = "windows"))]
                     {
-                        todo!()
+                        RunasCommand::new("cp")
+                            .args(&["-f", tmp_core_path.to_str().unwrap(), &target_core_str])
+                            .status()
                     }
                 })
                 .await??;
