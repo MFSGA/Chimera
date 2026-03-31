@@ -49,7 +49,9 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             ClashCore::ClashRs | ClashCore::ChimeraClient | ClashCore::ClashRsAlpha
         ) {
             append!(tun_val, "device-id", "dev://utun1989");
-            append!(tun_val, "auto-route", true);
+            append!(tun_val, "route-all", true);
+            append!(tun_val, "dns-hijack", true);
+            append!(tun_val, "gateway", "198.18.0.1/16");
         } else {
             let mut tun_stack = {
                 *Config::verge()
