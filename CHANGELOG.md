@@ -1,3 +1,35 @@
+## [0.9.0] - 2026-04-01 02:23:37
+
+### ✨ Features
+
+- **check:** Prepare the resources by @MFSGA
+
+- **replace_core:** For the later update in ubuntu by @MFSGA
+
+- **setting:** Support base by @MFSGA
+
+- **tray:** Refactor the menu logic by @MFSGA
+
+- **tray:** Optimize the exit process by @MFSGA
+
+- **tray:** Support i18n by @MFSGA
+
+- **tray:** Support basic tray operation by @MFSGA
+
+- **tun:** Adapter for chimera_client tun conf by @MFSGA
+
+- **update:** Support update by @MFSGA
+
+### 🐛 Bug Fixes
+
+- Solve the update error by @MFSGA
+
+- Solve the comiple error by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.8.4...v0.9.0
+
 ## [0.8.4] - 2026-03-17 01:29:50
 
 ### 🐛 Bug Fixes
