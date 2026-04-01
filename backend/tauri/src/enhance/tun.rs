@@ -93,7 +93,17 @@ fn use_dns_for_tun(mut config: Mapping) -> Mapping {
     append!(
         dns_val,
         "nameserver",
-        vec!["114.114.114.114", "223.5.5.5", "8.8.8.8"]
+        vec![
+            "https://dns.alidns.com/dns-query",
+            "114.114.114.114",
+            "223.5.5.5",
+            "8.8.8.8"
+        ]
+    );
+    append!(
+        dns_val,
+        "default-nameserver",
+        vec!["114.114.114.114", "1.1.1.1", "8.8.8.8"]
     );
     append!(dns_val, "fallback", vec![] as Vec<&str>);
 
