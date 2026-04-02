@@ -13,10 +13,14 @@ import {
   Tooltip,
 } from '@mui/material';
 // import { readText } from '@tauri-apps/plugin-clipboard-manager';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export const QuickImport = () => {
+export interface QuickImportProps {
+  defaultUrl?: string | null;
+}
+
+export const QuickImport = ({ defaultUrl }: QuickImportProps) => {
   const { t } = useTranslation();
 
   const [url, setUrl] = useState('');
@@ -24,6 +28,10 @@ export const QuickImport = () => {
   const [loading, setLoading] = useState(false);
 
   const { create } = useProfile();
+
+  useEffect(() => {
+    setUrl(defaultUrl ?? '');
+  }, [defaultUrl]);
 
   const onCopyLink = async () => {
     const text = 'todo';
