@@ -10,6 +10,7 @@ import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
 import LocalesProvider from '@/components/app/locales-provider';
 import MutationProvider from '@/components/layout/mutation-provider';
+import NoticeProvider from '@/components/layout/notice-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
 import { useNyanpasuStorageSubscribers } from '@/hooks/use-store';
@@ -115,6 +116,7 @@ export default function App() {
               <CssBaseline />
               <LocalesProvider />
               <MutationProvider>
+                <NoticeProvider />
                 <UpdaterDialog />
                 <UpdaterProvider />
 
