@@ -1,3 +1,6 @@
+use tauri::Emitter;
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_specta::collect_commands;
 
 use crate::{
@@ -133,7 +136,17 @@ pub fn run() -> std::io::Result<()> {
     }
 
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            resolve::create_window(app);
+        }));
+        builder = builder.plugin(tauri_plugin_deep_link::init());
+    }
+
+    builder = builder
         .invoke_handler(specta_builder.invoke_handler())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -146,6 +159,44 @@ pub fn run() -> std::io::Result<()> {
             specta_builder.mount_events(app);
 
             resolve::resolve_setup(app);
+
+            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            app.deep_link().register_all()?;
+
+            #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+            {
+                let app_handle = app.handle().clone();
+                let on_open_url_handle = app_handle.clone();
+
+                app.deep_link().on_open_url(move |event| {
+                    let Some(url) = event.urls().first().map(ToString::to_string) else {
+                        return;
+                    };
+
+                    resolve::create_window(&on_open_url_handle);
+
+                    if !resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
+                        log::warn!(target: "app", "frontend did not become ready before delivering scheme request");
+                        return;
+                    }
+
+                    if let Err(error) = on_open_url_handle.emit("scheme-request-received", url.clone()) {
+                        log::error!(target: "app", "failed to emit scheme request {url}: {error:?}");
+                    }
+                });
+
+                if let Some(url) = app
+                    .deep_link()
+                    .get_current()?
+                    .and_then(|urls| urls.first().map(ToString::to_string))
+                {
+                    if resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
+                        app_handle.emit("scheme-request-received", url)?;
+                    } else {
+                        log::warn!(target: "app", "frontend did not become ready before delivering startup scheme request");
+                    }
+                }
+            }
 
             Ok(())
         });
@@ -164,6 +215,13 @@ pub fn run() -> std::io::Result<()> {
         }
         tauri::RunEvent::ExitRequested { .. } => {
             utils::help::cleanup_processes(app_handle);
+        }
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::Destroyed,
+            ..
+        } if label == crate::consts::LEGACY_WINDOW_LABEL || label == "main" => {
+            resolve::mark_frontend_unmounted();
         }
         e => {
             // tracing::debug!("Tauri Event: {:?}", e);
