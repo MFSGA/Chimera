@@ -226,6 +226,7 @@
   "Default Latency Test": "默认测试链接",
   "Error": "错误",
   "Successful": "成功",
+  "Refresh Clash Config": "刷新 Clash 配置",
   "Occupied": "被占用",
   "Disabled": "已禁用",
   "Providers": "资源",
