@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use semver::Version;
@@ -19,6 +22,8 @@ use crate::{
 
 /// Legacy window implementation (original UI)
 struct LegacyWindow;
+
+static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
 
 impl AppWindow for LegacyWindow {
     fn label(&self) -> &str {
@@ -60,6 +65,24 @@ pub fn create_legacy_window(app_handle: &AppHandle) {
     log_err!(LegacyWindow.create(app_handle));
 }
 
+pub fn mark_frontend_unmounted() {
+    FRONTEND_READY.store(false, Ordering::Release);
+}
+
+pub fn wait_for_frontend_ready(timeout: Duration) -> bool {
+    let start_at = Instant::now();
+
+    while !FRONTEND_READY.load(Ordering::Acquire) {
+        if start_at.elapsed() >= timeout {
+            return false;
+        }
+
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    true
+}
+
 /// Create window based on use_legacy_ui config
 /// This is the primary function to use when opening window from tray, etc.
 #[tracing_attributes::instrument(skip(app_handle))]
@@ -80,12 +103,10 @@ pub fn save_legacy_window_state(app_handle: &AppHandle, save_to_file: bool) -> R
 
 /// handle something when start app
 pub fn resolve_setup(app: &mut App) {
-    /* app.listen("react_app_mounted", move |_| {
-        tracing::debug!("Frontend React App is mounted, reset open window counter");
-        reset_window_open_counter();
-        #[cfg(target_os = "macos")]
-        todo!()
-    }); */
+    app.listen("react_app_mounted", move |_| {
+        tracing::debug!("frontend react app mounted");
+        FRONTEND_READY.store(true, Ordering::Release);
+    });
 
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
