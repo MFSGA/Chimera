@@ -2,13 +2,17 @@ import { useSetting } from '@chimera/interface';
 import { BaseCard, Expand, MenuItem, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, ListItem, ListItemText } from '@mui/material';
+import { invoke } from '@tauri-apps/api/core';
+import { useMemoizedFn } from 'ahooks';
 import { useAtom } from 'jotai';
 import { MuiColorInput } from 'mui-color-input';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isHexColor } from 'validator';
 import { atomIsDrawerOnlyIcon } from '@/store';
+import { formatError } from '@/utils';
 import { languageOptions } from '@/utils/language';
+import { message } from '@/utils/notification';
 import { DEFAULT_COLOR } from '../layout/use-custom-theme';
 
 const commonSx = {
@@ -110,6 +114,28 @@ export const SettingChimerauUI = () => {
   const { t } = useTranslation();
 
   const [onlyIcon, setOnlyIcon] = useAtom(atomIsDrawerOnlyIcon);
+  const legacyMode = useSetting('use_legacy_ui');
+  const [switchingLegacy, startSwitchingLegacy] = useTransition();
+
+  const handleOpenLegacyWindow = useMemoizedFn(() => {
+    startSwitchingLegacy(async () => {
+      try {
+        if (!legacyMode.value) {
+          await legacyMode.upsert(true);
+        }
+
+        await invoke('create_legacy_window');
+      } catch (error) {
+        await message(
+          `${t('Failed to open legacy window')}: ${formatError(error)}`,
+          {
+            kind: 'error',
+            title: t('Error'),
+          },
+        );
+      }
+    });
+  });
 
   return (
     <BaseCard label={t('User Interface')}>
@@ -125,6 +151,30 @@ export const SettingChimerauUI = () => {
           checked={onlyIcon}
           onChange={() => setOnlyIcon(!onlyIcon)}
         />
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={
+              legacyMode.value
+                ? t('Open Legacy Window')
+                : t('Switch to Legacy UI')
+            }
+            secondary={
+              legacyMode.value
+                ? t('Legacy UI is already the preferred window mode')
+                : t('Set Chimera to use the legacy window mode and open it')
+            }
+          />
+
+          <Button
+            variant="contained"
+            onClick={handleOpenLegacyWindow}
+            loading={switchingLegacy}
+            disabled={switchingLegacy}
+          >
+            {legacyMode.value ? t('Open') : t('Switch')}
+          </Button>
+        </ListItem>
       </List>
     </BaseCard>
   );
