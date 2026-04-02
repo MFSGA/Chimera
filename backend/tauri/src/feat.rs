@@ -182,6 +182,7 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
         Ok(()) => {
             Config::verge().apply();
             Config::verge().data().save_file()?;
+            handle::Handle::refresh_verge();
             Ok(())
         }
         Err(err) => {
@@ -231,6 +232,7 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
         match ProxiesGuard::global().update().await {
             Ok(_) => {
                 log::debug!(target: "app::clash::proxies", "update proxies buff success");
+                handle::Handle::mutate_proxies();
             }
             Err(e) => {
                 log::error!(target: "app::clash::proxies", "update proxies buff failed: {e}");

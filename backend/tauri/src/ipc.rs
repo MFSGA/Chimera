@@ -191,6 +191,7 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
     match CoreManager::global().update_config().await {
         Ok(_) => {
             handle::Handle::refresh_clash();
+            handle::Handle::refresh_profiles();
             Config::profiles().apply();
             (Config::profiles().data().save_file())?;
 
@@ -463,6 +464,7 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
 pub async fn select_proxy(group: String, name: String) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     (ProxiesGuard::global().select_proxy(&group, &name).await)?;
+    handle::Handle::mutate_proxies();
 
     // Interrupt connections based on configuration
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change()
@@ -637,6 +639,19 @@ pub fn save_window_size_state(app_handle: AppHandle, label: String) -> Result {
         }
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn create_legacy_window(app_handle: AppHandle) -> Result<()> {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let handle_inner = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            resolve::create_legacy_window(&handle_inner);
+        });
+    });
     Ok(())
 }
 

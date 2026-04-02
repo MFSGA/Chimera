@@ -34,5 +34,5 @@ export function useNyanpasuStorageSubscribers() {
         unlisten();
       }
     };
-  });
+  }, []);
 }
