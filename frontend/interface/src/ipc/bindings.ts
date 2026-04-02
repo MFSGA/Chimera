@@ -405,6 +405,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async createLegacyWindow(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('create_legacy_window') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async statusService(): Promise<Result<StatusInfo, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('status_service') };

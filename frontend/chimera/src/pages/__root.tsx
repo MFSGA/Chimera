@@ -1,17 +1,20 @@
 import { RootProvider, useSettings } from '@chimera/interface';
 import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
-import { createRootRoute, Outlet } from '@tanstack/react-router';
+import { createRootRoute, useLocation } from '@tanstack/react-router';
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useMount } from 'ahooks';
-import { lazy, PropsWithChildren } from 'react';
+import { lazy, PropsWithChildren, useEffect } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
 import LocalesProvider from '@/components/app/locales-provider';
+import MutationProvider from '@/components/layout/mutation-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
+import { useNyanpasuStorageSubscribers } from '@/hooks/use-store';
 import { UpdaterProvider } from '@/hooks/use-updater';
+import { atomIsDrawer, memorizedRoutePathAtom } from '@/store';
 import 'dayjs/locale/ru';
 import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/zh-tw';
@@ -19,7 +22,9 @@ import { cn } from '@chimera/ui';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { useAtom, useSetAtom } from 'jotai';
 import PageTransition from '@/components/layout/page-transition';
+import { FileRouteTypes } from '@/routeTree.gen';
 
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
@@ -50,6 +55,33 @@ const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
 };
 
 export default function App() {
+  useNyanpasuStorageSubscribers();
+
+  const [isDrawer, setIsDrawer] = useAtom(atomIsDrawer);
+  const setMemorizedPath = useSetAtom(memorizedRoutePathAtom);
+  const pathname = useLocation({
+    select: (location) => location.pathname,
+  });
+
+  useEffect(() => {
+    if (pathname !== '/') {
+      setMemorizedPath(pathname as FileRouteTypes['to']);
+    }
+  }, [pathname, setMemorizedPath]);
+
+  useEffect(() => {
+    const syncDrawerState = () => {
+      setIsDrawer(window.innerWidth < 900);
+    };
+
+    syncDrawerState();
+    window.addEventListener('resize', syncDrawerState);
+
+    return () => {
+      window.removeEventListener('resize', syncDrawerState);
+    };
+  }, [setIsDrawer]);
+
   useMount(() => {
     const appWindow = getCurrentWebviewWindow();
     Promise.all([
@@ -80,24 +112,23 @@ export default function App() {
         <QueryLoaderProvider>
           <StyledEngineProvider injectFirst>
             <ThemeModeProvider>
-              {/* 4 */}
               <CssBaseline />
-              {/* 3*/}
               <LocalesProvider />
+              <MutationProvider>
+                <UpdaterDialog />
+                <UpdaterProvider />
 
-              <UpdaterDialog />
-              <UpdaterProvider />
+                <AppContainer isDrawer={isDrawer}>
+                  <PageTransition
+                    className={cn(
+                      'absolute inset-4 top-10',
+                      !isDrawer && 'left-0',
+                    )}
+                  />
 
-              <AppContainer>
-                <PageTransition
-                  className={cn(
-                    'absolute inset-4 top-10',
-                    // !isDrawer && 'left-0',
-                  )}
-                />
-
-                <TanStackRouterDevtools />
-              </AppContainer>
+                  <TanStackRouterDevtools />
+                </AppContainer>
+              </MutationProvider>
             </ThemeModeProvider>
           </StyledEngineProvider>
         </QueryLoaderProvider>
