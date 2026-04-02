@@ -52,15 +52,23 @@ impl Handle {
     }
 
     pub fn notice_message(message: &Message) {
-        if let Some(window) = Self::global().get_window() {
-            log_err!(window.emit(NOTIFY_MESSAGE_URI, message));
-        }
+        log_err!(Self::emit(NOTIFY_MESSAGE_URI, message.clone()));
     }
 
     pub fn refresh_clash() {
-        if let Some(window) = Self::global().get_window() {
-            log_err!(window.emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
-        }
+        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
+    }
+
+    pub fn refresh_verge() {
+        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::NyanpasuConfig));
+    }
+
+    pub fn refresh_profiles() {
+        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::Profiles));
+    }
+
+    pub fn mutate_proxies() {
+        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::Proxies));
     }
 
     pub fn update_systray() -> Result<()> {

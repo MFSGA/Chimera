@@ -87,6 +87,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::set_storage_item,
         ipc::remove_storage_item,
         ipc::save_window_size_state,
+        ipc::create_legacy_window,
         // service mode
         ipc::service::status_service,
         ipc::service::install_service,

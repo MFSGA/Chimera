@@ -1,4 +1,9 @@
 /**
+ * Chimera backend event name, use tauri event api to listen this event
+ */
+export const CHIMERA_BACKEND_EVENT_NAME = 'nyanpasu://mutation';
+
+/**
  * Chimera profile query key, used to fetch profiles from query
  */
 export const RROFILES_QUERY_KEY = 'profiles';
