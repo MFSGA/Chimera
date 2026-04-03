@@ -565,6 +565,69 @@ pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuil
 
 #[tauri::command]
 #[specta::specta]
+pub async fn patch_profile(uid: String, profile: ProfileBuilder) -> Result {
+    {
+        let mut profiles = Config::profiles().draft();
+        let current = profiles
+            .items
+            .iter_mut()
+            .find(|item| item.uid() == uid)
+            .ok_or_else(|| anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+
+        match (current, profile) {
+            (
+                crate::config::profile::item::Profile::Remote(item),
+                ProfileBuilder::Remote(builder),
+            ) => {
+                builder
+                    .patch_profile(item)
+                    .context("failed to patch remote profile")?;
+            }
+        }
+    }
+
+    match CoreManager::global().update_config().await {
+        Ok(_) => {
+            handle::Handle::refresh_clash();
+            handle::Handle::refresh_profiles();
+            Config::profiles().apply();
+            Config::profiles().data().save_file()?;
+            Ok(())
+        }
+        Err(err) => {
+            Config::profiles().discard();
+            Err(IpcError::from(err))
+        }
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn delete_profile(uid: String) -> Result {
+    let should_update = {
+        let mut profiles = Config::profiles().draft();
+        profiles.delete_item(&uid)?
+    };
+
+    if should_update {
+        match CoreManager::global().update_config().await {
+            Ok(_) => handle::Handle::refresh_clash(),
+            Err(err) => {
+                Config::profiles().discard();
+                return Err(IpcError::from(err));
+            }
+        }
+    }
+
+    Config::profiles().apply();
+    Config::profiles().data().save_file()?;
+    handle::Handle::refresh_profiles();
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn read_profile_file(uid: String) -> Result<String> {
     let profiles = Config::profiles();
     let profiles = profiles.latest();
@@ -598,7 +661,36 @@ pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> Result {
-    todo!()
+    let _ = file_data;
+
+    let profile: crate::config::profile::item::Profile = match item {
+        ProfileBuilder::Remote(mut builder) => builder
+            .build_no_blocking()
+            .await
+            .context("failed to build remote profile")?
+            .into(),
+    };
+
+    let profile_id = if Config::profiles().draft().current.is_empty() {
+        Some(profile.uid().to_string())
+    } else {
+        None
+    };
+
+    {
+        let committer = Config::profiles().auto_commit();
+        committer.draft().append_item(profile)?;
+    }
+
+    if let Some(profile_id) = profile_id {
+        let mut builder = ProfilesBuilder::default();
+        builder.current(vec![profile_id]);
+        patch_profiles_config(builder).await?;
+    } else {
+        handle::Handle::refresh_profiles();
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

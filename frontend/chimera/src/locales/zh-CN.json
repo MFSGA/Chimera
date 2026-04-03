@@ -61,6 +61,7 @@
   "Update": "更新",
   "Update(Proxy)": "更新（使用代理）",
   "Delete": "删除",
+  "Delete this profile?": "确认删除这个配置吗？",
   "Enable": "启用",
   "Disable": "禁用",
   "Refresh": "刷新",

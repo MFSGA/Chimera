@@ -54,6 +54,8 @@ pub fn run() -> std::io::Result<()> {
         ipc::view_profile,
         ipc::patch_profiles_config,
         ipc::update_profile,
+        ipc::patch_profile,
+        ipc::delete_profile,
         ipc::read_profile_file,
         ipc::save_profile_file,
         ipc::create_profile,
