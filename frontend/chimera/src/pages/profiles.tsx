@@ -30,6 +30,7 @@ import {
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
 import ProfileItem from '@/components/profiles/profile-item';
+import ProfileSide from '@/components/profiles/profile-side';
 import { GlobalUpdatePendingContext } from '@/components/profiles/provider';
 import { QuickImport } from '@/components/profiles/quick-import';
 import RuntimeConfigDiffDialog from '@/components/profiles/runtime-config-diff-dialog';
@@ -146,6 +147,7 @@ function ProfilePage() {
       <SidePage
         title={t('Profiles')}
         flexReverse
+        side={hasSide && <ProfileSide onClose={handleSideClose} />}
         header={
           <div className="flex items-center gap-2">
             <RuntimeConfigDiffDialog
