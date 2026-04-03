@@ -6,8 +6,6 @@ import {
 } from '@chimera/interface';
 import { BaseDialog } from '@chimera/ui';
 import { Divider, InputAdornment } from '@mui/material';
-import { useQueryClient } from '@tanstack/react-query';
-import { invoke } from '@tauri-apps/api/core';
 import { useAsyncEffect } from 'ahooks';
 import { type editor } from 'monaco-editor';
 import {
@@ -57,8 +55,7 @@ export const ProfileDialog = ({
 }: ProfileDialogProps) => {
   const { t } = useTranslation();
 
-  const { create } = useProfile();
-  const queryClient = useQueryClient();
+  const { create, patch } = useProfile();
 
   const contentFn = useProfileContent(profile?.uid ?? '');
 
@@ -147,11 +144,10 @@ export const ProfileDialog = ({
         await contentFn.upsert.mutateAsync(value);
       }
 
-      await invoke('patch_profile', {
+      await patch.mutateAsync({
         uid: form.uid!,
         profile: form,
       });
-      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
     };
 
     try {
