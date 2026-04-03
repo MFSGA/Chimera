@@ -14,9 +14,7 @@ export function filterProfiles<T extends Profile>(items?: T[]) {
    * @param items - Array of items to filter
    * @returns {Array} Filtered array containing only remote and local items
    */
-  const clash = items?.filter(
-    (item) => item.type === 'remote' || item.type === 'local',
-  );
+  const clash = items?.filter((item) => item.type === 'remote');
 
   /**
    * Filters an array of items to get a chain of either 'merge' type items
@@ -36,9 +34,6 @@ export function filterProfiles<T extends Profile>(items?: T[]) {
   };
 }
 
-export type ClashProfile = Extract<Profile, { type: 'remote' | 'local' }>;
+export type ClashProfile = Extract<Profile, { type: 'remote' }>;
 
-export type ClashProfileBuilder = Extract<
-  ProfileBuilder,
-  { type: 'remote' | 'local' }
->;
+export type ClashProfileBuilder = Extract<ProfileBuilder, { type: 'remote' }>;

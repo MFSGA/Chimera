@@ -6,7 +6,11 @@ use serde_yaml::Mapping;
 use tracing::debug;
 
 use crate::{
-    config::{chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder},
+    config::{
+        chimera::IVerge,
+        core::Config,
+        profile::item::remote::{RemoteProfileOptionsBuilder, RemoteProfileSubscription},
+    },
     core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
     log_err,
     utils::{self, help::get_clash_external_port},
@@ -215,9 +219,35 @@ pub async fn update_profile<T: Borrow<String>>(
 ) -> Result<()> {
     let uid = uid.borrow();
     let profile_item = Config::profiles().latest().get_item(uid)?.clone();
-    let is_remote = profile_item.is_remote();
+    let res = || async move {
+        let mut item = profile_item.as_remote().unwrap().clone();
+        item.subscribe(opts).await?;
 
-    todo!()
+        let should_update = {
+            let mut profiles = Config::profiles().draft();
+            profiles.replace_item(uid, item.into())?;
+            profiles.get_current().iter().any(|current| current == uid)
+        };
+
+        if should_update {
+            update_core_config().await?;
+        }
+
+        <Result<()>>::Ok(())
+    };
+
+    match res().await {
+        Ok(()) => {
+            Config::profiles().apply();
+            Config::profiles().data().save_file()?;
+            handle::Handle::refresh_profiles();
+            Ok(())
+        }
+        Err(err) => {
+            Config::profiles().discard();
+            Err(err)
+        }
+    }
 }
 
 pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {

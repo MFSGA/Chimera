@@ -1,14 +1,13 @@
 import {
-  // LocalProfile,
-  // ProfileBuilder,
   ProfileQueryResultItem,
-  // ProfileTemplate,
   RemoteProfile,
   useProfile,
   useProfileContent,
 } from '@chimera/interface';
 import { BaseDialog } from '@chimera/ui';
 import { Divider, InputAdornment } from '@mui/material';
+import { useQueryClient } from '@tanstack/react-query';
+import { invoke } from '@tauri-apps/api/core';
 import { useAsyncEffect } from 'ahooks';
 import { type editor } from 'monaco-editor';
 import {
@@ -31,9 +30,6 @@ import { useTranslation } from 'react-i18next';
 import { useLatest } from 'react-use';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
-// import { version } from '~/package.json';
-import { LabelSwitch } from '../setting/modules/clash-field';
-import { ReadProfile } from './read-profile';
 import { ClashProfile, ClashProfileBuilder } from './utils';
 
 const ProfileMonacoViewer = lazy(() => import('./profile-monaco-viewer'));
@@ -61,14 +57,12 @@ export const ProfileDialog = ({
 }: ProfileDialogProps) => {
   const { t } = useTranslation();
 
-  // todo
   const { create } = useProfile();
+  const queryClient = useQueryClient();
 
   const contentFn = useProfileContent(profile?.uid ?? '');
 
-  const localProfile = useRef('');
   const addProfileCtx = use(AddProfileContext);
-  const [localProfileMessage, setLocalProfileMessage] = useState('');
   const [isEdit, setIsEdit] = useState(!!profile);
 
   const { control, watch, handleSubmit, reset, setValue } =
@@ -109,12 +103,6 @@ export const ProfileDialog = ({
     [],
   );
 
-  const handleProfileSelected = (content: string) => {
-    localProfile.current = content;
-
-    setLocalProfileMessage('');
-  };
-
   const [editor, setEditor] = useState({
     value: '',
     language: 'yaml',
@@ -137,58 +125,33 @@ export const ProfileDialog = ({
     }
 
     const toCreate = async () => {
-      if (isRemote) {
-        const data = form as RemoteProfile;
+      const data = form as RemoteProfile;
 
-        await create.mutateAsync({
-          type: 'url',
-          data: {
-            url: data.url,
-            // TODO: define backend serde(option) to move null
-            option: data.option
-              ? {
-                  ...data.option,
-                  user_agent: data.option.user_agent ?? null,
-                  // todo
-                  // with_proxy: data.option.with_proxy ?? null,
-                  // self_proxy: data.option.self_proxy ?? null,
-                }
-              : null,
-          },
-        });
-      } else {
-        if (localProfile.current) {
-          console.log('todo');
-
-          /* await create.mutateAsync({
-            type: 'manual',
-            data: {
-              item: form,
-              fileData: localProfile.current,
-            },
-          }); */
-        } else {
-          console.log('todo');
-          /* await create.mutateAsync({
-            // type: 'manual',
-            data: {
-              // item: form,
-              // fileData: ProfileTemplate.profile,
-            },
-          }); */
-        }
-      }
+      await create.mutateAsync({
+        type: 'url',
+        data: {
+          url: data.url,
+          option: data.option
+            ? {
+                ...data.option,
+                user_agent: data.option.user_agent ?? null,
+              }
+            : null,
+        },
+      });
     };
 
     const toUpdate = async () => {
       const value = latestEditor.current.value;
-      await contentFn.upsert.mutateAsync(value);
+      if (!isRemote) {
+        await contentFn.upsert.mutateAsync(value);
+      }
 
-      console.log('todo');
-      /* await patch.mutateAsync({
+      await invoke('patch_profile', {
         uid: form.uid!,
         profile: form,
-      }); */
+      });
+      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
     };
 
     try {
@@ -232,10 +195,6 @@ export const ProfileDialog = ({
               {
                 id: 'remote',
                 label: t('Remote Profile'),
-              },
-              {
-                id: 'local',
-                label: t('Local Profile'),
               },
             ]}
           />
@@ -294,50 +253,11 @@ export const ProfileDialog = ({
                 ),
               }}
             />
-
-            {/* <Controller
-              name="option.with_proxy"
-              control={control}
-              render={({ field }) => (
-                <LabelSwitch
-                  label={t('Use System Proxy')}
-                  checked={Boolean(field.value)}
-                  {...field}
-                />
-              )}
-            />
-
-            <Controller
-              name="option.self_proxy"
-              control={control}
-              render={({ field }) => (
-                <LabelSwitch
-                  label={t('Use Clash Proxy')}
-                  checked={Boolean(field.value)}
-                  {...field}
-                />
-              )}
-            /> */}
-          </>
-        )}
-        {!isRemote && !isEdit && (
-          <>
-            <ReadProfile
-              key="read_profile"
-              onSelected={handleProfileSelected}
-            />
-
-            {localProfileMessage && (
-              <div className="ml-2 text-red-500">{localProfileMessage}</div>
-            )}
-            <span className="px-2 text-xs">
-              * {t('Choose file to import or leave it blank to create new one')}
-            </span>
           </>
         )}
       </div>
     ),
-    [commonProps, control, isEdit, isRemote, localProfileMessage, t],
+    [commonProps, control, isEdit, isRemote, t],
   );
 
   useAsyncEffect(async () => {

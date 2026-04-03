@@ -3,6 +3,7 @@ import { unwrapResult } from '../utils';
 import {
   commands,
   Profile,
+  ProfileBuilder,
   ProfilesBuilder,
   RemoteProfileOptionsBuilder,
 } from './bindings';
@@ -16,19 +17,20 @@ type CreateParams = {
     url: URLImportParams[0];
     option: URLImportParams[1];
   };
+} | {
+  type: 'manual';
+  data: {
+    item: ProfileBuilder;
+    fileData: string | null;
+  };
 };
-/* todo | {
-    type: 'manual'
-    data: {
-      item: ManualImportParams[0]
-      fileData: ManualImportParams[1]
-    }
-  } */
 
 type ProfileHelperFn = {
   view: () => Promise<null | undefined>;
-  // todo update: (option: RemoteProfileOptionsBuilder) => Promise<null | undefined>
-  // todo drop: () => Promise<null | undefined>
+  update: (
+    option: RemoteProfileOptionsBuilder,
+  ) => Promise<null | undefined>;
+  drop: () => Promise<null | undefined>;
 };
 
 export type ProfileQueryResultItem = Profile & Partial<ProfileHelperFn>;
@@ -102,9 +104,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
         const { url, option } = data;
         return unwrapResult(await commands.importProfile(url, option));
       } else {
-        // todo
-        // const { item, fileData } = data
-        // return unwrapResult(await commands.createProfile(item, fileData))
+        const { item, fileData } = data;
+        return unwrapResult(await commands.createProfile(item, fileData));
       }
     },
     onSuccess: () => {
@@ -149,9 +150,9 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     return {
       ...item,
       view: async () => unwrapResult(await commands.viewProfile(item.uid)),
-      /* update: async (option: RemoteProfileOptionsBuilder) =>
+      update: async (option: RemoteProfileOptionsBuilder) =>
         await update.mutateAsync({ uid: item.uid, option }),
-      drop: async () => await drop.mutateAsync(item.uid), */
+      drop: async () => await drop.mutateAsync(item.uid),
     };
   }
 
@@ -206,5 +207,29 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
-  return { create, query, upsert, update };
+  const patch = useMutation({
+    mutationFn: async ({
+      uid,
+      profile,
+    }: {
+      uid: string;
+      profile: ProfileBuilder;
+    }) => {
+      return unwrapResult(await commands.patchProfile(uid, profile));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  const drop = useMutation({
+    mutationFn: async (uid: string) => {
+      return unwrapResult(await commands.deleteProfile(uid));
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  return { create, query, upsert, update, patch, drop };
 };

@@ -198,6 +198,35 @@ impl RemoteProfileBuilder {
             .await?;
         Ok(profile)
     }
+
+    pub fn patch_profile(
+        &self,
+        profile: &mut RemoteProfile,
+    ) -> Result<(), RemoteProfileBuilderError> {
+        if let Some(url) = self.url.as_ref() {
+            profile.url = url.clone();
+        }
+
+        if let Some(name) = self.shared.get_name() {
+            profile.shared.name = name.clone();
+        }
+
+        if let Some(desc) = self.shared.get_desc() {
+            profile.shared.desc = desc.clone();
+        }
+
+        if let Some(updated) = self.shared.get_updated() {
+            profile.shared.updated = *updated;
+        }
+
+        profile.option.apply(self.option.clone());
+
+        if let Some(chain) = self.chain.as_ref() {
+            profile.chain = chain.clone();
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
