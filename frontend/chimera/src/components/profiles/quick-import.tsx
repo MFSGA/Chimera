@@ -12,15 +12,17 @@ import {
   TextField,
   Tooltip,
 } from '@mui/material';
-// import { readText } from '@tauri-apps/plugin-clipboard-manager';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Notice } from '@/components/base';
+import { formatError } from '@/utils';
 
 export interface QuickImportProps {
   defaultUrl?: string | null;
+  onImported?: () => void;
 }
 
-export const QuickImport = ({ defaultUrl }: QuickImportProps) => {
+export const QuickImport = ({ defaultUrl, onImported }: QuickImportProps) => {
   const { t } = useTranslation();
 
   const [url, setUrl] = useState('');
@@ -34,7 +36,7 @@ export const QuickImport = ({ defaultUrl }: QuickImportProps) => {
   }, [defaultUrl]);
 
   const onCopyLink = async () => {
-    const text = 'todo';
+    const text = await navigator.clipboard.readText().catch(() => '');
 
     if (text) {
       setUrl(text);
@@ -84,8 +86,17 @@ export const QuickImport = ({ defaultUrl }: QuickImportProps) => {
           option: null,
         },
       });
-    } finally {
+      Notice.success(t('Successfully imported profile'));
       setUrl('');
+      onImported?.();
+    } catch (error) {
+      Notice.error(
+        t('Failed to import profile: {{error}}', {
+          error: formatError(error),
+        }),
+        3000,
+      );
+    } finally {
       setLoading(false);
     }
   };
