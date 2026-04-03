@@ -85,6 +85,35 @@ impl Profiles {
         &self.current
     }
 
+    pub fn replace_item(&mut self, uid: &str, item: Profile) -> Result<()> {
+        let target = self
+            .items
+            .iter_mut()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+
+        *target = item;
+        Ok(())
+    }
+
+    pub fn delete_item(&mut self, uid: &str) -> Result<bool> {
+        let Some(index) = self.items.iter().position(|profile| profile.uid() == uid) else {
+            bail!("failed to get the profile item \"uid:{uid}\"");
+        };
+
+        let should_update = self.current.iter().any(|current| current == uid);
+        let item = self.items.remove(index);
+        let file_path = dirs::app_profiles_dir()?.join(item.file());
+        if file_path.exists() {
+            std::fs::remove_file(file_path)?;
+        }
+
+        self.current.retain(|current| current != uid);
+        self.chain.retain(|chain_uid| chain_uid != uid);
+
+        Ok(should_update)
+    }
+
     /// 获取current指向的配置内容
     pub fn current_mappings(&self) -> Result<IndexMap<&str, Mapping>> {
         let current = self

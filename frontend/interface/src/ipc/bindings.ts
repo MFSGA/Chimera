@@ -91,6 +91,31 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async patchProfile(
+    uid: string,
+    profile: ProfileBuilder,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('patch_profile', { uid, profile }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async deleteProfile(uid: string): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('delete_profile', { uid }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async readProfileFile(uid: string): Promise<Result<string, string>> {
     try {
       return {

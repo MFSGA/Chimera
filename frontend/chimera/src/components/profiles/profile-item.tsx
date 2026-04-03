@@ -24,10 +24,12 @@ import {
   Paper,
   Tooltip,
 } from '@mui/material';
+import { useQueryClient } from '@tanstack/react-query';
+import { invoke } from '@tauri-apps/api/core';
 import { useLockFn, useMemoizedFn, useSetState } from 'ahooks';
 import dayjs from 'dayjs';
 import { AnimatePresence, motion } from 'framer-motion';
-import { memo, use, useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -55,6 +57,7 @@ export const ProfileItem = memo(function ProfileItem({
   maxLogLevelTriggered,
 }: ProfileItemProps) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
 
   const { deleteConnections } = useClashConnections();
 
@@ -146,9 +149,11 @@ export const ProfileItem = memo(function ProfileItem({
 
     try {
       setLoading({ update: true });
-
-      // await item?.update?.(options);
-      console.log('todo: update profile with options', options);
+      await invoke('update_profile', {
+        uid: item.uid,
+        option: options,
+      });
+      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
     } catch (e) {
       message(`Update failed: \n ${formatError(e)}`, {
         title: t('Error'),
@@ -160,12 +165,15 @@ export const ProfileItem = memo(function ProfileItem({
   });
 
   const handleDelete = useLockFn(async () => {
+    if (!window.confirm(t('Delete this profile?'))) {
+      return;
+    }
+
     try {
-      // await deleteProfile(item.uid)
-      // await item?.drop?.();
-      console.log('todo');
+      await invoke('delete_profile', { uid: item.uid });
+      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
     } catch (err) {
-      message(`Delete failed: \n ${JSON.stringify(err)}`, {
+      message(`Delete failed: \n ${formatError(err)}`, {
         title: t('Error'),
         kind: 'error',
       });
@@ -317,9 +325,12 @@ export const ProfileItem = memo(function ProfileItem({
                   cleanDeepClickEvent(e);
                   menuMapping.Update();
                 }}
-                // loading={globalUpdatePending || loading.update}
               >
-                <Update />
+                {loading.update ? (
+                  <LinearProgress className="w-4" />
+                ) : (
+                  <Update />
+                )}
               </Button>
             </Tooltip>
 
