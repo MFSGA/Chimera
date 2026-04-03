@@ -69,6 +69,7 @@ export const ProfileDialog = ({
   const localProfile = useRef('');
   const addProfileCtx = use(AddProfileContext);
   const [localProfileMessage, setLocalProfileMessage] = useState('');
+  const [isEdit, setIsEdit] = useState(!!profile);
 
   const { control, watch, handleSubmit, reset, setValue } =
     useForm<ClashProfileBuilder>({
@@ -86,16 +87,15 @@ export const ProfileDialog = ({
     });
 
   useEffect(() => {
-    if (addProfileCtx) {
+    if (addProfileCtx && !isEdit) {
       setValue('url', addProfileCtx.url);
       if (addProfileCtx.desc) setValue('desc', addProfileCtx.desc);
       if (addProfileCtx.name) setValue('name', addProfileCtx.name);
     }
-  }, [addProfileCtx, setValue]);
+  }, [addProfileCtx, isEdit, setValue]);
 
   const isRemote = watch('type') === 'remote';
 
-  const [isEdit, setIsEdit] = useState(!!profile);
   useEffect(() => {
     setIsEdit(!!profile);
   }, [profile]);
