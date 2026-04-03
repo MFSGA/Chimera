@@ -24,8 +24,6 @@ import {
   Paper,
   Tooltip,
 } from '@mui/material';
-import { useQueryClient } from '@tanstack/react-query';
-import { invoke } from '@tauri-apps/api/core';
 import { useLockFn, useMemoizedFn, useSetState } from 'ahooks';
 import dayjs from 'dayjs';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -57,7 +55,6 @@ export const ProfileItem = memo(function ProfileItem({
   maxLogLevelTriggered,
 }: ProfileItemProps) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
 
   const { deleteConnections } = useClashConnections();
 
@@ -74,17 +71,13 @@ export const ProfileItem = memo(function ProfileItem({
     let progress = 0;
     let total = 0;
     let used = 0;
-    console.log('todo: calc the data');
-    /* if ('extra' in item && item.extra) {
-      // todo: change it
-      let { download, upload, total: t } = { download: 0, upload: 0, total: 0 };
+    if ('extra' in item && item.extra) {
+      const { download, upload, total: limit } = item.extra;
 
-      total = t;
-
+      total = limit;
       used = download + upload;
-
       progress = (used / (total || 1)) * 100;
-    } */
+    }
     return { progress, total, used };
   };
 
@@ -149,11 +142,7 @@ export const ProfileItem = memo(function ProfileItem({
 
     try {
       setLoading({ update: true });
-      await invoke('update_profile', {
-        uid: item.uid,
-        option: options,
-      });
-      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      await item.update?.(options);
     } catch (e) {
       message(`Update failed: \n ${formatError(e)}`, {
         title: t('Error'),
@@ -170,8 +159,7 @@ export const ProfileItem = memo(function ProfileItem({
     }
 
     try {
-      await invoke('delete_profile', { uid: item.uid });
-      await queryClient.invalidateQueries({ queryKey: ['profiles'] });
+      await item.drop?.();
     } catch (err) {
       message(`Delete failed: \n ${formatError(err)}`, {
         title: t('Error'),
@@ -264,8 +252,20 @@ export const ProfileItem = memo(function ProfileItem({
             <TextCarousel
               className="flex h-6 w-30 items-center"
               nodes={[
-                <TimeSpan ts={10} key={1} k="Subscription Updated At" />,
-                <TimeSpan ts={100} key={2} k="Subscription Expires In" />,
+                !!item.updated && (
+                  <TimeSpan
+                    key="updated"
+                    ts={item.updated}
+                    k="Subscription Updated At"
+                  />
+                ),
+                !!(item as RemoteProfile).extra?.expire && (
+                  <TimeSpan
+                    key="expire"
+                    ts={(item as RemoteProfile).extra!.expire!}
+                    k="Subscription Expires In"
+                  />
+                ),
               ]}
             />
           </div>
@@ -385,7 +385,7 @@ function TimeSpan({ ts, k }: { ts: number; k: string }) {
     <Tooltip title={time.format('YYYY/MM/DD HH:mm:ss')}>
       <div className="animate-marquee h-fit text-right text-sm font-medium whitespace-nowrap">
         {t(k, {
-          time: 'todo',
+          time: time.fromNow(),
         })}
       </div>
     </Tooltip>

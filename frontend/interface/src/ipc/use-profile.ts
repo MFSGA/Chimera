@@ -11,25 +11,25 @@ import { RROFILES_QUERY_KEY } from './consts';
 
 type URLImportParams = Parameters<typeof commands.importProfile>;
 
-type CreateParams = {
-  type: 'url';
-  data: {
-    url: URLImportParams[0];
-    option: URLImportParams[1];
-  };
-} | {
-  type: 'manual';
-  data: {
-    item: ProfileBuilder;
-    fileData: string | null;
-  };
-};
+type CreateParams =
+  | {
+      type: 'url';
+      data: {
+        url: URLImportParams[0];
+        option: URLImportParams[1];
+      };
+    }
+  | {
+      type: 'manual';
+      data: {
+        item: ProfileBuilder;
+        fileData: string | null;
+      };
+    };
 
 type ProfileHelperFn = {
   view: () => Promise<null | undefined>;
-  update: (
-    option: RemoteProfileOptionsBuilder,
-  ) => Promise<null | undefined>;
+  update: (option: RemoteProfileOptionsBuilder) => Promise<null | undefined>;
   drop: () => Promise<null | undefined>;
 };
 
