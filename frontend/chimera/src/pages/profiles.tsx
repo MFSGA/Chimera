@@ -4,7 +4,12 @@ import {
   type RemoteProfile,
 } from '@chimera/interface';
 import { SidePage } from '@chimera/ui';
-import { Public, TextSnippetOutlined, Update } from '@mui/icons-material';
+import {
+  ErrorOutline,
+  Public,
+  TextSnippetOutlined,
+  Update,
+} from '@mui/icons-material';
 import {
   Badge,
   Button,
@@ -13,13 +18,18 @@ import {
   Grid,
   IconButton,
 } from '@mui/material';
-import { createFileRoute, useLocation } from '@tanstack/react-router';
+import {
+  createFileRoute,
+  useLocation,
+  useNavigate,
+} from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAtom } from 'jotai';
 import { useMemo, useState, useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useWindowSize } from 'react-use';
+import ContentDisplay from '@/components/base/content-display';
 import {
   atomChainsSelected,
   atomGlobalChainCurrent,
@@ -68,10 +78,12 @@ function ProfilePage() {
 
   const { query, update } = useProfile();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const profiles = useMemo(() => {
     return filterProfiles(query.data?.items);
   }, [query.data?.items]);
+  const profileItems = profiles?.clash ?? [];
   const addProfileCtxValue = useMemo(
     () => parseSubscribeProfileContext(window.location.search),
     [location],
@@ -142,6 +154,105 @@ function ProfilePage() {
     });
   });
 
+  const handleQuickImportSuccess = () => {
+    if (!window.location.search) {
+      return;
+    }
+
+    navigate({
+      to: '/profiles',
+      search: {} as never,
+      replace: true,
+    });
+  };
+
+  const renderProfilesContent = () => {
+    if (query.isLoading) {
+      return (
+        <ContentDisplay className="px-3 pt-2 pb-4">
+          <div className="flex min-h-64 w-full items-center justify-center">
+            <div className="flex flex-col items-center gap-4 rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
+              <CircularProgress size={28} />
+              <div className="text-sm opacity-80">{t('Loading profiles')}</div>
+            </div>
+          </div>
+        </ContentDisplay>
+      );
+    }
+
+    if (query.isError) {
+      return (
+        <ContentDisplay className="px-3 pt-2 pb-4">
+          <div className="flex min-h-64 w-full items-center justify-center">
+            <div className="flex w-full max-w-md flex-col items-center rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
+              <ErrorOutline className="!mb-4 !size-14 text-red-400 dark:text-red-300" />
+              <div className="text-base font-semibold">
+                {t('Failed to load profiles')}
+              </div>
+              <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                {formatError(query.error)}
+              </div>
+              <Button
+                className="!mt-5"
+                variant="contained"
+                onClick={() => query.refetch()}
+              >
+                {t('Refresh')}
+              </Button>
+            </div>
+          </div>
+        </ContentDisplay>
+      );
+    }
+
+    if (!profileItems.length) {
+      return (
+        <ContentDisplay className="px-3 pt-2 pb-4">
+          <div className="flex min-h-64 w-full items-center justify-center">
+            <div className="flex w-full max-w-md flex-col items-center rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
+              <Public className="!mb-4 !size-14 text-zinc-400 dark:text-zinc-500" />
+              <div className="text-base font-semibold">{t('No Profiles')}</div>
+              <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
+                {t('Import a subscription URL to get started')}
+              </div>
+            </div>
+          </div>
+        </ContentDisplay>
+      );
+    }
+
+    return (
+      <Grid container spacing={2}>
+        {profileItems.map((item) => (
+          <Grid
+            key={item.uid}
+            size={{
+              xs: 12,
+              sm: 12,
+              md: hasSide && width <= 1000 ? 12 : 6,
+              lg: 4,
+              xl: 3,
+            }}
+          >
+            <motion.div
+              key={item.uid}
+              layoutId={`profile-${item.uid}`}
+              layout="position"
+              initial={false}
+            >
+              <ProfileItem
+                item={item}
+                onClickChains={onClickChains}
+                selected={query.data?.current?.includes(item.uid)}
+                chainsSelected={chainsSelected === item.uid}
+              />
+            </motion.div>
+          </Grid>
+        ))}
+      </Grid>
+    );
+  };
+
   return (
     <AddProfileContext.Provider value={addProfileCtxValue}>
       <SidePage
@@ -180,38 +291,11 @@ function ProfilePage() {
         <AnimatePresence initial={false} mode="sync">
           <GlobalUpdatePendingContext.Provider value={globalUpdatePending}>
             <div className="flex flex-col gap-4 p-6">
-              <QuickImport defaultUrl={addProfileCtxValue?.url} />
-
-              {profiles && (
-                <Grid container spacing={2}>
-                  {profiles.clash?.map((item) => (
-                    <Grid
-                      key={item.uid}
-                      size={{
-                        xs: 12,
-                        sm: 12,
-                        md: hasSide && width <= 1000 ? 12 : 6,
-                        lg: 4,
-                        xl: 3,
-                      }}
-                    >
-                      <motion.div
-                        key={item.uid}
-                        layoutId={`profile-${item.uid}`}
-                        layout="position"
-                        initial={false}
-                      >
-                        <ProfileItem
-                          item={item}
-                          onClickChains={onClickChains}
-                          selected={query.data?.current?.includes(item.uid)}
-                          chainsSelected={chainsSelected === item.uid}
-                        />
-                      </motion.div>
-                    </Grid>
-                  ))}
-                </Grid>
-              )}
+              <QuickImport
+                defaultUrl={addProfileCtxValue?.url}
+                onImported={handleQuickImportSuccess}
+              />
+              {renderProfilesContent()}
             </div>
           </GlobalUpdatePendingContext.Provider>
         </AnimatePresence>
@@ -222,6 +306,12 @@ function ProfilePage() {
             color="default"
             onClick={handleGlobalProfileUpdate}
             title={t('Update All Profiles')}
+            disabled={
+              globalUpdatePending ||
+              query.isLoading ||
+              query.isError ||
+              !profileItems.length
+            }
           >
             {globalUpdatePending ? <CircularProgress size={22} /> : <Update />}
           </Fab>
