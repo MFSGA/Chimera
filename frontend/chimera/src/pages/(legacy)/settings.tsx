@@ -3,7 +3,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export const Route = createFileRoute('/settings')({
+export const Route = createFileRoute('/(legacy)/settings')({
   component: SettingPage,
 });
 

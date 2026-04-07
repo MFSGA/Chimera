@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import LogHeader from '@/components/logs/log-header';
 import { LogProvider } from '@/components/logs/log-provider';
 
-export const Route = createFileRoute('/logs')({
+export const Route = createFileRoute('/(legacy)/logs')({
   component: LogRoutePage,
 });
 

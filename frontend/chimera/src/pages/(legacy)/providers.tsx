@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 
-export const Route = createFileRoute('/providers')({
+export const Route = createFileRoute('/(legacy)/providers')({
   component: ProvidersPage,
 });
 
