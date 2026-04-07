@@ -44,6 +44,7 @@
     "core:window:allow-set-cursor-icon",
     "core:window:allow-set-cursor-position",
     "core:window:allow-set-ignore-cursor-events",
-    "core:window:allow-start-dragging"
+    "core:window:allow-start-dragging",
+    "clipboard-manager:allow-read-text"
   ]
 }

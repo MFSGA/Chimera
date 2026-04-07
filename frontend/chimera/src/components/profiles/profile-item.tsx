@@ -122,23 +122,12 @@ export const ProfileItem = memo(function ProfileItem({
     const selfOption = 'option' in item ? item.option : undefined;
 
     const options: RemoteProfileOptionsBuilder = {
-      // todo
-      // with_proxy: false,
-      // self_proxy: false,
       update_interval: 0,
       user_agent: null,
       ...selfOption,
     };
 
-    /* if (proxy) {
-      if (selfOption?.self_proxy) {
-        options.with_proxy = false;
-        options.self_proxy = true;
-      } else {
-        options.with_proxy = true;
-        options.self_proxy = false;
-      }
-    } */
+    void proxy;
 
     try {
       setLoading({ update: true });
@@ -154,14 +143,10 @@ export const ProfileItem = memo(function ProfileItem({
   });
 
   const handleDelete = useLockFn(async () => {
-    if (!window.confirm(t('Delete this profile?'))) {
-      return;
-    }
-
     try {
       await item.drop?.();
     } catch (err) {
-      message(`Delete failed: \n ${formatError(err)}`, {
+      message(`Delete failed: \n ${JSON.stringify(err)}`, {
         title: t('Error'),
         kind: 'error',
       });
