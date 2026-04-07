@@ -751,6 +751,7 @@ dependencies = [
  "backon",
  "base64 0.22.1",
  "camino",
+ "chimera-ipc",
  "chimera-macro",
  "chimera_utils",
  "chrono",
@@ -821,6 +822,35 @@ dependencies = [
  "windows-sys 0.60.2",
  "winreg 0.55.0",
  "zip",
+]
+
+[[package]]
+name = "chimera-ipc"
+version = "1.5.2"
+source = "git+https://github.com/MFSGA/Chimera_Service#2a48457b8cfb9fbb90bea17441b10eaf945a95b8"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "chimera_utils",
+ "derive_builder",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "indexmap 2.11.4",
+ "interprocess",
+ "pin-project-lite",
+ "serde",
+ "serde_json",
+ "simd-json",
+ "specta",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-attributes",
+ "windows 0.61.3",
 ]
 
 [[package]]
@@ -2747,9 +2777,9 @@ dependencies = [
 
 [[package]]
 name = "interprocess"
-version = "2.2.3"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d941b405bd2322993887859a8ee6ac9134945a24ec5ec763a8a962fc64dfec2d"
+checksum = "6be5e5c847dbdb44564bd85294740d031f4f8aeb3464e5375ef7141f7538db69"
 dependencies = [
  "doctest-file",
  "futures-core",

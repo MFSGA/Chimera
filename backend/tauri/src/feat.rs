@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 
 use anyhow::{Result, bail};
-use nyanpasu_ipc::api::status::CoreState;
+use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 use tracing::debug;
 
@@ -123,11 +123,10 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
         let service_mode = patch.enable_service_mode;
         let ipc_state = get_ipc_state();
         if service_mode.is_some() && ipc_state.is_connected() {
-            todo!()
-            /* log::debug!(target: "app", "change service mode to {}", service_mode.unwrap());
+            log::debug!(target: "app", "change service mode to {}", service_mode.unwrap());
 
             Config::generate().await?;
-            CoreManager::global().run_core().await?; */
+            CoreManager::global().run_core().await?;
         }
 
         if tun_mode.is_some() {

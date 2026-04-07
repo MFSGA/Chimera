@@ -15,5 +15,7 @@ pub mod open;
 /// 6
 pub mod resolve;
 /// 3
+pub mod sudo;
+/// 10
 #[cfg(target_os = "windows")]
 pub mod winreg;
