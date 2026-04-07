@@ -1,5 +1,5 @@
 import { useSettings } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { cn, useBreakpoint } from '@chimera/ui';
 import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createFileRoute, useLocation } from '@tanstack/react-router';
@@ -30,6 +30,7 @@ const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
 };
 
 function Layout() {
+  const breakpoint = useBreakpoint();
   const [isDrawer, setIsDrawer] = useAtom(atomIsDrawer);
   const setMemorizedPath = useSetAtom(memorizedRoutePathAtom);
   const pathname = useLocation({
@@ -43,17 +44,8 @@ function Layout() {
   }, [pathname, setMemorizedPath]);
 
   useEffect(() => {
-    const syncDrawerState = () => {
-      setIsDrawer(window.innerWidth < 900);
-    };
-
-    syncDrawerState();
-    window.addEventListener('resize', syncDrawerState);
-
-    return () => {
-      window.removeEventListener('resize', syncDrawerState);
-    };
-  }, [setIsDrawer]);
+    setIsDrawer(breakpoint === 'sm' || breakpoint === 'xs');
+  }, [breakpoint, setIsDrawer]);
 
   return (
     <SWRConfig
