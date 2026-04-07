@@ -1,29 +1,99 @@
-# inspirations
+# Chimera
 
-## based on the `clash-nyanpasu` project
+简体中文 | [English](README.en.md)
 
-## difference
+Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windows、macOS 与 Linux/NixOS 上提供稳定、清晰、可维护的代理使用体验。它基于 Tauri、Rust 与 React 构建，既保留了桌面应用应有的轻量与响应速度，也为代理核心、订阅配置、系统代理、服务模式和更新能力提供可靠支撑。
 
-My main focus will be on maintaining usage across Windows, macOS, and NixOS, with priority given to ensuring kernel support for `chimeera_client` and `clash-rs`.
+如果你希望有一个更专注于日常使用的代理管理工具，Chimera 的重点不是把界面做得复杂，而是把常用流程整理得更顺：导入订阅、切换节点、查看连接、调整规则、管理核心、处理更新，都应该尽量直接、可理解、少打扰。
 
-## support proxy combination.
+## 为什么选择 Chimera
 
-- trojan + ws + tls
-- reality + tcp
-- hysteria2
+- 跨平台桌面体验：关注 Windows、macOS 与 Linux/NixOS 环境下的真实使用问题。
+- 多核心支持方向：围绕 `chimera-client`、`clash-rs`、`mihomo` 等核心提供运行、切换、更新和状态管理能力。
+- 完整代理控制台：管理订阅与配置，查看代理组和节点，观察连接状态，调整运行时配置。
+- 服务模式支持：适合需要更稳定后台运行、系统级代理能力和长期使用场景的用户。
+- 日常排查友好：提供日志、连接、规则、配置目录和核心目录等入口，降低定位问题的成本。
 
-Pleease read more at wiki
+## 主要能力
 
-# quick dev steps
+- 订阅与 Profile 管理：支持导入、更新、删除、查看和编辑远程配置。
+- 代理节点管理：支持查看代理组、选择节点，并在切换时同步刷新运行状态。
+- 运行时配置：支持读取和调整 Clash 相关运行配置，方便排查和微调。
+- 核心管理：支持查询核心状态、切换核心、重启 sidecar，并获取或更新核心版本。
+- 系统集成：支持系统代理读取、应用深度链接、单实例启动、通知、对话框和进程管理。
+- 服务模式：支持服务安装、卸载、启动、停止和重启。
+- 更新能力：支持应用更新检查，并为核心版本更新保留独立管理链路。
 
-## 1. prepare the core info
+## 支持方向
 
-`pnpm generate:manifest`
+Chimera 当前重点关注常见代理组合与核心兼容，包括：
 
-## 2. prepare the core binary file.
+- `trojan + ws + tls`
+- `reality + tcp`
+- `hysteria2`
 
-`pnpm check`
+项目会继续围绕跨平台桌面体验、代理核心稳定性、TUN/服务模式、配置增强和用户操作流程进行迭代。
 
-## 3. start the app
+## 使用体验
 
-`pnpm tauri dev`
+Chimera 的界面按实际使用场景组织：
+
+- Dashboard：查看整体状态。
+- Proxies：选择代理节点。
+- Profiles：管理订阅配置。
+- Connections：观察连接。
+- Rules 和 Providers：查看规则与提供者。
+- Logs：排查运行问题。
+- Settings：调整应用行为。
+
+普通用户可以只关注导入订阅和切换节点，进阶用户则可以继续查看连接、规则、运行时配置、核心版本和服务状态。
+
+## 技术基础
+
+Chimera 使用 Tauri 2 构建桌面壳，Rust 负责后端能力和系统集成，React/Vite 负责前端界面。前后端通过 Tauri IPC 通信，并使用类型绑定减少接口不一致带来的维护成本。
+
+相比传统 Electron 应用，Tauri 方案有更轻的运行时负担；相比纯命令行工具，Chimera 提供了更直观的管理入口。它把桌面用户需要的代理能力集中到一个应用中，同时尽量保持底层实现清晰、可演进。
+
+## 开发
+
+安装依赖：
+
+```bash
+pnpm install
+```
+
+准备核心信息：
+
+```bash
+pnpm generate:manifest
+```
+
+准备核心二进制资源并执行检查：
+
+```bash
+pnpm check
+```
+
+启动桌面应用：
+
+```bash
+pnpm dev:diff
+```
+
+构建应用：
+
+```bash
+pnpm build
+```
+
+## 贡献
+
+有任何使用上的问题，或者代码实现上的问题，欢迎 Issue 以及 PR
+即使你是完全的计算机新手小白，在查阅完 wiki 后，再针对性的提问，我会抽出时间一一回答的。
+本项目另一大目的也也是为了吸引更多的开发者参与其中。
+
+## 总结
+
+Chimera 是一个专注跨平台、核心兼容与日常可用性的现代桌面代理客户端。它把订阅管理、节点切换、连接观察、服务模式、核心更新和系统集成放在同一个清晰的工作流中，适合希望长期稳定使用代理工具的桌面用户。
+
+如果觉得有帮助，欢迎点个 star
