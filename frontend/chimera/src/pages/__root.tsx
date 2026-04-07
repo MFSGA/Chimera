@@ -1,5 +1,10 @@
 import { RootProvider } from '@chimera/interface';
-import { createRootRoute, Outlet } from '@tanstack/react-router';
+import { cn } from '@chimera/ui';
+import {
+  createRootRoute,
+  ErrorComponentProps,
+  Outlet,
+} from '@tanstack/react-router';
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useMount } from 'ahooks';
@@ -15,6 +20,46 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
 
+const appWindow = getCurrentWebviewWindow();
+
+export const Catch = ({ error }: ErrorComponentProps) => {
+  return (
+    <div className={cn('h-dvh bg-black text-white', 'flex flex-col gap-4 p-4')}>
+      <div
+        className="fixed top-0 left-0 z-10 h-6 w-full"
+        data-tauri-drag-region
+      />
+
+      <h1 data-tauri-drag-region>Oops!</h1>
+
+      <p>Something went wrong... Caught in error boundary.</p>
+
+      <pre className="overflow-x-auto font-mono whitespace-pre-wrap select-text">
+        {error.message}
+        {error.stack}
+      </pre>
+
+      <div className="flex items-center gap-2">
+        <button
+          className="cursor-pointer bg-zinc-900 px-3 py-2 text-zinc-100"
+          onClick={() => window.location.reload()}
+        >
+          Reload Resource
+        </button>
+
+        <button
+          className="cursor-pointer bg-zinc-900 px-3 py-2 text-zinc-100"
+          onClick={() => appWindow.close()}
+        >
+          Close Window
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export const Pending = () => <div>Loading from _root...</div>;
+
 const TanStackRouterDevtools = import.meta.env.PROD
   ? () => null // Render nothing in production
   : lazy(() =>
@@ -28,15 +73,14 @@ const TanStackRouterDevtools = import.meta.env.PROD
 
 export const Route = createRootRoute({
   component: App,
-  // errorComponent: Catch,
-  // pendingComponent: Pending,
+  errorComponent: Catch,
+  pendingComponent: Pending,
 });
 
 export default function App() {
   useNyanpasuStorageSubscribers();
 
   useMount(() => {
-    const appWindow = getCurrentWebviewWindow();
     Promise.all([
       appWindow.show(),
       appWindow.unminimize(),
