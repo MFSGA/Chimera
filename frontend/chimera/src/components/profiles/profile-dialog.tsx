@@ -78,12 +78,12 @@ export const ProfileDialog = ({
     });
 
   useEffect(() => {
-    if (addProfileCtx && !isEdit) {
+    if (addProfileCtx) {
       setValue('url', addProfileCtx.url);
       if (addProfileCtx.desc) setValue('desc', addProfileCtx.desc);
       if (addProfileCtx.name) setValue('name', addProfileCtx.name);
     }
-  }, [addProfileCtx, isEdit, setValue]);
+  }, [addProfileCtx, setValue]);
 
   const isRemote = watch('type') === 'remote';
 
@@ -140,9 +140,7 @@ export const ProfileDialog = ({
 
     const toUpdate = async () => {
       const value = latestEditor.current.value;
-      if (!isRemote) {
-        await contentFn.upsert.mutateAsync(value);
-      }
+      await contentFn.upsert.mutateAsync(value);
 
       await patch.mutateAsync({
         uid: form.uid!,
