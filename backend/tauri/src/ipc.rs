@@ -2,7 +2,7 @@ use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
 
-use nyanpasu_ipc::api::status::CoreState;
+use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
@@ -325,7 +325,7 @@ pub mod service {
 
     #[tauri::command]
     #[specta::specta]
-    pub async fn status_service<'a>() -> Result<nyanpasu_ipc::types::StatusInfo<'a>> {
+    pub async fn status_service<'a>() -> Result<chimera_ipc::types::StatusInfo<'a>> {
         Ok(service::control::status().await?)
     }
 

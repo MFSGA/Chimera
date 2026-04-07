@@ -27,17 +27,33 @@ fn format_exit_failure(action: &str, status: std::process::ExitStatus) -> anyhow
 }
 
 async fn run_service_command(action: &str, args: Vec<OsString>) -> anyhow::Result<()> {
+    let action = action.to_owned();
     let status = tokio::task::spawn_blocking(move || {
-        RunasCommand::new(SERVICE_PATH.as_path())
-            .args(&args)
-            .gui(true)
-            .show(true)
-            .status()
+        #[cfg(not(target_os = "macos"))]
+        {
+            RunasCommand::new(SERVICE_PATH.as_path())
+                .args(&args)
+                .gui(true)
+                .show(true)
+                .status()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use crate::utils::sudo::sudo;
+            let args = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>();
+            match sudo(SERVICE_PATH.to_string_lossy(), &args) {
+                Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
+                Err(e) => {
+                    tracing::error!("failed to {action}: {}", e);
+                    Err(e)
+                }
+            }
+        }
     })
     .await??;
 
     if !status.success() {
-        return Err(format_exit_failure(action, status));
+        return Err(format_exit_failure(&action, status));
     }
 
     Ok(())
@@ -88,27 +104,57 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
 }
 
 pub async fn install_service() -> anyhow::Result<()> {
-    run_service_command("install service", get_service_install_args().await?).await
+    run_service_command("install service", get_service_install_args().await?).await?;
+    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
+        super::ipc::spawn_health_check();
+    }
+    Ok(())
+}
+
+pub async fn update_service() -> anyhow::Result<()> {
+    run_service_command("update service", vec!["update".into()]).await
 }
 
 pub async fn uninstall_service() -> anyhow::Result<()> {
-    run_service_command("uninstall service", vec!["uninstall".into()]).await
+    run_service_command("uninstall service", vec!["uninstall".into()]).await?;
+    let _ = super::ipc::KILL_FLAG.compare_exchange(
+        false,
+        true,
+        std::sync::atomic::Ordering::Acquire,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    Ok(())
 }
 
 pub async fn start_service() -> anyhow::Result<()> {
-    run_service_command("start service", vec!["start".into()]).await
+    run_service_command("start service", vec!["start".into()]).await?;
+    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
+        super::ipc::spawn_health_check();
+    }
+    Ok(())
 }
 
 pub async fn stop_service() -> anyhow::Result<()> {
-    run_service_command("stop service", vec!["stop".into()]).await
+    run_service_command("stop service", vec!["stop".into()]).await?;
+    let _ = super::ipc::KILL_FLAG.compare_exchange_weak(
+        false,
+        true,
+        std::sync::atomic::Ordering::Acquire,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    Ok(())
 }
 
 pub async fn restart_service() -> anyhow::Result<()> {
-    run_service_command("restart service", vec!["restart".into()]).await
+    run_service_command("restart service", vec!["restart".into()]).await?;
+    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
+        super::ipc::spawn_health_check();
+    }
+    Ok(())
 }
 
 #[tracing::instrument]
-pub async fn status<'a>() -> anyhow::Result<nyanpasu_ipc::types::StatusInfo<'a>> {
+pub async fn status<'a>() -> anyhow::Result<chimera_ipc::types::StatusInfo<'a>> {
     let mut cmd = tokio::process::Command::new(SERVICE_PATH.as_path());
     cmd.args(["status", "--json"]);
     #[cfg(windows)]
