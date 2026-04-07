@@ -8,7 +8,6 @@ import { PropsWithChildren, useEffect } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
 import LocalesProvider from '@/components/app/locales-provider';
-import MutationProvider from '@/components/layout/mutation-provider';
 import NoticeProvider from '@/components/layout/notice-provider';
 import PageTransition from '@/components/layout/page-transition';
 import SchemeProvider from '@/components/layout/scheme-provider';
@@ -70,21 +69,16 @@ function Layout() {
           <ThemeModeProvider>
             <CssBaseline />
             <LocalesProvider />
-            <MutationProvider>
-              <NoticeProvider />
-              <SchemeProvider />
-              <UpdaterDialog />
-              <UpdaterProvider />
+            <NoticeProvider />
+            <SchemeProvider />
+            <UpdaterDialog />
+            <UpdaterProvider />
 
-              <AppContainer isDrawer={isDrawer}>
-                <PageTransition
-                  className={cn(
-                    'absolute inset-4 top-10',
-                    !isDrawer && 'left-0',
-                  )}
-                />
-              </AppContainer>
-            </MutationProvider>
+            <AppContainer isDrawer={isDrawer}>
+              <PageTransition
+                className={cn('absolute inset-4 top-10', !isDrawer && 'left-0')}
+              />
+            </AppContainer>
           </ThemeModeProvider>
         </StyledEngineProvider>
       </QueryLoaderProvider>
