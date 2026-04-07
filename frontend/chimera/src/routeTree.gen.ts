@@ -9,100 +9,105 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './pages/__root'
-import { Route as SettingsRouteImport } from './pages/settings'
-import { Route as RulesRouteImport } from './pages/rules'
-import { Route as ProxiesRouteImport } from './pages/proxies'
-import { Route as ProvidersRouteImport } from './pages/providers'
-import { Route as ProfilesRouteImport } from './pages/profiles'
-import { Route as LogsRouteImport } from './pages/logs'
-import { Route as DashboardRouteImport } from './pages/dashboard'
-import { Route as ConnectionsRouteImport } from './pages/connections'
-import { Route as IndexRouteImport } from './pages/index'
+import { Route as legacyRouteRouteImport } from './pages/(legacy)/route'
+import { Route as legacyIndexRouteImport } from './pages/(legacy)/index'
+import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
+import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
+import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
+import { Route as legacyProvidersRouteImport } from './pages/(legacy)/providers'
+import { Route as legacyProfilesRouteImport } from './pages/(legacy)/profiles'
+import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
+import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
+import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
 
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+const legacyRouteRoute = legacyRouteRouteImport.update({
+  id: '/(legacy)',
   getParentRoute: () => rootRouteImport,
 } as any)
-const RulesRoute = RulesRouteImport.update({
-  id: '/rules',
-  path: '/rules',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProxiesRoute = ProxiesRouteImport.update({
-  id: '/proxies',
-  path: '/proxies',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProvidersRoute = ProvidersRouteImport.update({
-  id: '/providers',
-  path: '/providers',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ProfilesRoute = ProfilesRouteImport.update({
-  id: '/profiles',
-  path: '/profiles',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const LogsRoute = LogsRouteImport.update({
-  id: '/logs',
-  path: '/logs',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ConnectionsRoute = ConnectionsRouteImport.update({
-  id: '/connections',
-  path: '/connections',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const IndexRoute = IndexRouteImport.update({
+const legacyIndexRoute = legacyIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacySettingsRoute = legacySettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyRulesRoute = legacyRulesRouteImport.update({
+  id: '/rules',
+  path: '/rules',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyProxiesRoute = legacyProxiesRouteImport.update({
+  id: '/proxies',
+  path: '/proxies',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyProvidersRoute = legacyProvidersRouteImport.update({
+  id: '/providers',
+  path: '/providers',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyProfilesRoute = legacyProfilesRouteImport.update({
+  id: '/profiles',
+  path: '/profiles',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyLogsRoute = legacyLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyDashboardRoute = legacyDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyConnectionsRoute = legacyConnectionsRouteImport.update({
+  id: '/connections',
+  path: '/connections',
+  getParentRoute: () => legacyRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/connections': typeof ConnectionsRoute
-  '/dashboard': typeof DashboardRoute
-  '/logs': typeof LogsRoute
-  '/profiles': typeof ProfilesRoute
-  '/providers': typeof ProvidersRoute
-  '/proxies': typeof ProxiesRoute
-  '/rules': typeof RulesRoute
-  '/settings': typeof SettingsRoute
+  '/connections': typeof legacyConnectionsRoute
+  '/dashboard': typeof legacyDashboardRoute
+  '/logs': typeof legacyLogsRoute
+  '/profiles': typeof legacyProfilesRoute
+  '/providers': typeof legacyProvidersRoute
+  '/proxies': typeof legacyProxiesRoute
+  '/rules': typeof legacyRulesRoute
+  '/settings': typeof legacySettingsRoute
+  '/': typeof legacyIndexRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/connections': typeof ConnectionsRoute
-  '/dashboard': typeof DashboardRoute
-  '/logs': typeof LogsRoute
-  '/profiles': typeof ProfilesRoute
-  '/providers': typeof ProvidersRoute
-  '/proxies': typeof ProxiesRoute
-  '/rules': typeof RulesRoute
-  '/settings': typeof SettingsRoute
+  '/connections': typeof legacyConnectionsRoute
+  '/dashboard': typeof legacyDashboardRoute
+  '/logs': typeof legacyLogsRoute
+  '/profiles': typeof legacyProfilesRoute
+  '/providers': typeof legacyProvidersRoute
+  '/proxies': typeof legacyProxiesRoute
+  '/rules': typeof legacyRulesRoute
+  '/settings': typeof legacySettingsRoute
+  '/': typeof legacyIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/connections': typeof ConnectionsRoute
-  '/dashboard': typeof DashboardRoute
-  '/logs': typeof LogsRoute
-  '/profiles': typeof ProfilesRoute
-  '/providers': typeof ProvidersRoute
-  '/proxies': typeof ProxiesRoute
-  '/rules': typeof RulesRoute
-  '/settings': typeof SettingsRoute
+  '/(legacy)': typeof legacyRouteRouteWithChildren
+  '/(legacy)/connections': typeof legacyConnectionsRoute
+  '/(legacy)/dashboard': typeof legacyDashboardRoute
+  '/(legacy)/logs': typeof legacyLogsRoute
+  '/(legacy)/profiles': typeof legacyProfilesRoute
+  '/(legacy)/providers': typeof legacyProvidersRoute
+  '/(legacy)/proxies': typeof legacyProxiesRoute
+  '/(legacy)/rules': typeof legacyRulesRoute
+  '/(legacy)/settings': typeof legacySettingsRoute
+  '/(legacy)/': typeof legacyIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/'
     | '/connections'
     | '/dashboard'
     | '/logs'
@@ -111,9 +116,9 @@ export interface FileRouteTypes {
     | '/proxies'
     | '/rules'
     | '/settings'
+    | '/'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/'
     | '/connections'
     | '/dashboard'
     | '/logs'
@@ -122,109 +127,130 @@ export interface FileRouteTypes {
     | '/proxies'
     | '/rules'
     | '/settings'
+    | '/'
   id:
     | '__root__'
-    | '/'
-    | '/connections'
-    | '/dashboard'
-    | '/logs'
-    | '/profiles'
-    | '/providers'
-    | '/proxies'
-    | '/rules'
-    | '/settings'
+    | '/(legacy)'
+    | '/(legacy)/connections'
+    | '/(legacy)/dashboard'
+    | '/(legacy)/logs'
+    | '/(legacy)/profiles'
+    | '/(legacy)/providers'
+    | '/(legacy)/proxies'
+    | '/(legacy)/rules'
+    | '/(legacy)/settings'
+    | '/(legacy)/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  ConnectionsRoute: typeof ConnectionsRoute
-  DashboardRoute: typeof DashboardRoute
-  LogsRoute: typeof LogsRoute
-  ProfilesRoute: typeof ProfilesRoute
-  ProvidersRoute: typeof ProvidersRoute
-  ProxiesRoute: typeof ProxiesRoute
-  RulesRoute: typeof RulesRoute
-  SettingsRoute: typeof SettingsRoute
+  legacyRouteRoute: typeof legacyRouteRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
+    '/(legacy)': {
+      id: '/(legacy)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof legacyRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/rules': {
-      id: '/rules'
-      path: '/rules'
-      fullPath: '/rules'
-      preLoaderRoute: typeof RulesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/proxies': {
-      id: '/proxies'
-      path: '/proxies'
-      fullPath: '/proxies'
-      preLoaderRoute: typeof ProxiesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/providers': {
-      id: '/providers'
-      path: '/providers'
-      fullPath: '/providers'
-      preLoaderRoute: typeof ProvidersRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/profiles': {
-      id: '/profiles'
-      path: '/profiles'
-      fullPath: '/profiles'
-      preLoaderRoute: typeof ProfilesRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/logs': {
-      id: '/logs'
-      path: '/logs'
-      fullPath: '/logs'
-      preLoaderRoute: typeof LogsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/connections': {
-      id: '/connections'
-      path: '/connections'
-      fullPath: '/connections'
-      preLoaderRoute: typeof ConnectionsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/': {
-      id: '/'
+    '/(legacy)/': {
+      id: '/(legacy)/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof legacyIndexRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/settings': {
+      id: '/(legacy)/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof legacySettingsRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/rules': {
+      id: '/(legacy)/rules'
+      path: '/rules'
+      fullPath: '/rules'
+      preLoaderRoute: typeof legacyRulesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/proxies': {
+      id: '/(legacy)/proxies'
+      path: '/proxies'
+      fullPath: '/proxies'
+      preLoaderRoute: typeof legacyProxiesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/providers': {
+      id: '/(legacy)/providers'
+      path: '/providers'
+      fullPath: '/providers'
+      preLoaderRoute: typeof legacyProvidersRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/profiles': {
+      id: '/(legacy)/profiles'
+      path: '/profiles'
+      fullPath: '/profiles'
+      preLoaderRoute: typeof legacyProfilesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/logs': {
+      id: '/(legacy)/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof legacyLogsRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/dashboard': {
+      id: '/(legacy)/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof legacyDashboardRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/connections': {
+      id: '/(legacy)/connections'
+      path: '/connections'
+      fullPath: '/connections'
+      preLoaderRoute: typeof legacyConnectionsRouteImport
+      parentRoute: typeof legacyRouteRoute
     }
   }
 }
 
+interface legacyRouteRouteChildren {
+  legacyConnectionsRoute: typeof legacyConnectionsRoute
+  legacyDashboardRoute: typeof legacyDashboardRoute
+  legacyLogsRoute: typeof legacyLogsRoute
+  legacyProfilesRoute: typeof legacyProfilesRoute
+  legacyProvidersRoute: typeof legacyProvidersRoute
+  legacyProxiesRoute: typeof legacyProxiesRoute
+  legacyRulesRoute: typeof legacyRulesRoute
+  legacySettingsRoute: typeof legacySettingsRoute
+  legacyIndexRoute: typeof legacyIndexRoute
+}
+
+const legacyRouteRouteChildren: legacyRouteRouteChildren = {
+  legacyConnectionsRoute: legacyConnectionsRoute,
+  legacyDashboardRoute: legacyDashboardRoute,
+  legacyLogsRoute: legacyLogsRoute,
+  legacyProfilesRoute: legacyProfilesRoute,
+  legacyProvidersRoute: legacyProvidersRoute,
+  legacyProxiesRoute: legacyProxiesRoute,
+  legacyRulesRoute: legacyRulesRoute,
+  legacySettingsRoute: legacySettingsRoute,
+  legacyIndexRoute: legacyIndexRoute,
+}
+
+const legacyRouteRouteWithChildren = legacyRouteRoute._addFileChildren(
+  legacyRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  ConnectionsRoute: ConnectionsRoute,
-  DashboardRoute: DashboardRoute,
-  LogsRoute: LogsRoute,
-  ProfilesRoute: ProfilesRoute,
-  ProvidersRoute: ProvidersRoute,
-  ProxiesRoute: ProxiesRoute,
-  RulesRoute: RulesRoute,
-  SettingsRoute: SettingsRoute,
+  legacyRouteRoute: legacyRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

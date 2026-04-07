@@ -44,7 +44,7 @@ import { ClashProfile, filterProfiles } from '@/components/profiles/utils';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
-export const Route = createFileRoute('/profiles')({
+export const Route = createFileRoute('/(legacy)/profiles')({
   validateSearch: (search): ProfilePageSearch => {
     const subscribeUrl = asValidUrl(search.subscribeUrl);
 

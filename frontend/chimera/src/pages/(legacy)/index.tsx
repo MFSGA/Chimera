@@ -3,7 +3,7 @@ import { useAtomValue } from 'jotai';
 import { useEffect } from 'react';
 import { memorizedRoutePathAtom } from '@/store';
 
-export const Route = createFileRoute('/')({
+export const Route = createFileRoute('/(legacy)/')({
   component: IndexPage,
 });
 

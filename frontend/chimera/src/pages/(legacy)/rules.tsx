@@ -8,7 +8,7 @@ import { lazy, Suspense, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { atomRulePage } from '@/components/rules/modules/store';
 
-export const Route = createFileRoute('/rules')({
+export const Route = createFileRoute('/(legacy)/rules')({
   component: RulesPage,
 });
 
