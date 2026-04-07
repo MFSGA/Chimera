@@ -24,7 +24,7 @@ import SortSelector from '@/components/proxies/sort-selector';
 import { proxyGroupAtom } from '@/store';
 import { proxiesFilterAtom } from '@/store/proxies';
 
-export const Route = createFileRoute('/proxies')({
+export const Route = createFileRoute('/(legacy)/proxies')({
   component: ProxyPage,
 });
 

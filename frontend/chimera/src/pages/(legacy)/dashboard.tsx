@@ -7,7 +7,7 @@ import ProxyShortcuts from '@/components/dashboard/proxy-shortcuts';
 import ServiceShortcuts from '@/components/dashboard/service-shortcuts';
 import { useVisibility } from '@/hooks/use-visibility';
 
-export const Route = createFileRoute('/dashboard')({
+export const Route = createFileRoute('/(legacy)/dashboard')({
   component: Dashboard,
 });
 
