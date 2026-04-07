@@ -104,3 +104,47 @@ pub fn init_resources() -> Result<()> {
 
     Ok(())
 }
+
+/// initialize service resources
+/// after tauri setup
+#[tracing::instrument]
+pub fn init_service() -> Result<()> {
+    use nyanpasu_utils::runtime::block_on;
+
+    tracing::debug!("init services");
+    block_on(async move {
+        let enable_service = {
+            *crate::config::core::Config::verge()
+                .latest()
+                .enable_service_mode
+                .as_ref()
+                .unwrap_or(&false)
+        };
+        if enable_service {
+            match crate::core::service::control::status().await {
+                Ok(status) => {
+                    tracing::info!(
+                        "service mode is enabled and service is running, do a update check"
+                    );
+                    if let Some(info) = status.server {
+                        let server_ver = semver::Version::parse(info.version.as_ref()).unwrap();
+                        let app_ver = semver::Version::parse(status.version.as_ref()).unwrap();
+                        if app_ver > server_ver {
+                            tracing::info!(
+                                "client service ver is newer than exist one, do service update"
+                            );
+                            if let Err(e) = crate::core::service::control::update_service().await {
+                                log::error!(target: "app", "failed to update service: {e:?}");
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!(target: "app", "failed to get service status: {e:?}");
+                }
+            }
+        }
+        crate::core::service::init_service().await;
+    });
+    Ok(())
+}

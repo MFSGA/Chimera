@@ -113,7 +113,7 @@ pub fn resolve_setup(app: &mut App) {
     // crate::consts::setup_app_handle(app.app_handle().clone());
 
     log_err!(init::init_resources());
-    debug!("todo for service");
+    log_err!(init::init_service());
 
     // 启动核心
     log::trace!("init config");

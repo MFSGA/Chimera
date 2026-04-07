@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI64, Ordering},
@@ -16,7 +17,14 @@ use chimera_utils::{
     },
     runtime::{block_on, spawn},
 };
-use nyanpasu_ipc::{api::status::CoreState, utils::get_current_ts};
+/* use nyanpasu_ipc::{
+    api::{core::start::CoreStartReq, status::CoreState},
+    utils::get_current_ts,
+}; */
+use chimera_ipc::{
+    api::{core::start::CoreStartReq, status::CoreState},
+    utils::get_current_ts,
+};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -72,7 +80,10 @@ enum Instance {
         stated_changed_at: Arc<AtomicI64>,
         kill_flag: Arc<AtomicBool>,
     },
-    Service {},
+    Service {
+        config_path: PathBuf,
+        core_type: chimera_utils::core::CoreType,
+    },
 }
 
 impl Instance {
@@ -98,7 +109,21 @@ impl Instance {
                 )
             }
             Instance::Service { .. } => {
-                todo!()
+                let status = nyanpasu_ipc::client::shortcuts::Client::service_default()
+                    .status()
+                    .await;
+                match status {
+                    Ok(info) => (
+                        Cow::Owned(match info.core_infos.state {
+                            nyanpasu_ipc::api::status::CoreState::Running => CoreState::Running,
+                            nyanpasu_ipc::api::status::CoreState::Stopped(_) => {
+                                CoreState::Stopped(None)
+                            }
+                        }),
+                        info.core_infos.state_changed_at,
+                    ),
+                    Err(_) => (Cow::Owned(CoreState::Stopped(None)), 0),
+                }
             }
         }
     }
@@ -124,7 +149,17 @@ impl Instance {
                 })
             }
             Instance::Service { .. } => {
-                todo!()
+                let status = nyanpasu_ipc::client::shortcuts::Client::service_default()
+                    .status()
+                    .await
+                    .map(|info| match info.core_infos.state {
+                        nyanpasu_ipc::api::status::CoreState::Running => CoreState::Running,
+                        nyanpasu_ipc::api::status::CoreState::Stopped(_) => {
+                            CoreState::Stopped(None)
+                        }
+                    })
+                    .unwrap_or(CoreState::Stopped(None));
+                Cow::Owned(status)
             }
         }
     }
@@ -150,20 +185,22 @@ impl Instance {
                 Ok(())
             }
             Instance::Service { .. } => {
-                todo!()
+                Ok(nyanpasu_ipc::client::shortcuts::Client::service_default()
+                    .stop_core()
+                    .await?)
             }
         }
     }
 
     pub fn try_new(run_type: RunType) -> Result<Self> {
-        let core_type: chimera_utils::core::CoreType = {
-            (Config::verge()
-                .latest()
-                .clash_core
-                .as_ref()
-                .unwrap_or(&ClashCore::Mihomo))
-            .into()
-        };
+        let clash_core = Config::verge()
+            .latest()
+            .clash_core
+            .as_ref()
+            .unwrap_or(&ClashCore::Mihomo)
+            .to_owned();
+        let core_type: chimera_utils::core::CoreType = { (&clash_core).into() };
+        let service_core_type: chimera_utils::core::CoreType = (&clash_core).into();
 
         let data_dir = camino::Utf8PathBuf::from_path_buf(dirs::app_data_dir()?)
             .map_err(|e| anyhow::anyhow!("failed to convert data dir to utf8 path: {:?}", e))?;
@@ -193,9 +230,10 @@ impl Instance {
                     stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
                 })
             }
-            RunType::Service => {
-                todo!()
-            }
+            RunType::Service => Ok(Instance::Service {
+                config_path: config_path.into(),
+                core_type: service_core_type,
+            }),
             RunType::Elevated => {
                 todo!()
             }
@@ -266,7 +304,7 @@ impl Instance {
                                             break;
                                         }
                                         CommandEvent::Terminated(status) => {
-                                                log::error!(
+                                            log::error!(
                                                 target: "app",
                                                 "core terminated with status: {status:?}"
                                             );
@@ -319,10 +357,20 @@ impl Instance {
                 Ok(())
             }
             Instance::Service {
-                // config_path,
-                // core_type,
+                config_path,
+                core_type,
             } => {
-                todo!()
+                let payload = CoreStartReq {
+                    config_file: Cow::Borrowed(config_path),
+                    core_type: Cow::Borrowed(core_type),
+                };
+                match chimera_ipc::client::shortcuts::Client::service_default()
+                    .start_core(&payload)
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(err) => Err(anyhow::anyhow!("failed to start core: {}", err)),
+                }
             }
         }
     }

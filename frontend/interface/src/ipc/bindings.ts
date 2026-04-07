@@ -515,7 +515,8 @@ export type ClashCoreType =
   | 'mihomo-alpha'
   | 'clash-rs'
   | 'clash-rs-alpha'
-  | 'clash';
+  | 'clash'
+  | 'chimera_client';
 export type ClashInfo = {
   /**
    * clash core port
