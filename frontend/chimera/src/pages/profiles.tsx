@@ -18,11 +18,7 @@ import {
   Grid,
   IconButton,
 } from '@mui/material';
-import {
-  createFileRoute,
-  useLocation,
-  useNavigate,
-} from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAtom } from 'jotai';
@@ -49,44 +45,61 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
 export const Route = createFileRoute('/profiles')({
+  validateSearch: (search): ProfilePageSearch => {
+    const subscribeUrl = asValidUrl(search.subscribeUrl);
+
+    return {
+      subscribeUrl,
+      subscribeName: asOptionalString(search.subscribeName),
+      subscribeDesc: asOptionalString(search.subscribeDesc),
+    };
+  },
   component: ProfilePage,
 });
 
-const parseSubscribeProfileContext = (search: string) => {
-  const params = new URLSearchParams(search);
-  const subscribeUrl = params.get('subscribeUrl');
+type ProfilePageSearch = {
+  subscribeName?: string;
+  subscribeUrl?: string;
+  subscribeDesc?: string;
+};
 
-  if (!subscribeUrl) {
-    return null;
+const asOptionalString = (value: unknown) => {
+  return typeof value === 'string' && value ? value : undefined;
+};
+
+const asValidUrl = (value: unknown) => {
+  if (typeof value !== 'string' || !value) {
+    return undefined;
   }
 
   try {
-    new URL(subscribeUrl);
+    new URL(value);
+    return value;
   } catch {
-    return null;
+    return undefined;
   }
-
-  return {
-    name: params.get('subscribeName'),
-    desc: params.get('subscribeDesc'),
-    url: subscribeUrl,
-  } satisfies AddProfileContextValue;
 };
 
 function ProfilePage() {
   const { t } = useTranslation();
 
   const { query, update } = useProfile();
-  const location = useLocation();
-  const navigate = useNavigate();
+  const search = Route.useSearch();
 
   const profiles = useMemo(() => {
     return filterProfiles(query.data?.items);
   }, [query.data?.items]);
   const profileItems = profiles?.clash ?? [];
   const addProfileCtxValue = useMemo(
-    () => parseSubscribeProfileContext(window.location.search),
-    [location],
+    () =>
+      search.subscribeUrl
+        ? ({
+            name: search.subscribeName ?? null,
+            desc: search.subscribeDesc ?? null,
+            url: search.subscribeUrl,
+          } satisfies AddProfileContextValue)
+        : null,
+    [search],
   );
   // todo: optimize the components
 
@@ -153,18 +166,6 @@ function ProfilePage() {
       }
     });
   });
-
-  const handleQuickImportSuccess = () => {
-    if (!window.location.search) {
-      return;
-    }
-
-    navigate({
-      to: '/profiles',
-      search: {} as never,
-      replace: true,
-    });
-  };
 
   const renderProfilesContent = () => {
     if (query.isLoading) {
@@ -291,10 +292,7 @@ function ProfilePage() {
         <AnimatePresence initial={false} mode="sync">
           <GlobalUpdatePendingContext.Provider value={globalUpdatePending}>
             <div className="flex flex-col gap-4 p-6">
-              <QuickImport
-                defaultUrl={addProfileCtxValue?.url}
-                onImported={handleQuickImportSuccess}
-              />
+              <QuickImport />
               {renderProfilesContent()}
             </div>
           </GlobalUpdatePendingContext.Provider>

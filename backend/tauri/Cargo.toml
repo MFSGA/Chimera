@@ -155,6 +155,7 @@ tracing-attributes = "0.1"
 tauri-plugin-os = "2.2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
+tauri-plugin-clipboard-manager = "2.2"
 rust-i18n = "3"
 
 dashmap = "6"
