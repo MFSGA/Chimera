@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_INCREMENTAL: 0
