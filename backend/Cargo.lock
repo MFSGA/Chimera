@@ -826,8 +826,8 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.5.2"
-source = "git+https://github.com/MFSGA/Chimera_Service#2a48457b8cfb9fbb90bea17441b10eaf945a95b8"
+version = "1.6.0"
+source = "git+https://github.com/MFSGA/Chimera_Service#61ea08b4250703699e4831813298d70f8ee234c2"
 dependencies = [
  "anyhow",
  "axum",
@@ -865,7 +865,7 @@ dependencies = [
 [[package]]
 name = "chimera_utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#dbad1ae4fb238b4a2d0c02c95574d13c91a7d271"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
  "camino",
  "constcat",
@@ -1412,7 +1412,7 @@ dependencies = [
 [[package]]
 name = "dirs-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#dbad1ae4fb238b4a2d0c02c95574d13c91a7d271"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
  "dirs 6.0.0",
  "thiserror 2.0.17",
@@ -1455,7 +1455,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330c60081dcc4c72131f8eb70510f1ac07223e5d4163db481a04a0befcffa412"
 dependencies = [
- "libloading 0.8.9",
+ "libloading 0.7.4",
 ]
 
 [[package]]
@@ -2553,7 +2553,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.0",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -3971,9 +3971,9 @@ dependencies = [
 [[package]]
 name = "os-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#dbad1ae4fb238b4a2d0c02c95574d13c91a7d271"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#0ed55a482ee67bdca06af6526382111b64fa6473"
 dependencies = [
- "nix 0.30.1",
+ "nix 0.29.0",
  "shared_child",
  "windows 0.61.3",
 ]
@@ -4001,7 +4001,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -7652,7 +7652,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
