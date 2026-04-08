@@ -73,8 +73,8 @@ impl Proxies {
             } else {
                 api::ProxyItem {
                     name: name.to_string(),
-                    // r#type: "Unknown".to_string(),
-                    // udp: false,
+                    r#type: "Unknown".to_string(),
+                    udp: false,
                     history: vec![],
                     ..Default::default()
                 }
@@ -94,6 +94,7 @@ impl Proxies {
         // 3. generate the proxies groups
         let groups: Vec<ProxyGroupItem> = match global {
             Some(api::ProxyItem { all: Some(all), .. }) => {
+                tracing::debug!("all: {all:#?}");
                 let all = all.clone();
                 all.into_iter()
                     .filter(|name| {
