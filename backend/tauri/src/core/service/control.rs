@@ -44,7 +44,7 @@ async fn run_service_command(action: &str, args: Vec<OsString>) -> anyhow::Resul
             match sudo(SERVICE_PATH.to_string_lossy(), &args) {
                 Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
                 Err(e) => {
-                    tracing::error!("failed to {action}: {}", e);
+                    tracing::error!("failed to {}: {}", &action.clone(), e);
                     Err(e)
                 }
             }
