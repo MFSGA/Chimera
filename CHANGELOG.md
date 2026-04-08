@@ -1,3 +1,15 @@
+## [0.9.2] - 2026-04-08 12:08:25
+
+### ✨ Features
+
+- **ProxyItem:** Support more option in proxies page by @MFSGA
+
+- **workflow:** Support auto release by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.9.1...v0.9.2
+
 ## [0.9.1] - 2026-04-08 11:13:10
 
 ### ✨ Features
