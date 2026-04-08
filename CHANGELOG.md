@@ -1,3 +1,13 @@
+## [0.9.3] - 2026-04-08 12:15:46
+
+### 🐛 Bug Fixes
+
+- Workflow by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.9.2...v0.9.3
+
 ## [0.9.2] - 2026-04-08 12:08:25
 
 ### ✨ Features
