@@ -1,8 +1,21 @@
 name: '[Entire] Build Release Version'
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag'
+        required: true
+        type: string
+      release_body:
+        description: 'Release Body'
+        required: false
+        type: string
   release:
     types: [published]
+
+permissions:
+  contents: write
 
 env:
   CARGO_INCREMENTAL: 0
@@ -18,14 +31,14 @@ jobs:
       # todo:
       fixed-webview: false
       arch: 'x86_64'
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
     secrets: inherit
   linux_build:
     name: Linux Build
     uses: ./.github/workflows/deps-build-linux.yaml
     with:
       nightly: false
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
       arch: 'x86_64'
     secrets: inherit
 
@@ -35,7 +48,8 @@ jobs:
     needs: [windows_build, linux_build]
     uses: ./.github/workflows/deps-upload-release-assets.yaml
     with:
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
+    secrets: inherit
   updater:
     name: Create Updater
     uses: ./.github/workflows/deps-create-updater.yaml
@@ -43,3 +57,5 @@ jobs:
     needs: [upload_release_assets]
     with:
       nightly: false
+      release_body: ${{ inputs.release_body || github.event.release.body }}
+    secrets: inherit
