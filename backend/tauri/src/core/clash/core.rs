@@ -10,20 +10,16 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use camino::Utf8PathBuf;
+use chimera_ipc::{
+    api::{core::start::CoreStartReq, status::CoreState},
+    utils::get_current_ts,
+};
 use chimera_utils::{
     core::{
         CommandEvent,
         instance::{CoreInstance, CoreInstanceBuilder},
     },
     runtime::{block_on, spawn},
-};
-/* use nyanpasu_ipc::{
-    api::{core::start::CoreStartReq, status::CoreState},
-    utils::get_current_ts,
-}; */
-use chimera_ipc::{
-    api::{core::start::CoreStartReq, status::CoreState},
-    utils::get_current_ts,
 };
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -109,14 +105,14 @@ impl Instance {
                 )
             }
             Instance::Service { .. } => {
-                let status = nyanpasu_ipc::client::shortcuts::Client::service_default()
+                let status = chimera_ipc::client::shortcuts::Client::service_default()
                     .status()
                     .await;
                 match status {
                     Ok(info) => (
                         Cow::Owned(match info.core_infos.state {
-                            nyanpasu_ipc::api::status::CoreState::Running => CoreState::Running,
-                            nyanpasu_ipc::api::status::CoreState::Stopped(_) => {
+                            chimera_ipc::api::status::CoreState::Running => CoreState::Running,
+                            chimera_ipc::api::status::CoreState::Stopped(_) => {
                                 CoreState::Stopped(None)
                             }
                         }),
@@ -149,14 +145,12 @@ impl Instance {
                 })
             }
             Instance::Service { .. } => {
-                let status = nyanpasu_ipc::client::shortcuts::Client::service_default()
+                let status = chimera_ipc::client::shortcuts::Client::service_default()
                     .status()
                     .await
                     .map(|info| match info.core_infos.state {
-                        nyanpasu_ipc::api::status::CoreState::Running => CoreState::Running,
-                        nyanpasu_ipc::api::status::CoreState::Stopped(_) => {
-                            CoreState::Stopped(None)
-                        }
+                        chimera_ipc::api::status::CoreState::Running => CoreState::Running,
+                        chimera_ipc::api::status::CoreState::Stopped(_) => CoreState::Stopped(None),
                     })
                     .unwrap_or(CoreState::Stopped(None));
                 Cow::Owned(status)
@@ -185,7 +179,7 @@ impl Instance {
                 Ok(())
             }
             Instance::Service { .. } => {
-                Ok(nyanpasu_ipc::client::shortcuts::Client::service_default()
+                Ok(chimera_ipc::client::shortcuts::Client::service_default()
                     .stop_core()
                     .await?)
             }
