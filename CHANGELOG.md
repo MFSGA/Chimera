@@ -1,3 +1,53 @@
+## [0.9.1] - 2026-04-08 11:13:10
+
+### ✨ Features
+
+- **app:** Migrate the MutationProvider by @MFSGA
+
+- **deeplink:** Support the frontend for profile by @MFSGA
+
+- **deeplink:** Support the backend by @MFSGA
+
+- **docs:** Optimize the readme by @MFSGA
+
+- **layout:** Refactor root component by @MFSGA
+
+- **layout:** Use the latest layout by @MFSGA
+
+- **mutation:** Add the comp in interface by @MFSGA
+
+- **notice:** Prepare to support deeplink by @MFSGA
+
+- **profile:** Keep align with ref and mainly use clipboard plugin by @MFSGA
+
+- **profile:** Keeo align with the remote by @MFSGA
+
+- **profile:** Optimize for quick-iimport by @MFSGA
+
+- **profile:** Support update patch create delete profile by @MFSGA
+
+- **profile:** Add the basic chain support: just the ui by @MFSGA
+
+- **profile:** Add new profile button by @MFSGA
+
+- **service:** Replace ipc by @MFSGA
+
+- **service:** Prepare for service by @MFSGA
+
+- **settings:** Support to change to legacy ui by @MFSGA
+
+- **tun:** Optimize for dns by @MFSGA
+
+- **ui:** Support breakpoint by @MFSGA
+
+### 🐛 Bug Fixes
+
+- Support macos by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.9.0...v0.9.1
+
 ## [0.9.0] - 2026-04-01 02:23:37
 
 ### ✨ Features
