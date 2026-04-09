@@ -31,6 +31,16 @@ pub struct ProfileShared {
     pub updated: usize,
 }
 
+impl ProfileShared {
+    pub fn get_default_builder(kind: &ProfileItemType) -> ProfileSharedBuilder {
+        let mut builder = ProfileSharedBuilder::default();
+        builder
+            .name(ProfileSharedBuilder::default_name(kind).to_string())
+            .uid(ProfileSharedBuilder::default_uid(kind));
+        builder
+    }
+}
+
 impl ProfileSharedBuilder {
     fn default_uid(kind: &ProfileItemType) -> String {
         super::utils::generate_uid(kind)

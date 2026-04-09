@@ -583,6 +583,13 @@ pub async fn patch_profile(uid: String, profile: ProfileBuilder) -> Result {
                     .patch_profile(item)
                     .context("failed to patch remote profile")?;
             }
+            (
+                crate::config::profile::item::Profile::Local(item),
+                ProfileBuilder::Local(builder),
+            ) => {
+                item.apply(builder);
+            }
+            _ => return Err(anyhow!("profile type mismatch").into()),
         }
     }
 
@@ -661,7 +668,7 @@ pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> Result {
-    let _ = file_data;
+    let is_remote = matches!(&item, ProfileBuilder::Remote(_));
 
     let profile: crate::config::profile::item::Profile = match item {
         ProfileBuilder::Remote(mut builder) => builder
@@ -669,7 +676,18 @@ pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> 
             .await
             .context("failed to build remote profile")?
             .into(),
+        ProfileBuilder::Local(builder) => builder
+            .build()
+            .context("failed to build local profile")?
+            .into(),
     };
+
+    if let Some(file_data) = file_data
+        && !file_data.is_empty()
+        && !is_remote
+    {
+        profile.save_file(file_data)?;
+    }
 
     let profile_id = if Config::profiles().draft().current.is_empty() {
         Some(profile.uid().to_string())

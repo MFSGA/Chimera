@@ -150,6 +150,7 @@ camino = { version = "1.1.9", features = ["serde1"] }
 sysproxy = { git = "https://github.com/libnyanpasu/sysproxy-rs.git", version = "0.3" }
 
 tauri-plugin-dialog = "2.2"
+tauri-plugin-fs = "2.4"
 tauri-plugin-deep-link = "2"
 
 oneshot = "0.1"

@@ -11,6 +11,7 @@
     "opener:default",
     "updater:default",
     "dialog:default",
+    "fs:default",
     "core:window:default",
     "core:window:allow-create",
     "core:window:allow-center",

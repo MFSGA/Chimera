@@ -5,10 +5,15 @@ use anyhow::{Context, Result, bail};
 use chimera_macro::EnumWrapperCombined;
 
 use crate::{
-    config::profile::{item::remote::RemoteProfile, item_type::ProfileItemType},
+    config::profile::{
+        item::{local::LocalProfile, remote::RemoteProfile},
+        item_type::ProfileItemType,
+    },
     utils::dirs,
 };
 
+/// 0
+pub mod local;
 /// 1
 pub mod remote;
 /// 2
@@ -31,12 +36,14 @@ pub trait ProfileMetaGetter {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Profile {
     Remote(RemoteProfile),
+    Local(LocalProfile),
 }
 
 impl Profile {
     pub fn file(&self) -> &str {
         match self {
             Profile::Remote(profile) => &profile.shared.file,
+            Profile::Local(profile) => &profile.shared.file,
         }
     }
 

@@ -1,5 +1,6 @@
 import {
   ProfileQueryResultItem,
+  ProfileTemplate,
   RemoteProfile,
   useProfile,
   useProfileContent,
@@ -28,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { useLatest } from 'react-use';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { ReadProfile } from './read-profile';
 import { ClashProfile, ClashProfileBuilder } from './utils';
 
 const ProfileMonacoViewer = lazy(() => import('./profile-monaco-viewer'));
@@ -59,8 +61,10 @@ export const ProfileDialog = ({
 
   const contentFn = useProfileContent(profile?.uid ?? '');
 
+  const localProfile = useRef('');
   const addProfileCtx = use(AddProfileContext);
   const [isEdit, setIsEdit] = useState(!!profile);
+  const [localProfileMessage] = useState('');
 
   const { control, watch, handleSubmit, reset, setValue } =
     useForm<ClashProfileBuilder>({
@@ -100,6 +104,10 @@ export const ProfileDialog = ({
     [],
   );
 
+  const handleProfileSelected = (content: string) => {
+    localProfile.current = content;
+  };
+
   const [editor, setEditor] = useState({
     value: '',
     language: 'yaml',
@@ -122,20 +130,30 @@ export const ProfileDialog = ({
     }
 
     const toCreate = async () => {
-      const data = form as RemoteProfile;
+      if (isRemote) {
+        const data = form as RemoteProfile;
 
-      await create.mutateAsync({
-        type: 'url',
-        data: {
-          url: data.url,
-          option: data.option
-            ? {
-                ...data.option,
-                user_agent: data.option.user_agent ?? null,
-              }
-            : null,
-        },
-      });
+        await create.mutateAsync({
+          type: 'url',
+          data: {
+            url: data.url,
+            option: data.option
+              ? {
+                  ...data.option,
+                  user_agent: data.option.user_agent ?? null,
+                }
+              : null,
+          },
+        });
+      } else {
+        await create.mutateAsync({
+          type: 'manual',
+          data: {
+            item: form,
+            fileData: localProfile.current || ProfileTemplate.profile,
+          },
+        });
+      }
     };
 
     const toUpdate = async () => {
@@ -189,6 +207,10 @@ export const ProfileDialog = ({
               {
                 id: 'remote',
                 label: t('Remote Profile'),
+              },
+              {
+                id: 'local',
+                label: t('Local Profile'),
               },
             ]}
           />
@@ -249,9 +271,25 @@ export const ProfileDialog = ({
             />
           </>
         )}
+
+        {!isRemote && !isEdit && (
+          <>
+            <ReadProfile
+              key="read_profile"
+              onSelected={handleProfileSelected}
+            />
+
+            {localProfileMessage && (
+              <div className="ml-2 text-red-500">{localProfileMessage}</div>
+            )}
+            <span className="px-2 text-xs">
+              * {t('Choose file to import or leave it blank to create new one')}
+            </span>
+          </>
+        )}
       </div>
     ),
-    [commonProps, control, isEdit, isRemote, t],
+    [commonProps, control, isEdit, isRemote, localProfileMessage, t],
   );
 
   useAsyncEffect(async () => {
