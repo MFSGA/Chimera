@@ -683,6 +683,54 @@ export type JsonValue =
   | string
   | JsonValue[]
   | Partial<{ [key in string]: JsonValue }>;
+export type LocalProfile = {
+  /**
+   * Profile ID
+   */
+  uid: string;
+  /**
+   * profile name
+   */
+  name: string;
+  /**
+   * profile holds the file
+   */
+  file: string;
+  /**
+   * profile description
+   */
+  desc: string | null;
+  /**
+   * update time
+   */
+  updated: number;
+} & { symlinks?: string | null; chain?: string[] };
+/**
+ * Builder for [`LocalProfile`](struct.LocalProfile.html).
+ *
+ */
+export type LocalProfileBuilder = {
+  /**
+   * Profile ID
+   */
+  uid: string | null;
+  /**
+   * profile name
+   */
+  name: string | null;
+  /**
+   * profile holds the file
+   */
+  file: string | null;
+  /**
+   * profile description
+   */
+  desc: string | null;
+  /**
+   * update time
+   */
+  updated: number | null;
+} & { symlinks: string | null; chain?: string[] | null };
 export type LoggingLevel =
   | 'silent'
   | 'trace'
@@ -704,8 +752,12 @@ export type PatchRuntimeConfig = {
   log_level?: string | null;
   mode?: string | null;
 };
-export type Profile = { type: 'remote' } & RemoteProfile;
-export type ProfileBuilder = { type: 'remote' } & RemoteProfileBuilder;
+export type Profile =
+  | ({ type: 'remote' } & RemoteProfile)
+  | ({ type: 'local' } & LocalProfile);
+export type ProfileBuilder =
+  | ({ type: 'remote' } & RemoteProfileBuilder)
+  | ({ type: 'local' } & LocalProfileBuilder);
 export type Profiles = {
   current: string[];
   /**
