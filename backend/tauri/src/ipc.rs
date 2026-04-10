@@ -188,7 +188,10 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
 pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
     Config::profiles().draft().apply(profiles);
 
-    match CoreManager::global().update_config().await {
+    match CoreManager::global()
+        .restart_core_with_generated_config()
+        .await
+    {
         Ok(_) => {
             handle::Handle::refresh_clash();
             handle::Handle::refresh_profiles();
@@ -593,7 +596,10 @@ pub async fn patch_profile(uid: String, profile: ProfileBuilder) -> Result {
         }
     }
 
-    match CoreManager::global().update_config().await {
+    match CoreManager::global()
+        .restart_core_with_generated_config()
+        .await
+    {
         Ok(_) => {
             handle::Handle::refresh_clash();
             handle::Handle::refresh_profiles();
@@ -617,7 +623,10 @@ pub async fn delete_profile(uid: String) -> Result {
     };
 
     if should_update {
-        match CoreManager::global().update_config().await {
+        match CoreManager::global()
+            .restart_core_with_generated_config()
+            .await
+        {
             Ok(_) => handle::Handle::refresh_clash(),
             Err(err) => {
                 Config::profiles().discard();

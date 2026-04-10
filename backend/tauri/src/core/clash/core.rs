@@ -471,6 +471,16 @@ impl CoreManager {
         Ok(())
     }
 
+    /// Apply the generated config by restarting the core.
+    /// This is used for restart-required changes such as profile source switches
+    /// and tun mode changes. In service mode this will stop/start via service IPC.
+    pub async fn restart_core_with_generated_config(&self) -> Result<()> {
+        log::debug!(target: "app", "restart core with regenerated config");
+        Config::generate().await?;
+        self.check_config().await?;
+        self.run_core().await
+    }
+
     /// 检查配置是否正确
     pub async fn check_config(&self) -> Result<()> {
         use chimera_utils::core::instance::CoreInstance;
