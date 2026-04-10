@@ -112,8 +112,14 @@ pub(super) fn spawn_health_check() {
 async fn health_check() {
     match super::control::status().await {
         Ok(info) => match info.status {
-            ServiceStatus::Running => {
+            ServiceStatus::Running if super::is_service_runtime_compatible(&info) => {
                 dispatch_connected();
+            }
+            ServiceStatus::Running => {
+                tracing::debug!(
+                    "service is running but runtime dirs do not match current app instance; keep service mode disconnected"
+                );
+                dispatch_disconnected();
             }
             ServiceStatus::Stopped | ServiceStatus::NotInstalled => {
                 dispatch_disconnected();
