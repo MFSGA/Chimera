@@ -477,8 +477,22 @@ impl CoreManager {
     pub async fn restart_core_with_generated_config(&self) -> Result<()> {
         log::debug!(target: "app", "restart core with regenerated config");
         Config::generate().await?;
-        self.check_config().await?;
-        self.run_core().await
+        let result = async {
+            self.check_config().await?;
+            self.run_core().await
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                Config::runtime().apply();
+                Ok(())
+            }
+            Err(err) => {
+                Config::runtime().discard();
+                Err(err)
+            }
+        }
     }
 
     /// 检查配置是否正确
