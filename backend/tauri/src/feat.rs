@@ -131,8 +131,6 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
 
         if tun_mode.is_some() {
             log::debug!(target: "app", "toggle tun mode");
-            #[allow(unused_mut)]
-            let mut flag = false;
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 use crate::utils::dirs::check_core_permission;
@@ -142,21 +140,10 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
                 if !service_state.is_connected() && check_core_permission(&current_core).inspect_err(|e| {
                     log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
                 }).is_ok_and(|v| !v) {
-                    log::debug!(target: "app", "grant core permission, and restart core");
-                    flag = true;
-                }
+                    log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
+                };
             }
-            let (state, _, _) = CoreManager::global().status().await;
-            if flag || matches!(state.as_ref(), CoreState::Stopped(_)) {
-                log::debug!(target: "app", "core is stopped, restart core");
-                Config::generate().await?;
-                CoreManager::global().run_core().await?;
-            } else {
-                log::debug!(target: "app", "update core config");
-                #[cfg(target_os = "macos")]
-                todo!();
-                update_core_config().await?;
-            }
+            update_core_config().await?;
         }
 
         if system_proxy.is_some() || proxy_bypass.is_some() {
@@ -197,7 +184,10 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
 
 /// 更新配置
 async fn update_core_config() -> Result<()> {
-    match CoreManager::global().update_config().await {
+    match CoreManager::global()
+        .restart_core_with_generated_config()
+        .await
+    {
         Ok(_) => {
             handle::Handle::refresh_clash();
             handle::Handle::notice_message(&Message::SetConfig(Ok(())));
