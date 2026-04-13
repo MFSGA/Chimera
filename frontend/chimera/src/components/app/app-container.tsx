@@ -1,14 +1,15 @@
-import { alpha, getSystem } from '@chimera/ui';
+import { alpha, cn, getSystem } from '@chimera/ui';
 import { Box } from '@mui/material';
 import Paper from '@mui/material/Paper';
-import { useSuspenseQuery } from '@tanstack/react-query';
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
+import { TauriEvent, UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { ReactNode } from 'react';
+import { useAtomValue } from 'jotai';
+import { ReactNode, useEffect, useRef } from 'react';
+import { atomIsDrawerOnlyIcon } from '@/store';
 import { LayoutControl } from '../layout/layout-control';
 import styles from './app-container.module.scss';
 import { DrawerContent } from './drawer-content';
-
-// todo: add the css style file
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -25,25 +26,41 @@ export const AppContainer = ({
     queryKey: ['isMaximized'],
     queryFn: () => appWindow.isMaximized(),
   });
+  const queryClient = useQueryClient();
+  const unlistenRef = useRef<UnlistenFn | null>(null);
+  const onlyIcon = useAtomValue(atomIsDrawerOnlyIcon);
+
+  useEffect(() => {
+    appWindow
+      .listen(TauriEvent.WINDOW_RESIZED, () => {
+        queryClient.invalidateQueries({ queryKey: ['isMaximized'] });
+      })
+      .then((unlisten) => {
+        unlistenRef.current = unlisten;
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+
+    return () => {
+      unlistenRef.current?.();
+    };
+  }, [queryClient]);
 
   return (
     <Paper
       square
       elevation={0}
       className={styles.layout}
-      /* todo: 
-      onPointerDown={(e: any) => {
-        if (e.target?.dataset?.windrag) {
+      onPointerDown={(e) => {
+        if ((e.target as HTMLElement)?.dataset?.windrag) {
           appWindow.startDragging();
         }
-      }} */
-      onContextMenu={(e) => {
-        e.preventDefault();
       }}
     >
       {!isDrawer && (
-        <div>
-          <DrawerContent />
+        <div className={cn(onlyIcon ? 'w-24' : 'w-64')}>
+          <DrawerContent data-tauri-drag-region onlyIcon={onlyIcon} />
         </div>
       )}
 
