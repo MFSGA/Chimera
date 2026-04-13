@@ -10,11 +10,10 @@ import {
 } from '@mui/icons-material';
 import { Button, ButtonProps } from '@mui/material';
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { listen, TauriEvent, UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { platform as getPlatform } from '@tauri-apps/plugin-os';
 import { useMemoizedFn } from 'ahooks';
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -39,20 +38,7 @@ export const LayoutControl = ({ className }: { className?: string }) => {
     queryFn: () => appWindow.isMaximized(),
   });
   const queryClient = useQueryClient();
-  const unlistenRef = useRef<UnlistenFn | null>(null);
   const platform = useRef(getPlatform());
-
-  useEffect(() => {
-    listen(TauriEvent.WINDOW_RESIZED, () => {
-      queryClient.invalidateQueries({ queryKey: ['isMaximized'] });
-    })
-      .then((unlisten) => {
-        unlistenRef.current = unlisten;
-      })
-      .catch((error) => {
-        console.error(error);
-      });
-  }, [queryClient]);
 
   const toggleAlwaysOnTop = useMemoizedFn(async () => {
     await upsert(!alwaysOnTop);

@@ -1,5 +1,5 @@
 import { use } from 'react';
-// todo: import CloseConnectionsButton from './close-connections-button';
+import CloseConnectionsButton from './close-connections-button';
 import { SearchTermCtx } from './connection-search-term';
 import ConnectionsTable from './connections-table';
 
@@ -8,6 +8,7 @@ export default function ConnectionPage() {
   return (
     <>
       <ConnectionsTable searchTerm={searchTerm} />
+      <CloseConnectionsButton />
     </>
   );
 }
