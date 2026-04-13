@@ -141,6 +141,8 @@
   "Fixed": "Fixed",
   "Random": "Random",
   "Core Secret": "Core Secret",
+  "Apply": "Apply",
+  "Port must be between 1 and 65535.": "Port must be between 1 and 65535.",
   "Clash Core": "Clash Core",
   "TUN Mode": "TUN Mode",
   "System Service": "System Service",

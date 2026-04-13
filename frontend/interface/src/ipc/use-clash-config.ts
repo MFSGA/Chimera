@@ -4,6 +4,16 @@ import { unwrapResult } from '../utils';
 import { commands, PatchRuntimeConfig } from './bindings';
 import { CLASH_CONFIG_QUERY_KEY } from './consts';
 
+const RESTART_REQUIRED_KEYS = new Set([
+  'mixed-port',
+  'secret',
+  'external-controller',
+]);
+
+const requiresCoreRestart = (
+  payload: PatchRuntimeConfig & Partial<ClashConfig>,
+) => Object.keys(payload).some((key) => RESTART_REQUIRED_KEYS.has(key));
+
 /**
  * A hook that manages fetching and updating the Clash configuration.
  *
@@ -60,7 +70,9 @@ export const useClashConfig = () => {
    */
   const upsert = useMutation({
     mutationFn: async (payload: PatchRuntimeConfig & Partial<ClashConfig>) => {
-      await patchConfigs(payload);
+      if (!requiresCoreRestart(payload)) {
+        await patchConfigs(payload);
+      }
 
       return unwrapResult(await commands.patchClashConfig(payload));
     },

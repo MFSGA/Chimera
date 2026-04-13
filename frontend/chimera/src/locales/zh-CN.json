@@ -141,6 +141,8 @@
   "Fixed": "固定",
   "Random": "随机",
   "Core Secret": "API 访问密钥",
+  "Apply": "应用",
+  "Port must be between 1 and 65535.": "端口必须在 1 到 65535 之间。",
   "Clash Core": "Clash 内核",
   "TUN Mode": "TUN 模式",
   "System Service": "系统服务",
