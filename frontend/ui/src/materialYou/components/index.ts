@@ -13,3 +13,4 @@ export * from './item';
 
 export * from './expandMore';
 export * from './loadingButton';
+export * from './sparkline';
