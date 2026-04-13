@@ -4,6 +4,8 @@ import SettingChimerauUI from './setting-chimera-ui';
 import SettingNyanpasuVersion from './setting-chimera-version';
 import { SettingClashBase } from './setting-clash-base';
 import SettingClashCore from './setting-clash-core';
+import SettingClashExternal from './setting-clash-external';
+import SettingClashPort from './setting-clash-port';
 import SettingSystemProxy from './setting-system-proxy';
 import SettingSystemService from './setting-system-service';
 
@@ -29,6 +31,8 @@ export const SettingPage = () => {
       <SettingChimerauUI />
       {/* 6 */}
       <SettingClashBase />
+      <SettingClashPort />
+      <SettingClashExternal />
       {/* 4 */}
       <SettingClashCore />
       {/* 5 */}

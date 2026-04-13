@@ -141,6 +141,8 @@
   "Fixed": "Фиксированный",
   "Random": "Случайный",
   "Core Secret": "Секрет ядра",
+  "Apply": "Применить",
+  "Port must be between 1 and 65535.": "Порт должен быть в диапазоне от 1 до 65535.",
   "Clash Core": "Ядро Clash",
   "TUN Mode": "Режим TUN",
   "System Service": "Системная служба",

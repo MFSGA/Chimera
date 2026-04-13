@@ -1,4 +1,4 @@
-use std::result::Result as StdResult;
+use std::{borrow::Borrow, result::Result as StdResult};
 
 use anyhow::{Context, anyhow};
 
@@ -431,7 +431,13 @@ pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
 
-    (crate::core::clash::api::patch_configs(&mapping).await)?;
+    let requires_core_restart = ["mixed-port", "secret", "external-controller"]
+        .iter()
+        .any(|key| mapping.contains_key(serde_yaml::Value::from(*key).borrow()));
+
+    if !requires_core_restart {
+        (crate::core::clash::api::patch_configs(&mapping).await)?;
+    }
 
     if let Err(e) = feat::patch_clash(mapping).await {
         tracing::error!("{e}");

@@ -17,6 +17,7 @@ export * from './use-clash-proxies';
 export * from './use-clash-cores';
 /** 10 */
 export * from './use-clash-version';
+export * from './use-clash-info';
 export * from './use-clash-logs';
 export * from './use-clash-memory';
 export * from './use-clash-traffic';
