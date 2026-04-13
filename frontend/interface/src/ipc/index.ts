@@ -18,6 +18,8 @@ export * from './use-clash-cores';
 /** 10 */
 export * from './use-clash-version';
 export * from './use-clash-logs';
+export * from './use-clash-memory';
+export * from './use-clash-traffic';
 /** 11 */
 export * from './use-profile-content';
 /** 12 */
