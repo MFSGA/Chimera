@@ -35,6 +35,36 @@ const applyRootStyleVar = (mode: 'light' | 'dark', theme: Theme) => {
     alpha(palette.primary.main, 0.1),
   );
 
+  // Keep Tailwind color utilities aligned with the runtime Material theme.
+  root.style.setProperty('--color-md-primary', palette.primary.main);
+  root.style.setProperty('--color-md-on-primary', palette.primary.contrastText);
+  root.style.setProperty(
+    '--color-md-primary-container',
+    alpha(palette.primary.main, 0.2),
+  );
+  root.style.setProperty(
+    '--color-md-on-primary-container',
+    palette.text.primary,
+  );
+  root.style.setProperty('--color-md-secondary', palette.secondary.main);
+  root.style.setProperty(
+    '--color-md-on-secondary',
+    palette.secondary.contrastText,
+  );
+  root.style.setProperty('--color-md-background', palette.background.default);
+  root.style.setProperty('--color-md-on-background', palette.text.primary);
+  root.style.setProperty('--color-md-surface', palette.background.paper);
+  root.style.setProperty('--color-md-on-surface', palette.text.primary);
+  root.style.setProperty(
+    '--color-md-surface-variant',
+    alpha(palette.text.primary, 0.08),
+  );
+  root.style.setProperty(
+    '--color-md-on-surface-variant',
+    palette.text.secondary,
+  );
+  root.style.setProperty('--color-md-inverse-primary', palette.primary.light);
+
   const reactRootDom = document.getElementById('root');
   if (reactRootDom) {
     reactRootDom.className = cn(mode === 'dark' ? 'dark' : 'light');

@@ -24,6 +24,21 @@
   --custom-text-shadow-xl:
     1px 1px 3px rgb(0 0 0 / 29%), 2px 4px 7px rgb(73 64 125 / 35%);
   --custom-text-shadow-none: none;
+
+  /* Material Design color system */
+  --color-primary: var(--color-md-primary);
+  --color-on-primary: var(--color-md-on-primary);
+  --color-primary-container: var(--color-md-primary-container);
+  --color-on-primary-container: var(--color-md-on-primary-container);
+  --color-secondary: var(--color-md-secondary);
+  --color-on-secondary: var(--color-md-on-secondary);
+  --color-background: var(--color-md-background);
+  --color-on-background: var(--color-md-on-background);
+  --color-surface: var(--color-md-surface);
+  --color-on-surface: var(--color-md-on-surface);
+  --color-surface-variant: var(--color-md-surface-variant);
+  --color-on-surface-variant: var(--color-md-on-surface-variant);
+  --color-inverse-primary: var(--color-md-inverse-primary);
 }
 
 @utility text-shadow-* {
