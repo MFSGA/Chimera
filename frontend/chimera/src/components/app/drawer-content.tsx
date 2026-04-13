@@ -1,5 +1,6 @@
 import { cn } from '@chimera/ui';
 import { Box } from '@mui/material';
+import type { ComponentProps } from 'react';
 import getSystem from '@/utils/get-system';
 import { getRoutesWithIcon } from '@/utils/routes-utils';
 import RouteListItem from './modules/route-list-item';
@@ -7,10 +8,11 @@ import RouteListItem from './modules/route-list-item';
 export const DrawerContent = ({
   className,
   onlyIcon,
+  ...props
 }: {
   className?: string;
   onlyIcon?: boolean;
-}) => {
+} & ComponentProps<typeof Box>) => {
   const routes = getRoutesWithIcon();
 
   return (
@@ -30,7 +32,7 @@ export const DrawerContent = ({
           backgroundColor: 'var(--background-color-alpha)',
         },
       ]}
-      data-tauri-drag-region
+      {...props}
     >
       <div className="scrollbar-hidden flex flex-col gap-2 !overflow-x-hidden overflow-y-auto">
         {Object.entries(routes).map(([name, { path, icon }]) => {

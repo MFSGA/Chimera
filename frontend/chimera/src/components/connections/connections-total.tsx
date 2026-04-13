@@ -1,0 +1,131 @@
+import { useClashConnections } from '@chimera/interface';
+import { darken, lighten } from '@chimera/ui';
+import { Download, Upload } from '@mui/icons-material';
+import { Paper, Skeleton } from '@mui/material';
+import type { SxProps, Theme } from '@mui/material/styles';
+import { filesize } from 'filesize';
+import { useEffect, useRef, useState } from 'react';
+
+export default function ConnectionsTotal() {
+  const {
+    query: { data: clashConnections, isLoading },
+  } = useClashConnections();
+
+  const latestClashConnections = clashConnections?.at(-1);
+  const [downloadHighlight, setDownloadHighlight] = useState(false);
+  const [uploadHighlight, setUploadHighlight] = useState(false);
+  const downloadHighlightTimerRef = useRef<number | null>(null);
+  const uploadHighlightTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (
+      latestClashConnections?.downloadTotal &&
+      latestClashConnections.downloadTotal > 0
+    ) {
+      setDownloadHighlight(true);
+      if (downloadHighlightTimerRef.current) {
+        clearTimeout(downloadHighlightTimerRef.current);
+      }
+      downloadHighlightTimerRef.current = window.setTimeout(() => {
+        setDownloadHighlight(false);
+      }, 300);
+    }
+  }, [latestClashConnections?.downloadTotal]);
+
+  useEffect(() => {
+    if (
+      latestClashConnections?.uploadTotal &&
+      latestClashConnections.uploadTotal > 0
+    ) {
+      setUploadHighlight(true);
+      if (uploadHighlightTimerRef.current) {
+        clearTimeout(uploadHighlightTimerRef.current);
+      }
+      uploadHighlightTimerRef.current = window.setTimeout(() => {
+        setUploadHighlight(false);
+      }, 300);
+    }
+  }, [latestClashConnections?.uploadTotal]);
+
+  if (isLoading || !latestClashConnections) {
+    return (
+      <div className="flex gap-2">
+        <Paper
+          elevation={0}
+          className="flex min-h-8 items-center justify-center gap-1 px-2"
+          sx={{ borderRadius: '1em' }}
+        >
+          <Download className="scale-75" />
+          <Skeleton variant="text" width={60} height={20} />
+        </Paper>
+
+        <Paper
+          elevation={0}
+          className="flex min-h-8 items-center justify-center gap-1 px-2"
+          sx={{ borderRadius: '1em' }}
+        >
+          <Upload className="scale-75" />
+          <Skeleton variant="text" width={60} height={20} />
+        </Paper>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex gap-2">
+      <Paper
+        elevation={0}
+        className="flex min-h-8 items-center justify-center gap-1 px-2"
+        sx={{ borderRadius: '1em' }}
+      >
+        <Download
+          className="scale-75"
+          sx={
+            ((theme) => ({
+              color: darken(
+                theme.vars.palette.primary.main,
+                downloadHighlight ? 0.9 : 0.3,
+              ),
+              ...theme.applyStyles('dark', {
+                color: lighten(
+                  theme.vars.palette.primary.main,
+                  downloadHighlight ? 0.2 : 0.9,
+                ),
+              }),
+            })) as SxProps<Theme>
+          }
+        />
+        <span className="font-mono text-xs">
+          {filesize(latestClashConnections.downloadTotal, { pad: true })}
+        </span>
+      </Paper>
+
+      <Paper
+        elevation={0}
+        className="flex min-h-8 items-center justify-center gap-1 px-2"
+        sx={{ borderRadius: '1em' }}
+      >
+        <Upload
+          className="scale-75"
+          sx={
+            ((theme) => ({
+              color: darken(
+                theme.vars.palette.primary.main,
+                uploadHighlight ? 0.9 : 0.3,
+              ),
+              ...theme.applyStyles('dark', {
+                color: lighten(
+                  theme.vars.palette.primary.main,
+                  uploadHighlight ? 0.2 : 0.9,
+                ),
+              }),
+            })) as SxProps<Theme>
+          }
+        />
+        <span className="font-mono text-xs">
+          {filesize(latestClashConnections.uploadTotal, { pad: true })}
+        </span>
+      </Paper>
+    </div>
+  );
+}

@@ -16,10 +16,9 @@ const ColumnFilterDialog = lazy(
   () => import('@/components/connections/connections-column-filter'),
 );
 
-/* const ConnectionTotal = lazy(
+const ConnectionTotal = lazy(
   () => import('@/components/connections/connections-total'),
 );
- */
 export const Route = createFileRoute('/(legacy)/connections')({
   component: Connections,
 });
@@ -70,9 +69,9 @@ function Connections() {
         full
         header={
           <div className="flex max-h-96 w-full flex-1 items-center justify-between gap-2 pl-5">
-            {/* <Suspense fallback={null}>
+            <Suspense fallback={null}>
               <ConnectionTotal />
-            </Suspense> */}
+            </Suspense>
             <div className="flex items-center gap-1">
               <Suspense fallback={null}>
                 <ColumnFilterDialog
