@@ -148,6 +148,7 @@
   "System Service": "Системная служба",
   "Service Mode": "Режим службы",
   "Initiating Behavior": "Инициирующее поведение",
+  "Always On Top": "Поверх окон",
   "Auto Start": "Автозапуск",
   "Silent Start": "Тихий запуск",
   "System Proxy": "Системный прокси",

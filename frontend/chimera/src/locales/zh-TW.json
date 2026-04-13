@@ -148,6 +148,7 @@
   "System Service": "系統服務",
   "Service Mode": "服務模式",
   "Initiating Behavior": "啟動行為",
+  "Always On Top": "視窗置頂",
   "Auto Start": "開機啟動",
   "Silent Start": "靜默啟動",
   "System Proxy": "系統代理",
