@@ -82,6 +82,10 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_server_port,
         ipc::get_core_dir,
         ipc::get_service_install_prompt,
+        ipc::open_app_config_dir,
+        ipc::open_app_data_dir,
+        ipc::open_core_dir,
+        ipc::open_logs_dir,
         // updater
         ipc::get_core_version,
         ipc::update_core,
