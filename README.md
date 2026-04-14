@@ -1,6 +1,18 @@
 # Chimera
 
-简体中文 | [English](README.en.md)
+> 面向桌面用户的现代代理客户端，强调稳定、清晰、可维护的日常使用体验。
+
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4c8bf5)](#)
+[![Tauri](https://img.shields.io/badge/Tauri-2.x-24c8db)](#)
+[![Rust](https://img.shields.io/badge/Rust-stable-f74c00)](#)
+[![React](https://img.shields.io/badge/React-19-61dafb)](#)
+[![pnpm](https://img.shields.io/badge/pnpm-workspace-f69220)](#)
+
+简体中文 | [English](README.en.md) | [Русский](README.ru.md) | [فارسی](README.fa.md)
+
+---
+
+## 项目简介
 
 Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windows、macOS 与 Linux/NixOS 上提供稳定、清晰、可维护的代理使用体验。它基于 Tauri、Rust 与 React 构建，既保留了桌面应用应有的轻量与响应速度，也为代理核心、订阅配置、系统代理、服务模式和更新能力提供可靠支撑。
 
@@ -9,10 +21,20 @@ Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windo
 ## 为什么选择 Chimera
 
 - 跨平台桌面体验：关注 Windows、macOS 与 Linux/NixOS 环境下的真实使用问题。
-- 多核心支持方向：围绕 `chimera-client`、`clash-rs`、`mihomo` 等核心提供运行、切换、更新和状态管理能力。
+- 多核心支持方向：主要围绕 `chimera-client`、`clash-rs`、`mihomo` 等核心提供运行、切换、更新和状态管理能力。
+- 全协议支持：覆盖常见代理协议组合，兼顾核心兼容性。
 - 完整代理控制台：管理订阅与配置，查看代理组和节点，观察连接状态，调整运行时配置。
-- 服务模式支持：适合需要更稳定后台运行、系统级代理能力和长期使用场景的用户。
+- 服务模式支持：适合追求更安全、更稳定后台运行、系统级代理能力和长期使用场景的用户。
 - 日常排查友好：提供日志、连接、规则、配置目录和核心目录等入口，降低定位问题的成本。
+
+## 当前支持协议
+
+Chimera 当前重点关注常见代理组合与核心兼容，包括：
+
+- `trojan + ws + tls`
+- `reality + tcp`
+- `hysteria2`
+- `xhttp`
 
 ## 主要能力
 
@@ -24,37 +46,7 @@ Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windo
 - 服务模式：支持服务安装、卸载、启动、停止和重启。
 - 更新能力：支持应用更新检查，并为核心版本更新保留独立管理链路。
 
-## 支持方向
-
-Chimera 当前重点关注常见代理组合与核心兼容，包括：
-
-- `trojan + ws + tls`
-- `reality + tcp`
-- `hysteria2`
-
-项目会继续围绕跨平台桌面体验、代理核心稳定性、TUN/服务模式、配置增强和用户操作流程进行迭代。
-
-## 使用体验
-
-Chimera 的界面按实际使用场景组织：
-
-- Dashboard：查看整体状态。
-- Proxies：选择代理节点。
-- Profiles：管理订阅配置。
-- Connections：观察连接。
-- Rules 和 Providers：查看规则与提供者。
-- Logs：排查运行问题。
-- Settings：调整应用行为。
-
-普通用户可以只关注导入订阅和切换节点，进阶用户则可以继续查看连接、规则、运行时配置、核心版本和服务状态。
-
-## 技术基础
-
-Chimera 使用 Tauri 2 构建桌面壳，Rust 负责后端能力和系统集成，React/Vite 负责前端界面。前后端通过 Tauri IPC 通信，并使用类型绑定减少接口不一致带来的维护成本。
-
-相比传统 Electron 应用，Tauri 方案有更轻的运行时负担；相比纯命令行工具，Chimera 提供了更直观的管理入口。它把桌面用户需要的代理能力集中到一个应用中，同时尽量保持底层实现清晰、可演进。
-
-## 开发
+## 常见开发命令
 
 安装依赖：
 
@@ -88,12 +80,10 @@ pnpm build
 
 ## 贡献
 
-有任何使用上的问题，或者代码实现上的问题，欢迎 Issue 以及 PR
-即使你是完全的计算机新手小白，在查阅完 wiki 后，再针对性的提问，我会抽出时间一一回答的。
-本项目另一大目的也也是为了吸引更多的开发者参与其中。
+- 有任何使用上的问题，或者代码实现上的问题，欢迎提 Issue 或 PR。
+- 即使你是完全的新手，在查阅完 [wiki](https://mfsga.github.io/Proxy_WIKI/) 后，也可以继续有针对性地提问。
+- 本项目也希望吸引更多开发者一起参与完善。
 
-## 总结
+---
 
-Chimera 是一个专注跨平台、核心兼容与日常可用性的现代桌面代理客户端。它把订阅管理、节点切换、连接观察、服务模式、核心更新和系统集成放在同一个清晰的工作流中，适合希望长期稳定使用代理工具的桌面用户。
-
-如果觉得有帮助，欢迎点个 star
+如果觉得有帮助，欢迎点个 star 🧡
