@@ -2,7 +2,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '@/utils';
 import { commands } from './bindings';
 
-export type ServiceType = 'install' | 'uninstall' | 'start' | 'stop';
+export type ServiceType =
+  | 'install'
+  | 'uninstall'
+  | 'start'
+  | 'stop'
+  | 'restart';
 
 /**
  * Custom hook to fetch and manage the system service status using TanStack Query.
@@ -36,6 +41,10 @@ export const useSystemService = () => {
 
         case 'stop':
           await commands.stopService();
+          break;
+
+        case 'restart':
+          await commands.restartService();
           break;
       }
     },

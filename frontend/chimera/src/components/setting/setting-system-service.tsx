@@ -1,4 +1,5 @@
 import {
+  getCoreStatus,
   restartSidecar,
   useSetting,
   useSystemService,
@@ -12,8 +13,10 @@ import {
   Typography,
 } from '@mui/material';
 import { useMemoizedFn } from 'ahooks';
+import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
 import { useTranslation } from 'react-i18next';
+import useSWR from 'swr';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import {
@@ -25,6 +28,10 @@ export const SettingSystemService = () => {
   const { t } = useTranslation();
 
   const { query, upsert } = useSystemService();
+  const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
+    refreshInterval: 2000,
+    revalidateOnFocus: false,
+  });
 
   const getInstallButtonString = () => {
     switch (query.data?.status) {
@@ -130,7 +137,61 @@ export const SettingSystemService = () => {
     });
   });
 
+  const [serviceRestartPending, startServiceRestart] = useTransition();
+  const handleRestartClick = useMemoizedFn(() => {
+    startServiceRestart(async () => {
+      try {
+        await upsert.mutateAsync('restart');
+        await restartSidecar();
+      } catch (e) {
+        message(`Restart failed: ${formatError(e)}`, {
+          kind: 'error',
+          title: t('Error'),
+        });
+      }
+    });
+  });
+
+  const [refreshPending, startRefresh] = useTransition();
+  const handleRefreshClick = useMemoizedFn(() => {
+    startRefresh(async () => {
+      await Promise.all([query.refetch(), coreStatusSWR.mutate()]);
+    });
+  });
+
   const serviceMode = useSetting('enable_service_mode');
+  const serviceServer = query.data?.server;
+  const isServiceInstalled = query.data?.status !== 'not_installed';
+  const runtimeInfos = serviceServer?.runtime_infos;
+  const serviceCoreInfos = serviceServer?.core_infos;
+
+  const currentCoreStatus = (() => {
+    const status = coreStatusSWR.data?.[0];
+    if (!status) return t('Unknown');
+    if (
+      isObject(status) &&
+      Object.prototype.hasOwnProperty.call(status, 'Stopped')
+    ) {
+      const { Stopped } = status;
+      return !!Stopped && Stopped.trim()
+        ? t('stopped_reason', { reason: Stopped })
+        : t('stopped');
+    }
+    return t('running');
+  })();
+
+  const currentRunType = coreStatusSWR.data?.[2]
+    ? t(coreStatusSWR.data[2])
+    : t('Unknown');
+
+  const serviceCoreType = (() => {
+    const type = serviceCoreInfos?.type;
+    if (!type) return t('Unknown');
+    return typeof type === 'string' ? type : type.clash;
+  })();
+
+  const currentCoreChangedAt = coreStatusSWR.data?.[1];
+  const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
 
   return (
     <BaseCard label={t('System Service')}>
@@ -160,24 +221,64 @@ export const SettingSystemService = () => {
             })}
           />
           <div className="flex gap-2">
-            {!isDisabled && (
+            {isServiceInstalled && (
               <Button
                 variant="contained"
                 onClick={handleControlClick}
                 loading={serviceControlPending}
-                disabled={installOrUninstallPending || serviceControlPending}
+                disabled={
+                  installOrUninstallPending ||
+                  serviceControlPending ||
+                  serviceRestartPending ||
+                  refreshPending
+                }
               >
                 {getControlButtonString()}
               </Button>
             )}
 
+            {/* {isServiceInstalled && (
+                <Button
+                  variant="contained"
+                  onClick={handleRestartClick}
+                  loading={serviceRestartPending}
+                  disabled={
+                    installOrUninstallPending ||
+                    serviceControlPending ||
+                    serviceRestartPending ||
+                    refreshPending
+                  }
+                >
+                  {t('Restart')}
+                </Button>
+              )} */}
+
             <Button
               variant="contained"
               onClick={handleInstallClick}
               loading={installOrUninstallPending}
-              disabled={installOrUninstallPending || serviceControlPending}
+              disabled={
+                installOrUninstallPending ||
+                serviceControlPending ||
+                serviceRestartPending ||
+                refreshPending
+              }
             >
               {getInstallButtonString()}
+            </Button>
+
+            <Button
+              variant="contained"
+              onClick={handleRefreshClick}
+              loading={refreshPending}
+              disabled={
+                installOrUninstallPending ||
+                serviceControlPending ||
+                serviceRestartPending ||
+                refreshPending
+              }
+            >
+              {t('Refresh')}
             </Button>
 
             {import.meta.env.DEV && (
@@ -189,6 +290,99 @@ export const SettingSystemService = () => {
               </Button>
             )}
           </div>
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Service Name')}
+            secondary={query.data?.name || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Service Version')}
+            secondary={query.data?.version || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Server Version')}
+            secondary={serviceServer?.version || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('App Core Status')}
+            secondary={currentCoreStatus}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText primary={t('Run Type')} secondary={currentRunType} />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText primary={t('Core Type')} secondary={serviceCoreType} />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Core Config Path')}
+            secondary={serviceCoreInfos?.config_path || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('App Core State Changed At')}
+            secondary={
+              currentCoreChangedAt
+                ? new Date(currentCoreChangedAt).toLocaleString()
+                : t('Unknown')
+            }
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Service Core State Changed At')}
+            secondary={
+              serviceCoreChangedAt
+                ? new Date(serviceCoreChangedAt).toLocaleString()
+                : t('Unknown')
+            }
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Service Config Dir')}
+            secondary={runtimeInfos?.service_config_dir || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Service Data Dir')}
+            secondary={runtimeInfos?.service_data_dir || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Bound Config Dir')}
+            secondary={runtimeInfos?.nyanpasu_config_dir || t('Unknown')}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={t('Bound Data Dir')}
+            secondary={runtimeInfos?.nyanpasu_data_dir || t('Unknown')}
+          />
         </ListItem>
       </List>
     </BaseCard>
