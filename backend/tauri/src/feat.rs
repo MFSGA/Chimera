@@ -131,6 +131,92 @@ fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
     }
 }
 
+struct VergePatchPlan {
+    service_mode: Option<bool>,
+    tun_mode: Option<bool>,
+    system_proxy_changed: bool,
+    proxy_bypass_changed: bool,
+    enable_proxy_guard: bool,
+    log_level_changed: bool,
+    log_max_files_changed: bool,
+    refresh_systray: bool,
+}
+
+// Build a normalized view of the verge patch before runtime changes and side effects.
+fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
+    if let Some(ref theme_color) = patch.theme_color
+        && !theme_color.is_empty()
+        && !crate::config::chimera::is_hex_color(theme_color)
+    {
+        bail!("Invalid theme color: {}", theme_color);
+    }
+
+    Ok(VergePatchPlan {
+        service_mode: patch.enable_service_mode,
+        tun_mode: patch.enable_tun_mode,
+        system_proxy_changed: patch.enable_system_proxy.is_some(),
+        proxy_bypass_changed: patch.system_proxy_bypass.is_some(),
+        enable_proxy_guard: patch.enable_proxy_guard == Some(true),
+        log_level_changed: patch.app_log_level.is_some(),
+        log_max_files_changed: patch.max_log_files.is_some(),
+        refresh_systray: patch.enable_system_proxy.is_some() || patch.enable_tun_mode.is_some(),
+    })
+}
+
+async fn apply_verge_runtime_change(plan: &VergePatchPlan) -> Result<()> {
+    let ipc_state = get_ipc_state();
+
+    if let Some(service_mode) = plan.service_mode
+        && ipc_state.is_connected()
+    {
+        log::debug!(target: "app", "change service mode to {}", service_mode);
+        Config::generate().await?;
+        CoreManager::global().run_core().await?;
+    }
+
+    if plan.tun_mode.is_some() {
+        log::debug!(target: "app", "toggle tun mode");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            use crate::utils::dirs::check_core_permission;
+            let current_core = Config::verge().data().clash_core.unwrap_or_default();
+            let current_core: chimera_utils::core::CoreType = (&current_core).into();
+            let service_state = crate::core::service::ipc::get_ipc_state();
+            if !service_state.is_connected() && check_core_permission(&current_core).inspect_err(|e| {
+                log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
+            }).is_ok_and(|v| !v) {
+                log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
+            };
+        }
+        update_core_config().await?;
+    }
+
+    Ok(())
+}
+
+fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result<()> {
+    if plan.system_proxy_changed || plan.proxy_bypass_changed {
+        sysopt::Sysopt::global().update_sysproxy()?;
+        sysopt::Sysopt::global().guard_proxy();
+    }
+
+    if plan.enable_proxy_guard {
+        sysopt::Sysopt::global().guard_proxy();
+    }
+
+    if plan.log_level_changed || plan.log_max_files_changed {
+        utils::init::refresh_logger((patch.app_log_level.clone(), patch.max_log_files))?;
+    }
+
+    if plan.refresh_systray {
+        handle::Handle::update_systray_part()?;
+    }
+
+    debug!("todo: handle other fields");
+
+    Ok(())
+}
+
 /// 修改clash的配置
 pub async fn patch_clash(patch: Mapping) -> Result<()> {
     Config::clash().draft().patch_config(patch.clone());
@@ -163,74 +249,16 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
 /// 修改verge的配置
 /// 一般都是一个个的修改
 pub async fn patch_verge(patch: IVerge) -> Result<()> {
-    // Validate theme_color if it's being updated
-    if let Some(ref theme_color) = patch.theme_color {
-        if !theme_color.is_empty() && !crate::config::chimera::is_hex_color(theme_color) {
-            anyhow::bail!("Invalid theme color: {}", theme_color);
-        }
-    }
-
     Config::verge().draft().patch_config(patch.clone());
-    let tun_mode = patch.enable_tun_mode;
+    let result = async {
+        let plan = plan_verge_patch(&patch)?;
+        apply_verge_runtime_change(&plan).await?;
+        run_verge_patch_side_effects(&plan, &patch)?;
+        Ok(())
+    }
+    .await;
 
-    // let auto_launch = patch.enable_auto_launch;
-
-    let system_proxy = patch.enable_system_proxy;
-    let proxy_bypass = patch.system_proxy_bypass;
-    let language = patch.language.clone();
-    let log_level = patch.app_log_level;
-    let log_max_files = patch.max_log_files;
-    // let network_statistic_widget = patch.network_statistic_widget;
-    let res = || async move {
-        let service_mode = patch.enable_service_mode;
-        let ipc_state = get_ipc_state();
-        if service_mode.is_some() && ipc_state.is_connected() {
-            log::debug!(target: "app", "change service mode to {}", service_mode.unwrap());
-
-            Config::generate().await?;
-            CoreManager::global().run_core().await?;
-        }
-
-        if tun_mode.is_some() {
-            log::debug!(target: "app", "toggle tun mode");
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            {
-                use crate::utils::dirs::check_core_permission;
-                let current_core = Config::verge().data().clash_core.unwrap_or_default();
-                let current_core: chimera_utils::core::CoreType = (&current_core).into();
-                let service_state = crate::core::service::ipc::get_ipc_state();
-                if !service_state.is_connected() && check_core_permission(&current_core).inspect_err(|e| {
-                    log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
-                }).is_ok_and(|v| !v) {
-                    log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
-                };
-            }
-            update_core_config().await?;
-        }
-
-        if system_proxy.is_some() || proxy_bypass.is_some() {
-            sysopt::Sysopt::global().update_sysproxy()?;
-            sysopt::Sysopt::global().guard_proxy();
-        }
-
-        if let Some(true) = patch.enable_proxy_guard {
-            sysopt::Sysopt::global().guard_proxy();
-        }
-
-        if log_level.is_some() || log_max_files.is_some() {
-            utils::init::refresh_logger((log_level, log_max_files))?;
-        }
-
-        if system_proxy.or(tun_mode).is_some() {
-            handle::Handle::update_systray_part()?;
-        }
-
-        debug!("todo: handle other fields");
-
-        <Result<()>>::Ok(())
-    };
-
-    match res().await {
+    match result {
         Ok(()) => {
             Config::verge().apply();
             Config::verge().data().save_file()?;
