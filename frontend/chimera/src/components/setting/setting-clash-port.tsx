@@ -1,4 +1,4 @@
-import { useClashConfig, useSetting } from '@chimera/interface';
+import { useClashConfig, useClashCoreConfig, useSetting } from '@chimera/interface';
 import { BaseCard, BaseItem, Expand } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
@@ -11,7 +11,8 @@ const MIXED_PORT_FALLBACK = 7890;
 const ClashPort = () => {
   const { t } = useTranslation();
   const { value, upsert } = useSetting('verge_mixed_port');
-  const { query, upsert: upsertClash } = useClashConfig();
+  const { query } = useClashConfig();
+  const { upsert: upsertClashCore } = useClashCoreConfig();
 
   const port = useMemo(
     () => query.data?.['mixed-port'] || value || MIXED_PORT_FALLBACK,
@@ -37,7 +38,7 @@ const ClashPort = () => {
       return;
     }
 
-    await upsertClash.mutateAsync({ 'mixed-port': parsed });
+    await upsertClashCore.mutateAsync({ 'mixed-port': parsed });
     await upsert(parsed);
   };
 

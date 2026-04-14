@@ -65,6 +65,7 @@ pub fn run() -> std::io::Result<()> {
         // clash
         ipc::get_clash_info,
         ipc::patch_clash_config,
+        ipc::patch_clash_core_config,
         ipc::get_proxies,
         ipc::select_proxy,
         ipc::change_clash_core,
