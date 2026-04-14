@@ -32,3 +32,7 @@ export * from './use-system-proxy';
 
 // manually added
 export const openUWPTool = commands.invokeUwpTool;
+export const openAppConfigDir = commands.openAppConfigDir;
+export const openAppDataDir = commands.openAppDataDir;
+export const openCoreDir = commands.openCoreDir;
+export const openLogsDir = commands.openLogsDir;

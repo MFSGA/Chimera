@@ -1,5 +1,6 @@
 import Masonry from '@mui/lab/Masonry';
 import { useIsAppImage } from '@/hooks/use-consts';
+import SettingChimeraPath from './setting-chimera-path';
 import SettingChimerauUI from './setting-chimera-ui';
 import SettingNyanpasuVersion from './setting-chimera-version';
 import { SettingClashBase } from './setting-clash-base';
@@ -39,6 +40,7 @@ export const SettingPage = () => {
       <SettingSystemBehavior />
       {/* 5 */}
       {!isAppImage.data && <SettingSystemService />}
+      <SettingChimeraPath />
       {/* 2 */}
       <SettingNyanpasuVersion />
     </Masonry>
