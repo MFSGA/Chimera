@@ -17,75 +17,135 @@ use crate::{
 };
 use handle::Message;
 
+struct ClashPatchPlan {
+    mixed_port: Option<u16>,
+    mixed_port_changed: bool,
+    external_controller: Option<String>,
+    external_controller_changed: bool,
+    mode_changed: bool,
+    requires_restart: bool,
+}
+
+fn get_non_null_patch_value<'a>(patch: &'a Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
+    patch.get(key).filter(|value| !value.is_null())
+}
+
+// Build a normalized view of the clash patch before validation and side effects.
+fn plan_clash_patch(patch: &Mapping) -> Result<ClashPatchPlan> {
+    let mixed_port = get_non_null_patch_value(patch, "mixed-port").and_then(|value| value.as_u64());
+    let mixed_port = mixed_port
+        .map(|port| u16::try_from(port).map_err(|_| anyhow::anyhow!("invalid mixed-port")))
+        .transpose()?;
+    let mixed_port_changed = mixed_port
+        .map(|port| {
+            port != Config::verge()
+                .latest()
+                .verge_mixed_port
+                .unwrap_or(Config::clash().data().get_mixed_port())
+        })
+        .unwrap_or(false);
+
+    let external_controller = get_non_null_patch_value(patch, "external-controller")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| anyhow::anyhow!("external-controller must be a string"))
+        })
+        .transpose()?;
+    let external_controller_changed = external_controller
+        .as_ref()
+        .map(|controller| controller != &Config::clash().data().get_client_info().server)
+        .unwrap_or(false);
+
+    Ok(ClashPatchPlan {
+        mixed_port,
+        mixed_port_changed,
+        external_controller,
+        external_controller_changed,
+        mode_changed: get_non_null_patch_value(patch, "mode").is_some(),
+        requires_restart: get_non_null_patch_value(patch, "mixed-port").is_some()
+            || get_non_null_patch_value(patch, "secret").is_some()
+            || get_non_null_patch_value(patch, "external-controller").is_some(),
+    })
+}
+
+fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
+    if plan.mixed_port_changed
+        && let Some(port) = plan.mixed_port
+        && !port_scanner::local_port_available(port)
+    {
+        bail!("port already in use");
+    }
+
+    Ok(())
+}
+
+async fn validate_external_controller_change(plan: &ClashPatchPlan) -> Result<()> {
+    if !plan.external_controller_changed {
+        return Ok(());
+    }
+
+    let external_controller = plan
+        .external_controller
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("missing external-controller"))?;
+    let (_, port) = external_controller
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("external-controller must be host:port"))?;
+    let port = port.parse::<u16>()?;
+    let strategy = Config::verge()
+        .latest()
+        .get_external_controller_port_strategy();
+    let core_state = crate::core::CoreManager::global().status().await;
+
+    if matches!(core_state.0.as_ref(), &CoreState::Running)
+        && get_clash_external_port(&strategy, port).is_err()
+    {
+        bail!("can not select fixed: current port is not available.");
+    }
+
+    Ok(())
+}
+
+async fn apply_clash_runtime_change(plan: &ClashPatchPlan) -> Result<()> {
+    if !plan.requires_restart {
+        return Ok(());
+    }
+
+    Config::generate().await?;
+    CoreManager::global().run_core().await?;
+    handle::Handle::refresh_clash();
+    Ok(())
+}
+
+fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
+    if plan.mixed_port.is_some() {
+        log_err!(sysopt::Sysopt::global().init_sysproxy());
+    }
+
+    if plan.mode_changed {
+        crate::feat::update_proxies_buff(None);
+        debug!("systray mode changed, update proxies buff");
+        log_err!(handle::Handle::update_systray_part());
+    }
+}
+
 /// 修改clash的配置
 pub async fn patch_clash(patch: Mapping) -> Result<()> {
     Config::clash().draft().patch_config(patch.clone());
-
-    let run = move || async move {
-        let mixed_port = patch.get("mixed-port");
-        // let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
-        if mixed_port.is_some() {
-            let changed = mixed_port.unwrap()
-                != Config::verge()
-                    .latest()
-                    .verge_mixed_port
-                    .unwrap_or(Config::clash().data().get_mixed_port());
-            // 检查端口占用
-            if changed
-                && let Some(port) = mixed_port.unwrap().as_u64()
-                && !port_scanner::local_port_available(port as u16)
-            {
-                Config::clash().discard();
-                bail!("port already in use");
-            }
-        };
-
-        // 检测 external-controller port 是否修改
-        if let Some(external_controller) = patch.get("external-controller") {
-            let external_controller = external_controller.as_str().unwrap();
-            let changed = external_controller != Config::clash().data().get_client_info().server;
-            if changed {
-                let (_, port) = external_controller.split_once(':').unwrap();
-                let port = port.parse::<u16>()?;
-                let strategy = Config::verge()
-                    .latest()
-                    .get_external_controller_port_strategy();
-                let core_state = crate::core::CoreManager::global().status().await;
-                if matches!(core_state.0.as_ref(), &CoreState::Running)
-                    && get_clash_external_port(&strategy, port).is_err()
-                {
-                    Config::clash().discard();
-                    bail!("can not select fixed: current port is not available.");
-                }
-            }
-        }
-
-        // 激活配置
-        if mixed_port.is_some()
-            || patch.get("secret").is_some()
-            || patch.get("external-controller").is_some()
-        {
-            Config::generate().await?;
-            CoreManager::global().run_core().await?;
-            handle::Handle::refresh_clash();
-        }
-
-        // 更新系统代理
-        if mixed_port.is_some() {
-            log_err!(sysopt::Sysopt::global().init_sysproxy());
-        }
-
-        if patch.get("mode").is_some() {
-            crate::feat::update_proxies_buff(None);
-            debug!("systray mode changed, update proxies buff");
-            log_err!(handle::Handle::update_systray_part());
-        }
-
+    let result = async {
+        let plan = plan_clash_patch(&patch)?;
+        validate_mixed_port_change(&plan)?;
+        validate_external_controller_change(&plan).await?;
+        apply_clash_runtime_change(&plan).await?;
+        run_clash_patch_side_effects(&plan);
         Config::runtime().latest().patch_config(patch);
+        Ok(())
+    }
+    .await;
 
-        <Result<()>>::Ok(())
-    };
-    match run().await {
+    match result {
         Ok(()) => {
             Config::clash().apply();
             Config::clash().data().save_config()?;
