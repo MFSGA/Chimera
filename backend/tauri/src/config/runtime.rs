@@ -57,10 +57,18 @@ pub struct PatchRuntimeConfig {
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, specta::Type)]
 pub struct PatchClashCoreConfig {
-    #[serde(rename = "mixed-port", default)]
+    #[serde(
+        rename = "mixed-port",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub mixed_port: Option<u16>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret: Option<String>,
-    #[serde(rename = "external-controller", default)]
+    #[serde(
+        rename = "external-controller",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub external_controller: Option<String>,
 }
