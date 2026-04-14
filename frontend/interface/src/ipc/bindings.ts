@@ -198,6 +198,19 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async patchClashCoreConfig(
+    payload: PatchClashCoreConfig,
+  ): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('patch_clash_core_config', { payload }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getProxies(): Promise<Result<Proxies, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_proxies') };
@@ -745,6 +758,11 @@ export type ManifestVersionLatest = {
   chimera_client: string;
   clash_rs_alpha: string;
   clash_premium: string;
+};
+export type PatchClashCoreConfig = {
+  'mixed-port'?: number | null;
+  secret?: string | null;
+  'external-controller'?: string | null;
 };
 export type PatchRuntimeConfig = {
   allow_lan?: boolean | null;
