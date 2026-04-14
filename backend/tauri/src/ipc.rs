@@ -1,4 +1,4 @@
-use std::{borrow::Borrow, result::Result as StdResult};
+use std::result::Result as StdResult;
 
 use anyhow::{Context, anyhow};
 
@@ -21,7 +21,7 @@ use crate::{
             item_type::ProfileItemType,
             profiles::{Profiles, ProfilesBuilder},
         },
-        runtime::PatchRuntimeConfig,
+        runtime::{PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
         clash::core::{CoreManager, RunType},
@@ -430,14 +430,25 @@ pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
+    (crate::core::clash::api::patch_configs(&mapping).await)?;
 
-    let requires_core_restart = ["mixed-port", "secret", "external-controller"]
-        .iter()
-        .any(|key| mapping.contains_key(serde_yaml::Value::from(*key).borrow()));
-
-    if !requires_core_restart {
-        (crate::core::clash::api::patch_configs(&mapping).await)?;
+    if let Err(e) = feat::patch_clash(mapping).await {
+        tracing::error!("{e}");
+        return Err(IpcError::from(e));
     }
+
+    feat::update_proxies_buff(None);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_clash_core_config(payload: PatchClashCoreConfig) -> Result {
+    tracing::debug!("patch clash core config: {payload:?}");
+    let mapping = match serde_yaml::to_value(&payload)? {
+        serde_yaml::Value::Mapping(m) => m,
+        _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
+    };
 
     if let Err(e) = feat::patch_clash(mapping).await {
         tracing::error!("{e}");

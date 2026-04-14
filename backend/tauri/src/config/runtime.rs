@@ -54,3 +54,13 @@ pub struct PatchRuntimeConfig {
     #[serde(default)]
     pub mode: Option<String>,
 }
+
+#[derive(Default, Debug, Clone, Deserialize, Serialize, specta::Type)]
+pub struct PatchClashCoreConfig {
+    #[serde(rename = "mixed-port", default)]
+    pub mixed_port: Option<u16>,
+    #[serde(default)]
+    pub secret: Option<String>,
+    #[serde(rename = "external-controller", default)]
+    pub external_controller: Option<String>,
+}

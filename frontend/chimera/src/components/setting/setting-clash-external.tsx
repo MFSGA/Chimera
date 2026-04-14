@@ -1,5 +1,5 @@
 import {
-  useClashConfig,
+  useClashCoreConfig,
   useClashInfo,
   useRuntimeProfile,
   useSetting,
@@ -57,7 +57,7 @@ const TextItem = ({
 const ExternalController = () => {
   const { t } = useTranslation();
   const { data, refetch } = useClashInfo();
-  const { upsert } = useClashConfig();
+  const { upsert } = useClashCoreConfig();
   const runtimeProfile = useRuntimeProfile();
 
   return (
@@ -108,7 +108,7 @@ const PortStrategy = () => {
 const CoreSecret = () => {
   const { t } = useTranslation();
   const { data, refetch } = useClashInfo();
-  const { upsert } = useClashConfig();
+  const { upsert } = useClashCoreConfig();
 
   return (
     <TextItem
