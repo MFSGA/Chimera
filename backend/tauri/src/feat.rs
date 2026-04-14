@@ -140,7 +140,7 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
         validate_external_controller_change(&plan).await?;
         apply_clash_runtime_change(&plan).await?;
         run_clash_patch_side_effects(&plan);
-        Config::runtime().latest().patch_config(patch);
+        Config::runtime().draft().patch_config(patch);
         Ok(())
     }
     .await;
@@ -148,11 +148,13 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
     match result {
         Ok(()) => {
             Config::clash().apply();
+            Config::runtime().apply();
             Config::clash().data().save_config()?;
             Ok(())
         }
         Err(err) => {
             Config::clash().discard();
+            Config::runtime().discard();
             Err(err)
         }
     }
