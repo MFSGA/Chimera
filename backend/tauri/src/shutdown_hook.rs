@@ -64,7 +64,7 @@ unsafe extern "system" fn callback(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             tracing::info!("Shutdown hook triggered, received WM_QUERYENDSESSION");
             if let Some(tx) = SHUTDOWN_HOOK_INSTANCE.get() {
                 tracing::info!("Blocking shutdown for cleanup...");
-                let reason = w!("Clash Nyanpasu is cleaning up...");
+                let reason = w!("Clash Chimera is cleaning up...");
                 if unsafe { ShutdownBlockReasonCreate(hwnd, reason.as_ptr()) } == 0 {
                     let err = Error::from_win32();
                     tracing::error!("Failed to create shutdown block reason: {err}");

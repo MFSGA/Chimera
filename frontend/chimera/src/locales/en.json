@@ -276,7 +276,7 @@
   "running": "Running",
   "stopped_reason": "Stopped, Reason: {{reason}}",
   "Current Status": "Current Status: {{status}}",
-  "Information: To enable service mode, make sure the Clash Nyanpasu service is installed and started": "Information: To enable service mode, make sure the Clash Nyanpasu service is installed and started.",
+  "Information: To enable service mode, make sure the Clash Chimera service is installed and started": "Information: To enable service mode, make sure the Clash Chimera service is installed and started.",
   "Prompt": "Prompt",
   "install": "install",
   "uninstall": "uninstall",

@@ -276,7 +276,7 @@
   "running": "Работает",
   "stopped_reason": "Остановлено, Причина: {{reason}}",
   "Current Status": "Текущее состояние: {{status}}",
-  "Information: To enable service mode, make sure the Clash Nyanpasu service is installed and started": "Информация: Чтобы включить режим службы, убедитесь, что служба Clash Nyanpasu установлена и запущена.",
+  "Information: To enable service mode, make sure the Clash Chimera service is installed and started": "Информация: Чтобы включить режим службы, убедитесь, что служба Clash Chimera установлена и запущена.",
   "Prompt": "Подсказка",
   "install": "установить",
   "uninstall": "удалить",
