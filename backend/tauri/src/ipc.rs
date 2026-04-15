@@ -413,7 +413,7 @@ pub async fn get_service_install_prompt() -> Result<String> {
         .map(|arg| arg.to_string_lossy().to_string())
         .collect::<Vec<_>>()
         .join(" ");
-    let mut prompt = format!("./nyanpasu-service {args}");
+    let mut prompt = format!("./chimera-service {args}");
     if cfg!(not(windows)) {
         prompt = format!("sudo {prompt}");
     }
