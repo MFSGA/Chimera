@@ -23,6 +23,14 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  macos_aarch64_build:
+    name: macOS aarch64 Build
+    uses: ./.github/workflows/deps-build-macos.yaml
+    with:
+      nightly: false
+      aarch64: true
+      tag: ${{ github.event.release.tag_name }}
+    secrets: inherit
   windows_build:
     name: Windows Build
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
@@ -46,7 +54,7 @@ jobs:
   upload_release_assets:
     name: Upload Release Assets
     # todo windows_build
-    needs: [windows_build, linux_build]
+    needs: [windows_build, linux_build, macos_aarch64_build]
     uses: ./.github/workflows/deps-upload-release-assets.yaml
     with:
       tag: ${{ inputs.tag || github.event.release.tag_name }}
