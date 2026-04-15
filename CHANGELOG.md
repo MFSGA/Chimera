@@ -1,3 +1,15 @@
+## [0.10.0] - 2026-04-15 07:12:52
+
+### ✨ Features
+
+- **script:** Set for macos by @MFSGA
+
+- **workflow:** Support macos release by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.9.8...v0.10.0
+
 ## [0.9.3] - 2026-04-08 12:15:46
 
 ### 🐛 Bug Fixes
