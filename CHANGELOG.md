@@ -1,3 +1,53 @@
+## [0.9.4] - 2026-04-15 03:57:14
+
+### ✨ Features
+
+- **dashboard:** Add legacy data panel by @MFSGA
+
+- **dir:** Add the command support in backend by @MFSGA
+
+- **dir:** Add the useful dir path for display by @MFSGA
+
+- **field:** Prepare for clash field by @MFSGA
+
+- **profile:** Support local profile by @MFSGA
+
+- **restart:** Solve service and eroored config bug by @MFSGA
+
+- **restart:** Support tun and profile change by @MFSGA
+
+- **service:** Add more info for display by @MFSGA
+
+- **settings:** Split clash core config patch flow by @MFSGA
+
+- **settings:** Add SettingSystemBehavior component by @MFSGA
+
+- **settings:** Add the external and port by @MFSGA
+
+- **ui:** Tighten connections and shell interactions by @MFSGA
+
+- **ui:** Add sparkline theme bridge by @MFSGA
+
+- **workflow:** Support macos by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **clash:** Align runtime patch transaction boundaries by @MFSGA
+
+- **clash:** Honor partial core config patches by @MFSGA
+
+- **service:** For macos by @MFSGA
+
+- For ubuntu by @MFSGA
+
+### 🔨 Refactor
+
+- **verge:** Split patch planning and side effects by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.9.3...v0.9.4
+
 ## [0.9.3] - 2026-04-08 12:15:46
 
 ### 🐛 Bug Fixes
