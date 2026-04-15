@@ -28,24 +28,28 @@ fn format_exit_failure(action: &str, status: std::process::ExitStatus) -> anyhow
 
 async fn run_service_command(action: &str, args: Vec<OsString>) -> anyhow::Result<()> {
     let action = action.to_owned();
-    let status = tokio::task::spawn_blocking(move || {
-        #[cfg(not(target_os = "macos"))]
-        {
-            RunasCommand::new(SERVICE_PATH.as_path())
-                .args(&args)
-                .gui(true)
-                .show(true)
-                .status()
-        }
+    let status = tokio::task::spawn_blocking({
         #[cfg(target_os = "macos")]
-        {
-            use crate::utils::sudo::sudo;
-            let args = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>();
-            match sudo(SERVICE_PATH.to_string_lossy(), &args) {
-                Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
-                Err(e) => {
-                    tracing::error!("failed to {}: {}", &action.clone(), e);
-                    Err(e)
+        let action = action.clone();
+        move || {
+            #[cfg(not(target_os = "macos"))]
+            {
+                RunasCommand::new(SERVICE_PATH.as_path())
+                    .args(&args)
+                    .gui(true)
+                    .show(true)
+                    .status()
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use crate::utils::sudo::sudo;
+                let args = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>();
+                match sudo(SERVICE_PATH.to_string_lossy(), &args) {
+                    Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
+                    Err(e) => {
+                        tracing::error!("failed to {}: {}", &action, e);
+                        Err(e)
+                    }
                 }
             }
         }
