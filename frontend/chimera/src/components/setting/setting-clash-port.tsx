@@ -1,4 +1,8 @@
-import { useClashConfig, useClashCoreConfig, useSetting } from '@chimera/interface';
+import {
+  useClashConfig,
+  useClashCoreConfig,
+  useSetting,
+} from '@chimera/interface';
 import { BaseCard, BaseItem, Expand } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
