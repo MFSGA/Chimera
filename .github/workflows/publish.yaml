@@ -92,6 +92,7 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
+          # note: set for draft
           draft: true
           body: ${{steps.build-changelog.outputs.content}}
           name: Clash Chimera v${{steps.update-version.outputs.version}}
