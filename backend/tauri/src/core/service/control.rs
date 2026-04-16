@@ -84,11 +84,11 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
         "--user".into(),
         user.into(),
         "--nyanpasu-data-dir".into(),
-        format!("\"{}\"", data_dir.to_string_lossy()).into(),
+        data_dir.into(),
         "--nyanpasu-config-dir".into(),
-        format!("\"{}\"", config_dir.to_string_lossy()).into(),
+        config_dir.into(),
         "--nyanpasu-app-dir".into(),
-        format!("\"{}\"", app_dir.to_string_lossy()).into(),
+        app_dir.into(),
     ];
 
     #[cfg(windows)]
