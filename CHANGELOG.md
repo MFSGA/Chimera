@@ -1,3 +1,19 @@
+## [0.10.1] - 2026-04-17 02:42:33
+
+### ✨ Features
+
+- **service:** Support service mode for linux user by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **display:** Fix some word issue by @MFSGA
+
+- **release:** Set for auto release by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.10.0...v0.10.1
+
 ## [0.10.0] - 2026-04-15 07:12:52
 
 ### ✨ Features
