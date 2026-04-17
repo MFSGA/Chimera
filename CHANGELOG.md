@@ -1,3 +1,13 @@
+## [0.11.0] - 2026-04-17 04:37:22
+
+### 🐛 Bug Fixes
+
+- Set the right order for release by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.10.3...v0.11.0
+
 ## [0.10.2] - 2026-04-17 03:12:17
 
 ### 🐛 Bug Fixes
