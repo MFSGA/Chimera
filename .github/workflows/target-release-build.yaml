@@ -27,7 +27,7 @@ jobs:
     with:
       nightly: false
       aarch64: true
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
     secrets: inherit
   windows_build:
     name: Windows Build
@@ -63,6 +63,7 @@ jobs:
     # todo windows_build
     needs: [upload_release_assets]
     with:
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
       nightly: false
       release_body: ${{ inputs.release_body || github.event.release.body }}
     secrets: inherit

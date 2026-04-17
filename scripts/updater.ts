@@ -11,6 +11,7 @@ const UPDATE_JSON_PROXY = 'update-proxy.json';
 const UPDATE_FIXED_WEBVIEW_FILE = 'update-fixed-webview.json';
 const UPDATE_FIXED_WEBVIEW_PROXY = 'update-fixed-webview-proxy.json';
 const UPDATE_RELEASE_BODY = process.env.RELEASE_BODY || '';
+const RELEASE_TAG = process.env.RELEASE_TAG?.trim();
 
 const argv = yargs(hideBin(process.argv))
   .option('fixed-webview', {
@@ -34,21 +35,14 @@ async function resolveUpdater() {
   const options = { owner: context.repo.owner, repo: context.repo.repo };
   const github = getOctokit(process.env.GITHUB_TOKEN);
 
-  const { data: tags } = await github.rest.repos.listTags({
-    ...options,
-    per_page: 10,
-    page: 1,
-  });
+  const tagName =
+    RELEASE_TAG || (await resolveLatestVersionTag(github, options));
+  consola.debug(colorize`latest tag: {gray.bold ${tagName}}`);
 
-  // get the latest publish tag
-  const tag = tags.find((t) => t.name.startsWith('v'));
-  if (!tag) throw new Error('could not found the latest tag');
-  consola.debug(colorize`latest tag: {gray.bold ${tag.name}}`);
-
-  const { data: latestRelease } = await github.rest.repos.getReleaseByTag({
-    ...options,
-    tag: tag.name,
-  });
+  const latestRelease = await resolveReleaseByTag(github, options, tagName);
+  if (!latestRelease) {
+    throw new Error(`could not find release for tag "${tagName}"`);
+  }
 
   let updateLog: string | null = null;
   try {
@@ -58,7 +52,7 @@ async function resolveUpdater() {
   }
 
   const updateData = {
-    name: tag.name,
+    name: tagName,
     notes: UPDATE_RELEASE_BODY || updateLog || latestRelease.body,
     pub_date: new Date().toISOString(),
     platforms: {
@@ -124,10 +118,16 @@ async function resolveUpdater() {
   });
 
   // update the update.json
-  const { data: updateRelease } = await github.rest.repos.getReleaseByTag({
-    ...options,
-    tag: UPDATE_TAG_NAME,
-  });
+  const updateRelease = await resolveReleaseByTag(
+    github,
+    options,
+    UPDATE_TAG_NAME,
+  );
+  if (!updateRelease) {
+    throw new Error(
+      `could not find updater release for tag "${UPDATE_TAG_NAME}"`,
+    );
+  }
 
   // delete the old assets
   for (const asset of updateRelease.assets) {
@@ -183,6 +183,54 @@ async function resolveUpdater() {
   );
 }
 
+async function resolveLatestVersionTag(
+  github: ReturnType<typeof getOctokit>,
+  options: { owner: string; repo: string },
+) {
+  const { data: tags } = await github.rest.repos.listTags({
+    ...options,
+    per_page: 10,
+    page: 1,
+  });
+
+  const latestTag = tags.find((tag) => tag.name.startsWith('v'));
+  if (!latestTag) {
+    throw new Error('could not found the latest tag');
+  }
+
+  return latestTag.name;
+}
+
+async function resolveReleaseByTag(
+  github: ReturnType<typeof getOctokit>,
+  options: { owner: string; repo: string },
+  tagName: string,
+) {
+  const { data: releases } = await github.rest.repos.listReleases({
+    ...options,
+    per_page: 100,
+    page: 1,
+  });
+
+  const listedRelease = releases.find(
+    (release) => release.tag_name === tagName,
+  );
+  if (listedRelease) {
+    return listedRelease;
+  }
+
+  try {
+    const { data: release } = await github.rest.repos.getReleaseByTag({
+      ...options,
+      tag: tagName,
+    });
+    return release;
+  } catch (err) {
+    consola.error(err);
+    return null;
+  }
+}
+
 async function saveToCache(fileName: string, content: string) {
   if (!argv.cachePath) return;
 
@@ -209,4 +257,5 @@ async function getSignature(url: string) {
 
 resolveUpdater().catch((err) => {
   consola.error(err);
+  process.exitCode = 1;
 });

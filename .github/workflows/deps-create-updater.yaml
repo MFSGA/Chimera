@@ -3,6 +3,10 @@ name: '[Single] Create Updater'
 on:
   workflow_dispatch:
     inputs:
+      tag:
+        description: 'Release Tag'
+        required: false
+        type: string
       nightly:
         description: 'Nightly'
         required: true
@@ -14,6 +18,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      tag:
+        description: 'Release Tag'
+        required: false
+        type: string
       nightly:
         description: 'Nightly'
         required: true
@@ -73,3 +81,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_BODY: ${{ inputs.release_body || github.event.release.body }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
