@@ -1,3 +1,17 @@
+## [0.10.3] - 2026-04-17 03:53:37
+
+### ✨ Features
+
+- **system:** Optimize system behavior by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **release:** For updater workflow by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.10.2...v0.10.3
+
 ## [0.10.2] - 2026-04-17 03:12:17
 
 ### 🐛 Bug Fixes
