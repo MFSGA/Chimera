@@ -134,6 +134,7 @@ fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
 struct VergePatchPlan {
     service_mode: Option<bool>,
     tun_mode: Option<bool>,
+    auto_launch_changed: bool,
     system_proxy_changed: bool,
     proxy_bypass_changed: bool,
     enable_proxy_guard: bool,
@@ -154,6 +155,7 @@ fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
     Ok(VergePatchPlan {
         service_mode: patch.enable_service_mode,
         tun_mode: patch.enable_tun_mode,
+        auto_launch_changed: patch.enable_auto_launch.is_some(),
         system_proxy_changed: patch.enable_system_proxy.is_some(),
         proxy_bypass_changed: patch.system_proxy_bypass.is_some(),
         enable_proxy_guard: patch.enable_proxy_guard == Some(true),
@@ -195,6 +197,10 @@ async fn apply_verge_runtime_change(plan: &VergePatchPlan) -> Result<()> {
 }
 
 fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result<()> {
+    if plan.auto_launch_changed {
+        sysopt::Sysopt::global().update_launch()?;
+    }
+
     if plan.system_proxy_changed || plan.proxy_bypass_changed {
         sysopt::Sysopt::global().update_sysproxy()?;
         sysopt::Sysopt::global().guard_proxy();

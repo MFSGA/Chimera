@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use auto_launch::{AutoLaunch, AutoLaunchBuilder};
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use sysproxy::Sysproxy;
-use tauri::async_runtime::Mutex as TokioMutex;
+use tauri::{async_runtime::Mutex as TokioMutex, utils::platform::current_exe};
 
 use crate::{config::core::Config, log_err};
 
@@ -24,6 +25,9 @@ pub struct Sysopt {
     /// recover it when exit
     old_sysproxy: Arc<Mutex<Option<Sysproxy>>>,
 
+    /// helps to auto launch the app
+    auto_launch: Arc<Mutex<Option<AutoLaunch>>>,
+
     /// record whether the guard async is running or not
     guard_state: Arc<TokioMutex<bool>>,
 }
@@ -35,10 +39,103 @@ impl Sysopt {
         SYSOPT.get_or_init(|| Sysopt {
             cur_sysproxy: Arc::new(Mutex::new(None)),
             old_sysproxy: Arc::new(Mutex::new(None)),
+            auto_launch: Arc::new(Mutex::new(None)),
             guard_state: Arc::new(TokioMutex::new(false)),
-            /* auto_launch: Arc::new(Mutex::new(None)),
-             */
         })
+    }
+
+    /// init the auto launch
+    pub fn init_launch(&self) -> Result<()> {
+        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+
+        let app_exe = current_exe()?;
+        let app_exe = dunce::canonicalize(app_exe)?;
+        let app_name = app_exe
+            .file_stem()
+            .and_then(|f| f.to_str())
+            .ok_or_else(|| anyhow::anyhow!("failed to get file stem"))?;
+        let app_path = app_exe
+            .as_os_str()
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("failed to get app path"))?
+            .to_string();
+
+        #[cfg(target_os = "windows")]
+        let app_path = format!("\"{app_path}\"");
+
+        #[cfg(target_os = "macos")]
+        let app_path = (|| -> Option<String> {
+            let path = std::path::PathBuf::from(&app_path);
+            let path = path.parent()?.parent()?.parent()?;
+            let extension = path.extension()?.to_str()?;
+            (extension == "app").then(|| path.as_os_str().to_str().map(str::to_string))?
+        })()
+        .unwrap_or(app_path);
+
+        #[cfg(target_os = "linux")]
+        let app_path = {
+            let app_handle = crate::consts::app_handle();
+            let appimage_path = app_handle
+                .env()
+                .appimage
+                .and_then(|p| p.to_str().map(str::to_string));
+            let fallback_appimage = std::env::var("APPIMAGE").ok();
+            appimage_path.or(fallback_appimage).unwrap_or(app_path)
+        };
+
+        let auto = AutoLaunchBuilder::new()
+            .set_app_name(app_name)
+            .set_app_path(&app_path)
+            .build()?;
+
+        #[cfg(feature = "verge-dev")]
+        if !enable {
+            return Ok(());
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if enable && !auto.is_enabled().unwrap_or(false) {
+                let _ = auto.disable();
+                auto.enable()?;
+            } else if !enable {
+                let _ = auto.disable();
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if enable {
+                auto.enable()?;
+            } else {
+                let _ = auto.disable();
+            }
+        }
+
+        *self.auto_launch.lock() = Some(auto);
+
+        Ok(())
+    }
+
+    /// update the startup
+    pub fn update_launch(&self) -> Result<()> {
+        let auto_launch = self.auto_launch.lock();
+
+        if auto_launch.is_none() {
+            drop(auto_launch);
+            return self.init_launch();
+        }
+
+        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+        let auto_launch = auto_launch.as_ref().unwrap();
+
+        if enable {
+            auto_launch.enable()?;
+        } else {
+            log_err!(auto_launch.disable());
+        }
+
+        Ok(())
     }
 
     /// update the system proxy

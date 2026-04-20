@@ -636,6 +636,14 @@ export type IVerge = {
    */
   enable_system_proxy: boolean | null;
   /**
+   * 5.1. auto launch on system startup
+   */
+  enable_auto_launch: boolean | null;
+  /**
+   * 5.2. do not show window when app launches
+   */
+  enable_silent_start: boolean | null;
+  /**
    * 6. windows service mode
    */
   enable_service_mode?: boolean | null;
