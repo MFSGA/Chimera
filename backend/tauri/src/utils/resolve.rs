@@ -110,7 +110,7 @@ pub fn resolve_setup(app: &mut App) {
 
     handle::Handle::global().init(app.app_handle().clone());
     debug!("todo init handle for widget not tray");
-    // crate::consts::setup_app_handle(app.app_handle().clone());
+    crate::consts::setup_app_handle(app.app_handle().clone());
 
     log_err!(init::init_resources());
     log_err!(init::init_service());
@@ -133,6 +133,7 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(crate::core::tasks::setup(app, storage));
     } */
 
+    log_err!(sysopt::Sysopt::global().init_launch());
     log_err!(sysopt::Sysopt::global().init_sysproxy());
 
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
@@ -150,7 +151,13 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(app.emit("update_systray", ()));
     }
 
-    create_window(app.app_handle());
+    let silent_start = Config::verge()
+        .latest()
+        .enable_silent_start
+        .unwrap_or(false);
+    if !silent_start {
+        create_window(app.app_handle());
+    }
 
     crate::core::storage::register_web_storage_listener(app.app_handle());
 }

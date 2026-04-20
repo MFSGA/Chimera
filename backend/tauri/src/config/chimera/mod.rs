@@ -92,6 +92,10 @@ pub struct IVerge {
     pub enable_tun_mode: Option<bool>,
     /// 5. set system proxy
     pub enable_system_proxy: Option<bool>,
+    /// 5.1. auto launch on system startup
+    pub enable_auto_launch: Option<bool>,
+    /// 5.2. do not show window when app launches
+    pub enable_silent_start: Option<bool>,
     /// 6. windows service mode
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enable_service_mode: Option<bool>,
@@ -182,6 +186,8 @@ impl IVerge {
             clash_core: Some(ClashCore::default()),
             max_log_files: Some(7), // 7 days
             app_log_level: Some(logging::LoggingLevel::default()),
+            enable_auto_launch: Some(false),
+            enable_silent_start: Some(false),
             always_on_top: Some(false),
 
             ..Self::default()
@@ -196,6 +202,12 @@ impl IVerge {
         }
         if config.clash_core.is_none() {
             config.clash_core = template.clash_core;
+        }
+        if config.enable_auto_launch.is_none() {
+            config.enable_auto_launch = template.enable_auto_launch;
+        }
+        if config.enable_silent_start.is_none() {
+            config.enable_silent_start = template.enable_silent_start;
         }
         if config.always_on_top.is_none() {
             config.always_on_top = template.always_on_top;
