@@ -1,4 +1,5 @@
-use once_cell::sync::Lazy;
+use once_cell::sync::{Lazy, OnceCell};
+use tauri::AppHandle;
 
 #[cfg(target_os = "windows")]
 pub static IS_PORTABLE: Lazy<bool> = Lazy::new(|| {
@@ -44,3 +45,15 @@ pub static IS_APPIMAGE: Lazy<bool> = Lazy::new(|| std::env::var("APPIMAGE").is_o
 
 pub const LEGACY_WINDOW_LABEL: &str = "legacy";
 pub const APP_NAME: &str = "Chimera";
+
+/// A Tauri AppHandle copy for access from global context.
+static APP_HANDLE: OnceCell<AppHandle> = OnceCell::new();
+
+#[cfg(target_os = "linux")]
+pub fn app_handle() -> &'static AppHandle {
+    APP_HANDLE.get().expect("app handle not initialized")
+}
+
+pub(super) fn setup_app_handle(app_handle: AppHandle) {
+    let _ = APP_HANDLE.set(app_handle);
+}
