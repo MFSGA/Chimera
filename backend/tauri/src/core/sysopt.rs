@@ -7,6 +7,9 @@ use parking_lot::Mutex;
 use sysproxy::Sysproxy;
 use tauri::{async_runtime::Mutex as TokioMutex, utils::platform::current_exe};
 
+#[cfg(target_os = "linux")]
+use tauri::Manager;
+
 use crate::{config::core::Config, log_err};
 
 #[cfg(target_os = "windows")]
