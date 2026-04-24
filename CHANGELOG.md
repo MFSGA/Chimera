@@ -1,3 +1,13 @@
+## [0.11.2] - 2026-04-24 08:59:26
+
+### 🐛 Bug Fixes
+
+- For linux compile by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.11.1...v0.11.2
+
 ## [0.11.1] - 2026-04-24 07:44:03
 
 ### ✨ Features
