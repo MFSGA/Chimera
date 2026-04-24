@@ -1,9 +1,9 @@
 import { BasePage } from '@chimera/ui';
 import { FilterAlt } from '@mui/icons-material';
 import { Box, CircularProgress, IconButton } from '@mui/material';
-import { createFileRoute, useBlocker } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { useThrottle } from 'ahooks';
-import { lazy, Suspense, useDeferredValue, useEffect, useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchTermCtx } from '@/components/connections/connection-search-term';
 import HeaderSearch from '@/components/connections/header-search';
@@ -30,22 +30,6 @@ function Connections() {
 
   const [searchTerm, setSearchTerm] = useState<string>();
   const throttledSearchTerm = useThrottle(searchTerm, { wait: 150 });
-
-  const [mountTable, setMountTable] = useState(true);
-  const deferredMountTable = useDeferredValue(mountTable);
-  const { proceed } = useBlocker({
-    shouldBlockFn: (args) => {
-      setMountTable(false);
-      return !mountTable;
-    },
-    withResolver: true,
-  });
-
-  useEffect(() => {
-    if (!deferredMountTable) {
-      proceed?.();
-    }
-  }, [proceed, deferredMountTable]);
 
   // Loading fallback component
   const LoadingFallback = () => (
@@ -91,7 +75,7 @@ function Connections() {
         }
       >
         <Suspense fallback={<LoadingFallback />}>
-          {mountTable && <Component />}
+          <Component />
         </Suspense>
       </BasePage>
     </SearchTermCtx.Provider>

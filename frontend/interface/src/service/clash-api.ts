@@ -17,18 +17,32 @@ export const useClashAPI = () => {
   const { data } = useClashInfo();
 
   const request = useMemo(() => {
+    const server = prepareServer(data?.server);
+
+    if (!server) {
+      return null;
+    }
+
     return ofetch.create({
-      baseURL: `http://${prepareServer(data?.server)}`,
+      baseURL: `http://${server}`,
       headers: data?.secret
         ? { Authorization: `Bearer ${data?.secret}` }
         : undefined,
     });
-  }, [data]);
+  }, [data?.secret, data?.server]);
+
+  const getRequest = () => {
+    if (!request) {
+      throw new Error('Clash controller is not ready');
+    }
+
+    return request;
+  };
 
   const deleteConnections = async (id?: string) => {
     const url = id ? `/connections/${id}` : '/connections';
 
-    return await request(url, {
+    return await getRequest()(url, {
       method: 'DELETE',
     });
   };
@@ -37,7 +51,7 @@ export const useClashAPI = () => {
    * Fetches Clash configurations from the server.
    */
   const configs = async () => {
-    return await request<ClashConfig>('/configs');
+    return await getRequest()<ClashConfig>('/configs');
   };
 
   /**
@@ -45,14 +59,14 @@ export const useClashAPI = () => {
    * modified as needed for the configuration items to be updated.
    */
   const patchConfigs = async (config: Partial<ClashConfig>) => {
-    return await request<ClashConfig>('/configs', {
+    return await getRequest()<ClashConfig>('/configs', {
       method: 'PATCH',
       body: config,
     });
   };
 
   const proxiesDelay = async (name: string, options?: ClashDelayOptions) => {
-    return await request<{ delay: number }>(
+    return await getRequest()<{ delay: number }>(
       `/proxies/${encodeURIComponent(name)}/delay`,
       {
         params: {
@@ -64,7 +78,7 @@ export const useClashAPI = () => {
   };
 
   const groupDelay = async (group: string, options?: ClashDelayOptions) => {
-    return await request<Record<string, number>>(
+    return await getRequest()<Record<string, number>>(
       `/group/${encodeURIComponent(group)}/delay`,
       {
         params: {
@@ -76,16 +90,17 @@ export const useClashAPI = () => {
   };
 
   const rules = async () => {
-    return await request<{
+    return await getRequest()<{
       rules: ClashRule[];
     }>('/rules');
   };
 
   const version = async () => {
-    return await request<ClashVersion>('/version');
+    return await getRequest()<ClashVersion>('/version');
   };
 
   return {
+    isReady: Boolean(request),
     deleteConnections,
     configs,
     patchConfigs,
