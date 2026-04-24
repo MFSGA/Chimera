@@ -22,7 +22,7 @@ import { CLASH_CONFIG_QUERY_KEY } from './consts';
  * const { query, upsert } = useClashConfig();
  */
 export const useClashConfig = () => {
-  const { configs, patchConfigs } = useClashAPI();
+  const { configs, isReady, patchConfigs } = useClashAPI();
 
   const queryClient = useQueryClient();
 
@@ -41,6 +41,7 @@ export const useClashConfig = () => {
   const query = useQuery({
     queryKey: [CLASH_CONFIG_QUERY_KEY],
     queryFn: configs,
+    enabled: isReady,
   });
 
   /**

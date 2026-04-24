@@ -2,6 +2,7 @@ import { useClashWSContext } from '@chimera/interface';
 import { BasePage } from '@chimera/ui';
 import Grid from '@mui/material/Grid';
 import { createFileRoute } from '@tanstack/react-router';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import DataPanel from '@/components/dashboard/data-panel';
 import ProxyShortcuts from '@/components/dashboard/proxy-shortcuts';
@@ -17,7 +18,9 @@ function Dashboard() {
   const visible = useVisibility();
   const { setRecordTraffic } = useClashWSContext();
 
-  setRecordTraffic(visible);
+  useEffect(() => {
+    setRecordTraffic(visible);
+  }, [setRecordTraffic, visible]);
 
   return (
     <BasePage title={t('Dashboard')}>
