@@ -1,3 +1,19 @@
+## [0.11.1] - 2026-04-24 07:44:03
+
+### ✨ Features
+
+- Support auto-launch by @MFSGA
+
+### 🐛 Bug Fixes
+
+- For correct url api interface by @MFSGA
+
+- For correct config by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.11.0...v0.11.1
+
 ## [0.11.0] - 2026-04-17 04:37:22
 
 ### 🐛 Bug Fixes
