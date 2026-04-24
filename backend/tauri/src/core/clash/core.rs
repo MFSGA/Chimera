@@ -419,6 +419,9 @@ impl CoreManager {
         Config::clash()
             .latest()
             .prepare_external_controller_port()?;
+        // Rebuild the runtime config after port fallback so the core process and
+        // frontend observe the same controller address and secret.
+        Config::generate().await?;
         let run_type = RunType::default();
         let instance = Arc::new(Instance::try_new(run_type)?);
 
@@ -435,7 +438,9 @@ impl CoreManager {
             let mut this = self.instance.lock();
             *this = Some(instance.clone());
         }
-        instance.start().await
+        instance.start().await?;
+        crate::core::handle::Handle::refresh_clash();
+        Ok(())
     }
 
     /// 更新proxies那些
