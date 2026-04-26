@@ -1,3 +1,9 @@
+## [0.11.3] - 2026-04-26 11:23:32
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.11.2...v0.11.3
+
 ## [0.11.2] - 2026-04-24 08:59:26
 
 ### 🐛 Bug Fixes
