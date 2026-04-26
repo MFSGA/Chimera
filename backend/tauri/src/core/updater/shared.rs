@@ -45,7 +45,7 @@ pub(super) fn get_download_path(core_type: CoreTypeMeta, artifact: &str) -> Stri
             format!("Watfaq/clash-rs/releases/download/{tag}/{artifact}")
         }
         CoreTypeMeta::ChimeraClient(tag) => {
-            format!("MFSGA/chimera-client/releases/download/{tag}/{artifact}")
+            format!("MFSGA/Chimera_Client/releases/download/{tag}/{artifact}")
         }
         CoreTypeMeta::ClashRsAlpha => {
             format!("Watfaq/clash-rs/releases/download/latest/{artifact}")
