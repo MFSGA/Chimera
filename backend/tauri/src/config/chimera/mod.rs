@@ -118,6 +118,8 @@ pub struct IVerge {
     pub system_proxy_bypass: Option<String>,
     /// 12. verge mixed port 用于覆盖 clash 的 mixed port
     pub verge_mixed_port: Option<u16>,
+    /// 23. use a random mixed port on startup
+    pub enable_random_port: Option<bool>,
     /// 13. enable proxy guard
     pub enable_proxy_guard: Option<bool>,
     /// 14. proxy guard interval
@@ -145,7 +147,7 @@ pub struct IVerge {
     /// 21. Use legacy UI (original UI at "/" route)
     /// When true, opens legacy window; when false, opens new main window
     pub use_legacy_ui: Option<bool>,
-    /// Tun 堆栈选择
+    /// 22. Tun 堆栈选择
     /// TODO: 弃用此字段，转移到 clash config 里
     pub tun_stack: Option<TunStack>,
 }
@@ -189,6 +191,7 @@ impl IVerge {
             enable_auto_launch: Some(false),
             enable_silent_start: Some(false),
             always_on_top: Some(false),
+            enable_random_port: Some(false),
 
             ..Self::default()
         }
@@ -211,6 +214,9 @@ impl IVerge {
         }
         if config.always_on_top.is_none() {
             config.always_on_top = template.always_on_top;
+        }
+        if config.enable_random_port.is_none() {
+            config.enable_random_port = template.enable_random_port;
         }
 
         config

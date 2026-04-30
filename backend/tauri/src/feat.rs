@@ -71,7 +71,10 @@ fn plan_clash_patch(patch: &Mapping) -> Result<ClashPatchPlan> {
 }
 
 fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
+    let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
+
     if plan.mixed_port_changed
+        && !enable_random_port
         && let Some(port) = plan.mixed_port
         && !port_scanner::local_port_available(port)
     {
