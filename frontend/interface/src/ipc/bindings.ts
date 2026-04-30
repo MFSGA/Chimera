@@ -680,6 +680,10 @@ export type IVerge = {
    */
   verge_mixed_port: number | null;
   /**
+   * 12.1. use a random mixed port on startup
+   */
+  enable_random_port: boolean | null;
+  /**
    * 13. enable proxy guard
    */
   enable_proxy_guard: boolean | null;

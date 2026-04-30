@@ -3,7 +3,7 @@ import {
   useClashCoreConfig,
   useSetting,
 } from '@chimera/interface';
-import { BaseCard, BaseItem, Expand } from '@chimera/ui';
+import { BaseCard, BaseItem, Expand, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
@@ -74,6 +74,35 @@ const ClashPort = () => {
   );
 };
 
+const RandomPort = () => {
+  const { t } = useTranslation();
+  const { value, upsert } = useSetting('enable_random_port');
+
+  const handleRandomPort = async () => {
+    try {
+      await upsert(!value);
+    } catch (e) {
+      message(JSON.stringify(e), {
+        title: t('Error'),
+        kind: 'error',
+      });
+    } finally {
+      message(t('After restart to take effect'), {
+        title: t('Successful'),
+        kind: 'info',
+      });
+    }
+  };
+
+  return (
+    <SwitchItem
+      label={t('Random Port')}
+      checked={value || false}
+      onChange={handleRandomPort}
+    />
+  );
+};
+
 export const SettingClashPort = () => {
   const { t } = useTranslation();
 
@@ -81,6 +110,8 @@ export const SettingClashPort = () => {
     <BaseCard label={t('Clash Port')}>
       <List disablePadding>
         <ClashPort />
+
+        <RandomPort />
       </List>
     </BaseCard>
   );

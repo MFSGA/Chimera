@@ -1,4 +1,5 @@
 use std::{
+    net::TcpListener,
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
@@ -24,6 +25,46 @@ use crate::{
 struct LegacyWindow;
 
 static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
+
+fn find_unused_port() -> Result<u16> {
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => Ok(listener.local_addr()?.port()),
+        Err(_) => {
+            let port = Config::verge()
+                .latest()
+                .verge_mixed_port
+                .unwrap_or(Config::clash().data().get_mixed_port());
+            log::warn!(target: "app", "use default mixed port: {port}");
+            Ok(port)
+        }
+    }
+}
+
+fn resolve_random_mixed_port() {
+    let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
+
+    if !enable_random_port {
+        return;
+    }
+
+    let fallback_port = Config::verge()
+        .latest()
+        .verge_mixed_port
+        .unwrap_or(Config::clash().data().get_mixed_port());
+    let port = find_unused_port().unwrap_or(fallback_port);
+
+    Config::verge().data().patch_config(IVerge {
+        verge_mixed_port: Some(port),
+        ..IVerge::default()
+    });
+    let _ = Config::verge().data().save_file();
+
+    let mut mapping = serde_yaml::Mapping::new();
+    mapping.insert("mixed-port".into(), port.into());
+    Config::clash().data().patch_config(mapping);
+    let _ = Config::clash().latest().prepare_external_controller_port();
+    let _ = Config::clash().data().save_config();
+}
 
 impl AppWindow for LegacyWindow {
     fn label(&self) -> &str {
@@ -114,6 +155,8 @@ pub fn resolve_setup(app: &mut App) {
 
     log_err!(init::init_resources());
     log_err!(init::init_service());
+
+    resolve_random_mixed_port();
 
     // 启动核心
     log::trace!("init config");
