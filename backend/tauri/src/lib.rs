@@ -72,6 +72,9 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_runtime_yaml,
         ipc::get_core_status,
         ipc::uwp::invoke_uwp_tool,
+        ipc::collect_logs,
+        ipc::get_custom_app_dir,
+        ipc::set_custom_app_dir,
         // updater layer
         ipc::check_update,
         // utils

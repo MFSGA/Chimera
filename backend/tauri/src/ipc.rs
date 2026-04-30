@@ -1,4 +1,4 @@
-use std::result::Result as StdResult;
+use std::{path::PathBuf, result::Result as StdResult};
 
 use anyhow::{Context, anyhow};
 
@@ -6,6 +6,7 @@ use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     config::{
@@ -30,7 +31,7 @@ use crate::{
         updater::{self, ManifestVersionLatest},
     },
     feat,
-    utils::{dirs, help, resolve},
+    utils::{candy, dirs, help, resolve},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
@@ -526,6 +527,84 @@ pub async fn get_core_version(
     match resolve::resolve_core_version(&app_handle, &core_type).await {
         Ok(version) => Ok(version),
         Err(err) => Err(IpcError::from(err)),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn collect_logs(app_handle: AppHandle) -> Result {
+    let now = chrono::Local::now().format("%Y-%m-%d");
+    let fname = format!("{now}-log.zip");
+    let Some(path) = app_handle
+        .dialog()
+        .file()
+        .add_filter("archive files", &["zip"])
+        .set_file_name(fname)
+        .set_title("Save log archive")
+        .blocking_save_file()
+        .and_then(|path| path.as_path().map(PathBuf::from))
+    else {
+        return Ok(());
+    };
+
+    candy::collect_logs(&path)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_custom_app_dir() -> Result<Option<String>> {
+    #[cfg(windows)]
+    {
+        return Ok(
+            crate::utils::winreg::get_app_dir()?.map(|path| path.to_string_lossy().to_string())
+        );
+    }
+
+    #[cfg(not(windows))]
+    {
+        Ok(None)
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result {
+    #[cfg(windows)]
+    {
+        let target = PathBuf::from(path);
+        if !target.is_absolute() {
+            return Err(IpcError::from(anyhow!("custom app dir must be absolute")));
+        }
+
+        let current = dirs::app_config_dir()?;
+        if current != target {
+            if target.starts_with(&current) {
+                return Err(IpcError::from(anyhow!(
+                    "custom app dir cannot be inside the current app config dir"
+                )));
+            }
+
+            fs_extra::dir::create_all(&target, false)
+                .map_err(|err| anyhow!("failed to create custom app dir: {err:?}"))?;
+
+            let mut options = fs_extra::dir::CopyOptions::new();
+            options.overwrite = true;
+            options.copy_inside = true;
+            fs_extra::dir::copy(&current, &target, &options)
+                .map_err(|err| anyhow!("failed to migrate app config dir: {err:?}"))?;
+        }
+
+        crate::utils::winreg::set_app_dir(&target)?;
+        return Ok(());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Err(IpcError::from(anyhow!(
+            "custom app dir is only supported on Windows"
+        )))
     }
 }
 

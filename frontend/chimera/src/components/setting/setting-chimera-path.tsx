@@ -1,11 +1,14 @@
 import {
+  collectLogs,
   openAppConfigDir,
   openAppDataDir,
   openCoreDir,
   openLogsDir,
+  setCustomAppDir,
 } from '@chimera/interface';
 import { BaseCard } from '@chimera/ui';
 import Grid from '@mui/material/Grid';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useLockFn } from 'ahooks';
 import { useTranslation } from 'react-i18next';
 import { formatError } from '@/utils';
@@ -42,14 +45,44 @@ const PathButton = ({
   );
 };
 
+const runCommand = async (
+  command: () => Promise<
+    { status: 'ok'; data: unknown } | { status: 'error'; error: string }
+  >,
+) => {
+  const result = await command();
+  if (result.status === 'error') {
+    throw new Error(result.error);
+  }
+};
+
 export const SettingChimeraPath = () => {
   const { t } = useTranslation();
 
+  const handleMigrateConfigDir = async () => {
+    const selected = await openDialog({
+      directory: true,
+      multiple: false,
+      title: t('Migrate Config Dir'),
+    });
+
+    if (!selected || Array.isArray(selected)) {
+      return;
+    }
+
+    await runCommand(() => setCustomAppDir(selected));
+  };
+
   const buttonItems = [
-    { label: t('Open Config Dir'), onClick: openAppConfigDir },
-    { label: t('Open Data Dir'), onClick: openAppDataDir },
-    { label: t('Open Core Dir'), onClick: openCoreDir },
-    { label: t('Open Log Dir'), onClick: openLogsDir },
+    { label: t('Migrate Config Dir'), onClick: handleMigrateConfigDir },
+    {
+      label: t('Open Config Dir'),
+      onClick: () => runCommand(openAppConfigDir),
+    },
+    { label: t('Open Data Dir'), onClick: () => runCommand(openAppDataDir) },
+    { label: t('Open Core Dir'), onClick: () => runCommand(openCoreDir) },
+    { label: t('Open Log Dir'), onClick: () => runCommand(openLogsDir) },
+    { label: t('Collect Logs'), onClick: () => runCommand(collectLogs) },
   ];
 
   return (

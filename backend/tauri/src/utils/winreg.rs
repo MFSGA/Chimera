@@ -1,5 +1,8 @@
 use super::dirs::APP_DIR_PLACEHOLDER;
-use std::{io::ErrorKind, path::PathBuf};
+use std::{
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use once_cell::sync::Lazy;
@@ -31,4 +34,14 @@ pub fn get_app_dir() -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     Ok(Some(path))
+}
+
+pub fn set_app_dir(path: &Path) -> Result<()> {
+    let hcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hcu.create_subkey(*SOFTWARE_KEY)?;
+    let path = path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("failed to convert app dir path to string"))?;
+    key.set_value("AppDir", &path)?;
+    Ok(())
 }

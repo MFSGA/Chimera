@@ -270,6 +270,33 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async collectLogs(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('collect_logs') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async getCustomAppDir(): Promise<Result<string | null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_custom_app_dir') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async setCustomAppDir(path: string): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('set_custom_app_dir', { path }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async checkUpdate(): Promise<Result<UpdateWrapper | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('check_update') };
@@ -680,7 +707,7 @@ export type IVerge = {
    */
   verge_mixed_port: number | null;
   /**
-   * 12.1. use a random mixed port on startup
+   * 23. use a random mixed port on startup
    */
   enable_random_port: boolean | null;
   /**
@@ -728,7 +755,7 @@ export type IVerge = {
    */
   use_legacy_ui: boolean | null;
   /**
-   * Tun 堆栈选择
+   * 22. Tun 堆栈选择
    * TODO: 弃用此字段，转移到 clash config 里
    */
   tun_stack: TunStack | null;
