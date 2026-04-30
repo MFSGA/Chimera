@@ -1,8 +1,43 @@
-use super::config::NyanpasuReqwestProxyExt;
+use super::{config::NyanpasuReqwestProxyExt, dirs::app_logs_dir};
 use anyhow::Result;
+use chrono::Local;
 use futures_util::future;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 use url::Url;
+use zip::{ZipWriter, write::SimpleFileOptions};
+
+pub fn collect_logs(target_path: &Path) -> Result<()> {
+    let logs_dir = app_logs_dir()?;
+    let now = Local::now().format("%Y-%m-%d").to_string();
+    let suffix = format!(".{now}.app.log");
+    let mut paths = Vec::new();
+
+    for entry in std::fs::read_dir(logs_dir)? {
+        let path = entry?.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(&suffix))
+        {
+            paths.push(path);
+        }
+    }
+
+    let file = std::fs::File::create(target_path)?;
+    let mut zip = ZipWriter::new(file);
+
+    for path in paths {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        zip.start_file(file_name, SimpleFileOptions::default())?;
+        let mut file = std::fs::File::open(path)?;
+        std::io::copy(&mut file, &mut zip)?;
+    }
+
+    zip.finish()?;
+    Ok(())
+}
 
 pub fn get_reqwest_client() -> Result<reqwest::Client> {
     let client = reqwest::ClientBuilder::new()
