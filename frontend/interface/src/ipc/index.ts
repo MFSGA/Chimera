@@ -36,3 +36,6 @@ export const openAppConfigDir = commands.openAppConfigDir;
 export const openAppDataDir = commands.openAppDataDir;
 export const openCoreDir = commands.openCoreDir;
 export const openLogsDir = commands.openLogsDir;
+export const collectLogs = commands.collectLogs;
+export const getCustomAppDir = commands.getCustomAppDir;
+export const setCustomAppDir = commands.setCustomAppDir;
