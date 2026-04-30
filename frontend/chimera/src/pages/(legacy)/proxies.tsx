@@ -2,6 +2,7 @@ import {
   ProxyGroupItem,
   useClashProxies,
   useProxyMode,
+  type ProxyMode,
 } from '@chimera/interface';
 import { alpha, cn, SidePage } from '@chimera/ui';
 import { Check } from '@mui/icons-material';
@@ -105,7 +106,9 @@ function ProxyPage() {
 
   const nodeListRef = useRef<NodeListRef>(null);
 
-  const handleSwitch = useLockFn(async (key: string) => {
+  const handleSwitch = useLockFn(async (key: ProxyMode | null) => {
+    if (!key) return;
+
     await upsert(key);
   });
 
