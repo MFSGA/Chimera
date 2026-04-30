@@ -1,4 +1,5 @@
-import { alpha, BaseCard } from '@chimera/ui';
+import { useSetting } from '@chimera/interface';
+import { alpha, BaseCard, SwitchItem } from '@chimera/ui';
 import { Box, Button, List, ListItem, Paper, Typography } from '@mui/material';
 import { useLockFn } from 'ahooks';
 import { useSetAtom } from 'jotai';
@@ -10,6 +11,19 @@ import { checkUpdate, useUpdaterPlatformSupported } from '@/hooks/use-updater';
 import { UpdaterInstanceAtom } from '@/store/updater';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+
+const AutoCheckUpdate = () => {
+  const { t } = useTranslation();
+  const { value, upsert } = useSetting('enable_auto_check_update');
+
+  return (
+    <SwitchItem
+      label={t('Auto Check Updates')}
+      checked={value ?? true}
+      onChange={() => upsert(!value)}
+    />
+  );
+};
 
 export const SettingNyanpasuVersion = () => {
   const { t } = useTranslation();
@@ -80,17 +94,23 @@ export const SettingNyanpasuVersion = () => {
         </ListItem>
 
         {isPlatformSupported && (
-          <ListItem sx={{ pl: 0, pr: 0 }}>
-            <Button
-              variant="contained"
-              size="large"
-              loading={loading}
-              onClick={onCheckUpdate}
-              sx={{ width: '100%' }}
-            >
-              {t('Check for Updates')}
-            </Button>
-          </ListItem>
+          <>
+            <div className="mt-1 mb-1">
+              <AutoCheckUpdate />
+            </div>
+
+            <ListItem sx={{ pl: 0, pr: 0 }}>
+              <Button
+                variant="contained"
+                size="large"
+                loading={loading}
+                onClick={onCheckUpdate}
+                sx={{ width: '100%' }}
+              >
+                {t('Check for Updates')}
+              </Button>
+            </ListItem>
+          </>
         )}
       </List>
     </BaseCard>
