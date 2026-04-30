@@ -2,6 +2,7 @@ import path from 'node:path';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { NodePackageImporter } from 'sass-embedded';
+import Icons from 'unplugin-icons/vite';
 import { defineConfig, UserConfig } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
@@ -54,6 +55,7 @@ export default defineConfig(async ({ command, mode }) => {
         },
       }),
       react({}),
+      Icons({ compiler: 'jsx' }),
       sassDts({ esmExport: true }),
       isDev && devtools(),
     ],
