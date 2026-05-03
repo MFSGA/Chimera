@@ -52,7 +52,8 @@ export const themeMode = atomWithLocalStorage<'light' | 'dark'>(
 
 export const atomIsDrawerOnlyIcon = atomWithStorage<boolean>(
   'atomIsDrawerOnlyIcon',
-  true,
+  // help people to navigate
+  false,
 );
 
 // TODO: generate default columns based on COLUMNS
