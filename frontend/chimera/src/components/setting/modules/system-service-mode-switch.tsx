@@ -39,7 +39,7 @@ export const ServiceModeSwitch = () => {
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <Typography>
             {t(
-              'Information: To enable service mode, make sure the clash-chimera service is installed and started',
+              'Information: To enable service mode, make sure the Clash Chimera service is installed and started',
             )}
           </Typography>
         </ListItem>
