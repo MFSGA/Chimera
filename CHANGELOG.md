@@ -1,3 +1,33 @@
+## [0.12.0] - 2026-05-03 10:15:32
+
+### ✨ Features
+
+- **chimera:** Add ref ui button infrastructure by @MFSGA
+
+- **settings:** Reorganize legacy setting cards by @MFSGA
+
+- **settings:** Align system proxy card by @MFSGA
+
+- Support collect_logs and set_custom_app_dir get_custom_app_dir by @MFSGA
+
+- Support for random port by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **chimera:** Type proxy mode switch values by @MFSGA
+
+- **interface:** Align proxy mode guard with ref by @MFSGA
+
+- Correct the translation by @MFSGA
+
+- Correct the translate by @MFSGA
+
+- Help greener to use by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.11.3...v0.12.0
+
 ## [0.11.3] - 2026-04-26 11:23:32
 
 ---
