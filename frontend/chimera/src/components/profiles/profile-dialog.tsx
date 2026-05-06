@@ -262,11 +262,15 @@ export const ProfileDialog = ({
               {...commonProps}
               size="small"
               type="number"
-              InputProps={{
-                inputProps: { min: 0 },
-                endAdornment: (
-                  <InputAdornment position="end">{t('minutes')}</InputAdornment>
-                ),
+              slotProps={{
+                htmlInput: { min: 0 },
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      {t('minutes')}
+                    </InputAdornment>
+                  ),
+                },
               }}
             />
           </>

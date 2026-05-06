@@ -71,7 +71,7 @@ export const LabelSwitch = ({
       })}
       elevation={0}
     >
-      <Box display="flex" alignItems="center" gap={1}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <Typography noWrap>{label}</Typography>
 
         {url && (
@@ -139,7 +139,7 @@ export const ClashFieldItem = ({
           }}
           {...props}
         >
-          <Box width="calc(100% - 8px)">
+          <Box sx={{ width: 'calc(100% - 8px)' }}>
             <Typography
               sx={{
                 textTransform: 'capitalize',
@@ -150,7 +150,7 @@ export const ClashFieldItem = ({
             </Typography>
 
             <Marquee speed={36}>
-              <Box display="flex" gap={1} sx={{ paddingRight: 16 }}>
+              <Box sx={{ display: 'flex', gap: 1, paddingRight: 16 }}>
                 <span>Enabled: </span>
 
                 {fields.map((item, index) => {

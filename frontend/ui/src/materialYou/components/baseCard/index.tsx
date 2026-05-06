@@ -26,10 +26,12 @@ export const BaseCard = ({
       <CardContent>
         {label && (
           <Box
-            display="flex"
-            justifyContent="space-between"
-            alignItems="center"
-            sx={{ pb: 1 }}
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              pb: 1,
+            }}
           >
             <Typography variant="h5" component="div">
               {label}

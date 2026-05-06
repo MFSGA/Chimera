@@ -29,7 +29,7 @@ const MaxLogFiles = () => {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           sx={{ width: 128 }}
-          inputProps={{ min: 1 }}
+          slotProps={{ htmlInput: { min: 1 } }}
         />
       </BaseItem>
 

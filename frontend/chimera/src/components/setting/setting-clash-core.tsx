@@ -169,7 +169,7 @@ export const SettingClashCore = () => {
             justifyContent: 'space-between',
           }}
         >
-          <Box display="flex" gap={1}>
+          <Box sx={{ display: 'flex', gap: 1 }}>
             <Button variant="outlined" onClick={handleRestart}>
               {t('Restart')}
             </Button>

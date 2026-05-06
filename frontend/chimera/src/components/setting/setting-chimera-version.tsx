@@ -75,14 +75,16 @@ export const SettingNyanpasuVersion = () => {
             })}
           >
             <Box
-              display="flex"
-              flexDirection="column"
-              alignItems="center"
-              gap={2}
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
+              }}
             >
               {/* <LogoSvg className="h-32 w-32" /> */}
 
-              <Typography fontWeight={700} noWrap>
+              <Typography noWrap sx={{ fontWeight: 700 }}>
                 {'Clash Chimera~(∠・ω< )⌒☆'}&nbsp;
               </Typography>
 

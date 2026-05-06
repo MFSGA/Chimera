@@ -59,8 +59,8 @@ export const PaperButton = memo(function PaperButton({
           <Typography
             noWrap
             component="p"
-            width="100%"
             sx={{
+              width: '100%',
               fontWeight: 700,
               textOverflow: 'ellipsis',
               overflow: 'hidden',

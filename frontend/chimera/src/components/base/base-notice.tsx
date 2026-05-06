@@ -1,5 +1,6 @@
 import { CheckCircleRounded, Close, ErrorRounded } from '@mui/icons-material';
 import { Box, IconButton, Slide, Snackbar, Typography } from '@mui/material';
+import type { SlideProps } from '@mui/material/Slide';
 import { ReactNode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -10,6 +11,10 @@ interface InnerProps {
   message: ReactNode;
   onClose: () => void;
 }
+
+const NoticeTransition = (props: SlideProps) => (
+  <Slide {...props} direction="left" />
+);
 
 const NoticeInner = ({
   type,
@@ -52,7 +57,7 @@ const NoticeInner = ({
       onClose={onAutoClose}
       message={msgElement}
       sx={{ maxWidth: 360 }}
-      TransitionComponent={(props) => <Slide {...props} direction="left" />}
+      slots={{ transition: NoticeTransition }}
       transitionDuration={200}
       action={
         <IconButton size="small" color="inherit" onClick={onBtnClose}>
