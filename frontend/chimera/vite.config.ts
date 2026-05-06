@@ -6,7 +6,6 @@ import Icons from 'unplugin-icons/vite';
 import { defineConfig, UserConfig } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
-import tsconfigPaths from 'vite-tsconfig-paths';
 
 const host = process.env.TAURI_DEV_HOST;
 
@@ -41,7 +40,6 @@ export default defineConfig(async ({ command, mode }) => {
       },
     },
     plugins: [
-      tsconfigPaths(),
       TanStackRouterVite(),
       createHtmlPlugin({
         inject: {
@@ -61,9 +59,17 @@ export default defineConfig(async ({ command, mode }) => {
     ],
 
     resolve: {
-      alias: {
-        '@root': path.resolve(__dirname, '../..'),
-      },
+      alias: [
+        { find: '@root', replacement: path.resolve(__dirname, '../..') },
+        { find: '@', replacement: path.resolve(__dirname, './src') },
+        { find: '~', replacement: path.resolve(__dirname, '.') },
+      ],
+      dedupe: ['react', 'react-dom'],
+    },
+
+    optimizeDeps: {
+      entries: ['./src/main.tsx'],
+      include: ['@tauri-apps/api', 'react', 'react-dom'],
     },
 
     // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -71,18 +77,35 @@ export default defineConfig(async ({ command, mode }) => {
     // 1. prevent vite from obscuring rust errors
     clearScreen: false,
 
-    build: {
-      outDir: '../../backend/tauri/tmp/dist',
-      rollupOptions: {
+    worker: {
+      format: 'es',
+      rolldownOptions: {
         output: {
-          /*  manualChunks: {
-             jsonWorker: [`monaco-editor/esm/vs/language/json/json.worker`],
-             tsWorker: [`monaco-editor/esm/vs/language/typescript/ts.worker`],
-             editorWorker: [`monaco-editor/esm/vs/editor/editor.worker`],
-             yamlWorker: [`monaco-yaml/yaml.worker`],
-           }, */
+          manualChunks: (id) => {
+            if (id.includes('monaco-editor/esm/vs/language/json/json.worker')) {
+              return 'json-worker';
+            }
+
+            if (
+              id.includes('monaco-editor/esm/vs/language/typescript/ts.worker')
+            ) {
+              return 'ts-worker';
+            }
+
+            if (id.includes('monaco-editor/esm/vs/editor/editor.worker')) {
+              return 'editor-worker';
+            }
+
+            if (id.includes('monaco-yaml/yaml.worker')) {
+              return 'yaml-worker';
+            }
+          },
         },
       },
+    },
+
+    build: {
+      outDir: '../../backend/tauri/tmp/dist',
       emptyOutDir: true,
       sourcemap: isDev || IS_NIGHTLY ? 'inline' : false,
     },

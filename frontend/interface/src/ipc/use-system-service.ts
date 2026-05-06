@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { unwrapResult } from '@/utils';
+import { unwrapResult } from '../utils';
 import { commands } from './bindings';
 
 export type ServiceType =

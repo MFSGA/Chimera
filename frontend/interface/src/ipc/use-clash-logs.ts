@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemoizedFn } from 'ahooks';
-import { useClashWSContext } from '@/provider/clash-ws-provider';
+import { useClashWSContext } from '../provider/clash-ws-provider';
 import { CLASH_LOGS_QUERY_KEY } from './consts';
 
 export type ClashLog = {
