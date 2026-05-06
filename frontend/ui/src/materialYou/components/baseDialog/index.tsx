@@ -1,8 +1,7 @@
 import { Box, Button, Divider } from '@mui/material';
 import { useColorScheme } from '@mui/material/styles';
 import * as Portal from '@radix-ui/react-portal';
-import { useLockFn } from 'ahooks';
-import useDebounceFn from 'ahooks/lib/useDebounceFn';
+import { useDebounceFn, useLockFn } from 'ahooks';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   CSSProperties,

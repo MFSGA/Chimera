@@ -142,7 +142,7 @@ const ProxyGuardInterval = () => {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           sx={{ width: 128 }}
-          inputProps={{ min: 1 }}
+          slotProps={{ htmlInput: { min: 1 } }}
         />
       </BaseItem>
 
@@ -181,7 +181,7 @@ const SystemProxyBypass = () => {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           sx={{ width: 220 }}
-          inputProps={{ 'aria-autocomplete': 'none' }}
+          slotProps={{ htmlInput: { 'aria-autocomplete': 'none' } }}
         />
       </BaseItem>
 

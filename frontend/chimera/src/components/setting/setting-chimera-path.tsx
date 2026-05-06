@@ -87,7 +87,7 @@ export const SettingChimeraPath = () => {
 
   return (
     <BaseCard label={t('Path Config')}>
-      <Grid container alignItems="stretch" spacing={2}>
+      <Grid container spacing={2} sx={{ alignItems: 'stretch' }}>
         {buttonItems.map(({ label, onClick }) => (
           <Grid
             key={label}
