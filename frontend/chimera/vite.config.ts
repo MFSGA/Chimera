@@ -54,7 +54,7 @@ export default defineConfig(async ({ command, mode }) => {
       }),
       react({}),
       Icons({ compiler: 'jsx' }),
-      sassDts({ esmExport: true }),
+      sassDts({ esmExport: true, legacyFileFormat: true }),
       isDev && devtools(),
     ],
 

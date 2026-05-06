@@ -52,7 +52,7 @@ export const NodeCard = memo(function NodeCard({
         }),
       })}
     >
-      <Box width="100%" display="flex" gap={0.5}>
+      <Box sx={{ width: '100%', display: 'flex', gap: 0.5 }}>
         <FeatureChip label={node.type} />
 
         {node.udp && <FeatureChip label="UDP" />}

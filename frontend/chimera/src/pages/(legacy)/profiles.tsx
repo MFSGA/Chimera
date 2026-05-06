@@ -5,7 +5,7 @@ import {
 } from '@chimera/interface';
 import { SidePage } from '@chimera/ui';
 import {
-  ErrorOutline,
+  ErrorOutlined,
   Public,
   TextSnippetOutlined,
   Update,
@@ -186,7 +186,7 @@ function ProfilePage() {
         <ContentDisplay className="px-3 pt-2 pb-4">
           <div className="flex min-h-64 w-full items-center justify-center">
             <div className="flex w-full max-w-md flex-col items-center rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
-              <ErrorOutline className="!mb-4 !size-14 text-red-400 dark:text-red-300" />
+              <ErrorOutlined className="!mb-4 !size-14 text-red-400 dark:text-red-300" />
               <div className="text-base font-semibold">
                 {t('Failed to load profiles')}
               </div>

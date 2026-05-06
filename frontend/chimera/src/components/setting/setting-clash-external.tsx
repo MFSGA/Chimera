@@ -35,7 +35,7 @@ const TextItem = ({
           value={textValue}
           onChange={(e) => setTextValue(e.target.value)}
           sx={{ width: 160 }}
-          inputProps={{ 'aria-autocomplete': 'none' }}
+          slotProps={{ htmlInput: { 'aria-autocomplete': 'none' } }}
         />
       </BaseItem>
 

@@ -55,7 +55,7 @@ const ClashPort = () => {
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           sx={{ width: 128 }}
-          inputProps={{ min: 1, max: 65535 }}
+          slotProps={{ htmlInput: { min: 1, max: 65535 } }}
         />
       </BaseItem>
 
