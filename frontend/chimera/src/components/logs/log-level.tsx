@@ -14,9 +14,10 @@ export const LogLevel = () => {
 
   const mapping: Record<string, string> = {
     all: 'ALL',
-    inf: 'INFO',
-    warn: 'WARN',
-    err: 'ERROR',
+    debug: 'DEBUG',
+    info: 'INFO',
+    warning: 'WARN',
+    error: 'ERROR',
   };
 
   return (

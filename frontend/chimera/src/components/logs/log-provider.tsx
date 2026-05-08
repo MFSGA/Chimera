@@ -15,6 +15,24 @@ const LogContext = createContext<{
   setLogLevel: (level: string) => void;
 } | null>(null);
 
+const normalizeLogType = (type: string) => {
+  const normalized = type.toLowerCase();
+
+  if (normalized === 'inf') {
+    return 'info';
+  }
+
+  if (normalized === 'warn') {
+    return 'warning';
+  }
+
+  if (normalized === 'err') {
+    return 'error';
+  }
+
+  return normalized;
+};
+
 export const useLogContext = () => {
   const context = useContext(LogContext);
 
@@ -38,7 +56,8 @@ export const LogProvider = ({ children }: PropsWithChildren) => {
         !filterText ||
         log.payload.toLowerCase().includes(filterText.toLowerCase());
 
-      const matchesLevel = logLevel === 'all' ? true : log.type === logLevel;
+      const matchesLevel =
+        logLevel === 'all' ? true : normalizeLogType(log.type) === logLevel;
 
       return matchesFilter && matchesLevel;
     });
