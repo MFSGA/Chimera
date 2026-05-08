@@ -3,7 +3,6 @@
     margin-bottom: 0;
     // todo: note word-break: break-word;
     word-break: break-all;
-    white-space: pre-wrap !important;
     background-color: transparent !important;
 
     * {
@@ -14,12 +13,12 @@
       white-space: normal;
     }
   }
-}
 
-.dark {
-  :global(.shiki) {
-    span {
-      color: var(--shiki-dark) !important;
+  &.dark {
+    :global(.shiki) {
+      span {
+        color: var(--shiki-dark) !important;
+      }
     }
   }
 }

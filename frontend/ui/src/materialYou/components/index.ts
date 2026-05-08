@@ -12,5 +12,6 @@ export * from './expand';
 export * from './item';
 
 export * from './expandMore';
+export * from './floatingButton';
 export * from './loadingButton';
 export * from './sparkline';

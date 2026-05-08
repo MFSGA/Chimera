@@ -9,9 +9,9 @@ export const LogFilter = () => {
 
   const inputProps: Partial<FilledInputProps> = {
     sx: (theme) => ({
-      height: 36,
-      borderRadius: 10,
+      borderRadius: 7,
       backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
+
       fieldset: {
         border: 'none',
       },
@@ -25,11 +25,9 @@ export const LogFilter = () => {
       spellCheck="false"
       value={filterText}
       placeholder={t('Filter conditions')}
-      onChange={(event) => setFilterText(event.target.value)}
+      onChange={(e) => setFilterText(e.target.value)}
       className="!pb-0"
-      sx={{
-        input: { py: 1, px: 1.5, fontSize: 14 },
-      }}
+      sx={{ input: { py: 1, fontSize: 14 } }}
       slotProps={{
         input: inputProps,
       }}
