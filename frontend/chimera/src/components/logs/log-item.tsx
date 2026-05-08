@@ -7,11 +7,23 @@ import { formatAnsi } from '@/utils/shiki';
 import styles from './log-item.module.scss';
 
 const colorMapping: Record<string, SxProps<Theme>> = {
+  debug: (theme) => ({
+    color: theme.vars.palette.text.secondary,
+  }),
+  error: (theme) => ({
+    color: theme.vars.palette.error.main,
+  }),
   err: (theme) => ({
     color: theme.vars.palette.error.main,
   }),
+  warning: (theme) => ({
+    color: theme.vars.palette.warning.main,
+  }),
   warn: (theme) => ({
     color: theme.vars.palette.warning.main,
+  }),
+  info: (theme) => ({
+    color: theme.vars.palette.info.main,
   }),
   inf: (theme) => ({
     color: theme.vars.palette.info.main,
