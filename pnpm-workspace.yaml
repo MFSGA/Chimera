@@ -1,8 +1,8 @@
 packages:
   - 'frontend/*'
   - 'scripts'
-
 allowBuilds:
+  '@parcel/watcher': true
   electron: true
   esbuild: true
   meta-json-schema: true
