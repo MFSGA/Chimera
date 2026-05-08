@@ -73,6 +73,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_core_status,
         ipc::uwp::invoke_uwp_tool,
         ipc::collect_logs,
+        ipc::collect_envs,
         ipc::get_custom_app_dir,
         ipc::set_custom_app_dir,
         // updater layer

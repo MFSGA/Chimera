@@ -31,7 +31,7 @@ use crate::{
         updater::{self, ManifestVersionLatest},
     },
     feat,
-    utils::{candy, dirs, help, resolve},
+    utils::{candy, collect::EnvInfo, dirs, help, resolve},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
@@ -549,6 +549,12 @@ pub async fn collect_logs(app_handle: AppHandle) -> Result {
 
     candy::collect_logs(&path)?;
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn collect_envs() -> Result<EnvInfo> {
+    Ok(crate::utils::collect::collect_envs())
 }
 
 #[tauri::command]
