@@ -1,5 +1,7 @@
 /// 7
 pub mod candy;
+/// 11
+pub mod collect;
 /// 8
 pub mod config;
 /// 9
