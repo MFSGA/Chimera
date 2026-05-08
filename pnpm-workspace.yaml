@@ -1,3 +1,8 @@
 packages:
   - 'frontend/*'
   - 'scripts'
+
+allowBuilds:
+  electron: true
+  esbuild: true
+  meta-json-schema: true
