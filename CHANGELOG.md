@@ -1,3 +1,33 @@
+## [0.13.0] - 2026-05-08 07:38:15
+
+### ✨ Features
+
+- **LogPage:** Optimize relay selector operation about loglevel by @MFSGA
+
+- **LogPage:** Keep align with ref legacy LogPage by @MFSGA
+
+- **Setting:** Add a new GithubIcon by @MFSGA
+
+- **collect_envs:** Support feedback icon by @MFSGA
+
+- **collect_envs:** Support collect_envs by @MFSGA
+
+- Support bug report by @MFSGA
+
+- Upgrade mui to 9.x by @MFSGA
+
+- Upgrade vite to 8.x by @MFSGA
+
+### 🐛 Bug Fixes
+
+- Upgrade pnpm to 11 for build by @MFSGA
+
+- For workflow build in macos by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.12.0...v0.13.0
+
 ## [0.12.0] - 2026-05-03 10:15:32
 
 ### ✨ Features
