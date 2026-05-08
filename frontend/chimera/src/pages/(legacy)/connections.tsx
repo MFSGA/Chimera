@@ -3,7 +3,14 @@ import { FilterAlt } from '@mui/icons-material';
 import { Box, CircularProgress, IconButton } from '@mui/material';
 import { createFileRoute, useBlocker } from '@tanstack/react-router';
 import { useThrottle } from 'ahooks';
-import { lazy, Suspense, useDeferredValue, useEffect, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useDeferredValue,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchTermCtx } from '@/components/connections/connection-search-term';
 import HeaderSearch from '@/components/connections/header-search';
@@ -33,16 +40,22 @@ function Connections() {
 
   const [mountTable, setMountTable] = useState(true);
   const deferredMountTable = useDeferredValue(mountTable);
+  const pendingNavigationRef = useRef(false);
   const { proceed } = useBlocker({
     shouldBlockFn: () => {
+      if (pendingNavigationRef.current) {
+        return false;
+      }
+
+      pendingNavigationRef.current = true;
       setMountTable(false);
-      return !mountTable;
+      return true;
     },
     withResolver: true,
   });
 
   useEffect(() => {
-    if (!deferredMountTable) {
+    if (pendingNavigationRef.current && !deferredMountTable) {
       proceed?.();
     }
   }, [proceed, deferredMountTable]);
