@@ -1,3 +1,15 @@
+## [0.13.1] - 2026-05-08 09:03:08
+
+### 🐛 Bug Fixes
+
+- **Connection:** Recover FloatingButton by @MFSGA
+
+- **Connection:** Recover mountTable logic by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.13.0...v0.13.1
+
 ## [0.13.0] - 2026-05-08 07:38:15
 
 ### ✨ Features
