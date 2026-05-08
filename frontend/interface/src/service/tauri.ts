@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { type EnvInfo } from '../ipc/bindings';
 import { InspectUpdater } from './types';
 
 export type SystemServiceStatus = 'running' | 'stopped' | 'not_installed';
@@ -16,6 +17,10 @@ export const isAppImage = async () => {
 
 export const openThat = async (path: string) => {
   return await invoke<void>('open_that', { path });
+};
+
+export const collectEnvs = async () => {
+  return await invoke<EnvInfo>('collect_envs');
 };
 
 export const cleanupProcesses = async () => {
