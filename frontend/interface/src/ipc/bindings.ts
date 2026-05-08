@@ -278,6 +278,14 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async collectEnvs(): Promise<Result<EnvInfo, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('collect_envs') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async getCustomAppDir(): Promise<Result<string | null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('get_custom_app_dir') };
@@ -567,6 +575,19 @@ export const commands = {
 /** user-defined types **/
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
+export type BuildInfo = {
+  app_name: string;
+  app_version: string;
+  pkg_version: string;
+  commit_hash: string;
+  commit_author: string;
+  commit_date: string;
+  build_date: string;
+  build_profile: string;
+  build_platform: string;
+  rustc_version: string;
+  llvm_version: string;
+};
 export type ChunkStatus = {
   state: ChunkThreadState;
   start: number;
@@ -614,6 +635,7 @@ export type CoreInfos = {
 };
 export type CoreState = 'Running' | { Stopped: string | null };
 export type CoreType = { clash: ClashCoreType } | 'singbox';
+export type DeviceInfo = { cpu: string[]; memory: string };
 export type DownloadStatus = {
   state: DownloaderState;
   downloaded: number;
@@ -629,6 +651,13 @@ export type DownloaderState =
   | 'merging'
   | { failed: string }
   | 'finished';
+export type EnvInfo = {
+  os: string;
+  arch: string;
+  core: Partial<{ [key in string]: string }>;
+  device: DeviceInfo;
+  build_info: BuildInfo;
+};
 export type ExternalControllerPortStrategy =
   | 'fixed'
   | 'random'
