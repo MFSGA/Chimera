@@ -1,3 +1,15 @@
+## [0.13.2] - 2026-05-09 09:02:07
+
+### 🐛 Bug Fixes
+
+- **connection:** Optimize the unmount process by @MFSGA
+
+- **route:** Help unmount the stale route by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.13.1...v0.13.2
+
 ## [0.13.1] - 2026-05-08 09:03:08
 
 ### 🐛 Bug Fixes
