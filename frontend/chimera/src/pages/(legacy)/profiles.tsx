@@ -255,67 +255,67 @@ function ProfilePage() {
   };
 
   return (
-    <AddProfileContext.Provider value={addProfileCtxValue}>
-      <SidePage
-        title={t('Profiles')}
-        flexReverse
-        side={hasSide && <ProfileSide onClose={handleSideClose} />}
-        header={
-          <div className="flex items-center gap-2">
-            <RuntimeConfigDiffDialog
-              open={runtimeConfigViewerOpen}
-              onClose={() => setRuntimeConfigViewerOpen(false)}
-            />
-            <IconButton
-              className="h-10 w-10"
-              color="inherit"
-              title={t('Runtime Config')}
-              onClick={() => {
-                setRuntimeConfigViewerOpen(true);
-              }}
-            >
-              <TextSnippetOutlined />
-            </IconButton>
-            <Badge variant="dot">
-              <Button
-                size="small"
-                variant={globalChain ? 'contained' : 'outlined'}
-                onClick={handleGlobalChainClick}
-                startIcon={<Public />}
-              >
-                {t('Global Proxy Chains')}
-              </Button>
-            </Badge>
-          </div>
-        }
-      >
-        <AnimatePresence initial={false} mode="sync">
-          <GlobalUpdatePendingContext.Provider value={globalUpdatePending}>
-            <div className="flex flex-col gap-4 p-6">
-              <QuickImport />
-              {renderProfilesContent()}
-            </div>
-          </GlobalUpdatePendingContext.Provider>
-        </AnimatePresence>
-
-        <div className="pointer-events-none fixed right-8 bottom-8 z-10 flex flex-col gap-3">
-          <Fab
-            className="pointer-events-auto"
-            color="default"
-            onClick={handleGlobalProfileUpdate}
-            title={t('Update All Profiles')}
-            disabled={
-              globalUpdatePending ||
-              query.isLoading ||
-              query.isError ||
-              !profileItems.length
-            }
+    <SidePage
+      title={t('Profiles')}
+      flexReverse
+      side={hasSide && <ProfileSide onClose={handleSideClose} />}
+      header={
+        <div className="flex items-center gap-2">
+          <RuntimeConfigDiffDialog
+            open={runtimeConfigViewerOpen}
+            onClose={() => setRuntimeConfigViewerOpen(false)}
+          />
+          <IconButton
+            className="h-10 w-10"
+            color="inherit"
+            title={t('Runtime Config')}
+            onClick={() => {
+              setRuntimeConfigViewerOpen(true);
+            }}
           >
-            {globalUpdatePending ? <CircularProgress size={22} /> : <Update />}
-          </Fab>
-          <NewProfileButton className="pointer-events-auto" />
+            <TextSnippetOutlined />
+          </IconButton>
+          <Badge variant="dot">
+            <Button
+              size="small"
+              variant={globalChain ? 'contained' : 'outlined'}
+              onClick={handleGlobalChainClick}
+              startIcon={<Public />}
+            >
+              {t('Global Proxy Chains')}
+            </Button>
+          </Badge>
         </div>
-      </SidePage>
-    </AddProfileContext.Provider>
+      }
+    >
+      <AnimatePresence initial={false} mode="sync">
+        <GlobalUpdatePendingContext.Provider value={globalUpdatePending}>
+          <div className="flex flex-col gap-4 p-6">
+            <QuickImport />
+            {renderProfilesContent()}
+          </div>
+        </GlobalUpdatePendingContext.Provider>
+      </AnimatePresence>
+
+      <div className="pointer-events-none fixed right-8 bottom-8 z-10 flex flex-col gap-3">
+        <Fab
+          className="pointer-events-auto"
+          color="default"
+          onClick={handleGlobalProfileUpdate}
+          title={t('Update All Profiles')}
+          disabled={
+            globalUpdatePending ||
+            query.isLoading ||
+            query.isError ||
+            !profileItems.length
+          }
+        >
+          {globalUpdatePending ? <CircularProgress size={22} /> : <Update />}
+        </Fab>
+        <AddProfileContext.Provider value={addProfileCtxValue}>
+          <NewProfileButton className="pointer-events-auto" />
+        </AddProfileContext.Provider>
+      </div>
+    </SidePage>
   );
 }
