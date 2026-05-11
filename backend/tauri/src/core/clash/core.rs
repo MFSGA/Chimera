@@ -1,5 +1,6 @@
 use std::{
     borrow::Cow,
+    fs,
     path::PathBuf,
     sync::{
         Arc,
@@ -518,10 +519,17 @@ impl CoreManager {
         let binary_path = Utf8PathBuf::from_path_buf(binary_path)
             .map_err(|_| anyhow::anyhow!("failed to convert binary path to utf8 path"))?;
         log::debug!(target: "app", "check config in `{clash_core}`");
-        CoreInstance::check_config_(&clash_core, &config_path, &binary_path, &app_dir)
-            .await
-            .context("failed to check config")
-            .inspect_err(|e| log::error!(target: "app", "failed to check config: {e:?}"))?;
+        let check_result =
+            CoreInstance::check_config_(&clash_core, &config_path, &binary_path, &app_dir)
+                .await
+                .context("failed to check config")
+                .inspect_err(|e| log::error!(target: "app", "failed to check config: {e:?}"));
+
+        if let Err(err) = fs::remove_file(config_path.as_std_path()) {
+            log::warn!(target: "app", "failed to remove check config `{config_path}`: {err:?}");
+        }
+
+        check_result?;
 
         Ok(())
     }
