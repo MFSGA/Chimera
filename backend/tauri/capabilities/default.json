@@ -12,6 +12,7 @@
     "updater:default",
     "dialog:default",
     "fs:default",
+    "notification:default",
     "core:window:default",
     "core:window:allow-create",
     "core:window:allow-center",
