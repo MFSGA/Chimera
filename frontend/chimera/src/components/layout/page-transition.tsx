@@ -68,8 +68,6 @@ export default function PageTransition({ className }: { className?: string }) {
       <AnimatedOutlet
         className={cn('page-transition', className)}
         key={nextMatch ? nextMatch.id : ''}
-        layout
-        layoutId={nextMatch.id}
         variants={variants}
         initial="initial"
         animate="visible"

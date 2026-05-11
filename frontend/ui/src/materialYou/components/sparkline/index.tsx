@@ -11,6 +11,7 @@ export const Sparkline = ({
   data,
   animationDuration = 1,
   className,
+  visible: _visible,
   ...props
 }: ComponentPropsWithoutRef<'svg'> & {
   data: number[];
