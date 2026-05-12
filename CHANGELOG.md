@@ -1,3 +1,17 @@
+## [0.13.3] - 2026-05-12 06:33:19
+
+### 🐛 Bug Fixes
+
+- **config-check:** Solve the permission issue in linux by @MFSGA
+
+- **notice:** Add a basic permission for notification by @MFSGA
+
+- **transition:** For react render maximum depth issue by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.13.2...v0.13.3
+
 ## [0.13.2] - 2026-05-09 09:02:07
 
 ### 🐛 Bug Fixes
