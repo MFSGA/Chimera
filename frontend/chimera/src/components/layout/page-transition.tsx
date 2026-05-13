@@ -1,7 +1,7 @@
 import { useSetting } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useMatch, useMatches } from '@tanstack/react-router';
-import { AnimatePresence, type Transition, type Variant } from 'framer-motion';
+import { type Transition, type Variant } from 'framer-motion';
 import { AnimatedOutlet } from '../router/animated-outlet';
 
 type PageVariantKey = 'initial' | 'visible' | 'hidden';
@@ -64,17 +64,13 @@ export default function PageTransition({ className }: { className?: string }) {
     : pageTransitionVariants.slide;
 
   return (
-    <AnimatePresence mode="popLayout" initial={false}>
-      <AnimatedOutlet
-        className={cn('page-transition', className)}
-        key={nextMatch ? nextMatch.id : ''}
-        layout
-        layoutId={nextMatch.id}
-        variants={variants}
-        initial="initial"
-        animate="visible"
-        exit="hidden"
-      />
-    </AnimatePresence>
+    <AnimatedOutlet
+      className={cn('page-transition', className)}
+      key={nextMatch ? nextMatch.id : ''}
+      layout
+      variants={variants}
+      initial="initial"
+      animate="visible"
+    />
   );
 }
