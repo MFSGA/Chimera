@@ -7,11 +7,14 @@ import { createRouter, RouterProvider } from '@tanstack/react-router';
 import React from 'react';
 import ReactDOM, { createRoot } from 'react-dom/client';
 import { routeTree } from './routeTree.gen';
+import { setupFrontendConsoleBridge } from './services/frontend-console-bridge';
 import './services/i18n';
 
 // import React from "react";
 
 const container = document.getElementById('root')!;
+
+void setupFrontendConsoleBridge();
 
 // Set up a Router instance
 const router = createRouter({
