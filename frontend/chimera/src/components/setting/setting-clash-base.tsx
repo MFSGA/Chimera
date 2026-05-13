@@ -26,7 +26,7 @@ const AllowLan = () => {
   return (
     <SwitchItem
       label={t('Allow LAN')}
-      checked={value}
+      checked={Boolean(value)}
       onChange={async () => {
         await upsert.mutateAsync({
           'allow-lan': !value,
@@ -46,7 +46,7 @@ const IPv6 = () => {
   return (
     <SwitchItem
       label={t('IPv6')}
-      checked={value}
+      checked={Boolean(value)}
       onChange={async () => {
         await upsert.mutateAsync({
           ipv6: !value,

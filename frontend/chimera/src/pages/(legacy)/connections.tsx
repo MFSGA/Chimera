@@ -35,7 +35,7 @@ function Connections() {
 
   const [openColumnFilter, setOpenColumnFilter] = useState(false);
 
-  const [searchTerm, setSearchTerm] = useState<string>();
+  const [searchTerm, setSearchTerm] = useState('');
   const throttledSearchTerm = useThrottle(searchTerm, { wait: 150 });
 
   const [mountTable, setMountTable] = useState(true);
