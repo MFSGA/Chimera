@@ -33,6 +33,7 @@ build.ps1
 release.sh
 
 *.tsbuildinfo
+.tmp/
 
 docs/
 # new rust-analyzer
