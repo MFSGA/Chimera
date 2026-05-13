@@ -1,8 +1,11 @@
 import {
   Outlet,
+  RouterContextProvider,
   useMatch,
   useMatches,
+  useRouter,
   useRouterState,
+  type AnyRouter,
 } from '@tanstack/react-router';
 import { AnimatePresence, motion, useIsPresent, Variants } from 'framer-motion';
 import { ComponentProps, useRef } from 'react';
@@ -51,10 +54,60 @@ export function AnimatedOutlet({
   ...props
 }: ComponentProps<typeof motion.div>) {
   const isPresent = useIsPresent();
+  const matches = useMatches();
+  const prevMatches = useRef(matches);
+  const router = useRouter();
+  const frozenRouterRef = useRef<AnyRouter | null>(null);
+
+  let renderedRouter = router;
+
+  if (isPresent) {
+    prevMatches.current = matches;
+    frozenRouterRef.current = null;
+  } else {
+    if (!frozenRouterRef.current) {
+      const patchedMatches = [
+        ...matches.map((match, index) => ({
+          ...(prevMatches.current[index] || match),
+          id: match.id,
+        })),
+        ...prevMatches.current.slice(matches.length),
+      ];
+      const patchedState = {
+        ...router.state,
+        matches: patchedMatches,
+      };
+      const frozenStore = {
+        state: patchedState,
+        subscribe: () => () => {},
+      };
+      const fakeRouter = Object.create(router);
+
+      // Keep exiting routes subscribed to their previous match snapshot.
+      Object.defineProperty(fakeRouter, '__store', {
+        value: frozenStore,
+        configurable: true,
+      });
+      Object.defineProperty(fakeRouter, 'state', {
+        get: () => patchedState,
+        configurable: true,
+      });
+      Object.defineProperty(fakeRouter, 'latestLocation', {
+        value: patchedState.location,
+        configurable: true,
+      });
+
+      frozenRouterRef.current = fakeRouter;
+    }
+
+    renderedRouter = frozenRouterRef.current!;
+  }
 
   return (
     <motion.div ref={ref} {...props}>
-      {isPresent && <Outlet />}
+      <RouterContextProvider router={renderedRouter}>
+        <Outlet />
+      </RouterContextProvider>
     </motion.div>
   );
 }
