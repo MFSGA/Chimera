@@ -67,7 +67,9 @@ function ProxyPage() {
 
   const { value: proxyMode, upsert } = useProxyMode();
 
-  const { data } = useClashProxies();
+  const {
+    proxies: { data },
+  } = useClashProxies();
 
   const [proxyGroup] = useAtom(proxyGroupAtom);
 

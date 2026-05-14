@@ -149,9 +149,21 @@ export const useClashProxies = () => {
     },
   });
 
-  const updateGroupDelay = useMutation({
+  const updateGroupDelay = useMutation<
+    Awaited<ReturnType<typeof groupDelay>>,
+    unknown,
+    Parameters<typeof groupDelay>,
+    ReturnType<typeof setInterval>
+  >({
     mutationFn: async (args: Parameters<typeof groupDelay>) => {
       return await groupDelay(...args);
+    },
+    onMutate: () => {
+      const intervalId = setInterval(() => {
+        proxies.refetch();
+      }, 500);
+
+      return intervalId;
     },
     onSuccess: (data) => {
       const oldData = getQueryData();
@@ -195,9 +207,16 @@ export const useClashProxies = () => {
 
       setQueryData(newData);
     },
+    onSettled: (_, __, ___, context) => {
+      if (context !== undefined) {
+        clearInterval(context);
+      }
+    },
   });
 
   return {
-    ...proxies,
+    proxies,
+    updateProxiesDelay,
+    updateGroupDelay,
   };
 };
