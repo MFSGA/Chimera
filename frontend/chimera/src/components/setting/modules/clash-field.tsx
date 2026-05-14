@@ -11,7 +11,11 @@ import { SwitchProps } from '@mui/material/Switch';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { ChangeEvent, useState } from 'react';
-import Marquee from 'react-fast-marquee';
+import ReactFastMarquee from 'react-fast-marquee';
+
+const Marquee = ((
+  ReactFastMarquee as unknown as { default?: typeof ReactFastMarquee }
+).default ?? ReactFastMarquee) as typeof ReactFastMarquee;
 
 export interface LabelSwitchProps extends SwitchProps {
   label: string;
