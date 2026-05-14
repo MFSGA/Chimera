@@ -2,6 +2,7 @@ import {
   useSetting,
   type BreakWhenProxyChange as BreakWhenProxyChangeType,
   type LoggingLevel,
+  type ProxiesSelectorMode,
 } from '@chimera/interface';
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { List } from '@mui/material';
@@ -90,6 +91,27 @@ const BreakWhenModeChange = () => {
   );
 };
 
+const TrayProxiesSelector = () => {
+  const { t } = useTranslation();
+
+  const { value, upsert } = useSetting('clash_tray_selector');
+
+  const trayProxiesSelectorMode = {
+    normal: t('Normal'),
+    hidden: t('Hidden'),
+    submenu: t('Submenu'),
+  };
+
+  return (
+    <MenuItem
+      label={t('Tray Proxies Selector')}
+      options={trayProxiesSelectorMode}
+      selected={value || 'normal'}
+      onSelected={(value) => upsert(value as ProxiesSelectorMode)}
+    />
+  );
+};
+
 const EnableBuiltinEnhanced = () => {
   const { t } = useTranslation();
   const { value, upsert } = useSetting('enable_builtin_enhanced');
@@ -124,6 +146,8 @@ export const SettingChimeraMisc = () => {
     <BaseCard label={t('Nyanpasu Setting')}>
       <List disablePadding>
         <AppLogLevel />
+
+        <TrayProxiesSelector />
 
         <BreakWhenProxyChange />
 

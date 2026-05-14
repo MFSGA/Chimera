@@ -154,6 +154,8 @@ pub struct IVerge {
     /// 22. Tun 堆栈选择
     /// TODO: 弃用此字段，转移到 clash config 里
     pub tun_stack: Option<TunStack>,
+    /// 23. show proxies in tray menu
+    pub clash_tray_selector: Option<ProxiesSelectorMode>,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
@@ -197,7 +199,6 @@ impl IVerge {
             always_on_top: Some(false),
             enable_random_port: Some(false),
             lighten_animation_effects: Some(false),
-
             ..Self::default()
         }
     }
@@ -275,4 +276,13 @@ impl AsRef<str> for TunStack {
             TunStack::Mixed => "mixed",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxiesSelectorMode {
+    #[default]
+    Normal,
+    Hidden,
+    Submenu,
 }
