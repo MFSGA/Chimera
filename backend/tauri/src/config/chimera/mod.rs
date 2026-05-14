@@ -116,6 +116,8 @@ pub struct IVerge {
     pub clash_strategy: Option<ClashStrategy>,
     /// 11. set system proxy bypass
     pub system_proxy_bypass: Option<String>,
+    /// 11.1. web ui list
+    pub web_ui_list: Option<Vec<String>>,
     /// 12. verge mixed port 用于覆盖 clash 的 mixed port
     pub verge_mixed_port: Option<u16>,
     /// 23. use a random mixed port on startup
