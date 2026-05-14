@@ -36,7 +36,9 @@ export const NodeList = forwardRef(function NodeList(
   { scrollRef }: { scrollRef: RefObject<HTMLElement> },
   ref,
 ) {
-  const { data } = useClashProxies();
+  const {
+    proxies: { data },
+  } = useClashProxies();
 
   const { value: proxyMode } = useProxyMode();
 
