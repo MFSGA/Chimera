@@ -10,7 +10,11 @@ import Paper, { PaperProps } from '@mui/material/Paper';
 import { styled } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import { ReactElement, ReactNode } from 'react';
-import Marquee from 'react-fast-marquee';
+import ReactFastMarquee from 'react-fast-marquee';
+
+const Marquee = ((
+  ReactFastMarquee as unknown as { default?: typeof ReactFastMarquee }
+).default ?? ReactFastMarquee) as typeof ReactFastMarquee;
 
 type WebUrlLabels = {
   [label: string]: string | number | undefined | null;
