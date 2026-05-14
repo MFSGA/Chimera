@@ -13,6 +13,7 @@ import SettingClashCore from './setting-clash-core';
 import SettingClashExternal from './setting-clash-external';
 import SettingClashField from './setting-clash-field';
 import SettingClashPort from './setting-clash-port';
+import SettingClashWeb from './setting-clash-web';
 import SettingSystemBehavior from './setting-system-behavior';
 import SettingSystemProxy from './setting-system-proxy';
 import SettingSystemService from './setting-system-service';
@@ -43,6 +44,7 @@ export const SettingPage = () => {
       <SettingClashBase />
       <SettingClashPort />
       <SettingClashExternal />
+      <SettingClashWeb />
       <SettingClashField />
       {/* 4 */}
       <SettingClashCore />
