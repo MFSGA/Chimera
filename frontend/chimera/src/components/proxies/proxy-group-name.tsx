@@ -7,9 +7,7 @@ export const ProxyGroupName = memo(function ProxyGroupName({
 }: {
   name: string;
 }) {
-  // todo: support global setting
-  // const { value: disbaleMotion } = useSetting('lighten_animation_effects');
-  const disbaleMotion = true;
+  const { value: disbaleMotion } = useSetting('lighten_animation_effects');
 
   return disbaleMotion ? (
     <>{name}</>

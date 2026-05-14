@@ -48,11 +48,9 @@ export const pageTransitionVariants: { [name: string]: PageVariant } = {
 };
 
 export default function PageTransition({ className }: { className?: string }) {
-  /* const { value: lightenAnimationEffects } = useSetting(
+  const { value: lightenAnimationEffects } = useSetting(
     'lighten_animation_effects',
-  ); */
-  // todo: about
-  const lightenAnimationEffects = true;
+  );
 
   const matches = useMatches();
   const match = useMatch({ strict: false });

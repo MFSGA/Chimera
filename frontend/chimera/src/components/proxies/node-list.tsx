@@ -3,6 +3,7 @@ import {
   ProxyGroupItem,
   useClashProxies,
   useProxyMode,
+  useSetting,
 } from '@chimera/interface';
 import { cn, useBreakpointValue } from '@chimera/ui';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -126,7 +127,7 @@ export const NodeList = forwardRef(function NodeList(
     setRenderList(list);
   }, [group?.all, group?.name, column, deferredProxiesFilter]);
 
-  const disableMotion = false;
+  const { value: disableMotion } = useSetting('lighten_animation_effects');
 
   const vListRef = useRef<VListHandle>(null);
 
