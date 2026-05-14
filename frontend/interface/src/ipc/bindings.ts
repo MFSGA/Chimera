@@ -732,6 +732,10 @@ export type IVerge = {
    */
   system_proxy_bypass: string | null;
   /**
+   * 11.1. web ui list
+   */
+  web_ui_list: string[] | null;
+  /**
    * 12. verge mixed port 用于覆盖 clash 的 mixed port
    */
   verge_mixed_port: number | null;
