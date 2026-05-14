@@ -26,6 +26,9 @@ pub struct ProxyGroupItem {
     pub r#type: String, // TODO: 考虑改成枚举
     /// 7
     pub udp: bool,
+    /// 8
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>, // Mihomo Only
 }
 
 impl From<api::ProxyItem> for ProxyGroupItem {
@@ -40,6 +43,7 @@ impl From<api::ProxyItem> for ProxyGroupItem {
             now: item.now,
             r#type: item.r#type,
             udp: item.udp,
+            icon: item.icon,
         }
     }
 }
