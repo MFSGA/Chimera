@@ -712,6 +712,10 @@ export type IVerge = {
    */
   window_size_state?: WindowState | null;
   /**
+   * 6.3. global ui framer motion effects
+   */
+  lighten_animation_effects: boolean | null;
+  /**
    * 7. 是否使用内部的脚本支持，默认为真
    */
   enable_builtin_enhanced: boolean | null;

@@ -103,6 +103,20 @@ const EnableBuiltinEnhanced = () => {
   );
 };
 
+const LightenAnimationEffects = () => {
+  const { t } = useTranslation();
+
+  const { value, upsert } = useSetting('lighten_animation_effects');
+
+  return (
+    <SwitchItem
+      label={t('Lighten Up Animation Effects')}
+      checked={Boolean(value)}
+      onChange={() => upsert(!value)}
+    />
+  );
+};
+
 export const SettingChimeraMisc = () => {
   const { t } = useTranslation();
 
@@ -118,6 +132,8 @@ export const SettingChimeraMisc = () => {
         <BreakWhenModeChange />
 
         <EnableBuiltinEnhanced />
+
+        <LightenAnimationEffects />
       </List>
     </BaseCard>
   );

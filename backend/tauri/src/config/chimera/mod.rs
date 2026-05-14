@@ -105,6 +105,8 @@ pub struct IVerge {
     /// 6.2. window size and position
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_size_state: Option<WindowState>,
+    /// 6.3. global ui framer motion effects
+    pub lighten_animation_effects: Option<bool>,
     /// 7. 是否使用内部的脚本支持，默认为真
     pub enable_builtin_enhanced: Option<bool>,
     /// 8. clash core path
@@ -194,6 +196,7 @@ impl IVerge {
             enable_silent_start: Some(false),
             always_on_top: Some(false),
             enable_random_port: Some(false),
+            lighten_animation_effects: Some(false),
 
             ..Self::default()
         }
@@ -219,6 +222,9 @@ impl IVerge {
         }
         if config.enable_random_port.is_none() {
             config.enable_random_port = template.enable_random_port;
+        }
+        if config.lighten_animation_effects.is_none() {
+            config.lighten_animation_effects = template.lighten_animation_effects;
         }
 
         config
