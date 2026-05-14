@@ -10,8 +10,7 @@ export const filterDelay = (history?: ProxyItemHistory[]): number => {
 
 export enum SortType {
   Default = 'default',
-  // todo: changed the item
-  Dealy = 'delay',
+  Delay = 'delay',
   Name = 'name',
 }
 
@@ -22,7 +21,7 @@ export const nodeSortingFn = (
   let sortedList = selectedGroup.all?.slice();
 
   switch (type) {
-    case SortType.Dealy: {
+    case SortType.Delay: {
       sortedList = sortedList?.sort((a, b) => {
         const delayA = filterDelay(a.history);
         const delayB = filterDelay(b.history);

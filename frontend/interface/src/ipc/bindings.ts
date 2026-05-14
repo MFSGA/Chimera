@@ -954,6 +954,10 @@ export type ProxyGroupItem = {
    * 7
    */
   udp: boolean;
+  /**
+   * 8
+   */
+  icon?: string | null;
 };
 export type ProxyItem = {
   name: string;
@@ -963,6 +967,7 @@ export type ProxyItem = {
   now: string | null;
   type: string;
   udp: boolean;
+  icon?: string | null;
 };
 export type ProxyItemHistory = { time: string; delay: number };
 export type RemoteProfile = {

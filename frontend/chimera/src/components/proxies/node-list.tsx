@@ -3,9 +3,8 @@ import {
   ProxyGroupItem,
   useClashProxies,
   useProxyMode,
-  useSetting,
 } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { cn, useBreakpointValue } from '@chimera/ui';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAtomValue } from 'jotai';
 import {
@@ -77,14 +76,13 @@ export const NodeList = forwardRef(function NodeList(
     sortGroup();
   }, [sortGroup]);
 
-  /** todo1 */
-  const column = 1; /* useBreakpointValue({
+  const column = useBreakpointValue({
     xs: 1,
     sm: 1,
     md: 2,
     lg: 3,
     xl: 4,
-  }); */
+  });
 
   const [renderList, setRenderList] = useState<RenderClashProxy[][]>([]);
 
@@ -128,8 +126,6 @@ export const NodeList = forwardRef(function NodeList(
     setRenderList(list);
   }, [group?.all, group?.name, column, deferredProxiesFilter]);
 
-  // todo
-  // const { value: disableMotion } = useSetting('lighten_animation_effects');
   const disableMotion = false;
 
   const vListRef = useRef<VListHandle>(null);

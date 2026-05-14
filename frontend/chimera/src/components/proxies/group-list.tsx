@@ -106,13 +106,12 @@ export const GroupList = ({
               ]}
               {...listItemButtonProps}
             >
-              {/* todo */}
-              {/* {group.icon && <IconRender icon={group.icon} />} */}
+              {group.icon && <IconRender icon={group.icon} />}
 
               <ListItemText
                 className="!truncate"
                 primary={group.name}
-                /* todo secondary={group.now} */
+                secondary={group.now}
               />
             </ListItemButton>
           </ListItem>

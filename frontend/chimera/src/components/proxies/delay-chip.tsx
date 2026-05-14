@@ -2,8 +2,7 @@ import { cn } from '@chimera/ui';
 import { Bolt } from '@mui/icons-material';
 import { CircularProgress } from '@mui/material';
 import { memo, useState } from 'react';
-// todo
-// import { useColorSxForDelay } from '@/hooks/theme';
+import { useColorSxForDelay } from '@/hooks/theme';
 import { mergeSxProps } from '@/utils/mui-theme';
 import FeatureChip from './feature-chip';
 
@@ -35,7 +34,7 @@ export const DelayChip = memo(function DelayChip({
         {
           ml: 'auto',
         },
-        // useColorSxForDelay(delay),
+        useColorSxForDelay(delay),
       )}
       label={
         <>
