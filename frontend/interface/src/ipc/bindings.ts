@@ -796,6 +796,10 @@ export type IVerge = {
    * TODO: 弃用此字段，转移到 clash config 里
    */
   tun_stack: TunStack | null;
+  /**
+   * 23. show proxies in tray menu
+   */
+  clash_tray_selector: ProxiesSelectorMode | null;
 };
 export type JsonValue =
   | null
@@ -929,6 +933,7 @@ export type Proxies = {
    */
   direct: ProxyItem;
 };
+export type ProxiesSelectorMode = 'normal' | 'hidden' | 'submenu';
 export type ProxyGroupItem = {
   /**
    * 1
