@@ -52,7 +52,9 @@ export const GroupList = ({
   scrollRef,
   ...listItemButtonProps
 }: GroupListProps) => {
-  const { data } = useClashProxies();
+  const {
+    proxies: { data },
+  } = useClashProxies();
 
   const [proxyGroup, setProxyGroup] = useAtom(proxyGroupAtom);
   const proxiesFilter = useAtomValue(proxiesFilterAtom);
@@ -67,25 +69,27 @@ export const GroupList = ({
       return [];
     }
 
-    return data.groups.filter((group) => {
-      return (
-        !deferredProxiesFilter ||
-        group.name
-          .toLowerCase()
-          .includes(deferredProxiesFilter.toLowerCase()) ||
-        group.all?.some((proxy) => {
-          return proxy.name
+    return data.groups
+      .map((group, index) => ({ group, index }))
+      .filter(({ group }) => {
+        return (
+          !deferredProxiesFilter ||
+          group.name
             .toLowerCase()
-            .includes(deferredProxiesFilter.toLowerCase());
-        }) ||
-        false
-      );
-    });
+            .includes(deferredProxiesFilter.toLowerCase()) ||
+          group.all?.some((proxy) => {
+            return proxy.name
+              .toLowerCase()
+              .includes(deferredProxiesFilter.toLowerCase());
+          }) ||
+          false
+        );
+      });
   }, [data?.groups, deferredProxiesFilter]);
 
   return (
     <Virtualizer scrollRef={scrollRef}>
-      {groups.map((group, index) => {
+      {groups.map(({ group, index }) => {
         const selected = index === proxyGroup.selector;
 
         return (
