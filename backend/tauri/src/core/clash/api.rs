@@ -179,6 +179,8 @@ pub struct ProxyItem {
     pub now: Option<String>, // 当前选中的代理
     pub r#type: String,      // TODO: 考虑改成枚举
     pub udp: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>, // Mihomo Only
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Type)]
