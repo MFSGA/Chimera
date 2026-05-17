@@ -262,6 +262,28 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  async urlDelayTest(
+    url: string,
+    expectedStatus: number,
+  ): Promise<Result<number | null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('url_delay_test', { url, expectedStatus }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async getIpsbAsn(): Promise<Result<IpsbResponse, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('get_ipsb_asn') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async invokeUwpTool(): Promise<Result<null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('invoke_uwp_tool') };
@@ -800,6 +822,20 @@ export type IVerge = {
    * 23. show proxies in tray menu
    */
   clash_tray_selector: ProxiesSelectorMode | null;
+};
+export type IpsbResponse = {
+  organization: string;
+  longitude: number;
+  timezone: string;
+  isp: string;
+  offset: number;
+  asn: number;
+  asn_organization: string;
+  country: string;
+  ip: string;
+  latitude: number;
+  continent_code: string;
+  country_code: string;
 };
 export type JsonValue =
   | null

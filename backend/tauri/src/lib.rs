@@ -104,6 +104,8 @@ pub fn run() -> std::io::Result<()> {
         ipc::change_clash_core,
         ipc::get_runtime_yaml,
         ipc::get_core_status,
+        ipc::url_delay_test,
+        ipc::get_ipsb_asn,
         ipc::uwp::invoke_uwp_tool,
         ipc::collect_logs,
         ipc::collect_envs,

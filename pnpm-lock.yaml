@@ -352,6 +352,9 @@ importers:
       react:
         specifier: 19.2.3
         version: 19.2.3
+      swr:
+        specifier: 2.3.6
+        version: 2.3.6(react@19.2.3)
     devDependencies:
       '@types/lodash-es':
         specifier: 4.17.12
