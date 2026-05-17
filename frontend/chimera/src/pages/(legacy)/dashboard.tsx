@@ -5,6 +5,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import DataPanel from '@/components/dashboard/data-panel';
+import HealthPanel from '@/components/dashboard/health-panel';
 import ProxyShortcuts from '@/components/dashboard/proxy-shortcuts';
 import ServiceShortcuts from '@/components/dashboard/service-shortcuts';
 import { useVisibility } from '@/hooks/use-visibility';
@@ -26,6 +27,7 @@ function Dashboard() {
     <BasePage title={t('Dashboard')}>
       <Grid container spacing={2}>
         <DataPanel visible={visible} />
+        <HealthPanel />
         <ProxyShortcuts />
         <ServiceShortcuts />
       </Grid>

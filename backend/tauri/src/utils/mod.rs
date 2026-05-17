@@ -12,6 +12,7 @@ pub mod downloader;
 pub mod help;
 /// 5
 pub mod init;
+pub mod net;
 /// 4
 pub mod open;
 /// 6

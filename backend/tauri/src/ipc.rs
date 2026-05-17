@@ -45,6 +45,22 @@ pub struct GetSysProxyResponse {
     pub server: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, specta::Type)]
+pub struct IpsbResponse {
+    pub organization: String,
+    pub longitude: f64,
+    pub timezone: String,
+    pub isp: String,
+    pub offset: i64,
+    pub asn: i64,
+    pub asn_organization: String,
+    pub country: String,
+    pub ip: String,
+    pub latitude: f64,
+    pub continent_code: String,
+    pub country_code: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
     #[error(transparent)]
@@ -516,6 +532,19 @@ pub fn get_core_dir() -> Result<String> {
 pub async fn get_core_status() -> Result<(CoreState, i64, RunType)> {
     let (state, ts, run_type) = CoreManager::global().status().await;
     Ok((state.into_owned(), ts, run_type))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn url_delay_test(url: &str, expected_status: u16) -> Result<Option<u64>> {
+    Ok(crate::utils::net::url_delay_test(url, expected_status).await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_ipsb_asn() -> Result<IpsbResponse> {
+    let value = crate::utils::net::get_ipsb_asn().await?;
+    Ok(serde_json::from_value(value).map_err(anyhow::Error::from)?)
 }
 
 #[tauri::command]
