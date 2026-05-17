@@ -1,4 +1,5 @@
 export * from './ipc';
+export * from './openapi';
 export * from './utils';
 export * from './provider';
 /** 4 */

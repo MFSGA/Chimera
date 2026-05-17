@@ -23,7 +23,8 @@
     "lodash-es": "4.17.21",
     "ofetch": "1.5.1",
     "ahooks": "3.9.6",
-    "dayjs": "1.11.19"
+    "dayjs": "1.11.19",
+    "swr": "2.3.6"
   },
   "devDependencies": {
     "@types/react": "19.2.7",

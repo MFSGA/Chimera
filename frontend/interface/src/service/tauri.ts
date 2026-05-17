@@ -2,6 +2,21 @@ import { invoke } from '@tauri-apps/api/core';
 import { type EnvInfo } from '../ipc/bindings';
 import { InspectUpdater } from './types';
 
+export interface IPSBResponse {
+  organization: string;
+  longitude: number;
+  timezone: string;
+  isp: string;
+  offset: number;
+  asn: number;
+  asn_organization: string;
+  country: string;
+  ip: string;
+  latitude: number;
+  continent_code: string;
+  country_code: string;
+}
+
 export type SystemServiceStatus = 'running' | 'stopped' | 'not_installed';
 
 export type SystemServiceStatusInfo = {
@@ -101,4 +116,15 @@ export const getCoreStatus = async () => {
   return await invoke<
     ['Running' | { Stopped: string | null }, number, 'normal' | 'service']
   >('get_core_status');
+};
+
+export const urlDelayTest = async (url: string, expectedStatus: number) => {
+  return await invoke<number | null>('url_delay_test', {
+    url,
+    expectedStatus,
+  });
+};
+
+export const getIpsbASN = async () => {
+  return await invoke<IPSBResponse>('get_ipsb_asn');
 };
