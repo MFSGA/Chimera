@@ -1,3 +1,35 @@
+## [0.14.0] - 2026-05-18 03:50:20
+
+### ✨ Features
+
+- **proxies:** Keep align with legacy by @MFSGA
+
+- **proxies:** Support lighten_animation_effects field by @MFSGA
+
+- **proxies:** Optimize the display by @MFSGA
+
+- **settings:** Support ProxiesSelectorMode in tray menu by @MFSGA
+
+- **web_ui_list:** Add web_ui_list display by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **clash-web:** Fix the import issue by @MFSGA
+
+- **render:** Recover by @MFSGA
+
+- **type:** Solve type problem by @MFSGA
+
+- Add the clash field support by @MFSGA
+
+- Optimize for type by @MFSGA
+
+- Stabilize legacy route transitions by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.13.3...v0.14.0
+
 ## [0.13.3] - 2026-05-12 06:33:19
 
 ### 🐛 Bug Fixes
