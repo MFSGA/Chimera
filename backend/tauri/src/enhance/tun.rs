@@ -51,7 +51,7 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             append!(tun_val, "device-id", "dev://utun1989");
             append!(tun_val, "route-all", true);
             append!(tun_val, "dns-hijack", true);
-            append!(tun_val, "gateway", "198.18.0.1/16");
+            // append!(tun_val, "gateway", "198.18.0.1/16");
         } else {
             let mut tun_stack = {
                 *Config::verge()
@@ -105,7 +105,7 @@ fn use_dns_for_tun(mut config: Mapping) -> Mapping {
         "default-nameserver",
         vec!["114.114.114.114", "1.1.1.1", "8.8.8.8"]
     );
-    append!(dns_val, "fallback", vec![] as Vec<&str>);
+    // append!(dns_val, "fallback", vec![] as Vec<&str>);
 
     #[cfg(target_os = "windows")]
     append!(
