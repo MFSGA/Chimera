@@ -1,3 +1,17 @@
+## [0.14.1] - 2026-05-21 08:32:19
+
+### ✨ Features
+
+- **HealthPanel:** Support in DashBoard by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **tun:** Do mot support gateway in tun mod by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.14.0...v0.14.1
+
 ## [0.14.0] - 2026-05-18 03:50:20
 
 ### ✨ Features
