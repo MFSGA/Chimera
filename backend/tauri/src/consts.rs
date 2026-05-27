@@ -44,6 +44,7 @@ pub static BUILD_INFO: Lazy<BuildInfo> = Lazy::new(|| BuildInfo {
 pub static IS_APPIMAGE: Lazy<bool> = Lazy::new(|| std::env::var("APPIMAGE").is_ok());
 
 pub const LEGACY_WINDOW_LABEL: &str = "legacy";
+pub const MAIN_WINDOW_LABEL: &str = "main";
 pub const APP_NAME: &str = "Chimera";
 
 /// A Tauri AppHandle copy for access from global context.
