@@ -521,25 +521,6 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
-  async saveWindowSizeState(label: string): Promise<Result<null, string>> {
-    try {
-      return {
-        status: 'ok',
-        data: await TAURI_INVOKE('save_window_size_state', { label }),
-      };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
-  async createLegacyWindow(): Promise<Result<null, string>> {
-    try {
-      return { status: 'ok', data: await TAURI_INVOKE('create_legacy_window') };
-    } catch (e) {
-      if (e instanceof Error) throw e;
-      else return { status: 'error', error: e as any };
-    }
-  },
   async statusService(): Promise<Result<StatusInfo, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('status_service') };
@@ -583,6 +564,33 @@ export const commands = {
   async restartService(): Promise<Result<null, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('restart_service') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async saveWindowSizeState(label: string): Promise<Result<null, string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('save_window_size_state', { label }),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async createMainWindow(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('create_main_window') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
+  async createLegacyWindow(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('create_legacy_window') };
     } catch (e) {
       if (e instanceof Error) throw e;
       else return { status: 'error', error: e as any };
