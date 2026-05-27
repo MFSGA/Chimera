@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './pages/__root'
+import { Route as mainRouteRouteImport } from './pages/(main)/route'
 import { Route as legacyRouteRouteImport } from './pages/(legacy)/route'
 import { Route as legacyIndexRouteImport } from './pages/(legacy)/index'
 import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
@@ -19,7 +20,12 @@ import { Route as legacyProfilesRouteImport } from './pages/(legacy)/profiles'
 import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
 import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
 import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
+import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
 
+const mainRouteRoute = mainRouteRouteImport.update({
+  id: '/(main)',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const legacyRouteRoute = legacyRouteRouteImport.update({
   id: '/(legacy)',
   getParentRoute: () => rootRouteImport,
@@ -69,6 +75,11 @@ const legacyConnectionsRoute = legacyConnectionsRouteImport.update({
   path: '/connections',
   getParentRoute: () => legacyRouteRoute,
 } as any)
+const mainMainIndexRoute = mainMainIndexRouteImport.update({
+  id: '/main/',
+  path: '/main/',
+  getParentRoute: () => mainRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/connections': typeof legacyConnectionsRoute
@@ -80,6 +91,7 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main': typeof mainMainIndexRoute
 }
 export interface FileRoutesByTo {
   '/connections': typeof legacyConnectionsRoute
@@ -91,10 +103,12 @@ export interface FileRoutesByTo {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main': typeof mainMainIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/(legacy)': typeof legacyRouteRouteWithChildren
+  '/(main)': typeof mainRouteRouteWithChildren
   '/(legacy)/connections': typeof legacyConnectionsRoute
   '/(legacy)/dashboard': typeof legacyDashboardRoute
   '/(legacy)/logs': typeof legacyLogsRoute
@@ -104,6 +118,7 @@ export interface FileRoutesById {
   '/(legacy)/rules': typeof legacyRulesRoute
   '/(legacy)/settings': typeof legacySettingsRoute
   '/(legacy)/': typeof legacyIndexRoute
+  '/(main)/main/': typeof mainMainIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -117,6 +132,7 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connections'
@@ -128,9 +144,11 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main'
   id:
     | '__root__'
     | '/(legacy)'
+    | '/(main)'
     | '/(legacy)/connections'
     | '/(legacy)/dashboard'
     | '/(legacy)/logs'
@@ -140,14 +158,23 @@ export interface FileRouteTypes {
     | '/(legacy)/rules'
     | '/(legacy)/settings'
     | '/(legacy)/'
+    | '/(main)/main/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   legacyRouteRoute: typeof legacyRouteRouteWithChildren
+  mainRouteRoute: typeof mainRouteRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/(main)': {
+      id: '/(main)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof mainRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/(legacy)': {
       id: '/(legacy)'
       path: ''
@@ -218,6 +245,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof legacyConnectionsRouteImport
       parentRoute: typeof legacyRouteRoute
     }
+    '/(main)/main/': {
+      id: '/(main)/main/'
+      path: '/main'
+      fullPath: '/main'
+      preLoaderRoute: typeof mainMainIndexRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
   }
 }
 
@@ -249,8 +283,21 @@ const legacyRouteRouteWithChildren = legacyRouteRoute._addFileChildren(
   legacyRouteRouteChildren,
 )
 
+interface mainRouteRouteChildren {
+  mainMainIndexRoute: typeof mainMainIndexRoute
+}
+
+const mainRouteRouteChildren: mainRouteRouteChildren = {
+  mainMainIndexRoute: mainMainIndexRoute,
+}
+
+const mainRouteRouteWithChildren = mainRouteRoute._addFileChildren(
+  mainRouteRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   legacyRouteRoute: legacyRouteRouteWithChildren,
+  mainRouteRoute: mainRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
