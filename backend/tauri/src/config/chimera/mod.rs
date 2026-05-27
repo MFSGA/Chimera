@@ -77,6 +77,14 @@ impl std::fmt::Display for ClashCore {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowType {
+    Main,
+    #[default]
+    Legacy,
+}
+
 #[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
 #[verge(patch_fn = "patch_config")]
 // TODO: use new managedState and builder pattern instead
@@ -148,14 +156,18 @@ pub struct IVerge {
     pub theme_mode: Option<String>,
     /// 20. i18n
     pub language: Option<String>,
-    /// 21. Use legacy UI (original UI at "/" route)
-    /// When true, opens legacy window; when false, opens new main window
+    /// 21. Legacy compatibility field for older configs.
+    /// Prefer window_type for new code.
     pub use_legacy_ui: Option<bool>,
     /// 22. Tun 堆栈选择
     /// TODO: 弃用此字段，转移到 clash config 里
     pub tun_stack: Option<TunStack>,
     /// 23. show proxies in tray menu
     pub clash_tray_selector: Option<ProxiesSelectorMode>,
+    /// 24. Window type to use when opening the app window
+    /// Main: opens new main window
+    /// Legacy: opens legacy window
+    pub window_type: Option<WindowType>,
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
@@ -199,6 +211,7 @@ impl IVerge {
             always_on_top: Some(false),
             enable_random_port: Some(false),
             lighten_animation_effects: Some(false),
+            window_type: Some(WindowType::Legacy),
             ..Self::default()
         }
     }
@@ -226,6 +239,10 @@ impl IVerge {
         }
         if config.lighten_animation_effects.is_none() {
             config.lighten_animation_effects = template.lighten_animation_effects;
+        }
+
+        if config.window_type.is_none() {
+            config.window_type = template.window_type;
         }
 
         config

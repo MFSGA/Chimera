@@ -809,8 +809,8 @@ export type IVerge = {
    */
   language: string | null;
   /**
-   * 21. Use legacy UI (original UI at "/" route)
-   * When true, opens legacy window; when false, opens new main window
+   * 21. Legacy compatibility field for older configs.
+   * Prefer window_type for new code.
    */
   use_legacy_ui: boolean | null;
   /**
@@ -822,6 +822,12 @@ export type IVerge = {
    * 23. show proxies in tray menu
    */
   clash_tray_selector: ProxiesSelectorMode | null;
+  /**
+   * 24. Window type to use when opening the app window
+   * Main: opens new main window
+   * Legacy: opens legacy window
+   */
+  window_type: WindowType | null;
 };
 export type IpsbResponse = {
   organization: string;
@@ -1177,6 +1183,7 @@ export type WindowState = {
   maximized: boolean;
   fullscreen: boolean;
 };
+export type WindowType = 'main' | 'legacy';
 
 type __EventObj__<T> = {
   listen: (
