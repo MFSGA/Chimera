@@ -135,15 +135,17 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_storage_item,
         ipc::set_storage_item,
         ipc::remove_storage_item,
-        ipc::save_window_size_state,
-        ipc::create_legacy_window,
         // service mode
         ipc::service::status_service,
         ipc::service::install_service,
         ipc::service::uninstall_service,
         ipc::service::start_service,
         ipc::service::stop_service,
-        ipc::service::restart_service
+        ipc::service::restart_service,
+        // window management
+        ipc::save_window_size_state,
+        ipc::create_main_window,
+        ipc::create_legacy_window
     ]);
 
     #[cfg(debug_assertions)]
