@@ -12,7 +12,7 @@ use tracing::debug;
 
 use crate::{
     config::{
-        chimera::{ClashCore, IVerge, WindowState},
+        chimera::{ClashCore, IVerge, WindowState, WindowType},
         core::Config,
     },
     core::{clash::core::CoreManager, handle, sysopt, tray},
@@ -100,10 +100,53 @@ impl AppWindow for LegacyWindow {
     }
 }
 
+/// Main window implementation (new UI)
+struct MainWindow;
+
+impl AppWindow for MainWindow {
+    fn label(&self) -> &str {
+        crate::consts::MAIN_WINDOW_LABEL
+    }
+
+    fn title(&self) -> &str {
+        crate::consts::APP_NAME
+    }
+
+    fn url(&self) -> &str {
+        "/main"
+    }
+
+    fn config(&self) -> WindowConfig {
+        WindowConfig::new()
+            .singleton(true)
+            .visible_on_create(true)
+            .default_size(800.0, 636.0)
+            .min_size(400.0, 600.0)
+            .center(true)
+    }
+
+    fn get_window_state(&self) -> Option<WindowState> {
+        Config::verge().latest().window_size_state.clone()
+    }
+
+    fn set_window_state(&self, state: Option<WindowState>) {
+        Config::verge().data().patch_config(IVerge {
+            window_size_state: state,
+            ..IVerge::default()
+        });
+    }
+}
+
 /// create legacy window
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_legacy_window(app_handle: &AppHandle) {
     log_err!(LegacyWindow.create(app_handle));
+}
+
+/// create main window
+#[tracing_attributes::instrument(skip(app_handle))]
+pub fn create_main_window(app_handle: &AppHandle) {
+    log_err!(MainWindow.create(app_handle));
 }
 
 pub fn mark_frontend_unmounted() {
@@ -124,22 +167,27 @@ pub fn wait_for_frontend_ready(timeout: Duration) -> bool {
     true
 }
 
-/// Create window based on use_legacy_ui config
+/// Create window based on window_type config
 /// This is the primary function to use when opening window from tray, etc.
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_window(app_handle: &AppHandle) {
-    let use_legacy = Config::verge().latest().use_legacy_ui.unwrap_or(true);
+    let window_type = Config::verge()
+        .latest()
+        .window_type
+        .unwrap_or(WindowType::Main);
 
-    if use_legacy {
-        create_legacy_window(app_handle);
-    } else {
-        todo!()
-        // create_main_window(app_handle);
+    match window_type {
+        WindowType::Legacy => create_legacy_window(app_handle),
+        WindowType::Main => create_main_window(app_handle),
     }
 }
 
 pub fn save_legacy_window_state(app_handle: &AppHandle, save_to_file: bool) -> Result<()> {
     LegacyWindow.save_state(app_handle, save_to_file)
+}
+
+pub fn save_main_window_state(app_handle: &AppHandle, save_to_file: bool) -> Result<()> {
+    MainWindow.save_state(app_handle, save_to_file)
 }
 
 /// handle something when start app
