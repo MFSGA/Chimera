@@ -17,6 +17,7 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { BlockTaskProvider } from '@/components/providers/block-task-provider';
+import { LanguageProvider } from '@/components/providers/language-provider';
 
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
@@ -100,8 +101,10 @@ export default function App() {
   return (
     <RootProvider>
       <BlockTaskProvider>
-        <Outlet />
-        <TanStackRouterDevtools />
+        <LanguageProvider>
+          <Outlet />
+          <TanStackRouterDevtools />
+        </LanguageProvider>
       </BlockTaskProvider>
     </RootProvider>
   );
