@@ -16,6 +16,7 @@ import 'dayjs/locale/zh-tw';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { BlockTaskProvider } from '@/components/providers/block-task-provider';
 
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
@@ -98,8 +99,10 @@ export default function App() {
 
   return (
     <RootProvider>
-      <Outlet />
-      <TanStackRouterDevtools />
+      <BlockTaskProvider>
+        <Outlet />
+        <TanStackRouterDevtools />
+      </BlockTaskProvider>
     </RootProvider>
   );
 }
