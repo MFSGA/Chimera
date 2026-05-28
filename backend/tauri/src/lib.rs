@@ -261,10 +261,11 @@ pub fn run() -> std::io::Result<()> {
     app.run(|app_handle, e| match e {
         // pay attention to this event order, otherwise the app will quit immediately after all windows are closed
         tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
-            #[cfg(not(feature = "verge-dev"))]
+            // todo optimize for dev
+            // #[cfg(not(feature = "verge-dev"))]
             api.prevent_exit();
-            #[cfg(feature = "verge-dev")]
-            utils::help::cleanup_processes(app_handle);
+            // #[cfg(feature = "verge-dev")]
+            // utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::ExitRequested { .. } => {
             utils::help::cleanup_processes(app_handle);
