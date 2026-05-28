@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { paraglideVitePlugin } from '@inlang/paraglide-js';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { NodePackageImporter } from 'sass-embedded';
@@ -56,6 +57,11 @@ export default defineConfig(async ({ command, mode }) => {
       Icons({ compiler: 'jsx' }),
       sassDts({ esmExport: true, legacyFileFormat: true }),
       isDev && devtools(),
+      paraglideVitePlugin({
+        project: './project.inlang',
+        outdir: './src/paraglide',
+        strategy: ['custom-extension'],
+      }),
     ],
 
     resolve: {
