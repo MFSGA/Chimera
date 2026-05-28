@@ -89,7 +89,7 @@ fn use_dns_for_tun(mut config: Mapping) -> Mapping {
 
     revise!(dns_val, "enable", true);
     append!(dns_val, "enhanced-mode", "fake-ip");
-    append!(dns_val, "fake-ip-range", "198.18.0.1/16");
+    // append!(dns_val, "fake-ip-range", "198.18.0.1/16");
     append!(
         dns_val,
         "nameserver",
