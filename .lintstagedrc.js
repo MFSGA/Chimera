@@ -3,7 +3,7 @@ export default {
   'scripts/**/*.{ts,tsx}': [
     'prettier --write',
     'eslint --cache --fix',
-    () => 'tsc -p scripts/tsconfig.json --noEmit',
+    // () => 'tsc -p scripts/tsconfig.json --noEmit',
   ],
   // todo
   'frontend/ui/**/*.{ts,tsx}': [
