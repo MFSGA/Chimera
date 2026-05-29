@@ -1,9 +1,11 @@
 use crate::{log_err, utils::dirs};
 use anyhow::Context;
 use redb::{ReadableDatabase, ReadableTable, TableDefinition};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use specta::Type;
 use std::{fs, ops::Deref, result::Result as StdResult, sync::Arc};
 use tauri::{Emitter, Manager};
+use tauri_specta::Event;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StorageOperationError {
@@ -54,6 +56,15 @@ impl Deref for Storage {
 pub struct StorageInner {
     instance: redb::Database,
     tx: tokio::sync::broadcast::Sender<(String, Option<Vec<u8>>)>,
+}
+
+/// Event emitted to all windows when a storage value changes.
+/// Event name: `storage-value-changed-event`
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+pub struct StorageValueChangedEvent {
+    pub key: String,
+    /// The new JSON-encoded value, or `None` if the key was removed.
+    pub value: Option<String>,
 }
 
 pub trait WebStorage {

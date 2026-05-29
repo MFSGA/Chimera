@@ -6,7 +6,7 @@ use tauri::Emitter;
 use tauri::Listener;
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_specta::collect_commands;
+use tauri_specta::{collect_commands, collect_events};
 
 use crate::{
     config::core::Config,
@@ -76,78 +76,88 @@ pub fn run() -> std::io::Result<()> {
     }
 
     // setup specta
-    let specta_builder = tauri_specta::Builder::<tauri::Wry>::new().commands(collect_commands![
-        // demo
-        greet,
-        // common
-        ipc::get_sys_proxy,
-        // profile
-        ipc::get_profiles,
-        ipc::import_profile,
-        ipc::view_profile,
-        ipc::patch_profiles_config,
-        ipc::update_profile,
-        ipc::patch_profile,
-        ipc::delete_profile,
-        ipc::read_profile_file,
-        ipc::save_profile_file,
-        ipc::create_profile,
-        // verge
-        ipc::get_verge_config,
-        ipc::patch_verge_config,
-        // clash
-        ipc::get_clash_info,
-        ipc::patch_clash_config,
-        ipc::patch_clash_core_config,
-        ipc::get_proxies,
-        ipc::select_proxy,
-        ipc::change_clash_core,
-        ipc::get_runtime_yaml,
-        ipc::get_core_status,
-        ipc::url_delay_test,
-        ipc::get_ipsb_asn,
-        ipc::uwp::invoke_uwp_tool,
-        ipc::collect_logs,
-        ipc::collect_envs,
-        ipc::get_custom_app_dir,
-        ipc::set_custom_app_dir,
-        // updater layer
-        ipc::check_update,
-        // utils
-        ipc::is_portable,
-        ipc::is_appimage,
-        ipc::open_that,
-        ipc::cleanup_processes,
-        ipc::get_server_port,
-        ipc::get_core_dir,
-        ipc::get_service_install_prompt,
-        ipc::open_app_config_dir,
-        ipc::open_app_data_dir,
-        ipc::open_core_dir,
-        ipc::open_logs_dir,
-        // updater
-        ipc::get_core_version,
-        ipc::update_core,
-        ipc::restart_sidecar,
-        ipc::fetch_latest_core_versions,
-        ipc::inspect_updater,
-        // storage
-        ipc::get_storage_item,
-        ipc::set_storage_item,
-        ipc::remove_storage_item,
-        ipc::get_all_storage_items,
-        // service mode
-        ipc::service::status_service,
-        ipc::service::install_service,
-        ipc::service::uninstall_service,
-        ipc::service::start_service,
-        ipc::service::stop_service,
-        ipc::service::restart_service,
-        // window management
-        ipc::save_window_size_state,
-        ipc::create_main_window,
-        ipc::create_legacy_window
-    ]);
+    let specta_builder = tauri_specta::Builder::<tauri::Wry>::new()
+        .commands(collect_commands![
+            // demo
+            greet,
+            // common
+            ipc::get_sys_proxy,
+            // profile
+            ipc::get_profiles,
+            ipc::import_profile,
+            ipc::view_profile,
+            ipc::patch_profiles_config,
+            ipc::update_profile,
+            ipc::patch_profile,
+            ipc::delete_profile,
+            ipc::read_profile_file,
+            ipc::save_profile_file,
+            ipc::create_profile,
+            // verge
+            ipc::get_verge_config,
+            ipc::patch_verge_config,
+            // clash
+            ipc::get_clash_info,
+            ipc::patch_clash_config,
+            ipc::patch_clash_core_config,
+            ipc::get_proxies,
+            ipc::select_proxy,
+            ipc::change_clash_core,
+            ipc::get_runtime_yaml,
+            ipc::get_core_status,
+            ipc::url_delay_test,
+            ipc::get_ipsb_asn,
+            ipc::uwp::invoke_uwp_tool,
+            ipc::collect_logs,
+            ipc::collect_envs,
+            ipc::get_custom_app_dir,
+            ipc::set_custom_app_dir,
+            // updater layer
+            ipc::check_update,
+            // utils
+            ipc::is_portable,
+            ipc::is_appimage,
+            ipc::open_that,
+            ipc::cleanup_processes,
+            ipc::get_server_port,
+            ipc::get_core_dir,
+            ipc::get_service_install_prompt,
+            ipc::open_app_config_dir,
+            ipc::open_app_data_dir,
+            ipc::open_core_dir,
+            ipc::open_logs_dir,
+            // updater
+            ipc::get_core_version,
+            ipc::update_core,
+            ipc::restart_sidecar,
+            ipc::fetch_latest_core_versions,
+            ipc::inspect_updater,
+            // storage
+            ipc::get_storage_item,
+            ipc::set_storage_item,
+            ipc::remove_storage_item,
+            ipc::get_all_storage_items,
+            ipc::clear_storage,
+            // service mode
+            ipc::service::status_service,
+            ipc::service::install_service,
+            ipc::service::uninstall_service,
+            ipc::service::start_service,
+            ipc::service::stop_service,
+            ipc::service::restart_service,
+            // window management
+            ipc::save_window_size_state,
+            ipc::create_main_window,
+            ipc::create_legacy_window
+        ])
+        .events(collect_events![
+            core::storage::StorageValueChangedEvent // core::clash::ClashConnectionsEvent,
+                                                    // core::clash::ws::ClashWsEvent,
+                                                    // window::WindowMessageEvent,
+                                                    // window::WindowReadyEvent,
+        ]);
+    // todo
+    // .dangerously_cast_bigints_to_number();
 
     #[cfg(debug_assertions)]
     {
