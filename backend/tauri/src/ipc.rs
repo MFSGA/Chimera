@@ -339,6 +339,11 @@ pub fn cleanup_processes(app_handle: AppHandle) -> Result {
     Ok(())
 }
 
+/// Namespace prefix for all frontend-visible KV entries.
+/// Internal subsystems (e.g. task storage) use un-prefixed keys and are
+/// never exposed to the frontend through these IPC commands.
+const WEB_STORAGE_KEY_PREFIX: &str = "web:";
+
 pub mod service {
     use super::Result;
     use crate::core::service;
@@ -1013,5 +1018,16 @@ pub struct StorageEntry {
 #[specta::specta]
 pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
     let storage = app_handle.state::<Storage>();
-    todo!()
+    let items = storage.get_all()?;
+    Ok(items
+        .into_iter()
+        .filter_map(|(raw_key, value)| {
+            raw_key
+                .strip_prefix(WEB_STORAGE_KEY_PREFIX)
+                .map(|key| StorageEntry {
+                    key: key.to_string(),
+                    value,
+                })
+        })
+        .collect())
 }
