@@ -999,3 +999,19 @@ pub mod uwp {
         Ok(())
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct StorageEntry {
+    pub key: String,
+    /// Raw JSON-encoded value string.
+    pub value: String,
+}
+
+/// Debug: returns all frontend KV entries (keys with the `web:` prefix).
+/// Internal storage entries used by other subsystems are excluded.
+#[tauri::command]
+#[specta::specta]
+pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
+    let storage = app_handle.state::<Storage>();
+    todo!()
+}

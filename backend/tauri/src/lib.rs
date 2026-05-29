@@ -135,6 +135,7 @@ pub fn run() -> std::io::Result<()> {
         ipc::get_storage_item,
         ipc::set_storage_item,
         ipc::remove_storage_item,
+        ipc::get_all_storage_items,
         // service mode
         ipc::service::status_service,
         ipc::service::install_service,

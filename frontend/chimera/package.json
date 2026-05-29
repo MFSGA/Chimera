@@ -48,7 +48,8 @@
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-os": "2.3.2",
     "@inlang/paraglide-js": "2.18.1",
-    "@uidotdev/usehooks": "2.4.1"
+    "@uidotdev/usehooks": "2.4.1",
+    "less": "4.6.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.2",
@@ -83,6 +84,7 @@
     "@monaco-editor/react": "4.7.0",
     "monaco-yaml": "5.4.0",
     "shiki": "2.5.0",
-    "filesize": "11.0.13"
+    "filesize": "11.0.13",
+    "@types/less": "3.0.8"
   }
 }
