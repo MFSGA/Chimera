@@ -20,13 +20,15 @@
       "@root/*": ["../../*"],
       "@/*": ["./src/*"],
       "~/*": ["./*"],
+      "@chimera/utils": ["../utils/src/index.ts"],
+      "@chimera/utils/*": ["../utils/src/*"],
     },
     "jsxImportSource": "@emotion/react",
     "customConditions": ["source"],
     // to solve the eroor
     // "ignoreDeprecations": "6.0",
   },
-  "include": ["src", "./auto-imports.d.ts"],
+  "include": ["src", "./auto-imports.d.ts", "../utils/src"],
   "references": [
     {
       "path": "./tsconfig.node.json",
