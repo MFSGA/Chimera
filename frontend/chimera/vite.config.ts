@@ -69,6 +69,7 @@ export default defineConfig(async ({ command, mode }) => {
         { find: '@root', replacement: path.resolve(__dirname, '../..') },
         { find: '@', replacement: path.resolve(__dirname, './src') },
         { find: '~', replacement: path.resolve(__dirname, '.') },
+        { find: '@chimera/utils', replacement: path.resolve('../utils/src') },
       ],
       dedupe: ['react', 'react-dom'],
     },
