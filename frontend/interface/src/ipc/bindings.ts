@@ -521,6 +521,21 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Debug: returns all frontend KV entries (keys with the `web:` prefix).
+   * Internal storage entries used by other subsystems are excluded.
+   */
+  async getAllStorageItems(): Promise<Result<StorageEntry[], string>> {
+    try {
+      return {
+        status: 'ok',
+        data: await TAURI_INVOKE('get_all_storage_items'),
+      };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async statusService(): Promise<Result<StatusInfo, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('status_service') };
@@ -1153,6 +1168,13 @@ export type StatusResBody = {
   version: string;
   core_infos: CoreInfos;
   runtime_infos: RuntimeInfos;
+};
+export type StorageEntry = {
+  key: string;
+  /**
+   * Raw JSON-encoded value string.
+   */
+  value: string;
 };
 export type SubscriptionInfo = {
   upload: number;
