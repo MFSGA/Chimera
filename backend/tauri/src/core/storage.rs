@@ -1,6 +1,6 @@
 use crate::{log_err, utils::dirs};
 use anyhow::Context;
-use redb::{ReadableDatabase, TableDefinition};
+use redb::{ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{fs, ops::Deref, result::Result as StdResult, sync::Arc};
 use tauri::{Emitter, Manager};
@@ -60,6 +60,8 @@ pub trait WebStorage {
     fn get_item<T: DeserializeOwned>(&self, key: impl AsRef<str>) -> Result<Option<T>>;
     fn set_item<T: Serialize>(&self, key: impl AsRef<str>, value: &T) -> Result<()>;
     fn remove_item(&self, key: impl AsRef<str>) -> Result<()>;
+    /// Returns all key-value pairs as raw JSON strings (for debug use).
+    fn get_all(&self) -> Result<Vec<(String, String)>>;
 }
 
 impl StorageInner {
@@ -162,6 +164,20 @@ impl WebStorage for StorageInner {
         write_txn.commit()?;
         self.notify_subscribers(key_str, None);
         Ok(())
+    }
+
+    fn get_all(&self) -> Result<Vec<(String, String)>> {
+        let db = self.get_instance();
+        let read_txn = db.begin_read()?;
+        let table = read_txn.open_table(NYANPASU_TABLE)?;
+        let mut result = Vec::new();
+        for entry in table.iter()? {
+            let (key, value) = entry?;
+            let key = String::from_utf8_lossy(key.value()).to_string();
+            let value = String::from_utf8_lossy(value.value()).to_string();
+            result.push((key, value));
+        }
+        Ok(result)
     }
 }
 
