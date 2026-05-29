@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { commands } from '../ipc/bindings'
+import { commands, events } from '../ipc/bindings'
 
 const LOCAL_CACHE_PREFIX = 'nyanpasu-kv-:'
 /** Mirrors the `WEB_STORAGE_KEY_PREFIX` constant on the backend. */
@@ -107,7 +107,54 @@ export function useKvStorage<T>(
     })
   }, [key, applyMigrate])
 
-  // todo
+  // Listen for changes emitted from backend (any window).
+  // The backend emits the raw storage key which includes the `web:` prefix.
+  useEffect(() => {
+    const unlistenPromise = events.storageValueChangedEvent.listen((event) => {
+      if (event.payload.key !== WEB_KEY_PREFIX + key) {
+        return
+      }
+
+      if (event.payload.value === null) {
+        pendingWritesRef.current.delete('null')
+        setValueState(defaultValueRef.current)
+        removeLocalCache(key)
+      } else {
+        // If this event is the echo of our own optimistic write, skip the
+        // redundant setState to avoid an unnecessary re-render.
+        // Note: the backend double-encodes the value in the event payload
+        // (the stored JSON string is wrapped in another JSON string), so we
+        // compare against the double-encoded form.
+        if (pendingWritesRef.current.has(event.payload.value)) {
+          pendingWritesRef.current.delete(event.payload.value)
+          return
+        }
+
+        try {
+          // The backend emits the stored value double-encoded: the raw stored
+          // string (already valid JSON) is JSON-encoded again inside the event
+          // payload. Parse once to get the inner string, then parse again to
+          // get the actual value. Fall back to single-parse for backends that
+          // emit the value without extra encoding.
+          const firstParsed = JSON.parse(event.payload.value)
+          const parsed =
+            typeof firstParsed === 'string'
+              ? JSON.parse(firstParsed)
+              : firstParsed
+          const migrated = applyMigrate(parsed)
+
+          setValueState(migrated)
+          setLocalCache(key, migrated)
+        } catch {
+          // ignore invalid JSON from event
+        }
+      }
+    })
+
+    return () => {
+      unlistenPromise.then((fn) => fn())
+    }
+  }, [key, applyMigrate])
 
   const setValue = useCallback(
     async (newValue: T | ((prev: T) => T)) => {
@@ -163,5 +210,12 @@ export const kvStorageDebug = {
     )
   },
 
-  // todo
+  /** Removes every entry from the backend storage. */
+  async clear(): Promise<void> {
+    const result = await commands.clearStorage()
+
+    if (result.status === 'error') {
+      throw new Error(result.error)
+    }
+  },
 }

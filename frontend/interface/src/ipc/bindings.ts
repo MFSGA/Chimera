@@ -536,6 +536,18 @@ export const commands = {
       else return { status: 'error', error: e as any };
     }
   },
+  /**
+   * Debug: clears all frontend KV entries (keys with the `web:` prefix).
+   * Internal storage entries used by other subsystems are left intact.
+   */
+  async clearStorage(): Promise<Result<null, string>> {
+    try {
+      return { status: 'ok', data: await TAURI_INVOKE('clear_storage') };
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      else return { status: 'error', error: e as any };
+    }
+  },
   async statusService(): Promise<Result<StatusInfo, string>> {
     try {
       return { status: 'ok', data: await TAURI_INVOKE('status_service') };
@@ -614,6 +626,12 @@ export const commands = {
 };
 
 /** user-defined events **/
+
+export const events = __makeEvents__<{
+  storageValueChangedEvent: StorageValueChangedEvent;
+}>({
+  storageValueChangedEvent: 'storage-value-changed-event',
+});
 
 /** user-defined constants **/
 
@@ -1175,6 +1193,17 @@ export type StorageEntry = {
    * Raw JSON-encoded value string.
    */
   value: string;
+};
+/**
+ * Event emitted to all windows when a storage value changes.
+ * Event name: `storage-value-changed-event`
+ */
+export type StorageValueChangedEvent = {
+  key: string;
+  /**
+   * The new JSON-encoded value, or `None` if the key was removed.
+   */
+  value: string | null;
 };
 export type SubscriptionInfo = {
   upload: number;

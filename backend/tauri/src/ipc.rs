@@ -1031,3 +1031,21 @@ pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>>
         })
         .collect())
 }
+
+/// Debug: clears all frontend KV entries (keys with the `web:` prefix).
+/// Internal storage entries used by other subsystems are left intact.
+#[tauri::command]
+#[specta::specta]
+pub fn clear_storage(app_handle: AppHandle) -> Result {
+    let storage = app_handle.state::<Storage>();
+    let web_keys: Vec<String> = storage
+        .get_all()?
+        .into_iter()
+        .filter(|(k, _)| k.starts_with(WEB_STORAGE_KEY_PREFIX))
+        .map(|(k, _)| k)
+        .collect();
+    for key in web_keys {
+        storage.remove_item(&key)?;
+    }
+    Ok(())
+}
