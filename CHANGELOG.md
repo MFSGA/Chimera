@@ -1,3 +1,37 @@
+## [0.15.0] - 2026-06-02 02:45:44
+
+### ✨ Features
+
+- **LanguageProvider:** Use inlang as new i18n method by @MFSGA
+
+- **css:** Add CustomCssProvider by @MFSGA
+
+- **root:** Add BlockTaskProvider component by @MFSGA
+
+- **storage:** Complete command clear_storage and support event StorageValueChangedEvent by @MFSGA
+
+- **storage:** Complete command get_all_storage_items by @MFSGA
+
+- **theme:** Add ExperimentalThemeProvider by @MFSGA
+
+- **ui:** For simple main window ui by @MFSGA
+
+- **ui:** Support create main window command but not work well by @MFSGA
+
+- **ui:** Prepare for new main ui by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **lint:** Delete a rule for deno by @MFSGA
+
+- **main:** Support for exiting from a window by @MFSGA
+
+- **tun:** Allow for setting custom fake-ip-range by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.14.1...v0.15.0
+
 ## [0.14.1] - 2026-05-21 08:32:19
 
 ### ✨ Features
