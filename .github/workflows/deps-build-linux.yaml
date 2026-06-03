@@ -84,10 +84,9 @@ jobs:
         with:
           node-version: 24
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         name: Install pnpm
         with:
-          version: latest
           run_install: false
 
       - uses: denoland/setup-deno@v2
