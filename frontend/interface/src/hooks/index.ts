@@ -1,1 +1,1 @@
-export * from './use-kv-storage'
+export * from './use-kv-storage';
