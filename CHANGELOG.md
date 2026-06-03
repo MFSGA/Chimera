@@ -1,3 +1,13 @@
+## [0.15.2] - 2026-06-03 17:12:30
+
+### 🐛 Bug Fixes
+
+- **build:** Update the pnpm process by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.15.1...v0.15.2
+
 ## [0.15.1] - 2026-06-03 16:44:17
 
 ### 🐛 Bug Fixes
