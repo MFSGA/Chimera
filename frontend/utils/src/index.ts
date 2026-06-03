@@ -1,1 +1,1 @@
-export { alpha, darken, lighten } from './color'
+export { alpha, darken, lighten } from './color';
