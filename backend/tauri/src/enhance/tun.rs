@@ -51,7 +51,8 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             append!(tun_val, "device-id", "dev://utun1989");
             append!(tun_val, "route-all", true);
             append!(tun_val, "dns-hijack", true);
-            // append!(tun_val, "gateway", "198.18.0.1/16");
+            // mainly used for linux
+            append!(tun_val, "so-mark", 7777);
         } else {
             let mut tun_stack = {
                 *Config::verge()
