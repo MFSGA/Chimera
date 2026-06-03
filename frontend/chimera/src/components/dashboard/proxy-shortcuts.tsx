@@ -17,14 +17,17 @@ const TitleComp = () => {
     query: { data: clashConfigs },
   } = useClashConfig();
   const systemProxy = useSystemProxy();
+  const mixedPort = clashConfigs?.['mixed-port'];
+  const systemProxyEnabled = systemProxy.data?.enable;
+  const systemProxyServer = systemProxy.data?.server;
 
   const status = useMemo<{
     label: string;
     color: ChipProps['color'];
   }>(() => {
-    if (systemProxy.data?.enable) {
-      const port = Number(systemProxy.data?.server?.split(':')[1]);
-      if (port === clashConfigs?.['mixed-port']) {
+    if (systemProxyEnabled) {
+      const port = Number(systemProxyServer?.split(':')[1]);
+      if (port === mixedPort) {
         return {
           label: t('Successful'),
           color: 'success',
@@ -40,12 +43,7 @@ const TitleComp = () => {
       label: t('Disabled'),
       color: 'error',
     };
-  }, [
-    clashConfigs?.['mixed-port'],
-    systemProxy.data?.enable,
-    systemProxy.data?.server,
-    t,
-  ]);
+  }, [mixedPort, systemProxyEnabled, systemProxyServer, t]);
 
   return (
     <div className="flex items-center gap-2 px-1">

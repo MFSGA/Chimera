@@ -8,6 +8,8 @@ pnpm-lock.yaml
 *.wxs
 frontend/chimera/src/routeTree.gen.ts
 frontend/chimera/src/paraglide/
+frontend/chimera/project.inlang/.meta.json
+frontend/chimera/project.inlang/README.md
 frontend/chimera/auto-imports.d.ts
 # todo 
 # backend/tauri/gen/schemas/
