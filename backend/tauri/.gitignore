@@ -11,3 +11,4 @@ resources
 sidecar
 # real target is git-info
 tmp/
+tauri.nightly.conf.json
