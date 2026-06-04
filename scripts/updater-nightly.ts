@@ -1,9 +1,8 @@
-/// <reference lib="deno.ns" />
-/// <reference lib="dom" />
-
 import { parseArgs } from 'jsr:@std/cli@1/parse-args';
 import * as path from 'jsr:@std/path';
 import { Octokit } from 'npm:octokit';
+import semver from 'npm:semver';
+import { z } from 'npm:zod';
 import { colorize, consola } from './deno/utils/logger.ts';
 
 const GITHUB_PROXY = 'https://gh-proxy.com/';
@@ -66,20 +65,20 @@ async function resolveNightlyVersion() {
   }
 }
 
-function getBuildMetadata(version: string) {
-  const build = version.split('+')[1];
-  return build?.split('.')[0] ?? '';
-}
-
 async function resolveShortHash(assets: ReleaseAsset[]) {
   const latestContent = assets.find((asset) => asset.name === 'latest.json');
   if (latestContent) {
     try {
-      const latest = (await fetch(latestContent.browser_download_url).then(
-        (res) => res.json(),
-      )) as { version?: string };
-      const shortHash = latest.version ? getBuildMetadata(latest.version) : '';
-      if (shortHash) return shortHash;
+      const schema = z.object({ version: z.string().min(1) });
+      const latest = schema.parse(
+        await fetch(latestContent.browser_download_url).then((res) =>
+          res.json(),
+        ),
+      );
+      const version = semver.parse(latest.version);
+      if (version && version.build.length > 0) {
+        return version.build[0];
+      }
     } catch (err) {
       consola.error(err);
     }
