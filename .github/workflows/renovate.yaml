@@ -28,8 +28,20 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Validate Renovate token
+        env:
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+        run: |
+          if [ -z "$RENOVATE_TOKEN" ]; then
+            echo "::error::Repository secret RENOVATE_TOKEN is not configured."
+            exit 1
+          fi
+
+          gh api rate_limit >/dev/null
+
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@v43.0.20
+        uses: renovatebot/github-action@v46.1.14
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}
