@@ -5,24 +5,21 @@ on:
   schedule:
     - cron: '15 0 * * *' # 每天 08:15 UTC+8 自动构建
 
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
 env:
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: short
 
 jobs:
-  delete_current_releases:
-    name: Delete Current Releases
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.repository, 'libnyanpasu') }}
-    uses: ./.github/workflows/deps-delete-releases.yaml
-    with:
-      tag: 'pre-release'
-
   windows_amd64_build:
     name: Windows x86_64 Build
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.repository, 'libnyanpasu') }}
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
-    needs: [delete_current_releases]
     with:
-      portable: true
+      portable: false
       nightly: true
       fixed-webview: false
       arch: 'x86_64'
@@ -36,9 +33,23 @@ jobs:
     with:
       tag: 'pre-release'
 
+  delete_current_releases:
+    name: Delete Current Releases
+    needs: [update_tag]
+    uses: ./.github/workflows/deps-delete-releases.yaml
+    with:
+      tag: 'pre-release'
+
+  upload_release_assets:
+    name: Upload Release Assets
+    needs: [delete_current_releases]
+    uses: ./.github/workflows/deps-upload-release-assets.yaml
+    with:
+      tag: 'pre-release'
+
   updater:
     name: Create Updater
-    needs: [update_tag]
+    needs: [upload_release_assets]
     uses: ./.github/workflows/deps-create-updater.yaml
     with:
       nightly: true
