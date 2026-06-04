@@ -9,7 +9,7 @@
     "web:devtools": "pnpm react-devtools",
     "web:dev": "pnpm --filter=chimera-ui dev",
     "build": "tauri build",
-    "build:nightly": "tauri build -f nightly -c ./backend/tauri/overrides/nightly.conf.json",
+    "build:nightly": "tauri build -f nightly -c ./backend/tauri/tauri.nightly.conf.json",
     "web:build": "pnpm --filter=chimera-ui build",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -32,7 +32,8 @@
     "generate:manifest:latest-version": "deno run -A scripts/generate-latest-version.ts",
     "generate:data-slots": "deno run -A scripts/extract-data-slots.ts",
     "updater": "pnpm --filter @chimera/scripts exec tsx updater.ts",
-    "updater:nightly": "deno run -A scripts/updater-nightly.ts"
+    "updater:nightly": "deno run -A scripts/updater-nightly.ts",
+    "prepare:nightly": "deno run -A scripts/prepare-nightly.ts"
   },
   "dependencies": {
     "husky": "9.1.7",

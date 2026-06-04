@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/cli@1": "1.0.30",
     "jsr:@std/fs@*": "1.0.24",
     "jsr:@std/fs@^1.0.19": "1.0.24",
     "jsr:@std/internal@^1.0.14": "1.0.14",
@@ -19,14 +20,21 @@
     "npm:consola@3.4.2": "3.4.2",
     "npm:fs-extra@11.3.2": "11.3.2",
     "npm:globby@*": "16.2.0",
+    "npm:lodash-es@*": "4.18.1",
+    "npm:octokit@*": "5.0.5",
     "npm:octokit@5.0.5": "5.0.5",
     "npm:picocolors@*": "1.1.1",
     "npm:picocolors@1.1.1": "1.1.1",
+    "npm:semver@*": "7.8.1",
     "npm:tar@7.5.2": "7.5.2",
     "npm:undici@7.16.0": "7.16.0",
-    "npm:yargs@18.0.0": "18.0.0"
+    "npm:yargs@18.0.0": "18.0.0",
+    "npm:zod@*": "4.4.3"
   },
   "jsr": {
+    "@std/cli@1.0.30": {
+      "integrity": "769446536522d0417d7127ebcabcafac1ab0ce6766d0eb3fca1d36326fe98d13"
+    },
     "@std/fs@1.0.24": {
       "integrity": "f3061b45b81673a2bece689da041df32d174be064c89eb6397fb5718d3fb7877",
       "dependencies": [
@@ -624,6 +632,10 @@
       ],
       "tarball": "https://registry.npmmirror.com/jsonfile/-/jsonfile-6.2.1.tgz"
     },
+    "lodash-es@4.18.1": {
+      "integrity": "sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==",
+      "tarball": "https://registry.npmmirror.com/lodash-es/-/lodash-es-4.18.1.tgz"
+    },
     "merge2@1.4.1": {
       "integrity": "sha512-8q7VEgMJW4J8tcfVPy8g09NcQwZdbwFEqhe/WZkoIzjn/3TGDwtOCYtXGxA3O8tPzpczCCDgv+P2P5y00ZJOOg==",
       "tarball": "https://registry.npmmirror.com/merge2/-/merge2-1.4.1.tgz"
@@ -693,6 +705,11 @@
         "queue-microtask"
       ],
       "tarball": "https://registry.npmmirror.com/run-parallel/-/run-parallel-1.2.0.tgz"
+    },
+    "semver@7.8.1": {
+      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
+      "bin": true,
+      "tarball": "https://registry.npmmirror.com/semver/-/semver-7.8.1.tgz"
     },
     "slash@5.1.0": {
       "integrity": "sha512-ZA6oR3T/pEyuqwMgAKT0/hAv8oAXckzbkmR0UkUosQ+Mc4RxGoJkRmwHgHufaenlyAgE1Mxgpdcrf75y6XcnDg==",
@@ -811,6 +828,10 @@
         "yargs-parser"
       ],
       "tarball": "https://registry.npmmirror.com/yargs/-/yargs-18.0.0.tgz"
+    },
+    "zod@4.4.3": {
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "tarball": "https://registry.npmmirror.com/zod/-/zod-4.4.3.tgz"
     }
   },
   "workspace": {

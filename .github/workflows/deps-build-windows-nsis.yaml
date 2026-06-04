@@ -144,6 +144,10 @@ jobs:
       - name: Build Interface
         run: |
           pnpm -F interface build
+      - name: Nightly Prepare
+        if: ${{ inputs.nightly == true }}
+        run: |
+          pnpm prepare:nightly --nsis
       # TODO: optimize strategy
       - name: Tauri build x86_64
         if: ${{ inputs.arch == 'x86_64' }}
