@@ -91,7 +91,7 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
-  '/main': typeof mainMainIndexRoute
+  '/main/': typeof mainMainIndexRoute
 }
 export interface FileRoutesByTo {
   '/connections': typeof legacyConnectionsRoute
@@ -132,7 +132,7 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
-    | '/main'
+    | '/main/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connections'
@@ -248,7 +248,7 @@ declare module '@tanstack/react-router' {
     '/(main)/main/': {
       id: '/(main)/main/'
       path: '/main'
-      fullPath: '/main'
+      fullPath: '/main/'
       preLoaderRoute: typeof mainMainIndexRouteImport
       parentRoute: typeof mainRouteRoute
     }
