@@ -1,14 +1,12 @@
 import path from 'node:path';
 import { paraglideVitePlugin } from '@inlang/paraglide-js';
-import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
+import { tanstackRouter } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { NodePackageImporter } from 'sass-embedded';
 import Icons from 'unplugin-icons/vite';
 import { defineConfig, UserConfig } from 'vite';
 import { createHtmlPlugin } from 'vite-plugin-html';
 import sassDts from 'vite-plugin-sass-dts';
-
-const host = process.env.TAURI_DEV_HOST;
 
 const devtools = () => {
   return {
@@ -41,7 +39,13 @@ export default defineConfig(async ({ command, mode }) => {
       },
     },
     plugins: [
-      TanStackRouterVite(),
+      tanstackRouter({
+        target: 'react',
+        autoCodeSplitting: true,
+        routesDirectory: 'src/pages',
+        generatedRouteTree: 'src/routeTree.gen.ts',
+        routeFileIgnorePattern: '_modules',
+      }),
       createHtmlPlugin({
         inject: {
           data: {
