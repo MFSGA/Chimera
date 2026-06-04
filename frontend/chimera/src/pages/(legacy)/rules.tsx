@@ -8,6 +8,8 @@ import { lazy, Suspense, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { atomRulePage } from '@/components/rules/modules/store';
 
+const RulePageComponent = lazy(() => import('@/components/rules/rule-page'));
+
 export const Route = createFileRoute('/(legacy)/rules')({
   component: RulesPage,
 });
@@ -55,8 +57,6 @@ function RulesPage() {
     }),
   };
 
-  const Component = lazy(() => import('@/components/rules/rule-page'));
-
   return (
     <BasePage
       full
@@ -79,7 +79,7 @@ function RulesPage() {
       viewportRef={viewportRef}
     >
       <Suspense fallback={null}>
-        <Component />
+        <RulePageComponent />
       </Suspense>
     </BasePage>
   );

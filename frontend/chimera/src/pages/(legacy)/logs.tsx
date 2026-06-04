@@ -5,6 +5,8 @@ import { useTranslation } from 'react-i18next';
 import LogHeader from '@/components/logs/log-header';
 import { LogProvider } from '@/components/logs/log-provider';
 
+const LogPageComponent = lazy(() => import('@/components/logs/log-page'));
+
 export const Route = createFileRoute('/(legacy)/logs')({
   component: LogRoutePage,
 });
@@ -12,7 +14,6 @@ export const Route = createFileRoute('/(legacy)/logs')({
 function LogRoutePage() {
   const { t } = useTranslation();
   const viewportRef = useRef<HTMLDivElement>(null);
-  const Component = lazy(() => import('@/components/logs/log-page'));
 
   return (
     <LogProvider>
@@ -23,7 +24,7 @@ function LogRoutePage() {
         viewportRef={viewportRef}
       >
         <Suspense fallback={null}>
-          <Component scrollRef={viewportRef as RefObject<HTMLElement>} />
+          <LogPageComponent scrollRef={viewportRef as RefObject<HTMLElement>} />
         </Suspense>
       </BasePage>
     </LogProvider>
