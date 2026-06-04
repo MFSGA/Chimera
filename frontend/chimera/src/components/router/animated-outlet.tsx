@@ -5,7 +5,6 @@ import {
   useMatches,
   useRouter,
   useRouterState,
-  type AnyRouter,
 } from '@tanstack/react-router';
 import { AnimatePresence, motion, useIsPresent, Variants } from 'framer-motion';
 import { ComponentProps, useRef } from 'react';
@@ -57,7 +56,7 @@ export function AnimatedOutlet({
   const matches = useMatches();
   const prevMatches = useRef(matches);
   const router = useRouter();
-  const frozenRouterRef = useRef<AnyRouter | null>(null);
+  const frozenRouterRef = useRef<typeof router | null>(null);
 
   let renderedRouter = router;
 
@@ -77,23 +76,68 @@ export function AnimatedOutlet({
         ...router.state,
         matches: patchedMatches,
       };
-      const frozenStore = {
-        state: patchedState,
-        subscribe: () => () => {},
-      };
+
+      function frozenStore<T>(value: T) {
+        return {
+          state: value,
+          get: () => value,
+          subscribe: (_: () => void) => ({ unsubscribe: () => {} }),
+        };
+      }
+
+      const routerStores = (
+        router as typeof router & {
+          stores: {
+            matchStores: Map<string, unknown>;
+            getRouteMatchStore: (routeId: string) => unknown;
+          };
+        }
+      ).stores;
+
+      const fakeMatchStores = new Map(routerStores.matchStores);
+      const routeIdToFrozenStore = new Map<
+        string,
+        ReturnType<typeof frozenStore>
+      >();
+
+      patchedMatches.forEach((match) => {
+        const store = frozenStore(match);
+        (store as typeof store & { routeId?: string }).routeId = match.routeId;
+        fakeMatchStores.set(match.id, store);
+        if (match.routeId) {
+          routeIdToFrozenStore.set(match.routeId, store);
+        }
+      });
+
+      const fakeStores = Object.create(routerStores);
+
+      Object.defineProperty(fakeStores, 'matches', {
+        value: frozenStore(patchedMatches),
+        configurable: true,
+      });
+      Object.defineProperty(fakeStores, 'matchesId', {
+        value: frozenStore(patchedMatches.map((match) => match.id)),
+        configurable: true,
+      });
+      Object.defineProperty(fakeStores, 'matchStores', {
+        value: fakeMatchStores,
+        configurable: true,
+      });
+      Object.defineProperty(fakeStores, 'getRouteMatchStore', {
+        value: (routeId: string) =>
+          routeIdToFrozenStore.get(routeId) ?? frozenStore(undefined),
+        configurable: true,
+      });
+
       const fakeRouter = Object.create(router);
 
       // Keep exiting routes subscribed to their previous match snapshot.
-      Object.defineProperty(fakeRouter, '__store', {
-        value: frozenStore,
+      Object.defineProperty(fakeRouter, 'stores', {
+        value: fakeStores,
         configurable: true,
       });
       Object.defineProperty(fakeRouter, 'state', {
         get: () => patchedState,
-        configurable: true,
-      });
-      Object.defineProperty(fakeRouter, 'latestLocation', {
-        value: patchedState.location,
         configurable: true,
       });
 
