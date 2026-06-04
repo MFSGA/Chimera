@@ -1,3 +1,19 @@
+## [0.15.3] - 2026-06-04 09:48:24
+
+### ✨ Features
+
+- Optimize animation effect by @MFSGA
+
+- Update the react version and router version and vite config by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **maximum:** Solve the constant maximum depth issue by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.15.2...v0.15.3
+
 ## [0.15.2] - 2026-06-03 17:12:30
 
 ### 🐛 Bug Fixes
