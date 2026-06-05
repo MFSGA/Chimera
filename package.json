@@ -33,7 +33,8 @@
     "generate:data-slots": "deno run -A scripts/extract-data-slots.ts",
     "updater": "pnpm --filter @chimera/scripts exec tsx updater.ts",
     "updater:nightly": "deno run -A scripts/updater-nightly.ts",
-    "prepare:nightly": "deno run -A scripts/prepare-nightly.ts"
+    "prepare:nightly": "deno run -A scripts/prepare-nightly.ts",
+    "lint:rustfmt": "cargo fmt --manifest-path ./backend/Cargo.toml --all -- --check"
   },
   "dependencies": {
     "husky": "9.1.7",
