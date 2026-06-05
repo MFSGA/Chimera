@@ -84,7 +84,7 @@
     "@monaco-editor/react": "4.7.0",
     "monaco-yaml": "5.4.0",
     "shiki": "2.5.0",
-    "filesize": "11.0.13",
+    "filesize": "11.0.17",
     "@types/less": "3.0.8"
   }
 }
