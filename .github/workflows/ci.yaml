@@ -59,16 +59,12 @@ jobs:
         with:
           node-version: 24
 
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          workspaces: |
+            backend -> target
+          cache-on-failure: true
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
@@ -101,11 +97,11 @@ jobs:
       - name: Lint
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm lint # Lint
-      #- name: Lint
-      #  if: startsWith(matrix.targets.os, 'ubuntu-') == false
-      #  run: pnpm run-p lint:clippy lint:rustfmt # Lint
-      #  env:
-      #    NODE_OPTIONS: '--max_old_space_size=4096'
+      - name: Lint
+        if: startsWith(matrix.targets.os, 'ubuntu-') == false
+        run: pnpm run-p lint:clippy lint:rustfmt # Lint
+        env:
+          NODE_OPTIONS: '--max_old_space_size=4096'
   # TODO: support test cross-platform
   build:
     name: Build Tauri
@@ -146,16 +142,12 @@ jobs:
         with:
           node-version: 24
 
-      - uses: actions/cache@v4
+      - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          workspaces: |
+            backend -> target
+          cache-on-failure: true
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
