@@ -1,3 +1,29 @@
+## [0.15.4] - 2026-06-05 18:25:08
+
+### ✨ Features
+
+- **ci:** To support alpha workflow by @MFSGA
+
+- **nightly:** Use deno script by @MFSGA
+
+- **prepare-nightly:** Add the script and used in the workflow by @MFSGA
+
+- **updater:** Add deno compilerOptions and use semver by @MFSGA
+
+- **workflow:** Fix for nsis by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Skip fixed webview updater when not built by @MFSGA
+
+- **renovate:** Update the renovate settings and workflow by @MFSGA
+
+- For deno by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.15.3...v0.15.4
+
 ## [0.15.3] - 2026-06-04 09:48:24
 
 ### ✨ Features
