@@ -121,8 +121,8 @@ importers:
         specifier: 11.14.1
         version: 11.14.1(@emotion/react@11.14.0(@types/react@19.2.7)(react@19.2.6))(@types/react@19.2.7)(react@19.2.6)
       '@inlang/paraglide-js':
-        specifier: 2.18.1
-        version: 2.18.1(babel-plugin-macros@3.1.0)(typescript@5.9.3)
+        specifier: 2.18.2
+        version: 2.18.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)
       '@material/material-color-utilities':
         specifier: 0.4.0
         version: 0.4.0
@@ -1175,11 +1175,11 @@ packages:
   '@iconify/utils@3.1.1':
     resolution: {integrity: sha512-MwzoDtw9rO1x+qfgLTV/IVXsHDBqeYZoMIQC8SfxfYSlaSUG+oWiAcoiB1yajAda6mqblm4/1/w2E8tRu7a7Tw==}
 
-  '@inlang/paraglide-js@2.18.1':
-    resolution: {integrity: sha512-YzIrJ34KbsJwzvVKBzcBEgp4AqmhNYD1EF2pOV+g87L024XTFmcmikI4/NMfb63H9zJ6UeEPTOmEK7Nzu/4E2Q==}
+  '@inlang/paraglide-js@2.18.2':
+    resolution: {integrity: sha512-H2ksOE2dy9M4iJ+oDu8VPgk+B52C+OCFQpuJHBol0ZYLs3H17PCewVWIppkJNC36ClmLZnGhF+URjbcglTM8XQ==}
     hasBin: true
     peerDependencies:
-      typescript: '>=5'
+      typescript: '>=5.6'
     peerDependenciesMeta:
       typescript:
         optional: true
@@ -7169,10 +7169,6 @@ packages:
     resolution: {integrity: sha512-5uKD0nqiYVzlmCRs01Fhs2BdkEgBS3SAVP6ndrBsuK42iC2+JHyxM05Rm9G8+5mkmRtzMZGY8Ct5+mliZxU/Ww==}
     engines: {node: '>=18.12.0'}
 
-  unplugin@2.3.2:
-    resolution: {integrity: sha512-3n7YA46rROb3zSj8fFxtxC/PqoyvYQ0llwz9wtUPUutr9ig09C8gGo5CWCwHrUzlqC1LLR43kxp5vEIyH1ac1w==}
-    engines: {node: '>=18.12.0'}
-
   unplugin@3.0.0:
     resolution: {integrity: sha512-0Mqk3AT2TZCXWKdcoaufeXNukv2mTrEZExeXlHIOZXdqYoHHr4n51pymnwV8x2BOVxwXbK2HLlI7usrqMpycdg==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -8272,14 +8268,14 @@ snapshots:
       '@iconify/types': 2.0.0
       mlly: 1.8.2
 
-  '@inlang/paraglide-js@2.18.1(babel-plugin-macros@3.1.0)(typescript@5.9.3)':
+  '@inlang/paraglide-js@2.18.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)':
     dependencies:
       '@inlang/recommend-sherlock': 0.2.1
       '@inlang/sdk': 2.9.3(babel-plugin-macros@3.1.0)
       commander: 11.1.0
       consola: 3.4.0
       json5: 2.2.3
-      unplugin: 2.3.2
+      unplugin: 2.3.11
       urlpattern-polyfill: 10.1.0
     optionalDependencies:
       typescript: 5.9.3
@@ -14594,12 +14590,6 @@ snapshots:
     dependencies:
       '@jridgewell/remapping': 2.3.5
       acorn: 8.16.0
-      picomatch: 4.0.4
-      webpack-virtual-modules: 0.6.2
-
-  unplugin@2.3.2:
-    dependencies:
-      acorn: 8.15.0
       picomatch: 4.0.4
       webpack-virtual-modules: 0.6.2
 

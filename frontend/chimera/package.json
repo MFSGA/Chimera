@@ -47,7 +47,7 @@
     "radix-ui": "^1.4.3",
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-os": "2.3.2",
-    "@inlang/paraglide-js": "2.18.1",
+    "@inlang/paraglide-js": "2.18.2",
     "@uidotdev/usehooks": "2.4.1",
     "less": "4.6.4"
   },
