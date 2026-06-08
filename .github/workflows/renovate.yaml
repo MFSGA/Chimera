@@ -41,7 +41,7 @@ jobs:
           gh api rate_limit >/dev/null
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@v46.1.14
+        uses: renovatebot/github-action@v46.1.15
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}
