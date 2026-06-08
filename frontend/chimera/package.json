@@ -44,7 +44,7 @@
     "material-react-table": "3.2.1",
     "change-case": "5.4.4",
     "class-variance-authority": "0.7.1",
-    "radix-ui": "1.4.3",
+    "radix-ui": "1.5.0",
     "@tauri-apps/plugin-notification": "2.3.3",
     "@tauri-apps/plugin-os": "2.3.2",
     "@inlang/paraglide-js": "2.18.2",
