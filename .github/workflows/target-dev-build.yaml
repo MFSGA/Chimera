@@ -16,7 +16,7 @@ env:
 jobs:
   windows_amd64_build:
     name: Windows x86_64 Build
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.repository, 'libnyanpasu') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.repository, 'MFSGA/Chimera') }}
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
     with:
       portable: false
