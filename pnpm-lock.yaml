@@ -439,7 +439,14 @@ importers:
         specifier: 3.3.1
         version: 3.3.1
 
-  frontend/utils: {}
+  frontend/utils:
+    dependencies:
+      clsx:
+        specifier: 2.1.1
+        version: 2.1.1
+      tailwind-merge:
+        specifier: 3.6.0
+        version: 3.6.0
 
   scripts:
     dependencies:
@@ -6935,6 +6942,9 @@ packages:
 
   tailwind-merge@3.3.1:
     resolution: {integrity: sha512-gBXpgUm/3rp1lMZZrM/w7D8GKqshif0zAymAhbCyIt8KMe+0v9DQ7cdYLR4FHH/cKpdTXb+A/tKKU3eolfsI+g==}
+
+  tailwind-merge@3.6.0:
+    resolution: {integrity: sha512-uxL7qAVQriqRQPAyK3pj66VqskWqoZ37PW94jwOTwNfq/z9oyu1V+eqrZqtR2+fCiXdYOZe/Modt8GtvqNzu+w==}
 
   tailwindcss@4.1.16:
     resolution: {integrity: sha512-pONL5awpaQX4LN5eiv7moSiSPd/DLDzKVRJz8Q9PgzmAdd1R4307GQS2ZpfiN7ZmekdQrfhZZiSE5jkLR4WNaA==}
@@ -14325,6 +14335,8 @@ snapshots:
       strip-ansi: 6.0.1
 
   tailwind-merge@3.3.1: {}
+
+  tailwind-merge@3.6.0: {}
 
   tailwindcss@4.1.16: {}
 
