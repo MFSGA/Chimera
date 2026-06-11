@@ -11,20 +11,12 @@ export const Route = createFileRoute('/(main)')({
   component: RouteComponent,
 });
 
-const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
-  const {
-    query: { isLoading },
-  } = useSettings();
-
-  return isLoading ? null : children;
-};
-
 const AppContent = () => {
   return (
     <AnimatedOutletPreset
       className={cn(
-        'h-[calc(100vh-40px-64px)] overflow-hidden',
-        'sm:h-[calc(100vh-40px-48px)]',
+        'flex min-h-0 flex-1 flex-col overflow-hidden',
+        '[&>div]:min-h-0 [&>div]:flex-1',
       )}
       data-slot="app-content"
     />
@@ -34,19 +26,22 @@ const AppContent = () => {
 function RouteComponent() {
   return (
     <div
-      className={cn('flex max-h-dvh min-h-dvh flex-col', 'bg-mixed-background')}
+      className={cn(
+        'flex max-h-dvh min-h-dvh flex-col overflow-hidden',
+        'bg-mixed-background',
+      )}
       data-slot="app-root"
       data-app-version={packageJson.version}
     >
-      <Header />
+      <Header className="shrink-0" />
 
       <div
-        className="flex flex-1 flex-col sm:flex-col-reverse"
+        className="flex min-h-0 flex-1 flex-col-reverse sm:flex-col"
         data-slot="app-content-container"
       >
-        <AppContent />
+        <Navbar className="shrink-0" />
 
-        <Navbar />
+        <AppContent />
       </div>
     </div>
   );
