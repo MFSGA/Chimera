@@ -21,6 +21,8 @@ import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
 import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
 import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
+import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/providers/route'
+import { Route as mainMainProvidersIndexRouteImport } from './pages/(main)/main/providers/index'
 
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
@@ -80,6 +82,16 @@ const mainMainIndexRoute = mainMainIndexRouteImport.update({
   path: '/main/',
   getParentRoute: () => mainRouteRoute,
 } as any)
+const mainMainProvidersRouteRoute = mainMainProvidersRouteRouteImport.update({
+  id: '/main/providers',
+  path: '/main/providers',
+  getParentRoute: () => mainRouteRoute,
+} as any)
+const mainMainProvidersIndexRoute = mainMainProvidersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainProvidersRouteRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/connections': typeof legacyConnectionsRoute
@@ -91,7 +103,9 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main/providers': typeof mainMainProvidersRouteRouteWithChildren
   '/main/': typeof mainMainIndexRoute
+  '/main/providers/': typeof mainMainProvidersIndexRoute
 }
 export interface FileRoutesByTo {
   '/connections': typeof legacyConnectionsRoute
@@ -104,6 +118,7 @@ export interface FileRoutesByTo {
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
   '/main': typeof mainMainIndexRoute
+  '/main/providers': typeof mainMainProvidersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -118,7 +133,9 @@ export interface FileRoutesById {
   '/(legacy)/rules': typeof legacyRulesRoute
   '/(legacy)/settings': typeof legacySettingsRoute
   '/(legacy)/': typeof legacyIndexRoute
+  '/(main)/main/providers': typeof mainMainProvidersRouteRouteWithChildren
   '/(main)/main/': typeof mainMainIndexRoute
+  '/(main)/main/providers/': typeof mainMainProvidersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -132,7 +149,9 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main/providers'
     | '/main/'
+    | '/main/providers/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connections'
@@ -145,6 +164,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/'
     | '/main'
+    | '/main/providers'
   id:
     | '__root__'
     | '/(legacy)'
@@ -158,7 +178,9 @@ export interface FileRouteTypes {
     | '/(legacy)/rules'
     | '/(legacy)/settings'
     | '/(legacy)/'
+    | '/(main)/main/providers'
     | '/(main)/main/'
+    | '/(main)/main/providers/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -252,6 +274,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainIndexRouteImport
       parentRoute: typeof mainRouteRoute
     }
+    '/(main)/main/providers': {
+      id: '/(main)/main/providers'
+      path: '/main/providers'
+      fullPath: '/main/providers'
+      preLoaderRoute: typeof mainMainProvidersRouteRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
+    '/(main)/main/providers/': {
+      id: '/(main)/main/providers/'
+      path: '/'
+      fullPath: '/main/providers/'
+      preLoaderRoute: typeof mainMainProvidersIndexRouteImport
+      parentRoute: typeof mainMainProvidersRouteRoute
+    }
   }
 }
 
@@ -283,11 +319,27 @@ const legacyRouteRouteWithChildren = legacyRouteRoute._addFileChildren(
   legacyRouteRouteChildren,
 )
 
+interface mainMainProvidersRouteRouteChildren {
+  mainMainProvidersIndexRoute: typeof mainMainProvidersIndexRoute
+}
+
+const mainMainProvidersRouteRouteChildren: mainMainProvidersRouteRouteChildren =
+  {
+    mainMainProvidersIndexRoute: mainMainProvidersIndexRoute,
+  }
+
+const mainMainProvidersRouteRouteWithChildren =
+  mainMainProvidersRouteRoute._addFileChildren(
+    mainMainProvidersRouteRouteChildren,
+  )
+
 interface mainRouteRouteChildren {
+  mainMainProvidersRouteRoute: typeof mainMainProvidersRouteRouteWithChildren
   mainMainIndexRoute: typeof mainMainIndexRoute
 }
 
 const mainRouteRouteChildren: mainRouteRouteChildren = {
+  mainMainProvidersRouteRoute: mainMainProvidersRouteRouteWithChildren,
   mainMainIndexRoute: mainMainIndexRoute,
 }
 
