@@ -1,19 +1,30 @@
 export default {
-  '*.{js,cjs,.mjs,jsx}': ['prettier --write', 'eslint --cache --fix'],
+  '*.{js,cjs,.mjs,jsx}': (filenames) => {
+    const configFiles = [
+      '.oxlintrc.json',
+      '.lintstagedrc.js',
+      'commitlint.config.js',
+    ];
+    const filtered = filenames.filter(
+      (file) => !configFiles.some((config) => file.endsWith(config)),
+    );
+    if (filtered.length === 0) return [];
+    return ['prettier --write', 'oxlint --fix'];
+  },
   'scripts/**/*.{ts,tsx}': [
     'prettier --write',
-    'eslint --cache --fix',
+    'oxlint --fix .',
     // () => 'tsc -p scripts/tsconfig.json --noEmit',
   ],
   // todo
   'frontend/ui/**/*.{ts,tsx}': [
     'prettier --write',
-    'eslint --cache --fix',
+    'oxlint --fix',
     () => 'tsc -p frontend/ui/tsconfig.json --noEmit',
   ],
   'frontend/chimera/**/*.{ts,tsx}': [
     'prettier --write',
-    'eslint --cache --fix',
+    'oxlint --fix',
     () => 'tsc -p frontend/interface/tsconfig.json',
     () => 'tsc -p frontend/ui/tsconfig.json',
     () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
