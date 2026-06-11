@@ -1,0 +1,71 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react", "typescript", "react-hooks"],
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": [
+    "**/node_modules",
+    "**/.DS_Store",
+    "**/dist",
+    "**/*.local",
+    "**/update.json",
+    "scripts/_env.sh",
+    "**/.eslintcache",
+    "**/.stylelintcache",
+    "**/tauri.nightly.conf.json",
+    "**/tauri.preview.conf.json",
+    "**/.idea",
+    "**/*.tsbuildinfo",
+    "manifest/site/updater/*",
+    "!manifest/site/updater/.gitkeep",
+    "backend/tauri/gen/",
+    "**/index.html",
+    "**/node_modules/",
+    "node_modules/",
+    "backend/",
+    "backend/**/target",
+    "scripts/",
+    "scripts/deno/**",
+    ".lintstagedrc.js",
+    "commitlint.config.js"
+  ],
+  "overrides": [
+    {
+      "files": ["**/*.{jsx,mjsx,tsx,mtsx}"],
+      "rules": {
+        "react/display-name": "error",
+        "react/jsx-key": "error",
+        "react/jsx-no-comment-textnodes": "error",
+        "react/jsx-no-duplicate-props": "error",
+        "react/jsx-no-target-blank": "error",
+        "react/no-children-prop": "error",
+        "react/no-danger-with-children": "error",
+        "react/no-direct-mutation-state": "error",
+        "react/no-find-dom-node": "error",
+        "react/no-is-mounted": "error",
+        "react/no-render-return-value": "error",
+        "react/no-string-refs": "error",
+        "react/no-unknown-property": "error",
+        "react/no-unsafe": "off",
+        "react/react-in-jsx-scope": "off",
+        "react-hooks/rules-of-hooks": "error",
+        "react-hooks/exhaustive-deps": "warn"
+      }
+    },
+    {
+      "files": ["**/*.{js,mjs,cjs,jsx,mjsx,ts,tsx,mtsx}"],
+      "rules": {
+        "no-var": "warn",
+        "curly": ["error", "multi-line"],
+        "eqeqeq": ["error", "always", { "null": "ignore" }],
+        "no-debugger": "error",
+        "no-unused-vars": "off",
+        "prefer-const": ["error", { "destructuring": "all" }]
+      }
+    }
+  ]
+}

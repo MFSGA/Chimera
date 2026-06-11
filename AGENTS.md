@@ -27,12 +27,12 @@
 - `pnpm tauri:dev` runs Tauri dev only.
 - `pnpm web:dev` runs the frontend app only.
 - `pnpm build` builds the Tauri desktop app.
-- `pnpm lint` runs eslint/prettier/stylelint/clippy.
+- `pnpm lint` runs oxlint/prettier/stylelint/clippy.
 - `pnpm fmt` runs prettier + cargo fmt.
 
 ## Code conventions
 
-- JS/TS formatting via Prettier; lint via ESLint and Stylelint.
+- JS/TS formatting via Prettier; lint via oxlint and Stylelint.
 - Rust formatting via `cargo fmt`; lint via `cargo clippy`.
 - Commit messages follow Conventional Commits (commitlint).
 
