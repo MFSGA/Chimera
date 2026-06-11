@@ -38,7 +38,7 @@
     "lodash-es": "4.17.22",
     "json-schema": "0.4.0",
     "monaco-editor": "0.54.0",
-    "react-use": "17.6.0",
+    "react-use": "17.6.1",
     "@tauri-apps/plugin-fs": "2.4.2",
     "react-hook-form-mui": "9.0.1",
     "material-react-table": "3.2.1",
