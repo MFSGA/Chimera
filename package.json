@@ -68,8 +68,8 @@
     "lint-staged": "16.2.6",
     "@commitlint/cli": "20.3.1",
     "@commitlint/config-conventional": "20.3.1",
-    "tsx": "4.20.6",
-    "@types/node": "24.10.7",
+    "tsx": "4.22.4",
+    "@types/node": "24.13.2",
     "typescript": "5.9.3",
     "prettier-plugin-ember-template-tag": "2.1.0"
   },
