@@ -1,4 +1,9 @@
 export default {
+  'scripts/**/*.{ts,tsx}': [
+    'prettier --write',
+    'oxlint --fix .',
+    // () => 'tsc -p scripts/tsconfig.json --noEmit',
+  ],
   '*.{js,cjs,.mjs,jsx}': (filenames) => {
     const configFiles = [
       '.oxlintrc.json',
@@ -11,12 +16,16 @@ export default {
     if (filtered.length === 0) return [];
     return ['prettier --write', 'oxlint --fix'];
   },
-  'scripts/**/*.{ts,tsx}': [
+  'frontend/interface/**/*.{ts,tsx}': [
     'prettier --write',
-    'oxlint --fix .',
-    // () => 'tsc -p scripts/tsconfig.json --noEmit',
+    'oxlint --fix',
+    () => 'tsc -p frontend/interface/tsconfig.json --noEmit',
   ],
-  // todo
+  'frontend/utils/**/*.{ts,tsx}': [
+    'prettier --write',
+    'oxlint --fix',
+    () => 'tsc -p frontend/utils/tsconfig.json --noEmit',
+  ],
   'frontend/ui/**/*.{ts,tsx}': [
     'prettier --write',
     'oxlint --fix',
@@ -25,8 +34,6 @@ export default {
   'frontend/chimera/**/*.{ts,tsx}': [
     'prettier --write',
     'oxlint --fix',
-    () => 'tsc -p frontend/interface/tsconfig.json',
-    () => 'tsc -p frontend/ui/tsconfig.json',
     () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
   ],
   'backend/**/*.{rs,toml}': [
@@ -40,5 +47,12 @@ export default {
   ],
   '*.{html,sass,scss,less}': ['prettier --write', 'stylelint --fix'],
   'package.json': ['prettier --write'],
-  '*.{md,json,jsonc,json5,yaml,yml,toml}': ['prettier --write'],
+  '*.{md,json,jsonc,json5,yaml,yml,toml}': (filenames) => {
+    // exclude generated locale files
+    const filtered = filenames.filter(
+      (file) => !file.includes('frontend/chimera/src/paraglide/'),
+    );
+    if (filtered.length === 0) return [];
+    return `prettier --write ${filtered.join(' ')}`;
+  },
 };
