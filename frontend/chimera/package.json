@@ -49,7 +49,7 @@
     "@tauri-apps/plugin-os": "2.3.2",
     "@inlang/paraglide-js": "2.18.2",
     "@uidotdev/usehooks": "2.4.1",
-    "less": "4.6.4"
+    "less": "4.6.6"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.2",
