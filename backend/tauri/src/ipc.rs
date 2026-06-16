@@ -1,4 +1,4 @@
-use std::{path::PathBuf, result::Result as StdResult};
+use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
 
 use anyhow::{Context, anyhow};
 use specta_typescript::Any;
@@ -26,6 +26,7 @@ use crate::{
         runtime::{PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
+        clash,
         clash::core::{CoreManager, RunType},
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
@@ -1049,4 +1050,25 @@ pub fn clear_storage(app_handle: AppHandle) -> Result {
         storage.remove_item(&key)?;
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_proxy_delay(
+    name: String,
+    url: Option<String>,
+) -> Result<clash::api::DelayRes> {
+    match clash::api::get_proxy_delay(name, url).await {
+        Ok(res) => Ok(res),
+        Err(err) => Err(err.into()),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_group_delay(
+    group: String,
+    url: Option<String>,
+) -> Result<HashMap<String, u32>> {
+    Ok(clash::api::get_group_delay(group, url).await?)
 }

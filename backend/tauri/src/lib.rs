@@ -112,6 +112,8 @@ pub fn run() -> std::io::Result<()> {
             ipc::collect_envs,
             ipc::get_custom_app_dir,
             ipc::set_custom_app_dir,
+            ipc::clash_api_get_proxy_delay,
+            ipc::clash_api_get_group_delay,
             // updater layer
             ipc::check_update,
             // utils
