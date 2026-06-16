@@ -5,14 +5,13 @@ import Grid from '@mui/material/Grid';
 import { useLockFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
+import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
 const TitleComp = () => {
-  const { t } = useTranslation();
   const {
     query: { data: clashConfigs },
   } = useClashConfig();
@@ -29,25 +28,25 @@ const TitleComp = () => {
       const port = Number(systemProxyServer?.split(':')[1]);
       if (port === mixedPort) {
         return {
-          label: t('Successful'),
+          label: 'Successful',
           color: 'success',
         };
       }
       return {
-        label: t('Occupied'),
+        label: m.dashboard_widget_proxy_status_occupied(),
         color: 'warning',
       };
     }
 
     return {
-      label: t('Disabled'),
+      label: m.dashboard_widget_proxy_status_disabled(),
       color: 'error',
     };
-  }, [mixedPort, systemProxyEnabled, systemProxyServer, t]);
+  }, [mixedPort, systemProxyEnabled, systemProxyServer]);
 
   return (
     <div className="flex items-center gap-2 px-1">
-      <div>{t('Proxy Takeover Status')}</div>
+      <div>{m.dashboard_widget_proxy_status()}</div>
 
       <Chip
         label={status.label}
@@ -64,7 +63,6 @@ const TitleComp = () => {
 };
 
 export const ProxyShortcuts = () => {
-  const { t } = useTranslation();
   const isDrawer = useAtomValue(atomIsDrawer);
 
   const systemProxy = useSetting('enable_system_proxy');
@@ -77,7 +75,7 @@ export const ProxyShortcuts = () => {
       await message(
         `Activation System Proxy failed! \n Error: ${formatError(error)}`,
         {
-          title: t('Error'),
+          title: 'Error',
           kind: 'error',
         },
       );
@@ -91,7 +89,7 @@ export const ProxyShortcuts = () => {
       await message(
         `Activation TUN Mode failed! \n Error: ${formatError(error)}`,
         {
-          title: t('Error'),
+          title: 'Error',
           kind: 'error',
         },
       );
@@ -119,7 +117,7 @@ export const ProxyShortcuts = () => {
               <div className="flex flex-col gap-2">
                 <NetworkPing />
 
-                <div>{t('System Proxy')}</div>
+                <div>{m.settings_system_proxy_system_proxy_label()}</div>
               </div>
             </PaperSwitchButton>
           </div>
@@ -132,7 +130,7 @@ export const ProxyShortcuts = () => {
               <div className="flex flex-col gap-2">
                 <SettingsEthernet />
 
-                <div>{t('TUN Mode')}</div>
+                <div>{m.settings_system_proxy_tun_mode_label()}</div>
               </div>
             </PaperSwitchButton>
           </div>

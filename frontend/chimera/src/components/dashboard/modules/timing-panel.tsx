@@ -3,12 +3,10 @@ import Box from '@mui/material/Box';
 import Grid from '@mui/material/Grid';
 import Paper from '@mui/material/Paper';
 import { useAtomValue } from 'jotai';
-import { useTranslation } from 'react-i18next';
 import { useColorSxForDelay } from '@/hooks/theme';
 import { atomIsDrawer } from '@/store';
 
 function LatencyTag({ name, value }: { name: string; value: number }) {
-  const { t } = useTranslation();
   const sx = useColorSxForDelay(value);
 
   return (
@@ -16,7 +14,7 @@ function LatencyTag({ name, value }: { name: string; value: number }) {
       <div className="font-bold">{name}:</div>
 
       <Box className="truncate" sx={sx}>
-        {value ? `${value.toFixed(0)} ms` : t('Timeout')}
+        {value ? `${value.toFixed(0)} ms` : 'Timeout'}
       </Box>
     </div>
   );
