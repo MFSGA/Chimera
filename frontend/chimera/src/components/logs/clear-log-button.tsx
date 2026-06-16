@@ -3,10 +3,9 @@ import { FloatingButton } from '@chimera/ui';
 import { Close } from '@mui/icons-material';
 import { Tooltip } from '@mui/material';
 import { useLockFn } from 'ahooks';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 export const ClearLogButton = () => {
-  const { t } = useTranslation();
   const { clean } = useClashLogs();
 
   const handleClean = useLockFn(async () => {
@@ -14,7 +13,7 @@ export const ClearLogButton = () => {
   });
 
   return (
-    <Tooltip title={t('Clear')}>
+    <Tooltip title={m.common_clear()}>
       <FloatingButton onClick={handleClean}>
         <Close className="absolute !size-8" />
       </FloatingButton>
