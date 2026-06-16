@@ -7,13 +7,12 @@ import { BaseCard, BaseItem, Expand, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { message } from '@/utils/notification';
 
 const MIXED_PORT_FALLBACK = 7890;
 
 const ClashPort = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('verge_mixed_port');
   const { query } = useClashConfig();
   const { upsert: upsertClashCore } = useClashCoreConfig();
@@ -35,8 +34,8 @@ const ClashPort = () => {
 
   const handleApply = async () => {
     if (invalid) {
-      message(t('Port must be between 1 and 65535.'), {
-        title: t('Error'),
+      message('Port must be between 1 and 65535.', {
+        title: 'Error',
         kind: 'error',
       });
       return;
@@ -48,7 +47,7 @@ const ClashPort = () => {
 
   return (
     <>
-      <BaseItem title={t('Mixed Port')}>
+      <BaseItem title={m.settings_clash_settings_mixed_port_label()}>
         <TextField
           size="small"
           type="number"
@@ -66,7 +65,7 @@ const ClashPort = () => {
             startIcon={<Done />}
             onClick={handleApply}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </Button>
         </div>
       </Expand>
@@ -75,7 +74,6 @@ const ClashPort = () => {
 };
 
 const RandomPort = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('enable_random_port');
 
   const handleRandomPort = async () => {
@@ -83,12 +81,12 @@ const RandomPort = () => {
       await upsert(!value);
     } catch (e) {
       message(JSON.stringify(e), {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     } finally {
-      message(t('After restart to take effect'), {
-        title: t('Successful'),
+      message('After restart to take effect', {
+        title: 'Successful',
         kind: 'info',
       });
     }
@@ -96,7 +94,7 @@ const RandomPort = () => {
 
   return (
     <SwitchItem
-      label={t('Random Port')}
+      label={m.settings_clash_settings_random_port_label()}
       checked={value || false}
       onChange={handleRandomPort}
     />
@@ -104,10 +102,8 @@ const RandomPort = () => {
 };
 
 export const SettingClashPort = () => {
-  const { t } = useTranslation();
-
   return (
-    <BaseCard label={t('Clash Port')}>
+    <BaseCard label={m.settings_clash_settings_port_label()}>
       <List disablePadding>
         <ClashPort />
 

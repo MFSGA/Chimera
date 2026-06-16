@@ -21,10 +21,10 @@ import {
 import NetworkPing from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Button, type ButtonProps } from '@/components/ui/button';
 import { CircularProgress } from '@/components/ui/progress';
 import { useSystemProxy, useTunMode } from '@/hooks/use-proxy-settings';
+import * as m from '@/paraglide/messages';
 
 const DEFAULT_BYPASS =
   'localhost;127.;192.168.;10.;' +
@@ -70,7 +70,6 @@ const ProxyButton = ({
 };
 
 const TunModeButton = (props: Omit<ButtonProps, 'children' | 'loading'>) => {
-  const { t } = useTranslation();
   const { execute, isPending, isActive } = useTunMode();
 
   return (
@@ -81,7 +80,7 @@ const TunModeButton = (props: Omit<ButtonProps, 'children' | 'loading'>) => {
       isActive={isActive}
     >
       <SettingsEthernet />
-      <span>{t('TUN Mode')}</span>
+      <span>{m.settings_system_proxy_tun_mode_label()}</span>
     </ProxyButton>
   );
 };
@@ -89,7 +88,6 @@ const TunModeButton = (props: Omit<ButtonProps, 'children' | 'loading'>) => {
 const SystemProxyButton = (
   props: Omit<ButtonProps, 'children' | 'loading'>,
 ) => {
-  const { t } = useTranslation();
   const { execute, isPending, isActive } = useSystemProxy();
 
   return (
@@ -100,18 +98,17 @@ const SystemProxyButton = (
       isActive={isActive}
     >
       <NetworkPing />
-      <span>{t('System Proxy')}</span>
+      <span>{m.settings_system_proxy_system_proxy_label()}</span>
     </ProxyButton>
   );
 };
 
 const ProxyGuardSwitch = () => {
-  const { t } = useTranslation();
   const proxyGuard = useSetting('enable_proxy_guard');
 
   return (
     <SwitchItem
-      label={t('Proxy Guard')}
+      label={m.settings_system_proxy_proxy_guard_label()}
       checked={Boolean(proxyGuard.value)}
       onChange={() => proxyGuard.upsert(!proxyGuard.value)}
     />
@@ -119,7 +116,6 @@ const ProxyGuardSwitch = () => {
 };
 
 const ProxyGuardInterval = () => {
-  const { t } = useTranslation();
   const proxyGuardInterval = useSetting('proxy_guard_interval');
 
   const value = proxyGuardInterval.value ?? 1;
@@ -135,7 +131,7 @@ const ProxyGuardInterval = () => {
 
   return (
     <>
-      <BaseItem title={t('Guard Interval')}>
+      <BaseItem title={m.settings_system_proxy_proxy_guard_interval_label()}>
         <TextField
           size="small"
           type="number"
@@ -154,7 +150,7 @@ const ProxyGuardInterval = () => {
             onClick={() => proxyGuardInterval.upsert(parsed)}
             disabled={invalid}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </MuiButton>
         </div>
       </Expand>
@@ -163,7 +159,6 @@ const ProxyGuardInterval = () => {
 };
 
 const SystemProxyBypass = () => {
-  const { t } = useTranslation();
   const proxyBypass = useSetting('system_proxy_bypass');
 
   const value = proxyBypass.value ?? '';
@@ -175,7 +170,7 @@ const SystemProxyBypass = () => {
 
   return (
     <>
-      <BaseItem title={t('Proxy Bypass')}>
+      <BaseItem title={m.settings_system_proxy_proxy_bypass_label()}>
         <TextField
           size="small"
           value={inputValue}
@@ -192,7 +187,7 @@ const SystemProxyBypass = () => {
             startIcon={<Done />}
             onClick={() => proxyBypass.upsert(inputValue || DEFAULT_BYPASS)}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </MuiButton>
         </div>
       </Expand>
@@ -201,7 +196,6 @@ const SystemProxyBypass = () => {
 };
 
 const CurrentSystemProxy = () => {
-  const { t } = useTranslation();
   const { data } = useSystemProxyQuery();
   const entries = Object.entries(data ?? {});
 
@@ -210,7 +204,9 @@ const CurrentSystemProxy = () => {
       className="!w-full !flex-col !items-start select-text"
       sx={{ pl: 0, pr: 0 }}
     >
-      <div className="text-base leading-10">{t('Current System Proxy')}</div>
+      <div className="text-base leading-10">
+        {m.settings_system_proxy_current_system_proxy_label()}
+      </div>
 
       {entries.length > 0 ? (
         entries.map(([key, value], index) => (
@@ -221,19 +217,18 @@ const CurrentSystemProxy = () => {
           </div>
         ))
       ) : (
-        <div className="leading-8">{t('No System Proxy')}</div>
+        <div className="leading-8">{'No System Proxy'}</div>
       )}
     </ListItem>
   );
 };
 
 export const SettingSystemProxy = () => {
-  const { t } = useTranslation();
   const [expand, setExpand] = useState(false);
 
   return (
     <BaseCard
-      label={t('System Setting')}
+      label={m.settings_system_proxy_title()}
       labelChildren={
         <ExpandMore expand={expand} onClick={() => setExpand(!expand)} />
       }

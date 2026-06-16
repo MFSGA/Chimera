@@ -5,9 +5,9 @@ import { IconButton, Tooltip, useColorScheme } from '@mui/material';
 import { useAsyncEffect } from 'ahooks';
 import { useAtom, useSetAtom } from 'jotai';
 import { useCallback, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
 import { OS } from '@/consts';
+import * as m from '@/paraglide/messages';
 import { serviceManualPromptDialogAtom } from '@/store/service';
 import { notification } from '@/utils/notification';
 import { getShikiSingleton } from '@/utils/shiki';
@@ -18,10 +18,9 @@ type CopyToClipboardButtonProps = {
 };
 
 function CopyToClipboardButton({ onClick }: CopyToClipboardButtonProps) {
-  const { t } = useTranslation();
   return (
     <Tooltip
-      title={t('Copy to clipboard')}
+      title={'Copy to clipboard'}
       placement="top"
       slotProps={{
         popper: {
@@ -58,7 +57,6 @@ export default function ServerManualPromptDialog({
   operation,
   ...props
 }: ServerManualPromptDialogProps) {
-  const { t } = useTranslation();
   const { mode } = useColorScheme();
   const { data: serviceInstallPrompt, error } = useSWR(
     operation === 'install' ? '/service_install_prompt' : null,
@@ -97,32 +95,31 @@ export default function ServerManualPromptDialog({
         .then(() => {
           console.log('copied');
           notification({
-            title: `Clash Chimera - ${t('Service Manual Tips')}`,
-            body: t('Copied to clipboard'),
+            title: `Clash Chimera - Service Manual Tips`,
+            body: 'Copied to clipboard',
           });
         })
         .catch((error) => {
           console.error(error);
           notification({
-            title: `Clash Chimera - ${t('Service Manual Tips')}`,
-            body: t('Failed to copy to clipboard'),
+            title: `Clash Chimera - Service Manual Tips`,
+            body: 'Failed to copy to clipboard',
           });
         });
     }
-  }, [commands, t]);
+  }, [commands]);
 
   return (
     <BaseDialog
-      title={t('Service Manual Tips')}
+      title={'Service Manual Tips'}
       open={open}
       onClose={onClose}
       {...props}
     >
       <div className="grid gap-3">
         <p>
-          {t('Unable to operation the service automatically', {
-            operation: t(`${operation}`),
-          })}
+          {'Unable to operation the service automatically: ' +
+            (operation ?? 'unknown')}
         </p>
         {error && <p className="text-red-500">{error.message}</p>}
         {!!codes && (

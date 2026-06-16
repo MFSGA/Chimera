@@ -1,16 +1,15 @@
 import { useSetting } from '@chimera/interface';
 import { BaseCard } from '@chimera/ui';
 import { Grid } from '@mui/material';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { PaperSwitchButton } from './modules/system-proxy';
 
 const AutoStartButton = () => {
-  const { t } = useTranslation();
   const autoLaunch = useSetting('enable_auto_launch');
 
   return (
     <PaperSwitchButton
-      label={t('Auto Start')}
+      label={m.settings_system_proxy_auto_launch_label()}
       checked={autoLaunch.value || false}
       onClick={() => autoLaunch.upsert(!autoLaunch.value)}
     />
@@ -18,12 +17,11 @@ const AutoStartButton = () => {
 };
 
 const SilentStartButton = () => {
-  const { t } = useTranslation();
   const silentStart = useSetting('enable_silent_start');
 
   return (
     <PaperSwitchButton
-      label={t('Silent Start')}
+      label={m.settings_system_proxy_silent_start_label()}
       checked={silentStart.value || false}
       onClick={() => silentStart.upsert(!silentStart.value)}
     />
@@ -31,9 +29,8 @@ const SilentStartButton = () => {
 };
 
 export const SettingSystemBehavior = () => {
-  const { t } = useTranslation();
   return (
-    <BaseCard label={t('Initiating Behavior')}>
+    <BaseCard label={'Initiating Behavior'}>
       <Grid container spacing={2}>
         <Grid size={{ xs: 6 }}>
           <AutoStartButton />
