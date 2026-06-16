@@ -28,7 +28,7 @@ import { useLockFn, useMemoizedFn, useSetState } from 'ahooks';
 import dayjs from 'dayjs';
 import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import parseTraffic from '@/utils/parse-traffic';
@@ -54,8 +54,6 @@ export const ProfileItem = memo(function ProfileItem({
   chainsSelected,
   maxLogLevelTriggered,
 }: ProfileItemProps) {
-  const { t } = useTranslation();
-
   const { deleteConnections } = useClashConnections();
 
   const { upsert } = useProfile();
@@ -108,7 +106,7 @@ export const ProfileItem = memo(function ProfileItem({
           ? `Failed to delete connections: \n ${err instanceof Error ? err.message : String(err)}`
           : `Error setting profile: \n ${err instanceof Error ? err.message : String(err)}`,
         {
-          title: isFetchError ? t('DeleteConnectionsError') : t('Error'),
+          title: isFetchError ? 'Delete Connections Error' : 'Error',
           kind: isFetchError ? 'warning' : 'error',
         },
       );
@@ -134,7 +132,7 @@ export const ProfileItem = memo(function ProfileItem({
       await item.update?.(options);
     } catch (e) {
       message(`Update failed: \n ${formatError(e)}`, {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     } finally {
@@ -147,7 +145,7 @@ export const ProfileItem = memo(function ProfileItem({
       await item.drop?.();
     } catch (err) {
       message(`Delete failed: \n ${JSON.stringify(err)}`, {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     }
@@ -165,6 +163,16 @@ export const ProfileItem = memo(function ProfileItem({
     }),
     [handleDelete, handleSelect, handleUpdate, item, onClickChains],
   );
+
+  const menuLabels: Record<string, string> = {
+    Select: 'Select',
+    'Edit Info': m.profile_name_editor_title(),
+    'Proxy Chains': 'Proxy Chains',
+    'Open File': 'Open File',
+    Update: m.profile_subscription_update(),
+    'Update(Proxy)': 'Update(Proxy)',
+    Delete: m.profile_delete_title(),
+  };
 
   const MenuComp = useMemo(() => {
     const handleClick = (func: () => void) => {
@@ -187,13 +195,13 @@ export const ProfileItem = memo(function ProfileItem({
                 handleClick(func);
               }}
             >
-              {t(key)}
+              {menuLabels[key]}
             </MenuItem>
           );
         })}
       </Menu>
     );
-  }, [anchorEl, menuMapping, t]);
+  }, [anchorEl, menuMapping]);
 
   const [open, setOpen] = useState(false);
 
@@ -221,7 +229,9 @@ export const ProfileItem = memo(function ProfileItem({
               <Chip
                 className="!pr-2 !pl-2 font-bold"
                 avatar={<IconComponent className="!size-5" color="primary" />}
-                label={isRemote ? t('Remote') : t('Local')}
+                label={
+                  isRemote ? m.profile_remote_label() : m.profile_local_label()
+                }
               />
             </Tooltip>
 
@@ -297,11 +307,11 @@ export const ProfileItem = memo(function ProfileItem({
                   onClickChains(item as ClashProfile);
                 }}
               >
-                {t('Proxy Chains')}
+                {'Proxy Chains'}
               </Button>
             </Badge>
 
-            <Tooltip title={t('Update')}>
+            <Tooltip title={m.profile_subscription_update()}>
               <Button
                 size="small"
                 variant="outlined"
@@ -319,7 +329,7 @@ export const ProfileItem = memo(function ProfileItem({
               </Button>
             </Tooltip>
 
-            <Tooltip title={t('Menu')}>
+            <Tooltip title={'Menu'}>
               <Button
                 size="small"
                 variant="contained"
@@ -350,7 +360,7 @@ export const ProfileItem = memo(function ProfileItem({
         >
           <LinearProgress className="w-40" />
 
-          <div>{t('Applying Profile')}</div>
+          <div>{'Applying Profile'}</div>
         </motion.div>
       </Paper>
       {MenuComp}
@@ -365,13 +375,20 @@ export const ProfileItem = memo(function ProfileItem({
 
 function TimeSpan({ ts, k }: { ts: number; k: string }) {
   const time = dayjs(ts * 1000);
-  const { t } = useTranslation();
+  const label = (() => {
+    switch (k) {
+      case 'Subscription Updated At':
+        return m.profile_subscription_updated_at({ updated: time.fromNow() });
+      case 'Subscription Expires In':
+        return m.profile_subscription_expires_in({ expires: time.fromNow() });
+      default:
+        return k;
+    }
+  })();
   return (
     <Tooltip title={time.format('YYYY/MM/DD HH:mm:ss')}>
       <div className="animate-marquee h-fit text-right text-sm font-medium whitespace-nowrap">
-        {t(k, {
-          time: time.fromNow(),
-        })}
+        {label}
       </div>
     </Tooltip>
   );

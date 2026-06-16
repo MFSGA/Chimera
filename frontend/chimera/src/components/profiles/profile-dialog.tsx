@@ -25,8 +25,8 @@ import {
   TextFieldElement,
   useForm,
 } from 'react-hook-form-mui';
-import { useTranslation } from 'react-i18next';
 import { useLatest } from 'react-use';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { ReadProfile } from './read-profile';
@@ -55,8 +55,6 @@ export const ProfileDialog = ({
   open,
   onClose,
 }: ProfileDialogProps) => {
-  const { t } = useTranslation();
-
   const { create, patch } = useProfile();
 
   const contentFn = useProfileContent(profile?.uid ?? '');
@@ -70,7 +68,7 @@ export const ProfileDialog = ({
     useForm<ClashProfileBuilder>({
       defaultValues: (profile as ClashProfile) || {
         type: 'remote',
-        name: addProfileCtx?.name || t(`New Profile`),
+        name: addProfileCtx?.name || 'New Profile',
         desc: addProfileCtx?.desc || '',
         url: addProfileCtx?.url || '',
         option: {
@@ -197,7 +195,7 @@ export const ProfileDialog = ({
       <div className="flex flex-col gap-4 pt-2 pb-2">
         {!isEdit && (
           <SelectElement
-            label={t('Type')}
+            label={'Type'}
             name="type"
             control={control}
             {...commonProps}
@@ -206,18 +204,18 @@ export const ProfileDialog = ({
             options={[
               {
                 id: 'remote',
-                label: t('Remote Profile'),
+                label: m.profile_remote_label(),
               },
               {
                 id: 'local',
-                label: t('Local Profile'),
+                label: m.profile_local_label(),
               },
             ]}
           />
         )}
 
         <TextFieldElement
-          label={t('Name')}
+          label={m.profile_form_name_label()}
           name="name"
           control={control}
           size="small"
@@ -226,7 +224,7 @@ export const ProfileDialog = ({
         />
 
         <TextFieldElement
-          label={t('Descriptions')}
+          label={m.profile_form_desc_label()}
           name="desc"
           control={control}
           {...commonProps}
@@ -237,7 +235,7 @@ export const ProfileDialog = ({
         {isRemote && (
           <>
             <TextFieldElement
-              label={t('Subscription URL')}
+              label={m.profile_subscription_url_label()}
               name="url"
               control={control}
               {...commonProps}
@@ -247,7 +245,7 @@ export const ProfileDialog = ({
             />
 
             <TextFieldElement
-              label={t('User Agent')}
+              label={m.profile_user_agent_label()}
               name="option.user_agent"
               control={control}
               {...commonProps}
@@ -256,7 +254,7 @@ export const ProfileDialog = ({
             />
 
             <TextFieldElement
-              label={t('Update Interval')}
+              label={m.profile_update_interval_label()}
               name="option.update_interval"
               control={control}
               {...commonProps}
@@ -266,9 +264,7 @@ export const ProfileDialog = ({
                 htmlInput: { min: 0 },
                 input: {
                   endAdornment: (
-                    <InputAdornment position="end">
-                      {t('minutes')}
-                    </InputAdornment>
+                    <InputAdornment position="end">{'minutes'}</InputAdornment>
                   ),
                 },
               }}
@@ -287,13 +283,13 @@ export const ProfileDialog = ({
               <div className="ml-2 text-red-500">{localProfileMessage}</div>
             )}
             <span className="px-2 text-xs">
-              * {t('Choose file to import or leave it blank to create new one')}
+              * {'Choose file to import or leave it blank to create new one'}
             </span>
           </>
         )}
       </div>
     ),
-    [commonProps, control, isEdit, isRemote, localProfileMessage, t],
+    [commonProps, control, isEdit, isRemote, localProfileMessage],
   );
 
   useAsyncEffect(async () => {
@@ -313,7 +309,7 @@ export const ProfileDialog = ({
 
   return (
     <BaseDialog
-      title={isEdit ? t('Edit Profile') : t('Create Profile')}
+      title={isEdit ? m.profile_update_option_edit() : 'Create Profile'}
       open={open}
       onClose={() => onClose()}
       onOk={onSubmit}
