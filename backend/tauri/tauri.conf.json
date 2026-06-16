@@ -12,7 +12,8 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
+      "csp": "script-src 'unsafe-eval' 'self'; default-src blob: data: filesystem: ws: wss: http: https: tauri: 'unsafe-eval' 'unsafe-inline' 'self'; img-src 'self' data: asset: blob: http://localhost:* https:; connect-src ipc: http://ipc.localhost http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:* wss://*",
+      "capabilities": ["main-capability"]
     }
   },
   "bundle": {
@@ -25,7 +26,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": "v1Compatible",
     "resources": [
       "resources"
     ],
