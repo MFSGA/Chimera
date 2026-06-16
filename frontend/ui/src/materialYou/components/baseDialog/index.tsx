@@ -10,7 +10,6 @@ import {
   useLayoutEffect,
   useState,
 } from 'react';
-import { useTranslation } from 'react-i18next';
 import { getSystem, useClickPosition } from '../../../hooks';
 import { alpha, cn } from '../../../utils';
 
@@ -45,8 +44,6 @@ export const BaseDialog = ({
   ok,
   divider,
 }: BaseDialogProps) => {
-  const { t } = useTranslation();
-
   const { mode } = useColorScheme();
 
   const [mounted, setMounted] = useState(false);
@@ -226,7 +223,7 @@ export const BaseDialog = ({
                   variant="outlined"
                   onClick={handleClose}
                 >
-                  {close || t('Close')}
+                  {close || 'Close'}
                 </Button>
               )}
 
@@ -237,7 +234,7 @@ export const BaseDialog = ({
                   variant="contained"
                   onClick={handleOk}
                 >
-                  {ok || t('Ok')}
+                  {ok || 'OK'}
                 </Button>
               )}
             </div>
