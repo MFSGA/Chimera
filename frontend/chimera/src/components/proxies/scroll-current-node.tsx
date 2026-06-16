@@ -1,13 +1,10 @@
 import { alpha } from '@chimera/ui';
 import { Radar } from '@mui/icons-material';
 import { Button, Tooltip } from '@mui/material';
-import { useTranslation } from 'react-i18next';
 
 export const ScrollCurrentNode = ({ onClick }: { onClick?: () => void }) => {
-  const { t } = useTranslation();
-
   return (
-    <Tooltip title={t('Locate')}>
+    <Tooltip title="Locate">
       <Button
         size="small"
         className="!size-8 !min-w-0"

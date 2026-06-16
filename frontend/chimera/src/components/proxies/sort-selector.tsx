@@ -2,12 +2,9 @@ import { alpha } from '@chimera/ui';
 import { Button, Menu, MenuItem } from '@mui/material';
 import { useAtom } from 'jotai';
 import { memo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { proxyGroupSortAtom } from '@/store';
 
 export const SortSelector = memo(function SortSelector() {
-  const { t } = useTranslation();
-
   const [proxyGroupSort, setProxyGroupSort] = useAtom(proxyGroupSortAtom);
 
   type SortType = typeof proxyGroupSort;
@@ -36,7 +33,7 @@ export const SortSelector = memo(function SortSelector() {
         })}
         onClick={(e) => setAnchorEl(e.currentTarget)}
       >
-        {t(tmaps[proxyGroupSort])}
+        {tmaps[proxyGroupSort]}
       </Button>
 
       <Menu
@@ -47,7 +44,7 @@ export const SortSelector = memo(function SortSelector() {
         {Object.entries(tmaps).map(([key, value], index) => {
           return (
             <MenuItem key={index} onClick={() => handleClick(key as SortType)}>
-              {t(value)}
+              {value}
             </MenuItem>
           );
         })}
