@@ -41,6 +41,20 @@ where
     }
 }
 
+impl<T> From<(reqwest::Method, &str, Query<T>)> for PerformRequest<(), T>
+where
+    T: Serialize,
+{
+    fn from((method, path, Query(query)): (reqwest::Method, &str, Query<T>)) -> Self {
+        Self {
+            method,
+            path: path.to_string(),
+            data: None,
+            query: Some(query),
+        }
+    }
+}
+
 /// The Request Parameters
 struct PerformRequest<D = (), Q = ()> {
     method: reqwest::Method,
@@ -233,4 +247,44 @@ pub async fn patch_configs(config: &Mapping) -> Result<()> {
     let path = "/configs";
     let _ = perform_request((Method::PATCH, path, Data(config))).await?;
     Ok(())
+}
+
+#[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
+pub struct DelayRes {
+    delay: u64,
+}
+
+/// GET /proxies/{name}/delay
+/// 获取代理延迟
+#[instrument]
+pub async fn get_proxy_delay(name: String, test_url: Option<String>) -> Result<DelayRes> {
+    let path = format!("/proxies/{name}/delay");
+    let default_url = "http://www.gstatic.com/generate_204";
+    let test_url = test_url
+        .map(|s| if s.is_empty() { default_url.into() } else { s })
+        .unwrap_or(default_url.into());
+
+    let query = Query([("timeout", "10000"), ("url", &test_url)]);
+    let resp: DelayRes = perform_request((Method::GET, path.as_str(), query))
+        .await?
+        .json()
+        .await?;
+    Ok(resp)
+}
+
+/// GET /group/:name/delay
+#[instrument]
+pub async fn get_group_delay(group: String, url: Option<String>) -> Result<HashMap<String, u32>> {
+    let path = format!("/group/{group}/delay");
+    let default_url = "http://www.gstatic.com/generate_204";
+    let test_url = url
+        .map(|s| if s.is_empty() { default_url.into() } else { s })
+        .unwrap_or(default_url.into());
+
+    let query = Query([("timeout", "10000"), ("url", &test_url)]);
+    let resp: HashMap<String, u32> = perform_request((Method::GET, path.as_str(), query))
+        .await?
+        .json()
+        .await?;
+    Ok(resp)
 }
