@@ -14,7 +14,8 @@ import { MRT_Localization_RU } from 'material-react-table/locales/ru';
 import { MRT_Localization_ZH_HANS } from 'material-react-table/locales/zh-Hans';
 import { MRT_Localization_ZH_HANT } from 'material-react-table/locales/zh-Hant';
 import { lazy, useDeferredValue, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
+import { getLocale } from '@/paraglide/runtime';
 import { connectionTableColumnsAtom } from '@/store';
 import { containsSearchTerm } from '@/utils';
 import ContentDisplay from '../base/content-display';
@@ -32,8 +33,6 @@ export interface TableMessage extends Omit<ClashConnection, 'connections'> {
 }
 
 export const ConnectionsTable = ({ searchTerm }: { searchTerm?: string }) => {
-  const { t, i18n } = useTranslation();
-
   const {
     query: { data: clashConnections, isLoading },
   } = useClashConnections();
@@ -84,11 +83,12 @@ export const ConnectionsTable = ({ searchTerm }: { searchTerm?: string }) => {
 
   const deferredTableData = useDeferredValue(connectionsMessage?.connections);
 
+  const lang = getLocale();
   const locale = useMemo(() => {
-    switch (i18n.language) {
-      case 'zh-CN':
+    switch (lang) {
+      case 'zh-cn':
         return MRT_Localization_ZH_HANS;
-      case 'zh-TW':
+      case 'zh-tw':
         return MRT_Localization_ZH_HANT;
       case 'ru':
         return MRT_Localization_RU;
@@ -96,7 +96,7 @@ export const ConnectionsTable = ({ searchTerm }: { searchTerm?: string }) => {
       default:
         return MRT_Localization_EN;
     }
-  }, [i18n.language]);
+  }, [lang]);
 
   const columns = useColumns();
   const tableColsOrder = useAtomValue(connectionTableColumnsAtom);
@@ -210,7 +210,7 @@ export const ConnectionsTable = ({ searchTerm }: { searchTerm?: string }) => {
   ) : (
     <ContentDisplay
       className="!absolute !h-full !w-full"
-      message={t('No Connections')}
+      message={m.connections_empty_message()}
     />
   );
 };

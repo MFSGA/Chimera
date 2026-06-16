@@ -1,10 +1,8 @@
 import { alpha } from '@chimera/ui';
 import { FilledInputProps, TextField, TextFieldProps } from '@mui/material';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 export const HeaderSearch = (props: TextFieldProps) => {
-  const { t } = useTranslation();
-
   const inputProps: Partial<FilledInputProps> = {
     sx: (theme) => ({
       borderRadius: 7,
@@ -25,7 +23,7 @@ export const HeaderSearch = (props: TextFieldProps) => {
       autoComplete="off"
       spellCheck="false"
       hiddenLabel
-      placeholder={t('Filter conditions')}
+      placeholder={m.connections_search_placeholder()}
       variant="filled"
       className="!pb-0"
       sx={{ input: { py: 1, fontSize: 14 } }}

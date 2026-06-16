@@ -9,7 +9,7 @@ import { AnimatePresence, Reorder, useDragControls } from 'framer-motion';
 import { useAtom } from 'jotai';
 import { type MRT_ColumnDef } from 'material-react-table';
 import { MouseEventHandler, useCallback, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { connectionTableColumnsAtom } from '@/store';
 import parseTraffic from '@/utils/parse-traffic';
 import { TableConnection } from './connections-table';
@@ -48,8 +48,6 @@ function CloseConnectionButton({ id }: { id: string }) {
 }
 
 export const useColumns = (): Array<MRT_ColumnDef<TableConnection>> => {
-  const { t } = useTranslation();
-
   return useMemo(
     () =>
       (
@@ -153,10 +151,10 @@ export const useColumns = (): Array<MRT_ColumnDef<TableConnection>> => {
           ({
             ...column,
             id: snakeCase(column.header),
-            header: t(column.header),
+            header: column.header,
           }) satisfies MRT_ColumnDef<TableConnection>,
       ),
-    [t],
+    [],
   );
 };
 
@@ -200,7 +198,6 @@ function ColItem({
 export default function ConnectionColumnFilterDialog(
   props: ConnectionColumnFilterDialogProps,
 ) {
-  const { t } = useTranslation();
   const columns = useColumns();
   const [filteredCols, setFilteredCols] = useAtom(connectionTableColumnsAtom);
   const sortedCols = useMemo(
@@ -230,7 +227,7 @@ export default function ConnectionColumnFilterDialog(
   ]) as Array<[string, boolean]>;
 
   return (
-    <BaseDialog title={t('Connection Columns')} {...props}>
+    <BaseDialog title="Connection Columns" {...props}>
       <div className="grid grid-cols-1 gap-1">
         <AnimatePresence>
           <Reorder.Group
