@@ -1,10 +1,8 @@
 import { alpha } from '@chimera/ui';
 import { TextField, type FilledInputProps } from '@mui/material';
-import { useTranslation } from 'react-i18next';
 import { useLogContext } from './log-provider';
 
 export const LogFilter = () => {
-  const { t } = useTranslation();
   const { filterText, setFilterText } = useLogContext();
 
   const inputProps: Partial<FilledInputProps> = {
@@ -24,7 +22,7 @@ export const LogFilter = () => {
       autoComplete="off"
       spellCheck="false"
       value={filterText}
-      placeholder={t('Filter conditions')}
+      placeholder="Filter conditions"
       onChange={(e) => setFilterText(e.target.value)}
       className="!pb-0"
       sx={{ input: { py: 1, fontSize: 14 } }}
