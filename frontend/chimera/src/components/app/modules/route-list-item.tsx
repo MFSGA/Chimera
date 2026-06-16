@@ -4,8 +4,19 @@ import { SvgIconComponent } from '@mui/icons-material';
 import { Box, ListItemButton, ListItemIcon, Tooltip } from '@mui/material';
 import { useMatch, useNavigate } from '@tanstack/react-router';
 import { createElement } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { languageQuirks } from '@/utils/language';
+
+const labelMap: Record<string, () => string> = {
+  dashboard: m.navbar_label_dashboard,
+  proxies: m.navbar_label_proxies,
+  profiles: m.navbar_label_profiles,
+  connections: m.navbar_label_connections,
+  rules: m.navbar_label_rules,
+  logs: m.navbar_label_logs,
+  settings: m.navbar_label_settings,
+  providers: m.navbar_label_providers,
+};
 
 export const RouteListItem = ({
   name,
@@ -18,7 +29,6 @@ export const RouteListItem = ({
   icon: SvgIconComponent;
   onlyIcon?: boolean;
 }) => {
-  const { t } = useTranslation();
   const match = useMatch({
     strict: false,
     shouldThrow: false,
@@ -72,14 +82,14 @@ export const RouteListItem = ({
             color: match ? theme.vars.palette.primary.main : undefined,
           })}
         >
-          {t(`label_${name}`)}
+          {labelMap[name]?.() ?? name}
         </Box>
       )}
     </ListItemButton>
   );
 
   return onlyIcon ? (
-    <Tooltip title={t(`label_${name}`)}>{listItemButton}</Tooltip>
+    <Tooltip title={labelMap[name]?.() ?? name}>{listItemButton}</Tooltip>
   ) : (
     listItemButton
   );

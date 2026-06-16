@@ -7,7 +7,6 @@ import { useLockFn } from 'ahooks';
 import dayjs from 'dayjs';
 import { useSetAtom } from 'jotai';
 import { lazy, Suspense, useCallback, useState, useTransition } from 'react';
-import { useTranslation } from 'react-i18next';
 import { IS_NIGHTLY } from '@/consts';
 import { UpdaterIgnoredAtom } from '@/store/updater';
 import { formatError } from '@/utils';
@@ -26,7 +25,6 @@ export default function UpdaterDialog({
   onClose,
   ...others
 }: UpdaterDialogProps) {
-  const { t } = useTranslation();
   const setUpdaterIgnore = useSetAtom(UpdaterIgnoredAtom);
   const [contentLength, setContentLength] = useState(0);
   const [contentDownloaded, setContentDownloaded] = useState(0);
@@ -68,7 +66,7 @@ export default function UpdaterDialog({
         await relaunch();
       } catch (e) {
         console.error(e);
-        message(formatError(e), { kind: 'error', title: t('Error') });
+        message(formatError(e), { kind: 'error', title: 'Error' });
       }
     });
   });
@@ -80,7 +78,7 @@ export default function UpdaterDialog({
   return (
     <BaseDialog
       {...others}
-      title={t('updater.title')}
+      title="Update Available"
       open={open}
       onClose={() => {
         setUpdaterIgnore(update.version); // TODO: control this behavior
@@ -88,8 +86,8 @@ export default function UpdaterDialog({
       }}
       onOk={handleUpdate}
       loading={pending}
-      close={t('updater.close')}
-      ok={t('updater.update')}
+      close="Close"
+      ok="Update"
       divider
     >
       <div
@@ -114,13 +112,13 @@ export default function UpdaterDialog({
               openThat(releasesPageUrl);
             }}
           >
-            {t('updater.go')}
+            {'Open'}
           </Button>
         </div>
         <div
           className={cn('h-[50vh] overflow-y-auto p-4', styles.MarkdownContent)}
         >
-          <Suspense fallback={<div>{t('loading')}</div>}>
+          <Suspense fallback={<div>Loading...</div>}>
             <Markdown
               components={{
                 a(props) {
