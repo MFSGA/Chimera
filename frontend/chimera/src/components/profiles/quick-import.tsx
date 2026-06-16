@@ -14,13 +14,11 @@ import {
 } from '@mui/material';
 import { readText } from '@tauri-apps/plugin-clipboard-manager';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Notice } from '@/components/base';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 
 export const QuickImport = () => {
-  const { t } = useTranslation();
-
   const [url, setUrl] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -43,13 +41,13 @@ export const QuickImport = () => {
     if (url) {
       return (
         <>
-          <Tooltip title={t('Clear')}>
+          <Tooltip title={'Clear'}>
             <IconButton size="small" onClick={() => setUrl('')}>
               <ClearRounded fontSize="inherit" />
             </IconButton>
           </Tooltip>
 
-          <Tooltip title={t('Download')}>
+          <Tooltip title={m.profile_subscription_update()}>
             <IconButton size="small" onClick={handleImport}>
               <Download fontSize="inherit" />
             </IconButton>
@@ -59,7 +57,7 @@ export const QuickImport = () => {
     }
 
     return (
-      <Tooltip title={t('Paste')}>
+      <Tooltip title={'Paste'}>
         <IconButton size="small" onClick={onCopyLink}>
           <ContentCopyRounded fontSize="inherit" />
         </IconButton>
@@ -78,15 +76,10 @@ export const QuickImport = () => {
           option: null,
         },
       });
-      Notice.success(t('Successfully imported profile'));
+      Notice.success(m.profile_quick_import_success_message());
       setUrl('');
     } catch (error) {
-      Notice.error(
-        t('Failed to import profile: {{error}}', {
-          error: formatError(error),
-        }),
-        3000,
-      );
+      Notice.error(`Failed to import profile: ${formatError(error)}`, 3000);
     } finally {
       setLoading(false);
     }
@@ -110,7 +103,7 @@ export const QuickImport = () => {
       autoComplete="off"
       spellCheck="false"
       value={url}
-      placeholder={t('Profile URL')}
+      placeholder={m.profile_import_remote_url_label()}
       onChange={(e) => setUrl(e.target.value)}
       onKeyDown={(e) => url !== '' && e.key === 'Enter' && handleImport()}
       sx={{ input: { py: 1, px: 2 } }}

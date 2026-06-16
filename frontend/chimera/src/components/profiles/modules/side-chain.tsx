@@ -2,14 +2,13 @@ import { useProfile } from '@chimera/interface';
 import { Button, Chip } from '@mui/material';
 import { useAtomValue } from 'jotai';
 import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import ContentDisplay from '@/components/base/content-display';
+import * as m from '@/paraglide/messages';
 import { ProfileDialog } from '../profile-dialog';
 import { filterProfiles } from '../utils';
 import { atomChainsSelected, atomGlobalChainCurrent } from './store';
 
 export const SideChain = () => {
-  const { t } = useTranslation();
   const { query } = useProfile();
   const items = query.data?.items ?? [];
 
@@ -43,10 +42,10 @@ export const SideChain = () => {
     <>
       <div className="flex h-full flex-col gap-4 p-4">
         <div className="rounded-3xl border border-white/10 p-4">
-          <div className="text-sm opacity-70">{t('Profile')}</div>
+          <div className="text-sm opacity-70">{m.profile_profile_label()}</div>
           <div className="mt-1 text-lg font-bold">
             {isGlobalChainCurrent
-              ? t('All Profiles')
+              ? 'All Profiles'
               : (currentProfile?.name ?? '-')}
           </div>
 
@@ -54,17 +53,23 @@ export const SideChain = () => {
             <div className="mt-4 flex flex-wrap gap-2">
               <Chip
                 size="small"
-                label={`${t('Profiles')}: ${profiles.clash?.length ?? 0}`}
+                label={`${m.profile_profile_label()}: ${profiles.clash?.length ?? 0}`}
               />
-              <Chip size="small" label={`${t('Remote')}: ${remoteCount}`} />
-              <Chip size="small" label={`${t('Local')}: ${localCount}`} />
+              <Chip
+                size="small"
+                label={`${m.profile_remote_label()}: ${remoteCount}`}
+              />
+              <Chip
+                size="small"
+                label={`${m.profile_local_label()}: ${localCount}`}
+              />
             </div>
           ) : (
             <>
               <div className="mt-2 text-sm opacity-70">
                 {currentProfile?.type === 'remote'
-                  ? t('Remote Profile')
-                  : t('Local Profile')}
+                  ? m.profile_remote_label()
+                  : m.profile_local_label()}
               </div>
 
               {currentProfile?.desc && (
@@ -85,7 +90,7 @@ export const SideChain = () => {
                   variant="contained"
                   onClick={() => setDialogOpen(true)}
                 >
-                  {t('Edit Profile')}
+                  {m.profile_update_option_edit()}
                 </Button>
 
                 <Button
@@ -93,7 +98,7 @@ export const SideChain = () => {
                   variant="outlined"
                   onClick={handleOpenFile}
                 >
-                  {t('Open File')}
+                  {'Open File'}
                 </Button>
               </div>
             </>
@@ -101,11 +106,11 @@ export const SideChain = () => {
         </div>
 
         <div className="rounded-3xl border border-white/10 p-4">
-          <div className="mb-2 text-sm opacity-70">{t('Chains')}</div>
+          <div className="mb-2 text-sm opacity-70">{'Chains'}</div>
 
           <ContentDisplay
             className="min-h-48"
-            message={t('Chain profiles are not available in this build yet')}
+            message={'Chain profiles are not available in this build yet'}
           />
         </div>
       </div>

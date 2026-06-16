@@ -2,7 +2,7 @@ import { Button } from '@mui/material';
 import { open } from '@tauri-apps/plugin-dialog';
 import { readTextFile } from '@tauri-apps/plugin-fs';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import getSystem from '@/utils/get-system';
 
 const isWin = getSystem() === 'windows';
@@ -12,8 +12,6 @@ export interface ReadProfileProps {
 }
 
 export const ReadProfile = ({ onSelected }: ReadProfileProps) => {
-  const { t } = useTranslation();
-
   const [loading, setLoading] = useState(false);
 
   const [label, setLabel] = useState('');
@@ -27,7 +25,7 @@ export const ReadProfile = ({ onSelected }: ReadProfileProps) => {
         multiple: false,
         filters: [
           {
-            name: t('Profile'),
+            name: m.profile_profile_label(),
             extensions: ['yaml', 'yml'],
           },
         ],
@@ -60,7 +58,7 @@ export const ReadProfile = ({ onSelected }: ReadProfileProps) => {
       onClick={handleSelectFile}
       color={label ? 'success' : 'primary'}
     >
-      {label || t('Choose File')}
+      {label || 'Choose File'}
     </Button>
   );
 };

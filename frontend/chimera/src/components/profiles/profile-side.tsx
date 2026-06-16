@@ -3,7 +3,7 @@ import { Close } from '@mui/icons-material';
 import { IconButton } from '@mui/material';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { SideChain } from './modules/side-chain';
 import { atomChainsSelected, atomGlobalChainCurrent } from './modules/store';
 
@@ -12,7 +12,6 @@ export interface ProfileSideProps {
 }
 
 export const ProfileSide = ({ onClose }: ProfileSideProps) => {
-  const { t } = useTranslation();
   const { query } = useProfile();
 
   const isGlobalChainCurrent = useAtomValue(atomGlobalChainCurrent);
@@ -27,13 +26,11 @@ export const ProfileSide = ({ onClose }: ProfileSideProps) => {
       <div className="flex items-start justify-between p-4 pr-2">
         <div>
           <div className="text-xl font-bold">
-            {isGlobalChainCurrent
-              ? t('Global Proxy Chains')
-              : t('Proxy Chains')}
+            {isGlobalChainCurrent ? 'Global Proxy Chains' : 'Proxy Chains'}
           </div>
 
           <div className="truncate opacity-80">
-            {isGlobalChainCurrent ? t('All Profiles') : currentProfile?.name}
+            {isGlobalChainCurrent ? 'All Profiles' : currentProfile?.name}
           </div>
         </div>
 

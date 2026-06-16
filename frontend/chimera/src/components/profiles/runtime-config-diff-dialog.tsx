@@ -8,7 +8,7 @@ import { useCreation } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import { nanoid } from 'nanoid';
 import { lazy, Suspense } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { themeMode } from '@/store';
 
 const MonacoDiffEditor = lazy(() => import('./profile-monaco-diff-viewer'));
@@ -22,8 +22,6 @@ export default function RuntimeConfigDiffDialog({
   open,
   onClose,
 }: RuntimeConfigDiffDialogProps) {
-  const { t } = useTranslation();
-
   const { query } = useProfile();
 
   const currentProfileUid = query.data?.current?.[0];
@@ -47,7 +45,7 @@ export default function RuntimeConfigDiffDialog({
   }
 
   return (
-    <BaseDialog title={t('Runtime Config')} open={open} onClose={onClose}>
+    <BaseDialog title={'Runtime Config'} open={open} onClose={onClose}>
       <div className="xs:w-[95vw] h-full w-[80vw] px-4">
         <div
           className={cn(
@@ -55,10 +53,8 @@ export default function RuntimeConfigDiffDialog({
             loaded ? 'flex' : 'hidden',
           )}
         >
-          <span className="text-base font-semibold">
-            {t('Original Config')}
-          </span>
-          <span className="text-base font-semibold">{t('Runtime Config')}</span>
+          <span className="text-base font-semibold">{'Original Config'}</span>
+          <span className="text-base font-semibold">{'Runtime Config'}</span>
         </div>
         <div className="h-[75vh] w-full">
           <Suspense fallback={null}>
