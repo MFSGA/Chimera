@@ -15,9 +15,9 @@ import { Tooltip } from '@mui/material';
 import { Link, useLocation } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ComponentProps, ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
@@ -83,7 +83,6 @@ const NavbarButton = ({
 };
 
 export default function Navbar({ className, ...props }: ComponentProps<'div'>) {
-  const { t } = useTranslation();
   const windowType = useSetting('window_type');
 
   const switchToLegacy = useLockFn(async () => {
@@ -155,7 +154,7 @@ export default function Navbar({ className, ...props }: ComponentProps<'div'>) {
       icon: <Apps />,
     },
     {
-      label: t('Switch to Legacy UI'),
+      label: 'Switch to Legacy UI',
       icon: <ExitToAppRounded />,
       onClick: () => void switchToLegacy(),
       loading: windowType.isPending,

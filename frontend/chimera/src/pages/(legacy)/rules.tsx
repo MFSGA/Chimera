@@ -5,8 +5,8 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useDebounceEffect } from 'ahooks';
 import { useSetAtom } from 'jotai';
 import { lazy, Suspense, useRef, useState, type RefObject } from 'react';
-import { useTranslation } from 'react-i18next';
 import { atomRulePage } from '@/components/rules/modules/store';
+import * as m from '@/paraglide/messages';
 
 const RulePageComponent = lazy(() => import('@/components/rules/rule-page'));
 
@@ -15,7 +15,6 @@ export const Route = createFileRoute('/(legacy)/rules')({
 });
 
 function RulesPage() {
-  const { t } = useTranslation();
   const { data } = useClashRules();
   const [filterText, setFilterText] = useState('');
   const setRule = useSetAtom(atomRulePage);
@@ -60,14 +59,14 @@ function RulesPage() {
   return (
     <BasePage
       full
-      title={t('Rules')}
+      title={m.navbar_label_rules()}
       header={
         <TextField
           hiddenLabel
           autoComplete="off"
           spellCheck="false"
           value={filterText}
-          placeholder={t('Filter conditions')}
+          placeholder={'Filter conditions'}
           onChange={(e) => setFilterText(e.target.value)}
           className="!pb-0"
           sx={{ input: { py: 1, fontSize: 14 } }}

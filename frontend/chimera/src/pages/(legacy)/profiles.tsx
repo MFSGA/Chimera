@@ -23,7 +23,6 @@ import { useLockFn } from 'ahooks';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useAtom } from 'jotai';
 import { useMemo, useState, useTransition } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useWindowSize } from 'react-use';
 import ContentDisplay from '@/components/base/content-display';
 import {
@@ -41,6 +40,7 @@ import { GlobalUpdatePendingContext } from '@/components/profiles/provider';
 import { QuickImport } from '@/components/profiles/quick-import';
 import RuntimeConfigDiffDialog from '@/components/profiles/runtime-config-diff-dialog';
 import { ClashProfile, filterProfiles } from '@/components/profiles/utils';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
@@ -81,8 +81,6 @@ const asValidUrl = (value: unknown) => {
 };
 
 function ProfilePage() {
-  const { t } = useTranslation();
-
   const { query, update } = useProfile();
   const search = Route.useSearch();
 
@@ -161,7 +159,7 @@ function ProfilePage() {
       } catch (error) {
         message(`failed to update profiles: \n${formatError(error)}`, {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         });
       }
     });
@@ -174,7 +172,7 @@ function ProfilePage() {
           <div className="flex min-h-64 w-full items-center justify-center">
             <div className="flex flex-col items-center gap-4 rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
               <CircularProgress size={28} />
-              <div className="text-sm opacity-80">{t('Loading profiles')}</div>
+              <div className="text-sm opacity-80">{'Loading profiles'}</div>
             </div>
           </div>
         </ContentDisplay>
@@ -188,7 +186,7 @@ function ProfilePage() {
             <div className="flex w-full max-w-md flex-col items-center rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
               <ErrorOutlined className="!mb-4 !size-14 text-red-400 dark:text-red-300" />
               <div className="text-base font-semibold">
-                {t('Failed to load profiles')}
+                {'Failed to load profiles'}
               </div>
               <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
                 {formatError(query.error)}
@@ -198,7 +196,7 @@ function ProfilePage() {
                 variant="contained"
                 onClick={() => query.refetch()}
               >
-                {t('Refresh')}
+                {'Refresh'}
               </Button>
             </div>
           </div>
@@ -212,9 +210,9 @@ function ProfilePage() {
           <div className="flex min-h-64 w-full items-center justify-center">
             <div className="flex w-full max-w-md flex-col items-center rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
               <Public className="!mb-4 !size-14 text-zinc-400 dark:text-zinc-500" />
-              <div className="text-base font-semibold">{t('No Profiles')}</div>
+              <div className="text-base font-semibold">{'No Profiles'}</div>
               <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-                {t('Import a subscription URL to get started')}
+                {'Import a subscription URL to get started'}
               </div>
             </div>
           </div>
@@ -256,7 +254,7 @@ function ProfilePage() {
 
   return (
     <SidePage
-      title={t('Profiles')}
+      title={m.navbar_label_profiles()}
       flexReverse
       side={hasSide && <ProfileSide onClose={handleSideClose} />}
       header={
@@ -268,7 +266,7 @@ function ProfilePage() {
           <IconButton
             className="h-10 w-10"
             color="inherit"
-            title={t('Runtime Config')}
+            title={'Runtime Config'}
             onClick={() => {
               setRuntimeConfigViewerOpen(true);
             }}
@@ -282,7 +280,7 @@ function ProfilePage() {
               onClick={handleGlobalChainClick}
               startIcon={<Public />}
             >
-              {t('Global Proxy Chains')}
+              {'Global Proxy Chains'}
             </Button>
           </Badge>
         </div>
@@ -302,7 +300,7 @@ function ProfilePage() {
           className="pointer-events-auto"
           color="default"
           onClick={handleGlobalProfileUpdate}
-          title={t('Update All Profiles')}
+          title={'Update All Profiles'}
           disabled={
             globalUpdatePending ||
             query.isLoading ||
