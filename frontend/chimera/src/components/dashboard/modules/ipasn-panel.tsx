@@ -10,7 +10,6 @@ import Paper from '@mui/material/Paper';
 import Tooltip from '@mui/material/Tooltip';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { atomIsDrawer } from '@/store';
 
 const IP_REFRESH_SECONDS = 180;
@@ -40,7 +39,6 @@ const EmojiCountry = ({ countryCode }: { countryCode: string }) => {
 };
 
 export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
-  const { t } = useTranslation();
   const { data, mutate, isValidating } = useIPSB();
   const [showIPAddress, setShowIPAddress] = useState(false);
   const isDrawer = useAtomValue(atomIsDrawer);
@@ -67,7 +65,7 @@ export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
               <div className="flex items-end justify-between text-xl font-bold text-shadow-md">
                 <div className="truncate">{data.country}</div>
 
-                <Tooltip title={t('Click to Refresh Now')}>
+                <Tooltip title="Click to Refresh Now">
                   <Button
                     className="!size-8 !min-w-0"
                     loading={isValidating}

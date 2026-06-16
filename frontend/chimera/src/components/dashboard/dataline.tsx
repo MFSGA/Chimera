@@ -2,7 +2,7 @@ import { cn, Sparkline } from '@chimera/ui';
 import type { SvgIconComponent } from '@mui/icons-material';
 import { Paper } from '@mui/material';
 import type { FC } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import parseTraffic from '@/utils/parse-traffic';
 
 export interface DatalineProps {
@@ -24,7 +24,6 @@ export const Dataline: FC<DatalineProps> = ({
   className,
   visible = true,
 }) => {
-  const { t } = useTranslation();
   const latestValue = data.at(-1) ?? 0;
 
   return (
@@ -49,7 +48,9 @@ export const Dataline: FC<DatalineProps> = ({
         <div className="h-5">
           {total !== undefined && (
             <span className="text-shadow-sm">
-              {t('Total')}: {parseTraffic(total).join(' ')}
+              {m.dashboard_widget_traffic_total({
+                value: parseTraffic(total).join(' '),
+              })}
             </span>
           )}
         </div>
