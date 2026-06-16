@@ -7,8 +7,8 @@ import { useLockFn } from 'ahooks';
 import { useAtom } from 'jotai';
 import { MuiColorInput } from 'mui-color-input';
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { isHexColor } from 'validator';
+import * as m from '@/paraglide/messages';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import { languageOptions } from '@/utils/language';
 import { DEFAULT_COLOR } from '../layout/use-custom-theme';
@@ -20,13 +20,11 @@ const commonSx = {
 };
 
 const LanguageSwitch = () => {
-  const { t } = useTranslation();
-
   const language = useSetting('language');
 
   return (
     <MenuItem
-      label={t('Language')}
+      label={m.settings_user_interface_language_label()}
       selectSx={commonSx}
       options={languageOptions}
       selected={language.value || 'en'}
@@ -36,19 +34,17 @@ const LanguageSwitch = () => {
 };
 
 const ThemeSwitch = () => {
-  const { t } = useTranslation();
-
   const themeOptions = {
-    dark: t('theme.dark'),
-    light: t('theme.light'),
-    system: t('theme.system'),
+    dark: m.settings_user_interface_theme_mode_dark(),
+    light: m.settings_user_interface_theme_mode_light(),
+    system: m.settings_user_interface_theme_mode_system(),
   };
 
   const themeMode = useSetting('theme_mode');
 
   return (
     <MenuItem
-      label={t('Theme Mode')}
+      label={m.settings_user_interface_theme_mode_label()}
       selectSx={commonSx}
       options={themeOptions}
       selected={themeMode.value || 'system'}
@@ -58,8 +54,6 @@ const ThemeSwitch = () => {
 };
 
 const ThemeColor = () => {
-  const { t } = useTranslation();
-
   const theme = useSetting('theme_color');
 
   const [value, setValue] = useState(theme.value ?? DEFAULT_COLOR);
@@ -71,7 +65,7 @@ const ThemeColor = () => {
   return (
     <>
       <ListItem sx={{ pl: 0, pr: 0 }}>
-        <ListItemText primary={t('Theme Setting')} />
+        <ListItemText primary={m.settings_user_interface_theme_color_label()} />
 
         <MuiColorInput
           size="small"
@@ -102,7 +96,7 @@ const ThemeColor = () => {
               }
             }}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </Button>
         </div>
       </Expand>
@@ -131,12 +125,10 @@ const ExperimentalSwitch = () => {
 };
 
 export const SettingChimerauUI = () => {
-  const { t } = useTranslation();
-
   const [onlyIcon, setOnlyIcon] = useAtom(atomIsDrawerOnlyIcon);
 
   return (
-    <BaseCard label={t('User Interface')}>
+    <BaseCard label={m.settings_user_interface_title()}>
       <List disablePadding>
         <LanguageSwitch />
 
@@ -145,7 +137,7 @@ export const SettingChimerauUI = () => {
         <ThemeColor />
 
         <SwitchItem
-          label={t('Icon Navigation Bar')}
+          label={'Icon Navigation Bar'}
           checked={onlyIcon}
           onChange={() => setOnlyIcon(!onlyIcon)}
         />

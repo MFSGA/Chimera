@@ -7,12 +7,11 @@ import {
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { List } from '@mui/material';
 import { useLockFn } from 'ahooks';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
 const AppLogLevel = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('app_log_level');
 
   const options = {
@@ -26,7 +25,7 @@ const AppLogLevel = () => {
 
   return (
     <MenuItem
-      label={t('App Log Level')}
+      label={m.settings_nyanpasu_app_log_level_label()}
       options={options}
       selected={value || 'info'}
       onSelected={(value) => upsert(value as LoggingLevel)}
@@ -35,7 +34,6 @@ const AppLogLevel = () => {
 };
 
 const BreakWhenProxyChange = () => {
-  const { t } = useTranslation();
   const breakWhenProxyChange = useSetting('break_when_proxy_change');
   const checked = breakWhenProxyChange.value
     ? breakWhenProxyChange.value !== 'none'
@@ -48,7 +46,7 @@ const BreakWhenProxyChange = () => {
       );
     } catch (error) {
       message(`Update break when proxy change failed!\n${formatError(error)}`, {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     }
@@ -56,7 +54,7 @@ const BreakWhenProxyChange = () => {
 
   return (
     <SwitchItem
-      label={t('Disconnect on Proxy Change')}
+      label={m.settings_nyanpasu_enhance_break_when_proxy_change_label()}
       checked={checked}
       onChange={handleChange}
     />
@@ -64,12 +62,11 @@ const BreakWhenProxyChange = () => {
 };
 
 const BreakWhenProfileChange = () => {
-  const { t } = useTranslation();
   const breakWhenProfileChange = useSetting('break_when_profile_change');
 
   return (
     <SwitchItem
-      label={t('Disconnect on Profile Change')}
+      label={m.settings_nyanpasu_enhance_break_when_profile_change_label()}
       checked={Boolean(breakWhenProfileChange.value)}
       onChange={() =>
         breakWhenProfileChange.upsert(!breakWhenProfileChange.value)
@@ -79,12 +76,11 @@ const BreakWhenProfileChange = () => {
 };
 
 const BreakWhenModeChange = () => {
-  const { t } = useTranslation();
   const breakWhenModeChange = useSetting('break_when_mode_change');
 
   return (
     <SwitchItem
-      label={t('Disconnect on Mode Change')}
+      label={m.settings_nyanpasu_enhance_break_when_mode_change_label()}
       checked={Boolean(breakWhenModeChange.value)}
       onChange={() => breakWhenModeChange.upsert(!breakWhenModeChange.value)}
     />
@@ -92,19 +88,17 @@ const BreakWhenModeChange = () => {
 };
 
 const TrayProxiesSelector = () => {
-  const { t } = useTranslation();
-
   const { value, upsert } = useSetting('clash_tray_selector');
 
   const trayProxiesSelectorMode = {
-    normal: t('Normal'),
-    hidden: t('Hidden'),
-    submenu: t('Submenu'),
+    normal: m.settings_nyanpasu_tray_type_normal(),
+    hidden: m.settings_nyanpasu_tray_type_hidden(),
+    submenu: m.settings_nyanpasu_tray_type_submenu(),
   };
 
   return (
     <MenuItem
-      label={t('Tray Proxies Selector')}
+      label={'Tray Proxies Selector'}
       options={trayProxiesSelectorMode}
       selected={value || 'normal'}
       onSelected={(value) => upsert(value as ProxiesSelectorMode)}
@@ -113,12 +107,11 @@ const TrayProxiesSelector = () => {
 };
 
 const EnableBuiltinEnhanced = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('enable_builtin_enhanced');
 
   return (
     <SwitchItem
-      label={t('Enable Built-in Enhanced')}
+      label={m.settings_nyanpasu_enhance_enable_builtin_enhanced_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />
@@ -126,13 +119,11 @@ const EnableBuiltinEnhanced = () => {
 };
 
 const LightenAnimationEffects = () => {
-  const { t } = useTranslation();
-
   const { value, upsert } = useSetting('lighten_animation_effects');
 
   return (
     <SwitchItem
-      label={t('Lighten Up Animation Effects')}
+      label={'Lighten Up Animation Effects'}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />
@@ -140,10 +131,8 @@ const LightenAnimationEffects = () => {
 };
 
 export const SettingChimeraMisc = () => {
-  const { t } = useTranslation();
-
   return (
-    <BaseCard label={t('Nyanpasu Setting')}>
+    <BaseCard label={m.settings_label_nyanpasu()}>
       <List disablePadding>
         <AppLogLevel />
 

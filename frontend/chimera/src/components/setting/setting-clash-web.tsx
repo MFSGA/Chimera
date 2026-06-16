@@ -13,7 +13,7 @@ import {
 import Grid from '@mui/material/Grid';
 import { useLockFn } from 'ahooks';
 import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import {
   ClashWebItem,
   extractServer,
@@ -22,10 +22,8 @@ import {
 } from './modules/clash-web';
 
 const AddRecordButton = ({ onClick }: { onClick: () => void }) => {
-  const { t } = useTranslation();
-
   return (
-    <Tooltip title={t('New Item')}>
+    <Tooltip title={'New Item'}>
       <IconButton onClick={onClick}>
         <AddIcon />
       </IconButton>
@@ -34,8 +32,6 @@ const AddRecordButton = ({ onClick }: { onClick: () => void }) => {
 };
 
 export const SettingClashWeb = () => {
-  const { t } = useTranslation();
-
   const { value, upsert } = useSetting('web_ui_list');
 
   const { data } = useClashInfo();
@@ -77,7 +73,7 @@ export const SettingClashWeb = () => {
   return (
     <>
       <BaseCard
-        label={t('Web UI')}
+        label={m.settings_web_ui_title()}
         labelChildren={
           <AddRecordButton
             onClick={() => {
@@ -117,7 +113,7 @@ export const SettingClashWeb = () => {
       </BaseCard>
 
       <BaseDialog
-        title={editIndex != null ? t('Edit Item') : t('New Item')}
+        title={editIndex != null ? 'Edit Item' : 'New Item'}
         open={open}
         onClose={() => {
           setOpen(false);
@@ -129,25 +125,25 @@ export const SettingClashWeb = () => {
           setEditIndex(null);
           setEditString('');
         }}
-        ok={t('Ok')}
-        close={t('Close')}
+        ok={'Ok'}
+        close={m.common_close()}
         contentStyle={{ overflow: editString ? 'auto' : 'hidden' }}
         divider
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Typography variant="h5">{t('Input')}</Typography>
+          <Typography variant="h5">{'Input'}</Typography>
 
           <TextField
             sx={{ width: '100%' }}
             value={editString}
             variant="outlined"
             multiline
-            placeholder={t(`Support %host %port, and %secret`)}
+            placeholder={'Support %host %port, and %secret'}
             onChange={(e) => setEditString(e.target.value)}
           />
 
           <Typography sx={{ userSelect: 'text' }}>
-            {t('Replace host, port, and secret with')}
+            {m.settings_web_ui_replace_with_label()}
           </Typography>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
@@ -160,7 +156,9 @@ export const SettingClashWeb = () => {
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
               <Divider sx={{ mt: 1, mb: 1 }} />
 
-              <Typography variant="h5">{t('Result')}</Typography>
+              <Typography variant="h5">
+                {m.settings_web_ui_preview_title()}
+              </Typography>
 
               <Typography sx={{ userSelect: 'text' }} component="div">
                 {renderChip(editString, labels)}

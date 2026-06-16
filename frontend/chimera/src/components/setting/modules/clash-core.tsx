@@ -15,10 +15,10 @@ import Tooltip from '@mui/material/Tooltip';
 import { motion } from 'framer-motion';
 import { isObject } from 'lodash-es';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import ClashRs from '@/assets/image/core/clash-rs.png';
 import ClashMeta from '@/assets/image/core/clash.meta.png';
 import Clash from '@/assets/image/core/clash.png';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import parseTraffic from '@/utils/parse-traffic';
@@ -135,8 +135,6 @@ export const ClashCoreItem = ({
   core,
   onClick,
 }: ClashCoreItemProps) => {
-  const { t } = useTranslation();
-
   const { query, updateCore } = useClashCores();
 
   const haveNewVersion = data.latestVersion
@@ -183,14 +181,14 @@ export const ClashCoreItem = ({
 
       await query.refetch();
 
-      message(t('Successfully updated the core', { core: `${data.name}` }), {
+      message('Successfully updated the core: ' + data.name, {
         kind: 'info',
-        title: t('Successful'),
+        title: 'Successful',
       });
     } catch (e) {
-      message(t('Failed to update', { error: `${formatError(e)}` }), {
+      message('Failed to update. Error: ' + formatError(e), {
         kind: 'error',
-        title: t('Error'),
+        title: 'Error',
       });
     } finally {
       setDownloadState(false);
@@ -243,7 +241,7 @@ export const ClashCoreItem = ({
           </div>
 
           {haveNewVersion && (
-            <Tooltip title={t('Update Core')}>
+            <Tooltip title={'Update Core'}>
               <Button
                 variant="text"
                 className="!size-8 !min-w-0"

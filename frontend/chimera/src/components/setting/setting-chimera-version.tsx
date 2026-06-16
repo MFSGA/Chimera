@@ -4,21 +4,20 @@ import { Box, Button, List, ListItem, Paper, Typography } from '@mui/material';
 import { useLockFn } from 'ahooks';
 import { useSetAtom } from 'jotai';
 import { useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { version } from '@root/package.json';
 // import LogoSvg from '@/assets/image/logo.svg?react';
 import { checkUpdate, useUpdaterPlatformSupported } from '@/hooks/use-updater';
+import * as m from '@/paraglide/messages';
 import { UpdaterInstanceAtom } from '@/store/updater';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
 const AutoCheckUpdate = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('enable_auto_check_update');
 
   return (
     <SwitchItem
-      label={t('Auto Check Updates')}
+      label={m.settings_label_about_auto_check_updates()}
       checked={value ?? true}
       onChange={() => upsert(!value)}
     />
@@ -26,8 +25,6 @@ const AutoCheckUpdate = () => {
 };
 
 export const SettingNyanpasuVersion = () => {
-  const { t } = useTranslation();
-
   const [loading, setLoading] = useState(false);
 
   const setUpdaterInstance = useSetAtom(UpdaterInstanceAtom);
@@ -39,8 +36,8 @@ export const SettingNyanpasuVersion = () => {
       const update = await checkUpdate();
 
       if (!update) {
-        message(t('No update available.'), {
-          title: t('Info'),
+        message(m.settings_label_about_update_no_update(), {
+          title: 'Info',
           kind: 'info',
         });
       } else {
@@ -50,7 +47,7 @@ export const SettingNyanpasuVersion = () => {
       message(
         `Update check failed. Please verify your network connection.\n\n${formatError(e)}`,
         {
-          title: t('Error'),
+          title: 'Error',
           kind: 'error',
         },
       );
@@ -60,7 +57,7 @@ export const SettingNyanpasuVersion = () => {
   });
 
   return (
-    <BaseCard label={t('Chimera Version')}>
+    <BaseCard label={m.settings_label_about_version()}>
       <List disablePadding>
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <Paper
@@ -109,7 +106,7 @@ export const SettingNyanpasuVersion = () => {
                 onClick={onCheckUpdate}
                 sx={{ width: '100%' }}
               >
-                {t('Check for Updates')}
+                {m.settings_label_about_update()}
               </Button>
             </ListItem>
           </>
