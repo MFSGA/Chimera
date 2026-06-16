@@ -8,8 +8,8 @@ import {
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { Button, List, ListItem, ListItemText } from '@mui/material';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
 import { useCoreType } from '@/hooks/use-store';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import getSystem from '@/utils/get-system';
 import { message } from '@/utils/notification';
@@ -17,15 +17,13 @@ import { message } from '@/utils/notification';
 const isWIN = getSystem() === 'windows';
 
 const AllowLan = () => {
-  const { t } = useTranslation();
-
   const { query, upsert } = useClashConfig();
 
   const value = useMemo(() => query.data?.['allow-lan'], [query.data]);
 
   return (
     <SwitchItem
-      label={t('Allow LAN')}
+      label={m.settings_clash_settings_allow_lan_label()}
       checked={Boolean(value)}
       onChange={async () => {
         await upsert.mutateAsync({
@@ -37,15 +35,13 @@ const AllowLan = () => {
 };
 
 const IPv6 = () => {
-  const { t } = useTranslation();
-
   const { query, upsert } = useClashConfig();
 
   const value = useMemo(() => query.data?.['ipv6'], [query.data]);
 
   return (
     <SwitchItem
-      label={t('IPv6')}
+      label={m.settings_clash_settings_ipv6_label()}
       checked={Boolean(value)}
       onChange={async () => {
         await upsert.mutateAsync({
@@ -57,8 +53,6 @@ const IPv6 = () => {
 };
 
 const TunStack = () => {
-  const { t } = useTranslation();
-
   const [coreType] = useCoreType();
 
   const { value, upsert: upsertTunStack } = useSetting('tun_stack');
@@ -90,7 +84,7 @@ const TunStack = () => {
 
   return (
     <MenuItem
-      label={t('TUN Stack')}
+      label={m.settings_clash_settings_tun_stack_label()}
       options={tunStackOptions}
       selected={selected}
       onSelected={async (value) => {
@@ -106,7 +100,7 @@ const TunStack = () => {
           await runtimeProfile.refetch();
         } catch (error) {
           message(`Change Tun Stack failed ! \n Error: ${formatError(error)}`, {
-            title: t('Error'),
+            title: 'Error',
             kind: 'error',
           });
         }
@@ -116,8 +110,6 @@ const TunStack = () => {
 };
 
 const LogLevel = () => {
-  const { t } = useTranslation();
-
   const { query, upsert } = useClashConfig();
 
   const options = {
@@ -132,7 +124,7 @@ const LogLevel = () => {
 
   return (
     <MenuItem
-      label={t('Log Level')}
+      label={m.settings_clash_settings_log_level_label()}
       options={options}
       selected={value ?? 'debug'}
       onSelected={async (value) => {
@@ -145,14 +137,12 @@ const LogLevel = () => {
 };
 
 const UWPTool = () => {
-  const { t } = useTranslation();
-
   const handleClick = async () => {
     try {
       await openUWPTool();
     } catch (e) {
       message(`Failed to Open UWP Tools.\n${JSON.stringify(e)}`, {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     }
@@ -160,22 +150,20 @@ const UWPTool = () => {
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
-      <ListItemText primary={t('Open UWP Tool')} />
+      <ListItemText primary={'Open UWP Tool'} />
 
       <Button variant="contained" onClick={handleClick}>
-        {t('Open')}
+        {m.common_open()}
       </Button>
     </ListItem>
   );
 };
 
 export const SettingClashBase = () => {
-  const { t } = useTranslation();
-
   const [coreType] = useCoreType();
 
   return (
-    <BaseCard label={t('Clash Setting')}>
+    <BaseCard label={m.settings_clash_settings_title()}>
       <List disablePadding>
         <AllowLan />
 

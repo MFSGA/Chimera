@@ -10,7 +10,7 @@ import { BaseCard } from '@chimera/ui';
 import Grid from '@mui/material/Grid';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { useLockFn } from 'ahooks';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { PaperButton } from './modules/paper-button';
@@ -22,14 +22,12 @@ const PathButton = ({
   label: string;
   onClick: () => Promise<unknown>;
 }) => {
-  const { t } = useTranslation();
-
   const handleClick = useLockFn(async () => {
     try {
       await onClick();
     } catch (error) {
       await message(`${label}: ${formatError(error)}`, {
-        title: t('Error'),
+        title: 'Error',
         kind: 'error',
       });
     }
@@ -57,13 +55,11 @@ const runCommand = async (
 };
 
 export const SettingChimeraPath = () => {
-  const { t } = useTranslation();
-
   const handleMigrateConfigDir = async () => {
     const selected = await openDialog({
       directory: true,
       multiple: false,
-      title: t('Migrate Config Dir'),
+      title: 'Migrate Config Dir',
     });
 
     if (!selected || Array.isArray(selected)) {
@@ -74,19 +70,22 @@ export const SettingChimeraPath = () => {
   };
 
   const buttonItems = [
-    { label: t('Migrate Config Dir'), onClick: handleMigrateConfigDir },
+    { label: 'Migrate Config Dir', onClick: handleMigrateConfigDir },
     {
-      label: t('Open Config Dir'),
+      label: 'Open Config Dir',
       onClick: () => runCommand(openAppConfigDir),
     },
-    { label: t('Open Data Dir'), onClick: () => runCommand(openAppDataDir) },
-    { label: t('Open Core Dir'), onClick: () => runCommand(openCoreDir) },
-    { label: t('Open Log Dir'), onClick: () => runCommand(openLogsDir) },
-    { label: t('Collect Logs'), onClick: () => runCommand(collectLogs) },
+    { label: 'Open Data Dir', onClick: () => runCommand(openAppDataDir) },
+    { label: 'Open Core Dir', onClick: () => runCommand(openCoreDir) },
+    { label: 'Open Log Dir', onClick: () => runCommand(openLogsDir) },
+    {
+      label: m.header_help_action_collect_logs(),
+      onClick: () => runCommand(collectLogs),
+    },
   ];
 
   return (
-    <BaseCard label={t('Path Config')}>
+    <BaseCard label={'Path Config'}>
       <Grid container spacing={2} sx={{ alignItems: 'stretch' }}>
         {buttonItems.map(({ label, onClick }) => (
           <Grid

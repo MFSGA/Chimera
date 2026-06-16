@@ -3,8 +3,8 @@ import { BaseCard, BaseDialog } from '@chimera/ui';
 import { Box, Typography } from '@mui/material';
 import Grid from '@mui/material/Grid';
 import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import CLASH_FIELD from '@/assets/json/clash-field.json';
+import * as m from '@/paraglide/messages';
 import { ClashFieldItem, LabelSwitch } from './modules/clash-field';
 
 type ClashFieldGroup = Record<string, string>;
@@ -71,13 +71,11 @@ const FieldsControl = ({
 };
 
 const ClashFieldSwitch = () => {
-  const { t } = useTranslation();
-
   const { value, upsert } = useSetting('enable_clash_fields');
 
   return (
     <LabelSwitch
-      label={t('Enable Clash Fields Filter')}
+      label={m.settings_clash_settings_field_filter_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />
@@ -85,8 +83,6 @@ const ClashFieldSwitch = () => {
 };
 
 export const SettingClashField = () => {
-  const { t } = useTranslation();
-
   const { query, upsert } = useProfile();
 
   const mergeFields = useMemo(
@@ -123,7 +119,7 @@ export const SettingClashField = () => {
   };
 
   return (
-    <BaseCard label={t('Clash Field')}>
+    <BaseCard label={'Clash Field'}>
       <Box sx={{ pt: 1, pb: 2 }}>
         <ClashFieldSwitch />
       </Box>

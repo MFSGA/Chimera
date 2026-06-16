@@ -11,15 +11,13 @@ import { Box, Button, List, ListItem } from '@mui/material';
 import { useLockFn, useReactive } from 'ahooks';
 import { motion } from 'framer-motion';
 import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import { OS } from '@/consts';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { ClashCoreItem } from './modules/clash-core';
 
 export const SettingClashCore = () => {
-  const { t } = useTranslation();
-
   const loading = useReactive({
     mask: false,
   });
@@ -58,23 +56,17 @@ export const SettingClashCore = () => {
 
       await switchCore.mutateAsync(core);
 
-      message(
-        t('Successfully switched to the clash core', {
-          core: ClashCores[core],
-        }),
-        {
-          kind: 'info',
-          title: t('Successful'),
-        },
-      );
+      message('Successfully switched to the clash core: ' + ClashCores[core], {
+        kind: 'info',
+        title: 'Successful',
+      });
     } catch (e) {
       message(
-        t('Failed to switch. You could see the details in the log', {
-          error: `${e instanceof Error ? e.message : String(e)}`,
-        }),
+        'Failed to switch. You could see the details in the log: ' +
+          `${e instanceof Error ? e.message : String(e)}`,
         {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         },
       );
     } finally {
@@ -86,17 +78,17 @@ export const SettingClashCore = () => {
     try {
       await restartSidecar();
 
-      message(t('Successfully restarted the core'), {
+      message('Successfully restarted the core', {
         kind: 'info',
-        title: t('Successful'),
+        title: 'Successful',
       });
     } catch (e) {
       message(
-        t('Failed to restart. You could see the details in the log') +
+        'Failed to restart. You could see the details in the log' +
           formatError(e),
         {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         },
       );
     }
@@ -107,12 +99,12 @@ export const SettingClashCore = () => {
       await fetchRemote.mutateAsync();
     } catch (e) {
       message(
-        t('Failed to fetch. Please check your network connection') +
+        'Failed to fetch. Please check your network connection' +
           '\n' +
           formatError(e),
         {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         },
       );
     }
@@ -120,7 +112,7 @@ export const SettingClashCore = () => {
 
   return (
     <BaseCard
-      label={t('Clash Core')}
+      label={m.settings_clash_core_manager_card_title()}
       loading={loading.mask}
       labelChildren={<span>{version}</span>}
     >
@@ -171,7 +163,7 @@ export const SettingClashCore = () => {
         >
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Button variant="outlined" onClick={handleRestart}>
-              {t('Restart')}
+              {m.settings_clash_core_manager_card_restart_sidecar()}
             </Button>
 
             {/** TODO: Support Linux when Manifest v2 released */}
@@ -181,7 +173,7 @@ export const SettingClashCore = () => {
                 loading={fetchRemote.isPending}
                 onClick={handleCheckUpdates}
               >
-                {t('Check Updates')}
+                {m.settings_clash_core_manager_card_fetch_remote()}
               </LoadingButton>
             )}
           </Box>

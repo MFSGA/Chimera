@@ -3,42 +3,39 @@ import { LoadingButton } from '@chimera/ui';
 import { Button, ListItem, ListItemText } from '@mui/material';
 import { useMemoizedFn } from 'ahooks';
 import { useTransition } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { useServerManualPromptDialog } from './service-manual-prompt-dialog';
 
 const getInstallButtonLabel = (
   status: 'running' | 'stopped' | 'not_installed' | undefined,
-  t: (key: string) => string,
 ) => {
   switch (status) {
     case 'running':
     case 'stopped':
-      return t('uninstall');
+      return m.settings_system_proxy_system_service_ctrl_uninstall();
     case 'not_installed':
-      return t('install');
+      return m.settings_system_proxy_system_service_ctrl_install();
     default:
-      return t('install');
+      return m.settings_system_proxy_system_service_ctrl_install();
   }
 };
 
 const getControlButtonLabel = (
   status: 'running' | 'stopped' | 'not_installed' | undefined,
-  t: (key: string) => string,
 ) => {
   switch (status) {
     case 'running':
-      return t('stop');
+      return m.settings_system_proxy_system_service_ctrl_stop();
     case 'stopped':
-      return t('start');
+      return m.settings_system_proxy_system_service_ctrl_start();
     default:
-      return t('start');
+      return m.settings_system_proxy_system_service_ctrl_start();
   }
 };
 
 export const ServiceStatusControl = () => {
-  const { t } = useTranslation();
   const { query, upsert } = useSystemService();
   const status = query.data?.status;
   // todo use enum
@@ -67,10 +64,10 @@ export const ServiceStatusControl = () => {
       } catch (error) {
         const errorMessage = `${
           status === 'not_installed'
-            ? t('Failed to install')
-            : t('Failed to uninstall')
+            ? m.settings_system_proxy_system_service_ctrl_failed_install()
+            : m.settings_system_proxy_system_service_ctrl_failed_uninstall()
         }: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: t('Error') });
+        message(errorMessage, { kind: 'error', title: 'Error' });
 
         if (status === 'not_installed') {
           promptDialog.show('install');
@@ -100,7 +97,7 @@ export const ServiceStatusControl = () => {
           status === 'running'
             ? `Stop failed: ${formatError(error)}`
             : `Start failed: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: t('Error') });
+        message(errorMessage, { kind: 'error', title: 'Error' });
 
         if (status === 'running') {
           promptDialog.show('stop');
@@ -113,11 +110,7 @@ export const ServiceStatusControl = () => {
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
-      <ListItemText
-        primary={t('Current Status', {
-          status: t(`${status}`),
-        })}
-      />
+      <ListItemText primary={`Current Status: ${status ?? 'Unknown'}`} />
 
       <div className="flex gap-2">
         {!isDisabled && (
@@ -127,7 +120,7 @@ export const ServiceStatusControl = () => {
             loading={serviceControlPending}
             disabled={isPending}
           >
-            {getControlButtonLabel(status, t)}
+            {getControlButtonLabel(status)}
           </LoadingButton>
         )}
 
@@ -137,7 +130,7 @@ export const ServiceStatusControl = () => {
           loading={installOrUninstallPending}
           disabled={isPending}
         >
-          {getInstallButtonLabel(status, t)}
+          {getInstallButtonLabel(status)}
         </LoadingButton>
 
         {import.meta.env.DEV && (
@@ -145,7 +138,7 @@ export const ServiceStatusControl = () => {
             variant="contained"
             onClick={() => promptDialog.show('install')}
           >
-            {t('Prompt')}
+            {'Prompt'}
           </Button>
         )}
       </div>

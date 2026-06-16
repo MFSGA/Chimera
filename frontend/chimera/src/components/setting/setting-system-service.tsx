@@ -15,8 +15,8 @@ import {
 import { useMemoizedFn } from 'ahooks';
 import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
-import { useTranslation } from 'react-i18next';
 import useSWR from 'swr';
+import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import {
@@ -25,8 +25,6 @@ import {
 } from './modules/service-manual-prompt-dialog';
 
 export const SettingSystemService = () => {
-  const { t } = useTranslation();
-
   const { query, upsert } = useSystemService();
   const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
     refreshInterval: 2000,
@@ -37,11 +35,11 @@ export const SettingSystemService = () => {
     switch (query.data?.status) {
       case 'running':
       case 'stopped': {
-        return t('uninstall');
+        return m.settings_system_proxy_system_service_ctrl_uninstall();
       }
 
       case 'not_installed': {
-        return t('install');
+        return m.settings_system_proxy_system_service_ctrl_install();
       }
 
       default:
@@ -51,11 +49,11 @@ export const SettingSystemService = () => {
   const getControlButtonString = () => {
     switch (query.data?.status) {
       case 'running': {
-        return t('stop');
+        return m.settings_system_proxy_system_service_ctrl_stop();
       }
 
       case 'stopped': {
-        return t('start');
+        return m.settings_system_proxy_system_service_ctrl_start();
       }
 
       default:
@@ -88,13 +86,13 @@ export const SettingSystemService = () => {
       } catch (e) {
         const errorMessage = `${
           query.data?.status === 'not_installed'
-            ? t('Failed to install')
-            : t('Failed to uninstall')
+            ? m.settings_system_proxy_system_service_ctrl_failed_install()
+            : m.settings_system_proxy_system_service_ctrl_failed_uninstall()
         }: ${formatError(e)}`;
 
         message(errorMessage, {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         });
         // If the installation fails, prompt the user to manually install the service
         promptDialog.show(
@@ -129,7 +127,7 @@ export const SettingSystemService = () => {
 
         message(errorMessage, {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         });
         // If start failed show a prompt to user to start the service manually
         promptDialog.show(query.data?.status === 'running' ? 'stop' : 'start');
@@ -146,7 +144,7 @@ export const SettingSystemService = () => {
       } catch (e) {
         message(`Restart failed: ${formatError(e)}`, {
           kind: 'error',
-          title: t('Error'),
+          title: 'Error',
         });
       }
     });
@@ -165,28 +163,39 @@ export const SettingSystemService = () => {
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
 
+  const getInstallStatusLabel = (status: string): string => {
+    switch (status) {
+      case 'not_installed':
+        return 'Not Installed';
+      case 'running':
+        return 'Running';
+      case 'stopped':
+        return 'Stopped';
+      default:
+        return status;
+    }
+  };
+
   const currentCoreStatus = (() => {
     const status = coreStatusSWR.data?.[0];
-    if (!status) return t('Unknown');
+    if (!status) return 'Unknown';
     if (
       isObject(status) &&
       Object.prototype.hasOwnProperty.call(status, 'Stopped')
     ) {
       const { Stopped } = status;
-      return !!Stopped && Stopped.trim()
-        ? t('stopped_reason', { reason: Stopped })
-        : t('stopped');
+      return !!Stopped && Stopped.trim() ? `Stopped: ${Stopped}` : 'Stopped';
     }
-    return t('running');
+    return 'Running';
   })();
 
   const currentRunType = coreStatusSWR.data?.[2]
-    ? t(coreStatusSWR.data[2])
-    : t('Unknown');
+    ? coreStatusSWR.data[2]
+    : 'Unknown';
 
   const serviceCoreType = (() => {
     const type = serviceCoreInfos?.type;
-    if (!type) return t('Unknown');
+    if (!type) return 'Unknown';
     return typeof type === 'string' ? type : type.clash;
   })();
 
@@ -194,11 +203,11 @@ export const SettingSystemService = () => {
   const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
 
   return (
-    <BaseCard label={t('System Service')}>
+    <BaseCard label={m.settings_system_proxy_system_service_ctrl_label()}>
       <ServerManualPromptDialogWrapper />
       <List disablePadding>
         <SwitchItem
-          label={t('Service Mode')}
+          label={m.settings_system_proxy_service_mode_label()}
           disabled={isDisabled}
           checked={serviceMode.value || false}
           onChange={() => serviceMode.upsert(!serviceMode.value)}
@@ -207,18 +216,14 @@ export const SettingSystemService = () => {
         {isDisabled && (
           <ListItem sx={{ pl: 0, pr: 0 }}>
             <Typography>
-              {t(
-                'Information: To enable service mode, make sure the Clash Chimera service is installed and started',
-              )}
+              {m.settings_system_proxy_service_mode_description()}
             </Typography>
           </ListItem>
         )}
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Current Status', {
-              status: t(`${query.data?.status}`),
-            })}
+            primary={`Current Status: ${getInstallStatusLabel(query.data?.status ?? 'Unknown')}`}
           />
           <div className="flex gap-2">
             {isServiceInstalled && (
@@ -249,7 +254,7 @@ export const SettingSystemService = () => {
                     refreshPending
                   }
                 >
-                  {t('Restart')}
+                  Restart
                 </Button>
               )} */}
 
@@ -278,7 +283,7 @@ export const SettingSystemService = () => {
                 refreshPending
               }
             >
-              {t('Refresh')}
+              {'Refresh'}
             </Button>
 
             {import.meta.env.DEV && (
@@ -286,7 +291,7 @@ export const SettingSystemService = () => {
                 variant="contained"
                 onClick={() => promptDialog.show('install')}
               >
-                {t('Prompt')}
+                {'Prompt'}
               </Button>
             )}
           </div>
@@ -294,94 +299,94 @@ export const SettingSystemService = () => {
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Service Name')}
-            secondary={query.data?.name || t('Unknown')}
+            primary={'Service Name'}
+            secondary={query.data?.name || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Service Version')}
-            secondary={query.data?.version || t('Unknown')}
+            primary={'Service Version'}
+            secondary={query.data?.version || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Server Version')}
-            secondary={serviceServer?.version || t('Unknown')}
+            primary={'Server Version'}
+            secondary={serviceServer?.version || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('App Core Status')}
+            primary={'App Core Status'}
             secondary={currentCoreStatus}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
-          <ListItemText primary={t('Run Type')} secondary={currentRunType} />
+          <ListItemText primary={'Run Type'} secondary={currentRunType} />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
-          <ListItemText primary={t('Core Type')} secondary={serviceCoreType} />
+          <ListItemText primary={'Core Type'} secondary={serviceCoreType} />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Core Config Path')}
-            secondary={serviceCoreInfos?.config_path || t('Unknown')}
+            primary={'Core Config Path'}
+            secondary={serviceCoreInfos?.config_path || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('App Core State Changed At')}
+            primary={'App Core State Changed At'}
             secondary={
               currentCoreChangedAt
                 ? new Date(currentCoreChangedAt).toLocaleString()
-                : t('Unknown')
+                : 'Unknown'
             }
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Service Core State Changed At')}
+            primary={'Service Core State Changed At'}
             secondary={
               serviceCoreChangedAt
                 ? new Date(serviceCoreChangedAt).toLocaleString()
-                : t('Unknown')
+                : 'Unknown'
             }
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Service Config Dir')}
-            secondary={runtimeInfos?.service_config_dir || t('Unknown')}
+            primary={'Service Config Dir'}
+            secondary={runtimeInfos?.service_config_dir || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Service Data Dir')}
-            secondary={runtimeInfos?.service_data_dir || t('Unknown')}
+            primary={'Service Data Dir'}
+            secondary={runtimeInfos?.service_data_dir || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Bound Config Dir')}
-            secondary={runtimeInfos?.nyanpasu_config_dir || t('Unknown')}
+            primary={'Bound Config Dir'}
+            secondary={runtimeInfos?.nyanpasu_config_dir || 'Unknown'}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={t('Bound Data Dir')}
-            secondary={runtimeInfos?.nyanpasu_data_dir || t('Unknown')}
+            primary={'Bound Data Dir'}
+            secondary={runtimeInfos?.nyanpasu_data_dir || 'Unknown'}
           />
         </ListItem>
       </List>

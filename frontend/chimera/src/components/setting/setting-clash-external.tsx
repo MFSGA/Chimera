@@ -9,7 +9,7 @@ import { BaseCard, BaseItem, Expand, MenuItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 const TextItem = ({
   label,
@@ -20,7 +20,6 @@ const TextItem = ({
   value: string;
   onApply: (value: string) => Promise<void>;
 }) => {
-  const { t } = useTranslation();
   const [textValue, setTextValue] = useState(value);
 
   useEffect(() => {
@@ -46,7 +45,7 @@ const TextItem = ({
             startIcon={<Done />}
             onClick={() => onApply(textValue)}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </Button>
         </div>
       </Expand>
@@ -55,14 +54,13 @@ const TextItem = ({
 };
 
 const ExternalController = () => {
-  const { t } = useTranslation();
   const { data, refetch } = useClashInfo();
   const { upsert } = useClashCoreConfig();
   const runtimeProfile = useRuntimeProfile();
 
   return (
     <TextItem
-      label={t('External Controller')}
+      label={m.settings_clash_settings_external_controll_label()}
       value={data?.server || ''}
       onApply={async (value) => {
         await upsert.mutateAsync({ 'external-controller': value });
@@ -75,13 +73,12 @@ const ExternalController = () => {
 };
 
 const PortStrategy = () => {
-  const { t } = useTranslation();
   const { value, upsert } = useSetting('clash_strategy');
 
   const portStrategyOptions = {
-    allow_fallback: t('Allow Fallback'),
-    fixed: t('Fixed'),
-    random: t('Random'),
+    allow_fallback: m.settings_clash_settings_allow_fallback_label(),
+    fixed: m.settings_clash_settings_fixed_label(),
+    random: m.settings_clash_settings_random_label(),
   };
 
   const selected = useMemo(
@@ -91,7 +88,7 @@ const PortStrategy = () => {
 
   return (
     <MenuItem
-      label={t('Port Strategy')}
+      label={m.settings_clash_settings_port_strategy_label()}
       options={portStrategyOptions}
       selected={selected}
       selectSx={{ width: 160 }}
@@ -106,13 +103,12 @@ const PortStrategy = () => {
 };
 
 const CoreSecret = () => {
-  const { t } = useTranslation();
   const { data, refetch } = useClashInfo();
   const { upsert } = useClashCoreConfig();
 
   return (
     <TextItem
-      label={t('Core Secret')}
+      label={m.settings_clash_settings_core_secret_label()}
       value={data?.secret || ''}
       onApply={async (value) => {
         await upsert.mutateAsync({ secret: value });
@@ -123,10 +119,8 @@ const CoreSecret = () => {
 };
 
 export const SettingClashExternal = () => {
-  const { t } = useTranslation();
-
   return (
-    <BaseCard label={t('Clash External Controll')}>
+    <BaseCard label={'Clash External Controll'}>
       <List disablePadding>
         <ExternalController />
         <PortStrategy />

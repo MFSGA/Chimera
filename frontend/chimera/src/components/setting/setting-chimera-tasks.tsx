@@ -3,10 +3,9 @@ import { BaseCard, BaseItem, Expand } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
 import { useEffect, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 const MaxLogFiles = () => {
-  const { t } = useTranslation();
   const maxLogFiles = useSetting('max_log_files');
 
   const value = maxLogFiles.value ?? 7;
@@ -22,7 +21,7 @@ const MaxLogFiles = () => {
 
   return (
     <>
-      <BaseItem title={t('Max Log Files')}>
+      <BaseItem title={m.settings_nyanpasu_max_log_files_label()}>
         <TextField
           size="small"
           type="number"
@@ -41,7 +40,7 @@ const MaxLogFiles = () => {
             onClick={() => maxLogFiles.upsert(parsed)}
             disabled={invalid}
           >
-            {t('Apply')}
+            {m.common_apply()}
           </Button>
         </div>
       </Expand>
@@ -50,10 +49,8 @@ const MaxLogFiles = () => {
 };
 
 export const SettingChimeraTasks = () => {
-  const { t } = useTranslation();
-
   return (
-    <BaseCard label={t('Tasks')}>
+    <BaseCard label={'Tasks'}>
       <List disablePadding>
         <MaxLogFiles />
       </List>
