@@ -2,14 +2,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
 import {
   commands,
-  Profile,
-  ProfileBuilder,
-  ProfilesBuilder,
+  Profile_Serialize,
+  ProfileBuilder_Deserialize,
+  ProfilesBuilder_Deserialize,
   RemoteProfileOptionsBuilder,
 } from './bindings';
 import { RROFILES_QUERY_KEY } from './consts';
 
 type URLImportParams = Parameters<typeof commands.importProfile>;
+
+type NormalizedProfile = NonNullable<
+  Profile_Serialize['remote'] | Profile_Serialize['local']
+>;
 
 type CreateParams =
   | {
@@ -22,7 +26,7 @@ type CreateParams =
   | {
       type: 'manual';
       data: {
-        item: ProfileBuilder;
+        item: NormalizedProfile;
         fileData: string | null;
       };
     };
@@ -33,7 +37,8 @@ type ProfileHelperFn = {
   drop: () => Promise<null | undefined>;
 };
 
-export type ProfileQueryResultItem = Profile & Partial<ProfileHelperFn>;
+export type ProfileQueryResultItem = NormalizedProfile &
+  Partial<ProfileHelperFn>;
 
 /**
  * A custom hook for managing profiles with various operations including creation, updating, sorting, and deletion.
@@ -105,7 +110,12 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
         return unwrapResult(await commands.importProfile(url, option));
       } else {
         const { item, fileData } = data;
-        return unwrapResult(await commands.createProfile(item, fileData));
+        return unwrapResult(
+          await commands.createProfile(
+            item as unknown as ProfileBuilder_Deserialize,
+            fileData,
+          ),
+        );
       }
     },
     onSuccess: () => {
@@ -139,20 +149,22 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
 
       return {
         ...result,
-        items: result?.items?.map((item) => {
-          return addHelperFn(item);
-        }),
+        items: result?.items?.map((item) => addHelperFn(item)),
       };
     },
   });
 
-  function addHelperFn(item: Profile): Profile & ProfileHelperFn {
+  function addHelperFn(
+    item: Profile_Serialize,
+  ): NormalizedProfile & ProfileHelperFn {
+    const normalized = item as unknown as NormalizedProfile;
+    const uid = normalized.uid;
     return {
-      ...item,
-      view: async () => unwrapResult(await commands.viewProfile(item.uid)),
+      ...normalized,
+      view: async () => unwrapResult(await commands.viewProfile(uid)),
       update: async (option: RemoteProfileOptionsBuilder) =>
-        await update.mutateAsync({ uid: item.uid, option }),
-      drop: async () => await drop.mutateAsync(item.uid),
+        await update.mutateAsync({ uid, option }),
+      drop: async () => await drop.mutateAsync(uid),
     };
   }
 
@@ -169,9 +181,11 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
    * - Automatically invalidates the 'profiles' query cache on successful mutation
    */
   const upsert = useMutation({
-    mutationFn: async (options: Partial<ProfilesBuilder>) => {
+    mutationFn: async (options: Partial<ProfilesBuilder_Deserialize>) => {
       return unwrapResult(
-        await commands.patchProfilesConfig(options as ProfilesBuilder),
+        await commands.patchProfilesConfig(
+          options as ProfilesBuilder_Deserialize,
+        ),
       );
     },
     onSuccess: () => {
@@ -213,7 +227,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
       profile,
     }: {
       uid: string;
-      profile: ProfileBuilder;
+      profile: ProfileBuilder_Deserialize;
     }) => {
       return unwrapResult(await commands.patchProfile(uid, profile));
     },

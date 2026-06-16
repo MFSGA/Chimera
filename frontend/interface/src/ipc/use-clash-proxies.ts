@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useClashAPI, type ClashDelayOptions } from '../service/clash-api';
+import { ClashDelayOptions } from '@/service';
 import { unwrapResult } from '../utils';
 import {
   commands,
   ProxyItemHistory,
-  type Proxies,
-  type ProxyGroupItem,
-  type ProxyItem,
+  type Proxies_Serialize,
+  type ProxyGroupItem_Serialize,
+  type ProxyItem_Serialize,
 } from './bindings';
 import { CLASH_PROXIES_QUERY_KEY } from './consts';
 
@@ -15,18 +15,18 @@ export type ClashProxiesQueryHelperFn = {
 };
 
 export interface ClashProxiesQueryProxyItem
-  extends ProxyItem,
+  extends ProxyItem_Serialize,
     ClashProxiesQueryHelperFn {
   mutateSelect: () => Promise<void>;
 }
 
 export interface ClashProxiesQueryGroupItem
-  extends ProxyGroupItem,
+  extends ProxyGroupItem_Serialize,
     ClashProxiesQueryHelperFn {
   all: ClashProxiesQueryProxyItem[];
 }
 
-export interface ClashProxiesQuery extends Proxies {
+export interface ClashProxiesQuery extends Proxies_Serialize {
   global: ClashProxiesQueryGroupItem;
   groups: ClashProxiesQueryGroupItem[];
 }
@@ -49,8 +49,6 @@ const createUpdatedProxy = (
 export const useClashProxies = () => {
   const queryClient = useQueryClient();
 
-  const { proxiesDelay, groupDelay } = useClashAPI();
-
   const proxies = useQuery<ClashProxiesQuery | undefined>({
     queryKey: [CLASH_PROXIES_QUERY_KEY],
     queryFn: async () => {
@@ -62,7 +60,7 @@ export const useClashProxies = () => {
 
       // Create helper functions to reduce code duplication
       const createProxyWithHelpers = (
-        proxy: ProxyItem,
+        proxy: ProxyItem_Serialize,
         groupName: string,
       ): ClashProxiesQueryProxyItem => ({
         ...proxy,
@@ -76,7 +74,7 @@ export const useClashProxies = () => {
       });
 
       const createGroupWithHelpers = (
-        group: ProxyGroupItem,
+        group: ProxyGroupItem_Serialize,
       ): ClashProxiesQueryGroupItem => ({
         ...group,
         mutateDelay: async (options?: ClashDelayOptions) => {
@@ -115,10 +113,14 @@ export const useClashProxies = () => {
   };
 
   const updateProxiesDelay = useMutation({
-    mutationFn: async (args: Parameters<typeof proxiesDelay>) => {
+    mutationFn: async (args: [string, ClashDelayOptions?]) => {
+      const [name, options] = args;
+      const res = unwrapResult(
+        await commands.clashApiGetProxyDelay(name, options?.url ?? null),
+      );
       return {
-        name: args[0],
-        delay: (await proxiesDelay(...args)).delay,
+        name,
+        delay: res?.delay ?? 0,
       };
     },
     onSuccess: ({ name, delay }) => {
@@ -150,19 +152,25 @@ export const useClashProxies = () => {
   });
 
   const updateGroupDelay = useMutation<
-    Awaited<ReturnType<typeof groupDelay>>,
+    Record<string, number>,
     unknown,
-    Parameters<typeof groupDelay>,
+    [string, ClashDelayOptions?],
     ReturnType<typeof setInterval>
   >({
-    mutationFn: async (args: Parameters<typeof groupDelay>) => {
-      return await groupDelay(...args);
+    mutationFn: async (args: [string, ClashDelayOptions?]) => {
+      const [group, options] = args;
+      return (
+        unwrapResult(
+          await commands.clashApiGetGroupDelay(group, options?.url ?? null),
+        ) ?? {}
+      );
     },
     onMutate: () => {
+      // Start polling proxies every 0.5 seconds
       const intervalId = setInterval(() => {
         proxies.refetch();
       }, 500);
-
+      // Return interval ID to be used in onSettled
       return intervalId;
     },
     onSuccess: (data) => {
@@ -208,6 +216,7 @@ export const useClashProxies = () => {
       setQueryData(newData);
     },
     onSettled: (_, __, ___, context) => {
+      // Clear interval when mutation is settled (success or error)
       if (context !== undefined) {
         clearInterval(context);
       }
