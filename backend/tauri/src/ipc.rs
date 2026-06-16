@@ -1,6 +1,7 @@
 use std::{path::PathBuf, result::Result as StdResult};
 
 use anyhow::{Context, anyhow};
+use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
@@ -87,11 +88,9 @@ impl serde::Serialize for IpcError {
 }
 
 impl specta::Type for IpcError {
-    fn inline(
-        type_map: &mut specta::TypeMap,
-        generics: specta::Generics,
-    ) -> specta::datatype::DataType {
-        specta::datatype::DataType::Primitive(specta::datatype::PrimitiveType::String)
+    fn definition(types: &mut specta::Types) -> specta::datatype::DataType {
+        let _ = types;
+        specta::datatype::DataType::Primitive(specta::datatype::Primitive::str)
     }
 }
 
@@ -245,6 +244,8 @@ pub struct UpdateWrapper {
     version: String,
     date: Option<String>,
     body: Option<String>,
+    // TODO: specta 2.0.0-rc.25 cannot export recursive inline types (serde_json::Value).
+    #[specta(type = Any)]
     raw_json: serde_json::Value,
 }
 

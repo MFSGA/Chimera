@@ -155,34 +155,15 @@ pub fn run() -> std::io::Result<()> {
                                                     // core::clash::ws::ClashWsEvent,
                                                     // window::WindowMessageEvent,
                                                     // window::WindowReadyEvent,
-        ]);
-    // todo
-    // .dangerously_cast_bigints_to_number();
+        ])
+        .dangerously_cast_bigints_to_number();
 
     #[cfg(debug_assertions)]
     {
         const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
 
         match specta_builder.export(
-            specta_typescript::Typescript::default()
-                .formatter(specta_typescript::formatter::prettier)
-                .formatter(|file| {
-                    let npx_command = if cfg!(target_os = "windows") {
-                        "npx.cmd"
-                    } else {
-                        "npx"
-                    };
-
-                    std::process::Command::new(npx_command)
-                        .arg("prettier")
-                        .arg("--write")
-                        .arg(file)
-                        .output()
-                        .map(|_| ())
-                        .map_err(std::io::Error::other)
-                })
-                .bigint(specta_typescript::BigIntExportBehavior::Number)
-                .header("/* eslint-disable */\n// @ts-nocheck"),
+            specta_typescript::Typescript::default().header("/* eslint-disable */\n// @ts-nocheck"),
             SPECTA_BINDINGS_PATH,
         ) {
             Ok(_) => {
@@ -216,6 +197,7 @@ pub fn run() -> std::io::Result<()> {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(move |app| {
             specta_builder.mount_events(app);
 
