@@ -1,9 +1,9 @@
 import { cn } from '@chimera/ui';
 import { useDebounceEffect } from 'ahooks';
 import { useDeferredValue, useEffect, useRef, type RefObject } from 'react';
-import { useTranslation } from 'react-i18next';
 import { Virtualizer, type VListHandle } from 'virtua';
 import ContentDisplay from '@/components/base/content-display';
+import * as m from '@/paraglide/messages';
 import LogItem from './log-item';
 import { useLogContext } from './log-provider';
 
@@ -12,7 +12,6 @@ export const LogList = ({
 }: {
   scrollRef: RefObject<HTMLElement>;
 }) => {
-  const { t } = useTranslation();
   const { logs, logLevel } = useLogContext();
   const virtualizerRef = useRef<VListHandle>(null);
   const shouldStickToBottom = useRef(true);
@@ -62,6 +61,6 @@ export const LogList = ({
       })}
     </Virtualizer>
   ) : (
-    <ContentDisplay className="absolute" message={t('No Logs')} />
+    <ContentDisplay className="absolute" message={m.logs_empty_message()} />
   );
 };
