@@ -5,7 +5,7 @@ import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
 import { filesize } from 'filesize';
 import * as React from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 export type ConnectionDetailDialogProps = { item?: Connection.Item } & Omit<
   BaseDialogProps,
@@ -87,11 +87,10 @@ export default function ConnectionDetailDialog({
   item,
   ...others
 }: ConnectionDetailDialogProps) {
-  const { t } = useTranslation();
   if (!item) return null;
 
   return (
-    <BaseDialog {...others} title={t('Connection Detail')}>
+    <BaseDialog {...others} title="Connection Details">
       <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-2 px-3">
         {Object.entries(item)
           .filter(([key, value]) => key !== 'metadata' && isDisplayValue(value))
@@ -99,9 +98,7 @@ export default function ConnectionDetailDialog({
             <Row key={key} label={key} value={value} />
           ))}
 
-        <h3 className="col-span-2 py-1 pt-5 text-xl font-semibold">
-          {t('Metadata')}
-        </h3>
+        <h3 className="col-span-2 py-1 pt-5 text-xl font-semibold">Metadata</h3>
 
         {Object.entries(item.metadata)
           .filter(([, value]) => isDisplayValue(value))
