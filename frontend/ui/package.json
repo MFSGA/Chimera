@@ -26,7 +26,6 @@
     "@mui/material": "9.0.1",
     "@radix-ui/react-portal": "1.1.11",
     "ahooks": "3.9.7",
-    "react-i18next": "16.5.3",
     "@radix-ui/react-scroll-area": "1.2.11",
     "tailwindcss": "4.1.16",
     "@material/material-color-utilities": "0.4.0",
