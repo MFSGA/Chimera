@@ -1,7 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { kebabCase } from 'lodash-es';
 import { unwrapResult } from '../utils';
-import { commands, type ClashCore } from './bindings';
+import {
+  commands,
+  type ClashCore_Deserialize,
+  type ClashCore_Serialize,
+} from './bindings';
 import {
   CHIMERA_SETTING_QUERY_KEY,
   CLASH_CORE_QUERY_KEY,
@@ -15,9 +19,9 @@ export const ClashCores = {
   'clash-rs': 'Clash Rust',
   'chimera-client': 'Chimera Client',
   'clash-rs-alpha': 'Clash Rust Alpha',
-} as Record<ClashCore, string>;
+} as Record<ClashCore_Serialize, string>;
 
-export type ClashCoresInfo = Record<ClashCore, ClashCoresDetail>;
+export type ClashCoresInfo = Record<ClashCore_Serialize, ClashCoresDetail>;
 
 export type ClashCoresDetail = {
   name: string;
@@ -36,17 +40,18 @@ export const useClashCores = () => {
           const result = await acc;
           try {
             const currentVersion =
-              unwrapResult(await commands.getCoreVersion(key as ClashCore)) ??
-              'N/A';
+              unwrapResult(
+                await commands.getCoreVersion(key as ClashCore_Deserialize),
+              ) ?? 'N/A';
 
-            result[key as ClashCore] = {
-              name: ClashCores[key as ClashCore],
+            result[key as ClashCore_Serialize] = {
+              name: ClashCores[key as ClashCore_Serialize],
               currentVersion,
             };
           } catch (e) {
             console.error('failed to fetch core version', e);
-            result[key as ClashCore] = {
-              name: ClashCores[key as ClashCore],
+            result[key as ClashCore_Serialize] = {
+              name: ClashCores[key as ClashCore_Serialize],
               currentVersion: 'N/A',
             };
           }
@@ -75,9 +80,9 @@ export const useClashCores = () => {
         Object.entries(results).forEach(([_key, latestVersion]) => {
           const key = kebabCase(_key);
 
-          if (updatedData[key as ClashCore]) {
-            updatedData[key as ClashCore] = {
-              ...updatedData[key as ClashCore],
+          if (updatedData[key as ClashCore_Serialize]) {
+            updatedData[key as ClashCore_Serialize] = {
+              ...updatedData[key as ClashCore_Serialize],
               latestVersion,
             };
           }
@@ -90,7 +95,7 @@ export const useClashCores = () => {
   });
 
   const updateCore = useMutation({
-    mutationFn: async (core: ClashCore) => {
+    mutationFn: async (core: ClashCore_Deserialize) => {
       return unwrapResult(await commands.updateCore(core));
     },
     onSuccess: () => {
@@ -99,7 +104,7 @@ export const useClashCores = () => {
   });
 
   const upsert = useMutation({
-    mutationFn: async (core: ClashCore) => {
+    mutationFn: async (core: ClashCore_Deserialize) => {
       return unwrapResult(await commands.changeClashCore(core));
     },
     onSuccess: () => {
