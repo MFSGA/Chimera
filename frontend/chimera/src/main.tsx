@@ -4,10 +4,7 @@ import React from 'react';
 import ReactDOM, { createRoot } from 'react-dom/client';
 import { routeTree } from './routeTree.gen';
 import { setupFrontendConsoleBridge } from './services/frontend-console-bridge';
-import './services/i18n';
-// import React from "react";
 // manually import language utils, inject paraglide custom strategy
-// todo: use language
 import '@/utils/language-new';
 
 const container = document.getElementById('root')!;

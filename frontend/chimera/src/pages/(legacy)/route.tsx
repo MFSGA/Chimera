@@ -7,7 +7,6 @@ import { useAtom, useSetAtom } from 'jotai';
 import { PropsWithChildren, useEffect } from 'react';
 import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
-import LocalesProvider from '@/components/app/locales-provider';
 import NoticeProvider from '@/components/layout/notice-provider';
 import PageTransition from '@/components/layout/page-transition';
 import SchemeProvider from '@/components/layout/scheme-provider';
@@ -60,7 +59,6 @@ function Layout() {
         <StyledEngineProvider injectFirst>
           <ThemeModeProvider>
             <CssBaseline />
-            <LocalesProvider />
             <NoticeProvider />
             <SchemeProvider />
             <UpdaterDialog />
