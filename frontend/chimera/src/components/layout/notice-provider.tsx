@@ -1,6 +1,5 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useEffect, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
 import { notification, NotificationType } from '@/utils/notification';
 
 type SetConfigPayload =
@@ -38,7 +37,6 @@ const getSetConfigError = (payload?: SetConfigPayload | null) => {
 };
 
 export const NoticeProvider = () => {
-  const { t } = useTranslation();
   const unlistenRef = useRef<UnlistenFn | null>(null);
 
   useEffect(() => {
@@ -47,8 +45,8 @@ export const NoticeProvider = () => {
 
       if (setConfigStatus === 'ok') {
         notification({
-          title: t('Successful'),
-          body: t('Refresh Clash Config'),
+          title: 'Successful',
+          body: 'Refresh Clash Config',
           type: NotificationType.Success,
         }).catch((error) => {
           console.error(error);
@@ -58,7 +56,7 @@ export const NoticeProvider = () => {
 
       if (setConfigStatus === 'err') {
         notification({
-          title: t('Error'),
+          title: 'Error',
           body: getSetConfigError(payload?.set_config) ?? undefined,
           type: NotificationType.Error,
         }).catch((error) => {
@@ -71,7 +69,7 @@ export const NoticeProvider = () => {
       })
       .catch((error) => {
         notification({
-          title: t('Error'),
+          title: 'Error',
           body: error.message,
           type: NotificationType.Error,
         }).catch((notificationError) => {
@@ -82,7 +80,7 @@ export const NoticeProvider = () => {
     return () => {
       unlistenRef.current?.();
     };
-  }, [t]);
+  }, []);
 
   return null;
 };

@@ -3,15 +3,13 @@ import { Bolt, Done } from '@mui/icons-material';
 import { Button, CircularProgress, Tooltip } from '@mui/material';
 import { useDebounceFn, useLockFn } from 'ahooks';
 import { memo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 
 export const DelayButton = memo(function DelayButton({
   onClick,
 }: {
   onClick: () => Promise<void>;
 }) {
-  const { t } = useTranslation();
-
   const [loading, setLoading] = useState(false);
 
   const [mounted, setMounted] = useState(false);
@@ -37,7 +35,7 @@ export const DelayButton = memo(function DelayButton({
   const isSuccess = mounted && !loading;
 
   return (
-    <Tooltip title={t('Latency check')}>
+    <Tooltip title={m.proxies_group_delay_test_title()}>
       <Button
         className="!fixed right-8 bottom-8 z-10 size-16 !rounded-2xl backdrop-blur"
         sx={(theme) => ({
