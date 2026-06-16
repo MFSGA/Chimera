@@ -11,9 +11,9 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useTranslation } from 'react-i18next';
 import { SearchTermCtx } from '@/components/connections/connection-search-term';
 import HeaderSearch from '@/components/connections/header-search';
+import * as m from '@/paraglide/messages';
 
 const Component = lazy(
   () => import('@/components/connections/connection-page'),
@@ -31,8 +31,6 @@ export const Route = createFileRoute('/(legacy)/connections')({
 });
 
 function Connections() {
-  const { t } = useTranslation();
-
   const [openColumnFilter, setOpenColumnFilter] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState<string>();
@@ -78,7 +76,7 @@ function Connections() {
   return (
     <SearchTermCtx.Provider value={throttledSearchTerm}>
       <BasePage
-        title={t('Connections')}
+        title={m.navbar_label_connections()}
         full
         header={
           <div className="flex max-h-96 w-full flex-1 items-center justify-between gap-2 pl-5">

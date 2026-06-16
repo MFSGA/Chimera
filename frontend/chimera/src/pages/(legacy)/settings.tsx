@@ -5,7 +5,7 @@ import { IconButton } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { lazy, Suspense } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 
 const SettingPageComponent = lazy(
@@ -17,8 +17,6 @@ export const Route = createFileRoute('/(legacy)/settings')({
 });
 
 function SettingPage() {
-  const { t } = useTranslation();
-
   const GithubIcon = () => {
     const toGithubRepo = useLockFn(() => {
       return openThat('https://github.com/MFSGA/Chimera');
@@ -53,7 +51,7 @@ function SettingPage() {
     });
 
     return (
-      <IconButton color="inherit" title={t('Feedback')} onClick={toFeedback}>
+      <IconButton color="inherit" title={'Feedback'} onClick={toFeedback}>
         <Feedback fontSize="inherit" />
       </IconButton>
     );
@@ -61,7 +59,7 @@ function SettingPage() {
 
   return (
     <BasePage
-      title={t('Settings')}
+      title={m.navbar_label_settings()}
       header={
         <div className="flex gap-1">
           <FeedbackIcon />

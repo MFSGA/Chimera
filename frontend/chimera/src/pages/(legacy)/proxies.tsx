@@ -11,7 +11,6 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { useAtom } from 'jotai';
 import { RefObject, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import ContentDisplay from '@/components/base/content-display';
 import {
   DelayButton,
@@ -22,6 +21,7 @@ import {
 import ProxyGroupName from '@/components/proxies/proxy-group-name';
 import ScrollCurrentNode from '@/components/proxies/scroll-current-node';
 import SortSelector from '@/components/proxies/sort-selector';
+import * as m from '@/paraglide/messages';
 import { proxyGroupAtom } from '@/store';
 import { proxiesFilterAtom } from '@/store/proxies';
 
@@ -31,7 +31,6 @@ export const Route = createFileRoute('/(legacy)/proxies')({
 
 function SideBar() {
   const [proxiesFilter, setProxiesFilter] = useAtom(proxiesFilterAtom);
-  const { t } = useTranslation();
 
   return (
     <TextField
@@ -39,7 +38,7 @@ function SideBar() {
       fullWidth
       autoComplete="off"
       spellCheck="false"
-      placeholder={t('Filter conditions')}
+      placeholder={'Filter conditions'}
       className="!pb-0"
       sx={{ input: { py: 1.2, fontSize: 14 } }}
       value={proxiesFilter || ''}
@@ -63,8 +62,6 @@ function SideBar() {
 }
 
 function ProxyPage() {
-  const { t } = useTranslation();
-
   const { value: proxyMode, upsert } = useProxyMode();
 
   const {
@@ -114,6 +111,13 @@ function ProxyPage() {
     await upsert(key);
   });
 
+  const modeLabels: Record<string, string> = {
+    rule: 'Rule',
+    global: 'Global',
+    direct: 'Direct',
+    script: 'Script',
+  };
+
   const Header = useMemo(() => {
     return (
       <div className="flex items-center gap-1">
@@ -136,13 +140,13 @@ function ProxyPage() {
               selected={enabled}
             >
               {enabled && <Check className="mr-[0.1rem] -ml-2 scale-75" />}
-              {t(key)}
+              {modeLabels[key] ?? key}
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
       </div>
     );
-  }, [handleSwitch, proxyMode, t]);
+  }, [handleSwitch, proxyMode]);
 
   const leftViewportRef = useRef<HTMLDivElement>(null);
 
@@ -150,7 +154,7 @@ function ProxyPage() {
 
   return (
     <SidePage
-      title={t('Proxy Groups')}
+      title={'Proxy Groups'}
       leftViewportRef={leftViewportRef}
       rightViewportRef={rightViewportRef}
       header={Header}
@@ -199,10 +203,10 @@ function ProxyPage() {
             <DelayButton onClick={handleDelayClick} />
           </>
         ) : (
-          <ContentDisplay className="absolute" message={t('No Proxies')} />
+          <ContentDisplay className="absolute" message={'No Proxies'} />
         )
       ) : (
-        <ContentDisplay className="absolute" message={t('Direct Mode')} />
+        <ContentDisplay className="absolute" message={'Direct Mode'} />
       )}
     </SidePage>
   );
