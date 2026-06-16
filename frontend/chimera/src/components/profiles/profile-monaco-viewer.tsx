@@ -2,17 +2,20 @@ import { OS } from '@/consts';
 import '@/services/monaco';
 import { openThat } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import MonacoEditor, { type Monaco } from '@monaco-editor/react';
+import MonacoEditor from '@monaco-editor/react';
 import { useAtomValue } from 'jotai';
 import { type JSONSchema7 } from 'json-schema';
 import nyanpasuMergeSchema from 'meta-json-schema/schemas/clash-nyanpasu-merge-json-schema.json';
 import clashMetaSchema from 'meta-json-schema/schemas/meta-json-schema.json';
-import { type editor } from 'monaco-editor';
+import * as monaco from 'monaco-editor';
 import { configureMonacoYaml } from 'monaco-yaml';
 import { nanoid } from 'nanoid';
 import { useCallback, useMemo, useRef } from 'react';
 // schema
 import { themeMode } from '@/store';
+
+type IMarker = monaco.editor.IMarker;
+type IStandaloneCodeEditor = monaco.editor.IStandaloneCodeEditor;
 
 export interface ProfileMonacoViewProps {
   value?: string;
@@ -21,7 +24,7 @@ export interface ProfileMonacoViewProps {
   className?: string;
   readonly?: boolean;
   schemaType?: 'clash' | 'merge';
-  onValidate?: (markers: editor.IMarker[]) => void;
+  onValidate?: (markers: IMarker[]) => void;
 }
 
 export interface ProfileMonacoViewRef {
@@ -30,10 +33,13 @@ export interface ProfileMonacoViewRef {
 
 let initd = false;
 
-export const beforeEditorMount = (monaco: Monaco) => {
+export const beforeEditorMount = () => {
   if (!initd) {
-    monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
-      target: monaco.languages.typescript.ScriptTarget.ES2020,
+    // typescriptDefaults and ScriptTarget are deprecated in monaco-editor v0.55+, use type assertion
+    const tsDefaults = (monaco.languages.typescript as any).typescriptDefaults;
+    const ScriptTarget = (monaco.languages.typescript as any).ScriptTarget;
+    tsDefaults.setCompilerOptions({
+      target: ScriptTarget.ES2020,
       allowNonTsExtensions: true,
       allowJs: true,
     });
@@ -119,7 +125,7 @@ export default function ProfileMonacoViewer({
     [schemaType, language],
   );
 
-  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = useRef<IStandaloneCodeEditor | null>(null);
 
   const onChange = useCallback(
     (value: string | undefined) => {
@@ -131,7 +137,7 @@ export default function ProfileMonacoViewer({
   );
 
   const handleEditorDidMount = useCallback(
-    (editor: editor.IStandaloneCodeEditor, monaco: Monaco) => {
+    (editor: IStandaloneCodeEditor, _monaco: typeof monaco) => {
       editorRef.current = editor;
 
       // Enable URL detection and handling

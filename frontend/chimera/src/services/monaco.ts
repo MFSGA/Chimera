@@ -6,7 +6,7 @@ import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js';
 import 'monaco-editor/esm/vs/editor/editor.all.js';
 import 'monaco-editor/esm/vs/editor/contrib/links/browser/links.js';
 // language services
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import * as monaco from 'monaco-editor';
 import 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js';
 // others
 import { loader } from '@monaco-editor/react';
