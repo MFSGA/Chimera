@@ -18,12 +18,11 @@ import {
 import Grid from '@mui/material/Grid';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
-import { useTranslation } from 'react-i18next';
+import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 import Dataline, { type DatalineProps } from './dataline';
 
 export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
-  const { t } = useTranslation();
   const { data: clashTraffic } = useClashTraffic();
   const { data: clashMemory } = useClashMemory();
   const {
@@ -47,7 +46,7 @@ export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
         MAX_TRAFFIC_HISTORY,
       ),
       icon: ArrowDownward,
-      title: t('Download Traffic'),
+      title: m.dashboard_widget_traffic_download(),
       total: clashConnections?.at(-1)?.downloadTotal,
       type: 'speed',
       visible,
@@ -58,7 +57,7 @@ export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
         MAX_TRAFFIC_HISTORY,
       ),
       icon: ArrowUpward,
-      title: t('Upload Traffic'),
+      title: m.dashboard_widget_traffic_upload(),
       total: clashConnections?.at(-1)?.uploadTotal,
       type: 'speed',
       visible,
@@ -69,7 +68,7 @@ export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
         MAX_CONNECTIONS_HISTORY,
       ),
       icon: SettingsEthernet,
-      title: t('Active Connections'),
+      title: m.dashboard_widget_connections(),
       type: 'raw',
       visible,
     },
@@ -82,7 +81,7 @@ export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
         MAX_MEMORY_HISTORY,
       ),
       icon: MemoryOutlined,
-      title: t('Memory'),
+      title: m.dashboard_widget_memory(),
       visible,
     });
   }
