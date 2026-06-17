@@ -20,6 +20,8 @@
       "@root/*": ["../../*"],
       "@/*": ["./src/*"],
       "~/*": ["./*"],
+      "@chimera/interface": ["../interface/src/index.ts"],
+      "@chimera/interface/*": ["../interface/src/*"],
       "@chimera/utils": ["../utils/src/index.ts"],
       "@chimera/utils/*": ["../utils/src/*"],
       "@interface/*": ["../interface/src/*"],
@@ -33,10 +35,6 @@
   "references": [
     {
       "path": "./tsconfig.node.json",
-    },
-    // to import types from interface correctly in the local env.
-    {
-      "path": "../interface",
     },
   ],
 }
