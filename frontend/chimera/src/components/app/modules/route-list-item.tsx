@@ -76,7 +76,8 @@ export const RouteListItem = ({
         <Box
           className={cn(
             'w-full pt-1 pb-1 text-nowrap',
-            language && languageQuirks[language].drawer.itemClassNames,
+            language &&
+              languageQuirks[language.toLowerCase()]?.drawer.itemClassNames,
           )}
           sx={(theme) => ({
             color: match ? theme.vars.palette.primary.main : undefined,
