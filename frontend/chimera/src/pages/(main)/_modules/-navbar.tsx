@@ -104,45 +104,62 @@ export default function Navbar({ className, ...props }: ComponentProps<'div'>) {
     }
   });
 
+  /**
+   * 导航栏项目列表
+   *
+   * 迁移自 ref: `src/pages/(main)/_modules/navbar.tsx`
+   *
+   * 路由映射：
+   * - Dashboard → `/main/dashboard`（着陆页）
+   * - Proxies → `/main/proxies`（已迁移）
+   * - Profiles → `/main/profiles`（已迁移）
+   * - Connections → `/main/connections`（已迁移）
+   * - Rules → `/main/rules`（已迁移）
+   * - Logs → `/main/logs`（已迁移）
+   * - Settings → `/main/settings`（已迁移）
+   * - Providers → `/main/providers`（已迁移）
+   *
+   * TODO: 页面迁移完成后，移除到 legacy UI 的切换按钮
+   */
   const navItems = [
     {
-      to: '/main',
-      activeWhen: '/main',
+      to: '/main/dashboard',
+      activeWhen: '/main/dashboard',
       label: 'Dashboard',
       icon: <DashboardRounded />,
     },
     {
-      to: '/main',
+      to: '/main/proxies',
       activeWhen: '/main/proxies',
       label: 'Proxies',
       icon: <Public />,
     },
     {
-      to: '/main',
+      to: '/main/profiles',
       activeWhen: '/main/profiles',
       label: 'Profiles',
       icon: <GridViewRounded />,
     },
     {
-      to: '/main',
+      to: '/main/connections',
       activeWhen: '/main/connections',
       label: 'Connections',
       icon: <SettingsEthernetRounded />,
     },
     {
-      to: '/main',
+      to: '/main/rules',
       activeWhen: '/main/rules',
       label: 'Rules',
       icon: <DesignServicesRounded />,
     },
     {
-      to: '/main',
+      to: '/main/logs',
       activeWhen: '/main/logs',
       label: 'Logs',
       icon: <TerminalRounded />,
     },
     {
-      to: '/main',
+      to: '/main/settings',
       activeWhen: '/main/settings',
       label: 'Settings',
       icon: <SettingsRounded />,
