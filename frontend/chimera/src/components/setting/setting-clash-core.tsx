@@ -1,6 +1,6 @@
 import {
-  ClashCore,
   ClashCores,
+  type ClashCore_Serialize,
   useClashConnections,
   useClashCores,
   useClashVersion,
@@ -45,7 +45,7 @@ export const SettingClashCore = () => {
         : clashVersion?.version || '-';
   }, [clashVersion]);
 
-  const changeClashCore = useLockFn(async (core: ClashCore) => {
+  const changeClashCore = useLockFn(async (core: ClashCore_Serialize) => {
     try {
       loading.mask = true;
       try {
@@ -145,9 +145,9 @@ export const SettingClashCore = () => {
               >
                 <ClashCoreItem
                   data={item}
-                  core={core as ClashCore}
+                  core={core as ClashCore_Serialize}
                   selected={core === currentCore}
-                  onClick={() => changeClashCore(core as ClashCore)}
+                  onClick={() => changeClashCore(core as ClashCore_Serialize)}
                 />
               </motion.div>
             );

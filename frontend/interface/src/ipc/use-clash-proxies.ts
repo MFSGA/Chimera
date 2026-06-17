@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClashDelayOptions } from '@/service';
+import { ClashDelayOptions } from '../service';
 import { unwrapResult } from '../utils';
 import {
   commands,
