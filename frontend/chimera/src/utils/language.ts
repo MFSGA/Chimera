@@ -1,8 +1,8 @@
 export const languageOptions = {
   en: 'English',
   ru: 'Русский',
-  'zh-CN': '简体中文',
-  'zh-TW': '繁體中文',
+  'zh-cn': '简体中文',
+  'zh-tw': '繁體中文',
 };
 
 export const languageQuirks: {
@@ -23,12 +23,12 @@ export const languageQuirks: {
       minWidth: 240,
     },
   },
-  'zh-CN': {
+  'zh-cn': {
     drawer: {
       minWidth: 180,
     },
   },
-  'zh-TW': {
+  'zh-tw': {
     drawer: {
       minWidth: 180,
     },
