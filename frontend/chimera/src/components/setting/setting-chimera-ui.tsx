@@ -8,7 +8,9 @@ import { useAtom } from 'jotai';
 import { MuiColorInput } from 'mui-color-input';
 import { useEffect, useState } from 'react';
 import { isHexColor } from 'validator';
+import { useLanguage } from '@/components/providers/language-provider';
 import * as m from '@/paraglide/messages';
+import type { Locale } from '@/paraglide/runtime';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import { languageOptions } from '@/utils/language';
 import { DEFAULT_COLOR } from '../layout/use-custom-theme';
@@ -20,15 +22,15 @@ const commonSx = {
 };
 
 const LanguageSwitch = () => {
-  const language = useSetting('language');
+  const { setLanguage, language: currentLocale } = useLanguage();
 
   return (
     <MenuItem
       label={m.settings_user_interface_language_label()}
       selectSx={commonSx}
       options={languageOptions}
-      selected={language.value || 'en'}
-      onSelected={(value) => language.upsert(value as string)}
+      selected={currentLocale || 'en'}
+      onSelected={(value) => setLanguage(value as Locale)}
     />
   );
 };
