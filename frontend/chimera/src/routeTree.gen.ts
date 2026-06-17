@@ -22,7 +22,9 @@ import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
 import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
 import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/providers/route'
+import { Route as mainMainDashboardRouteRouteImport } from './pages/(main)/main/dashboard/route'
 import { Route as mainMainProvidersIndexRouteImport } from './pages/(main)/main/providers/index'
+import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
 
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
@@ -87,10 +89,20 @@ const mainMainProvidersRouteRoute = mainMainProvidersRouteRouteImport.update({
   path: '/main/providers',
   getParentRoute: () => mainRouteRoute,
 } as any)
+const mainMainDashboardRouteRoute = mainMainDashboardRouteRouteImport.update({
+  id: '/main/dashboard',
+  path: '/main/dashboard',
+  getParentRoute: () => mainRouteRoute,
+} as any)
 const mainMainProvidersIndexRoute = mainMainProvidersIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => mainMainProvidersRouteRoute,
+} as any)
+const mainMainDashboardIndexRoute = mainMainDashboardIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainDashboardRouteRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -103,8 +115,10 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main/dashboard': typeof mainMainDashboardRouteRouteWithChildren
   '/main/providers': typeof mainMainProvidersRouteRouteWithChildren
   '/main/': typeof mainMainIndexRoute
+  '/main/dashboard/': typeof mainMainDashboardIndexRoute
   '/main/providers/': typeof mainMainProvidersIndexRoute
 }
 export interface FileRoutesByTo {
@@ -118,6 +132,7 @@ export interface FileRoutesByTo {
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
   '/main': typeof mainMainIndexRoute
+  '/main/dashboard': typeof mainMainDashboardIndexRoute
   '/main/providers': typeof mainMainProvidersIndexRoute
 }
 export interface FileRoutesById {
@@ -133,8 +148,10 @@ export interface FileRoutesById {
   '/(legacy)/rules': typeof legacyRulesRoute
   '/(legacy)/settings': typeof legacySettingsRoute
   '/(legacy)/': typeof legacyIndexRoute
+  '/(main)/main/dashboard': typeof mainMainDashboardRouteRouteWithChildren
   '/(main)/main/providers': typeof mainMainProvidersRouteRouteWithChildren
   '/(main)/main/': typeof mainMainIndexRoute
+  '/(main)/main/dashboard/': typeof mainMainDashboardIndexRoute
   '/(main)/main/providers/': typeof mainMainProvidersIndexRoute
 }
 export interface FileRouteTypes {
@@ -149,8 +166,10 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main/dashboard'
     | '/main/providers'
     | '/main/'
+    | '/main/dashboard/'
     | '/main/providers/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -164,6 +183,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/'
     | '/main'
+    | '/main/dashboard'
     | '/main/providers'
   id:
     | '__root__'
@@ -178,8 +198,10 @@ export interface FileRouteTypes {
     | '/(legacy)/rules'
     | '/(legacy)/settings'
     | '/(legacy)/'
+    | '/(main)/main/dashboard'
     | '/(main)/main/providers'
     | '/(main)/main/'
+    | '/(main)/main/dashboard/'
     | '/(main)/main/providers/'
   fileRoutesById: FileRoutesById
 }
@@ -281,12 +303,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProvidersRouteRouteImport
       parentRoute: typeof mainRouteRoute
     }
+    '/(main)/main/dashboard': {
+      id: '/(main)/main/dashboard'
+      path: '/main/dashboard'
+      fullPath: '/main/dashboard'
+      preLoaderRoute: typeof mainMainDashboardRouteRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
     '/(main)/main/providers/': {
       id: '/(main)/main/providers/'
       path: '/'
       fullPath: '/main/providers/'
       preLoaderRoute: typeof mainMainProvidersIndexRouteImport
       parentRoute: typeof mainMainProvidersRouteRoute
+    }
+    '/(main)/main/dashboard/': {
+      id: '/(main)/main/dashboard/'
+      path: '/'
+      fullPath: '/main/dashboard/'
+      preLoaderRoute: typeof mainMainDashboardIndexRouteImport
+      parentRoute: typeof mainMainDashboardRouteRoute
     }
   }
 }
@@ -319,6 +355,20 @@ const legacyRouteRouteWithChildren = legacyRouteRoute._addFileChildren(
   legacyRouteRouteChildren,
 )
 
+interface mainMainDashboardRouteRouteChildren {
+  mainMainDashboardIndexRoute: typeof mainMainDashboardIndexRoute
+}
+
+const mainMainDashboardRouteRouteChildren: mainMainDashboardRouteRouteChildren =
+  {
+    mainMainDashboardIndexRoute: mainMainDashboardIndexRoute,
+  }
+
+const mainMainDashboardRouteRouteWithChildren =
+  mainMainDashboardRouteRoute._addFileChildren(
+    mainMainDashboardRouteRouteChildren,
+  )
+
 interface mainMainProvidersRouteRouteChildren {
   mainMainProvidersIndexRoute: typeof mainMainProvidersIndexRoute
 }
@@ -334,11 +384,13 @@ const mainMainProvidersRouteRouteWithChildren =
   )
 
 interface mainRouteRouteChildren {
+  mainMainDashboardRouteRoute: typeof mainMainDashboardRouteRouteWithChildren
   mainMainProvidersRouteRoute: typeof mainMainProvidersRouteRouteWithChildren
   mainMainIndexRoute: typeof mainMainIndexRoute
 }
 
 const mainRouteRouteChildren: mainRouteRouteChildren = {
+  mainMainDashboardRouteRoute: mainMainDashboardRouteRouteWithChildren,
   mainMainProvidersRouteRoute: mainMainProvidersRouteRouteWithChildren,
   mainMainIndexRoute: mainMainIndexRoute,
 }
