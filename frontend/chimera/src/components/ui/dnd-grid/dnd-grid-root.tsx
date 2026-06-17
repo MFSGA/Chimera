@@ -16,7 +16,6 @@
  * 回调以完成拖拽放置。
  */
 
-import { useCallback, useRef, useState, type PropsWithChildren } from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -27,6 +26,7 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
+import { useCallback, useRef, useState, type PropsWithChildren } from 'react';
 import {
   DndGridRootContext,
   type ActiveDrag,
@@ -126,7 +126,9 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     const { reg, plainId } = found;
     const { sourceOnly, getCellSize, onSourceDragStart } = reg;
 
-    const data = e.active.data.current as { w?: number; h?: number } | undefined;
+    const data = e.active.data.current as
+      | { w?: number; h?: number }
+      | undefined;
     const { cellW, cellH, gap } = getCellSize();
     const w = data?.w ?? 2;
     const h = data?.h ?? 2;

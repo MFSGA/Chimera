@@ -20,13 +20,13 @@
  * - 考虑复用 ref 的 DelayChip 设计，或统一 Chimera 的 DelayChip 组件
  */
 
+import { type ClashProxiesQueryProxyItem } from '@chimera/interface';
+import { cn } from '@chimera/ui';
 import FlashOnRounded from '~icons/material-symbols/flash-on-rounded';
-import { type ComponentProps, type MouseEvent, useMemo } from 'react';
+import { useMemo, type ComponentProps, type MouseEvent } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
-import { type ClashProxiesQueryProxyItem } from '@chimera/interface';
-import { cn } from '@chimera/ui';
 
 /**
  * 延迟测试结果的背景色映射

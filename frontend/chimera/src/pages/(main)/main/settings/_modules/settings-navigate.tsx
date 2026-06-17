@@ -17,6 +17,8 @@
  * - 使用 Button 组件 variant="fab" + asChild 模式（支持）
  */
 
+import { cn } from '@chimera/ui';
+import { Link, useLocation } from '@tanstack/react-router';
 import DisplayExternalInput from '~icons/material-symbols/display-external-input-rounded';
 import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-rounded';
 import SettingsBoltRounded from '~icons/material-symbols/settings-b-roll-rounded';
@@ -27,8 +29,6 @@ import type { ComponentProps, ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
-import { cn } from '@chimera/ui';
-import { Link, useLocation } from '@tanstack/react-router';
 
 /**
  * Chimera Logo（内联 SVG）

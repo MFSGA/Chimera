@@ -24,10 +24,14 @@ export default function LogLevelBadge({
       className={cn(
         'inline-block rounded-full px-2 py-0.5 text-xs font-semibold uppercase',
         'bg-opacity-20',
-        childrenLower === 'info' && 'bg-blue-500/20 text-blue-600 dark:text-blue-400',
-        childrenLower === 'warning' && 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400',
-        childrenLower === 'error' && 'bg-red-500/20 text-red-600 dark:text-red-400',
-        childrenLower === 'debug' && 'bg-gray-500/20 text-gray-600 dark:text-gray-400',
+        childrenLower === 'info' &&
+          'bg-blue-500/20 text-blue-600 dark:text-blue-400',
+        childrenLower === 'warning' &&
+          'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400',
+        childrenLower === 'error' &&
+          'bg-red-500/20 text-red-600 dark:text-red-400',
+        childrenLower === 'debug' &&
+          'bg-gray-500/20 text-gray-600 dark:text-gray-400',
         className,
       )}
       {...props}

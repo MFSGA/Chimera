@@ -23,12 +23,12 @@
 import { useProfile } from '@chimera/interface';
 import { Public } from '@mui/icons-material';
 import { Grid } from '@mui/material';
-import { AnimatePresence, motion } from 'framer-motion';
 import { createFileRoute } from '@tanstack/react-router';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useMemo } from 'react';
 import ProfileItem from '@/components/profiles/profile-item';
 import { filterProfiles } from '@/components/profiles/utils';
-import { ProfileType, PROFILE_TYPE_NAMES } from '../_modules/consts';
+import { PROFILE_TYPE_NAMES, ProfileType } from '../_modules/consts';
 
 export const Route = createFileRoute('/(main)/main/profiles/$type/')({
   component: RouteComponent,
@@ -67,7 +67,10 @@ function RouteComponent() {
       </div>
 
       {/* 配置网格 */}
-      <div className="flex-1 overflow-y-auto p-4 pt-0" data-slot="profiles-type-list">
+      <div
+        className="flex-1 overflow-y-auto p-4 pt-0"
+        data-slot="profiles-type-list"
+      >
         {profileItems.length > 0 ? (
           <Grid container spacing={2}>
             {profileItems.map((item) => (

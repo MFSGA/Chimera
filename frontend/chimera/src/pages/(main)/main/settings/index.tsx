@@ -42,7 +42,7 @@ function RouteComponent() {
     <div className="min-h-full p-4" data-slot="settings-legacy-content">
       <Suspense
         fallback={
-          <div className="flex items-center justify-center p-8 text-on-surface-variant">
+          <div className="text-on-surface-variant flex items-center justify-center p-8">
             Loading...
           </div>
         }

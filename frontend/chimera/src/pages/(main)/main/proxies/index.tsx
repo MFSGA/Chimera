@@ -12,9 +12,9 @@
  * - 移动端（isMobile）：显示 ProxiesNavigate 作为独立页面
  */
 
+import { createFileRoute } from '@tanstack/react-router';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import useIsMobile from '@/hooks/use-is-moblie';
-import { createFileRoute } from '@tanstack/react-router';
 import ProxiesNavigate from './_modules/proxies-navigate';
 
 export const Route = createFileRoute('/(main)/main/proxies/')({

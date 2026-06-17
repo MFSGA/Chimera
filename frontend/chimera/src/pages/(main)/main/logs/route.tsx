@@ -20,12 +20,9 @@
 import { Tooltip } from '@mui/material';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import { useMemo } from 'react';
-import {
-  Sidebar,
-  SidebarContent,
-} from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import * as m from '@/paraglide/messages';
 import { LogLevel } from './_modules/consts';
 
@@ -51,10 +48,11 @@ export const Route = createFileRoute('/(main)/main/logs')({
   validateSearch: (search: Record<string, unknown>) => {
     const level = search.level;
     return {
-      level: typeof level === 'string' &&
+      level:
+        typeof level === 'string' &&
         Object.values(LogLevel).includes(level as LogLevel)
-        ? (level as LogLevel)
-        : undefined,
+          ? (level as LogLevel)
+          : undefined,
     };
   },
 });
@@ -81,14 +79,7 @@ function LogLevelButton({
       <Button
         variant="fab"
         data-active={String(isActive)}
-        className={`
-          h-12 min-w-0 px-3 flex items-center gap-2
-          data-[active=true]:bg-surface-variant/50
-          data-[active=false]:bg-transparent
-          data-[active=false]:shadow-none
-          data-[active=false]:hover:shadow-none
-          data-[active=false]:hover:bg-surface-variant/30
-        `}
+        className={`data-[active=true]:bg-surface-variant/50 data-[active=false]:hover:bg-surface-variant/30 flex h-12 min-w-0 items-center gap-2 px-3 data-[active=false]:bg-transparent data-[active=false]:shadow-none data-[active=false]:hover:shadow-none`}
         asChild
       >
         <Link
@@ -124,7 +115,7 @@ function RouteComponent() {
     <Sidebar data-slot="logs-container">
       {/* 左侧侧栏：日志级别过滤 */}
       <SidebarContent
-        className="border-r border-outline-variant"
+        className="border-outline-variant border-r"
         data-slot="logs-sidebar"
       >
         <ScrollArea className="min-h-0 w-full flex-1">

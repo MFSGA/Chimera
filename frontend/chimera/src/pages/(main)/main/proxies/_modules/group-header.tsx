@@ -17,22 +17,18 @@
  * - 配合 useScrollArea 的滚动方向检测，动态调整 padding
  */
 
+import { cn } from '@chimera/ui';
+import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
 import type { ComponentProps } from 'react';
 import { Button } from '@/components/ui/button';
-import { cn } from '@chimera/ui';
-import { Link } from '@tanstack/react-router';
 
 /**
  * 返回按钮（仅移动端显示）
  */
 const BackButton = () => {
   return (
-    <Button
-      icon
-      className="flex items-center justify-center md:hidden"
-      asChild
-    >
+    <Button icon className="flex items-center justify-center md:hidden" asChild>
       <Link to="/main/proxies" search={{ searchQuery: undefined }}>
         <ArrowBackIosNewRounded className="size-4" />
       </Link>

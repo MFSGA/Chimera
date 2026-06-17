@@ -8,11 +8,11 @@
  *   用于在 GroupHeader 中显示当前组的实时流量（下载/上传速度）
  */
 
-import { useMemo } from 'react';
 import {
   useClashConnections,
   type ClashProxiesQueryGroupItem,
 } from '@chimera/interface';
+import { useMemo } from 'react';
 
 /**
  * 查找经过当前代理组的活跃连接

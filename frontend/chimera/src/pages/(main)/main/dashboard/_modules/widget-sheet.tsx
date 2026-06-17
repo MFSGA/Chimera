@@ -14,13 +14,13 @@
  * - 拖拽开始时自动关闭抽屉（通过 onSourceDragStart）
  */
 
+import { cn } from '@chimera/ui';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { useMemo, useState } from 'react';
 import { Drawer } from 'vaul';
 import { Button } from '@/components/ui/button';
 import { DndGrid, type GridSize } from '@/components/ui/dnd-grid';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { cn } from '@chimera/ui';
 import { RENDER_MAP, WIDGET_MIN_SIZE_MAP, WidgetId } from './consts';
 import { useDashboardContext } from './provider';
 

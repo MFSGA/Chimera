@@ -20,6 +20,16 @@
  * - 接口包路径改为 @chimera/interface
  */
 
+import {
+  MAX_CONNECTIONS_HISTORY,
+  MAX_MEMORY_HISTORY,
+  MAX_TRAFFIC_HISTORY,
+  useClashConnections,
+  useClashMemory,
+  useClashTraffic,
+  type ClashConnection,
+} from '@chimera/interface';
+import { cn } from '@chimera/ui';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
@@ -28,16 +38,6 @@ import { filesize } from 'filesize';
 import type { ComponentProps, ComponentType } from 'react';
 import { Sparkline } from '@/components/ui/sparkline';
 import TextMarquee from '@/components/ui/text-marquee';
-import { cn } from '@chimera/ui';
-import {
-  type ClashConnection,
-  MAX_CONNECTIONS_HISTORY,
-  MAX_MEMORY_HISTORY,
-  MAX_TRAFFIC_HISTORY,
-  useClashConnections,
-  useClashMemory,
-  useClashTraffic,
-} from '@chimera/interface';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import WidgetItem from './widget-item';
@@ -134,10 +134,7 @@ function SparklineCardTitle({
 /**
  * SparklineCardContent — 主要数值显示
  */
-function SparklineCardContent({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+function SparklineCardContent({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn('text-2xl font-bold text-nowrap text-shadow-md', className)}
@@ -260,7 +257,9 @@ export function ConnectionsWidget({ id, onCloseClick }: WidgetComponentProps) {
     <SparklineCard
       id={id}
       data={padData(
-        clashConnections?.map((item: ClashConnection) => item.connections?.length ?? 0),
+        clashConnections?.map(
+          (item: ClashConnection) => item.connections?.length ?? 0,
+        ),
         MAX_CONNECTIONS_HISTORY,
       )}
       onCloseClick={onCloseClick}

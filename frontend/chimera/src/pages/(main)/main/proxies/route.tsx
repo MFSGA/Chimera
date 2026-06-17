@@ -22,6 +22,9 @@
  * - Step 3: @tanstack/react-virtual 多列网格 + GroupHeader + ProxyNodeButton
  */
 
+import { ProxyMode, useClashProxies, useProxyMode } from '@chimera/interface';
+import { cn } from '@chimera/ui';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import DirectionsRunRounded from '~icons/material-symbols/directions-run-rounded';
 import Search from '~icons/material-symbols/search';
@@ -31,13 +34,6 @@ import { Button } from '@/components/ui/button';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import { useLockFn } from '@/hooks/use-lock-fn';
-import {
-  ProxyMode,
-  useClashProxies,
-  useProxyMode,
-} from '@chimera/interface';
-import { cn } from '@chimera/ui';
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
 import ProxiesNavigate from './_modules/proxies-navigate';
 
@@ -51,9 +47,7 @@ export const Route = createFileRoute('/(main)/main/proxies')({
   component: RouteComponent,
   validateSearch: (search: Record<string, unknown>) => ({
     searchQuery:
-      typeof search.searchQuery === 'string'
-        ? search.searchQuery
-        : undefined,
+      typeof search.searchQuery === 'string' ? search.searchQuery : undefined,
   }),
 });
 
@@ -115,10 +109,7 @@ const Empty = () => {
         </div>
       ) : (
         <Button variant="raised" data-slot="proxies-no-proxies-button" asChild>
-          <Link
-            className="flex items-center gap-2"
-            to="/main/profiles"
-          >
+          <Link className="flex items-center gap-2" to="/main/profiles">
             {m.proxies_group_empty_button_text()}
           </Link>
         </Button>
@@ -150,8 +141,7 @@ function RouteComponent() {
   } = useClashProxies();
 
   // 检查无代理组的情况
-  const isNoProxies =
-    !proxies?.groups?.length || proxies?.groups?.length === 0;
+  const isNoProxies = !proxies?.groups?.length || proxies?.groups?.length === 0;
 
   const proxyMode = useProxyMode();
 
@@ -231,7 +221,7 @@ function RouteComponent() {
                   'focus-within:ring-primary/30 focus-within:ring-2',
                 )}
               >
-                <Search className="size-5 shrink-0 text-on-surface-variant" />
+                <Search className="text-on-surface-variant size-5 shrink-0" />
 
                 <input
                   className={cn(

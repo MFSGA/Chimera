@@ -17,15 +17,10 @@
  * - 连接详情中可添加更多可视化信息（流量折线图等）
  */
 
+import { useClashConnections } from '@chimera/interface';
 import { BaseDialog, cn } from '@chimera/ui';
 import { Close, InfoOutlined } from '@mui/icons-material';
-import {
-  Button,
-  List,
-  ListItem,
-  Menu,
-  MenuItem,
-} from '@mui/material';
+import { Button, List, ListItem, Menu, MenuItem } from '@mui/material';
 import { useLockFn } from 'ahooks';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
@@ -38,9 +33,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { useClashConnections } from '@chimera/interface';
 import * as m from '@/paraglide/messages';
-
 import type { ConnectionRow } from '../index';
 
 /**
@@ -97,7 +90,8 @@ function ConnectionDetailDialog({
 
         {Object.entries(data.metadata)
           .filter(
-            ([, value]) => value !== undefined && value !== null && value !== '',
+            ([, value]) =>
+              value !== undefined && value !== null && value !== '',
           )
           .map(([key, value]) => (
             <DetailListItem key={key} label={key} value={value} />
@@ -120,13 +114,7 @@ function ConnectionDetailDialog({
   );
 }
 
-function DetailListItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: unknown;
-}) {
+function DetailListItem({ label, value }: { label: string; value: unknown }) {
   const mono =
     label === 'id' ||
     label.includes('IP') ||
@@ -137,10 +125,10 @@ function DetailListItem({
   return (
     <ListItem disableGutters divider>
       <div className="flex min-w-0 flex-col py-1">
-        <div className="text-xs text-on-surface-variant">
+        <div className="text-on-surface-variant text-xs">
           {sentenceCase(label)}
         </div>
-        <div className={cn('break-all text-sm', mono && 'font-mono text-xs')}>
+        <div className={cn('text-sm break-all', mono && 'font-mono text-xs')}>
           {formatDetailValue(label, value)}
         </div>
       </div>
@@ -218,14 +206,17 @@ export default function TableRow({
   /**
    * 处理右键打开上下文菜单
    */
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu(
-      contextMenu === null
-        ? { mouseX: e.clientX - 2, mouseY: e.clientY - 4 }
-        : null,
-    );
-  }, [contextMenu]);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setContextMenu(
+        contextMenu === null
+          ? { mouseX: e.clientX - 2, mouseY: e.clientY - 4 }
+          : null,
+      );
+    },
+    [contextMenu],
+  );
 
   /**
    * 关闭上下文菜单
@@ -265,7 +256,12 @@ export default function TableRow({
             : undefined
         }
       >
-        <MenuItem onClick={() => { setDetailOpen(true); handleCloseContextMenu(); }}>
+        <MenuItem
+          onClick={() => {
+            setDetailOpen(true);
+            handleCloseContextMenu();
+          }}
+        >
           <InfoOutlined className="mr-2 !size-4" />
           {m.connections_view_details()}
         </MenuItem>

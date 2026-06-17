@@ -18,15 +18,15 @@
  * - 配合 useScrollArea 的 content-bottom 检测，动态调整按钮位置
  */
 
+import { useClashProxies } from '@chimera/interface';
+import { cn } from '@chimera/ui';
+import { Tooltip } from '@mui/material';
 import BoltRounded from '~icons/material-symbols/bolt-rounded';
 import { useState } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
-import { Tooltip } from '@mui/material';
 import * as m from '@/paraglide/messages';
-import { cn } from '@chimera/ui';
-import { useClashProxies } from '@chimera/interface';
 import { Route as NameRoute } from '../$name';
 
 /**

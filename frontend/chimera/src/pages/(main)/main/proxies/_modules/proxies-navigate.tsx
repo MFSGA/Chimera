@@ -15,8 +15,8 @@
 
 import { useClashProxies } from '@chimera/interface';
 import { cn, LazyImage } from '@chimera/ui';
-import { Button } from '@/components/ui/button';
 import { Link, useLocation } from '@tanstack/react-router';
+import { Button } from '@/components/ui/button';
 
 /**
  * 代理组导航组件

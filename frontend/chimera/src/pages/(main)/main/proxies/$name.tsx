@@ -25,6 +25,14 @@
  * - 添加排序功能（按延迟或名称）
  */
 
+import {
+  useClashProxies,
+  useProxyMode,
+  type ClashProxiesQueryGroupItem,
+} from '@chimera/interface';
+import { useContainerBreakpointValue } from '@chimera/ui';
+import { createFileRoute, useSearch } from '@tanstack/react-router';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import ArrowDownwardAltRounded from '~icons/material-symbols/arrow-downward-alt-rounded';
 import ArrowUpwardAltRounded from '~icons/material-symbols/arrow-upward-alt-rounded';
 import Radar from '~icons/material-symbols/radar';
@@ -32,17 +40,9 @@ import { filesize } from 'filesize';
 import { useCallback, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { useScrollArea } from '@/components/ui/scroll-area';
-import {
-  type ClashProxiesQueryGroupItem,
-  useClashProxies,
-  useProxyMode,
-} from '@chimera/interface';
-import { useContainerBreakpointValue } from '@chimera/ui';
-import { createFileRoute, useSearch } from '@tanstack/react-router';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { useCurrentGroupConnection } from './_modules/hooks';
 import DelayTestButton from './_modules/delay-test-button';
 import GroupHeader from './_modules/group-header';
+import { useCurrentGroupConnection } from './_modules/hooks';
 import ProxyNodeButton from './_modules/proxy-node-button';
 
 /**
@@ -174,8 +174,9 @@ function RouteComponent() {
 
           {/* 搜索匹配数（仅在有搜索条件时显示） */}
           {searchQuery && (
-            <span className="text-xs text-on-surface-variant/70">
-              匹配 {filteredProxies.length} / {currentGroup?.all?.length ?? 0} 个节点
+            <span className="text-on-surface-variant/70 text-xs">
+              匹配 {filteredProxies.length} / {currentGroup?.all?.length ?? 0}{' '}
+              个节点
             </span>
           )}
 

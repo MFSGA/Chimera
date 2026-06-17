@@ -13,8 +13,12 @@
  * 拖拽激活后，即使来源网格卸载，DndGridRoot 仍持有拖拽状态和 onSourceDrop 回调。
  */
 
+import type {
+  DragEndEvent,
+  DragMoveEvent,
+  DragStartEvent,
+} from '@dnd-kit/core';
 import { createContext, useContext } from 'react';
-import type { DragEndEvent, DragMoveEvent, DragStartEvent } from '@dnd-kit/core';
 
 /**
  * 网格在 DndGridRoot 中的注册信息

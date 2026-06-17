@@ -23,10 +23,7 @@
  * - 添加配置搜索过滤
  */
 
-import {
-  RemoteProfileOptionsBuilder,
-  useProfile,
-} from '@chimera/interface';
+import { RemoteProfileOptionsBuilder, useProfile } from '@chimera/interface';
 import {
   ErrorOutlined,
   Public,
@@ -289,10 +286,7 @@ function ProfilePage() {
         不使用 SidePage 包装，(main) 布局已提供导航栏
         链编辑侧栏（ProfileSide）作为覆盖层在内容之上显示
       */}
-      <div
-        className="flex min-h-0 flex-1"
-        data-slot="profiles-content-wrapper"
-      >
+      <div className="flex min-h-0 flex-1" data-slot="profiles-content-wrapper">
         {/* 主内容区 */}
         <div
           className="flex min-w-0 flex-1 flex-col overflow-hidden"

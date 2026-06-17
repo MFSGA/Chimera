@@ -14,25 +14,25 @@
  * - 使用 @chimera/interface 的 hooks 替代 @nyanpasu/interface
  */
 
-import NetworkPing from '~icons/material-symbols/network-ping';
-import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
-import { useMemo } from 'react';
-import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
-import { Button } from '@/components/ui/button';
-import TextMarquee from '@/components/ui/text-marquee';
-import { cn } from '@chimera/ui';
-import { m } from '@/paraglide/messages';
 import {
-  type CoreState,
+  getCoreStatus,
   useClashConfig,
   useClashCores,
   useSetting,
   useSystemProxy,
   useSystemService,
+  type CoreState,
 } from '@chimera/interface';
-import { getCoreStatus } from '@chimera/interface';
+import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
+import NetworkPing from '~icons/material-symbols/network-ping';
+import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
+import { useMemo } from 'react';
 import useSWR from 'swr';
+import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
+import { Button } from '@/components/ui/button';
+import TextMarquee from '@/components/ui/text-marquee';
+import { m } from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import WidgetItem from './widget-item';
 
@@ -133,7 +133,7 @@ export function ProxyShortcutsWidget({
 
   return (
     <WidgetItem id={id} minW={3} minH={2} onCloseClick={onCloseClick}>
-      <div className="flex size-full flex-col justify-between rounded-3xl bg-surface-variant/30">
+      <div className="bg-surface-variant/30 flex size-full flex-col justify-between rounded-3xl">
         <ProxyTitleRow />
 
         <div className="flex flex-1 gap-3 p-2">
@@ -268,7 +268,7 @@ const CurrentCoreCard = () => {
       <Link to="/main/settings">
         {/* 核心图标区域 */}
         <div
-          className="flex size-12 shrink-0 items-center justify-center rounded-full bg-surface-variant"
+          className="bg-surface-variant flex size-12 shrink-0 items-center justify-center rounded-full"
           data-slot="core-icon"
         >
           <SettingsEthernet className="size-6" />
@@ -337,7 +337,7 @@ export function CoreShortcutsWidget({
 }: WidgetComponentProps) {
   return (
     <WidgetItem id={id} minW={4} minH={2} onCloseClick={onCloseClick}>
-      <div className="flex size-full flex-col justify-between rounded-3xl bg-surface-variant/30 p-2">
+      <div className="bg-surface-variant/30 flex size-full flex-col justify-between rounded-3xl p-2">
         <div className="flex items-center gap-3 px-1">
           <span className="shrink-0 font-bold">
             {m.dashboard_widget_core_status()}

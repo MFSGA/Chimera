@@ -18,26 +18,25 @@
  * - 添加 Inspect 子路由支持
  */
 
-import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
-import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
-import CodeRounded from '~icons/material-symbols/code-rounded';
-import CallMergeRounded from '~icons/material-symbols/call-merge-rounded';
-import SearchRounded from '~icons/material-symbols/search-rounded';
-import { mapValues } from 'lodash-es';
-import { type ComponentProps, type ReactNode, useMemo } from 'react';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
-import * as m from '@/paraglide/messages';
 import { useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Link, useMatchRoute } from '@tanstack/react-router';
-
+import CallMergeRounded from '~icons/material-symbols/call-merge-rounded';
+import CodeRounded from '~icons/material-symbols/code-rounded';
+import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
+import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
+import SearchRounded from '~icons/material-symbols/search-rounded';
+import { mapValues } from 'lodash-es';
+import { useMemo, type ComponentProps, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import * as m from '@/paraglide/messages';
 /**
  * 使用共享常量（ProfileType, PROFILE_TYPE_CONDITIONS）
  * 迁移自 ref: `src/pages/(main)/main/profiles/_modules/consts.ts`
  */
 
-import { ProfileType, PROFILE_TYPE_CONDITIONS } from './consts';
+import { PROFILE_TYPE_CONDITIONS, ProfileType } from './consts';
 
 /**
  * 导航按钮组件

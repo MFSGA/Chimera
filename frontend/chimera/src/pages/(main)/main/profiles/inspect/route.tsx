@@ -12,8 +12,8 @@
  * - 后续可添加配置内省功能（YAML/JS/Lua 解析与可视化）
  */
 
-import { createFileRoute } from '@tanstack/react-router';
 import DescriptionOutlined from '@mui/icons-material/DescriptionOutlined';
+import { createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/(main)/main/profiles/inspect')({
   component: RouteComponent,

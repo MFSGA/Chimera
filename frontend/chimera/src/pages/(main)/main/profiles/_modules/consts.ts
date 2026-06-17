@@ -46,8 +46,6 @@ export const PROFILE_TYPE_CONDITIONS = {
   [ProfileType.JavaScript]: [
     { type: 'script' as const, script_type: 'javascript' as const },
   ],
-  [ProfileType.Lua]: [
-    { type: 'script' as const, script_type: 'lua' as const },
-  ],
+  [ProfileType.Lua]: [{ type: 'script' as const, script_type: 'lua' as const }],
   [ProfileType.Merge]: [{ type: 'merge' as const }],
 } as const;

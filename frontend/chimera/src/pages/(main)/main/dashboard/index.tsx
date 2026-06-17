@@ -29,8 +29,12 @@
  * - 跳过 ref 的 context-menu（Chimera 无此基础设施），改用 EditAction 编辑按钮
  */
 
+import { useKvStorage } from '@chimera/interface';
+import { DragOverlay } from '@dnd-kit/core';
+import { createFileRoute } from '@tanstack/react-router';
 import EditRounded from '~icons/material-symbols/edit-rounded';
 import { useCallback, useRef, useState } from 'react';
+import { Button } from '@/components/ui/button';
 import {
   DndGrid,
   DndGridRoot,
@@ -40,10 +44,6 @@ import {
   type GridSize,
 } from '@/components/ui/dnd-grid';
 import { hasOverlap } from '@/components/ui/dnd-grid/utils';
-import { Button } from '@/components/ui/button';
-import { DragOverlay } from '@dnd-kit/core';
-import { useKvStorage } from '@chimera/interface';
-import { createFileRoute } from '@tanstack/react-router';
 import {
   DashboardItem,
   DEFAULT_ITEMS,

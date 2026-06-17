@@ -30,12 +30,9 @@ import { cn } from '@chimera/ui';
 import { Tooltip } from '@mui/material';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import { useMemo, type ComponentProps } from 'react';
-import {
-  Sidebar,
-  SidebarContent,
-} from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import * as m from '@/paraglide/messages';
 
 /**
@@ -53,7 +50,10 @@ export const Route = createFileRoute('/(main)/main/connections')({
  * 侧栏内容容器
  * 使用 ScrollArea 使内容可滚动
  */
-const ProxySelectorContent = ({ className, ...props }: ComponentProps<'div'>) => {
+const ProxySelectorContent = ({
+  className,
+  ...props
+}: ComponentProps<'div'>) => {
   return <div className={cn('p-2', className)} {...props} />;
 };
 
@@ -98,9 +98,7 @@ function ProxyFilterItem({
             <div
               className={cn(
                 'size-2 rounded-full',
-                item === proxy
-                  ? 'bg-primary'
-                  : 'bg-surface-variant',
+                item === proxy ? 'bg-primary' : 'bg-surface-variant',
               )}
             />
           </div>

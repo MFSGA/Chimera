@@ -30,7 +30,7 @@ import {
   type ClashConnectionItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { InboxOutlined, CloseRounded } from '@mui/icons-material';
+import { CloseRounded, InboxOutlined } from '@mui/icons-material';
 import { IconButton, Tooltip } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import {
@@ -43,21 +43,27 @@ import {
   type Updater,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useLocalStorage } from '@uidotdev/usehooks';
 import { useLockFn } from 'ahooks';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useLocalStorage } from '@uidotdev/usehooks';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Button } from '@/components/ui/button';
 import {
   AppContentScrollArea,
   useScrollArea,
 } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
-import parseTraffic from '@/utils/parse-traffic';
 import { containsSearchTerm } from '@/utils';
-import { Route as ConnectionsRoute } from './route';
+import parseTraffic from '@/utils/parse-traffic';
 import TableRow from './_modules/table-row';
+import { Route as ConnectionsRoute } from './route';
 
 // 启用 dayjs relativeTime 插件
 dayjs.extend(relativeTime);
@@ -205,9 +211,11 @@ function Viewer({ search }: { search: string }) {
           size: 320,
           cell: (info) => (
             <HighlightText
-              text={info.row.original.metadata.host ||
+              text={
+                info.row.original.metadata.host ||
                 info.row.original.metadata.destinationIP ||
-                ''}
+                ''
+              }
               search={search}
             />
           ),
@@ -589,7 +597,11 @@ function RouteComponent() {
         />
 
         <Tooltip title={m.connections_close_all_connections()}>
-          <IconButton size="small" color="inherit" onClick={handleCloseAllConnections}>
+          <IconButton
+            size="small"
+            color="inherit"
+            onClick={handleCloseAllConnections}
+          >
             <CloseRounded />
           </IconButton>
         </Tooltip>

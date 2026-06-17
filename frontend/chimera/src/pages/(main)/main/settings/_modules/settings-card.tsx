@@ -16,23 +16,17 @@
  * - 使用 data-slot 属性标识组件角色，方便 QA 定位
  */
 
-import { type ComponentProps } from 'react';
 import { cn } from '@chimera/ui';
+import { type ComponentProps } from 'react';
 
 /**
  * SettingsLabel — 设置区域标签
  * 用于分隔不同设置区块的文本标签
  */
-export function SettingsLabel({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+export function SettingsLabel({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
-      className={cn(
-        'text-on-primary-container px-3 py-3 text-sm',
-        className,
-      )}
+      className={cn('text-on-primary-container px-3 py-3 text-sm', className)}
       data-slot="settings-label"
       {...props}
     />
@@ -47,10 +41,7 @@ export function SettingsLabel({
  * - 末个元素：下圆角，上平角
  * - 中间元素：无圆角
  */
-export function SettingsGroup({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+export function SettingsGroup({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn(
@@ -70,15 +61,12 @@ export function SettingsGroup({
  * SettingsCard — 设置卡片
  * 使用 Card 语义的外观容器，包裹设置项
  */
-export function SettingsCard({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+export function SettingsCard({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn(
         // ref 的 Card 组件样式映射：圆角 + 背景色 + 投影
-        'rounded-xl bg-surface-variant/20 shadow-sm',
+        'bg-surface-variant/20 rounded-xl shadow-sm',
         className,
       )}
       data-slot="settings-card"
@@ -142,16 +130,10 @@ export function SettingsCardContent({
  * ItemContainer — 设置项行容器
  * 使用 flex 布局将标签和操作控件分列两侧
  */
-export function ItemContainer({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+export function ItemContainer({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
-      className={cn(
-        'flex items-center justify-between gap-4',
-        className,
-      )}
+      className={cn('flex items-center justify-between gap-4', className)}
       data-slot="settings-card-content-item-container"
       {...props}
     />
@@ -162,10 +144,7 @@ export function ItemContainer({
  * ItemLabel — 设置项标签容器
  * 包含标题文本和描述文本，垂直排列
  */
-export function ItemLabel({
-  className,
-  ...props
-}: ComponentProps<'div'>) {
+export function ItemLabel({ className, ...props }: ComponentProps<'div'>) {
   return (
     <div
       className={cn('flex flex-col gap-0.5', className)}
@@ -179,10 +158,7 @@ export function ItemLabel({
  * ItemLabelText — 设置项标题文本
  * 粗体，用于标识设置项名称
  */
-export function ItemLabelText({
-  className,
-  ...props
-}: ComponentProps<'p'>) {
+export function ItemLabelText({ className, ...props }: ComponentProps<'p'>) {
   return (
     <p
       className={cn('text-base font-medium', className)}
@@ -202,10 +178,7 @@ export function ItemLabelDescription({
 }: ComponentProps<'p'>) {
   return (
     <p
-      className={cn(
-        'text-on-surface-variant text-sm',
-        className,
-      )}
+      className={cn('text-on-surface-variant text-sm', className)}
       data-slot="settings-card-content-item-label-description"
       {...props}
     />

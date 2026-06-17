@@ -10,11 +10,11 @@
  * - 使用 ref 相同的 Sidebar 布局模式（与 Proxies 一致）
  */
 
+import { cn } from '@chimera/ui';
+import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
-import { cn } from '@chimera/ui';
-import { createFileRoute } from '@tanstack/react-router';
 import SettingsNavigate from './_modules/settings-navigate';
 
 export const Route = createFileRoute('/(main)/main/settings')({
@@ -46,10 +46,7 @@ function RouteComponent() {
         data-slot="settings-content-scroll-area"
       >
         <div
-          className={cn(
-            'container mx-auto w-full max-w-7xl',
-            'min-h-full',
-          )}
+          className={cn('container mx-auto w-full max-w-7xl', 'min-h-full')}
           data-slot="settings-content"
         >
           <AnimatedOutletPreset />

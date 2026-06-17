@@ -10,12 +10,12 @@
  * 点击后通过 onCloseClick 回调通知父组件删除该 widget。
  */
 
+import { cn } from '@chimera/ui';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { DndGridItem, type DndGridItemProps } from '@/components/ui/dnd-grid';
 import { useDndGridContext } from '@/components/ui/dnd-grid/context';
-import { cn } from '@chimera/ui';
 import type { WidgetComponentProps } from './consts';
 
 export type WidgetItemProps = DndGridItemProps<string> & WidgetComponentProps;

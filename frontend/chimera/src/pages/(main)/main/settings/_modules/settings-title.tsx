@@ -16,13 +16,13 @@
  * - 动画时长和缓动曲线匹配 ref: 0.5s, [0.32, 0.72, 0, 1]
  */
 
+import { cn } from '@chimera/ui';
+import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useId, type ComponentProps } from 'react';
 import { Button } from '@/components/ui/button';
 import { useScrollArea } from '@/components/ui/scroll-area';
-import { cn } from '@chimera/ui';
-import { Link } from '@tanstack/react-router';
 
 /**
  * 返回按钮 — 仅在移动端 (md 以下) 显示

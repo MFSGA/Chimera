@@ -110,7 +110,7 @@ function Viewer({ search }: { search: string }) {
         accessorKey: 'payload',
         header: 'Payload',
         cell: (info) => (
-          <span className="text-sm font-mono break-all">
+          <span className="font-mono text-sm break-all">
             {info.row.original.payload || ''}
           </span>
         ),
@@ -194,7 +194,7 @@ function Viewer({ search }: { search: string }) {
                     <td
                       key={id}
                       data-slot="rules-virtual-td"
-                      className="px-3 py-2 text-sm truncate"
+                      className="truncate px-3 py-2 text-sm"
                     >
                       {flexRender(column.columnDef.cell, getContext())}
                     </td>

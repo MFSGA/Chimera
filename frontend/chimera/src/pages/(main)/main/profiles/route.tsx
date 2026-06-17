@@ -19,11 +19,11 @@
  * - 添加 inspect 子路由（配置内省）
  */
 
+import { cn } from '@chimera/ui';
+import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
-import { cn } from '@chimera/ui';
-import { createFileRoute } from '@tanstack/react-router';
 import ProfilesNavigate from './_modules/profiles-navigate';
 
 /**

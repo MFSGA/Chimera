@@ -184,7 +184,7 @@ function Viewer({
           >
             <div className="flex items-center gap-1">
               {/* 日志时间 */}
-              <span className="text-xs text-surface-variant">
+              <span className="text-surface-variant text-xs">
                 {log.time || ''}
               </span>
 
@@ -193,7 +193,7 @@ function Viewer({
             </div>
 
             {/* 日志内容 */}
-            <div className="font-normal text-wrap text-sm">
+            <div className="text-sm font-normal text-wrap">
               {log.payload || ''}
             </div>
           </div>

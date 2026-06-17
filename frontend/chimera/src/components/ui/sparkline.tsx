@@ -17,11 +17,11 @@
  * 4. 使用 framer-motion animate 进行高性能动画驱动
  */
 
+import { cn } from '@chimera/ui';
 import * as d3 from 'd3';
 import { animate } from 'framer-motion';
 import { cloneDeep } from 'lodash-es';
 import { useEffect, useRef, type ComponentPropsWithoutRef } from 'react';
-import { cn } from '@chimera/ui';
 
 /**
  * 变异系数（标准差/均值）阈值
@@ -85,8 +85,14 @@ export const Sparkline = ({
             ? STABLE_TOP_FACTOR
             : ACTIVE_TOP_FACTOR;
 
-      const x = d3.scaleLinear().domain([0, points.length - 1]).range(xRange);
-      const y = d3.scaleLinear().domain([0, yMax]).range([height, height * topFactor]);
+      const x = d3
+        .scaleLinear()
+        .domain([0, points.length - 1])
+        .range(xRange);
+      const y = d3
+        .scaleLinear()
+        .domain([0, yMax])
+        .range([height, height * topFactor]);
 
       // Catmull-Rom 样条（alpha=0.5）生成平滑曲线
       const lineGen = d3

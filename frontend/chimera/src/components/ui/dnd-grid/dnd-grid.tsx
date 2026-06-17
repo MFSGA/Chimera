@@ -19,15 +19,7 @@
  * 4. 放置后通过 onLayoutChange 通知外部更新
  */
 
-import { AnimatePresence, motion } from 'framer-motion';
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react';
+import { cn } from '@chimera/ui';
 import {
   DndContext,
   DragOverlay,
@@ -39,7 +31,15 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { cn } from '@chimera/ui';
+import { AnimatePresence, motion } from 'framer-motion';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { DndGridProvider } from './context';
 import { useDndGridRoot, type GridRegistration } from './root-context';
 import type {
