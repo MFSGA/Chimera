@@ -176,7 +176,7 @@ function ProfilePage() {
       } catch (error) {
         message(`failed to update profiles: \n${formatError(error)}`, {
           kind: 'error',
-          title: 'Error',
+          title: m.common_error(),
         });
       }
     });

@@ -3,6 +3,7 @@ import { Bolt } from '@mui/icons-material';
 import { CircularProgress } from '@mui/material';
 import { memo, useState } from 'react';
 import { useColorSxForDelay } from '@/hooks/theme';
+import * as m from '@/paraglide/messages';
 import { mergeSxProps } from '@/utils/mui-theme';
 import FeatureChip from './feature-chip';
 
@@ -49,7 +50,7 @@ export const DelayChip = memo(function DelayChip({
             ) : !!delay && delay < 10000 ? (
               `${delay} ms`
             ) : (
-              'timeout'
+              m.proxies_delay_timeout()
             )}
           </span>
 

@@ -120,7 +120,7 @@ const CoreSecret = () => {
 
 export const SettingClashExternal = () => {
   return (
-    <BaseCard label={'Clash External Controll'}>
+    <BaseCard label={m.settings_label_external_controll()}>
       <List disablePadding>
         <ExternalController />
         <PortStrategy />

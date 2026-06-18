@@ -41,7 +41,7 @@ export const QuickImport = () => {
     if (url) {
       return (
         <>
-          <Tooltip title={'Clear'}>
+          <Tooltip title={m.common_clear()}>
             <IconButton size="small" onClick={() => setUrl('')}>
               <ClearRounded fontSize="inherit" />
             </IconButton>
@@ -57,7 +57,7 @@ export const QuickImport = () => {
     }
 
     return (
-      <Tooltip title={'Paste'}>
+      <Tooltip title={m.common_paste()}>
         <IconButton size="small" onClick={onCopyLink}>
           <ContentCopyRounded fontSize="inherit" />
         </IconButton>

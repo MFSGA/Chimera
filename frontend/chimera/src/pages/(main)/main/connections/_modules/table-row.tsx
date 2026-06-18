@@ -85,7 +85,9 @@ function ConnectionDetailDialog({
           ))}
 
         <ListItem disableGutters>
-          <div className="pt-2 text-sm font-semibold">Metadata</div>
+          <div className="pt-2 text-sm font-semibold">
+            {m.connections_metadata_label()}
+          </div>
         </ListItem>
 
         {Object.entries(data.metadata)

@@ -116,14 +116,16 @@ export const ServiceShortcuts = () => {
       <Paper className="flex !h-full flex-col justify-between gap-2 !rounded-3xl p-3">
         {serviceStatus ? (
           <>
-            <div className="text-center font-bold">Service</div>
+            <div className="text-center font-bold">
+              {m.settings_system_proxy_system_service_ctrl_label()}
+            </div>
 
             <div className="flex w-full flex-col gap-2">
               <Box
                 className="flex w-full justify-center gap-[2px] rounded-2xl py-2"
                 sx={status.sx}
               >
-                <div>Service Status</div>
+                <div>{m.settings_system_service_status_label()}</div>
                 <div>{status.label}</div>
               </Box>
 
@@ -147,7 +149,7 @@ export const ServiceShortcuts = () => {
           <div className="flex w-full flex-col items-center justify-center gap-2">
             <CircularProgress />
 
-            <div>Loading...</div>
+            <div>{m.common_loading()}</div>
           </div>
         )}
       </Paper>

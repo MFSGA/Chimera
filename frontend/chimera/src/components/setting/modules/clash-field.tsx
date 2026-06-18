@@ -12,6 +12,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { ChangeEvent, useState } from 'react';
 import ReactFastMarquee from 'react-fast-marquee';
+import * as m from '@/paraglide/messages';
 
 const Marquee = ((
   ReactFastMarquee as unknown as { default?: typeof ReactFastMarquee }
@@ -79,7 +80,7 @@ export const LabelSwitch = ({
         <Typography noWrap>{label}</Typography>
 
         {url && (
-          <Tooltip title="What this field?">
+          <Tooltip title={m.settings_clash_fields_what_tooltip()}>
             <IconButton size="small" onClick={() => openThat(url)}>
               <OpenInNewRounded sx={{ width: 16, height: 16 }} />
             </IconButton>
@@ -155,7 +156,7 @@ export const ClashFieldItem = ({
 
             <Marquee speed={36}>
               <Box sx={{ display: 'flex', gap: 1, paddingRight: 16 }}>
-                <span>Enabled: </span>
+                <span>{m.common_enabled()}: </span>
 
                 {fields.map((item, index) => {
                   return <span key={index}>{item}</span>;

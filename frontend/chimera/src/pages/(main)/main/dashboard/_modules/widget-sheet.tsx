@@ -21,6 +21,7 @@ import { Drawer } from 'vaul';
 import { Button } from '@/components/ui/button';
 import { DndGrid, type GridSize } from '@/components/ui/dnd-grid';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import * as m from '@/paraglide/messages';
 import { RENDER_MAP, WIDGET_MIN_SIZE_MAP, WidgetId } from './consts';
 import { useDashboardContext } from './provider';
 
@@ -89,7 +90,7 @@ export function WidgetSheet({
           {/* 头部标题 + 关闭按钮 */}
           <div className="flex items-center justify-between gap-4 p-4">
             <Drawer.Title className="text-lg font-semibold">
-              添加小组件
+              {m.dashboard_add_widget()}
             </Drawer.Title>
 
             <Drawer.Close asChild>

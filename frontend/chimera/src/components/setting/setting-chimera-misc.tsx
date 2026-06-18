@@ -45,10 +45,15 @@ const BreakWhenProxyChange = () => {
         (checked ? 'none' : 'all') as BreakWhenProxyChangeType,
       );
     } catch (error) {
-      message(`Update break when proxy change failed!\n${formatError(error)}`, {
-        title: 'Error',
-        kind: 'error',
-      });
+      message(
+        m.settings_proxies_break_change_update_failed() +
+          '\n' +
+          formatError(error),
+        {
+          title: m.common_error(),
+          kind: 'error',
+        },
+      );
     }
   });
 
@@ -98,7 +103,7 @@ const TrayProxiesSelector = () => {
 
   return (
     <MenuItem
-      label={'Tray Proxies Selector'}
+      label={m.settings_nyanpasu_proxies_selector_label()}
       options={trayProxiesSelectorMode}
       selected={value || 'normal'}
       onSelected={(value) => upsert(value as ProxiesSelectorMode)}
@@ -123,7 +128,7 @@ const LightenAnimationEffects = () => {
 
   return (
     <SwitchItem
-      label={'Lighten Up Animation Effects'}
+      label={m.settings_nyanpasu_lighten_animations_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />

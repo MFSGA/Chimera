@@ -217,7 +217,9 @@ const CurrentSystemProxy = () => {
           </div>
         ))
       ) : (
-        <div className="leading-8">{'No System Proxy'}</div>
+        <div className="leading-8">
+          {m.settings_system_proxy_no_proxy_label()}
+        </div>
       )}
     </ListItem>
   );

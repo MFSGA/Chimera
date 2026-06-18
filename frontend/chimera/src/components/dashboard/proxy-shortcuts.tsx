@@ -28,7 +28,7 @@ const TitleComp = () => {
       const port = Number(systemProxyServer?.split(':')[1]);
       if (port === mixedPort) {
         return {
-          label: 'Successful',
+          label: m.common_successful(),
           color: 'success',
         };
       }
@@ -75,7 +75,7 @@ export const ProxyShortcuts = () => {
       await message(
         `Activation System Proxy failed! \n Error: ${formatError(error)}`,
         {
-          title: 'Error',
+          title: m.common_error(),
           kind: 'error',
         },
       );
@@ -89,7 +89,7 @@ export const ProxyShortcuts = () => {
       await message(
         `Activation TUN Mode failed! \n Error: ${formatError(error)}`,
         {
-          title: 'Error',
+          title: m.common_error(),
           kind: 'error',
         },
       );

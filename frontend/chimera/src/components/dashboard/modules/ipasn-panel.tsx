@@ -10,6 +10,7 @@ import Paper from '@mui/material/Paper';
 import Tooltip from '@mui/material/Tooltip';
 import { useAtomValue } from 'jotai';
 import { useState } from 'react';
+import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 
 const IP_REFRESH_SECONDS = 180;
@@ -65,7 +66,7 @@ export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
               <div className="flex items-end justify-between text-xl font-bold text-shadow-md">
                 <div className="truncate">{data.country}</div>
 
-                <Tooltip title="Click to Refresh Now">
+                <Tooltip title={m.dashboard_refresh_now_tooltip()}>
                   <Button
                     className="!size-8 !min-w-0"
                     loading={isValidating}

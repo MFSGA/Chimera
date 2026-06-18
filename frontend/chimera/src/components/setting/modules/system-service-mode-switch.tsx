@@ -18,7 +18,7 @@ export const ServiceModeSwitch = () => {
       message(
         `Activation Service Mode failed! \n Error: ${formatError(error)}`,
         {
-          title: 'Error',
+          title: m.common_error(),
           kind: 'error',
         },
       );

@@ -99,10 +99,15 @@ const TunStack = () => {
           // need manual mutate to refetch runtime profile
           await runtimeProfile.refetch();
         } catch (error) {
-          message(`Change Tun Stack failed ! \n Error: ${formatError(error)}`, {
-            title: 'Error',
-            kind: 'error',
-          });
+          message(
+            m.settings_clash_tun_stack_change_failed() +
+              ' \n ' +
+              formatError(error),
+            {
+              title: m.common_error(),
+              kind: 'error',
+            },
+          );
         }
       }}
     />
@@ -141,16 +146,19 @@ const UWPTool = () => {
     try {
       await openUWPTool();
     } catch (e) {
-      message(`Failed to Open UWP Tools.\n${JSON.stringify(e)}`, {
-        title: 'Error',
-        kind: 'error',
-      });
+      message(
+        m.settings_clash_uwp_tool_open_failed() + '\n' + JSON.stringify(e),
+        {
+          title: m.common_error(),
+          kind: 'error',
+        },
+      );
     }
   };
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
-      <ListItemText primary={'Open UWP Tool'} />
+      <ListItemText primary={m.settings_clash_open_uwp_tool_label()} />
 
       <Button variant="contained" onClick={handleClick}>
         {m.common_open()}

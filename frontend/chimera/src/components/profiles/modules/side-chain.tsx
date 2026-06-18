@@ -45,7 +45,7 @@ export const SideChain = () => {
           <div className="text-sm opacity-70">{m.profile_profile_label()}</div>
           <div className="mt-1 text-lg font-bold">
             {isGlobalChainCurrent
-              ? 'All Profiles'
+              ? m.profile_all_profiles()
               : (currentProfile?.name ?? '-')}
           </div>
 
@@ -98,7 +98,7 @@ export const SideChain = () => {
                   variant="outlined"
                   onClick={handleOpenFile}
                 >
-                  {'Open File'}
+                  {m.profile_menu_open_file()}
                 </Button>
               </div>
             </>
@@ -106,11 +106,13 @@ export const SideChain = () => {
         </div>
 
         <div className="rounded-3xl border border-white/10 p-4">
-          <div className="mb-2 text-sm opacity-70">{'Chains'}</div>
+          <div className="mb-2 text-sm opacity-70">
+            {m.profile_chains_label()}
+          </div>
 
           <ContentDisplay
             className="min-h-48"
-            message={'Chain profiles are not available in this build yet'}
+            message={m.profile_chains_not_available()}
           />
         </div>
       </div>

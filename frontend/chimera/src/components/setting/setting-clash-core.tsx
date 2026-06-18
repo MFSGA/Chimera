@@ -56,17 +56,17 @@ export const SettingClashCore = () => {
 
       await switchCore.mutateAsync(core);
 
-      message('Successfully switched to the clash core: ' + ClashCores[core], {
+      message(m.settings_clash_core_switch_success() + ClashCores[core], {
         kind: 'info',
-        title: 'Successful',
+        title: m.common_success(),
       });
     } catch (e) {
       message(
-        'Failed to switch. You could see the details in the log: ' +
+        m.settings_clash_core_switch_failed() +
           `${e instanceof Error ? e.message : String(e)}`,
         {
           kind: 'error',
-          title: 'Error',
+          title: m.common_error(),
         },
       );
     } finally {
@@ -78,19 +78,15 @@ export const SettingClashCore = () => {
     try {
       await restartSidecar();
 
-      message('Successfully restarted the core', {
+      message(m.settings_clash_core_restart_success(), {
         kind: 'info',
-        title: 'Successful',
+        title: m.common_success(),
       });
     } catch (e) {
-      message(
-        'Failed to restart. You could see the details in the log' +
-          formatError(e),
-        {
-          kind: 'error',
-          title: 'Error',
-        },
-      );
+      message(m.settings_clash_core_restart_failed() + formatError(e), {
+        kind: 'error',
+        title: m.common_error(),
+      });
     }
   };
 
@@ -98,15 +94,10 @@ export const SettingClashCore = () => {
     try {
       await fetchRemote.mutateAsync();
     } catch (e) {
-      message(
-        'Failed to fetch. Please check your network connection' +
-          '\n' +
-          formatError(e),
-        {
-          kind: 'error',
-          title: 'Error',
-        },
-      );
+      message(m.settings_clash_core_fetch_failed() + '\n' + formatError(e), {
+        kind: 'error',
+        title: m.common_error(),
+      });
     }
   };
 
