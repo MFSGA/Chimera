@@ -4,6 +4,7 @@ import Grid from '@mui/material/Grid';
 import Paper from '@mui/material/Paper';
 import { useAtomValue } from 'jotai';
 import { useColorSxForDelay } from '@/hooks/theme';
+import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 
 function LatencyTag({ name, value }: { name: string; value: number }) {
@@ -14,7 +15,7 @@ function LatencyTag({ name, value }: { name: string; value: number }) {
       <div className="font-bold">{name}:</div>
 
       <Box className="truncate" sx={sx}>
-        {value ? `${value.toFixed(0)} ms` : 'Timeout'}
+        {value ? `${value.toFixed(0)} ms` : m.proxies_timing_timeout()}
       </Box>
     </div>
   );

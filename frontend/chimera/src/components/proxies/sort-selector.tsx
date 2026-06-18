@@ -2,6 +2,7 @@ import { alpha } from '@chimera/ui';
 import { Button, Menu, MenuItem } from '@mui/material';
 import { useAtom } from 'jotai';
 import { memo, useState } from 'react';
+import * as m from '@/paraglide/messages';
 import { proxyGroupSortAtom } from '@/store';
 
 export const SortSelector = memo(function SortSelector() {
@@ -16,10 +17,10 @@ export const SortSelector = memo(function SortSelector() {
     setProxyGroupSort(sort);
   };
 
-  const tmaps: { [key: string]: string } = {
-    default: 'Sort by default',
-    delay: 'Sort by latency',
-    name: 'Sort by name',
+  const tmaps: Record<string, () => string> = {
+    default: m.proxies_sort_default,
+    delay: m.proxies_sort_latency,
+    name: m.proxies_sort_name,
   };
 
   return (
@@ -33,7 +34,7 @@ export const SortSelector = memo(function SortSelector() {
         })}
         onClick={(e) => setAnchorEl(e.currentTarget)}
       >
-        {tmaps[proxyGroupSort]}
+        {tmaps[proxyGroupSort]()}
       </Button>
 
       <Menu
@@ -44,7 +45,7 @@ export const SortSelector = memo(function SortSelector() {
         {Object.entries(tmaps).map(([key, value], index) => {
           return (
             <MenuItem key={index} onClick={() => handleClick(key as SortType)}>
-              {value}
+              {value()}
             </MenuItem>
           );
         })}

@@ -15,6 +15,7 @@ import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
+import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';
 
 export default function EditAction() {
@@ -59,7 +60,7 @@ export default function EditAction() {
             onClick={() => setOpenSheet(true)}
           >
             <AddRounded />
-            <span>添加小组件</span>
+            <span>{m.dashboard_add_widget()}</span>
           </Button>
 
           {/* 保存按钮 - 退出编辑模式 */}
@@ -69,7 +70,7 @@ export default function EditAction() {
             onClick={() => setIsEditing(false)}
           >
             <DoneRounded />
-            <span>完成</span>
+            <span>{m.common_done()}</span>
           </Button>
         </motion.div>
       )}

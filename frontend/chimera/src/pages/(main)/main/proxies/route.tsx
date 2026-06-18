@@ -228,7 +228,7 @@ function RouteComponent() {
                     'h-full w-full bg-transparent text-sm outline-none',
                     'placeholder:text-on-surface-variant/50',
                   )}
-                  placeholder="搜索节点..."
+                  placeholder={m.proxies_search_placeholder()}
                   defaultValue={searchQuery ?? ''}
                   onChange={(e) => handleSearchChange(e.target.value)}
                   data-slot="proxies-search-input"

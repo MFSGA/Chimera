@@ -92,7 +92,7 @@ export const SettingSystemService = () => {
 
         message(errorMessage, {
           kind: 'error',
-          title: 'Error',
+          title: m.common_error(),
         });
         // If the installation fails, prompt the user to manually install the service
         promptDialog.show(
@@ -127,7 +127,7 @@ export const SettingSystemService = () => {
 
         message(errorMessage, {
           kind: 'error',
-          title: 'Error',
+          title: m.common_error(),
         });
         // If start failed show a prompt to user to start the service manually
         promptDialog.show(query.data?.status === 'running' ? 'stop' : 'start');
@@ -144,7 +144,7 @@ export const SettingSystemService = () => {
       } catch (e) {
         message(`Restart failed: ${formatError(e)}`, {
           kind: 'error',
-          title: 'Error',
+          title: m.common_error(),
         });
       }
     });
@@ -166,36 +166,38 @@ export const SettingSystemService = () => {
   const getInstallStatusLabel = (status: string): string => {
     switch (status) {
       case 'not_installed':
-        return 'Not Installed';
+        return m.dashboard_widget_core_service_not_installed();
       case 'running':
-        return 'Running';
+        return m.dashboard_widget_core_status_running();
       case 'stopped':
-        return 'Stopped';
+        return m.dashboard_widget_core_status_stopped();
       default:
-        return status;
+        return m.common_unknown();
     }
   };
 
   const currentCoreStatus = (() => {
     const status = coreStatusSWR.data?.[0];
-    if (!status) return 'Unknown';
+    if (!status) return m.common_unknown();
     if (
       isObject(status) &&
       Object.prototype.hasOwnProperty.call(status, 'Stopped')
     ) {
       const { Stopped } = status;
-      return !!Stopped && Stopped.trim() ? `Stopped: ${Stopped}` : 'Stopped';
+      return !!Stopped && Stopped.trim()
+        ? m.dashboard_widget_core_stopped_with_message({ message: Stopped })
+        : m.dashboard_widget_core_status_stopped();
     }
-    return 'Running';
+    return m.dashboard_widget_core_status_running();
   })();
 
   const currentRunType = coreStatusSWR.data?.[2]
     ? coreStatusSWR.data[2]
-    : 'Unknown';
+    : m.common_unknown();
 
   const serviceCoreType = (() => {
     const type = serviceCoreInfos?.type;
-    if (!type) return 'Unknown';
+    if (!type) return m.common_unknown();
     return typeof type === 'string' ? type : type.clash;
   })();
 
@@ -223,7 +225,11 @@ export const SettingSystemService = () => {
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={`Current Status: ${getInstallStatusLabel(query.data?.status ?? 'Unknown')}`}
+            primary={
+              m.common_current_status() +
+              ': ' +
+              getInstallStatusLabel(query.data?.status ?? m.common_unknown())
+            }
           />
           <div className="flex gap-2">
             {isServiceInstalled && (
@@ -283,7 +289,7 @@ export const SettingSystemService = () => {
                 refreshPending
               }
             >
-              {'Refresh'}
+              {m.common_refresh()}
             </Button>
 
             {import.meta.env.DEV && (
@@ -299,94 +305,100 @@ export const SettingSystemService = () => {
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Service Name'}
-            secondary={query.data?.name || 'Unknown'}
+            primary={m.settings_service_name_label()}
+            secondary={query.data?.name || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Service Version'}
-            secondary={query.data?.version || 'Unknown'}
+            primary={m.settings_service_version_label()}
+            secondary={query.data?.version || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Server Version'}
-            secondary={serviceServer?.version || 'Unknown'}
+            primary={m.settings_server_version_label()}
+            secondary={serviceServer?.version || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'App Core Status'}
+            primary={m.settings_app_core_status_label()}
             secondary={currentCoreStatus}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
-          <ListItemText primary={'Run Type'} secondary={currentRunType} />
-        </ListItem>
-
-        <ListItem sx={{ pl: 0, pr: 0 }}>
-          <ListItemText primary={'Core Type'} secondary={serviceCoreType} />
-        </ListItem>
-
-        <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Core Config Path'}
-            secondary={serviceCoreInfos?.config_path || 'Unknown'}
+            primary={m.settings_run_type_label()}
+            secondary={currentRunType}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'App Core State Changed At'}
+            primary={m.settings_core_type_label()}
+            secondary={serviceCoreType}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={m.settings_core_config_path_label()}
+            secondary={serviceCoreInfos?.config_path || m.common_unknown()}
+          />
+        </ListItem>
+
+        <ListItem sx={{ pl: 0, pr: 0 }}>
+          <ListItemText
+            primary={m.settings_app_core_state_changed_at_label()}
             secondary={
               currentCoreChangedAt
                 ? new Date(currentCoreChangedAt).toLocaleString()
-                : 'Unknown'
+                : m.common_unknown()
             }
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Service Core State Changed At'}
+            primary={m.settings_service_core_state_changed_at_label()}
             secondary={
               serviceCoreChangedAt
                 ? new Date(serviceCoreChangedAt).toLocaleString()
-                : 'Unknown'
+                : m.common_unknown()
             }
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Service Config Dir'}
-            secondary={runtimeInfos?.service_config_dir || 'Unknown'}
+            primary={m.settings_service_config_dir_label()}
+            secondary={runtimeInfos?.service_config_dir || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Service Data Dir'}
-            secondary={runtimeInfos?.service_data_dir || 'Unknown'}
+            primary={m.settings_service_data_dir_label()}
+            secondary={runtimeInfos?.service_data_dir || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Bound Config Dir'}
-            secondary={runtimeInfos?.nyanpasu_config_dir || 'Unknown'}
+            primary={m.settings_bound_config_dir_label()}
+            secondary={runtimeInfos?.nyanpasu_config_dir || m.common_unknown()}
           />
         </ListItem>
 
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <ListItemText
-            primary={'Bound Data Dir'}
-            secondary={runtimeInfos?.nyanpasu_data_dir || 'Unknown'}
+            primary={m.settings_bound_data_dir_label()}
+            secondary={runtimeInfos?.nyanpasu_data_dir || m.common_unknown()}
           />
         </ListItem>
       </List>

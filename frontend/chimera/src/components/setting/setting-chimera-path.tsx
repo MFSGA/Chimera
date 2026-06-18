@@ -26,8 +26,8 @@ const PathButton = ({
     try {
       await onClick();
     } catch (error) {
-      await message(`${label}: ${formatError(error)}`, {
-        title: 'Error',
+      await message(label + ': ' + formatError(error), {
+        title: m.common_error(),
         kind: 'error',
       });
     }
@@ -59,7 +59,7 @@ export const SettingChimeraPath = () => {
     const selected = await openDialog({
       directory: true,
       multiple: false,
-      title: 'Migrate Config Dir',
+      title: m.settings_migrate_config_dir(),
     });
 
     if (!selected || Array.isArray(selected)) {
@@ -70,14 +70,23 @@ export const SettingChimeraPath = () => {
   };
 
   const buttonItems = [
-    { label: 'Migrate Config Dir', onClick: handleMigrateConfigDir },
+    { label: m.settings_migrate_config_dir(), onClick: handleMigrateConfigDir },
     {
-      label: 'Open Config Dir',
+      label: m.settings_debug_utils_open_config_directory(),
       onClick: () => runCommand(openAppConfigDir),
     },
-    { label: 'Open Data Dir', onClick: () => runCommand(openAppDataDir) },
-    { label: 'Open Core Dir', onClick: () => runCommand(openCoreDir) },
-    { label: 'Open Log Dir', onClick: () => runCommand(openLogsDir) },
+    {
+      label: m.settings_debug_utils_open_data_directory(),
+      onClick: () => runCommand(openAppDataDir),
+    },
+    {
+      label: m.settings_debug_utils_open_core_directory(),
+      onClick: () => runCommand(openCoreDir),
+    },
+    {
+      label: m.settings_debug_utils_open_log_directory(),
+      onClick: () => runCommand(openLogsDir),
+    },
     {
       label: m.header_help_action_collect_logs(),
       onClick: () => runCommand(collectLogs),
@@ -85,7 +94,7 @@ export const SettingChimeraPath = () => {
   ];
 
   return (
-    <BaseCard label={'Path Config'}>
+    <BaseCard label={m.settings_path_config_title()}>
       <Grid container spacing={2} sx={{ alignItems: 'stretch' }}>
         {buttonItems.map(({ label, onClick }) => (
           <Grid

@@ -44,6 +44,7 @@ import {
   type GridSize,
 } from '@/components/ui/dnd-grid';
 import { hasOverlap } from '@/components/ui/dnd-grid/utils';
+import * as m from '@/paraglide/messages';
 import {
   DashboardItem,
   DEFAULT_ITEMS,
@@ -354,7 +355,7 @@ function RouteComponent() {
             className="flex items-center gap-1"
           >
             <EditRounded className="size-4" />
-            <span>编辑</span>
+            <span>{m.common_edit()}</span>
           </Button>
         </div>
       )}

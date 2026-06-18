@@ -3,6 +3,7 @@ import { GitHub, HelpOutlined, Settings } from '@mui/icons-material';
 import { IconButton, Tooltip } from '@mui/material';
 import { Link } from '@tanstack/react-router';
 import { ComponentProps } from 'react';
+import * as m from '@/paraglide/messages';
 
 const APP_NAME = 'Clash Chimera';
 
@@ -27,7 +28,7 @@ export default function Header({ className, ...props }: ComponentProps<'div'>) {
       </div>
 
       <div className="flex items-center gap-1" data-slot="app-header-actions">
-        <Tooltip title="GitHub">
+        <Tooltip title={m.header_help_action_github()}>
           <IconButton
             size="small"
             color="inherit"
@@ -39,13 +40,13 @@ export default function Header({ className, ...props }: ComponentProps<'div'>) {
           </IconButton>
         </Tooltip>
 
-        <Tooltip title="Help">
+        <Tooltip title={m.header_help_action_title()}>
           <IconButton size="small" color="inherit">
             <HelpOutlined fontSize="small" />
           </IconButton>
         </Tooltip>
 
-        <Tooltip title="Settings">
+        <Tooltip title={m.header_settings_action_title()}>
           <IconButton size="small" color="inherit" component={Link} to="/main">
             <Settings fontSize="small" />
           </IconButton>

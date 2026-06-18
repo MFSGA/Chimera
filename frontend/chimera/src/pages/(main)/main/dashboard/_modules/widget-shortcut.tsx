@@ -77,10 +77,10 @@ const ProxyTitleRow = () => {
   }, [enableSystemProxy, enableTunMode, systemProxyStatus, clashConfigs]);
 
   const messages = {
-    [ProxyStatus.SYSTEM]: '系统代理',
-    [ProxyStatus.TUN]: 'TUN 模式',
-    [ProxyStatus.OCCUPIED]: '占用',
-    [ProxyStatus.DISABLED]: '已禁用',
+    [ProxyStatus.SYSTEM]: m.dashboard_widget_proxy_status_success_system(),
+    [ProxyStatus.TUN]: m.dashboard_widget_proxy_status_success_tun(),
+    [ProxyStatus.OCCUPIED]: m.dashboard_widget_proxy_status_occupied(),
+    [ProxyStatus.DISABLED]: m.dashboard_widget_proxy_status_disabled(),
   };
 
   return (
@@ -189,13 +189,13 @@ const CoreStatusBadge = () => {
 
     if (isRunning) {
       if (serviceStatus?.server?.core_infos?.state === 'Running') {
-        return '核心以服务模式运行';
+        return m.dashboard_widget_core_status_running_by_service();
       }
-      return '核心以子进程运行';
+      return m.dashboard_widget_core_status_running_by_child_process();
     }
 
-    let stoppedMessage = '核心已停止';
-    let serviceMessage = '';
+    let stoppedMessage: string;
+    let serviceMessage: string;
 
     const stoppedInfo =
       coreState && typeof coreState === 'object' && 'Stopped' in coreState
@@ -203,21 +203,28 @@ const CoreStatusBadge = () => {
         : null;
 
     if (serviceStatus?.status === 'running') {
-      serviceMessage = '服务运行中';
+      serviceMessage = m.dashboard_widget_core_service_running();
 
       if (stoppedInfo) {
-        stoppedMessage = `核心被服务停止: ${stoppedInfo}`;
+        stoppedMessage =
+          m.dashboard_widget_core_stopped_by_service_with_message({
+            message: stoppedInfo,
+          });
       } else {
-        stoppedMessage = '核心被服务停止（未知原因）';
+        stoppedMessage = m.dashboard_widget_core_stopped_by_service_unknown();
       }
     } else if (serviceStatus?.status === 'stopped') {
-      serviceMessage = '服务已停止';
+      serviceMessage = m.dashboard_widget_core_service_stopped();
+      stoppedMessage = m.dashboard_widget_core_stopped_unknown();
     } else {
-      serviceMessage = '服务未安装';
+      serviceMessage = m.dashboard_widget_core_service_not_installed();
+      stoppedMessage = m.dashboard_widget_core_stopped_unknown();
     }
 
     if (stoppedInfo) {
-      stoppedMessage = `核心已停止: ${stoppedInfo}`;
+      stoppedMessage = m.dashboard_widget_core_stopped_with_message({
+        message: stoppedInfo,
+      });
     }
 
     return `${stoppedMessage} ${serviceMessage}`;
@@ -279,7 +286,7 @@ const CurrentCoreCard = () => {
           data-slot="core-info"
         >
           <div className="font-semibold" data-slot="core-name">
-            {currentCore?.name ?? currentCoreKey ?? '未选择'}
+            {currentCore?.name ?? currentCoreKey ?? '-'}
           </div>
 
           <div
@@ -295,7 +302,9 @@ const CurrentCoreCard = () => {
           data-slot="core-status"
         >
           <div className="truncate" data-slot="core-status-text">
-            {isRunning ? '运行中' : '已停止'}
+            {isRunning
+              ? m.dashboard_widget_core_status_running()
+              : m.dashboard_widget_core_status_stopped()}
           </div>
 
           <div

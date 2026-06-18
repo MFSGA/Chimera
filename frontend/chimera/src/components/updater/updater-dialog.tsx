@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { useSetAtom } from 'jotai';
 import { lazy, Suspense, useCallback, useState, useTransition } from 'react';
 import { IS_NIGHTLY } from '@/consts';
+import * as m from '@/paraglide/messages';
 import { UpdaterIgnoredAtom } from '@/store/updater';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -66,7 +67,7 @@ export default function UpdaterDialog({
         await relaunch();
       } catch (e) {
         console.error(e);
-        message(formatError(e), { kind: 'error', title: 'Error' });
+        message(formatError(e), { kind: 'error', title: m.common_error() });
       }
     });
   });
@@ -78,7 +79,7 @@ export default function UpdaterDialog({
   return (
     <BaseDialog
       {...others}
-      title="Update Available"
+      title={m.updater_update_available()}
       open={open}
       onClose={() => {
         setUpdaterIgnore(update.version); // TODO: control this behavior
@@ -86,8 +87,8 @@ export default function UpdaterDialog({
       }}
       onOk={handleUpdate}
       loading={pending}
-      close="Close"
-      ok="Update"
+      close={m.common_close()}
+      ok={m.common_update()}
       divider
     >
       <div
@@ -102,7 +103,7 @@ export default function UpdaterDialog({
             <span className="contents text-xs text-slate-500">
               {date
                 ? dayjs(date).format('YYYY-MM-DD HH:mm:ss')
-                : 'Invalid date'}
+                : m.common_invalid_date()}
             </span>
           </div>
           <Button
@@ -112,13 +113,13 @@ export default function UpdaterDialog({
               openThat(releasesPageUrl);
             }}
           >
-            {'Open'}
+            {m.common_open()}
           </Button>
         </div>
         <div
           className={cn('h-[50vh] overflow-y-auto p-4', styles.MarkdownContent)}
         >
-          <Suspense fallback={<div>Loading...</div>}>
+          <Suspense fallback={<div>{m.common_loading()}</div>}>
             <Markdown
               components={{
                 a(props) {
@@ -140,7 +141,8 @@ export default function UpdaterDialog({
                 },
               }}
             >
-              {(update.rawJson.notes as string) || 'New version available.'}
+              {(update.rawJson.notes as string) ||
+                m.settings_label_about_update_has_new_version()}
             </Markdown>
           </Suspense>
         </div>

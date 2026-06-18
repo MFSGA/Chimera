@@ -99,7 +99,7 @@ export default function Navbar({ className, ...props }: ComponentProps<'div'>) {
     } catch (error) {
       await message(`Failed to open legacy UI: ${formatError(error)}`, {
         kind: 'error',
-        title: 'Error',
+        title: m.common_error(),
       });
     }
   });

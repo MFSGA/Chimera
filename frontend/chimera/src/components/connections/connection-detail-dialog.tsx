@@ -90,7 +90,7 @@ export default function ConnectionDetailDialog({
   if (!item) return null;
 
   return (
-    <BaseDialog {...others} title="Connection Details">
+    <BaseDialog {...others} title={m.connections_detail_title()}>
       <div className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-2 px-3">
         {Object.entries(item)
           .filter(([key, value]) => key !== 'metadata' && isDisplayValue(value))
@@ -98,7 +98,9 @@ export default function ConnectionDetailDialog({
             <Row key={key} label={key} value={value} />
           ))}
 
-        <h3 className="col-span-2 py-1 pt-5 text-xl font-semibold">Metadata</h3>
+        <h3 className="col-span-2 py-1 pt-5 text-xl font-semibold">
+          {m.connections_metadata_label()}
+        </h3>
 
         {Object.entries(item.metadata)
           .filter(([, value]) => isDisplayValue(value))

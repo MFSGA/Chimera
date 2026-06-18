@@ -1,5 +1,6 @@
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useEffect, useRef } from 'react';
+import * as m from '@/paraglide/messages';
 import { notification, NotificationType } from '@/utils/notification';
 
 type SetConfigPayload =
@@ -45,7 +46,7 @@ export const NoticeProvider = () => {
 
       if (setConfigStatus === 'ok') {
         notification({
-          title: 'Successful',
+          title: m.common_success(),
           body: 'Refresh Clash Config',
           type: NotificationType.Success,
         }).catch((error) => {
@@ -56,7 +57,7 @@ export const NoticeProvider = () => {
 
       if (setConfigStatus === 'err') {
         notification({
-          title: 'Error',
+          title: m.common_error(),
           body: getSetConfigError(payload?.set_config) ?? undefined,
           type: NotificationType.Error,
         }).catch((error) => {
@@ -69,7 +70,7 @@ export const NoticeProvider = () => {
       })
       .catch((error) => {
         notification({
-          title: 'Error',
+          title: m.common_error(),
           body: error.message,
           type: NotificationType.Error,
         }).catch((notificationError) => {

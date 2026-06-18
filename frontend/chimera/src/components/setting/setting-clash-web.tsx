@@ -23,7 +23,7 @@ import {
 
 const AddRecordButton = ({ onClick }: { onClick: () => void }) => {
   return (
-    <Tooltip title={'New Item'}>
+    <Tooltip title={m.settings_web_ui_new_item_title()}>
       <IconButton onClick={onClick}>
         <AddIcon />
       </IconButton>
@@ -113,7 +113,11 @@ export const SettingClashWeb = () => {
       </BaseCard>
 
       <BaseDialog
-        title={editIndex != null ? 'Edit Item' : 'New Item'}
+        title={
+          editIndex != null
+            ? m.settings_web_ui_edit_item_title()
+            : m.settings_web_ui_new_item_title()
+        }
         open={open}
         onClose={() => {
           setOpen(false);
@@ -125,20 +129,22 @@ export const SettingClashWeb = () => {
           setEditIndex(null);
           setEditString('');
         }}
-        ok={'Ok'}
+        ok={m.common_ok()}
         close={m.common_close()}
         contentStyle={{ overflow: editString ? 'auto' : 'hidden' }}
         divider
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          <Typography variant="h5">{'Input'}</Typography>
+          <Typography variant="h5">
+            {m.settings_web_ui_input_title()}
+          </Typography>
 
           <TextField
             sx={{ width: '100%' }}
             value={editString}
             variant="outlined"
             multiline
-            placeholder={'Support %host %port, and %secret'}
+            placeholder={m.settings_web_ui_replace_support_hint()}
             onChange={(e) => setEditString(e.target.value)}
           />
 

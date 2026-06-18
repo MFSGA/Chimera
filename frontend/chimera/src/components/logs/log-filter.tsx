@@ -1,5 +1,6 @@
 import { alpha } from '@chimera/ui';
 import { TextField, type FilledInputProps } from '@mui/material';
+import * as m from '@/paraglide/messages';
 import { useLogContext } from './log-provider';
 
 export const LogFilter = () => {
@@ -22,7 +23,7 @@ export const LogFilter = () => {
       autoComplete="off"
       spellCheck="false"
       value={filterText}
-      placeholder="Filter conditions"
+      placeholder={m.logs_filter_placeholder()}
       onChange={(e) => setFilterText(e.target.value)}
       className="!pb-0"
       sx={{ input: { py: 1, fontSize: 14 } }}
