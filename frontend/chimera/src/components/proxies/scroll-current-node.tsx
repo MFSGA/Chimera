@@ -1,10 +1,11 @@
 import { alpha } from '@chimera/ui';
 import { Radar } from '@mui/icons-material';
 import { Button, Tooltip } from '@mui/material';
+import * as m from '@/paraglide/messages';
 
 export const ScrollCurrentNode = ({ onClick }: { onClick?: () => void }) => {
   return (
-    <Tooltip title="Locate">
+    <Tooltip title={m.proxies_scroll_to_current_tooltip()}>
       <Button
         size="small"
         className="!size-8 !min-w-0"

@@ -45,7 +45,11 @@ export default function RuntimeConfigDiffDialog({
   }
 
   return (
-    <BaseDialog title={'Runtime Config'} open={open} onClose={onClose}>
+    <BaseDialog
+      title={m.profile_runtime_config_title()}
+      open={open}
+      onClose={onClose}
+    >
       <div className="xs:w-[95vw] h-full w-[80vw] px-4">
         <div
           className={cn(
@@ -53,8 +57,12 @@ export default function RuntimeConfigDiffDialog({
             loaded ? 'flex' : 'hidden',
           )}
         >
-          <span className="text-base font-semibold">{'Original Config'}</span>
-          <span className="text-base font-semibold">{'Runtime Config'}</span>
+          <span className="text-base font-semibold">
+            {m.profile_original_config_label()}
+          </span>
+          <span className="text-base font-semibold">
+            {m.profile_runtime_config_label()}
+          </span>
         </div>
         <div className="h-[75vh] w-full">
           <Suspense fallback={null}>

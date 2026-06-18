@@ -30,7 +30,7 @@ const SilentStartButton = () => {
 
 export const SettingSystemBehavior = () => {
   return (
-    <BaseCard label={'Initiating Behavior'}>
+    <BaseCard label={m.settings_system_behavior_initiating()}>
       <Grid container spacing={2}>
         <Grid size={{ xs: 6 }}>
           <AutoStartButton />

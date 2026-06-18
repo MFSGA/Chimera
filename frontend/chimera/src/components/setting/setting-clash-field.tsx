@@ -55,13 +55,17 @@ const FieldsControl = ({
       <BaseDialog
         title={label}
         open={open}
-        close="Close"
+        close={m.common_close()}
         onClose={() => setOpen(false)}
         divider
         contentStyle={{ overflow: 'auto' }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-          {disabled && <Typography>Clash Nyanpasu Control Fields.</Typography>}
+          {disabled && (
+            <Typography>
+              {m.settings_clash_fields_control_fields_label()}
+            </Typography>
+          )}
 
           <Item />
         </Box>
@@ -119,7 +123,7 @@ export const SettingClashField = () => {
   };
 
   return (
-    <BaseCard label={'Clash Field'}>
+    <BaseCard label={m.settings_clash_settings_field_filter_label()}>
       <Box sx={{ pt: 1, pb: 2 }}>
         <ClashFieldSwitch />
       </Box>

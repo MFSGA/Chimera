@@ -103,10 +103,16 @@ export const ProfileItem = memo(function ProfileItem({
       const isFetchError = err instanceof Error && err.name === 'FetchError';
       message(
         isFetchError
-          ? `Failed to delete connections: \n ${err instanceof Error ? err.message : String(err)}`
-          : `Error setting profile: \n ${err instanceof Error ? err.message : String(err)}`,
+          ? m.profile_error_delete_connections() +
+              ' \n ' +
+              (err instanceof Error ? err.message : String(err))
+          : m.profile_error_set_profile() +
+              ' \n ' +
+              (err instanceof Error ? err.message : String(err)),
         {
-          title: isFetchError ? 'Delete Connections Error' : 'Error',
+          title: isFetchError
+            ? m.profile_error_delete_connections_title()
+            : m.common_error(),
           kind: isFetchError ? 'warning' : 'error',
         },
       );
@@ -131,8 +137,8 @@ export const ProfileItem = memo(function ProfileItem({
       setLoading({ update: true });
       await item.update?.(options);
     } catch (e) {
-      message(`Update failed: \n ${formatError(e)}`, {
-        title: 'Error',
+      message(m.profile_update_failed() + ' \n ' + formatError(e), {
+        title: m.common_error(),
         kind: 'error',
       });
     } finally {
@@ -144,8 +150,8 @@ export const ProfileItem = memo(function ProfileItem({
     try {
       await item.drop?.();
     } catch (err) {
-      message(`Delete failed: \n ${JSON.stringify(err)}`, {
-        title: 'Error',
+      message(m.profile_delete_failed() + ' \n ' + JSON.stringify(err), {
+        title: m.common_error(),
         kind: 'error',
       });
     }
@@ -165,12 +171,12 @@ export const ProfileItem = memo(function ProfileItem({
   );
 
   const menuLabels: Record<string, string> = {
-    Select: 'Select',
+    Select: m.profile_menu_select(),
     'Edit Info': m.profile_name_editor_title(),
-    'Proxy Chains': 'Proxy Chains',
-    'Open File': 'Open File',
+    'Proxy Chains': m.profile_menu_proxy_chains(),
+    'Open File': m.profile_menu_open_file(),
     Update: m.profile_subscription_update(),
-    'Update(Proxy)': 'Update(Proxy)',
+    'Update(Proxy)': m.profile_menu_update_proxy(),
     Delete: m.profile_delete_title(),
   };
 
@@ -307,7 +313,7 @@ export const ProfileItem = memo(function ProfileItem({
                   onClickChains(item as ClashProfile);
                 }}
               >
-                {'Proxy Chains'}
+                {m.profile_menu_proxy_chains()}
               </Button>
             </Badge>
 
@@ -329,7 +335,7 @@ export const ProfileItem = memo(function ProfileItem({
               </Button>
             </Tooltip>
 
-            <Tooltip title={'Menu'}>
+            <Tooltip title={m.profile_menu_tooltip()}>
               <Button
                 size="small"
                 variant="contained"
@@ -360,7 +366,7 @@ export const ProfileItem = memo(function ProfileItem({
         >
           <LinearProgress className="w-40" />
 
-          <div>{'Applying Profile'}</div>
+          <div>{m.profile_applying_overlay()}</div>
         </motion.div>
       </Paper>
       {MenuComp}

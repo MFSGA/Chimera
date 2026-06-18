@@ -227,7 +227,7 @@ export default function ConnectionColumnFilterDialog(
   ]) as Array<[string, boolean]>;
 
   return (
-    <BaseDialog title="Connection Columns" {...props}>
+    <BaseDialog title={m.connections_column_filter_title()} {...props}>
       <div className="grid grid-cols-1 gap-1">
         <AnimatePresence>
           <Reorder.Group

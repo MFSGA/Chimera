@@ -67,7 +67,7 @@ export const ServiceStatusControl = () => {
             ? m.settings_system_proxy_system_service_ctrl_failed_install()
             : m.settings_system_proxy_system_service_ctrl_failed_uninstall()
         }: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: 'Error' });
+        message(errorMessage, { kind: 'error', title: m.common_error() });
 
         if (status === 'not_installed') {
           promptDialog.show('install');
@@ -97,7 +97,7 @@ export const ServiceStatusControl = () => {
           status === 'running'
             ? `Stop failed: ${formatError(error)}`
             : `Start failed: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: 'Error' });
+        message(errorMessage, { kind: 'error', title: m.common_error() });
 
         if (status === 'running') {
           promptDialog.show('stop');
@@ -110,7 +110,11 @@ export const ServiceStatusControl = () => {
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
-      <ListItemText primary={`Current Status: ${status ?? 'Unknown'}`} />
+      <ListItemText
+        primary={
+          m.common_current_status() + ': ' + (status ?? m.common_unknown())
+        }
+      />
 
       <div className="flex gap-2">
         {!isDisabled && (

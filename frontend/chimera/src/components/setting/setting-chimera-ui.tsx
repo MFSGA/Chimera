@@ -139,7 +139,7 @@ export const SettingChimerauUI = () => {
         <ThemeColor />
 
         <SwitchItem
-          label={'Icon Navigation Bar'}
+          label={m.settings_user_interface_icon_nav_label()}
           checked={onlyIcon}
           onChange={() => setOnlyIcon(!onlyIcon)}
         />

@@ -37,7 +37,7 @@ export const SettingNyanpasuVersion = () => {
 
       if (!update) {
         message(m.settings_label_about_update_no_update(), {
-          title: 'Info',
+          title: m.common_info(),
           kind: 'info',
         });
       } else {
@@ -45,9 +45,9 @@ export const SettingNyanpasuVersion = () => {
       }
     } catch (e) {
       message(
-        `Update check failed. Please verify your network connection.\n\n${formatError(e)}`,
+        m.settings_about_update_check_failed() + '\n\n' + formatError(e),
         {
-          title: 'Error',
+          title: m.common_error(),
           kind: 'error',
         },
       );
@@ -86,7 +86,7 @@ export const SettingNyanpasuVersion = () => {
               </Typography>
 
               <Typography>
-                <b>Version: </b>v{version}
+                <b>{m.settings_label_about_version({ version })}</b>
               </Typography>
             </Box>
           </Paper>

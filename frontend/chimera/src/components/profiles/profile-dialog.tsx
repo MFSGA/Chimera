@@ -70,7 +70,7 @@ export const ProfileDialog = ({
       defaultValues: (profile as ClashProfile) || {
         type: 'remote',
         uid: null,
-        name: addProfileCtx?.name || 'New Profile',
+        name: addProfileCtx?.name || m.profile_new_profile_default_name(),
         desc: addProfileCtx?.desc || '',
         file: null,
         updated: null,
@@ -126,7 +126,7 @@ export const ProfileDialog = ({
 
   const onSubmit = handleSubmit(async (form) => {
     if (editorHasError()) {
-      message('Please fix the error before saving', {
+      message(m.profile_error_before_save(), {
         kind: 'error',
       });
       return;
@@ -186,7 +186,7 @@ export const ProfileDialog = ({
 
       onClose();
     } catch (err) {
-      message('Failed to save profile: \n' + formatError(err), {
+      message(m.profile_error_save_failed() + ' \n' + formatError(err), {
         kind: 'error',
       });
       console.error(err);
@@ -206,7 +206,7 @@ export const ProfileDialog = ({
       <div className="flex flex-col gap-4 pt-2 pb-2">
         {!isEdit && (
           <SelectElement
-            label={'Type'}
+            label={m.profile_type_label()}
             name="type"
             control={control}
             {...commonProps}
@@ -275,7 +275,9 @@ export const ProfileDialog = ({
                 htmlInput: { min: 0 },
                 input: {
                   endAdornment: (
-                    <InputAdornment position="end">{'minutes'}</InputAdornment>
+                    <InputAdornment position="end">
+                      {m.profile_minutes_unit()}
+                    </InputAdornment>
                   ),
                 },
               }}
@@ -293,9 +295,7 @@ export const ProfileDialog = ({
             {localProfileMessage && (
               <div className="ml-2 text-red-500">{localProfileMessage}</div>
             )}
-            <span className="px-2 text-xs">
-              * {'Choose file to import or leave it blank to create new one'}
-            </span>
+            <span className="px-2 text-xs">* {m.profile_upload_hint()}</span>
           </>
         )}
       </div>
@@ -320,7 +320,7 @@ export const ProfileDialog = ({
 
   return (
     <BaseDialog
-      title={isEdit ? m.profile_update_option_edit() : 'Create Profile'}
+      title={isEdit ? m.profile_update_option_edit() : m.profile_create_title()}
       open={open}
       onClose={() => onClose()}
       onOk={onSubmit}

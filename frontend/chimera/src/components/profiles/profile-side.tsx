@@ -26,11 +26,15 @@ export const ProfileSide = ({ onClose }: ProfileSideProps) => {
       <div className="flex items-start justify-between p-4 pr-2">
         <div>
           <div className="text-xl font-bold">
-            {isGlobalChainCurrent ? 'Global Proxy Chains' : 'Proxy Chains'}
+            {isGlobalChainCurrent
+              ? m.profile_title_global_proxy_chains()
+              : m.profile_menu_proxy_chains()}
           </div>
 
           <div className="truncate opacity-80">
-            {isGlobalChainCurrent ? 'All Profiles' : currentProfile?.name}
+            {isGlobalChainCurrent
+              ? m.profile_all_profiles()
+              : currentProfile?.name}
           </div>
         </div>
 

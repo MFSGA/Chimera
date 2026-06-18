@@ -1,6 +1,7 @@
 import { useAtomValue } from 'jotai';
 import { Virtualizer } from 'virtua';
 import ContentDisplay from '@/components/base/content-display';
+import * as m from '@/paraglide/messages';
 import { atomRulePage } from './modules/store';
 import RuleItem from './rule-item';
 
@@ -10,10 +11,10 @@ export const RulePage = () => {
   return rule?.data?.length ? (
     <div className="h-full">
       <div className="sticky top-0 z-10 grid grid-cols-[5rem_10rem_minmax(0,1fr)_10rem] gap-4 border-b border-black/5 px-8 py-3 text-sm font-bold backdrop-blur-md dark:border-white/5">
-        <div>Index</div>
-        <div>Type</div>
-        <div>Payload</div>
-        <div>Proxy</div>
+        <div>{m.rules_column_index()}</div>
+        <div>{m.rules_column_type()}</div>
+        <div>{m.rules_column_payload()}</div>
+        <div>{m.rules_column_proxy()}</div>
       </div>
 
       <Virtualizer scrollRef={rule.scrollRef}>
@@ -30,7 +31,7 @@ export const RulePage = () => {
       </Virtualizer>
     </div>
   ) : (
-    <ContentDisplay className="absolute" message="No Rules" />
+    <ContentDisplay className="absolute" message={m.rules_empty_message()} />
   );
 };
 

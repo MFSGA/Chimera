@@ -50,7 +50,7 @@ const MaxLogFiles = () => {
 
 export const SettingChimeraTasks = () => {
   return (
-    <BaseCard label={'Tasks'}>
+    <BaseCard label={m.settings_chimera_tasks_label()}>
       <List disablePadding>
         <MaxLogFiles />
       </List>

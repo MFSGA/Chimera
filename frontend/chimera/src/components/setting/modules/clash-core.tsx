@@ -181,14 +181,14 @@ export const ClashCoreItem = ({
 
       await query.refetch();
 
-      message('Successfully updated the core: ' + data.name, {
+      message(m.settings_clash_core_update_success() + data.name, {
         kind: 'info',
-        title: 'Successful',
+        title: m.common_success(),
       });
     } catch (e) {
-      message('Failed to update. Error: ' + formatError(e), {
+      message(m.settings_clash_core_update_failed() + formatError(e), {
         kind: 'error',
-        title: 'Error',
+        title: m.common_error(),
       });
     } finally {
       setDownloadState(false);
@@ -236,12 +236,16 @@ export const ClashCoreItem = ({
             <div className="truncate text-sm">{data.currentVersion}</div>
 
             {haveNewVersion && (
-              <div className="truncate text-sm">New: {data.latestVersion}</div>
+              <div className="truncate text-sm">
+                {m.settings_clash_core_new_version_label({
+                  version: data.latestVersion ?? '',
+                })}
+              </div>
             )}
           </div>
 
           {haveNewVersion && (
-            <Tooltip title={'Update Core'}>
+            <Tooltip title={m.settings_clash_core_update_tooltip()}>
               <Button
                 variant="text"
                 className="!size-8 !min-w-0"

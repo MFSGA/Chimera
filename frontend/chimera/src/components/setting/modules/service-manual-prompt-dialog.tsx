@@ -20,7 +20,7 @@ type CopyToClipboardButtonProps = {
 function CopyToClipboardButton({ onClick }: CopyToClipboardButtonProps) {
   return (
     <Tooltip
-      title={'Copy to clipboard'}
+      title={m.common_copy_tooltip()}
       placement="top"
       slotProps={{
         popper: {
@@ -95,15 +95,15 @@ export default function ServerManualPromptDialog({
         .then(() => {
           console.log('copied');
           notification({
-            title: `Clash Chimera - Service Manual Tips`,
-            body: 'Copied to clipboard',
+            title: `Clash Chimera - ${m.settings_system_proxy_system_service_ctrl_manual_prompt()}`,
+            body: m.common_copied_to_clipboard(),
           });
         })
         .catch((error) => {
           console.error(error);
           notification({
-            title: `Clash Chimera - Service Manual Tips`,
-            body: 'Failed to copy to clipboard',
+            title: `Clash Chimera - ${m.settings_system_proxy_system_service_ctrl_manual_prompt()}`,
+            body: m.common_failed_copy_to_clipboard(),
           });
         });
     }
@@ -111,14 +111,14 @@ export default function ServerManualPromptDialog({
 
   return (
     <BaseDialog
-      title={'Service Manual Tips'}
+      title={m.settings_system_proxy_system_service_ctrl_manual_prompt()}
       open={open}
       onClose={onClose}
       {...props}
     >
       <div className="grid gap-3">
         <p>
-          {'Unable to operation the service automatically: ' +
+          {m.settings_service_manual_operation_failed() +
             (operation ?? 'unknown')}
         </p>
         {error && <p className="text-red-500">{error.message}</p>}

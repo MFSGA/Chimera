@@ -34,8 +34,8 @@ const ClashPort = () => {
 
   const handleApply = async () => {
     if (invalid) {
-      message('Port must be between 1 and 65535.', {
-        title: 'Error',
+      message(m.settings_clash_port_validation_error(), {
+        title: m.common_error(),
         kind: 'error',
       });
       return;
@@ -81,12 +81,12 @@ const RandomPort = () => {
       await upsert(!value);
     } catch (e) {
       message(JSON.stringify(e), {
-        title: 'Error',
+        title: m.common_error(),
         kind: 'error',
       });
     } finally {
-      message('After restart to take effect', {
-        title: 'Successful',
+      message(m.settings_clash_port_restart_to_effect(), {
+        title: m.common_success(),
         kind: 'info',
       });
     }
