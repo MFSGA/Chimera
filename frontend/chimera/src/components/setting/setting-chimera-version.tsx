@@ -57,7 +57,7 @@ export const SettingNyanpasuVersion = () => {
   });
 
   return (
-    <BaseCard label={m.settings_label_about_version()}>
+    <BaseCard label={m.settings_label_about()}>
       <List disablePadding>
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <Paper

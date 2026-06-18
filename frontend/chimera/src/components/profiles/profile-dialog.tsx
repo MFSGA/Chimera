@@ -1,7 +1,6 @@
 import {
   ProfileQueryResultItem,
   ProfileTemplate,
-  RemoteProfile,
   useProfile,
   useProfileContent,
 } from '@chimera/interface';
@@ -33,6 +32,8 @@ import { ReadProfile } from './read-profile';
 import { ClashProfile, ClashProfileBuilder } from './utils';
 
 const ProfileMonacoViewer = lazy(() => import('./profile-monaco-viewer'));
+
+type RemoteProfileForm = Extract<ClashProfileBuilder, { type: 'remote' }>;
 
 export interface ProfileDialogProps {
   profile?: ProfileQueryResultItem;
@@ -68,13 +69,17 @@ export const ProfileDialog = ({
     useForm<ClashProfileBuilder>({
       defaultValues: (profile as ClashProfile) || {
         type: 'remote',
+        uid: null,
         name: addProfileCtx?.name || 'New Profile',
         desc: addProfileCtx?.desc || '',
+        file: null,
+        updated: null,
         url: addProfileCtx?.url || '',
+        chain: null,
+        extra: null,
         option: {
-          // user_agent: "",
-          with_proxy: false,
-          self_proxy: false,
+          user_agent: null,
+          update_interval: null,
         },
       },
     });
@@ -129,12 +134,12 @@ export const ProfileDialog = ({
 
     const toCreate = async () => {
       if (isRemote) {
-        const data = form as RemoteProfile;
+        const data = form as RemoteProfileForm;
 
         await create.mutateAsync({
           type: 'url',
           data: {
-            url: data.url,
+            url: data.url ?? '',
             option: data.option
               ? {
                   ...data.option,
@@ -156,10 +161,16 @@ export const ProfileDialog = ({
 
     const toUpdate = async () => {
       const value = latestEditor.current.value;
+      const uid = profile?.uid;
+
+      if (!uid) {
+        return;
+      }
+
       await contentFn.upsert.mutateAsync(value);
 
       await patch.mutateAsync({
-        uid: form.uid!,
+        uid,
         profile: form,
       });
     };
