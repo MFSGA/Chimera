@@ -39,33 +39,33 @@
   },
   "dependencies": {
     "husky": "9.1.7",
-    "@prettier/plugin-oxc": "0.0.4"
+    "@prettier/plugin-oxc": "0.1.4"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.2",
     "npm-run-all2": "8.0.4",
     "react-devtools": "6.1.5",
     "oxlint": "1.69.0",
-    "prettier": "3.6.2",
-    "@ianvs/prettier-plugin-sort-imports": "4.7.0",
-    "prettier-plugin-tailwindcss": "0.7.2",
+    "prettier": "3.8.4",
+    "@ianvs/prettier-plugin-sort-imports": "4.7.1",
+    "prettier-plugin-tailwindcss": "0.8.0",
     "prettier-plugin-toml": "2.0.6",
     "postcss-scss": "4.0.9",
     "stylelint": "16.26.1",
     "stylelint-config-html": "1.1.0",
-    "stylelint-config-recess-order": "7.4.0",
+    "stylelint-config-recess-order": "7.7.0",
     "stylelint-config-standard": "39.0.1",
     "stylelint-declaration-block-no-ignored-properties": "2.8.0",
-    "stylelint-order": "7.0.0",
-    "stylelint-scss": "6.12.1",
+    "stylelint-order": "7.0.1",
+    "stylelint-scss": "6.14.0",
     "knip": "5.80.2",
-    "lint-staged": "16.2.6",
-    "@commitlint/cli": "20.3.1",
-    "@commitlint/config-conventional": "20.3.1",
+    "lint-staged": "16.4.0",
+    "@commitlint/cli": "20.5.3",
+    "@commitlint/config-conventional": "20.5.3",
     "tsx": "4.20.6",
     "@types/node": "24.10.7",
     "typescript": "5.9.3",
-    "prettier-plugin-ember-template-tag": "2.1.0"
+    "prettier-plugin-ember-template-tag": "2.1.6"
   },
   "pnpm": {
     "overrides": {
