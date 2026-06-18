@@ -21,7 +21,7 @@
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "@types/react": "19.2.7",
-    "react-error-boundary": "6.0.0",
+    "react-error-boundary": "6.1.2",
     "framer-motion": "12.40.0",
     "@mui/material": "9.0.1",
     "@radix-ui/react-portal": "1.1.11",
