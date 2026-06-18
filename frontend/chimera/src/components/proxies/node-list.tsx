@@ -1,6 +1,6 @@
 import {
+  ClashProxiesQueryGroupItem,
   ClashProxiesQueryProxyItem,
-  ProxyGroupItem,
   useClashProxies,
   useProxyMode,
   useSetting,
@@ -48,7 +48,7 @@ export const NodeList = forwardRef(function NodeList(
 
   const proxyGroupSort = useAtomValue(proxyGroupSortAtom);
 
-  const [group, setGroup] = useState<ProxyGroupItem>();
+  const [group, setGroup] = useState<ClashProxiesQueryGroupItem>();
 
   const sortGroup = useCallback(() => {
     if (!proxyMode.global) {

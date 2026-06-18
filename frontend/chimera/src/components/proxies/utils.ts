@@ -1,4 +1,7 @@
-import { ProxyGroupItem, ProxyItemHistory } from '@chimera/interface';
+import {
+  ClashProxiesQueryGroupItem,
+  ProxyItemHistory,
+} from '@chimera/interface';
 
 export const filterDelay = (history?: ProxyItemHistory[]): number => {
   if (!history || history.length === 0) {
@@ -15,10 +18,10 @@ export enum SortType {
 }
 
 export const nodeSortingFn = (
-  selectedGroup: ProxyGroupItem,
+  selectedGroup: ClashProxiesQueryGroupItem,
   type: SortType,
 ) => {
-  let sortedList = selectedGroup.all?.slice();
+  let sortedList = selectedGroup.all.slice();
 
   switch (type) {
     case SortType.Delay: {

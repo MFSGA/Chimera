@@ -4,6 +4,7 @@ import {
   commands,
   Profile_Serialize,
   ProfileBuilder_Deserialize,
+  Profiles_Serialize,
   ProfilesBuilder_Deserialize,
   RemoteProfileOptionsBuilder,
 } from './bindings';
@@ -11,8 +12,12 @@ import { RROFILES_QUERY_KEY } from './consts';
 
 type URLImportParams = Parameters<typeof commands.importProfile>;
 
-type NormalizedProfile = NonNullable<
+export type NormalizedProfile = NonNullable<
   Profile_Serialize['remote'] | Profile_Serialize['local']
+>;
+
+export type NormalizedProfileBuilder = NonNullable<
+  ProfileBuilder_Deserialize['remote'] | ProfileBuilder_Deserialize['local']
 >;
 
 type CreateParams =
@@ -26,7 +31,7 @@ type CreateParams =
   | {
       type: 'manual';
       data: {
-        item: NormalizedProfile;
+        item: NormalizedProfileBuilder;
         fileData: string | null;
       };
     };
@@ -39,6 +44,10 @@ type ProfileHelperFn = {
 
 export type ProfileQueryResultItem = NormalizedProfile &
   Partial<ProfileHelperFn>;
+
+export type ProfilesQueryResult = Omit<Profiles_Serialize, 'items'> & {
+  items: ProfileQueryResultItem[];
+};
 
 /**
  * A custom hook for managing profiles with various operations including creation, updating, sorting, and deletion.
@@ -82,6 +91,16 @@ export type ProfileQueryResultItem = NormalizedProfile &
 export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const queryClient = useQueryClient();
 
+  const serializeProfileBuilder = (
+    item: NormalizedProfileBuilder,
+  ): ProfileBuilder_Deserialize => {
+    if (item.type === 'remote') {
+      return { remote: item } as ProfileBuilder_Deserialize;
+    }
+
+    return { local: item } as ProfileBuilder_Deserialize;
+  };
+
   /**
    * Mutation hook for creating or importing profiles
    *
@@ -111,10 +130,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
       } else {
         const { item, fileData } = data;
         return unwrapResult(
-          await commands.createProfile(
-            item as unknown as ProfileBuilder_Deserialize,
-            fileData,
-          ),
+          await commands.createProfile(serializeProfileBuilder(item), fileData),
         );
       }
     },
@@ -139,17 +155,25 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
    */
   const query = useQuery({
     queryKey: [RROFILES_QUERY_KEY],
-    queryFn: async () => {
-      const result = unwrapResult(await commands.getProfiles());
+    queryFn: async (): Promise<ProfilesQueryResult> => {
+      const result = unwrapResult(await commands.getProfiles()) ?? {
+        current: [],
+        items: [],
+        valid: [],
+        chain: [],
+      };
 
       // Skip helper functions if without_helper_fn is set
       if (options?.without_helper_fn) {
-        return result;
+        return {
+          ...result,
+          items: result.items as unknown as NormalizedProfile[],
+        };
       }
 
       return {
         ...result,
-        items: result?.items?.map((item) => addHelperFn(item)),
+        items: result.items.map((item) => addHelperFn(item)),
       };
     },
   });
@@ -227,9 +251,11 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
       profile,
     }: {
       uid: string;
-      profile: ProfileBuilder_Deserialize;
+      profile: NormalizedProfileBuilder;
     }) => {
-      return unwrapResult(await commands.patchProfile(uid, profile));
+      return unwrapResult(
+        await commands.patchProfile(uid, serializeProfileBuilder(profile)),
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });

@@ -1,7 +1,7 @@
 import {
   useSetting,
   type BreakWhenProxyChange as BreakWhenProxyChangeType,
-  type LoggingLevel,
+  type LoggingLevel_Serialize,
   type ProxiesSelectorMode,
 } from '@chimera/interface';
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
@@ -28,7 +28,7 @@ const AppLogLevel = () => {
       label={m.settings_nyanpasu_app_log_level_label()}
       options={options}
       selected={value || 'info'}
-      onSelected={(value) => upsert(value as LoggingLevel)}
+      onSelected={(value) => upsert(value as LoggingLevel_Serialize)}
     />
   );
 };

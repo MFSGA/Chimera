@@ -1,4 +1,7 @@
-import type { Profile, ProfileBuilder } from '@chimera/interface';
+import type {
+  NormalizedProfileBuilder,
+  ProfileQueryResultItem,
+} from '@chimera/interface';
 
 /**
  * Filters an array of profiles into two categories: clash and chain profiles.
@@ -8,7 +11,7 @@ import type { Profile, ProfileBuilder } from '@chimera/interface';
  *          - clash: Array of profiles where type is 'remote' or 'local'
  *          - chain: Array of profiles where type is 'merge' or has a script property
  */
-export function filterProfiles<T extends Profile>(items?: T[]) {
+export function filterProfiles<T extends ProfileQueryResultItem>(items?: T[]) {
   /**
    * Filters the input array to include only items of type 'remote' or 'local'
    * @param items - Array of items to filter
@@ -36,9 +39,12 @@ export function filterProfiles<T extends Profile>(items?: T[]) {
   };
 }
 
-export type ClashProfile = Extract<Profile, { type: 'remote' | 'local' }>;
+export type ClashProfile = Extract<
+  ProfileQueryResultItem,
+  { type: 'remote' | 'local' }
+>;
 
 export type ClashProfileBuilder = Extract<
-  ProfileBuilder,
+  NormalizedProfileBuilder,
   { type: 'remote' | 'local' }
 >;
