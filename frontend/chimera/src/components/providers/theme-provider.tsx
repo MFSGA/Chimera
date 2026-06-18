@@ -1,4 +1,5 @@
 import { useSetting } from '@chimera/interface';
+import { createMDYTheme } from '@chimera/ui';
 import { alpha, darken, lighten } from '@chimera/utils';
 import {
   argbFromHex,
@@ -6,6 +7,7 @@ import {
   Theme,
   themeFromSourceColor,
 } from '@material/material-color-utilities';
+import { ThemeProvider } from '@mui/material/styles';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useLocalStorage } from '@uidotdev/usehooks';
 import { isEqual, kebabCase } from 'lodash-es';
@@ -23,6 +25,8 @@ import { insertStyle } from '@/utils/styled';
 const appWindow = getCurrentWebviewWindow();
 
 export const DEFAULT_COLOR = '#1867C0';
+
+const DEFAULT_FONT_FAMILY = `"Roboto", "Helvetica", "Arial", sans-serif, "Color Emoji Flags"," Color Emoji"`;
 
 export enum ThemeMode {
   LIGHT = 'light',
@@ -297,6 +301,12 @@ export function ExperimentalThemeProvider({ children }: PropsWithChildren) {
     applyRootStyleVar(currentThemeMode, cachedThemePalette);
   }, [cachedThemePalette, currentThemeMode]);
 
+  const muiTheme = useMemo(
+    () =>
+      createMDYTheme(themeColor.value || DEFAULT_COLOR, DEFAULT_FONT_FAMILY),
+    [themeColor.value],
+  );
+
   return (
     <ThemeContext.Provider
       value={{
@@ -309,7 +319,7 @@ export function ExperimentalThemeProvider({ children }: PropsWithChildren) {
         setThemeMode,
       }}
     >
-      {children}
+      <ThemeProvider theme={muiTheme}>{children}</ThemeProvider>
     </ThemeContext.Provider>
   );
 }
