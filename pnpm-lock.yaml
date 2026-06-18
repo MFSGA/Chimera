@@ -109,8 +109,8 @@ importers:
         specifier: 11.14.1
         version: 11.14.1(@emotion/react@11.14.0(@types/react@19.2.7)(react@19.2.7))(@types/react@19.2.7)(react@19.2.7)
       '@inlang/paraglide-js':
-        specifier: 2.18.2
-        version: 2.18.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)
+        specifier: 2.20.0
+        version: 2.20.0(babel-plugin-macros@3.1.0)(typescript@5.9.3)
       '@material/material-color-utilities':
         specifier: 0.4.0
         version: 0.4.0
@@ -1131,8 +1131,8 @@ packages:
   '@iconify/utils@3.1.1':
     resolution: {integrity: sha512-MwzoDtw9rO1x+qfgLTV/IVXsHDBqeYZoMIQC8SfxfYSlaSUG+oWiAcoiB1yajAda6mqblm4/1/w2E8tRu7a7Tw==}
 
-  '@inlang/paraglide-js@2.18.2':
-    resolution: {integrity: sha512-H2ksOE2dy9M4iJ+oDu8VPgk+B52C+OCFQpuJHBol0ZYLs3H17PCewVWIppkJNC36ClmLZnGhF+URjbcglTM8XQ==}
+  '@inlang/paraglide-js@2.20.0':
+    resolution: {integrity: sha512-vI8PdPVZSnpYnpagjvm+nWSa3nMDRJKVM/2eLAtUHFrNcZZadxVdmP79r4W95+dkMLDFGEyzSSY9sFxvjdkkyQ==}
     hasBin: true
     peerDependencies:
       typescript: '>=5.6'
@@ -1143,8 +1143,8 @@ packages:
   '@inlang/recommend-sherlock@0.2.1':
     resolution: {integrity: sha512-ckv8HvHy/iTqaVAEKrr+gnl+p3XFNwe5D2+6w6wJk2ORV2XkcRkKOJ/XsTUJbPSiyi4PI+p+T3bqbmNx/rDUlg==}
 
-  '@inlang/sdk@2.9.3':
-    resolution: {integrity: sha512-E/SxcSji8WIt4DqQG9APlOs6tVtJxrrOUS3dE4ho3pWRCLLIY0PIVzgNwSukuFT+m8LuJDFwpRY5VY3ryzyGWQ==}
+  '@inlang/sdk@2.10.2':
+    resolution: {integrity: sha512-O1ki72SNK6LPagaGrvlioBb1mWKvump7cO7P85hfGZjdFTmDdn3icI0A6MvaBsB3P9KQHAjzyubnN1OslGufTw==}
     engines: {node: '>=20.0.0'}
 
   '@isaacs/fs-minipass@4.0.1':
@@ -7690,10 +7690,10 @@ snapshots:
       '@iconify/types': 2.0.0
       mlly: 1.8.2
 
-  '@inlang/paraglide-js@2.18.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)':
+  '@inlang/paraglide-js@2.20.0(babel-plugin-macros@3.1.0)(typescript@5.9.3)':
     dependencies:
       '@inlang/recommend-sherlock': 0.2.1
-      '@inlang/sdk': 2.9.3(babel-plugin-macros@3.1.0)
+      '@inlang/sdk': 2.10.2(babel-plugin-macros@3.1.0)
       commander: 11.1.0
       consola: 3.4.0
       json5: 2.2.3
@@ -7708,7 +7708,7 @@ snapshots:
     dependencies:
       comment-json: 4.6.2
 
-  '@inlang/sdk@2.9.3(babel-plugin-macros@3.1.0)':
+  '@inlang/sdk@2.10.2(babel-plugin-macros@3.1.0)':
     dependencies:
       '@lix-js/sdk': 0.4.10(babel-plugin-macros@3.1.0)
       '@sinclair/typebox': 0.31.17
