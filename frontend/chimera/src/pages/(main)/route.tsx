@@ -1,7 +1,7 @@
-import { useSettings } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { CssBaseline } from '@mui/material';
+import { StyledEngineProvider } from '@mui/material/styles';
 import { createFileRoute } from '@tanstack/react-router';
-import { PropsWithChildren } from 'react';
 import packageJson from '@root/package.json';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import Header from './_modules/-header';
@@ -25,24 +25,28 @@ const AppContent = () => {
 
 function RouteComponent() {
   return (
-    <div
-      className={cn(
-        'flex max-h-dvh min-h-dvh flex-col overflow-hidden',
-        'bg-mixed-background',
-      )}
-      data-slot="app-root"
-      data-app-version={packageJson.version}
-    >
-      <Header className="shrink-0" />
+    <StyledEngineProvider injectFirst>
+      <CssBaseline />
 
       <div
-        className="flex min-h-0 flex-1 flex-col-reverse sm:flex-col"
-        data-slot="app-content-container"
+        className={cn(
+          'flex max-h-dvh min-h-dvh flex-col overflow-hidden',
+          'bg-mixed-background',
+        )}
+        data-slot="app-root"
+        data-app-version={packageJson.version}
       >
-        <Navbar className="shrink-0" />
+        <Header className="shrink-0" />
 
-        <AppContent />
+        <div
+          className="flex min-h-0 flex-1 flex-col-reverse sm:flex-col"
+          data-slot="app-content-container"
+        >
+          <Navbar className="shrink-0" />
+
+          <AppContent />
+        </div>
       </div>
-    </div>
+    </StyledEngineProvider>
   );
 }
