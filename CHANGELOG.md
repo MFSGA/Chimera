@@ -1,3 +1,71 @@
+## [0.16.0] - 2026-06-19 06:00:49
+
+### ✨ Features
+
+- **clash_api:** For better type safe by @MFSGA
+
+- **i18n:** Update entry points to use inlang/paraglide by @MFSGA
+
+- **lintstaged:** Optimize lintstage by @MFSGA
+
+- **main:** Wire new main UI routes by @MFSGA
+
+- **main:** Add settings navigation layout by @MFSGA
+
+- **main:** Add profiles proxies and rules pages by @MFSGA
+
+- **main:** Add connections and logs pages by @MFSGA
+
+- **main:** Add dashboard widget grid by @MFSGA
+
+- **navbar:** Support navigate to legacy ui by @MFSGA
+
+- **outlet:** Keep align with ref by @MFSGA
+
+- **oxlint:** Use oxlint instead of eslint by @MFSGA
+
+- **providers:** Add the Sidebar in Layout by @MFSGA
+
+- **providers:** Prepare for rule providers by @MFSGA
+
+- **providers:** Add the route and show basic text by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Used the incorrect repository name by @MFSGA
+
+- **deps:** Update radix-ui-primitives monorepo by @renovate-bot
+
+- **frontend:** Adapt UI to generated interface types by @MFSGA
+
+- **frontend:** Adapt monaco-editor imports for v0.55.1 by @MFSGA
+
+- **i18n:** Validate the new plan inlang by @MFSGA
+
+- **theme:** Solve the theme issue by @MFSGA
+
+### 🔨 Refactor
+
+- **i18n:** Migrate baseDialog in @chimera/ui from react-i18next to hardcoded strings by @MFSGA
+
+- **i18n:** Migrate page files from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate remaining components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate setting components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate logs components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate profiles components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate dashboard components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate connections components from react-i18next to inlang/paraglide by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.15.4...v0.16.0
+
 ## [0.15.4] - 2026-06-05 18:25:08
 
 ### ✨ Features
