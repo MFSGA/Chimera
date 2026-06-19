@@ -44,7 +44,7 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.11.2",
     "npm-run-all2": "8.0.4",
-    "react-devtools": "6.1.5",
+    "react-devtools": "7.0.1",
     "oxlint": "1.69.0",
     "prettier": "3.6.2",
     "@ianvs/prettier-plugin-sort-imports": "4.7.0",
