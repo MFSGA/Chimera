@@ -40,6 +40,8 @@ import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/mai
 import { Route as mainMainProxiesNameRouteImport } from './pages/(main)/main/proxies/$name'
 import { Route as mainMainProfilesInspectRouteRouteImport } from './pages/(main)/main/profiles/inspect/route'
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
+import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
+import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
 
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
@@ -198,6 +200,18 @@ const mainMainProfilesTypeIndexRoute =
     path: '/$type/',
     getParentRoute: () => mainMainProfilesRouteRoute,
   } as any)
+const mainMainProvidersRulesKeyRoute =
+  mainMainProvidersRulesKeyRouteImport.update({
+    id: '/rules/$key',
+    path: '/rules/$key',
+    getParentRoute: () => mainMainProvidersRouteRoute,
+  } as any)
+const mainMainProvidersProxiesKeyRoute =
+  mainMainProvidersProxiesKeyRouteImport.update({
+    id: '/proxies/$key',
+    path: '/proxies/$key',
+    getParentRoute: () => mainMainProvidersRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/connections': typeof legacyConnectionsRoute
@@ -228,6 +242,8 @@ export interface FileRoutesByFullPath {
   '/main/proxies/': typeof mainMainProxiesIndexRoute
   '/main/rules/': typeof mainMainRulesIndexRoute
   '/main/settings/': typeof mainMainSettingsIndexRoute
+  '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
+  '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
 }
 export interface FileRoutesByTo {
@@ -251,6 +267,8 @@ export interface FileRoutesByTo {
   '/main/proxies': typeof mainMainProxiesIndexRoute
   '/main/rules': typeof mainMainRulesIndexRoute
   '/main/settings': typeof mainMainSettingsIndexRoute
+  '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
+  '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
 }
 export interface FileRoutesById {
@@ -285,6 +303,8 @@ export interface FileRoutesById {
   '/(main)/main/proxies/': typeof mainMainProxiesIndexRoute
   '/(main)/main/rules/': typeof mainMainRulesIndexRoute
   '/(main)/main/settings/': typeof mainMainSettingsIndexRoute
+  '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
+  '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
 }
 export interface FileRouteTypes {
@@ -318,6 +338,8 @@ export interface FileRouteTypes {
     | '/main/proxies/'
     | '/main/rules/'
     | '/main/settings/'
+    | '/main/providers/proxies/$key'
+    | '/main/providers/rules/$key'
     | '/main/profiles/$type/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -341,6 +363,8 @@ export interface FileRouteTypes {
     | '/main/proxies'
     | '/main/rules'
     | '/main/settings'
+    | '/main/providers/proxies/$key'
+    | '/main/providers/rules/$key'
     | '/main/profiles/$type'
   id:
     | '__root__'
@@ -374,6 +398,8 @@ export interface FileRouteTypes {
     | '/(main)/main/proxies/'
     | '/(main)/main/rules/'
     | '/(main)/main/settings/'
+    | '/(main)/main/providers/proxies/$key'
+    | '/(main)/main/providers/rules/$key'
     | '/(main)/main/profiles/$type/'
   fileRoutesById: FileRoutesById
 }
@@ -601,6 +627,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProfilesTypeIndexRouteImport
       parentRoute: typeof mainMainProfilesRouteRoute
     }
+    '/(main)/main/providers/rules/$key': {
+      id: '/(main)/main/providers/rules/$key'
+      path: '/rules/$key'
+      fullPath: '/main/providers/rules/$key'
+      preLoaderRoute: typeof mainMainProvidersRulesKeyRouteImport
+      parentRoute: typeof mainMainProvidersRouteRoute
+    }
+    '/(main)/main/providers/proxies/$key': {
+      id: '/(main)/main/providers/proxies/$key'
+      path: '/proxies/$key'
+      fullPath: '/main/providers/proxies/$key'
+      preLoaderRoute: typeof mainMainProvidersProxiesKeyRouteImport
+      parentRoute: typeof mainMainProvidersRouteRoute
+    }
   }
 }
 
@@ -690,11 +730,15 @@ const mainMainProfilesRouteRouteWithChildren =
 
 interface mainMainProvidersRouteRouteChildren {
   mainMainProvidersIndexRoute: typeof mainMainProvidersIndexRoute
+  mainMainProvidersProxiesKeyRoute: typeof mainMainProvidersProxiesKeyRoute
+  mainMainProvidersRulesKeyRoute: typeof mainMainProvidersRulesKeyRoute
 }
 
 const mainMainProvidersRouteRouteChildren: mainMainProvidersRouteRouteChildren =
   {
     mainMainProvidersIndexRoute: mainMainProvidersIndexRoute,
+    mainMainProvidersProxiesKeyRoute: mainMainProvidersProxiesKeyRoute,
+    mainMainProvidersRulesKeyRoute: mainMainProvidersRulesKeyRoute,
   }
 
 const mainMainProvidersRouteRouteWithChildren =
