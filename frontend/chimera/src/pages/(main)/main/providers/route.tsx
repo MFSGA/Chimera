@@ -1,17 +1,113 @@
+import {
+  useClashProxiesProvider,
+  useClashRulesProvider,
+} from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { createFileRoute, useLocation } from '@tanstack/react-router';
+import { createFileRoute, Link, useLocation } from '@tanstack/react-router';
 import { motion } from 'framer-motion';
+import type { ComponentProps } from 'react';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
+import { Button } from '@/components/ui/button';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
+import TextMarquee from '@/components/ui/text-marquee';
 import useIsMobile from '@/hooks/use-is-moblie';
 
 export const Route = createFileRoute('/(main)/main/providers')({
   component: ProvidersLayout,
 });
 
+const NavigateButton = ({
+  className,
+  ...props
+}: ComponentProps<typeof Button>) => {
+  return (
+    <Button
+      className={cn(
+        'h-16 w-full rounded-2xl',
+        'flex flex-col items-start justify-center gap-2',
+        'data-[active=true]:bg-surface-variant/80',
+        'data-[active=false]:bg-transparent',
+        'data-[active=false]:shadow-none',
+        'data-[active=false]:hover:shadow-none',
+        'data-[active=false]:hover:bg-surface-variant/30',
+        className,
+      )}
+      asChild
+      {...props}
+    />
+  );
+};
+
 const SidebarNavigate = () => {
-  return null;
+  const proxiesProvider = useClashProxiesProvider();
+
+  const proxies = proxiesProvider.data
+    ? Object.entries(proxiesProvider.data)
+    : null;
+
+  const rulesProvider = useClashRulesProvider();
+
+  const rules = rulesProvider.data ? Object.entries(rulesProvider.data) : null;
+
+  const { pathname } = useLocation();
+
+  return (
+    <>
+      {proxies && proxies.length ? (
+        <>
+          <div className="flex flex-col gap-2 p-2">
+            {proxies.map(([key, data]) => (
+              <NavigateButton
+                key={key}
+                data-active={String(pathname.endsWith(`/proxies/${key}`))}
+              >
+                <Link
+                  to="/main/providers/proxies/$key"
+                  params={{
+                    key,
+                  }}
+                >
+                  <div className="text-sm font-medium">{data.name}</div>
+
+                  <TextMarquee className="text-xs text-zinc-500">
+                    {data.type}
+                  </TextMarquee>
+                </Link>
+              </NavigateButton>
+            ))}
+          </div>
+
+          <Separator />
+        </>
+      ) : null}
+
+      {rules && rules.length ? (
+        <div className="flex flex-col gap-2 p-2">
+          {rules.map(([key, data]) => (
+            <NavigateButton
+              key={key}
+              data-active={String(pathname.endsWith(`/rules/${key}`))}
+            >
+              <Link
+                to="/main/providers/rules/$key"
+                params={{
+                  key,
+                }}
+              >
+                <div className="text-sm font-medium">{data.name}</div>
+
+                <TextMarquee className="text-xs text-zinc-500">
+                  {data.type}
+                </TextMarquee>
+              </Link>
+            </NavigateButton>
+          ))}
+        </div>
+      ) : null}
+    </>
+  );
 };
 
 function ProvidersLayout() {
