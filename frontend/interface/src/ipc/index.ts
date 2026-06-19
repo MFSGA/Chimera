@@ -10,6 +10,8 @@ export * from './use-clash-config';
 export * from './use-clash-core-config';
 export * from './use-clash-connections';
 export * from './use-clash-rules';
+export * from './use-clash-proxies-provider';
+export * from './use-clash-rules-provider';
 /** 7 */
 export * from './use-proxy-mode';
 /** 8 */
