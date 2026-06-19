@@ -99,6 +99,36 @@ export const useClashAPI = () => {
     return await getRequest()<ClashVersion>('/version');
   };
 
+  /** GET /providers/rules — list all rule providers */
+  const providersRules = async () => {
+    return await getRequest()<ProvidersRulesRes>('/providers/rules');
+  };
+
+  /** PUT /providers/rules/{name} — force-update a specific rule provider */
+  const providersRulesUpdate = async (name: string) => {
+    return await getRequest()<null>(
+      `/providers/rules/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+      },
+    );
+  };
+
+  /** GET /providers/proxies — list all proxy providers */
+  const providersProxies = async () => {
+    return await getRequest()<ProvidersProxiesRes>('/providers/proxies');
+  };
+
+  /** PUT /providers/proxies/{name} — force-update a specific proxy provider */
+  const providersProxiesUpdate = async (name: string) => {
+    return await getRequest()<null>(
+      `/providers/proxies/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+      },
+    );
+  };
+
   return {
     isReady: Boolean(request),
     deleteConnections,
@@ -108,6 +138,10 @@ export const useClashAPI = () => {
     groupDelay,
     rules,
     version,
+    providersRules,
+    providersRulesUpdate,
+    providersProxies,
+    providersProxiesUpdate,
   };
 };
 
@@ -141,4 +175,58 @@ export type ClashRule = {
   type: string;
   payload: string;
   proxy: string;
+};
+
+/** Provider type from Clash REST API */
+export type ProviderType = 'Proxy' | 'Rule' | 'Unknown';
+
+/** Vehicle type from Clash REST API */
+export type VehicleType = 'File' | 'HTTP' | 'Compatible' | 'Unknown';
+
+/** Rule provider item from GET /providers/rules */
+export type RuleProviderItem = {
+  behavior: string | null;
+  format: string | null;
+  name: string;
+  ruleCount: number | null;
+  type: string | null;
+  updatedAt: string | null;
+  vehicleType: string | null;
+};
+
+/** Proxy provider item (serialized variant) from GET /providers/proxies */
+export type ProxyProviderItem = {
+  name: string;
+  type: ProviderType;
+  proxies: Array<{
+    name: string;
+    type: string;
+    udp: boolean;
+    history: Array<{ time: string; delay: number }>;
+    all: string[] | null;
+    now: string | null;
+    provider: string | null;
+    alive: boolean | null;
+    icon: string | null;
+  }>;
+  vehicleType: VehicleType;
+  updatedAt: string | null;
+  subscriptionInfo: {
+    upload: number;
+    download: number;
+    total: number;
+    expire: number;
+  } | null;
+  testUrl: string | null;
+  expectedStatus: string | null;
+};
+
+/** Response shape from GET /providers/rules */
+export type ProvidersRulesRes = {
+  providers: Record<string, RuleProviderItem>;
+};
+
+/** Response shape from GET /providers/proxies */
+export type ProvidersProxiesRes = {
+  providers: Record<string, ProxyProviderItem>;
 };
