@@ -1,3 +1,13 @@
+## [0.16.1] - 2026-06-19 06:56:59
+
+### 🐛 Bug Fixes
+
+- Test for publish by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.16.0...v0.16.1
+
 ## [0.16.0] - 2026-06-19 06:00:49
 
 ### ✨ Features
