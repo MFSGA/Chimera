@@ -1,3 +1,33 @@
+## [0.16.2] - 2026-06-23 13:56:42
+
+### ✨ Features
+
+- **interface:** Add provider IPC hooks and HTTP API methods by @MFSGA
+
+- **providers:** Add main providers page with sidebar navigation by @MFSGA
+
+- **providers:** Add proxy and rule provider detail pages by @MFSGA
+
+- **providers:** Add internal module helpers by @MFSGA
+
+- **ui:** Add Card and LinearProgress UI components by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update rust crate nanoid to 0.5.0 by @renovate-bot
+
+- **deps:** Update tauri packages by @renovate-bot
+
+- **deps:** Update dependency react-use to v17.6.1 by @renovate-bot
+
+- **deps:** Update tanstack-query monorepo to v5.101.0 by @renovate-bot
+
+- **start:** Get the correct config when start gui in service mode by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.16.1...v0.16.2
+
 ## [0.16.1] - 2026-06-19 06:56:59
 
 ### 🐛 Bug Fixes
