@@ -36,7 +36,7 @@ use crate::{
     },
     core::{clash::api, logger::Logger},
     log_err,
-    utils::dirs,
+    utils::{dirs, help},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
@@ -355,15 +355,40 @@ impl Instance {
                 config_path,
                 core_type,
             } => {
+                let client = chimera_ipc::client::shortcuts::Client::service_default();
+
+                // Windows services can survive across user logon/app restarts. In that case this
+                // fresh UI process has no local `Instance`, but the service may still be running a
+                // core with the previous generated config. Stop it before `start_core` so the new
+                // config path, controller port and selected core type are applied atomically.
+                if matches!(
+                    client.status().await.map(|info| info.core_infos.state),
+                    Ok(chimera_ipc::api::status::CoreState::Running)
+                ) {
+                    client.stop_core().await?;
+                }
+
                 let payload = CoreStartReq {
                     config_file: Cow::Borrowed(config_path),
                     core_type: Cow::Borrowed(core_type),
                 };
-                match chimera_ipc::client::shortcuts::Client::service_default()
-                    .start_core(&payload)
-                    .await
-                {
+                match client.start_core(&payload).await {
                     Ok(_) => Ok(()),
+                    Err(err)
+                        if err
+                            .to_string()
+                            .to_ascii_lowercase()
+                            .contains("core is already running") =>
+                    {
+                        // The service status can change between `status` and `start_core`.
+                        // Retry through stop/start once so the UI never keeps a new
+                        // external-controller while the service keeps the old core.
+                        client.stop_core().await?;
+                        client
+                            .start_core(&payload)
+                            .await
+                            .map_err(|err| anyhow::anyhow!("failed to start core: {}", err))
+                    }
                     Err(err) => Err(anyhow::anyhow!("failed to start core: {}", err)),
                 }
             }
@@ -374,6 +399,10 @@ impl Instance {
 #[derive(Debug)]
 pub struct CoreManager {
     instance: Mutex<Option<Arc<Instance>>>,
+    /// Serializes core lifecycle operations triggered by startup, IPC state changes and user
+    /// actions. Without this, service health checks can race the initial launch and leave the UI
+    /// pointing at a config that the service never applied.
+    run_lock: tokio::sync::Mutex<()>,
 }
 
 impl CoreManager {
@@ -381,6 +410,7 @@ impl CoreManager {
         static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
         CORE_MANAGER.get_or_init(|| CoreManager {
             instance: Mutex::new(None),
+            run_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -403,6 +433,11 @@ impl CoreManager {
 
     /// 启动核心
     pub async fn run_core(&self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
+        self.run_core_inner().await
+    }
+
+    async fn run_core_inner(&self) -> Result<()> {
         {
             let instance = {
                 let instance = self.instance.lock();
@@ -415,6 +450,9 @@ impl CoreManager {
                 instance.stop().await?;
             }
         }
+
+        Config::clash().reload();
+        log::debug!(target: "app", "reloaded clash config from file");
 
         // 检查端口是否可用
         Config::clash()
@@ -504,7 +542,7 @@ impl CoreManager {
     /// 检查配置是否正确
     pub async fn check_config(&self) -> Result<()> {
         use chimera_utils::core::instance::CoreInstance;
-        let config_path = Config::generate_file(ConfigType::Check)?;
+        let config_path = self.generate_check_config_file()?;
         let config_path = Utf8PathBuf::from_path_buf(config_path)
             .map_err(|_| anyhow::anyhow!("failed to convert config path to utf8 path"))?;
 
@@ -534,6 +572,19 @@ impl CoreManager {
         Ok(())
     }
 
+    fn generate_check_config_file(&self) -> Result<PathBuf> {
+        let path = Config::generate_file(ConfigType::Check)?;
+
+        /* if matches!(
+            crate::core::service::ipc::get_ipc_state(),
+            crate::core::service::ipc::IpcState::Connected
+        ) {
+            self.patch_check_config_ports(&path)?;
+        } */
+
+        Ok(path)
+    }
+
     #[cfg(target_os = "macos")]
     pub async fn change_default_network_dns(&self, enabled: bool) -> Result<()> {
         todo!()
@@ -541,6 +592,7 @@ impl CoreManager {
 
     /// 重启内核
     pub async fn recover_core(&'static self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
         // 清除原来的实例
         {
             let instance = {
@@ -555,9 +607,10 @@ impl CoreManager {
             }
         }
 
-        if let Err(err) = self.run_core().await {
+        if let Err(err) = self.run_core_inner().await {
             log::error!(target: "app", "failed to recover clash core");
             log::error!(target: "app", "{err:?}");
+            drop(_guard);
             tokio::time::sleep(Duration::from_secs(5)).await; // sleep 5s
             std::thread::spawn(move || {
                 block_on(async {
@@ -602,6 +655,8 @@ impl CoreManager {
 
         log::debug!(target: "app", "change core to `{clash_core}`");
 
+        let _guard = self.run_lock.lock().await;
+
         Config::verge().draft().clash_core = Some(clash_core);
 
         // 更新配置
@@ -612,7 +667,7 @@ impl CoreManager {
         // 清掉旧日志
         Logger::global().clear_log();
 
-        match self.run_core().await {
+        match self.run_core_inner().await {
             Ok(_) => {
                 tracing::info!("change core success");
                 Config::verge().apply();
@@ -624,7 +679,7 @@ impl CoreManager {
                 tracing::error!("failed to change core: {err:?}");
                 Config::verge().discard();
                 Config::runtime().discard();
-                self.run_core().await?;
+                self.run_core_inner().await?;
                 Err(err)
             }
         }
