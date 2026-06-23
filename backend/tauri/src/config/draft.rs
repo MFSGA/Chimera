@@ -71,3 +71,12 @@ draft_define!(IVerge);
 draft_define!(IClashTemp);
 /// 3
 draft_define!(IRuntime);
+
+impl Draft<IClashTemp> {
+    pub fn reload(&self) {
+        let new_config = IClashTemp::new();
+        let mut inner = self.inner.lock();
+        inner.0 = new_config;
+        inner.1 = None;
+    }
+}
