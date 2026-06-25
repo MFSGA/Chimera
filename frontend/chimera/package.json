@@ -40,7 +40,7 @@
     "framer-motion": "12.40.0",
     "jotai": "2.16.1",
     "json-schema": "0.4.0",
-    "less": "4.6.4",
+    "less": "4.6.7",
     "lodash-es": "4.17.22",
     "material-react-table": "3.2.1",
     "monaco-editor": "0.55.1",
