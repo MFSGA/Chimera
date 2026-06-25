@@ -153,7 +153,7 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 tauri-plugin-deep-link = "2.4.9"
 
-oneshot = "0.1"
+oneshot = "0.2"
 
 time = { version = "0.3", features = ["formatting", "parsing", "serde"] }
 semver = "1.0"
