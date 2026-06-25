@@ -52,7 +52,7 @@
     "react-hook-form-mui": "9.0.1",
     "react-markdown": "10.1.0",
     "react-use": "17.6.1",
-    "swr": "2.3.6",
+    "swr": "2.4.2",
     "vaul": "1.1.2",
     "virtua": "0.45.3"
   },
