@@ -38,7 +38,7 @@
     in {
       devShells.${system}.default = pkgs.mkShell {
         nativeBuildInputs = with pkgs; [
-          nodejs_22 pnpm corepack git
+          nodejs_24 pnpm corepack git
           cargo rustc rustfmt clippy
           clang llvmPackages.libclang cmake ninja gnumake pkg-config protobuf
           desktop-file-utils
