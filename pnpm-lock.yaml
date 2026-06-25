@@ -130,10 +130,10 @@ importers:
         specifier: 4.1.16
         version: 4.1.16
       '@tanstack/react-table':
-        specifier: ^8.21.3
+        specifier: 8.21.3
         version: 8.21.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tanstack/react-virtual':
-        specifier: ^3.14.2
+        specifier: 3.14.2
         version: 3.14.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@tauri-apps/api':
         specifier: 2.11.1
@@ -172,7 +172,7 @@ importers:
         specifier: 0.7.1
         version: 0.7.1
       d3:
-        specifier: ^7.9.0
+        specifier: 7.9.0
         version: 7.9.0
       dayjs:
         specifier: 1.11.21
