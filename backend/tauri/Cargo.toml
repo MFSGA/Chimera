@@ -127,7 +127,7 @@ tracing-appender = { version = "0.2", features = ["parking_lot"] }
 tracing = { workspace = true }
 tracing-log = { version = "0.2" }
 
-strum = { version = "0.27", features = ["derive"] }                       # for enum string conversion
+strum = { version = "0.28", features = ["derive"] }                       # for enum string conversion
 
 atomic_enum = "0.3.0"                                                     # for atomic enum
 
