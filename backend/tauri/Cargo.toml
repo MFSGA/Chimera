@@ -181,7 +181,7 @@ chrono = { version = "0.4", features = ["serde"] }
 adler = "1.0.2"
 
 # Database
-redb = "3.0.0"
+redb = "4.0.0"
 
 tracing-attributes = "0.1"
 
