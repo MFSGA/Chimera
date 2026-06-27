@@ -26,7 +26,7 @@ jobs:
           - os: windows-latest
     runs-on: ${{ matrix.targets.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Rust
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
@@ -119,7 +119,7 @@ jobs:
     runs-on: ${{ matrix.targets.os }}
     needs: lint
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Tauri dependencies
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: >-
