@@ -89,7 +89,7 @@ jobs:
           commit_user_email: '41898282+github-actions[bot]@users.noreply.github.com'
           tagging_message: 'v${{ steps.update-version.outputs.version }}'
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # note: set for draft
           draft: true
