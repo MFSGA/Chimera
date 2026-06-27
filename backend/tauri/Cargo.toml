@@ -195,7 +195,7 @@ dashmap = "6"
 async-trait = "0.1"
 tempfile = "3"
 flate2 = "1"
-zip = "4"
+zip = "8"
 num_cpus = "1"
 sysinfo = "0.38"
 
