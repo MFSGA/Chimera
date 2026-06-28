@@ -6,9 +6,6 @@ pub mod collect;
 pub mod config;
 /// 9
 pub mod dirs;
-/// 2
-pub mod downloader;
-/// 1
 pub mod help;
 /// 5
 pub mod init;
