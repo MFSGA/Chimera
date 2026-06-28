@@ -205,7 +205,7 @@ tauri-plugin-global-shortcut = "2.3.2"
 
 [target.'cfg(windows)'.dependencies]
 deelevate = "0.2.0"
-winreg = { version = "0.55", features = ["transactions"] }
+winreg = { version = "0.56", features = ["transactions"] }
 windows-sys = { version = "0.61", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_SystemInformation",
@@ -213,7 +213,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Shutdown",
   "Win32_Graphics_Gdi",
 ] }
-windows-core = "0.61"
+windows-core = "0.62"
 # webview2-com = "0.38"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
