@@ -1,3 +1,13 @@
+## [0.16.3] - 2026-06-28 13:24:39
+
+### ✨ Features
+
+- **download:** Use new download mod by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.16.2...v0.16.3
+
 ## [0.16.2] - 2026-06-23 13:56:42
 
 ### ✨ Features
