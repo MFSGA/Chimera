@@ -1,8 +1,15 @@
 packages:
   - 'frontend/*'
   - 'scripts'
+overrides:
+  material-react-table: npm:@greenhat616/material-react-table@4.0.0
 allowBuilds:
   '@parcel/watcher': true
+  '@tailwindcss/oxide': true
+  core-js-pure: true
   electron: true
   esbuild: true
   meta-json-schema: true
+  oxc-resolver: true
+minimumReleaseAgeExclude:
+  - '@iconify/json@2.2.491'
