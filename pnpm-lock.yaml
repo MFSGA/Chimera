@@ -99,6 +99,9 @@ importers:
       '@chimera/ui':
         specifier: workspace:^
         version: link:../ui
+      '@chimera/utils':
+        specifier: workspace:^
+        version: link:../utils
       '@dnd-kit/core':
         specifier: 6.3.1
         version: 6.3.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
