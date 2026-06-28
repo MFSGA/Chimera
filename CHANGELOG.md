@@ -1,3 +1,19 @@
+## [0.17.0] - 2026-06-28 15:11:44
+
+### 🐛 Bug Fixes
+
+- **bindings:** Update fmt for bindings by @MFSGA
+
+- Update the utils version by @MFSGA
+
+- Update the use-profile hook by @MFSGA
+
+- Update the translation by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.16.3...v0.17.0
+
 ## [0.16.3] - 2026-06-28 13:24:39
 
 ### ✨ Features
