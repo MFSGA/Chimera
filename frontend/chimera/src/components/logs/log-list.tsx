@@ -37,7 +37,9 @@ export const LogList = ({
   }, [logLevel]);
 
   const handleScroll = () => {
-    const end = virtualizerRef.current?.findEndIndex() || 0;
+    // todo: fix ih the future
+    // const end = virtualizerRef.current?.findEndIndex() || 0;
+    const end = 0;
 
     shouldStickToBottom.current = end + 1 === logs?.length;
   };

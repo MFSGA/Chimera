@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         name: Setup pnpm cache
         with:
           path: ${{ env.STORE_PATH }}
@@ -89,7 +89,7 @@ jobs:
           commit_user_email: '41898282+github-actions[bot]@users.noreply.github.com'
           tagging_message: 'v${{ steps.update-version.outputs.version }}'
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # note: set for draft
           draft: true
@@ -98,7 +98,7 @@ jobs:
           tag_name: 'v${{ steps.update-version.outputs.version }}'
           # target_commitish: ${{ steps.tag.outputs.sha }}
       - name: Trigger release build
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RELEASE_TAG: v${{ steps.update-version.outputs.version }}
           RELEASE_BODY: ${{ steps.build-changelog.outputs.content }}
