@@ -229,16 +229,6 @@ export type BuildInfo = {
   llvm_version: string;
 };
 
-export type ChunkStatus = {
-  state: ChunkThreadState;
-  start: number;
-  end: number;
-  downloaded: number;
-  speed: number | null;
-};
-
-export type ChunkThreadState = 'idle' | 'downloading' | 'finished';
-
 export type ClashCore = ClashCore_Serialize | ClashCore_Deserialize;
 
 export type ClashCoreType =
@@ -302,20 +292,18 @@ export type DeviceInfo = {
   memory: string;
 };
 
+/**  A snapshot of a download session's progress, polled by IPC. */
 export type DownloadStatus = {
   state: DownloaderState;
   downloaded: number;
   total: number;
   speed: number | null;
-  chunks: ChunkStatus[];
-  now: number;
 };
 
+/**  The high-level state of a download session. */
 export type DownloaderState =
   | 'idle'
   | 'downloading'
-  | 'waiting_for_merge'
-  | 'merging'
   | { failed: string }
   | 'finished';
 

@@ -1,7 +1,9 @@
+// pub mod agent;
 /// 3
 pub mod clash;
 /// 8
 pub mod connection_interruption;
+pub mod download;
 /// 6
 pub mod handle;
 /// 5
