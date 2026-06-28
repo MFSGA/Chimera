@@ -1,7 +1,7 @@
 {
   "name": "@chimera/scripts",
   "type": "module",
-  "version": "0.16.3",
+  "version": "0.17.0",
   "dependencies": {
     "yargs": "18.0.0",
     "@actions/github": "9.1.1"
