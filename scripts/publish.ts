@@ -7,6 +7,7 @@ const MONO_REPO_PATHS = [
   path.join(cwd, 'frontend/chimera'),
   path.join(cwd, 'frontend/ui'),
   path.join(cwd, 'frontend/interface'),
+  path.join(cwd, 'frontend/utils'),
   path.join(cwd, 'scripts'),
 ];
 
