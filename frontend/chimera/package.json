@@ -59,7 +59,7 @@
   "devDependencies": {
     "@emotion/babel-plugin": "11.13.5",
     "@emotion/react": "11.14.0",
-    "@iconify/json": "2.2.491",
+    "@iconify/json": "2.2.492",
     "@monaco-editor/react": "4.7.0",
     "@svgr/core": "8.1.0",
     "@svgr/plugin-jsx": "8.1.0",
