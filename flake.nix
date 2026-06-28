@@ -1,6 +1,6 @@
 {
   description = "Chimera Tauri development environment";
-  inputs.nixpkgs.url = "path:/nix/store/pzxxxg9vvzk63122vj38lcmqg9dl6qxk-nixos-26.05.1947.a0374025a863/nixos";
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   outputs = { nixpkgs, ... }:
     let
       system = "x86_64-linux";
