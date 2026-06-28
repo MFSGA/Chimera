@@ -95,7 +95,8 @@ const useCardContext = () => {
 };
 
 export interface CardProps
-  extends HTMLAttributes<HTMLDivElement>,
+  extends
+    HTMLAttributes<HTMLDivElement>,
     CardVariantsProps,
     Partial<CardContextType> {
   asChild?: boolean;
@@ -179,7 +180,8 @@ export const CardHeader = ({
 };
 
 export interface CardFooterProps
-  extends HTMLAttributes<HTMLDivElement>,
+  extends
+    HTMLAttributes<HTMLDivElement>,
     CardVariantsProps,
     Partial<Pick<CardContextType, 'divider'>> {}
 
