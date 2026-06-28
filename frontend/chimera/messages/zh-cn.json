@@ -198,7 +198,7 @@
   "profile_subscription_expires_in": "{expires}到期",
   "profile_subscription_update": "更新",
   "profile_base_info_title": "基本信息",
-  "profile_name_editor_title": "编辑名称",
+  "profile_name_editor_title": "编辑配置信息",
   "profile_name_label": "配置名称",
   "profile_update_option_edit": "订阅选项",
   "profile_update_option_editor_title": "编辑订阅选项",
