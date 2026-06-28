@@ -91,7 +91,7 @@ dunce = "1.0.4"
 which = "8"
 open = "5.0.1"
 runas = { git = "https://github.com/libnyanpasu/rust-runas.git" }
-whoami = "1.5.1"
+whoami = "2.0.0"
 auto-launch = { git = "https://github.com/libnyanpasu/auto-launch.git", version = "0.5" }
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
