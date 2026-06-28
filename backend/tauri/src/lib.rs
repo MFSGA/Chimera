@@ -165,10 +165,18 @@ pub fn run() -> std::io::Result<()> {
         const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
 
         match specta_builder.export(
-            specta_typescript::Typescript::default().header("/* eslint-disable */\n// @ts-nocheck"),
+            specta_typescript::Typescript::default().header("/* oxlint-disable */\n// @ts-nocheck"),
             SPECTA_BINDINGS_PATH,
         ) {
             Ok(_) => {
+                let npx_command = if cfg!(target_os = "windows") {
+                    "npx.cmd"
+                } else {
+                    "npx"
+                };
+                let _ = std::process::Command::new(npx_command)
+                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
+                    .output();
                 log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
             }
             Err(e) => {
