@@ -68,7 +68,7 @@
     "@tanstack/react-router": "1.170.16",
     "@tanstack/react-router-devtools": "1.167.0",
     "@tanstack/router-plugin": "1.168.18",
-    "@tauri-apps/cli": "2.11.3",
+    "@tauri-apps/cli": "2.11.4",
     "@tauri-apps/plugin-clipboard-manager": "2.3.2",
     "@types/d3": "7.4.3",
     "@types/json-schema": "7.0.15",
