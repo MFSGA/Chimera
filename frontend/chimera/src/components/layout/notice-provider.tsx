@@ -4,8 +4,7 @@ import * as m from '@/paraglide/messages';
 import { notification, NotificationType } from '@/utils/notification';
 
 type SetConfigPayload =
-  | { ok?: string | null; Ok?: string | null }
-  | { err?: string; Err?: string };
+  { ok?: string | null; Ok?: string | null } | { err?: string; Err?: string };
 
 type NoticePayload = {
   set_config?: SetConfigPayload | null;
