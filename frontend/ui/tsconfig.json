@@ -20,6 +20,7 @@
     "jsxFragmentFactory": "React.Fragment",
     "declaration": true,
     "composite": true,
+    "types": ["vite/client"],
     "paths": {
       "@/*": ["./src/*"],
     },
