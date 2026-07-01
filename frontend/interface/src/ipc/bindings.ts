@@ -302,10 +302,7 @@ export type DownloadStatus = {
 
 /**  The high-level state of a download session. */
 export type DownloaderState =
-  | 'idle'
-  | 'downloading'
-  | { failed: string }
-  | 'finished';
+  'idle' | 'downloading' | { failed: string } | 'finished';
 
 export type EnvInfo = {
   os: string;
@@ -316,9 +313,7 @@ export type EnvInfo = {
 };
 
 export type ExternalControllerPortStrategy =
-  | 'fixed'
-  | 'random'
-  | 'allow_fallback';
+  'fixed' | 'random' | 'allow_fallback';
 
 export type GetSysProxyResponse = {
   enable: boolean;
@@ -537,8 +532,7 @@ export type LocalProfile = LocalProfile_Serialize | LocalProfile_Deserialize;
 
 /** Builder for [`LocalProfile`](struct.LocalProfile.html). */
 export type LocalProfileBuilder =
-  | LocalProfileBuilder_Serialize
-  | LocalProfileBuilder_Deserialize;
+  LocalProfileBuilder_Serialize | LocalProfileBuilder_Deserialize;
 
 /** Builder for [`LocalProfile`](struct.LocalProfile.html). */
 export type LocalProfileBuilder_Deserialize =
@@ -586,12 +580,7 @@ export type LoggingLevel_Deserialize =
   | 'error';
 
 export type LoggingLevel_Serialize =
-  | 'silent'
-  | 'trace'
-  | 'debug'
-  | 'info'
-  | 'warn'
-  | 'error';
+  'silent' | 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 export type ManifestVersionLatest = {
   mihomo: string;
@@ -603,8 +592,7 @@ export type ManifestVersionLatest = {
 };
 
 export type PatchClashCoreConfig =
-  | PatchClashCoreConfig_Serialize
-  | PatchClashCoreConfig_Deserialize;
+  PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
 
 export type PatchClashCoreConfig_Deserialize = {
   'mixed-port'?: number | null;
@@ -619,8 +607,7 @@ export type PatchClashCoreConfig_Serialize = {
 };
 
 export type PatchRuntimeConfig =
-  | PatchRuntimeConfig_Serialize
-  | PatchRuntimeConfig_Deserialize;
+  PatchRuntimeConfig_Serialize | PatchRuntimeConfig_Deserialize;
 
 export type PatchRuntimeConfig_Deserialize = {
   'allow-lan'?: boolean | null;
@@ -639,8 +626,7 @@ export type PatchRuntimeConfig_Serialize = {
 export type Profile = Profile_Serialize | Profile_Deserialize;
 
 export type ProfileBuilder =
-  | ProfileBuilder_Serialize
-  | ProfileBuilder_Deserialize;
+  ProfileBuilder_Serialize | ProfileBuilder_Deserialize;
 
 export type ProfileBuilder_Deserialize =
   | ({
@@ -721,8 +707,7 @@ export type Profiles = Profiles_Serialize | Profiles_Deserialize;
 
 /** Builder for [`Profiles`](struct.Profiles.html). */
 export type ProfilesBuilder =
-  | ProfilesBuilder_Serialize
-  | ProfilesBuilder_Deserialize;
+  ProfilesBuilder_Serialize | ProfilesBuilder_Deserialize;
 
 /** Builder for [`Profiles`](struct.Profiles.html). */
 export type ProfilesBuilder_Deserialize = {
@@ -787,8 +772,7 @@ export type Proxies_Serialize = {
 };
 
 export type ProxyGroupItem =
-  | ProxyGroupItem_Serialize
-  | ProxyGroupItem_Deserialize;
+  ProxyGroupItem_Serialize | ProxyGroupItem_Deserialize;
 
 export type ProxyGroupItem_Deserialize = {
   /**  1 */
@@ -870,8 +854,7 @@ export type RemoteProfileBuilder = {
 } & ProfileSharedBuilder;
 
 export type RemoteProfileOptions =
-  | RemoteProfileOptions_Serialize
-  | RemoteProfileOptions_Deserialize;
+  RemoteProfileOptions_Serialize | RemoteProfileOptions_Deserialize;
 
 /** Builder for [`RemoteProfileOptions`](struct.RemoteProfileOptions.html). */
 export type RemoteProfileOptionsBuilder = {
