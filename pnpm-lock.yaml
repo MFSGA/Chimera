@@ -20,7 +20,7 @@ importers:
     devDependencies:
       '@commitlint/cli':
         specifier: 21.1.0
-        version: 21.1.0(@types/node@24.13.2)(conventional-commits-parser@6.4.0)(typescript@5.9.3)
+        version: 21.1.0(@types/node@24.13.2)(conventional-commits-parser@6.4.0)(typescript@6.0.3)
       '@commitlint/config-conventional':
         specifier: 21.1.0
         version: 21.1.0
@@ -65,31 +65,31 @@ importers:
         version: 7.0.1
       stylelint:
         specifier: 17.14.0
-        version: 17.14.0(typescript@5.9.3)
+        version: 17.14.0(typescript@6.0.3)
       stylelint-config-html:
         specifier: 1.1.0
-        version: 1.1.0(postcss-html@1.8.1)(stylelint@17.14.0(typescript@5.9.3))
+        version: 1.1.0(postcss-html@1.8.1)(stylelint@17.14.0(typescript@6.0.3))
       stylelint-config-recess-order:
         specifier: 7.7.0
-        version: 7.7.0(stylelint-order@8.1.1(stylelint@17.14.0(typescript@5.9.3)))(stylelint@17.14.0(typescript@5.9.3))
+        version: 7.7.0(stylelint-order@8.1.1(stylelint@17.14.0(typescript@6.0.3)))(stylelint@17.14.0(typescript@6.0.3))
       stylelint-config-standard:
         specifier: 40.0.0
-        version: 40.0.0(stylelint@17.14.0(typescript@5.9.3))
+        version: 40.0.0(stylelint@17.14.0(typescript@6.0.3))
       stylelint-declaration-block-no-ignored-properties:
         specifier: 3.0.0
-        version: 3.0.0(stylelint@17.14.0(typescript@5.9.3))
+        version: 3.0.0(stylelint@17.14.0(typescript@6.0.3))
       stylelint-order:
         specifier: 8.1.1
-        version: 8.1.1(stylelint@17.14.0(typescript@5.9.3))
+        version: 8.1.1(stylelint@17.14.0(typescript@6.0.3))
       stylelint-scss:
         specifier: 7.2.0
-        version: 7.2.0(stylelint@17.14.0(typescript@5.9.3))
+        version: 7.2.0(stylelint@17.14.0(typescript@6.0.3))
       tsx:
         specifier: 4.22.4
         version: 4.22.4
       typescript:
-        specifier: 5.9.3
-        version: 5.9.3
+        specifier: 6.0.3
+        version: 6.0.3
 
   frontend/chimera:
     dependencies:
@@ -116,7 +116,7 @@ importers:
         version: 11.14.1(@emotion/react@11.14.0(@types/react@19.2.17)(react@19.2.7))(@types/react@19.2.17)(react@19.2.7)
       '@inlang/paraglide-js':
         specifier: 2.20.2
-        version: 2.20.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)
+        version: 2.20.2(babel-plugin-macros@3.1.0)(typescript@6.0.3)
       '@material/material-color-utilities':
         specifier: 0.4.0
         version: 0.4.0
@@ -252,10 +252,10 @@ importers:
         version: 4.7.0(monaco-editor@0.55.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@svgr/core':
         specifier: 8.1.0
-        version: 8.1.0(typescript@5.9.3)
+        version: 8.1.0(typescript@6.0.3)
       '@svgr/plugin-jsx':
         specifier: 8.1.0
-        version: 8.1.0(@svgr/core@8.1.0(typescript@5.9.3))
+        version: 8.1.0(@svgr/core@8.1.0(typescript@6.0.3))
       '@tanstack/react-query':
         specifier: 5.101.2
         version: 5.101.2(react@19.2.7)
@@ -326,11 +326,11 @@ importers:
         specifier: 4.3.2
         version: 4.3.2
       typescript:
-        specifier: 5.9.3
-        version: 5.9.3
+        specifier: 6.0.3
+        version: 6.0.3
       unplugin-icons:
         specifier: 23.0.1
-        version: 23.0.1(@svgr/core@8.1.0(typescript@5.9.3))
+        version: 23.0.1(@svgr/core@8.1.0(typescript@6.0.3))
       validator:
         specifier: 13.15.35
         version: 13.15.35
@@ -6176,8 +6176,8 @@ packages:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
     engines: {node: '>=10'}
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -6708,12 +6708,12 @@ snapshots:
       hashery: 1.5.1
       keyv: 5.6.0
 
-  '@commitlint/cli@21.1.0(@types/node@24.13.2)(conventional-commits-parser@6.4.0)(typescript@5.9.3)':
+  '@commitlint/cli@21.1.0(@types/node@24.13.2)(conventional-commits-parser@6.4.0)(typescript@6.0.3)':
     dependencies:
       '@commitlint/config-conventional': 21.1.0
       '@commitlint/format': 21.1.0
       '@commitlint/lint': 21.1.0
-      '@commitlint/load': 21.1.0(@types/node@24.13.2)(typescript@5.9.3)
+      '@commitlint/load': 21.1.0(@types/node@24.13.2)(typescript@6.0.3)
       '@commitlint/read': 21.1.0(conventional-commits-parser@6.4.0)
       '@commitlint/types': 21.1.0
       tinyexec: 1.2.4
@@ -6758,14 +6758,14 @@ snapshots:
       '@commitlint/rules': 21.1.0
       '@commitlint/types': 21.1.0
 
-  '@commitlint/load@21.1.0(@types/node@24.13.2)(typescript@5.9.3)':
+  '@commitlint/load@21.1.0(@types/node@24.13.2)(typescript@6.0.3)':
     dependencies:
       '@commitlint/config-validator': 21.1.0
       '@commitlint/execute-rule': 21.0.1
       '@commitlint/resolve-extends': 21.1.0
       '@commitlint/types': 21.1.0
-      cosmiconfig: 9.0.2(typescript@5.9.3)
-      cosmiconfig-typescript-loader: 6.3.0(@types/node@24.13.2)(cosmiconfig@9.0.2(typescript@5.9.3))(typescript@5.9.3)
+      cosmiconfig: 9.0.2(typescript@6.0.3)
+      cosmiconfig-typescript-loader: 6.3.0(@types/node@24.13.2)(cosmiconfig@9.0.2(typescript@6.0.3))(typescript@6.0.3)
       es-toolkit: 1.48.1
       is-plain-obj: 4.1.0
       picocolors: 1.1.1
@@ -7180,7 +7180,7 @@ snapshots:
       '@iconify/types': 2.0.0
       import-meta-resolve: 4.2.0
 
-  '@inlang/paraglide-js@2.20.2(babel-plugin-macros@3.1.0)(typescript@5.9.3)':
+  '@inlang/paraglide-js@2.20.2(babel-plugin-macros@3.1.0)(typescript@6.0.3)':
     dependencies:
       '@inlang/recommend-sherlock': 0.2.1
       '@inlang/sdk': 2.10.2(babel-plugin-macros@3.1.0)
@@ -7190,7 +7190,7 @@ snapshots:
       unplugin: 2.3.11
       urlpattern-polyfill: 10.1.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 6.0.3
     transitivePeerDependencies:
       - babel-plugin-macros
 
@@ -8732,12 +8732,12 @@ snapshots:
       '@svgr/babel-plugin-transform-react-native-svg': 8.1.0(@babel/core@7.29.7)
       '@svgr/babel-plugin-transform-svg-component': 8.0.0(@babel/core@7.29.7)
 
-  '@svgr/core@8.1.0(typescript@5.9.3)':
+  '@svgr/core@8.1.0(typescript@6.0.3)':
     dependencies:
       '@babel/core': 7.29.7
       '@svgr/babel-preset': 8.1.0(@babel/core@7.29.7)
       camelcase: 6.3.0
-      cosmiconfig: 8.3.6(typescript@5.9.3)
+      cosmiconfig: 8.3.6(typescript@6.0.3)
       snake-case: 3.0.4
     transitivePeerDependencies:
       - supports-color
@@ -8748,11 +8748,11 @@ snapshots:
       '@babel/types': 7.29.7
       entities: 4.5.0
 
-  '@svgr/plugin-jsx@8.1.0(@svgr/core@8.1.0(typescript@5.9.3))':
+  '@svgr/plugin-jsx@8.1.0(@svgr/core@8.1.0(typescript@6.0.3))':
     dependencies:
       '@babel/core': 7.29.7
       '@svgr/babel-preset': 8.1.0(@babel/core@7.29.7)
-      '@svgr/core': 8.1.0(typescript@5.9.3)
+      '@svgr/core': 8.1.0(typescript@6.0.3)
       '@svgr/hast-util-to-babel-ast': 8.0.0
       svg-parser: 2.0.4
     transitivePeerDependencies:
@@ -9611,12 +9611,12 @@ snapshots:
 
   core-js-pure@3.49.0: {}
 
-  cosmiconfig-typescript-loader@6.3.0(@types/node@24.13.2)(cosmiconfig@9.0.2(typescript@5.9.3))(typescript@5.9.3):
+  cosmiconfig-typescript-loader@6.3.0(@types/node@24.13.2)(cosmiconfig@9.0.2(typescript@6.0.3))(typescript@6.0.3):
     dependencies:
       '@types/node': 24.13.2
-      cosmiconfig: 9.0.2(typescript@5.9.3)
+      cosmiconfig: 9.0.2(typescript@6.0.3)
       jiti: 2.6.1
-      typescript: 5.9.3
+      typescript: 6.0.3
 
   cosmiconfig@7.1.0:
     dependencies:
@@ -9626,23 +9626,23 @@ snapshots:
       path-type: 4.0.0
       yaml: 1.10.3
 
-  cosmiconfig@8.3.6(typescript@5.9.3):
+  cosmiconfig@8.3.6(typescript@6.0.3):
     dependencies:
       import-fresh: 3.3.1
       js-yaml: 4.2.0
       parse-json: 5.2.0
       path-type: 4.0.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 6.0.3
 
-  cosmiconfig@9.0.2(typescript@5.9.3):
+  cosmiconfig@9.0.2(typescript@6.0.3):
     dependencies:
       env-paths: 2.2.1
       import-fresh: 3.3.1
       js-yaml: 4.2.0
       parse-json: 5.2.0
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 6.0.3
 
   create-error-class@3.0.2:
     dependencies:
@@ -12125,36 +12125,36 @@ snapshots:
     dependencies:
       inline-style-parser: 0.2.7
 
-  stylelint-config-html@1.1.0(postcss-html@1.8.1)(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-config-html@1.1.0(postcss-html@1.8.1)(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
       postcss-html: 1.8.1
-      stylelint: 17.14.0(typescript@5.9.3)
+      stylelint: 17.14.0(typescript@6.0.3)
 
-  stylelint-config-recess-order@7.7.0(stylelint-order@8.1.1(stylelint@17.14.0(typescript@5.9.3)))(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-config-recess-order@7.7.0(stylelint-order@8.1.1(stylelint@17.14.0(typescript@6.0.3)))(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
-      stylelint: 17.14.0(typescript@5.9.3)
-      stylelint-order: 8.1.1(stylelint@17.14.0(typescript@5.9.3))
+      stylelint: 17.14.0(typescript@6.0.3)
+      stylelint-order: 8.1.1(stylelint@17.14.0(typescript@6.0.3))
 
-  stylelint-config-recommended@18.0.0(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-config-recommended@18.0.0(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
-      stylelint: 17.14.0(typescript@5.9.3)
+      stylelint: 17.14.0(typescript@6.0.3)
 
-  stylelint-config-standard@40.0.0(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-config-standard@40.0.0(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
-      stylelint: 17.14.0(typescript@5.9.3)
-      stylelint-config-recommended: 18.0.0(stylelint@17.14.0(typescript@5.9.3))
+      stylelint: 17.14.0(typescript@6.0.3)
+      stylelint-config-recommended: 18.0.0(stylelint@17.14.0(typescript@6.0.3))
 
-  stylelint-declaration-block-no-ignored-properties@3.0.0(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-declaration-block-no-ignored-properties@3.0.0(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
-      stylelint: 17.14.0(typescript@5.9.3)
+      stylelint: 17.14.0(typescript@6.0.3)
 
-  stylelint-order@8.1.1(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-order@8.1.1(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
       postcss: 8.5.16
       postcss-sorting: 10.0.0(postcss@8.5.16)
-      stylelint: 17.14.0(typescript@5.9.3)
+      stylelint: 17.14.0(typescript@6.0.3)
 
-  stylelint-scss@7.2.0(stylelint@17.14.0(typescript@5.9.3)):
+  stylelint-scss@7.2.0(stylelint@17.14.0(typescript@6.0.3)):
     dependencies:
       '@csstools/css-calc': 3.2.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
@@ -12167,9 +12167,9 @@ snapshots:
       postcss-resolve-nested-selector: 0.1.6
       postcss-selector-parser: 7.1.4
       postcss-value-parser: 4.2.0
-      stylelint: 17.14.0(typescript@5.9.3)
+      stylelint: 17.14.0(typescript@6.0.3)
 
-  stylelint@17.14.0(typescript@5.9.3):
+  stylelint@17.14.0(typescript@6.0.3):
     dependencies:
       '@csstools/css-calc': 3.2.1(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)
       '@csstools/css-parser-algorithms': 4.0.0(@csstools/css-tokenizer@4.0.0)
@@ -12179,7 +12179,7 @@ snapshots:
       '@csstools/selector-resolve-nested': 4.0.0(postcss-selector-parser@7.1.4)
       '@csstools/selector-specificity': 6.0.0(postcss-selector-parser@7.1.4)
       colord: 2.9.3
-      cosmiconfig: 9.0.2(typescript@5.9.3)
+      cosmiconfig: 9.0.2(typescript@6.0.3)
       css-functions-list: 3.3.3
       css-tree: 3.2.1
       debug: 4.4.3
@@ -12324,7 +12324,7 @@ snapshots:
   type-fest@0.13.1:
     optional: true
 
-  typescript@5.9.3: {}
+  typescript@6.0.3: {}
 
   ufo@1.6.4: {}
 
@@ -12383,7 +12383,7 @@ snapshots:
 
   universalify@2.0.1: {}
 
-  unplugin-icons@23.0.1(@svgr/core@8.1.0(typescript@5.9.3)):
+  unplugin-icons@23.0.1(@svgr/core@8.1.0(typescript@6.0.3)):
     dependencies:
       '@antfu/install-pkg': 1.1.0
       '@iconify/utils': 3.1.3
@@ -12391,7 +12391,7 @@ snapshots:
       obug: 2.1.3
       unplugin: 2.3.11
     optionalDependencies:
-      '@svgr/core': 8.1.0(typescript@5.9.3)
+      '@svgr/core': 8.1.0(typescript@6.0.3)
 
   unplugin@2.3.11:
     dependencies:
