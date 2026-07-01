@@ -3,11 +3,7 @@ import { unwrapResult } from '../utils';
 import { commands } from './bindings';
 
 export type ServiceType =
-  | 'install'
-  | 'uninstall'
-  | 'start'
-  | 'stop'
-  | 'restart';
+  'install' | 'uninstall' | 'start' | 'stop' | 'restart';
 
 /**
  * Custom hook to fetch and manage the system service status using TanStack Query.
