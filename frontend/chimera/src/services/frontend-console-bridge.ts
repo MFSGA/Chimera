@@ -1,8 +1,5 @@
 type ConsoleBridgeLevel =
-  | 'console.error'
-  | 'console.warn'
-  | 'window.error'
-  | 'unhandledrejection';
+  'console.error' | 'console.warn' | 'window.error' | 'unhandledrejection';
 
 const serialize = (value: unknown): string => {
   if (value instanceof Error) {
