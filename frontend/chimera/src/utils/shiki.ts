@@ -3,7 +3,8 @@ import { getSingletonHighlighterCore } from 'shiki/core';
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma';
 import minLight from 'shiki/themes/min-light.mjs';
 import nord from 'shiki/themes/nord.mjs';
-import getWasm from 'shiki/wasm';
+
+// import getWasm from 'shiki/wasm';
 
 let shiki: Highlighter | null = null;
 
@@ -13,7 +14,7 @@ export async function getShikiSingleton() {
       engine: createOnigurumaEngine(import('shiki/wasm')),
       themes: [nord, minLight],
       langs: [() => import('shiki/langs/shell.mjs')],
-      loadWasm: getWasm,
+      // loadWasm: getWasm,
     })) as Highlighter;
   }
   return shiki;
