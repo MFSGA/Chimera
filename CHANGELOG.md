@@ -1,3 +1,17 @@
+## [0.17.1] - 2026-07-02 07:55:35
+
+### 🐛 Bug Fixes
+
+- **deps:** Update the typescript deps by @MFSGA
+
+- **scss:** For better css settings by @MFSGA
+
+- **shiki:** For better call shiki by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.17.0...v0.17.1
+
 ## [0.17.0] - 2026-06-28 15:11:44
 
 ### 🐛 Bug Fixes
