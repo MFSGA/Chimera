@@ -1,5 +1,5 @@
 import { useSetting } from '@chimera/interface';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { memo } from 'react';
 
 export const ProxyGroupName = memo(function ProxyGroupName({

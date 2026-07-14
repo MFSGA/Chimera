@@ -1,5 +1,5 @@
 import * as d3 from 'd3';
-import { animate } from 'framer-motion';
+import { animate } from 'motion';
 import { ComponentPropsWithoutRef, useEffect, useRef } from 'react';
 import { cn } from '../../../utils';
 

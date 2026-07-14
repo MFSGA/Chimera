@@ -20,7 +20,7 @@ import {
 } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { useAtom } from 'jotai';
 import { useMemo, useState, useTransition } from 'react';
 import { useWindowSize } from 'react-use';

@@ -5,7 +5,7 @@ import { Checkbox, CircularProgress, IconButton } from '@mui/material';
 import { useLockFn } from 'ahooks';
 import { snakeCase } from 'change-case';
 import dayjs from 'dayjs';
-import { AnimatePresence, Reorder, useDragControls } from 'framer-motion';
+import { AnimatePresence, Reorder, useDragControls } from 'motion/react';
 import { useAtom } from 'jotai';
 import { type MRT_ColumnDef } from 'material-react-table';
 import { MouseEventHandler, useCallback, useMemo, useState } from 'react';

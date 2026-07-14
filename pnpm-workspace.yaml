@@ -13,3 +13,10 @@ allowBuilds:
   oxc-resolver: true
 minimumReleaseAgeExclude:
   - '@iconify/json@2.2.491'
+  - '@inlang/paraglide-js@2.22.0'
+  - '@tanstack/react-router@1.170.18'
+  - '@tanstack/router-core@1.171.15'
+  - '@tanstack/router-generator@1.167.19'
+  - '@tanstack/router-plugin@1.168.20'
+  - meta-json-schema@1.19.28
+  - postcss@8.5.19
