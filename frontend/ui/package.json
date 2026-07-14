@@ -22,7 +22,7 @@
     "react-dom": "19.2.7",
     "@types/react": "19.2.17",
     "react-error-boundary": "6.1.2",
-    "framer-motion": "12.42.0",
+    "framer-motion": "12.42.2",
     "@mui/material": "9.1.2",
     "@radix-ui/react-portal": "1.1.12",
     "ahooks": "3.9.7",
