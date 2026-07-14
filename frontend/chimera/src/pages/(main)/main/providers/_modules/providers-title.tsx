@@ -6,12 +6,12 @@
  * 功能：
  * - 提供返回按钮，导航到 /main/providers
  * - 滚动时显示/隐藏大标题（sticky 效果）
- * - 使用 framer-motion 实现标题过渡动画
+ * - 使用 motion 实现标题过渡动画
  */
 
 import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { useId, type ComponentProps } from 'react';
 import { Button } from '@/components/ui/button';
 import { useScrollArea } from '@/components/ui/scroll-area';

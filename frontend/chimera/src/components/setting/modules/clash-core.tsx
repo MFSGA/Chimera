@@ -12,7 +12,7 @@ import { Box, Button } from '@mui/material';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import Tooltip from '@mui/material/Tooltip';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { isObject } from 'lodash-es';
 import { useState } from 'react';
 import ClashRs from '@/assets/image/core/clash-rs.png';

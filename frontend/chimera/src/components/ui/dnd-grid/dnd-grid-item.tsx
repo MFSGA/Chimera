@@ -5,7 +5,7 @@
  *
  * 职责：
  * - 渲染单个网格项，使用 @dnd-kit 的 useDraggable 实现拖拽
- * - 使用 framer-motion 的 useSpring 实现放置后弹性动画
+ * - 使用 motion 的 useSpring 实现放置后弹性动画
  * - 提供调整大小的拖拽手柄（ResizeKnob）
  * - 支持覆盖层模式（DragOverlay 内渲染时跳过定位逻辑）
  *
@@ -21,7 +21,7 @@ import {
   motion,
   useSpring,
   type Transition,
-} from 'framer-motion';
+} from 'motion/react';
 import { useLayoutEffect, useRef, type PropsWithChildren } from 'react';
 import { useDndGridContext } from './context';
 import type { GridItemConstraints } from './types';

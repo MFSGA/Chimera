@@ -1,5 +1,5 @@
 import { cn } from '@chimera/utils';
-import { motion, useAnimationControls } from 'framer-motion';
+import { motion, useAnimationControls } from 'motion/react';
 import {
   useCallback,
   useEffect,

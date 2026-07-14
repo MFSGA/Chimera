@@ -24,7 +24,7 @@ import { useProfile } from '@chimera/interface';
 import { Public } from '@mui/icons-material';
 import { Grid } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { useMemo } from 'react';
 import ProfileItem from '@/components/profiles/profile-item';
 import { filterProfiles } from '@/components/profiles/utils';

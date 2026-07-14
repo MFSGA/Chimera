@@ -6,7 +6,7 @@ import {
   useSetting,
 } from '@chimera/interface';
 import { cn, useBreakpointValue } from '@chimera/ui';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { useAtomValue } from 'jotai';
 import {
   forwardRef,

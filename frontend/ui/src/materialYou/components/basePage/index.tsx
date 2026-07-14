@@ -1,5 +1,5 @@
 import * as ScrollArea from '@radix-ui/react-scroll-area';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { CSSProperties, FC, ReactNode, Ref, Suspense } from 'react';
 import { cn } from '../../../utils';
 import { BaseErrorBoundary } from './baseErrorBoundary';

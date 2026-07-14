@@ -5,7 +5,7 @@ import {
   CircularProgress,
   Typography,
 } from '@mui/material';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { ReactNode } from 'react';
 import { cn } from '../../../utils';
 import style from './style.module.scss';

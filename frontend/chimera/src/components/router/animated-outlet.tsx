@@ -6,7 +6,7 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
-import { AnimatePresence, motion, useIsPresent, Variants } from 'framer-motion';
+import { AnimatePresence, motion, useIsPresent, Variants } from 'motion/react';
 import { ComponentProps, useRef } from 'react';
 
 type TransitionDirection = 1 | -1;

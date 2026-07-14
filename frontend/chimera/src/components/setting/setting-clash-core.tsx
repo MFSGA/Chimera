@@ -9,7 +9,7 @@ import {
 import { BaseCard, ExpandMore, LoadingButton } from '@chimera/ui';
 import { Box, Button, List, ListItem } from '@mui/material';
 import { useLockFn, useReactive } from 'ahooks';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';

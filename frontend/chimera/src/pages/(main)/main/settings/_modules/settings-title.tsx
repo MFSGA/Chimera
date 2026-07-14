@@ -7,19 +7,19 @@
  * - 在设置子页面顶部显示粘性标题
  * - 滚动距离 < 40px 时：在页面内显示大标题（text-3xl）
  * - 滚动距离 >= 40px 时：在 sticky header 中显示小标题（text-xl）
- * - 使用 framer-motion 的 AnimatePresence + layout animation 实现平滑过渡
+ * - 使用 motion 的 AnimatePresence + layout animation 实现平滑过渡
  * - 在移动端（md 以下）显示返回按钮，跳转至 /main/settings
  *
  * 实现说明：
  * - 使用 useScrollArea().offset.top 获取滚动距离（与 ref 一致）
- * - 两个标题区域使用共享的 useId 作为 layoutId，确保 framer-motion 识别为同一元素
+ * - 两个标题区域使用共享的 useId 作为 layoutId，确保 motion 识别为同一元素
  * - 动画时长和缓动曲线匹配 ref: 0.5s, [0.32, 0.72, 0, 1]
  */
 
 import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { useId, type ComponentProps } from 'react';
 import { Button } from '@/components/ui/button';
 import { useScrollArea } from '@/components/ui/scroll-area';
@@ -44,7 +44,7 @@ const BackButton = () => {
 };
 
 /**
- * Animated Title — 使用 framer-motion 实现 layout 动画的标题文本
+ * Animated Title — 使用 motion 实现 layout 动画的标题文本
  * layoutId 与 useId 绑定，确保两个标题区域共享同一动画标识
  */
 const Title = (props: ComponentProps<typeof motion.p>) => {

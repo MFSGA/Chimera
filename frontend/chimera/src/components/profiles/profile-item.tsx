@@ -26,7 +26,7 @@ import {
 } from '@mui/material';
 import { useLockFn, useMemoizedFn, useSetState } from 'ahooks';
 import dayjs from 'dayjs';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { memo, useEffect, useMemo, useState } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
