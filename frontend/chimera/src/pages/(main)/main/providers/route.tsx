@@ -4,7 +4,7 @@ import {
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { createFileRoute, Link, useLocation } from '@tanstack/react-router';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import type { ComponentProps } from 'react';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { Button } from '@/components/ui/button';

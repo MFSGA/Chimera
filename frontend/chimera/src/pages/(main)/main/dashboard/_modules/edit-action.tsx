@@ -7,13 +7,13 @@
  * - "添加 Widget" 按钮：打开 WidgetSheet
  * - "保存" 按钮：退出编辑模式
  *
- * 使用 framer-motion 的 AnimatePresence 实现进出场动画。
+ * 使用 motion 的 AnimatePresence 实现进出场动画。
  */
 
 import { cn } from '@chimera/ui';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';

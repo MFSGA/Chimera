@@ -1,7 +1,7 @@
 import { useSetting } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useMatch, useMatches } from '@tanstack/react-router';
-import { type Transition, type Variant } from 'framer-motion';
+import { type Transition, type Variant } from 'motion/react';
 import { AnimatedOutlet } from '../router/animated-outlet';
 
 type PageVariantKey = 'initial' | 'visible' | 'hidden';

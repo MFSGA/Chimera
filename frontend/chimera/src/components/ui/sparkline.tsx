@@ -14,12 +14,12 @@
  * 1. SVG translateX 实现水平滚动（线性缓动，恒定速度）
  * 2. D3 easeCubicInOut 实现 yMax 插值（非线性缓动，自然感）
  * 3. 二者解耦，互不影响
- * 4. 使用 framer-motion animate 进行高性能动画驱动
+ * 4. 使用 motion animate 进行高性能动画驱动
  */
 
 import { cn } from '@chimera/ui';
 import * as d3 from 'd3';
-import { animate } from 'framer-motion';
+import { animate } from 'motion';
 import { cloneDeep } from 'lodash-es';
 import { useEffect, useRef, type ComponentPropsWithoutRef } from 'react';
 
@@ -215,7 +215,7 @@ export const Sparkline = ({
 
     let cancelled = false;
 
-    // 使用 framer-motion animate 驱动动画
+    // 使用 motion animate 驱动动画
     const anim = animate(0, 1, {
       duration: animationDuration,
       ease: 'linear',
