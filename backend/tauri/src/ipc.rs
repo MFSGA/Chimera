@@ -889,10 +889,11 @@ pub fn save_window_size_state(app_handle: AppHandle, label: String) -> Result {
         crate::consts::LEGACY_WINDOW_LABEL => {
             resolve::save_legacy_window_state(&app_handle, true)?;
         }
-        // "main" => resolve::save_main_window_state(&app_handle, true)?,
+        crate::consts::MAIN_WINDOW_LABEL => {
+            resolve::save_main_window_state(&app_handle, true)?;
+        }
         _ => {
-            todo!()
-            // log::warn!(target: "app", "Unknown window label: {}", label);
+            return Err(IpcError::Custom(format!("unknown window label: {label}")));
         }
     }
 
@@ -960,18 +961,9 @@ pub fn open_app_data_dir() -> Result<()> {
 #[tauri::command]
 #[specta::specta]
 pub fn open_core_dir() -> Result<()> {
-    let core_dir = (tauri::utils::platform::current_exe())?;
-    let core_dir = match core_dir
-        .parent()
-        .ok_or("failed to get core dir".to_string())
-    {
-        Ok(target) => target,
-        Err(err) => {
-            tracing::error!("{err}");
-            todo!()
-        }
-    };
-    (crate::utils::open::that(core_dir))?;
+    let core_dir = tauri::utils::platform::current_exe()?;
+    let core_dir = core_dir.parent().context("failed to get core dir")?;
+    crate::utils::open::that(core_dir)?;
     Ok(())
 }
 

@@ -1,11 +1,13 @@
-import { cn } from '@chimera/ui';
+import { cn, getSystem } from '@chimera/ui';
 import { GitHub, HelpOutlined, Settings } from '@mui/icons-material';
 import { IconButton, Tooltip } from '@mui/material';
 import { Link } from '@tanstack/react-router';
 import { ComponentProps } from 'react';
+import { LayoutControl } from '@/components/layout/layout-control';
 import * as m from '@/paraglide/messages';
 
 const APP_NAME = 'Clash Chimera';
+const OS = getSystem();
 
 export default function Header({ className, ...props }: ComponentProps<'div'>) {
   return (
@@ -47,10 +49,17 @@ export default function Header({ className, ...props }: ComponentProps<'div'>) {
         </Tooltip>
 
         <Tooltip title={m.header_settings_action_title()}>
-          <IconButton size="small" color="inherit" component={Link} to="/main">
+          <IconButton
+            size="small"
+            color="inherit"
+            component={Link}
+            to="/main/settings"
+          >
             <Settings fontSize="small" />
           </IconButton>
         </Tooltip>
+
+        {OS === 'windows' && <LayoutControl />}
       </div>
     </div>
   );
