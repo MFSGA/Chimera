@@ -1,8 +1,5 @@
 import { commands } from '@chimera/interface';
-import { cn, getSystem } from '@chimera/ui';
-import { GitHub, HelpOutlined, Settings } from '@mui/icons-material';
-import { IconButton, Tooltip } from '@mui/material';
-import { Link } from '@tanstack/react-router';
+import { getSystem } from '@chimera/ui';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { ComponentProps } from 'react';
 import {
@@ -12,7 +9,7 @@ import {
   MacOSHeaderLeft,
 } from '@/components/window/system-titlebar';
 import WindowTitle from '@/components/window/window-title';
-import * as m from '@/paraglide/messages';
+import HeaderMenu from './header-menu';
 
 const APP_NAME = 'Clash Chimera';
 const OS = getSystem();
@@ -43,49 +40,11 @@ const Title = () => (
   </WindowTitle>
 );
 
-const HeaderActions = ({ className, ...props }: ComponentProps<'div'>) => (
-  <div
-    className={cn('flex items-center gap-1', className)}
-    data-slot="app-header-actions"
-    data-tauri-drag-region
-    {...props}
-  >
-    <Tooltip title={m.header_help_action_github()}>
-      <IconButton
-        size="small"
-        color="inherit"
-        onClick={() =>
-          window.open('https://github.com/MFSGA/Chimera', '_blank')
-        }
-      >
-        <GitHub fontSize="small" />
-      </IconButton>
-    </Tooltip>
-
-    <Tooltip title={m.header_help_action_title()}>
-      <IconButton size="small" color="inherit">
-        <HelpOutlined fontSize="small" />
-      </IconButton>
-    </Tooltip>
-
-    <Tooltip title={m.header_settings_action_title()}>
-      <IconButton
-        size="small"
-        color="inherit"
-        component={Link}
-        to="/main/settings"
-      >
-        <Settings fontSize="small" />
-      </IconButton>
-    </Tooltip>
-  </div>
-);
-
 export default function Header({ className, ...props }: ComponentProps<'div'>) {
   return isMacOS ? (
     <MacOSHeader className={className} {...props}>
       <MacOSHeaderLeft>
-        <HeaderActions />
+        <HeaderMenu />
       </MacOSHeaderLeft>
       <Title />
     </MacOSHeader>
@@ -96,7 +55,7 @@ export default function Header({ className, ...props }: ComponentProps<'div'>) {
       {...props}
     >
       <Title />
-      <HeaderActions className="hidden md:flex" />
+      <HeaderMenu className="hidden md:flex" />
     </DefaultHeader>
   );
 }
