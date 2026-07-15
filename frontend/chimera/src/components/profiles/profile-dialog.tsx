@@ -42,6 +42,7 @@ export interface ProfileDialogProps {
 }
 
 export type AddProfileContextValue = {
+  type?: 'remote' | 'local';
   name: string | null;
   desc: string | null;
   url: string;
@@ -68,7 +69,7 @@ export const ProfileDialog = ({
   const { control, watch, handleSubmit, reset, setValue } =
     useForm<ClashProfileBuilder>({
       defaultValues: (profile as ClashProfile) || {
-        type: 'remote',
+        type: addProfileCtx?.type || 'remote',
         uid: null,
         name: addProfileCtx?.name || m.profile_new_profile_default_name(),
         desc: addProfileCtx?.desc || '',
@@ -86,6 +87,7 @@ export const ProfileDialog = ({
 
   useEffect(() => {
     if (addProfileCtx) {
+      if (addProfileCtx.type) setValue('type', addProfileCtx.type);
       setValue('url', addProfileCtx.url);
       if (addProfileCtx.desc) setValue('desc', addProfileCtx.desc);
       if (addProfileCtx.name) setValue('name', addProfileCtx.name);

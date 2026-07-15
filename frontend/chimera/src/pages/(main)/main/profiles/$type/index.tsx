@@ -21,50 +21,55 @@
  */
 
 import { useProfile } from '@chimera/interface';
-import { Public } from '@mui/icons-material';
+import { move } from '@dnd-kit/helpers';
+import { DragDropProvider } from '@dnd-kit/react';
 import { Grid } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
-import { AnimatePresence, motion } from 'motion/react';
 import { useMemo } from 'react';
-import ProfileItem from '@/components/profiles/profile-item';
 import { filterProfiles } from '@/components/profiles/utils';
-import { PROFILE_TYPE_NAMES, ProfileType } from '../_modules/consts';
+import * as m from '@/paraglide/messages';
+import { ProfileType } from '../_modules/consts';
+import ImportButton from './_modules/import-button';
+import ProfilesHeader from './_modules/profiles-header';
+import SortableProfileItem from './_modules/sortable-profile-item';
+
+export enum Action {
+  ImportLocalProfile = 'ImportLocalProfile',
+}
+
+type ProfileTypeSearch = {
+  action?: Action;
+};
 
 export const Route = createFileRoute('/(main)/main/profiles/$type/')({
+  validateSearch: (search): ProfileTypeSearch => ({
+    action:
+      search.action === Action.ImportLocalProfile
+        ? Action.ImportLocalProfile
+        : undefined,
+  }),
   component: RouteComponent,
 });
 
 function RouteComponent() {
   const { type } = Route.useParams();
 
-  const { query } = useProfile();
+  const { query, sort } = useProfile();
 
   // 过滤后的配置文件列表
   const profiles = useMemo(() => {
     return filterProfiles(query.data?.items);
   }, [query.data?.items]);
 
-  const profileItems = profiles?.clash ?? [];
-
   const profileType = type as ProfileType;
-  const typeName = PROFILE_TYPE_NAMES[profileType] ?? type;
-
+  const profileItems =
+    profileType === ProfileType.Profile ? (profiles?.clash ?? []) : [];
   return (
     <div
       className="flex min-h-0 flex-1 flex-col"
       data-slot="profiles-type-container"
     >
-      {/* 类型标题 */}
-      <div
-        className="bg-mixed-background flex shrink-0 items-center px-4 py-4"
-        data-slot="profiles-type-header"
-      >
-        <h2 className="text-lg font-bold">{typeName}</h2>
-
-        <span className="ml-2 text-sm text-zinc-500">
-          ({profileItems.length} profiles)
-        </span>
-      </div>
+      <ProfilesHeader />
 
       {/* 配置网格 */}
       <div
@@ -72,45 +77,55 @@ function RouteComponent() {
         data-slot="profiles-type-list"
       >
         {profileItems.length > 0 ? (
-          <Grid container spacing={2}>
-            {profileItems.map((item) => (
-              <Grid
-                key={item.uid}
-                size={{
-                  xs: 12,
-                  sm: 12,
-                  md: 6,
-                  lg: 4,
-                  xl: 3,
-                }}
-              >
-                <motion.div
-                  layoutId={`profile-${item.uid}`}
-                  layout="position"
-                  initial={false}
-                >
-                  <ProfileItem
+          <>
+            <DragDropProvider
+              onDragEnd={(event) => {
+                const filteredUids = profileItems.map((item) => item.uid);
+                const nextFilteredUids = move(filteredUids, event);
+
+                if (
+                  filteredUids.every(
+                    (uid, index) => uid === nextFilteredUids[index],
+                  )
+                ) {
+                  return;
+                }
+
+                const filteredSet = new Set(filteredUids);
+                let cursor = 0;
+                const fullOrder = (query.data?.items ?? []).map((item) =>
+                  filteredSet.has(item.uid)
+                    ? nextFilteredUids[cursor++]
+                    : item.uid,
+                );
+
+                sort.mutate(fullOrder);
+              }}
+            >
+              <Grid container spacing={2}>
+                {profileItems.map((item, index) => (
+                  <SortableProfileItem
+                    key={item.uid}
                     item={item}
-                    onClickChains={() => {}}
-                    selected={query.data?.current?.includes(item.uid)}
-                    chainsSelected={false}
+                    index={index}
+                    disabled={sort.isPending}
                   />
-                </motion.div>
+                ))}
               </Grid>
-            ))}
-          </Grid>
-        ) : (
-          <div className="flex min-h-64 w-full items-center justify-center">
-            <div className="flex flex-col items-center gap-4 rounded-[1.75rem] border border-black/6 bg-black/[0.025] px-8 py-10 text-center backdrop-blur-sm dark:border-white/8 dark:bg-white/[0.03]">
-              <Public className="!mb-2 !size-14 text-zinc-400 dark:text-zinc-500" />
-              <div className="text-base font-semibold">{typeName}</div>
-              <div className="text-sm text-zinc-500 dark:text-zinc-400">
-                No {typeName.toLowerCase()} profiles
-              </div>
+            </DragDropProvider>
+
+            <div className="flex h-16 items-center justify-center text-center text-sm text-gray-500">
+              {m.profile_no_more_profiles()}
             </div>
+          </>
+        ) : (
+          <div className="text-on-surface-variant flex min-h-full items-center justify-center text-center text-sm">
+            {m.profile_empty_list_message()}
           </div>
         )}
       </div>
+
+      {profileType === ProfileType.Profile && <ImportButton />}
     </div>
   );
 }

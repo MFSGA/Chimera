@@ -56,7 +56,7 @@ export const ProfileItem = memo(function ProfileItem({
 }: ProfileItemProps) {
   const { deleteConnections } = useClashConnections();
 
-  const { upsert } = useProfile();
+  const { activate } = useProfile();
 
   // const globalUpdatePending = use(GlobalUpdatePendingContext);
 
@@ -95,7 +95,7 @@ export const ProfileItem = memo(function ProfileItem({
     try {
       setLoading({ card: true });
 
-      await upsert.mutateAsync({ current: [item.uid] });
+      await activate.mutateAsync(item.uid);
 
       await deleteConnections.mutateAsync(undefined);
     } catch (err) {

@@ -24,7 +24,7 @@ export default function RuntimeConfigDiffDialog({
 }: RuntimeConfigDiffDialogProps) {
   const { query } = useProfile();
 
-  const currentProfileUid = query.data?.current?.[0];
+  const currentProfileUid = query.data?.current;
 
   const contentFn = useProfileContent(currentProfileUid || '');
 
