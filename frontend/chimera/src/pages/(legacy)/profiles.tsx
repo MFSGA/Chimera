@@ -143,7 +143,7 @@ function ProfilePage() {
       for (const profile of remoteProfiles) {
         const option = {
           ...profile.option,
-          update_interval: 0,
+          update_interval_minutes: 0,
           user_agent: profile.option?.user_agent ?? null,
         } satisfies RemoteProfileOptionsBuilder;
 

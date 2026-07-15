@@ -46,11 +46,15 @@ export const useActiveProfile = (profile: ProfileQueryResultItem) => {
   return { isActive, isPending: task.isPending, handleClick };
 };
 
-export const useDeleteProfile = (profile: ProfileQueryResultItem) => {
+export const useDeleteProfile = (
+  profile: ProfileQueryResultItem,
+  options?: { onSuccess?: () => void | Promise<void> },
+) => {
   const { drop } = useProfile();
   const task = useBlockTask(`delete-profile-${profile.uid}`, async () => {
     try {
       await drop.mutateAsync(profile.uid);
+      await options?.onSuccess?.();
     } catch (error) {
       await message(`${m.profile_delete_failed()} \n ${formatError(error)}`, {
         title: m.common_error(),
