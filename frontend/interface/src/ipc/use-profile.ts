@@ -77,15 +77,19 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
         return undefined;
       }
 
+      const current = result.current[0] ?? null;
+
       if (options?.without_helper_fn) {
         return {
           ...result,
+          current,
           items: result.items as unknown as NormalizedProfile[],
         };
       }
 
       return {
         ...result,
+        current,
         items: result.items.map((item) => addHelperFn(item)),
       };
     },
@@ -159,10 +163,26 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
+  const activate = useMutation({
+    mutationFn: async (uid: string | null) =>
+      unwrapResult(await commands.activateProfile(uid)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
   const drop = useMutation({
     mutationFn: async (uid: string) => {
       return unwrapResult(await commands.deleteProfile(uid));
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  const sort = useMutation({
+    mutationFn: async (uids: string[]) =>
+      unwrapResult(await commands.reorderProfilesByList(uids)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
     },
@@ -174,6 +194,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     update,
     patch,
     upsert,
+    activate,
     drop,
+    sort,
   };
 };

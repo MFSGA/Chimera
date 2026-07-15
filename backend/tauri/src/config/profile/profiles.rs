@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::{Result, bail};
 use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
@@ -93,6 +95,74 @@ impl Profiles {
             .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
 
         *target = item;
+        Ok(())
+    }
+
+    pub fn reorder(&mut self, active_id: &str, over_id: &str) -> Result<()> {
+        if active_id == over_id {
+            return Ok(());
+        }
+
+        let active_index = self
+            .items
+            .iter()
+            .position(|profile| profile.uid() == active_id)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{active_id}\""))?;
+        let over_index = self
+            .items
+            .iter()
+            .position(|profile| profile.uid() == over_id)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{over_id}\""))?;
+
+        let active = self.items.remove(active_index);
+        let target_index = if active_index < over_index {
+            over_index - 1
+        } else {
+            over_index
+        };
+        self.items.insert(target_index, active);
+        Ok(())
+    }
+
+    pub fn reorder_by_list(&mut self, list: &[ProfileUid]) -> Result<()> {
+        if list.len() != self.items.len() {
+            bail!(
+                "expected {} profile identifiers, got {}",
+                self.items.len(),
+                list.len()
+            );
+        }
+
+        let mut seen = HashSet::with_capacity(list.len());
+        for uid in list {
+            if !seen.insert(uid.as_str()) {
+                bail!("duplicate profile identifier: {uid}");
+            }
+            self.get_item(uid)?;
+        }
+
+        let mut remaining = std::mem::take(&mut self.items);
+        self.items = list
+            .iter()
+            .map(|uid| {
+                let index = remaining
+                    .iter()
+                    .position(|profile| profile.uid() == uid)
+                    .expect("profile reorder list was validated");
+                remaining.remove(index)
+            })
+            .collect();
+        Ok(())
+    }
+
+    pub fn activate(&mut self, uid: Option<&str>) -> Result<()> {
+        self.current = match uid {
+            Some(uid) => {
+                self.get_item(uid)?;
+                vec![uid.to_string()]
+            }
+            None => vec![],
+        };
         Ok(())
     }
 

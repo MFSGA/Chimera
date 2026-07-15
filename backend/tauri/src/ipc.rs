@@ -20,7 +20,7 @@ use crate::{
                 ProfileKindGetter, ProfileMetaGetter,
                 remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
             },
-            item_type::ProfileItemType,
+            item_type::{ProfileItemType, ProfileUid},
             profiles::{Profiles, ProfilesBuilder},
         },
         runtime::{PatchClashCoreConfig, PatchRuntimeConfig},
@@ -37,6 +37,14 @@ use crate::{
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
+
+#[allow(dead_code)]
+#[derive(specta::Type, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum RebuildOutcome {
+    Ok,
+    Degraded { error: String },
+}
 
 #[derive(specta::Type, serde::Serialize)]
 pub struct GetSysProxyResponse {
@@ -226,6 +234,65 @@ pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
             Config::profiles().discard();
 
             Err(IpcError::from(err))
+        }
+    }
+}
+
+fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) -> Result {
+    let profiles = Config::profiles();
+    let result = {
+        let mut draft = profiles.draft();
+        update(&mut draft).and_then(|_| draft.save_file())
+    };
+
+    if let Err(err) = result {
+        profiles.discard();
+        return Err(IpcError::from(err));
+    }
+
+    profiles.apply();
+    handle::Handle::refresh_profiles();
+    Ok(())
+}
+
+fn persist_profile_order(
+    update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>,
+) -> Result<RebuildOutcome> {
+    persist_profiles(update)?;
+    Ok(RebuildOutcome::Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reorder_profile(active_id: ProfileUid, over_id: ProfileUid) -> Result<RebuildOutcome> {
+    persist_profile_order(|profiles| profiles.reorder(&active_id, &over_id))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn reorder_profiles_by_list(list: Vec<ProfileUid>) -> Result<RebuildOutcome> {
+    persist_profile_order(|profiles| profiles.reorder_by_list(&list))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn activate_profile(uid: Option<ProfileUid>) -> Result<RebuildOutcome> {
+    persist_profiles(|profiles| profiles.activate(uid.as_deref()))?;
+
+    match CoreManager::global()
+        .restart_core_with_generated_config()
+        .await
+    {
+        Ok(_) => {
+            handle::Handle::refresh_clash();
+            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
+            Ok(RebuildOutcome::Ok)
+        }
+        Err(err) => {
+            log::error!(target: "app", "failed to rebuild after profile activation: {err:?}");
+            Ok(RebuildOutcome::Degraded {
+                error: err.to_string(),
+            })
         }
     }
 }
