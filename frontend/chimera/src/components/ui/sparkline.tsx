@@ -19,8 +19,8 @@
 
 import { cn } from '@chimera/ui';
 import * as d3 from 'd3';
-import { animate } from 'motion';
 import { cloneDeep } from 'lodash-es';
+import { animate } from 'motion';
 import { useEffect, useRef, type ComponentPropsWithoutRef } from 'react';
 
 /**
