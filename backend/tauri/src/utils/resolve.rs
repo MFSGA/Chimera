@@ -103,6 +103,40 @@ impl AppWindow for LegacyWindow {
 /// Main window implementation (new UI)
 struct MainWindow;
 
+struct ProfileEditorWindow {
+    label: String,
+    url: String,
+}
+
+impl AppWindow for ProfileEditorWindow {
+    fn label(&self) -> &str {
+        &self.label
+    }
+
+    fn title(&self) -> &str {
+        "Profile Editor"
+    }
+
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn config(&self) -> WindowConfig {
+        WindowConfig::new()
+            .singleton(true)
+            .visible_on_create(true)
+            .default_size(960.0, 680.0)
+            .min_size(600.0, 400.0)
+            .center(true)
+    }
+
+    fn get_window_state(&self) -> Option<WindowState> {
+        None
+    }
+
+    fn set_window_state(&self, _state: Option<WindowState>) {}
+}
+
 impl AppWindow for MainWindow {
     fn label(&self) -> &str {
         crate::consts::MAIN_WINDOW_LABEL
@@ -147,6 +181,15 @@ pub fn create_legacy_window(app_handle: &AppHandle) {
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_main_window(app_handle: &AppHandle) {
     log_err!(MainWindow.create(app_handle));
+}
+
+pub fn create_profile_editor_window(app_handle: &AppHandle, uid: &str) -> Result<()> {
+    let encoded_uid: String = url::form_urlencoded::byte_serialize(uid.as_bytes()).collect();
+    ProfileEditorWindow {
+        label: format!("profile-editor-{uid}"),
+        url: format!("/editor/profile?uid={encoded_uid}"),
+    }
+    .create(app_handle)
 }
 
 pub fn mark_frontend_unmounted() {

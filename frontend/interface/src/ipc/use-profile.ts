@@ -5,8 +5,11 @@ import {
   type Profile_Serialize,
   type ProfileBuilder_Deserialize,
   type ProfileBuilder_Serialize,
+  type ProfileDefinition_Deserialize,
+  type ProfileMetadataPatch_Deserialize,
   type ProfilesBuilder_Deserialize,
   type RemoteProfileOptionsBuilder,
+  type RemoteProfileOptionsPatch_Deserialize,
 } from './bindings';
 import { RROFILES_QUERY_KEY } from './consts';
 
@@ -50,6 +53,33 @@ export type ProfileQueryResult = NonNullable<
 
 export type ProfileQueryResultItem = NormalizedProfile &
   Partial<ProfileHelperFn>;
+
+export const remoteProfileDefinitionOf = (
+  profile: ProfileQueryResultItem,
+): ProfileDefinition_Deserialize | null => {
+  if (profile.type !== 'remote') return null;
+
+  return {
+    type: 'config',
+    config: {
+      type: 'file',
+      transforms: [],
+      source: {
+        type: 'remote',
+        file: profile.file,
+        updated_at: profile.updated || null,
+        url: profile.url,
+        option: {
+          user_agent: profile.option.user_agent ?? null,
+          with_proxy: profile.option.with_proxy,
+          self_proxy: profile.option.self_proxy,
+          update_interval_minutes: profile.option.update_interval_minutes,
+        },
+        subscription: profile.extra,
+      },
+    },
+  };
+};
 
 export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const queryClient = useQueryClient();
@@ -121,7 +151,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
       option,
     }: {
       uid: string;
-      option: RemoteProfileOptionsBuilder;
+      option: RemoteProfileOptionsBuilder | null;
     }) => {
       return unwrapResult(await commands.updateProfile(uid, option));
     },
@@ -171,6 +201,46 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
+  const patchMetadata = useMutation({
+    mutationFn: async ({
+      uid,
+      patch,
+    }: {
+      uid: string;
+      patch: ProfileMetadataPatch_Deserialize;
+    }) => unwrapResult(await commands.patchProfileMetadata(uid, patch)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  const patchRemoteOptions = useMutation({
+    mutationFn: async ({
+      uid,
+      patch,
+    }: {
+      uid: string;
+      patch: RemoteProfileOptionsPatch_Deserialize;
+    }) => unwrapResult(await commands.patchRemoteProfileOptions(uid, patch)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  const replaceDefinition = useMutation({
+    mutationFn: async ({
+      uid,
+      definition,
+    }: {
+      uid: string;
+      definition: ProfileDefinition_Deserialize;
+    }) =>
+      unwrapResult(await commands.replaceProfileDefinition(uid, definition)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
   const drop = useMutation({
     mutationFn: async (uid: string) => {
       return unwrapResult(await commands.deleteProfile(uid));
@@ -195,6 +265,9 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     patch,
     upsert,
     activate,
+    patchMetadata,
+    patchRemoteOptions,
+    replaceDefinition,
     drop,
     sort,
   };
