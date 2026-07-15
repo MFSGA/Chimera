@@ -40,8 +40,8 @@ import {
 } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
-import { AnimatePresence, motion } from 'motion/react';
 import { useAtom } from 'jotai';
+import { AnimatePresence, motion } from 'motion/react';
 import { useMemo, useState, useTransition } from 'react';
 import { useWindowSize } from 'react-use';
 import ContentDisplay from '@/components/base/content-display';
@@ -266,7 +266,7 @@ function ProfilePage() {
               <ProfileItem
                 item={item}
                 onClickChains={handleChainsClick}
-                selected={query.data?.current?.includes(item.uid)}
+                selected={query.data?.current === item.uid}
                 chainsSelected={chainsSelected === item.uid}
               />
             </motion.div>
