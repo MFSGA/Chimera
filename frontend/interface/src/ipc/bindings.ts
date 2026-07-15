@@ -13,15 +13,7 @@ export const commands = {
   getProfiles: () =>
     typedError<Profiles_Serialize, string>(__TAURI_INVOKE('get_profiles')),
   /**  later: check in the frontend */
-  importProfile: (
-    url: string,
-    option: {
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
-      /**  subscription update interval */
-      update_interval: number | null;
-    } | null,
-  ) =>
+  importProfile: (url: string, option: RemoteProfileOptionsBuilder | null) =>
     typedError<null, string>(__TAURI_INVOKE('import_profile', { url, option })),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
@@ -42,15 +34,28 @@ export const commands = {
     typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
     ),
-  updateProfile: (
+  patchProfileMetadata: (
     uid: string,
-    option: {
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
-      /**  subscription update interval */
-      update_interval: number | null;
-    } | null,
+    patch: ProfileMetadataPatch_Deserialize,
   ) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('patch_profile_metadata', { uid, patch }),
+    ),
+  patchRemoteProfileOptions: (
+    uid: string,
+    patch: RemoteProfileOptionsPatch_Deserialize,
+  ) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('patch_remote_profile_options', { uid, patch }),
+    ),
+  replaceProfileDefinition: (
+    uid: string,
+    definition: ProfileDefinition_Deserialize,
+  ) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('replace_profile_definition', { uid, definition }),
+    ),
+  updateProfile: (uid: string, option: RemoteProfileOptionsBuilder | null) =>
     typedError<null, string>(__TAURI_INVOKE('update_profile', { uid, option })),
   patchProfile: (uid: string, profile: ProfileBuilder_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_profile', { uid, profile })),
@@ -66,6 +71,10 @@ export const commands = {
   createProfile: (item: ProfileBuilder_Deserialize, fileData: string | null) =>
     typedError<null, string>(
       __TAURI_INVOKE('create_profile', { item, fileData }),
+    ),
+  createEditorWindow: (windowType: EditorWindowType, uid: string | null) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('create_editor_window', { windowType, uid }),
     ),
   getVergeConfig: () =>
     typedError<IVerge_Serialize, string>(__TAURI_INVOKE('get_verge_config')),
@@ -326,6 +335,8 @@ export type EnvInfo = {
 
 export type ExternalControllerPortStrategy =
   'fixed' | 'random' | 'allow_fallback';
+
+export type EditorWindowType = 'profile' | 'css-editor';
 
 export type GetSysProxyResponse = {
   enable: boolean;
@@ -856,6 +867,62 @@ export type ProxyItem_Serialize = {
 export type RebuildOutcome =
   { status: 'ok' } | { status: 'degraded'; error: string };
 
+export type ProfileDefinition =
+  ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
+
+export type ProfileDefinition_Deserialize = {
+  type: 'config';
+  config: ConfigDefinition_Deserialize;
+};
+
+export type ProfileDefinition_Serialize = {
+  type: 'config';
+  config: ConfigDefinition_Serialize;
+};
+
+export type ConfigDefinition_Deserialize = {
+  type: 'file';
+  source: ProfileSource_Deserialize;
+  transforms?: string[];
+};
+
+export type ConfigDefinition_Serialize = {
+  type: 'file';
+  source: ProfileSource_Serialize;
+  transforms?: string[];
+};
+
+export type ProfileSource_Deserialize = {
+  type: 'remote';
+  file: string;
+  updated_at?: number | null;
+  url: string;
+  option?: RemoteProfileOptions_Deserialize;
+  subscription?: SubscriptionInfo;
+};
+
+export type ProfileSource_Serialize = {
+  type: 'remote';
+  file: string;
+  updated_at?: number | null;
+  url: string;
+  option?: RemoteProfileOptions_Serialize;
+  subscription?: SubscriptionInfo;
+};
+
+export type ProfileMetadataPatch =
+  ProfileMetadataPatch_Serialize | ProfileMetadataPatch_Deserialize;
+
+export type ProfileMetadataPatch_Deserialize = {
+  name: string | null;
+  desc?: string | null;
+};
+
+export type ProfileMetadataPatch_Serialize = {
+  name?: string | null;
+  desc?: string | null;
+};
+
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 
 /** Builder for [`RemoteProfile`](struct.RemoteProfile.html). */
@@ -873,24 +940,41 @@ export type RemoteProfileOptions =
 
 /** Builder for [`RemoteProfileOptions`](struct.RemoteProfileOptions.html). */
 export type RemoteProfileOptionsBuilder = {
-  /**  see issue #13. must set the builder attr for build the user_agent for client */
   user_agent: string | null;
-  /**  subscription update interval */
-  update_interval: number | null;
+  with_proxy: boolean | null;
+  self_proxy: boolean | null;
+  update_interval_minutes: number | null;
+};
+
+export type RemoteProfileOptionsPatch =
+  RemoteProfileOptionsPatch_Serialize | RemoteProfileOptionsPatch_Deserialize;
+
+export type RemoteProfileOptionsPatch_Deserialize = {
+  user_agent?: string | null;
+  with_proxy: boolean | null;
+  self_proxy: boolean | null;
+  update_interval_minutes: number | null;
+};
+
+export type RemoteProfileOptionsPatch_Serialize = {
+  user_agent?: string | null;
+  with_proxy?: boolean | null;
+  self_proxy?: boolean | null;
+  update_interval_minutes?: number | null;
 };
 
 export type RemoteProfileOptions_Deserialize = {
-  /**  see issue #13. must set the builder attr for build the user_agent for client */
   user_agent: string | null;
-  /**  subscription update interval */
-  update_interval: number;
+  with_proxy: boolean;
+  self_proxy: boolean;
+  update_interval_minutes: number;
 };
 
 export type RemoteProfileOptions_Serialize = {
-  /**  see issue #13. must set the builder attr for build the user_agent for client */
   user_agent?: string | null;
-  /**  subscription update interval */
-  update_interval: number;
+  with_proxy: boolean;
+  self_proxy: boolean;
+  update_interval_minutes: number;
 };
 
 export type RemoteProfile_Deserialize = {

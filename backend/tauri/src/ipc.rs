@@ -18,7 +18,10 @@ use crate::{
             builder::ProfileBuilder,
             item::{
                 ProfileKindGetter, ProfileMetaGetter,
-                remote::{RemoteProfileBuilder, RemoteProfileOptionsBuilder},
+                remote::{
+                    RemoteProfileBuilder, RemoteProfileOptions, RemoteProfileOptionsBuilder,
+                    SubscriptionInfo,
+                },
             },
             item_type::{ProfileItemType, ProfileUid},
             profiles::{Profiles, ProfilesBuilder},
@@ -44,6 +47,69 @@ type Result<T = ()> = StdResult<T, IpcError>;
 pub enum RebuildOutcome {
     Ok,
     Degraded { error: String },
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EditorWindowType {
+    Profile,
+    CssEditor,
+}
+
+fn deserialize_optional_field<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(<Option<T> as serde::Deserialize>::deserialize(
+        deserializer,
+    )?))
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+pub struct ProfileMetadataPatch {
+    pub name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub desc: Option<Option<String>>,
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+pub struct RemoteProfileOptionsPatch {
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub user_agent: Option<Option<String>>,
+    pub with_proxy: Option<bool>,
+    pub self_proxy: Option<bool>,
+    pub update_interval_minutes: Option<u64>,
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProfileDefinition {
+    Config { config: ConfigDefinition },
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConfigDefinition {
+    File {
+        source: ProfileSource,
+        #[serde(default)]
+        transforms: Vec<ProfileUid>,
+    },
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProfileSource {
+    Remote {
+        file: String,
+        updated_at: Option<usize>,
+        url: url::Url,
+        option: Option<RemoteProfileOptions>,
+        subscription: Option<SubscriptionInfo>,
+    },
 }
 
 #[derive(specta::Type, serde::Serialize)]
@@ -196,6 +262,32 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
+pub fn create_editor_window(
+    app_handle: AppHandle,
+    window_type: EditorWindowType,
+    uid: Option<String>,
+) -> Result {
+    let uid = match window_type {
+        EditorWindowType::Profile => {
+            uid.ok_or_else(|| anyhow!("uid required for profile editor"))?
+        }
+        EditorWindowType::CssEditor => {
+            return Err(anyhow!("CSS editor is not supported yet").into());
+        }
+    };
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let handle = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            let _ = resolve::create_profile_editor_window(&handle, &uid);
+        });
+    });
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_verge_config() -> Result<IVerge> {
     Ok(Config::verge().data().clone())
 }
@@ -295,6 +387,65 @@ pub async fn activate_profile(uid: Option<ProfileUid>) -> Result<RebuildOutcome>
             })
         }
     }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_profile_metadata(
+    uid: ProfileUid,
+    patch: ProfileMetadataPatch,
+) -> Result<RebuildOutcome> {
+    persist_profiles(|profiles| profiles.patch_metadata(&uid, patch.name, patch.desc))?;
+    Ok(RebuildOutcome::Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_remote_profile_options(
+    uid: ProfileUid,
+    patch: RemoteProfileOptionsPatch,
+) -> Result<RebuildOutcome> {
+    persist_profiles(|profiles| {
+        profiles.patch_remote_options(
+            &uid,
+            patch.user_agent,
+            patch.with_proxy,
+            patch.self_proxy,
+            patch.update_interval_minutes,
+        )
+    })?;
+    Ok(RebuildOutcome::Ok)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn replace_profile_definition(
+    uid: ProfileUid,
+    definition: ProfileDefinition,
+) -> Result<RebuildOutcome> {
+    let ProfileDefinition::Config {
+        config:
+            ConfigDefinition::File {
+                source:
+                    ProfileSource::Remote {
+                        file,
+                        updated_at,
+                        url,
+                        option,
+                        subscription,
+                    },
+                transforms,
+            },
+    } = definition;
+
+    if !transforms.is_empty() {
+        return Err(anyhow!("scoped profile transforms are not supported yet").into());
+    }
+
+    persist_profiles(|profiles| {
+        profiles.replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
+    })?;
+    Ok(RebuildOutcome::Ok)
 }
 
 #[tauri::command]

@@ -10,7 +10,10 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::profile::{
-        item::{Profile, ProfileMetaGetter},
+        item::{
+            Profile, ProfileMetaGetter,
+            remote::{RemoteProfileOptions, SubscriptionInfo},
+        },
         item_type::ProfileUid,
     },
     utils::{dirs, help},
@@ -163,6 +166,103 @@ impl Profiles {
             }
             None => vec![],
         };
+        Ok(())
+    }
+
+    pub fn patch_metadata(
+        &mut self,
+        uid: &str,
+        name: Option<String>,
+        desc: Option<Option<String>>,
+    ) -> Result<()> {
+        let profile = self
+            .items
+            .iter_mut()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+        let shared = match profile {
+            Profile::Remote(profile) => &mut profile.shared,
+            Profile::Local(profile) => &mut profile.shared,
+        };
+
+        if let Some(name) = name {
+            if name.trim().is_empty() {
+                bail!("profile name cannot be empty");
+            }
+            shared.name = name;
+        }
+        if let Some(desc) = desc {
+            shared.desc = desc;
+        }
+        Ok(())
+    }
+
+    pub fn replace_remote_definition(
+        &mut self,
+        uid: &str,
+        file: &str,
+        updated_at: Option<usize>,
+        url: url::Url,
+        option: Option<RemoteProfileOptions>,
+        subscription: Option<SubscriptionInfo>,
+    ) -> Result<()> {
+        let profile = self
+            .items
+            .iter_mut()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+        let Profile::Remote(profile) = profile else {
+            bail!("profile \"uid:{uid}\" is not remote");
+        };
+        if profile.shared.file != file {
+            bail!("profile materialized file cannot be changed");
+        }
+
+        profile.url = url;
+        if let Some(updated_at) = updated_at {
+            profile.shared.updated = updated_at;
+        }
+        if let Some(option) = option {
+            profile.option = option;
+        }
+        if let Some(subscription) = subscription {
+            profile.extra = subscription;
+        }
+        Ok(())
+    }
+
+    pub fn patch_remote_options(
+        &mut self,
+        uid: &str,
+        user_agent: Option<Option<String>>,
+        with_proxy: Option<bool>,
+        self_proxy: Option<bool>,
+        update_interval_minutes: Option<u64>,
+    ) -> Result<()> {
+        let profile = self
+            .items
+            .iter_mut()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+        let Profile::Remote(profile) = profile else {
+            bail!("profile \"uid:{uid}\" is not remote");
+        };
+
+        if let Some(user_agent) = user_agent {
+            profile.option.user_agent = user_agent;
+        }
+        if let Some(with_proxy) = with_proxy {
+            profile.option.with_proxy = with_proxy;
+        }
+        if let Some(self_proxy) = self_proxy {
+            profile.option.self_proxy = self_proxy;
+        }
+        if let Some(update_interval_minutes) = update_interval_minutes {
+            if update_interval_minutes < 1 {
+                bail!("profile update interval must be at least one minute");
+            }
+            profile.option.update_interval_minutes = update_interval_minutes;
+        }
         Ok(())
     }
 
