@@ -19,7 +19,10 @@ use crate::{
         },
         item_type::{ProfileItemType, ProfileUid},
     },
-    utils::help,
+    utils::{
+        config::{NyanpasuReqwestProxyExt, get_self_proxy, get_system_proxy},
+        help,
+    },
 };
 
 use crate::utils::dirs::APP_VERSION;
@@ -39,16 +42,29 @@ pub struct RemoteProfileOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[builder(default, setter(strip_option))]
     pub user_agent: Option<String>,
-    /// subscription update interval
-    #[builder(default = "120")]
-    pub update_interval: u64,
+    #[serde(default)]
+    #[builder(default)]
+    pub with_proxy: bool,
+    #[serde(default)]
+    #[builder(default)]
+    pub self_proxy: bool,
+    /// subscription update interval in minutes
+    #[serde(default = "default_update_interval_minutes", alias = "update_interval")]
+    #[builder(default = "default_update_interval_minutes()")]
+    pub update_interval_minutes: u64,
+}
+
+const fn default_update_interval_minutes() -> u64 {
+    120
 }
 
 impl Default for RemoteProfileOptions {
     fn default() -> Self {
         Self {
             user_agent: None,
-            update_interval: 120, // 2 hours
+            with_proxy: false,
+            self_proxy: false,
+            update_interval_minutes: default_update_interval_minutes(),
         }
     }
 }
@@ -59,14 +75,6 @@ impl RemoteProfileOptions {
         if options.user_agent.is_none() {
             options.user_agent = Some(format!("clash-chimera/v{APP_VERSION}"));
         }
-        /* todo: RemoteProfileOptions
-
-        if options.with_proxy.is_none() {
-            options.with_proxy = Some(false);
-        }
-        if options.self_proxy.is_none() {
-            options.self_proxy = Some(false);
-        } */
         options
     }
 }
@@ -173,9 +181,9 @@ impl RemoteProfileBuilder {
         {
             self.shared.name(filename);
         }
-        if self.option.get_update_interval().is_none() && subscription.opts.is_some() {
+        if self.option.get_update_interval_minutes().is_none() && subscription.opts.is_some() {
             self.option
-                .update_interval(subscription.opts.take().unwrap().update_interval);
+                .update_interval_minutes(subscription.opts.take().unwrap().update_interval_minutes);
         }
 
         let profile = RemoteProfile {
@@ -270,7 +278,22 @@ async fn subscribe_url(
         .use_rustls_tls()
         .no_proxy()
         .timeout(Duration::from_secs(30));
-    // todo: proxy add the proxy client support
+
+    let proxy_url = if options.self_proxy {
+        get_self_proxy().ok()
+    } else {
+        None
+    }
+    .or_else(|| {
+        if options.with_proxy {
+            get_system_proxy().ok().flatten()
+        } else {
+            None
+        }
+    });
+    if let Some(proxy_url) = proxy_url {
+        builder = builder.swift_set_proxy(&proxy_url);
+    }
 
     builder = builder.user_agent(options.user_agent.unwrap());
 
@@ -336,7 +359,7 @@ async fn subscribe_url(
             // tracing::debug!("profile-update-interval: {:?}", value);
             match value.to_str().unwrap_or("").parse::<u64>() {
                 Ok(val) => Some(RemoteProfileOptions {
-                    update_interval: val * 60, // hour -> min
+                    update_interval_minutes: val * 60, // hour -> min
                     ..RemoteProfileOptions::default()
                 }),
                 Err(_) => None,
