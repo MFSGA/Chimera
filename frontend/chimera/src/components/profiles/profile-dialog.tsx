@@ -80,7 +80,9 @@ export const ProfileDialog = ({
         extra: null,
         option: {
           user_agent: null,
-          update_interval: null,
+          with_proxy: null,
+          self_proxy: null,
+          update_interval_minutes: null,
         },
       },
     });
@@ -268,7 +270,7 @@ export const ProfileDialog = ({
 
             <TextFieldElement
               label={m.profile_update_interval_label()}
-              name="option.update_interval"
+              name="option.update_interval_minutes"
               control={control}
               {...commonProps}
               size="small"

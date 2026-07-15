@@ -126,8 +126,10 @@ export const ProfileItem = memo(function ProfileItem({
     const selfOption = 'option' in item ? item.option : undefined;
 
     const options: RemoteProfileOptionsBuilder = {
-      update_interval: 0,
       user_agent: null,
+      with_proxy: null,
+      self_proxy: null,
+      update_interval_minutes: 0,
       ...selfOption,
     };
 
