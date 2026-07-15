@@ -30,6 +30,18 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('patch_profiles_config', { profiles }),
     ),
+  reorderProfile: (activeId: string, overId: string) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('reorder_profile', { activeId, overId }),
+    ),
+  reorderProfilesByList: (list: string[]) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('reorder_profiles_by_list', { list }),
+    ),
+  activateProfile: (uid: string | null) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('activate_profile', { uid }),
+    ),
   updateProfile: (
     uid: string,
     option: {
@@ -840,6 +852,9 @@ export type ProxyItem_Serialize = {
   udp: boolean;
   icon?: string | null;
 };
+
+export type RebuildOutcome =
+  { status: 'ok' } | { status: 'degraded'; error: string };
 
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 
