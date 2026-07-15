@@ -14,6 +14,8 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 import { ProfileType } from '../main/profiles/_modules/consts';
+import { Action } from '../main/profiles/$type';
+import HeaderSettingsAction from './header-settings-action';
 
 const MenuButton = ({ className, ...props }: ButtonProps) => (
   <Button
@@ -40,39 +42,17 @@ const FileMenu = () => (
   <Menu
     content={
       <DropdownMenuItem asChild>
-        <Link to="/main/profiles/$type" params={{ type: ProfileType.Profile }}>
+        <Link
+          to="/main/profiles/$type"
+          params={{ type: ProfileType.Profile }}
+          search={{ action: Action.ImportLocalProfile }}
+        >
           {m.header_file_action_import_local_profile()}
         </Link>
       </DropdownMenuItem>
     }
   >
     <MenuButton>{m.header_file_action_title()}</MenuButton>
-  </Menu>
-);
-
-const SettingsMenu = () => (
-  <Menu
-    content={
-      <>
-        <DropdownMenuItem asChild>
-          <Link to="/main/settings/user-interface">
-            {m.header_settings_action_language()}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to="/main/settings/user-interface">
-            {m.header_settings_action_theme_mode()}
-          </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <Link to="/main/settings/system">
-            {m.header_settings_action_proxy_settings()}
-          </Link>
-        </DropdownMenuItem>
-      </>
-    }
-  >
-    <MenuButton>{m.header_settings_action_title()}</MenuButton>
   </Menu>
 );
 
@@ -138,7 +118,9 @@ export default function HeaderMenu({
       {...props}
     >
       <FileMenu />
-      <SettingsMenu />
+      <HeaderSettingsAction>
+        <MenuButton>{m.header_settings_action_title()}</MenuButton>
+      </HeaderSettingsAction>
       <HelpMenu />
     </div>
   );
