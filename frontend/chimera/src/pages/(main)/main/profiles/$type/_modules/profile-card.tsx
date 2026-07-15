@@ -1,13 +1,21 @@
 import type { ProfileQueryResultItem } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { LinearProgress, Menu, MenuItem } from '@mui/material';
+import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState, type ComponentProps } from 'react';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+} from '@/components/ui/card';
 import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
+import { Route as IndexRoute } from '../index';
 import { useActiveProfile, useDeleteProfile } from './profile-actions';
 
 const Chip = ({ children, className, ...props }: ComponentProps<'span'>) => (
@@ -27,6 +35,7 @@ export default function ProfileCard({
 }: {
   profile: ProfileQueryResultItem;
 }) {
+  const { type } = IndexRoute.useParams();
   const activeProfile = useActiveProfile(profile);
   const deleteProfile = useDeleteProfile(profile);
   const isPending = activeProfile.isPending || deleteProfile.isPending;
@@ -88,6 +97,17 @@ export default function ProfileCard({
               : m.profile_local_label()}
           </Chip>
         </CardContent>
+
+        <CardFooter className="relative">
+          <Button asChild>
+            <Link
+              to="/main/profiles/$type/detail/$uid"
+              params={{ type, uid: profile.uid }}
+            >
+              {m.profile_view_details_title()}
+            </Link>
+          </Button>
+        </CardFooter>
       </Card>
 
       <Menu

@@ -20,6 +20,7 @@ import { Route as legacyProfilesRouteImport } from './pages/(legacy)/profiles'
 import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
 import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
 import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
+import { Route as editorEditorRouteRouteImport } from './pages/(editor)/editor/route'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
 import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
 import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
@@ -37,6 +38,7 @@ import { Route as mainMainProfilesIndexRouteImport } from './pages/(main)/main/p
 import { Route as mainMainLogsIndexRouteImport } from './pages/(main)/main/logs/index'
 import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
 import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
+import { Route as editorEditorProfileIndexRouteImport } from './pages/(editor)/editor/profile/index'
 import { Route as mainMainProxiesNameRouteImport } from './pages/(main)/main/proxies/$name'
 import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
 import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
@@ -49,6 +51,7 @@ import { Route as mainMainProfilesInspectRouteRouteImport } from './pages/(main)
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
 import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
+import { Route as mainMainProfilesTypeDetailUidRouteImport } from './pages/(main)/main/profiles/$type/detail/$uid'
 
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
@@ -102,6 +105,11 @@ const legacyConnectionsRoute = legacyConnectionsRouteImport.update({
   id: '/connections',
   path: '/connections',
   getParentRoute: () => legacyRouteRoute,
+} as any)
+const editorEditorRouteRoute = editorEditorRouteRouteImport.update({
+  id: '/(editor)/editor',
+  path: '/editor',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const mainMainIndexRoute = mainMainIndexRouteImport.update({
   id: '/main/',
@@ -190,6 +198,12 @@ const mainMainConnectionsIndexRoute =
     path: '/',
     getParentRoute: () => mainMainConnectionsRouteRoute,
   } as any)
+const editorEditorProfileIndexRoute =
+  editorEditorProfileIndexRouteImport.update({
+    id: '/profile/',
+    path: '/profile/',
+    getParentRoute: () => editorEditorRouteRoute,
+  } as any)
 const mainMainProxiesNameRoute = mainMainProxiesNameRouteImport.update({
   id: '/$name',
   path: '/$name',
@@ -261,8 +275,15 @@ const mainMainProvidersProxiesKeyRoute =
     path: '/proxies/$key',
     getParentRoute: () => mainMainProvidersRouteRoute,
   } as any)
+const mainMainProfilesTypeDetailUidRoute =
+  mainMainProfilesTypeDetailUidRouteImport.update({
+    id: '/$type/detail/$uid',
+    path: '/$type/detail/$uid',
+    getParentRoute: () => mainMainProfilesRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
+  '/editor': typeof editorEditorRouteRouteWithChildren
   '/connections': typeof legacyConnectionsRoute
   '/dashboard': typeof legacyDashboardRoute
   '/logs': typeof legacyLogsRoute
@@ -290,6 +311,7 @@ export interface FileRoutesByFullPath {
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/editor/profile/': typeof editorEditorProfileIndexRoute
   '/main/connections/': typeof mainMainConnectionsIndexRoute
   '/main/dashboard/': typeof mainMainDashboardIndexRoute
   '/main/logs/': typeof mainMainLogsIndexRoute
@@ -301,8 +323,10 @@ export interface FileRoutesByFullPath {
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
+  '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesByTo {
+  '/editor': typeof editorEditorRouteRouteWithChildren
   '/connections': typeof legacyConnectionsRoute
   '/dashboard': typeof legacyDashboardRoute
   '/logs': typeof legacyLogsRoute
@@ -322,6 +346,7 @@ export interface FileRoutesByTo {
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/editor/profile': typeof editorEditorProfileIndexRoute
   '/main/connections': typeof mainMainConnectionsIndexRoute
   '/main/dashboard': typeof mainMainDashboardIndexRoute
   '/main/logs': typeof mainMainLogsIndexRoute
@@ -333,11 +358,13 @@ export interface FileRoutesByTo {
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
+  '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/(legacy)': typeof legacyRouteRouteWithChildren
   '/(main)': typeof mainRouteRouteWithChildren
+  '/(editor)/editor': typeof editorEditorRouteRouteWithChildren
   '/(legacy)/connections': typeof legacyConnectionsRoute
   '/(legacy)/dashboard': typeof legacyDashboardRoute
   '/(legacy)/logs': typeof legacyLogsRoute
@@ -365,6 +392,7 @@ export interface FileRoutesById {
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/(main)/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/(main)/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/(editor)/editor/profile/': typeof editorEditorProfileIndexRoute
   '/(main)/main/connections/': typeof mainMainConnectionsIndexRoute
   '/(main)/main/dashboard/': typeof mainMainDashboardIndexRoute
   '/(main)/main/logs/': typeof mainMainLogsIndexRoute
@@ -376,10 +404,12 @@ export interface FileRoutesById {
   '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
+  '/(main)/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/editor'
     | '/connections'
     | '/dashboard'
     | '/logs'
@@ -407,6 +437,7 @@ export interface FileRouteTypes {
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
     | '/main/proxies/$name'
+    | '/editor/profile/'
     | '/main/connections/'
     | '/main/dashboard/'
     | '/main/logs/'
@@ -418,8 +449,10 @@ export interface FileRouteTypes {
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type/'
+    | '/main/profiles/$type/detail/$uid'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/editor'
     | '/connections'
     | '/dashboard'
     | '/logs'
@@ -439,6 +472,7 @@ export interface FileRouteTypes {
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
     | '/main/proxies/$name'
+    | '/editor/profile'
     | '/main/connections'
     | '/main/dashboard'
     | '/main/logs'
@@ -450,10 +484,12 @@ export interface FileRouteTypes {
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type'
+    | '/main/profiles/$type/detail/$uid'
   id:
     | '__root__'
     | '/(legacy)'
     | '/(main)'
+    | '/(editor)/editor'
     | '/(legacy)/connections'
     | '/(legacy)/dashboard'
     | '/(legacy)/logs'
@@ -481,6 +517,7 @@ export interface FileRouteTypes {
     | '/(main)/main/settings/user-interface'
     | '/(main)/main/settings/web-ui'
     | '/(main)/main/proxies/$name'
+    | '/(editor)/editor/profile/'
     | '/(main)/main/connections/'
     | '/(main)/main/dashboard/'
     | '/(main)/main/logs/'
@@ -492,11 +529,13 @@ export interface FileRouteTypes {
     | '/(main)/main/providers/proxies/$key'
     | '/(main)/main/providers/rules/$key'
     | '/(main)/main/profiles/$type/'
+    | '/(main)/main/profiles/$type/detail/$uid'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   legacyRouteRoute: typeof legacyRouteRouteWithChildren
   mainRouteRoute: typeof mainRouteRouteWithChildren
+  editorEditorRouteRoute: typeof editorEditorRouteRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -577,6 +616,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/connections'
       preLoaderRoute: typeof legacyConnectionsRouteImport
       parentRoute: typeof legacyRouteRoute
+    }
+    '/(editor)/editor': {
+      id: '/(editor)/editor'
+      path: '/editor'
+      fullPath: '/editor'
+      preLoaderRoute: typeof editorEditorRouteRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/(main)/main/': {
       id: '/(main)/main/'
@@ -697,6 +743,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainConnectionsIndexRouteImport
       parentRoute: typeof mainMainConnectionsRouteRoute
     }
+    '/(editor)/editor/profile/': {
+      id: '/(editor)/editor/profile/'
+      path: '/profile'
+      fullPath: '/editor/profile/'
+      preLoaderRoute: typeof editorEditorProfileIndexRouteImport
+      parentRoute: typeof editorEditorRouteRoute
+    }
     '/(main)/main/proxies/$name': {
       id: '/(main)/main/proxies/$name'
       path: '/$name'
@@ -781,6 +834,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProvidersProxiesKeyRouteImport
       parentRoute: typeof mainMainProvidersRouteRoute
     }
+    '/(main)/main/profiles/$type/detail/$uid': {
+      id: '/(main)/main/profiles/$type/detail/$uid'
+      path: '/$type/detail/$uid'
+      fullPath: '/main/profiles/$type/detail/$uid'
+      preLoaderRoute: typeof mainMainProfilesTypeDetailUidRouteImport
+      parentRoute: typeof mainMainProfilesRouteRoute
+    }
   }
 }
 
@@ -855,12 +915,14 @@ interface mainMainProfilesRouteRouteChildren {
   mainMainProfilesInspectRouteRoute: typeof mainMainProfilesInspectRouteRoute
   mainMainProfilesIndexRoute: typeof mainMainProfilesIndexRoute
   mainMainProfilesTypeIndexRoute: typeof mainMainProfilesTypeIndexRoute
+  mainMainProfilesTypeDetailUidRoute: typeof mainMainProfilesTypeDetailUidRoute
 }
 
 const mainMainProfilesRouteRouteChildren: mainMainProfilesRouteRouteChildren = {
   mainMainProfilesInspectRouteRoute: mainMainProfilesInspectRouteRoute,
   mainMainProfilesIndexRoute: mainMainProfilesIndexRoute,
   mainMainProfilesTypeIndexRoute: mainMainProfilesTypeIndexRoute,
+  mainMainProfilesTypeDetailUidRoute: mainMainProfilesTypeDetailUidRoute,
 }
 
 const mainMainProfilesRouteRouteWithChildren =
@@ -966,9 +1028,21 @@ const mainRouteRouteWithChildren = mainRouteRoute._addFileChildren(
   mainRouteRouteChildren,
 )
 
+interface editorEditorRouteRouteChildren {
+  editorEditorProfileIndexRoute: typeof editorEditorProfileIndexRoute
+}
+
+const editorEditorRouteRouteChildren: editorEditorRouteRouteChildren = {
+  editorEditorProfileIndexRoute: editorEditorProfileIndexRoute,
+}
+
+const editorEditorRouteRouteWithChildren =
+  editorEditorRouteRoute._addFileChildren(editorEditorRouteRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   legacyRouteRoute: legacyRouteRouteWithChildren,
   mainRouteRoute: mainRouteRouteWithChildren,
+  editorEditorRouteRoute: editorEditorRouteRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
