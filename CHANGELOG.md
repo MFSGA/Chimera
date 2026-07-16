@@ -1,3 +1,37 @@
+## [0.17.2] - 2026-07-16 11:15:41
+
+### ✨ Features
+
+- **header:** Add settings actions menu by @MFSGA
+
+- **profiles:** Add profile detail and editor pages by @MFSGA
+
+- **profiles:** Add profile editing IPC by @MFSGA
+
+- **profiles:** Build profile list management page by @MFSGA
+
+- **profiles:** Add profile management IPC by @MFSGA
+
+- **ui:** Add profile form controls by @MFSGA
+
+- Use menu by @MFSGA
+
+- Use header by @MFSGA
+
+- Add the correct route by @MFSGA
+
+### 🐛 Bug Fixes
+
+- Revert the update by @MFSGA
+
+### 💅 Styling
+
+- Fix prettier formatting by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.17.1...v0.17.2
+
 ## [0.17.1] - 2026-07-02 07:55:35
 
 ### 🐛 Bug Fixes
