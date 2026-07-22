@@ -70,7 +70,7 @@ export default function EditAction() {
             onClick={() => setIsEditing(false)}
           >
             <DoneRounded />
-            <span>{m.common_done()}</span>
+            <span>{m.common_save()}</span>
           </Button>
         </motion.div>
       )}
