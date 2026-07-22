@@ -46,9 +46,7 @@ export const useLogContext = () => {
 export const LogProvider = ({ children }: PropsWithChildren) => {
   const [filterText, setFilterText] = useState('');
   const [logLevel, setLogLevel] = useState('all');
-  const {
-    query: { data },
-  } = useClashLogs();
+  const { data } = useClashLogs();
 
   const logs = useMemo(() => {
     return data?.filter((log: ClashLog) => {

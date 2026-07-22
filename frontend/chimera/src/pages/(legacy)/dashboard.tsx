@@ -1,8 +1,6 @@
-import { useClashWSContext } from '@chimera/interface';
 import { BasePage } from '@chimera/ui';
 import Grid from '@mui/material/Grid';
 import { createFileRoute } from '@tanstack/react-router';
-import { useEffect } from 'react';
 import DataPanel from '@/components/dashboard/data-panel';
 import HealthPanel from '@/components/dashboard/health-panel';
 import ProxyShortcuts from '@/components/dashboard/proxy-shortcuts';
@@ -16,12 +14,6 @@ export const Route = createFileRoute('/(legacy)/dashboard')({
 
 function Dashboard() {
   const visible = useVisibility();
-  const { setRecordTraffic } = useClashWSContext();
-
-  useEffect(() => {
-    setRecordTraffic(visible);
-  }, [setRecordTraffic, visible]);
-
   return (
     <BasePage title={m.navbar_label_dashboard()}>
       <Grid container spacing={2}>
