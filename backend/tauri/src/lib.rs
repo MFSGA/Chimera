@@ -160,10 +160,9 @@ pub fn run() -> std::io::Result<()> {
             ipc::create_legacy_window
         ])
         .events(collect_events![
-            core::storage::StorageValueChangedEvent // core::clash::ClashConnectionsEvent,
-                                                    // core::clash::ws::ClashWsEvent,
-                                                    // window::WindowMessageEvent,
-                                                    // window::WindowReadyEvent,
+            core::storage::StorageValueChangedEvent,
+            core::clash::ClashConnectionsEvent,
+            core::clash::ws::ClashWsEvent,
         ])
         .dangerously_cast_bigints_to_number();
 
@@ -217,6 +216,8 @@ pub fn run() -> std::io::Result<()> {
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(move |app| {
             specta_builder.mount_events(app);
+
+            core::clash::setup(app)?;
 
             resolve::resolve_setup(app);
 
