@@ -33,9 +33,7 @@ export interface TableMessage extends Omit<ClashConnection, 'connections'> {
 }
 
 export const ConnectionsTable = ({ searchTerm }: { searchTerm?: string }) => {
-  const {
-    query: { data: clashConnections, isLoading },
-  } = useClashConnections();
+  const { data: clashConnections, isLoading } = useClashConnections();
 
   const historyMessage = useRef<TableMessage | null>(null);
 

@@ -25,9 +25,7 @@ import Dataline, { type DatalineProps } from './dataline';
 export const DataPanel = ({ visible = true }: { visible?: boolean }) => {
   const { data: clashTraffic } = useClashTraffic();
   const { data: clashMemory } = useClashMemory();
-  const {
-    query: { data: clashConnections },
-  } = useClashConnections();
+  const { data: clashConnections } = useClashConnections();
   const { value } = useSetting('clash_core');
 
   const supportMemory = Boolean(
