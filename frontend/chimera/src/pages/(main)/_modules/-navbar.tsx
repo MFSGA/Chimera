@@ -125,7 +125,7 @@ export const DefaultNavbar = () => {
         </NavbarButton>
       )}
 
-      <NavbarButton to="/main/profiles">
+      <NavbarButton to="/main/profiles/$type" params={{ type: 'profile' }}>
         <GridViewRounded />
         <NavbarLabel>{m.navbar_label_profiles()}</NavbarLabel>
       </NavbarButton>
@@ -145,7 +145,7 @@ export const DefaultNavbar = () => {
         <NavbarLabel>{m.navbar_label_logs()}</NavbarLabel>
       </NavbarButton>
 
-      <NavbarButton to="/main/settings">
+      <NavbarButton to="/main/settings/system">
         <SettingsRounded />
         <NavbarLabel>{m.navbar_label_settings()}</NavbarLabel>
       </NavbarButton>
@@ -191,7 +191,7 @@ export const MobileNavbar = () => {
       </MoblieNavbarContainer>
 
       <MoblieNavbarContainer>
-        <NavbarButton to="/main/settings">
+        <NavbarButton to="/main/settings/system">
           <SettingsRounded />
         </NavbarButton>
         {m.navbar_label_settings()}
@@ -207,12 +207,15 @@ export const MobileNavbar = () => {
               <MenuRounded className="size-5" />
             </Button>
           </DropdownMenuTrigger>
-          More
+          {m.navbar_label_more()}
         </MoblieNavbarContainer>
 
         <DropdownMenuContent>
           <DropdownMenuItem asChild>
-            <Link to={'/main/profiles' as never}>
+            <Link
+              to={'/main/profiles/$type' as never}
+              params={{ type: 'profile' } as never}
+            >
               <GridViewRounded />
               <span>{m.navbar_label_profiles()}</span>
             </Link>
