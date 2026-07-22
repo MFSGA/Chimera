@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",
-    "@chimera/utils": "workspace:^",
     "@chimera/ui": "workspace:^",
+    "@chimera/utils": "workspace:^",
     "@dnd-kit/core": "6.3.1",
     "@dnd-kit/helpers": "0.5.0",
     "@dnd-kit/react": "0.5.0",
@@ -38,13 +38,13 @@
     "class-variance-authority": "0.7.1",
     "d3": "7.9.0",
     "dayjs": "1.11.21",
-    "motion": "12.42.2",
     "jotai": "2.20.2",
     "json-schema": "0.4.0",
     "less": "4.7.0",
     "lodash-es": "4.18.1",
     "material-react-table": "3.2.1",
     "monaco-editor": "0.55.1",
+    "motion": "12.42.2",
     "mui-color-input": "9.0.0",
     "radix-ui": "1.6.4",
     "react": "19.2.7",
@@ -55,7 +55,8 @@
     "react-use": "17.6.1",
     "swr": "2.4.2",
     "vaul": "1.1.2",
-    "virtua": "0.49.3"
+    "virtua": "0.49.3",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@emotion/babel-plugin": "11.13.5",
