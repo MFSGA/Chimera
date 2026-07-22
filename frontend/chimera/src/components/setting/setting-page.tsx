@@ -1,7 +1,7 @@
+import { useIsAppImage } from '@chimera/interface';
 import Masonry from '@mui/lab/Masonry';
 import { useAtomValue } from 'jotai';
 import { useWindowSize } from 'react-use';
-import { useIsAppImage } from '@/hooks/use-consts';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import SettingChimeraMisc from './setting-chimera-misc';
 import SettingChimeraPath from './setting-chimera-path';

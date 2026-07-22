@@ -1,10 +1,14 @@
-import { commands, unwrapResult, useSetting } from '@chimera/interface';
+import {
+  commands,
+  unwrapResult,
+  useIsAppImage,
+  useSetting,
+} from '@chimera/interface';
 import { Update } from '@tauri-apps/plugin-updater';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useEffect, useState } from 'react';
 import { OS } from '@/consts';
 import { UpdaterIgnoredAtom, UpdaterInstanceAtom } from '@/store/updater';
-import { useIsAppImage } from './use-consts';
 
 export function useUpdaterPlatformSupported() {
   const [supported, setSupported] = useState(false);
