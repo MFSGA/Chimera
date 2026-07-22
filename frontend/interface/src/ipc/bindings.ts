@@ -158,6 +158,22 @@ export const commands = {
     typedError<{ [key in string]: number }, string>(
       __TAURI_INVOKE('clash_api_get_group_delay', { group, url }),
     ),
+  getClashWsConnectionsState: () =>
+    typedError<ClashConnectionsConnectorState, string>(
+      __TAURI_INVOKE('get_clash_ws_connections_state'),
+    ),
+  getClashWsSnapshot: () =>
+    typedError<ClashWsSnapshot, string>(
+      __TAURI_INVOKE('get_clash_ws_snapshot'),
+    ),
+  setClashWsRecording: (kind: ClashWsKind, enabled: boolean) =>
+    typedError<ClashWsRecording, string>(
+      __TAURI_INVOKE('set_clash_ws_recording', { kind, enabled }),
+    ),
+  clearClashWsHistory: (kind: ClashWsKind) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('clear_clash_ws_history', { kind }),
+    ),
   checkUpdate: () =>
     typedError<
       {
@@ -248,6 +264,10 @@ export const commands = {
 
 /** Events */
 export const events = {
+  clashConnectionsEvent: makeEvent<ClashConnectionsEvent>(
+    'clash-connections-event',
+  ),
+  clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
   storageValueChangedEvent: makeEvent<StorageValueChangedEvent>(
     'storage-value-changed-event',
   ),
@@ -268,6 +288,22 @@ export type BuildInfo = {
   build_platform: string;
   rustc_version: string;
   llvm_version: string;
+};
+
+export type ClashConnectionsConnectorEvent =
+  | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
+  | { kind: 'update'; data: ClashConnectionsInfo };
+
+export type ClashConnectionsConnectorState =
+  'disconnected' | 'connecting' | 'connected';
+
+export type ClashConnectionsEvent = ClashConnectionsConnectorEvent;
+
+export type ClashConnectionsInfo = {
+  downloadTotal: number;
+  uploadTotal: number;
+  downloadSpeed: number;
+  uploadSpeed: number;
 };
 
 export type ClashCore = ClashCore_Serialize | ClashCore_Deserialize;
@@ -311,6 +347,58 @@ export type ClashInfo = {
 
 export type ClashStrategy = {
   external_controller_port_strategy: ExternalControllerPortStrategy;
+};
+
+export type ClashWsConnectionSnapshot = {
+  downloadTotal: number;
+  uploadTotal: number;
+  downloadSpeed: number;
+  uploadSpeed: number;
+  memory: number | null;
+  connections: any | null;
+};
+
+export type ClashWsEvent =
+  | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
+  | { kind: 'connections_updated'; data: ClashWsConnectionSnapshot }
+  | { kind: 'log_appended'; data: ClashWsLog }
+  | { kind: 'traffic_updated'; data: ClashWsTraffic }
+  | { kind: 'memory_updated'; data: ClashWsMemory }
+  | { kind: 'recording_changed'; data: ClashWsRecording }
+  | { kind: 'history_cleared'; data: ClashWsKind };
+
+export type ClashWsKind = 'connections' | 'logs' | 'traffic' | 'memory';
+
+export type ClashWsLog = {
+  type: string;
+  time: string | null;
+  payload: string;
+};
+
+export type ClashWsMemory = {
+  inuse: number;
+  oslimit: number;
+};
+
+export type ClashWsRecording = {
+  connections: boolean;
+  logs: boolean;
+  traffic: boolean;
+  memory: boolean;
+};
+
+export type ClashWsSnapshot = {
+  state: ClashConnectionsConnectorState;
+  recording: ClashWsRecording;
+  connections: ClashWsConnectionSnapshot[];
+  logs: ClashWsLog[];
+  traffic: ClashWsTraffic[];
+  memory: ClashWsMemory[];
+};
+
+export type ClashWsTraffic = {
+  up: number;
+  down: number;
 };
 
 export type ConfigDefinition =
