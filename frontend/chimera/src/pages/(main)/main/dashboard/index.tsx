@@ -43,6 +43,7 @@ import {
 import { ContextMenuItem } from '@/components/ui/context-menu';
 import {
   DndGrid,
+  DndGridProvider,
   DndGridRoot,
   useDndGridRoot,
   type DndGridItemType,
@@ -128,13 +129,30 @@ function DashboardDragOverlay({
                 height: activeDrag.dims.height,
               }}
             >
-              {/* 
-                为 overlay 内的 WidgetComponent 提供一个最小 DndGridProvider，
-                使其能够正常渲染（isOverlay=true 跳过定位，displayItems 和回调为空） 
-              */}
-              <div className="size-full">
+              <DndGridProvider
+                value={{
+                  displayItems: [],
+                  getItemRect: () => ({
+                    left: 0,
+                    top: 0,
+                    width: 0,
+                    height: 0,
+                  }),
+                  dropInfoMap: {},
+                  activeItemId: null,
+                  resizingItemId: null,
+                  disabled: true,
+                  sourceOnly: true,
+                  dragIdPrefix: '',
+                  isOverlay: true,
+                  constraintsMapRef: { current: {} },
+                  onResizeStart: () => {},
+                  onResizeMove: () => {},
+                  onResizeEnd: () => {},
+                }}
+              >
                 <WidgetComponent id={activeDrag.itemId} />
-              </div>
+              </DndGridProvider>
             </div>
           );
         })()}
