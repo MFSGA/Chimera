@@ -1,4 +1,4 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { CssBaseline } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createFileRoute } from '@tanstack/react-router';

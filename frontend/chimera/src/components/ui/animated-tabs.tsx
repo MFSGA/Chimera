@@ -1,4 +1,4 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { motion, useReducedMotion } from 'motion/react';
 import { Slot } from 'radix-ui';
