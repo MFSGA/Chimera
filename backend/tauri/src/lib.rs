@@ -121,6 +121,7 @@ pub fn run() -> std::io::Result<()> {
             ipc::set_custom_app_dir,
             ipc::clash_api_get_proxy_delay,
             ipc::clash_api_get_group_delay,
+            ipc::clash_api_delete_connections,
             ipc::get_clash_ws_connections_state,
             ipc::get_clash_ws_snapshot,
             ipc::set_clash_ws_recording,
