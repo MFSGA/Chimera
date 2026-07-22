@@ -1324,3 +1324,9 @@ pub async fn clash_api_get_group_delay(
 ) -> Result<HashMap<String, u32>> {
     Ok(clash::api::get_group_delay(group, url).await?)
 }
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
+    Ok(clash::api::delete_connections(id.as_deref()).await?)
+}

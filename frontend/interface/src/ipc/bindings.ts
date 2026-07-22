@@ -158,6 +158,10 @@ export const commands = {
     typedError<{ [key in string]: number }, string>(
       __TAURI_INVOKE('clash_api_get_group_delay', { group, url }),
     ),
+  clashApiDeleteConnections: (id: string | null) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('clash_api_delete_connections', { id }),
+    ),
   getClashWsConnectionsState: () =>
     typedError<ClashConnectionsConnectorState, string>(
       __TAURI_INVOKE('get_clash_ws_connections_state'),
