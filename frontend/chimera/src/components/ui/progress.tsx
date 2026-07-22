@@ -2,6 +2,8 @@ import { cn } from '@chimera/ui';
 import type { ComponentProps } from 'react';
 import { Circle, CircleSVG } from './circle';
 
+export { LinearProgress } from './linear-progress';
+
 const HalfCircle = (props: Omit<ComponentProps<typeof Circle>, 'value'>) => {
   return <Circle value={50} {...props} />;
 };
