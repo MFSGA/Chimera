@@ -15,7 +15,6 @@
  * - useClashMemory：内存使用数据（mihomo 核心时可用）
  *
  * 适配说明：
- * - 使用 div 基础卡片样式替代 ref 的 Card/CardHeader/CardContent 组件
  * - Sparkline 组件已迁移至 @/components/ui/sparkline
  * - 接口包路径改为 @chimera/interface
  */
@@ -36,11 +35,12 @@ import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { filesize } from 'filesize';
 import type { ComponentProps, ComponentType } from 'react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Sparkline } from '@/components/ui/sparkline';
 import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
-import WidgetItem from './widget-item';
+import WidgetItem, { type WidgetItemProps } from './widget-item';
 
 /**
  * 填充数据数组
@@ -69,16 +69,9 @@ function SparklineCard({
   children,
   onCloseClick,
   ...props
-}: ComponentProps<'div'> & {
+}: ComponentProps<typeof Card> & {
   data: number[];
-} & {
-  id: string;
-  minW?: number;
-  minH?: number;
-  maxW?: number;
-  maxH?: number;
-  onCloseClick?: (id: string) => void;
-}) {
+} & WidgetItemProps) {
   return (
     <WidgetItem
       id={id}
@@ -88,22 +81,20 @@ function SparklineCard({
       maxH={maxH}
       onCloseClick={onCloseClick}
     >
-      <div
-        className={cn('relative isolate size-full rounded-3xl', className)}
+      <Card
+        className={cn('relative isolate size-full', className)}
         data-slot="widget-sparkline-card"
         {...props}
       >
-        {/* 背景 Sparkline 趋势图 */}
-        <Sparkline data={data} className="absolute inset-0 z-0 rounded-3xl" />
+        <Sparkline data={data} className="absolute inset-0 z-0" />
 
-        {/* 前景内容层 */}
-        <div
-          className="relative z-10 flex size-full flex-col justify-between gap-1 p-3"
+        <CardContent
+          className="relative z-10 flex size-full flex-col justify-between"
           data-slot="widget-sparkline-card-content"
         >
           {children}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </WidgetItem>
   );
 }
