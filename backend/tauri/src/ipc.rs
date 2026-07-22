@@ -1266,6 +1266,46 @@ pub fn clear_storage(app_handle: AppHandle) -> Result {
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_clash_ws_connections_state(
+    app_handle: AppHandle,
+) -> Result<crate::core::clash::ws::ClashConnectionsConnectorState> {
+    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
+    Ok(ws_connector.state())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_clash_ws_snapshot(
+    app_handle: AppHandle,
+) -> Result<crate::core::clash::ws::ClashWsSnapshot> {
+    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
+    Ok(ws_connector.snapshot())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_clash_ws_recording(
+    app_handle: AppHandle,
+    kind: crate::core::clash::ws::ClashWsKind,
+    enabled: bool,
+) -> Result<crate::core::clash::ws::ClashWsRecording> {
+    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
+    Ok(ws_connector.set_recording(kind, enabled))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_clash_ws_history(
+    app_handle: AppHandle,
+    kind: crate::core::clash::ws::ClashWsKind,
+) -> Result {
+    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
+    ws_connector.clear_history(kind);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn clash_api_get_proxy_delay(
     name: String,
     url: Option<String>,
