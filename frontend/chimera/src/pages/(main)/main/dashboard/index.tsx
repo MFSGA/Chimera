@@ -26,15 +26,21 @@
  * 适配说明：
  * - 使用 @dnd-kit/core 的 DragOverlay 替代 ref 中的嵌套（已统一到 DndGridRoot）
  * - 使用 useKvStorage 持久化布局（与 Chimera 的 KV 存储兼容）
- * - 跳过 ref 的 context-menu（Chimera 无此基础设施），改用 EditAction 编辑按钮
+ * - 使用与 ref 一致的 context-menu 进入编辑和添加组件状态
  */
 
 import { useKvStorage } from '@chimera/interface';
 import { DragOverlay } from '@dnd-kit/core';
 import { createFileRoute } from '@tanstack/react-router';
+import AddRounded from '~icons/material-symbols/add-rounded';
 import EditRounded from '~icons/material-symbols/edit-rounded';
 import { useCallback, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
+import {
+  RegisterContextMenu,
+  RegisterContextMenuContent,
+  RegisterContextMenuTrigger,
+} from '@/components/providers/context-menu-provider';
+import { ContextMenuItem } from '@/components/ui/context-menu';
 import {
   DndGrid,
   DndGridRoot,
@@ -339,32 +345,39 @@ const WidgetRender = () => {
  * EditAction 在编辑模式时显示浮动操作栏。
  */
 function RouteComponent() {
-  const { isEditing, setIsEditing, setOpenSheet } = useDashboardContext();
+  const { setIsEditing, setOpenSheet } = useDashboardContext();
 
   return (
-    <div
-      data-slot="dashboard-container"
-      className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
-    >
-      {/* 编辑按钮 — 点击进入编辑模式 */}
-      {!isEditing && (
-        <div className="flex justify-end px-4 pt-2">
-          <Button
-            variant="flat"
-            onClick={() => setIsEditing(true)}
-            className="flex items-center gap-1"
-          >
-            <EditRounded className="size-4" />
-            <span>{m.common_edit()}</span>
-          </Button>
+    <RegisterContextMenu>
+      <RegisterContextMenuTrigger asChild>
+        <div
+          data-slot="dashboard-container"
+          className="relative flex min-h-0 flex-1 flex-col overflow-hidden"
+        >
+          <WidgetRender />
+
+          <EditAction />
         </div>
-      )}
+      </RegisterContextMenuTrigger>
 
-      {/* Widget 网格 */}
-      <WidgetRender />
+      <RegisterContextMenuContent>
+        <ContextMenuItem onSelect={() => setIsEditing(true)}>
+          <EditRounded className="size-4" />
 
-      {/* 编辑模式浮动操作栏 */}
-      <EditAction />
-    </div>
+          <span>{m.dashboard_context_menu_edit_widgets()}</span>
+        </ContextMenuItem>
+
+        <ContextMenuItem
+          onSelect={() => {
+            setIsEditing(true);
+            setOpenSheet(true);
+          }}
+        >
+          <AddRounded className="size-4" />
+
+          <span>{m.dashboard_context_menu_add_widgets()}</span>
+        </ContextMenuItem>
+      </RegisterContextMenuContent>
+    </RegisterContextMenu>
   );
 }
