@@ -9,56 +9,61 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './pages/__root'
-import { Route as mainRouteRouteImport } from './pages/(main)/route'
 import { Route as legacyRouteRouteImport } from './pages/(legacy)/route'
-import { Route as legacyIndexRouteImport } from './pages/(legacy)/index'
-import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
-import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
-import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
-import { Route as legacyProvidersRouteImport } from './pages/(legacy)/providers'
-import { Route as legacyProfilesRouteImport } from './pages/(legacy)/profiles'
-import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
-import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
-import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
+import { Route as mainRouteRouteImport } from './pages/(main)/route'
 import { Route as editorEditorRouteRouteImport } from './pages/(editor)/editor/route'
+import { Route as legacyIndexRouteImport } from './pages/(legacy)/index'
+import { Route as legacyConnectionsRouteImport } from './pages/(legacy)/connections'
+import { Route as legacyDashboardRouteImport } from './pages/(legacy)/dashboard'
+import { Route as legacyLogsRouteImport } from './pages/(legacy)/logs'
+import { Route as legacyProfilesRouteImport } from './pages/(legacy)/profiles'
+import { Route as legacyProvidersRouteImport } from './pages/(legacy)/providers'
+import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
+import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
+import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
-import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
-import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
-import { Route as mainMainProxiesRouteRouteImport } from './pages/(main)/main/proxies/route'
-import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/providers/route'
-import { Route as mainMainProfilesRouteRouteImport } from './pages/(main)/main/profiles/route'
-import { Route as mainMainLogsRouteRouteImport } from './pages/(main)/main/logs/route'
-import { Route as mainMainDashboardRouteRouteImport } from './pages/(main)/main/dashboard/route'
 import { Route as mainMainConnectionsRouteRouteImport } from './pages/(main)/main/connections/route'
-import { Route as mainMainSettingsIndexRouteImport } from './pages/(main)/main/settings/index'
-import { Route as mainMainRulesIndexRouteImport } from './pages/(main)/main/rules/index'
-import { Route as mainMainProxiesIndexRouteImport } from './pages/(main)/main/proxies/index'
-import { Route as mainMainProvidersIndexRouteImport } from './pages/(main)/main/providers/index'
-import { Route as mainMainProfilesIndexRouteImport } from './pages/(main)/main/profiles/index'
-import { Route as mainMainLogsIndexRouteImport } from './pages/(main)/main/logs/index'
-import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
-import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
+import { Route as mainMainDashboardRouteRouteImport } from './pages/(main)/main/dashboard/route'
+import { Route as mainMainLogsRouteRouteImport } from './pages/(main)/main/logs/route'
+import { Route as mainMainProfilesRouteRouteImport } from './pages/(main)/main/profiles/route'
+import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/providers/route'
+import { Route as mainMainProxiesRouteRouteImport } from './pages/(main)/main/proxies/route'
+import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
+import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
 import { Route as editorEditorProfileIndexRouteImport } from './pages/(editor)/editor/profile/index'
-import { Route as mainMainProxiesNameRouteImport } from './pages/(main)/main/proxies/$name'
-import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
-import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
-import { Route as mainMainSettingsSystemRouteRouteImport } from './pages/(main)/main/settings/system/route'
-import { Route as mainMainSettingsNyanpasuRouteRouteImport } from './pages/(main)/main/settings/nyanpasu/route'
-import { Route as mainMainSettingsDebugRouteRouteImport } from './pages/(main)/main/settings/debug/route'
-import { Route as mainMainSettingsClashRouteRouteImport } from './pages/(main)/main/settings/clash/route'
-import { Route as mainMainSettingsAboutRouteRouteImport } from './pages/(main)/main/settings/about/route'
+import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
+import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
+import { Route as mainMainLogsIndexRouteImport } from './pages/(main)/main/logs/index'
+import { Route as mainMainProfilesIndexRouteImport } from './pages/(main)/main/profiles/index'
 import { Route as mainMainProfilesInspectRouteRouteImport } from './pages/(main)/main/profiles/inspect/route'
+import { Route as mainMainProvidersIndexRouteImport } from './pages/(main)/main/providers/index'
+import { Route as mainMainProxiesIndexRouteImport } from './pages/(main)/main/proxies/index'
+import { Route as mainMainProxiesNameRouteImport } from './pages/(main)/main/proxies/$name'
+import { Route as mainMainRulesIndexRouteImport } from './pages/(main)/main/rules/index'
+import { Route as mainMainSettingsIndexRouteImport } from './pages/(main)/main/settings/index'
+import { Route as mainMainSettingsAboutRouteRouteImport } from './pages/(main)/main/settings/about/route'
+import { Route as mainMainSettingsClashRouteRouteImport } from './pages/(main)/main/settings/clash/route'
+import { Route as mainMainSettingsDebugRouteRouteImport } from './pages/(main)/main/settings/debug/route'
+import { Route as mainMainSettingsNyanpasuRouteRouteImport } from './pages/(main)/main/settings/nyanpasu/route'
+import { Route as mainMainSettingsSystemRouteRouteImport } from './pages/(main)/main/settings/system/route'
+import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
+import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
-import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
+import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
 import { Route as mainMainProfilesTypeDetailUidRouteImport } from './pages/(main)/main/profiles/$type/detail/$uid'
 
+const legacyRouteRoute = legacyRouteRouteImport.update({
+  id: '/(legacy)',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const mainRouteRoute = mainRouteRouteImport.update({
   id: '/(main)',
   getParentRoute: () => rootRouteImport,
 } as any)
-const legacyRouteRoute = legacyRouteRouteImport.update({
-  id: '/(legacy)',
+const editorEditorRouteRoute = editorEditorRouteRouteImport.update({
+  id: '/(editor)/editor',
+  path: '/editor',
   getParentRoute: () => rootRouteImport,
 } as any)
 const legacyIndexRoute = legacyIndexRouteImport.update({
@@ -66,34 +71,9 @@ const legacyIndexRoute = legacyIndexRouteImport.update({
   path: '/',
   getParentRoute: () => legacyRouteRoute,
 } as any)
-const legacySettingsRoute = legacySettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => legacyRouteRoute,
-} as any)
-const legacyRulesRoute = legacyRulesRouteImport.update({
-  id: '/rules',
-  path: '/rules',
-  getParentRoute: () => legacyRouteRoute,
-} as any)
-const legacyProxiesRoute = legacyProxiesRouteImport.update({
-  id: '/proxies',
-  path: '/proxies',
-  getParentRoute: () => legacyRouteRoute,
-} as any)
-const legacyProvidersRoute = legacyProvidersRouteImport.update({
-  id: '/providers',
-  path: '/providers',
-  getParentRoute: () => legacyRouteRoute,
-} as any)
-const legacyProfilesRoute = legacyProfilesRouteImport.update({
-  id: '/profiles',
-  path: '/profiles',
-  getParentRoute: () => legacyRouteRoute,
-} as any)
-const legacyLogsRoute = legacyLogsRouteImport.update({
-  id: '/logs',
-  path: '/logs',
+const legacyConnectionsRoute = legacyConnectionsRouteImport.update({
+  id: '/connections',
+  path: '/connections',
   getParentRoute: () => legacyRouteRoute,
 } as any)
 const legacyDashboardRoute = legacyDashboardRouteImport.update({
@@ -101,54 +81,39 @@ const legacyDashboardRoute = legacyDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => legacyRouteRoute,
 } as any)
-const legacyConnectionsRoute = legacyConnectionsRouteImport.update({
-  id: '/connections',
-  path: '/connections',
+const legacyLogsRoute = legacyLogsRouteImport.update({
+  id: '/logs',
+  path: '/logs',
   getParentRoute: () => legacyRouteRoute,
 } as any)
-const editorEditorRouteRoute = editorEditorRouteRouteImport.update({
-  id: '/(editor)/editor',
-  path: '/editor',
-  getParentRoute: () => rootRouteImport,
+const legacyProfilesRoute = legacyProfilesRouteImport.update({
+  id: '/profiles',
+  path: '/profiles',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyProvidersRoute = legacyProvidersRouteImport.update({
+  id: '/providers',
+  path: '/providers',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyProxiesRoute = legacyProxiesRouteImport.update({
+  id: '/proxies',
+  path: '/proxies',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacyRulesRoute = legacyRulesRouteImport.update({
+  id: '/rules',
+  path: '/rules',
+  getParentRoute: () => legacyRouteRoute,
+} as any)
+const legacySettingsRoute = legacySettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => legacyRouteRoute,
 } as any)
 const mainMainIndexRoute = mainMainIndexRouteImport.update({
   id: '/main/',
   path: '/main/',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainSettingsRouteRoute = mainMainSettingsRouteRouteImport.update({
-  id: '/main/settings',
-  path: '/main/settings',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainRulesRouteRoute = mainMainRulesRouteRouteImport.update({
-  id: '/main/rules',
-  path: '/main/rules',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainProxiesRouteRoute = mainMainProxiesRouteRouteImport.update({
-  id: '/main/proxies',
-  path: '/main/proxies',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainProvidersRouteRoute = mainMainProvidersRouteRouteImport.update({
-  id: '/main/providers',
-  path: '/main/providers',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainProfilesRouteRoute = mainMainProfilesRouteRouteImport.update({
-  id: '/main/profiles',
-  path: '/main/profiles',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainLogsRouteRoute = mainMainLogsRouteRouteImport.update({
-  id: '/main/logs',
-  path: '/main/logs',
-  getParentRoute: () => mainRouteRoute,
-} as any)
-const mainMainDashboardRouteRoute = mainMainDashboardRouteRouteImport.update({
-  id: '/main/dashboard',
-  path: '/main/dashboard',
   getParentRoute: () => mainRouteRoute,
 } as any)
 const mainMainConnectionsRouteRoute =
@@ -157,86 +122,103 @@ const mainMainConnectionsRouteRoute =
     path: '/main/connections',
     getParentRoute: () => mainRouteRoute,
   } as any)
-const mainMainSettingsIndexRoute = mainMainSettingsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainSettingsRouteRoute,
+const mainMainDashboardRouteRoute = mainMainDashboardRouteRouteImport.update({
+  id: '/main/dashboard',
+  path: '/main/dashboard',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainRulesIndexRoute = mainMainRulesIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainRulesRouteRoute,
+const mainMainLogsRouteRoute = mainMainLogsRouteRouteImport.update({
+  id: '/main/logs',
+  path: '/main/logs',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainProxiesIndexRoute = mainMainProxiesIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainProxiesRouteRoute,
+const mainMainProfilesRouteRoute = mainMainProfilesRouteRouteImport.update({
+  id: '/main/profiles',
+  path: '/main/profiles',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainProvidersIndexRoute = mainMainProvidersIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainProvidersRouteRoute,
+const mainMainProvidersRouteRoute = mainMainProvidersRouteRouteImport.update({
+  id: '/main/providers',
+  path: '/main/providers',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainProfilesIndexRoute = mainMainProfilesIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainProfilesRouteRoute,
+const mainMainProxiesRouteRoute = mainMainProxiesRouteRouteImport.update({
+  id: '/main/proxies',
+  path: '/main/proxies',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainLogsIndexRoute = mainMainLogsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainLogsRouteRoute,
+const mainMainRulesRouteRoute = mainMainRulesRouteRouteImport.update({
+  id: '/main/rules',
+  path: '/main/rules',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainDashboardIndexRoute = mainMainDashboardIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => mainMainDashboardRouteRoute,
+const mainMainSettingsRouteRoute = mainMainSettingsRouteRouteImport.update({
+  id: '/main/settings',
+  path: '/main/settings',
+  getParentRoute: () => mainRouteRoute,
 } as any)
-const mainMainConnectionsIndexRoute =
-  mainMainConnectionsIndexRouteImport.update({
-    id: '/',
-    path: '/',
-    getParentRoute: () => mainMainConnectionsRouteRoute,
-  } as any)
 const editorEditorProfileIndexRoute =
   editorEditorProfileIndexRouteImport.update({
     id: '/profile/',
     path: '/profile/',
     getParentRoute: () => editorEditorRouteRoute,
   } as any)
+const mainMainConnectionsIndexRoute =
+  mainMainConnectionsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => mainMainConnectionsRouteRoute,
+  } as any)
+const mainMainDashboardIndexRoute = mainMainDashboardIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainDashboardRouteRoute,
+} as any)
+const mainMainLogsIndexRoute = mainMainLogsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainLogsRouteRoute,
+} as any)
+const mainMainProfilesIndexRoute = mainMainProfilesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainProfilesRouteRoute,
+} as any)
+const mainMainProfilesInspectRouteRoute =
+  mainMainProfilesInspectRouteRouteImport.update({
+    id: '/inspect',
+    path: '/inspect',
+    getParentRoute: () => mainMainProfilesRouteRoute,
+  } as any)
+const mainMainProvidersIndexRoute = mainMainProvidersIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainProvidersRouteRoute,
+} as any)
+const mainMainProxiesIndexRoute = mainMainProxiesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainProxiesRouteRoute,
+} as any)
 const mainMainProxiesNameRoute = mainMainProxiesNameRouteImport.update({
   id: '/$name',
   path: '/$name',
   getParentRoute: () => mainMainProxiesRouteRoute,
 } as any)
-const mainMainSettingsWebUiRouteRoute =
-  mainMainSettingsWebUiRouteRouteImport.update({
-    id: '/web-ui',
-    path: '/web-ui',
-    getParentRoute: () => mainMainSettingsRouteRoute,
-  } as any)
-const mainMainSettingsUserInterfaceRouteRoute =
-  mainMainSettingsUserInterfaceRouteRouteImport.update({
-    id: '/user-interface',
-    path: '/user-interface',
-    getParentRoute: () => mainMainSettingsRouteRoute,
-  } as any)
-const mainMainSettingsSystemRouteRoute =
-  mainMainSettingsSystemRouteRouteImport.update({
-    id: '/system',
-    path: '/system',
-    getParentRoute: () => mainMainSettingsRouteRoute,
-  } as any)
-const mainMainSettingsNyanpasuRouteRoute =
-  mainMainSettingsNyanpasuRouteRouteImport.update({
-    id: '/nyanpasu',
-    path: '/nyanpasu',
-    getParentRoute: () => mainMainSettingsRouteRoute,
-  } as any)
-const mainMainSettingsDebugRouteRoute =
-  mainMainSettingsDebugRouteRouteImport.update({
-    id: '/debug',
-    path: '/debug',
+const mainMainRulesIndexRoute = mainMainRulesIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainRulesRouteRoute,
+} as any)
+const mainMainSettingsIndexRoute = mainMainSettingsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainSettingsRouteRoute,
+} as any)
+const mainMainSettingsAboutRouteRoute =
+  mainMainSettingsAboutRouteRouteImport.update({
+    id: '/about',
+    path: '/about',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
 const mainMainSettingsClashRouteRoute =
@@ -245,17 +227,35 @@ const mainMainSettingsClashRouteRoute =
     path: '/clash',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
-const mainMainSettingsAboutRouteRoute =
-  mainMainSettingsAboutRouteRouteImport.update({
-    id: '/about',
-    path: '/about',
+const mainMainSettingsDebugRouteRoute =
+  mainMainSettingsDebugRouteRouteImport.update({
+    id: '/debug',
+    path: '/debug',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
-const mainMainProfilesInspectRouteRoute =
-  mainMainProfilesInspectRouteRouteImport.update({
-    id: '/inspect',
-    path: '/inspect',
-    getParentRoute: () => mainMainProfilesRouteRoute,
+const mainMainSettingsNyanpasuRouteRoute =
+  mainMainSettingsNyanpasuRouteRouteImport.update({
+    id: '/nyanpasu',
+    path: '/nyanpasu',
+    getParentRoute: () => mainMainSettingsRouteRoute,
+  } as any)
+const mainMainSettingsSystemRouteRoute =
+  mainMainSettingsSystemRouteRouteImport.update({
+    id: '/system',
+    path: '/system',
+    getParentRoute: () => mainMainSettingsRouteRoute,
+  } as any)
+const mainMainSettingsUserInterfaceRouteRoute =
+  mainMainSettingsUserInterfaceRouteRouteImport.update({
+    id: '/user-interface',
+    path: '/user-interface',
+    getParentRoute: () => mainMainSettingsRouteRoute,
+  } as any)
+const mainMainSettingsWebUiRouteRoute =
+  mainMainSettingsWebUiRouteRouteImport.update({
+    id: '/web-ui',
+    path: '/web-ui',
+    getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
 const mainMainProfilesTypeIndexRoute =
   mainMainProfilesTypeIndexRouteImport.update({
@@ -263,16 +263,16 @@ const mainMainProfilesTypeIndexRoute =
     path: '/$type/',
     getParentRoute: () => mainMainProfilesRouteRoute,
   } as any)
-const mainMainProvidersRulesKeyRoute =
-  mainMainProvidersRulesKeyRouteImport.update({
-    id: '/rules/$key',
-    path: '/rules/$key',
-    getParentRoute: () => mainMainProvidersRouteRoute,
-  } as any)
 const mainMainProvidersProxiesKeyRoute =
   mainMainProvidersProxiesKeyRouteImport.update({
     id: '/proxies/$key',
     path: '/proxies/$key',
+    getParentRoute: () => mainMainProvidersRouteRoute,
+  } as any)
+const mainMainProvidersRulesKeyRoute =
+  mainMainProvidersRulesKeyRouteImport.update({
+    id: '/rules/$key',
+    path: '/rules/$key',
     getParentRoute: () => mainMainProvidersRouteRoute,
   } as any)
 const mainMainProfilesTypeDetailUidRoute =
@@ -540,6 +540,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/(legacy)': {
+      id: '/(legacy)'
+      path: ''
+      fullPath: ''
+      preLoaderRoute: typeof legacyRouteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/(main)': {
       id: '/(main)'
       path: ''
@@ -547,11 +554,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/(legacy)': {
-      id: '/(legacy)'
-      path: ''
-      fullPath: ''
-      preLoaderRoute: typeof legacyRouteRouteImport
+    '/(editor)/editor': {
+      id: '/(editor)/editor'
+      path: '/editor'
+      fullPath: '/editor'
+      preLoaderRoute: typeof editorEditorRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/(legacy)/': {
@@ -561,46 +568,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof legacyIndexRouteImport
       parentRoute: typeof legacyRouteRoute
     }
-    '/(legacy)/settings': {
-      id: '/(legacy)/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof legacySettingsRouteImport
-      parentRoute: typeof legacyRouteRoute
-    }
-    '/(legacy)/rules': {
-      id: '/(legacy)/rules'
-      path: '/rules'
-      fullPath: '/rules'
-      preLoaderRoute: typeof legacyRulesRouteImport
-      parentRoute: typeof legacyRouteRoute
-    }
-    '/(legacy)/proxies': {
-      id: '/(legacy)/proxies'
-      path: '/proxies'
-      fullPath: '/proxies'
-      preLoaderRoute: typeof legacyProxiesRouteImport
-      parentRoute: typeof legacyRouteRoute
-    }
-    '/(legacy)/providers': {
-      id: '/(legacy)/providers'
-      path: '/providers'
-      fullPath: '/providers'
-      preLoaderRoute: typeof legacyProvidersRouteImport
-      parentRoute: typeof legacyRouteRoute
-    }
-    '/(legacy)/profiles': {
-      id: '/(legacy)/profiles'
-      path: '/profiles'
-      fullPath: '/profiles'
-      preLoaderRoute: typeof legacyProfilesRouteImport
-      parentRoute: typeof legacyRouteRoute
-    }
-    '/(legacy)/logs': {
-      id: '/(legacy)/logs'
-      path: '/logs'
-      fullPath: '/logs'
-      preLoaderRoute: typeof legacyLogsRouteImport
+    '/(legacy)/connections': {
+      id: '/(legacy)/connections'
+      path: '/connections'
+      fullPath: '/connections'
+      preLoaderRoute: typeof legacyConnectionsRouteImport
       parentRoute: typeof legacyRouteRoute
     }
     '/(legacy)/dashboard': {
@@ -610,74 +582,53 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof legacyDashboardRouteImport
       parentRoute: typeof legacyRouteRoute
     }
-    '/(legacy)/connections': {
-      id: '/(legacy)/connections'
-      path: '/connections'
-      fullPath: '/connections'
-      preLoaderRoute: typeof legacyConnectionsRouteImport
+    '/(legacy)/logs': {
+      id: '/(legacy)/logs'
+      path: '/logs'
+      fullPath: '/logs'
+      preLoaderRoute: typeof legacyLogsRouteImport
       parentRoute: typeof legacyRouteRoute
     }
-    '/(editor)/editor': {
-      id: '/(editor)/editor'
-      path: '/editor'
-      fullPath: '/editor'
-      preLoaderRoute: typeof editorEditorRouteRouteImport
-      parentRoute: typeof rootRouteImport
+    '/(legacy)/profiles': {
+      id: '/(legacy)/profiles'
+      path: '/profiles'
+      fullPath: '/profiles'
+      preLoaderRoute: typeof legacyProfilesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/providers': {
+      id: '/(legacy)/providers'
+      path: '/providers'
+      fullPath: '/providers'
+      preLoaderRoute: typeof legacyProvidersRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/proxies': {
+      id: '/(legacy)/proxies'
+      path: '/proxies'
+      fullPath: '/proxies'
+      preLoaderRoute: typeof legacyProxiesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/rules': {
+      id: '/(legacy)/rules'
+      path: '/rules'
+      fullPath: '/rules'
+      preLoaderRoute: typeof legacyRulesRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/settings': {
+      id: '/(legacy)/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof legacySettingsRouteImport
+      parentRoute: typeof legacyRouteRoute
     }
     '/(main)/main/': {
       id: '/(main)/main/'
       path: '/main'
       fullPath: '/main/'
       preLoaderRoute: typeof mainMainIndexRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/settings': {
-      id: '/(main)/main/settings'
-      path: '/main/settings'
-      fullPath: '/main/settings'
-      preLoaderRoute: typeof mainMainSettingsRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/rules': {
-      id: '/(main)/main/rules'
-      path: '/main/rules'
-      fullPath: '/main/rules'
-      preLoaderRoute: typeof mainMainRulesRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/proxies': {
-      id: '/(main)/main/proxies'
-      path: '/main/proxies'
-      fullPath: '/main/proxies'
-      preLoaderRoute: typeof mainMainProxiesRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/providers': {
-      id: '/(main)/main/providers'
-      path: '/main/providers'
-      fullPath: '/main/providers'
-      preLoaderRoute: typeof mainMainProvidersRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/profiles': {
-      id: '/(main)/main/profiles'
-      path: '/main/profiles'
-      fullPath: '/main/profiles'
-      preLoaderRoute: typeof mainMainProfilesRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/logs': {
-      id: '/(main)/main/logs'
-      path: '/main/logs'
-      fullPath: '/main/logs'
-      preLoaderRoute: typeof mainMainLogsRouteRouteImport
-      parentRoute: typeof mainRouteRoute
-    }
-    '/(main)/main/dashboard': {
-      id: '/(main)/main/dashboard'
-      path: '/main/dashboard'
-      fullPath: '/main/dashboard'
-      preLoaderRoute: typeof mainMainDashboardRouteRouteImport
       parentRoute: typeof mainRouteRoute
     }
     '/(main)/main/connections': {
@@ -687,61 +638,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainConnectionsRouteRouteImport
       parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/settings/': {
-      id: '/(main)/main/settings/'
-      path: '/'
-      fullPath: '/main/settings/'
-      preLoaderRoute: typeof mainMainSettingsIndexRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
+    '/(main)/main/dashboard': {
+      id: '/(main)/main/dashboard'
+      path: '/main/dashboard'
+      fullPath: '/main/dashboard'
+      preLoaderRoute: typeof mainMainDashboardRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/rules/': {
-      id: '/(main)/main/rules/'
-      path: '/'
-      fullPath: '/main/rules/'
-      preLoaderRoute: typeof mainMainRulesIndexRouteImport
-      parentRoute: typeof mainMainRulesRouteRoute
+    '/(main)/main/logs': {
+      id: '/(main)/main/logs'
+      path: '/main/logs'
+      fullPath: '/main/logs'
+      preLoaderRoute: typeof mainMainLogsRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/proxies/': {
-      id: '/(main)/main/proxies/'
-      path: '/'
-      fullPath: '/main/proxies/'
-      preLoaderRoute: typeof mainMainProxiesIndexRouteImport
-      parentRoute: typeof mainMainProxiesRouteRoute
+    '/(main)/main/profiles': {
+      id: '/(main)/main/profiles'
+      path: '/main/profiles'
+      fullPath: '/main/profiles'
+      preLoaderRoute: typeof mainMainProfilesRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/providers/': {
-      id: '/(main)/main/providers/'
-      path: '/'
-      fullPath: '/main/providers/'
-      preLoaderRoute: typeof mainMainProvidersIndexRouteImport
-      parentRoute: typeof mainMainProvidersRouteRoute
+    '/(main)/main/providers': {
+      id: '/(main)/main/providers'
+      path: '/main/providers'
+      fullPath: '/main/providers'
+      preLoaderRoute: typeof mainMainProvidersRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/profiles/': {
-      id: '/(main)/main/profiles/'
-      path: '/'
-      fullPath: '/main/profiles/'
-      preLoaderRoute: typeof mainMainProfilesIndexRouteImport
-      parentRoute: typeof mainMainProfilesRouteRoute
+    '/(main)/main/proxies': {
+      id: '/(main)/main/proxies'
+      path: '/main/proxies'
+      fullPath: '/main/proxies'
+      preLoaderRoute: typeof mainMainProxiesRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/logs/': {
-      id: '/(main)/main/logs/'
-      path: '/'
-      fullPath: '/main/logs/'
-      preLoaderRoute: typeof mainMainLogsIndexRouteImport
-      parentRoute: typeof mainMainLogsRouteRoute
+    '/(main)/main/rules': {
+      id: '/(main)/main/rules'
+      path: '/main/rules'
+      fullPath: '/main/rules'
+      preLoaderRoute: typeof mainMainRulesRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
-    '/(main)/main/dashboard/': {
-      id: '/(main)/main/dashboard/'
-      path: '/'
-      fullPath: '/main/dashboard/'
-      preLoaderRoute: typeof mainMainDashboardIndexRouteImport
-      parentRoute: typeof mainMainDashboardRouteRoute
-    }
-    '/(main)/main/connections/': {
-      id: '/(main)/main/connections/'
-      path: '/'
-      fullPath: '/main/connections/'
-      preLoaderRoute: typeof mainMainConnectionsIndexRouteImport
-      parentRoute: typeof mainMainConnectionsRouteRoute
+    '/(main)/main/settings': {
+      id: '/(main)/main/settings'
+      path: '/main/settings'
+      fullPath: '/main/settings'
+      preLoaderRoute: typeof mainMainSettingsRouteRouteImport
+      parentRoute: typeof mainRouteRoute
     }
     '/(editor)/editor/profile/': {
       id: '/(editor)/editor/profile/'
@@ -750,6 +694,55 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof editorEditorProfileIndexRouteImport
       parentRoute: typeof editorEditorRouteRoute
     }
+    '/(main)/main/connections/': {
+      id: '/(main)/main/connections/'
+      path: '/'
+      fullPath: '/main/connections/'
+      preLoaderRoute: typeof mainMainConnectionsIndexRouteImport
+      parentRoute: typeof mainMainConnectionsRouteRoute
+    }
+    '/(main)/main/dashboard/': {
+      id: '/(main)/main/dashboard/'
+      path: '/'
+      fullPath: '/main/dashboard/'
+      preLoaderRoute: typeof mainMainDashboardIndexRouteImport
+      parentRoute: typeof mainMainDashboardRouteRoute
+    }
+    '/(main)/main/logs/': {
+      id: '/(main)/main/logs/'
+      path: '/'
+      fullPath: '/main/logs/'
+      preLoaderRoute: typeof mainMainLogsIndexRouteImport
+      parentRoute: typeof mainMainLogsRouteRoute
+    }
+    '/(main)/main/profiles/': {
+      id: '/(main)/main/profiles/'
+      path: '/'
+      fullPath: '/main/profiles/'
+      preLoaderRoute: typeof mainMainProfilesIndexRouteImport
+      parentRoute: typeof mainMainProfilesRouteRoute
+    }
+    '/(main)/main/profiles/inspect': {
+      id: '/(main)/main/profiles/inspect'
+      path: '/inspect'
+      fullPath: '/main/profiles/inspect'
+      preLoaderRoute: typeof mainMainProfilesInspectRouteRouteImport
+      parentRoute: typeof mainMainProfilesRouteRoute
+    }
+    '/(main)/main/providers/': {
+      id: '/(main)/main/providers/'
+      path: '/'
+      fullPath: '/main/providers/'
+      preLoaderRoute: typeof mainMainProvidersIndexRouteImport
+      parentRoute: typeof mainMainProvidersRouteRoute
+    }
+    '/(main)/main/proxies/': {
+      id: '/(main)/main/proxies/'
+      path: '/'
+      fullPath: '/main/proxies/'
+      preLoaderRoute: typeof mainMainProxiesIndexRouteImport
+      parentRoute: typeof mainMainProxiesRouteRoute
+    }
     '/(main)/main/proxies/$name': {
       id: '/(main)/main/proxies/$name'
       path: '/$name'
@@ -757,46 +750,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProxiesNameRouteImport
       parentRoute: typeof mainMainProxiesRouteRoute
     }
-    '/(main)/main/settings/web-ui': {
-      id: '/(main)/main/settings/web-ui'
-      path: '/web-ui'
-      fullPath: '/main/settings/web-ui'
-      preLoaderRoute: typeof mainMainSettingsWebUiRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
+    '/(main)/main/rules/': {
+      id: '/(main)/main/rules/'
+      path: '/'
+      fullPath: '/main/rules/'
+      preLoaderRoute: typeof mainMainRulesIndexRouteImport
+      parentRoute: typeof mainMainRulesRouteRoute
     }
-    '/(main)/main/settings/user-interface': {
-      id: '/(main)/main/settings/user-interface'
-      path: '/user-interface'
-      fullPath: '/main/settings/user-interface'
-      preLoaderRoute: typeof mainMainSettingsUserInterfaceRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
-    }
-    '/(main)/main/settings/system': {
-      id: '/(main)/main/settings/system'
-      path: '/system'
-      fullPath: '/main/settings/system'
-      preLoaderRoute: typeof mainMainSettingsSystemRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
-    }
-    '/(main)/main/settings/nyanpasu': {
-      id: '/(main)/main/settings/nyanpasu'
-      path: '/nyanpasu'
-      fullPath: '/main/settings/nyanpasu'
-      preLoaderRoute: typeof mainMainSettingsNyanpasuRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
-    }
-    '/(main)/main/settings/debug': {
-      id: '/(main)/main/settings/debug'
-      path: '/debug'
-      fullPath: '/main/settings/debug'
-      preLoaderRoute: typeof mainMainSettingsDebugRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
-    }
-    '/(main)/main/settings/clash': {
-      id: '/(main)/main/settings/clash'
-      path: '/clash'
-      fullPath: '/main/settings/clash'
-      preLoaderRoute: typeof mainMainSettingsClashRouteRouteImport
+    '/(main)/main/settings/': {
+      id: '/(main)/main/settings/'
+      path: '/'
+      fullPath: '/main/settings/'
+      preLoaderRoute: typeof mainMainSettingsIndexRouteImport
       parentRoute: typeof mainMainSettingsRouteRoute
     }
     '/(main)/main/settings/about': {
@@ -806,12 +771,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainSettingsAboutRouteRouteImport
       parentRoute: typeof mainMainSettingsRouteRoute
     }
-    '/(main)/main/profiles/inspect': {
-      id: '/(main)/main/profiles/inspect'
-      path: '/inspect'
-      fullPath: '/main/profiles/inspect'
-      preLoaderRoute: typeof mainMainProfilesInspectRouteRouteImport
-      parentRoute: typeof mainMainProfilesRouteRoute
+    '/(main)/main/settings/clash': {
+      id: '/(main)/main/settings/clash'
+      path: '/clash'
+      fullPath: '/main/settings/clash'
+      preLoaderRoute: typeof mainMainSettingsClashRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
+    '/(main)/main/settings/debug': {
+      id: '/(main)/main/settings/debug'
+      path: '/debug'
+      fullPath: '/main/settings/debug'
+      preLoaderRoute: typeof mainMainSettingsDebugRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
+    '/(main)/main/settings/nyanpasu': {
+      id: '/(main)/main/settings/nyanpasu'
+      path: '/nyanpasu'
+      fullPath: '/main/settings/nyanpasu'
+      preLoaderRoute: typeof mainMainSettingsNyanpasuRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
+    '/(main)/main/settings/system': {
+      id: '/(main)/main/settings/system'
+      path: '/system'
+      fullPath: '/main/settings/system'
+      preLoaderRoute: typeof mainMainSettingsSystemRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
+    '/(main)/main/settings/user-interface': {
+      id: '/(main)/main/settings/user-interface'
+      path: '/user-interface'
+      fullPath: '/main/settings/user-interface'
+      preLoaderRoute: typeof mainMainSettingsUserInterfaceRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
+    '/(main)/main/settings/web-ui': {
+      id: '/(main)/main/settings/web-ui'
+      path: '/web-ui'
+      fullPath: '/main/settings/web-ui'
+      preLoaderRoute: typeof mainMainSettingsWebUiRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
     }
     '/(main)/main/profiles/$type/': {
       id: '/(main)/main/profiles/$type/'
@@ -820,18 +820,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProfilesTypeIndexRouteImport
       parentRoute: typeof mainMainProfilesRouteRoute
     }
-    '/(main)/main/providers/rules/$key': {
-      id: '/(main)/main/providers/rules/$key'
-      path: '/rules/$key'
-      fullPath: '/main/providers/rules/$key'
-      preLoaderRoute: typeof mainMainProvidersRulesKeyRouteImport
-      parentRoute: typeof mainMainProvidersRouteRoute
-    }
     '/(main)/main/providers/proxies/$key': {
       id: '/(main)/main/providers/proxies/$key'
       path: '/proxies/$key'
       fullPath: '/main/providers/proxies/$key'
       preLoaderRoute: typeof mainMainProvidersProxiesKeyRouteImport
+      parentRoute: typeof mainMainProvidersRouteRoute
+    }
+    '/(main)/main/providers/rules/$key': {
+      id: '/(main)/main/providers/rules/$key'
+      path: '/rules/$key'
+      fullPath: '/main/providers/rules/$key'
+      preLoaderRoute: typeof mainMainProvidersRulesKeyRouteImport
       parentRoute: typeof mainMainProvidersRouteRoute
     }
     '/(main)/main/profiles/$type/detail/$uid': {
