@@ -59,6 +59,8 @@ nanoid = "0.5.0"
 rand = "0.10"
 
 reqwest = { workspace = true }
+tokio-tungstenite = "0.30"
+urlencoding = "2.1"
 
 # Parallel/concurrent download engine. We disable the bundled reqwest adapter
 # (it targets reqwest 0.13 while this workspace pins 0.12) and implement our own
@@ -72,6 +74,7 @@ bolt-load = { version = "0.1", default-features = false, features = [
 smol-cancellation-token = "0.1"
 
 backon = { version = "1.0.1", features = ["tokio-sleep"] }                # for backoff retry
+ractor = "0.15"
 
 base64 = "0.22"
 hex = "0.4"
