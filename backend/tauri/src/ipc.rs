@@ -72,12 +72,14 @@ where
 pub struct ProfileMetadataPatch {
     pub name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[specta(type = Option<Option<String>>)]
     pub desc: Option<Option<String>>,
 }
 
 #[derive(specta::Type, serde::Deserialize)]
 pub struct RemoteProfileOptionsPatch {
     #[serde(default, deserialize_with = "deserialize_optional_field")]
+    #[specta(type = Option<Option<String>>)]
     pub user_agent: Option<Option<String>>,
     pub with_proxy: Option<bool>,
     pub self_proxy: Option<bool>,
