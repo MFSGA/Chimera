@@ -1,4 +1,4 @@
-import { commands, useSetting } from '@chimera/interface';
+import { commands, useClashProxies, useSetting } from '@chimera/interface';
 import { cn } from '@chimera/utils';
 import {
   Apps,
@@ -14,7 +14,7 @@ import {
 } from '@mui/icons-material';
 import { Link, useMatchRoute } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { ComponentProps, ReactNode } from 'react';
+import { ComponentProps, ReactNode, useMemo } from 'react';
 import AnimatedTabs, { AnimatedTabsItem } from '@/components/ui/animated-tabs';
 import { Button } from '@/components/ui/button';
 import {
@@ -30,11 +30,20 @@ import { message } from '@/utils/notification';
 
 const currentWindow = getCurrentWebviewWindow();
 
-function NavbarButton({ to, children }: { to: string; children: ReactNode }) {
+function NavbarButton({
+  to,
+  params,
+  children,
+}: {
+  to: string;
+  params?: Record<string, string>;
+  children: ReactNode;
+}) {
   const matchRoute = useMatchRoute();
 
   const isActive = !!matchRoute({
     to,
+    params,
     fuzzy: true,
   } as never);
 
@@ -46,7 +55,9 @@ function NavbarButton({ to, children }: { to: string; children: ReactNode }) {
       isActive={isActive}
       asChild
     >
-      <Link to={to as never}>{children}</Link>
+      <Link to={to as never} params={params as never}>
+        {children}
+      </Link>
     </AnimatedTabsItem>
   );
 }
@@ -78,6 +89,14 @@ const MoblieNavbarContainer = ({
 };
 
 export const DefaultNavbar = () => {
+  const {
+    proxies: { data: proxies },
+  } = useClashProxies();
+
+  const fristGroup = useMemo(() => {
+    return proxies?.groups[0]?.name;
+  }, [proxies]);
+
   return (
     <AnimatedTabs
       className={cn(
@@ -94,10 +113,17 @@ export const DefaultNavbar = () => {
         <NavbarLabel>{m.navbar_label_dashboard()}</NavbarLabel>
       </NavbarButton>
 
-      <NavbarButton to="/main/proxies">
-        <Public />
-        <NavbarLabel>{m.navbar_label_proxies()}</NavbarLabel>
-      </NavbarButton>
+      {fristGroup ? (
+        <NavbarButton to="/main/proxies/$name" params={{ name: fristGroup }}>
+          <Public />
+          <NavbarLabel>{m.navbar_label_proxies()}</NavbarLabel>
+        </NavbarButton>
+      ) : (
+        <NavbarButton to="/main/proxies">
+          <Public />
+          <NavbarLabel>{m.navbar_label_proxies()}</NavbarLabel>
+        </NavbarButton>
+      )}
 
       <NavbarButton to="/main/profiles">
         <GridViewRounded />
