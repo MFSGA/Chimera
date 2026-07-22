@@ -7,6 +7,7 @@ pub mod api;
 pub mod core;
 /// 3
 pub mod proxies;
+pub mod ws;
 
 pub static CLASH_API_DEFAULT_BACKOFF_STRATEGY: Lazy<ExponentialBuilder> = Lazy::new(|| {
     ExponentialBuilder::default()
