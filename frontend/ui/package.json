@@ -27,7 +27,7 @@
     "@radix-ui/react-portal": "1.1.13",
     "ahooks": "3.9.7",
     "@radix-ui/react-scroll-area": "1.2.14",
-    "tailwindcss": "4.3.2",
+    "tailwindcss": "4.3.3",
     "@material/material-color-utilities": "0.4.0",
     "@mui/icons-material": "9.2.0",
     "@tauri-apps/api": "2.11.1",
