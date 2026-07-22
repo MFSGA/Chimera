@@ -62,9 +62,7 @@ function Viewer({
   const { level } = LogsRoute.useSearch();
 
   // 从 WebSocket 获取实时日志
-  const {
-    query: { data: logs },
-  } = useClashLogs();
+  const { data: logs } = useClashLogs();
 
   /**
    * 过滤日志：
@@ -218,10 +216,7 @@ function RouteComponent() {
   const [search, setSearch] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const {
-    query: { data: logs },
-    clean,
-  } = useClashLogs();
+  const { data: logs, clean } = useClashLogs();
 
   const handleClearLogs = useLockFn(async () => {
     await clean.mutateAsync();
