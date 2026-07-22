@@ -3,6 +3,8 @@ packages:
   - 'scripts'
 overrides:
   material-react-table: npm:@greenhat616/material-react-table@4.0.0
+#patchedDependencies:
+#  monaco-worker-manager@2.0.1: patches/monaco-worker-manager@2.0.1.patch
 allowBuilds:
   '@parcel/watcher': true
   '@tailwindcss/oxide': true
@@ -20,3 +22,5 @@ minimumReleaseAgeExclude:
   - '@tanstack/router-plugin@1.168.20'
   - meta-json-schema@1.19.28
   - postcss@8.5.19
+  - '@prettier/plugin-oxc@0.2.2'
+  - prettier@3.9.6
