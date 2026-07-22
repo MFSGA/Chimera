@@ -1,4 +1,9 @@
-import { useSetting } from '@chimera/interface';
+import {
+  commands,
+  unwrapResult,
+  useIsAppImage,
+  useSetting,
+} from '@chimera/interface';
 import { Update } from '@tauri-apps/plugin-updater';
 import {
   createContext,
@@ -8,7 +13,6 @@ import {
   useState,
 } from 'react';
 import packageJson from '@root/package.json';
-import { checkUpdate, useUpdaterPlatformSupported } from '@/hooks/use-updater';
 import { useBlockTask } from './block-task-provider';
 
 const ChimeraUpdateContext = createContext<{
@@ -36,27 +40,37 @@ export default function ChimeraUpdateProvider({ children }: PropsWithChildren) {
   const { value: enableAutoCheckUpdate } = useSetting(
     'enable_auto_check_update',
   );
-  const isSupported = useUpdaterPlatformSupported();
+  const { data: isAppImage } = useIsAppImage();
+  const isSupported = !isAppImage || !WIN_PORTABLE;
   const [hasNewVersion, setHasNewVersion] = useState(false);
   const [newVersion, setNewVersion] = useState<Update | null>(null);
 
   const blockTask = useBlockTask('check-chimera-update', async () => {
-    const update = await checkUpdate();
+    const metadata = unwrapResult(await commands.checkUpdate());
 
-    if (update) {
+    if (metadata) {
+      const update = new Update({
+        rid: metadata.rid,
+        currentVersion: metadata.current_version,
+        version: metadata.version,
+        rawJson: metadata.raw_json as Record<string, unknown>,
+      });
+
       setNewVersion(update);
       setHasNewVersion(true);
+
+      return update;
     }
 
-    return update;
+    return null;
   });
 
   useEffect(() => {
-    if (enableAutoCheckUpdate && isSupported) {
-      void blockTask.execute().catch(console.error);
+    if (enableAutoCheckUpdate) {
+      blockTask.execute();
     }
     // oxlint-disable-next-line eslint-plugin-react-hooks/exhaustive-deps
-  }, [enableAutoCheckUpdate, isSupported, blockTask.execute]);
+  }, [enableAutoCheckUpdate, blockTask.execute]);
 
   return (
     <ChimeraUpdateContext.Provider
