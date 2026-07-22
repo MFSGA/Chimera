@@ -306,13 +306,13 @@ const WidgetRender = () => {
   return (
     <DndGridRoot>
       <div
-        className="flex min-h-0 flex-1 flex-col"
+        className="flex min-h-0 flex-1 flex-col p-4"
         data-slot="dashboard-widget-container"
       >
         {/* DnD Widget 网格 */}
         <DndGrid
           gridId="main"
-          className="min-h-0 flex-1 px-4"
+          className="min-h-0 flex-1"
           items={displayItems}
           onLayoutChange={(newItems) =>
             handleLayoutChange(normalizeItems(newItems))
