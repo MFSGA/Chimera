@@ -24,10 +24,10 @@
     "react-error-boundary": "6.1.2",
     "motion": "12.42.2",
     "@mui/material": "9.2.0",
-    "@radix-ui/react-portal": "1.1.13",
+    "@radix-ui/react-portal": "1.1.14",
     "ahooks": "3.9.7",
-    "@radix-ui/react-scroll-area": "1.2.14",
-    "tailwindcss": "4.3.2",
+    "@radix-ui/react-scroll-area": "1.2.15",
+    "tailwindcss": "4.3.3",
     "@material/material-color-utilities": "0.4.0",
     "@mui/icons-material": "9.2.0",
     "@tauri-apps/api": "2.11.1",
@@ -39,6 +39,6 @@
     "clsx": "2.1.1",
     "@emotion/react": "11.14.0",
     "@types/d3": "7.4.3",
-    "vite": "8.1.0"
+    "vite": "8.1.5"
   }
 }
