@@ -1,19 +1,68 @@
 use std::{
     collections::VecDeque,
+    ops::Deref,
     sync::{Arc, atomic::Ordering},
 };
 
+use anyhow::Context;
 use atomic_enum::atomic_enum;
+use futures_util::StreamExt;
 use parking_lot::Mutex;
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
+use tokio::{sync::mpsc::Receiver, task::JoinHandle};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
+};
 
 const MAX_CONNECTIONS_HISTORY: usize = 32;
 const MAX_MEMORY_HISTORY: usize = 32;
 const MAX_TRAFFIC_HISTORY: usize = 32;
 const MAX_LOGS_HISTORY: usize = 1024;
 const MAX_REASONABLE_MEMORY_BYTES: u64 = 16 * 1024_u64.pow(4);
+
+#[tracing::instrument]
+async fn connect_clash_server<T: serde::de::DeserializeOwned + Send + Sync + 'static>(
+    endpoint: Request,
+) -> anyhow::Result<Receiver<T>> {
+    let (stream, _) = connect_async(endpoint).await?;
+    let (_, mut read) = stream.split();
+    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    tokio::spawn(async move {
+        while let Some(msg) = read.next().await {
+            match msg {
+                Ok(Message::Text(text)) => match serde_json::from_str(&text) {
+                    Ok(data) => {
+                        let _ = tx.send(data).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to deserialize json: {}", e);
+                    }
+                },
+                Ok(Message::Binary(bin)) => match serde_json::from_slice(&bin) {
+                    Ok(data) => {
+                        let _ = tx.send(data).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("failed to deserialize json: {}", e);
+                    }
+                },
+                Ok(Message::Close(_)) => {
+                    tracing::info!("server closed connection");
+                    break;
+                }
+                Err(e) => {
+                    tracing::error!("failed to read message: {}", e);
+                }
+                _ => {}
+            }
+        }
+    });
+    Ok(rx)
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -412,6 +461,368 @@ impl ClashConnectionsConnectorShared {
     }
 }
 
+struct ClashConnectionsActorState {
+    shared: Arc<ClashConnectionsConnectorShared>,
+    connections_handler: Option<JoinHandle<()>>,
+    logs_handler: Option<JoinHandle<()>>,
+    traffic_handler: Option<JoinHandle<()>>,
+    memory_handler: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum ClashConnectionsActorMessage {
+    Start(RpcReplyPort<anyhow::Result<()>>),
+    Stop(RpcReplyPort<()>),
+    Restart(RpcReplyPort<anyhow::Result<()>>),
+    Reconnect(ClashWsKind),
+    StreamClosed(ClashWsKind),
+    Update(ClashWsKind, serde_json::Value),
+}
+
+struct ClashConnectionsActor;
+
+impl ClashConnectionsActor {
+    fn handler_mut(
+        state: &mut ClashConnectionsActorState,
+        kind: ClashWsKind,
+    ) -> &mut Option<JoinHandle<()>> {
+        match kind {
+            ClashWsKind::Connections => &mut state.connections_handler,
+            ClashWsKind::Logs => &mut state.logs_handler,
+            ClashWsKind::Traffic => &mut state.traffic_handler,
+            ClashWsKind::Memory => &mut state.memory_handler,
+        }
+    }
+
+    async fn stop_stream(state: &mut ClashConnectionsActorState, kind: ClashWsKind) {
+        if let Some(handle) = Self::handler_mut(state, kind).take() {
+            handle.abort();
+            let _ = handle.await;
+        }
+
+        if kind == ClashWsKind::Connections {
+            state
+                .shared
+                .dispatch_state_changed(ClashConnectionsConnectorState::Disconnected);
+        }
+    }
+
+    async fn stop_all(state: &mut ClashConnectionsActorState) {
+        log::info!("stopping clash websocket streams");
+        for kind in [
+            ClashWsKind::Connections,
+            ClashWsKind::Logs,
+            ClashWsKind::Traffic,
+            ClashWsKind::Memory,
+        ] {
+            Self::stop_stream(state, kind).await;
+        }
+    }
+
+    async fn start_stream(
+        myself: ActorRef<ClashConnectionsActorMessage>,
+        state: &mut ClashConnectionsActorState,
+        kind: ClashWsKind,
+    ) -> anyhow::Result<()> {
+        if Self::handler_mut(state, kind).is_some() {
+            Self::stop_stream(state, kind).await;
+        }
+
+        if kind == ClashWsKind::Connections {
+            state
+                .shared
+                .dispatch_state_changed(ClashConnectionsConnectorState::Connecting);
+        }
+
+        let endpoint = ClashConnectionsConnector::endpoint(kind.path())
+            .with_context(|| format!("failed to create {} endpoint", kind.path()))?;
+        log::debug!(
+            "connecting to clash {} ws server: {endpoint:?}",
+            kind.path()
+        );
+        let mut rx = connect_clash_server::<serde_json::Value>(endpoint).await?;
+
+        if kind == ClashWsKind::Connections {
+            state
+                .shared
+                .dispatch_state_changed(ClashConnectionsConnectorState::Connected);
+        }
+
+        let handle = tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Some(msg) => {
+                        if let Err(err) =
+                            myself.cast(ClashConnectionsActorMessage::Update(kind, msg))
+                        {
+                            tracing::error!("failed to forward clash ws update: {err}");
+                            break;
+                        }
+                    }
+                    None => {
+                        tracing::info!("clash {} ws server closed", kind.path());
+                        let _ = myself.cast(ClashConnectionsActorMessage::StreamClosed(kind));
+                        break;
+                    }
+                }
+            }
+        });
+        *Self::handler_mut(state, kind) = Some(handle);
+        Ok(())
+    }
+
+    async fn start_all(
+        myself: ActorRef<ClashConnectionsActorMessage>,
+        state: &mut ClashConnectionsActorState,
+    ) -> anyhow::Result<()> {
+        let mut first_error = None;
+        for kind in [
+            ClashWsKind::Connections,
+            ClashWsKind::Logs,
+            ClashWsKind::Traffic,
+            ClashWsKind::Memory,
+        ] {
+            if let Err(err) = Self::start_stream(myself.clone(), state, kind).await {
+                tracing::error!("failed to start clash {} ws: {err:#}", kind.path());
+                if kind == ClashWsKind::Connections {
+                    state
+                        .shared
+                        .dispatch_state_changed(ClashConnectionsConnectorState::Disconnected);
+                }
+                first_error.get_or_insert(err);
+            }
+        }
+
+        if state.connections_handler.is_none()
+            && state.logs_handler.is_none()
+            && state.traffic_handler.is_none()
+            && state.memory_handler.is_none()
+            && let Some(err) = first_error
+        {
+            return Err(err);
+        }
+
+        Ok(())
+    }
+}
+
+impl Actor for ClashConnectionsActor {
+    type Msg = ClashConnectionsActorMessage;
+    type State = ClashConnectionsActorState;
+    type Arguments = Arc<ClashConnectionsConnectorShared>;
+
+    async fn pre_start(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        shared: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Ok(ClashConnectionsActorState {
+            shared,
+            connections_handler: None,
+            logs_handler: None,
+            traffic_handler: None,
+            memory_handler: None,
+        })
+    }
+
+    async fn handle(
+        &self,
+        myself: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        match message {
+            ClashConnectionsActorMessage::Start(reply) => {
+                let result = Self::start_all(myself, state).await;
+                let _ = reply.send(result);
+            }
+            ClashConnectionsActorMessage::Stop(reply) => {
+                Self::stop_all(state).await;
+                let _ = reply.send(());
+            }
+            ClashConnectionsActorMessage::Restart(reply) => {
+                Self::stop_all(state).await;
+                let result = Self::start_all(myself, state).await;
+                let _ = reply.send(result);
+            }
+            ClashConnectionsActorMessage::StreamClosed(kind) => {
+                Self::handler_mut(state, kind).take();
+                if kind == ClashWsKind::Connections {
+                    state
+                        .shared
+                        .dispatch_state_changed(ClashConnectionsConnectorState::Disconnected);
+                }
+                let _ = myself.cast(ClashConnectionsActorMessage::Reconnect(kind));
+            }
+            ClashConnectionsActorMessage::Reconnect(kind) => {
+                if let Err(err) = Self::start_stream(myself.clone(), state, kind).await {
+                    tracing::error!("failed to restart clash {} ws: {err:#}", kind.path());
+                    if kind == ClashWsKind::Connections {
+                        state
+                            .shared
+                            .dispatch_state_changed(ClashConnectionsConnectorState::Disconnected);
+                    }
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        let _ = myself.cast(ClashConnectionsActorMessage::Reconnect(kind));
+                    });
+                }
+            }
+            ClashConnectionsActorMessage::Update(kind, msg) => {
+                state.shared.update(kind, msg);
+            }
+        }
+        Ok(())
+    }
+
+    async fn post_stop(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        Self::stop_all(state).await;
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct ClashConnectionsConnector {
+    inner: Arc<ClashConnectionsConnectorInner>,
+}
+
+impl Deref for ClashConnectionsConnector {
+    type Target = ClashConnectionsConnectorInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl ClashConnectionsConnector {
+    pub fn new() -> Self {
+        let shared = Arc::new(ClashConnectionsConnectorShared::new());
+        let actor_ref = tauri::async_runtime::block_on(async {
+            Actor::spawn(
+                Some("clash-ws-connector".to_string()),
+                ClashConnectionsActor,
+                shared.clone(),
+            )
+            .await
+            .context("failed to spawn clash websocket actor")
+        })
+        .expect("failed to spawn clash websocket actor")
+        .0;
+
+        Self {
+            inner: Arc::new(ClashConnectionsConnectorInner { shared, actor_ref }),
+        }
+    }
+
+    pub fn endpoint(path: &str) -> anyhow::Result<Request> {
+        let (server, secret) = {
+            let info = crate::Config::clash().data().get_client_info();
+            (info.server, info.secret)
+        };
+        let token = urlencoding::encode(secret.as_deref().unwrap_or_default());
+        let url = format!("ws://{server}/{path}?token={token}");
+        let mut request = url
+            .into_client_request()
+            .context("failed to create client request")?;
+        if let Some(secret) = secret {
+            request.headers_mut().insert(
+                "Authorization",
+                format!("Bearer {secret}")
+                    .parse()
+                    .context("failed to create header value")?,
+            );
+        }
+        Ok(request)
+    }
+
+    pub async fn start(&self) -> anyhow::Result<()> {
+        match self
+            .actor_ref
+            .call(
+                ClashConnectionsActorMessage::Start,
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .context("failed to call clash websocket start actor")?
+        {
+            CallResult::Success(result) => result,
+            CallResult::SenderError => {
+                Err(anyhow::anyhow!("clash websocket start actor reply dropped"))
+            }
+            CallResult::Timeout => Err(anyhow::anyhow!("clash websocket start actor timed out")),
+        }
+    }
+
+    pub async fn restart(&self) -> anyhow::Result<()> {
+        match self
+            .actor_ref
+            .call(
+                ClashConnectionsActorMessage::Restart,
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .context("failed to call clash websocket restart actor")?
+        {
+            CallResult::Success(result) => result,
+            CallResult::SenderError => Err(anyhow::anyhow!(
+                "clash websocket restart actor reply dropped"
+            )),
+            CallResult::Timeout => Err(anyhow::anyhow!("clash websocket restart actor timed out")),
+        }
+    }
+}
+
+pub struct ClashConnectionsConnectorInner {
+    shared: Arc<ClashConnectionsConnectorShared>,
+    actor_ref: ActorRef<ClashConnectionsActorMessage>,
+}
+
+impl ClashConnectionsConnectorInner {
+    pub fn state(&self) -> ClashConnectionsConnectorState {
+        self.shared.state()
+    }
+
+    pub fn snapshot(&self) -> ClashWsSnapshot {
+        self.shared.snapshot()
+    }
+
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<ClashConnectionsConnectorEvent> {
+        self.shared.subscribe()
+    }
+
+    pub fn subscribe_ws(&self) -> tokio::sync::broadcast::Receiver<ClashWsEvent> {
+        self.shared.subscribe_ws()
+    }
+
+    pub fn set_recording(&self, kind: ClashWsKind, enabled: bool) -> ClashWsRecording {
+        self.shared.set_recording(kind, enabled)
+    }
+
+    pub fn clear_history(&self, kind: ClashWsKind) {
+        self.shared.clear_history(kind);
+    }
+
+    pub async fn stop(&self) {
+        let _ = self
+            .actor_ref
+            .call(
+                ClashConnectionsActorMessage::Stop,
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await;
+    }
+}
+
+impl Drop for ClashConnectionsConnectorInner {
+    fn drop(&mut self) {
+        self.actor_ref.stop(None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +881,27 @@ mod tests {
             ClashWsEvent::ConnectionsUpdated(_)
         ));
         assert_eq!(shared.snapshot().connections.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn actor_stop_sets_disconnected() {
+        let shared = Arc::new(ClashConnectionsConnectorShared::new());
+        shared.dispatch_state_changed(ClashConnectionsConnectorState::Connected);
+        let (actor_ref, handle) = Actor::spawn(None, ClashConnectionsActor, shared.clone())
+            .await
+            .expect("actor should start");
+
+        actor_ref
+            .call(
+                ClashConnectionsActorMessage::Stop,
+                Some(std::time::Duration::from_secs(1)),
+            )
+            .await
+            .expect("stop call should complete");
+
+        assert_eq!(shared.state(), ClashConnectionsConnectorState::Disconnected);
+
+        actor_ref.stop(None);
+        handle.await.expect("actor should stop cleanly");
     }
 }
