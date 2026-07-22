@@ -29,7 +29,7 @@ import {
   useClashTraffic,
   type ClashConnection,
 } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded';
