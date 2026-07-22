@@ -23,7 +23,7 @@ import {
   useSystemService,
   type CoreState,
 } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { Link } from '@tanstack/react-router';
 import NetworkPing from '~icons/material-symbols/network-ping';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
