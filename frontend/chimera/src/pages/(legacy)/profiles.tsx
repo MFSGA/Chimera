@@ -141,11 +141,22 @@ function ProfilePage() {
       const updates: Array<Promise<void | null | undefined>> = [];
 
       for (const profile of remoteProfiles) {
-        const option = {
-          ...profile.option,
+        const profileOption = profile.option;
+        const option: RemoteProfileOptionsBuilder = {
+          user_agent:
+            profileOption && 'user_agent' in profileOption
+              ? (profileOption.user_agent ?? null)
+              : null,
+          with_proxy:
+            profileOption && 'with_proxy' in profileOption
+              ? (profileOption.with_proxy ?? null)
+              : null,
+          self_proxy:
+            profileOption && 'self_proxy' in profileOption
+              ? (profileOption.self_proxy ?? null)
+              : null,
           update_interval_minutes: 0,
-          user_agent: profile.option?.user_agent ?? null,
-        } satisfies RemoteProfileOptionsBuilder;
+        };
 
         const result = await update.mutateAsync({
           uid: profile.uid,
