@@ -27,7 +27,7 @@
     "npm:picocolors@1.1.1": "1.1.1",
     "npm:semver@*": "7.8.1",
     "npm:tar@7.5.20": "7.5.20",
-    "npm:undici@8.7.0": "8.7.0",
+    "npm:undici@8.8.0": "8.8.0",
     "npm:yargs@18.0.0": "18.0.0",
     "npm:zod@*": "4.4.3"
   },
@@ -566,8 +566,8 @@
     "undici@6.27.0": {
       "integrity": "sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg=="
     },
-    "undici@8.7.0": {
-      "integrity": "sha512-N7iQtfyLhIMOFgQubvmLV26svHpO0bqKnAiWotTQCVKCmWrcGbBotPuW1x+xwYZ2VHdSTVUfPQQnlEt1/LouTQ=="
+    "undici@8.8.0": {
+      "integrity": "sha512-ubshXMXwF3MQIMF1y/WxZdNBnjEKeSg2wF5mcGUtU55YTw34tnVVpKRlLf7ruDXZ5344KokPVX4RBx1wJm64Bw=="
     },
     "unicorn-magic@0.4.0": {
       "integrity": "sha512-wH590V9VNgYH9g3lH9wWjTrUoKsjLF6sGLjhR4sH1LWpLmCOH0Zf7PukhDA8BiS7KHe4oPNkcTHqYkj7SOGUOw=="
@@ -628,7 +628,7 @@
         "npm:octokit@5.0.5",
         "npm:picocolors@1.1.1",
         "npm:tar@7.5.20",
-        "npm:undici@8.7.0",
+        "npm:undici@8.8.0",
         "npm:yargs@18.0.0"
       ]
     }
