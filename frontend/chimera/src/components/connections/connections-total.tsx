@@ -7,9 +7,7 @@ import { filesize } from 'filesize';
 import { useEffect, useRef, useState } from 'react';
 
 export default function ConnectionsTotal() {
-  const {
-    query: { data: clashConnections, isLoading },
-  } = useClashConnections();
+  const { data: clashConnections, isLoading } = useClashConnections();
 
   const latestClashConnections = clashConnections?.at(-1);
   const [downloadHighlight, setDownloadHighlight] = useState(false);

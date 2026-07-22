@@ -5,6 +5,8 @@ import { CLASH_CONNECTIONS_QUERY_KEY } from './consts';
 export type ClashConnection = {
   downloadTotal: number;
   uploadTotal: number;
+  downloadSpeed: number;
+  uploadSpeed: number;
   memory?: number;
   connections?: ClashConnectionItem[];
 };
@@ -110,7 +112,7 @@ export const useClashConnections = () => {
   });
 
   return {
-    query,
+    ...query,
     deleteConnections,
   };
 };

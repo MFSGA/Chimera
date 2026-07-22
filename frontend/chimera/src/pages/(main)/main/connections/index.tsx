@@ -144,9 +144,7 @@ function Viewer({ search }: { search: string }) {
   );
 
   // WebSocket 连接数据
-  const {
-    query: { data: clashConnections },
-  } = useClashConnections();
+  const { data: clashConnections } = useClashConnections();
 
   // 获取 ScrollArea 的 viewportRef（与 AnimatedOutletPreset 配合）
   const { viewportRef } = useScrollArea();
