@@ -4,6 +4,11 @@
 export const CHIMERA_BACKEND_EVENT_NAME = 'nyanpasu://mutation';
 
 /**
+ * Is appimage query key, used by useIsAppImage hook
+ */
+export const IS_APPIMAGE_QUERY_KEY = 'is-appimage';
+
+/**
  * Chimera profile query key, used to fetch profiles from query
  */
 export const RROFILES_QUERY_KEY = 'profiles';
