@@ -1,5 +1,5 @@
 import { commands, useSetting } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import {
   Apps,
   DashboardRounded,
