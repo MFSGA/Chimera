@@ -10,7 +10,7 @@
  * 点击后通过 onCloseClick 回调通知父组件删除该 widget。
  */
 
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';

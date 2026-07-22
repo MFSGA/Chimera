@@ -14,7 +14,7 @@
  * - 拖拽开始时自动关闭抽屉（通过 onSourceDragStart）
  */
 
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { useMemo, useState } from 'react';
 import { Drawer } from 'vaul';

@@ -10,7 +10,7 @@
  * 使用 motion 的 AnimatePresence 实现进出场动画。
  */
 
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import { AnimatePresence, motion } from 'motion/react';
