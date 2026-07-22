@@ -121,6 +121,11 @@ export default defineConfig(async ({ command, mode }) => {
       emptyOutDir: true,
       sourcemap: isDev || IS_NIGHTLY ? 'inline' : false,
     },
+    define: {
+      OS_PLATFORM: `"${process.platform}"`,
+      WIN_PORTABLE: !!process.env.VITE_WIN_PORTABLE,
+      IS_NIGHTLY,
+    },
   } satisfies UserConfig;
   return config;
 });
