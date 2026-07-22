@@ -1,8 +1,8 @@
+import { useIsAppImage } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import SettingSystemBehavior from '@/components/setting/setting-system-behavior';
 import SettingSystemProxy from '@/components/setting/setting-system-proxy';
 import SettingSystemService from '@/components/setting/setting-system-service';
-import { useIsAppImage } from '@/hooks/use-consts';
 import * as m from '@/paraglide/messages';
 import { SettingsTitle } from '../_modules/settings-title';
 
