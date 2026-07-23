@@ -264,6 +264,20 @@ export const commands = {
     typedError<null, string>(__TAURI_INVOKE('create_main_window')),
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
+  agentGetNetworkSnapshot: () =>
+    __TAURI_INVOKE<AgentNetworkSnapshot>('agent_get_network_snapshot'),
+  agentProposeNetworkAction: (action: AgentActionRequest) =>
+    typedError<AgentProposal, string>(
+      __TAURI_INVOKE('agent_propose_network_action', { action }),
+    ),
+  agentExecuteNetworkAction: (proposalId: string, digest: string) =>
+    typedError<AgentActionResult, string>(
+      __TAURI_INVOKE('agent_execute_network_action', { proposalId, digest }),
+    ),
+  agentCancelNetworkAction: (proposalId: string) =>
+    typedError<boolean, string>(
+      __TAURI_INVOKE('agent_cancel_network_action', { proposalId }),
+    ),
 };
 
 /** Events */
@@ -278,6 +292,172 @@ export const events = {
 };
 
 /* Types */
+export type AgentActionKind = 'set_routing_mode' | 'disable_stale_system_proxy';
+
+export type AgentActionRequest =
+  | { action: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { action: 'disable_stale_system_proxy' };
+
+export type AgentActionResult = {
+  proposal_id: string;
+  action: AgentActionKind;
+  verified: boolean;
+  snapshot: AgentNetworkSnapshot;
+};
+
+export type AgentActionRisk = 'traffic_change' | 'host_network_change';
+
+export type AgentAppliedState = 'consistent' | 'stale' | 'unknown';
+
+export type AgentConnectorState =
+  'disconnected' | 'connecting' | 'connected' | 'unknown';
+
+export type AgentCoreSnapshot = {
+  state: AgentCoreState;
+  run_type: AgentRunType;
+  selected_core: string;
+  state_changed_at: number;
+  runtime_config_present: boolean;
+  routing_mode: AgentRoutingMode | null;
+  observed_routing_mode: AgentRoutingMode | null;
+  applied_consistency: AgentAppliedState;
+};
+
+export type AgentCoreState = 'running' | 'stopped' | 'unknown';
+
+export type AgentFinding = {
+  code: AgentFindingCode;
+  severity: AgentFindingSeverity;
+};
+
+export type AgentFindingCode =
+  | 'weak_controller_secret'
+  | 'system_proxy_without_running_core'
+  | 'system_proxy_endpoint_mismatch'
+  | 'runtime_config_missing'
+  | 'active_profile_missing'
+  | 'service_mode_inconsistent'
+  | 'clash_connector_disconnected'
+  | 'tun_runtime_mismatch'
+  | 'recent_core_errors';
+
+export type AgentFindingSeverity = 'info' | 'warning' | 'critical';
+
+export type AgentHealth = 'healthy' | 'warning' | 'critical' | 'degraded';
+
+export type AgentHostScope = 'loopback' | 'non_loopback' | 'unknown';
+
+export type AgentImpact =
+  | 'existing_connections_may_change'
+  | 'traffic_may_bypass_proxy'
+  | 'all_traffic_uses_proxy'
+  | 'restore_rule_routing'
+  | 'host_system_proxy_disabled';
+
+export type AgentNetworkSnapshot = {
+  schema_version: number;
+  revision: string;
+  captured_at: number;
+  app_version: string;
+  os_family: string;
+  health: AgentHealth;
+  core: AgentCoreSnapshot;
+  service: AgentServiceSnapshot;
+  system_proxy: AgentSystemProxySnapshot;
+  tun: AgentTunSnapshot;
+  profiles: AgentProfileSnapshot;
+  telemetry: AgentTelemetrySnapshot;
+  findings: AgentFinding[];
+  probe_failures: AgentProbeFailure[];
+  privacy: AgentPrivacyBoundary;
+};
+
+export type AgentPrivacyBoundary = {
+  contains_raw_logs: boolean;
+  contains_profile_names: boolean;
+  contains_profile_urls: boolean;
+  contains_connection_targets: boolean;
+  contains_controller_secret: boolean;
+};
+
+export type AgentProbeCode =
+  | 'core_config_unavailable'
+  | 'system_proxy_unavailable'
+  | 'service_status_unavailable'
+  | 'service_status_timeout'
+  | 'telemetry_unavailable';
+
+export type AgentProbeFailure = {
+  code: AgentProbeCode;
+};
+
+export type AgentProfileSnapshot = {
+  total_count: number;
+  active_count: number;
+  remote_count: number;
+  local_count: number;
+  active_references_valid: boolean;
+};
+
+export type AgentProposal = {
+  id: string;
+  digest: string;
+  action: AgentActionRequest;
+  risk: AgentActionRisk;
+  impacts: AgentImpact[];
+  changes: AgentStateChange[];
+  snapshot_revision: string;
+  created_at: number;
+  expires_at: number;
+  requires_confirmation: boolean;
+};
+
+export type AgentRoutingMode = 'rule' | 'global' | 'direct';
+
+export type AgentRunType = 'normal' | 'service' | 'elevated' | 'unknown';
+
+export type AgentServiceSnapshot = {
+  desired_enabled: boolean;
+  state: AgentServiceState;
+  ipc_connected: boolean;
+  runtime_compatible: boolean | null;
+};
+
+export type AgentServiceState =
+  'not_installed' | 'stopped' | 'running' | 'unknown';
+
+export type AgentStateChange = {
+  field: string;
+  before: string;
+  after: string;
+};
+
+export type AgentSystemProxySnapshot = {
+  desired_enabled: boolean;
+  observed_enabled: boolean | null;
+  observed_host_scope: AgentHostScope;
+  observed_port: number | null;
+  expected_mixed_port: number;
+  matches_expected_endpoint: boolean | null;
+};
+
+export type AgentTelemetrySnapshot = {
+  state: AgentConnectorState;
+  active_connection_count: number | null;
+  upload_speed: number | null;
+  download_speed: number | null;
+  upload_total: string | null;
+  download_total: string | null;
+  recent_error_count: number;
+};
+
+export type AgentTunSnapshot = {
+  desired_enabled: boolean;
+  generated_runtime_enabled: boolean | null;
+  observed_active: AgentAppliedState;
+  applied_consistency: AgentAppliedState;
+};
+
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
 export type BuildInfo = {
