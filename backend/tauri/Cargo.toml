@@ -223,7 +223,8 @@ windows-core = "0.61"
 nix = { version = "0.31", features = ["user"] }
 
 [features]
-default = ["default-meta"]
+default = ["default-meta", "agent"]
+agent = []
 nightly = []
 verge-dev = []
 default-meta = []
