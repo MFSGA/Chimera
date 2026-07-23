@@ -74,8 +74,11 @@ export function AgentPage() {
   };
 
   return (
-    <AppContentScrollArea>
-      <main className="container mx-auto flex w-full max-w-7xl flex-col gap-5 p-4 md:p-6">
+    <AppContentScrollArea
+      className="h-full overflow-hidden"
+      data-slot="agent-page-scroll-area"
+    >
+      <main className="container mx-auto flex min-h-full w-full max-w-7xl flex-col gap-5 p-4 md:p-6">
         <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="flex items-center gap-3">
@@ -196,7 +199,7 @@ function ContextPreview({
           <p className="text-on-surface-variant my-3 text-sm">
             {m.agent_context_description()}
           </p>
-          <pre className="bg-surface-variant/30 max-h-80 overflow-auto rounded-2xl p-3 text-xs break-all whitespace-pre-wrap">
+          <pre className="bg-surface-variant/30 overflow-x-auto rounded-2xl p-3 text-xs break-all whitespace-pre-wrap">
             {JSON.stringify(snapshot, null, 2)}
           </pre>
         </details>
