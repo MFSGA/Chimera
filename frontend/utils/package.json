@@ -1,6 +1,6 @@
 {
   "name": "@chimera/utils",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",

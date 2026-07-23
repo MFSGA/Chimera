@@ -1,3 +1,87 @@
+## [0.18.0] - 2026-07-23 10:20:47
+
+### ✨ Features
+
+- **agent:** Add network diagnostics backend by @MFSGA
+
+- **backend:** Mount ref clash websocket connector by @MFSGA
+
+- **backend:** Add ref clash websocket actor by @MFSGA
+
+- **backend:** Add ref clash websocket shared state by @MFSGA
+
+- **backend:** Add ref clash websocket models by @MFSGA
+
+- **frontend:** Align dashboard sparkline cards with ref by @MFSGA
+
+- **frontend:** Align dashboard drag overlay with ref by @MFSGA
+
+- **frontend:** Align dashboard context menu with ref by @MFSGA
+
+- **frontend:** Mount ref context menu provider by @MFSGA
+
+- **frontend:** Add ref context menu provider by @MFSGA
+
+- **frontend:** Add ref context menu primitives by @MFSGA
+
+- **frontend:** Align about version flow with ref by @MFSGA
+
+- **frontend:** Add ref animated logo behavior by @MFSGA
+
+- **frontend:** Show ref update action in header by @MFSGA
+
+- **frontend:** Add ref update action to about route by @MFSGA
+
+- **frontend:** Mount chimera update provider by @MFSGA
+
+- **frontend:** Add chimera update provider by @MFSGA
+
+- **frontend:** Align navbar target routes and labels by @MFSGA
+
+- **frontend:** Open first proxy group from navbar by @MFSGA
+
+- **frontend:** Align responsive navbar with ref by @MFSGA
+
+- **interface:** Expose network agent APIs by @MFSGA
+
+- **interface:** Align connection deletion with ref by @MFSGA
+
+- **interface:** Expose ref clash websocket commands by @MFSGA
+
+- **ui:** Add network assistant workspace by @MFSGA
+
+- **ui:** Add animated tabs component by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **dev:** Restore dev:diff startup by @MFSGA
+
+- **frontend:** Align dashboard save action with ref by @MFSGA
+
+- **frontend:** Align dashboard grid spacing with ref by @MFSGA
+
+- **frontend:** Normalize remote profile options by @MFSGA
+
+### 🔨 Refactor
+
+- **frontend:** Align dashboard utils imports with ref by @MFSGA
+
+- **frontend:** Align update provider with ref flow by @MFSGA
+
+- **frontend:** Align appimage hook with ref interface by @MFSGA
+
+- **frontend:** Align header action modules with ref by @MFSGA
+
+- **frontend:** Map ref utils to chimera utils by @MFSGA
+
+- **interface:** Use ref clash websocket context by @MFSGA
+
+- **interface:** Align clash connections hook with ref by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.17.2...v0.18.0
+
 ## [0.17.2] - 2026-07-16 11:15:41
 
 ### ✨ Features
