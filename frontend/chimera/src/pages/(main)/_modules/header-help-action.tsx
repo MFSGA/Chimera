@@ -69,6 +69,10 @@ export default function HeaderHelpAction({ children }: PropsWithChildren) {
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
 
       <DropdownMenuContent>
+        <DropdownMenuItem asChild>
+          <Link to={'/main/assistant' as never}>{m.agent_title()}</Link>
+        </DropdownMenuItem>
+
         <GitHubItem />
         <IssuesItem />
         <CollectLogItem />

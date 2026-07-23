@@ -22,6 +22,7 @@ import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
 import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
 import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
+import { Route as mainMainAssistantRouteRouteImport } from './pages/(main)/main/assistant/route'
 import { Route as mainMainConnectionsRouteRouteImport } from './pages/(main)/main/connections/route'
 import { Route as mainMainDashboardRouteRouteImport } from './pages/(main)/main/dashboard/route'
 import { Route as mainMainLogsRouteRouteImport } from './pages/(main)/main/logs/route'
@@ -114,6 +115,11 @@ const legacySettingsRoute = legacySettingsRouteImport.update({
 const mainMainIndexRoute = mainMainIndexRouteImport.update({
   id: '/main/',
   path: '/main/',
+  getParentRoute: () => mainRouteRoute,
+} as any)
+const mainMainAssistantRouteRoute = mainMainAssistantRouteRouteImport.update({
+  id: '/main/assistant',
+  path: '/main/assistant',
   getParentRoute: () => mainRouteRoute,
 } as any)
 const mainMainConnectionsRouteRoute =
@@ -293,6 +299,7 @@ export interface FileRoutesByFullPath {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main/connections': typeof mainMainConnectionsRouteRouteWithChildren
   '/main/dashboard': typeof mainMainDashboardRouteRouteWithChildren
   '/main/logs': typeof mainMainLogsRouteRouteWithChildren
@@ -336,6 +343,7 @@ export interface FileRoutesByTo {
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
   '/': typeof legacyIndexRoute
+  '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main': typeof mainMainIndexRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -374,6 +382,7 @@ export interface FileRoutesById {
   '/(legacy)/rules': typeof legacyRulesRoute
   '/(legacy)/settings': typeof legacySettingsRoute
   '/(legacy)/': typeof legacyIndexRoute
+  '/(main)/main/assistant': typeof mainMainAssistantRouteRoute
   '/(main)/main/connections': typeof mainMainConnectionsRouteRouteWithChildren
   '/(main)/main/dashboard': typeof mainMainDashboardRouteRouteWithChildren
   '/(main)/main/logs': typeof mainMainLogsRouteRouteWithChildren
@@ -419,6 +428,7 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main/assistant'
     | '/main/connections'
     | '/main/dashboard'
     | '/main/logs'
@@ -462,6 +472,7 @@ export interface FileRouteTypes {
     | '/rules'
     | '/settings'
     | '/'
+    | '/main/assistant'
     | '/main'
     | '/main/profiles/inspect'
     | '/main/settings/about'
@@ -499,6 +510,7 @@ export interface FileRouteTypes {
     | '/(legacy)/rules'
     | '/(legacy)/settings'
     | '/(legacy)/'
+    | '/(main)/main/assistant'
     | '/(main)/main/connections'
     | '/(main)/main/dashboard'
     | '/(main)/main/logs'
@@ -629,6 +641,13 @@ declare module '@tanstack/react-router' {
       path: '/main'
       fullPath: '/main/'
       preLoaderRoute: typeof mainMainIndexRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
+    '/(main)/main/assistant': {
+      id: '/(main)/main/assistant'
+      path: '/main/assistant'
+      fullPath: '/main/assistant'
+      preLoaderRoute: typeof mainMainAssistantRouteRouteImport
       parentRoute: typeof mainRouteRoute
     }
     '/(main)/main/connections': {
@@ -1001,6 +1020,7 @@ const mainMainSettingsRouteRouteWithChildren =
   )
 
 interface mainRouteRouteChildren {
+  mainMainAssistantRouteRoute: typeof mainMainAssistantRouteRoute
   mainMainConnectionsRouteRoute: typeof mainMainConnectionsRouteRouteWithChildren
   mainMainDashboardRouteRoute: typeof mainMainDashboardRouteRouteWithChildren
   mainMainLogsRouteRoute: typeof mainMainLogsRouteRouteWithChildren
@@ -1013,6 +1033,7 @@ interface mainRouteRouteChildren {
 }
 
 const mainRouteRouteChildren: mainRouteRouteChildren = {
+  mainMainAssistantRouteRoute: mainMainAssistantRouteRoute,
   mainMainConnectionsRouteRoute: mainMainConnectionsRouteRouteWithChildren,
   mainMainDashboardRouteRoute: mainMainDashboardRouteRouteWithChildren,
   mainMainLogsRouteRoute: mainMainLogsRouteRouteWithChildren,
