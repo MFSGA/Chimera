@@ -7,3 +7,4 @@ export * from './service';
 export * from './template';
 
 export * from './hooks';
+export * from './features/agent';
