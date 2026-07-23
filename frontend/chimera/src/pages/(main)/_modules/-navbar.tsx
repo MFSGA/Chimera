@@ -10,6 +10,7 @@ import {
   Public,
   SettingsEthernetRounded,
   SettingsRounded,
+  SmartToyRounded,
   TerminalRounded,
 } from '@mui/icons-material';
 import { Link, useMatchRoute } from '@tanstack/react-router';
@@ -211,6 +212,12 @@ export const MobileNavbar = () => {
         </MoblieNavbarContainer>
 
         <DropdownMenuContent>
+          <DropdownMenuItem asChild>
+            <Link to={'/main/assistant' as never}>
+              <SmartToyRounded />
+              <span>{m.agent_title()}</span>
+            </Link>
+          </DropdownMenuItem>
           <DropdownMenuItem asChild>
             <Link
               to={'/main/profiles/$type' as never}
