@@ -399,6 +399,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomicwrites"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef1bb8d1b645fe38d51dfc331d720fb5fc2c94b440c76cc79c80ff265ca33e3"
+dependencies = [
+ "rustix 0.38.44",
+ "tempfile",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "auto-launch"
 version = "0.5.0"
 source = "git+https://github.com/libnyanpasu/auto-launch.git#bb38ad4b0b26e956a3de471ed1531b810e81072c"
@@ -994,6 +1005,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "atomic_enum",
+ "atomicwrites",
  "auto-launch",
  "axum",
  "backon",
