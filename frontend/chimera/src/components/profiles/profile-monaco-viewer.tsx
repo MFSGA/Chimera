@@ -129,7 +129,7 @@ export default function ProfileMonacoViewer({
 
   const onChange = useCallback(
     (value: string | undefined) => {
-      if (value && others.onChange) {
+      if (value !== undefined && others.onChange) {
         others.onChange(value);
       }
     },
