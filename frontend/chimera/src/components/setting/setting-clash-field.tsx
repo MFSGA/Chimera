@@ -87,7 +87,7 @@ const ClashFieldSwitch = () => {
 };
 
 export const SettingClashField = () => {
-  const { query, upsert } = useProfile();
+  const { query, setValidFields } = useProfile();
 
   const mergeFields = useMemo(
     () => [
@@ -119,7 +119,7 @@ export const SettingClashField = () => {
       ? valid.filter((item) => item !== key)
       : [...valid, key];
 
-    await upsert.mutateAsync({ valid: nextFields });
+    await setValidFields.mutateAsync(nextFields);
   };
 
   return (

@@ -11,7 +11,7 @@ export const commands = {
   getSysProxy: () =>
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
-    typedError<Profiles_Serialize, string>(__TAURI_INVOKE('get_profiles')),
+    typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,
@@ -27,11 +27,6 @@ export const commands = {
     typedError<null, string>(__TAURI_INVOKE('import_profile', { url, option })),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
-  /**  修改profiles的 */
-  patchProfilesConfig: (profiles: ProfilesBuilder_Deserialize) =>
-    typedError<null, string>(
-      __TAURI_INVOKE('patch_profiles_config', { profiles }),
-    ),
   reorderProfile: (activeId: string, overId: string) =>
     typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('reorder_profile', { activeId, overId }),
@@ -43,6 +38,10 @@ export const commands = {
   activateProfile: (uid: string | null) =>
     typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
+    ),
+  setProfileValidFields: (fields: string[]) =>
+    typedError<RebuildOutcome, string>(
+      __TAURI_INVOKE('set_profile_valid_fields', { fields }),
     ),
   patchProfileMetadata: (
     uid: string,
@@ -77,18 +76,21 @@ export const commands = {
     } | null,
   ) =>
     typedError<null, string>(__TAURI_INVOKE('update_profile', { uid, option })),
-  patchProfile: (uid: string, profile: ProfileBuilder_Deserialize) =>
+  patchProfile: (uid: string, profile: ProfileBuilderRequest_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_profile', { uid, profile })),
   deleteProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('delete_profile', { uid })),
   readProfileFile: (uid: string) =>
     typedError<string, string>(__TAURI_INVOKE('read_profile_file', { uid })),
-  saveProfileFile: (uid: string, fileData: string | null) =>
+  saveProfileFile: (uid: string, fileData: string) =>
     typedError<null, string>(
       __TAURI_INVOKE('save_profile_file', { uid, fileData }),
     ),
   /**  create a new profile */
-  createProfile: (item: ProfileBuilder_Deserialize, fileData: string | null) =>
+  createProfile: (
+    item: ProfileBuilderRequest_Deserialize,
+    fileData: string | null,
+  ) =>
     typedError<null, string>(
       __TAURI_INVOKE('create_profile', { item, fileData }),
     ),
@@ -953,34 +955,16 @@ export type PatchRuntimeConfig_Serialize = {
   mode?: string | null;
 };
 
-export type Profile = Profile_Serialize | Profile_Deserialize;
+export type ProfileBuilderRequest =
+  ProfileBuilderRequest_Serialize | ProfileBuilderRequest_Deserialize;
 
-export type ProfileBuilder =
-  ProfileBuilder_Serialize | ProfileBuilder_Deserialize;
+export type ProfileBuilderRequest_Deserialize =
+  | ({ type: 'remote' } & RemoteProfileBuilder)
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
 
-export type ProfileBuilder_Deserialize =
-  | ({
-      remote: {
-        type: 'remote';
-      } & RemoteProfileBuilder;
-    } & { local?: never })
-  | ({
-      local: {
-        type: 'local';
-      } & LocalProfileBuilder_Deserialize;
-    } & { remote?: never });
-
-export type ProfileBuilder_Serialize =
-  | ({
-      remote: {
-        type: 'remote';
-      } & RemoteProfileBuilder;
-    } & { local?: never })
-  | ({
-      local: {
-        type: 'local';
-      } & LocalProfileBuilder_Serialize;
-    } & { remote?: never });
+export type ProfileBuilderRequest_Serialize =
+  | ({ type: 'remote' } & RemoteProfileBuilder)
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize);
 
 export type ProfileDefinition =
   ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
@@ -1007,6 +991,10 @@ export type ProfileMetadataPatch_Serialize = {
   name: string | null;
   desc: string | null;
 };
+
+export type ProfileResponse =
+  | ({ type: 'remote' } & RemoteProfile_Serialize)
+  | ({ type: 'local' } & LocalProfile_Serialize);
 
 export type ProfileShared = {
   /**  Profile ID */
@@ -1055,76 +1043,11 @@ export type ProfileSource_Serialize = {
   subscription: SubscriptionInfo | null;
 };
 
-export type Profile_Deserialize =
-  | ({
-      remote: {
-        type: 'remote';
-      } & RemoteProfile_Deserialize;
-    } & { local?: never })
-  | ({
-      local: {
-        type: 'local';
-      } & LocalProfile_Deserialize;
-    } & { remote?: never });
-
-export type Profile_Serialize =
-  | ({
-      remote: {
-        type: 'remote';
-      } & RemoteProfile_Serialize;
-    } & { local?: never })
-  | ({
-      local: {
-        type: 'local';
-      } & LocalProfile_Serialize;
-    } & { remote?: never });
-
-export type Profiles = Profiles_Serialize | Profiles_Deserialize;
-
-/** Builder for [`Profiles`](struct.Profiles.html). */
-export type ProfilesBuilder =
-  ProfilesBuilder_Serialize | ProfilesBuilder_Deserialize;
-
-/** Builder for [`Profiles`](struct.Profiles.html). */
-export type ProfilesBuilder_Deserialize = {
-  current: string[] | null;
-  /**  profile list */
-  items: Profile_Deserialize[] | null;
-  /**  record valid fields for clash */
-  valid: string[] | null;
-  /**  same as PrfConfig.chain */
-  chain: string[] | null;
-};
-
-/** Builder for [`Profiles`](struct.Profiles.html). */
-export type ProfilesBuilder_Serialize = {
-  current: string[] | null;
-  /**  profile list */
-  items: Profile_Serialize[] | null;
-  /**  record valid fields for clash */
-  valid: string[] | null;
-  /**  same as PrfConfig.chain */
-  chain: string[] | null;
-};
-
-export type Profiles_Deserialize = {
-  current: string[];
-  /**  profile list */
-  items?: Profile_Deserialize[];
-  /**  record valid fields for clash */
-  valid?: string[];
-  /**  same as PrfConfig.chain */
-  chain: string[];
-};
-
-export type Profiles_Serialize = {
-  current: string[];
-  /**  profile list */
-  items: Profile_Serialize[];
-  /**  record valid fields for clash */
+export type ProfilesResponse = {
+  current: string | null;
+  items: ProfileResponse[];
   valid: string[];
-  /**  same as PrfConfig.chain */
-  chain: string[];
+  global_transforms: string[];
 };
 
 export type Proxies = Proxies_Serialize | Proxies_Deserialize;
