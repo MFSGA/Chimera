@@ -17,10 +17,11 @@ use crate::{
         profile::{
             builder::ProfileBuilder,
             item::{
-                ProfileKindGetter, ProfileMetaGetter,
+                Profile, ProfileKindGetter, ProfileMetaGetter,
+                local::{LocalProfile, LocalProfileBuilder},
                 remote::{
-                    RemoteProfileBuilder, RemoteProfileOptions, RemoteProfileOptionsBuilder,
-                    SubscriptionInfo,
+                    RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
+                    RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
             },
             item_type::{ProfileItemType, ProfileUid},
@@ -115,6 +116,75 @@ pub enum ProfileSource {
 }
 
 #[derive(specta::Type, serde::Serialize)]
+pub struct ProfilesResponse {
+    pub current: Option<ProfileUid>,
+    pub items: Vec<ProfileResponse>,
+    pub valid: Vec<String>,
+    pub global_transforms: Vec<ProfileUid>,
+}
+
+#[derive(specta::Type, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProfileResponse {
+    Remote {
+        #[serde(flatten)]
+        profile: RemoteProfile,
+    },
+    Local {
+        #[serde(flatten)]
+        profile: LocalProfile,
+    },
+}
+
+impl From<Profiles> for ProfilesResponse {
+    fn from(profiles: Profiles) -> Self {
+        let Profiles {
+            current,
+            items,
+            valid,
+            chain,
+        } = profiles;
+        Self {
+            current: current.into_iter().next(),
+            items: items.into_iter().map(ProfileResponse::from).collect(),
+            valid,
+            global_transforms: chain,
+        }
+    }
+}
+
+impl From<Profile> for ProfileResponse {
+    fn from(profile: Profile) -> Self {
+        match profile {
+            Profile::Remote(profile) => Self::Remote { profile },
+            Profile::Local(profile) => Self::Local { profile },
+        }
+    }
+}
+
+#[derive(specta::Type, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ProfileBuilderRequest {
+    Remote {
+        #[serde(flatten)]
+        profile: RemoteProfileBuilder,
+    },
+    Local {
+        #[serde(flatten)]
+        profile: LocalProfileBuilder,
+    },
+}
+
+impl From<ProfileBuilderRequest> for ProfileBuilder {
+    fn from(request: ProfileBuilderRequest) -> Self {
+        match request {
+            ProfileBuilderRequest::Remote { profile } => Self::Remote(profile),
+            ProfileBuilderRequest::Local { profile } => Self::Local(profile),
+        }
+    }
+}
+
+#[derive(specta::Type, serde::Serialize)]
 pub struct GetSysProxyResponse {
     pub enable: bool,
     pub host: String,
@@ -173,8 +243,8 @@ impl specta::Type for IpcError {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_profiles() -> Result<Profiles> {
-    Ok(Config::profiles().data().clone())
+pub fn get_profiles() -> Result<ProfilesResponse> {
+    Ok(Config::profiles().data().clone().into())
 }
 
 #[tauri::command]
@@ -264,7 +334,7 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub fn create_editor_window(
+pub async fn create_editor_window(
     app_handle: AppHandle,
     window_type: EditorWindowType,
     uid: Option<String>,
@@ -278,13 +348,20 @@ pub fn create_editor_window(
         }
     };
 
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let handle = app_handle.clone();
-        let _ = app_handle.run_on_main_thread(move || {
-            let _ = resolve::create_profile_editor_window(&handle, &uid);
-        });
-    });
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let handle = app_handle.clone();
+    app_handle
+        .run_on_main_thread(move || {
+            let result = resolve::create_profile_editor_window(&handle, &uid)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        })
+        .context("failed to schedule profile editor window creation")?;
+
+    receiver
+        .await
+        .context("profile editor window creation was cancelled")?
+        .map_err(anyhow::Error::msg)?;
     Ok(())
 }
 
@@ -301,10 +378,8 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
     Ok(())
 }
 
-/// 修改profiles的
-#[tauri::command]
-#[specta::specta]
-pub async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
+/// Compatibility helper for callers that still construct the persisted builder.
+async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
     Config::profiles().draft().apply(profiles);
 
     match CoreManager::global()
@@ -356,6 +431,25 @@ fn persist_profile_order(
     Ok(RebuildOutcome::Ok)
 }
 
+async fn rebuild_after_profile_commit(operation: &str) -> RebuildOutcome {
+    match CoreManager::global()
+        .restart_core_with_generated_config()
+        .await
+    {
+        Ok(_) => {
+            handle::Handle::refresh_clash();
+            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
+            RebuildOutcome::Ok
+        }
+        Err(err) => {
+            log::error!(target: "app", "failed to rebuild after {operation}: {err:?}");
+            RebuildOutcome::Degraded {
+                error: err.to_string(),
+            }
+        }
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profile(active_id: ProfileUid, over_id: ProfileUid) -> Result<RebuildOutcome> {
@@ -372,23 +466,17 @@ pub async fn reorder_profiles_by_list(list: Vec<ProfileUid>) -> Result<RebuildOu
 #[specta::specta]
 pub async fn activate_profile(uid: Option<ProfileUid>) -> Result<RebuildOutcome> {
     persist_profiles(|profiles| profiles.activate(uid.as_deref()))?;
+    Ok(rebuild_after_profile_commit("profile activation").await)
+}
 
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
-            Ok(RebuildOutcome::Ok)
-        }
-        Err(err) => {
-            log::error!(target: "app", "failed to rebuild after profile activation: {err:?}");
-            Ok(RebuildOutcome::Degraded {
-                error: err.to_string(),
-            })
-        }
-    }
+#[tauri::command]
+#[specta::specta]
+pub async fn set_profile_valid_fields(fields: Vec<String>) -> Result<RebuildOutcome> {
+    persist_profiles(|profiles| {
+        profiles.valid = fields;
+        Ok(())
+    })?;
+    Ok(rebuild_after_profile_commit("profile valid fields update").await)
 }
 
 #[tauri::command]
@@ -926,7 +1014,8 @@ pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuil
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_profile(uid: String, profile: ProfileBuilder) -> Result {
+pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Result {
+    let profile = ProfileBuilder::from(profile);
     {
         let mut profiles = Config::profiles().draft();
         let current = profiles
@@ -1005,36 +1094,31 @@ pub async fn delete_profile(uid: String) -> Result {
 pub fn read_profile_file(uid: String) -> Result<String> {
     let profiles = Config::profiles();
     let profiles = profiles.latest();
-    let item = (profiles.get_item(&uid))?;
-    let data = match item.kind() {
-        ProfileItemType::Local | ProfileItemType::Remote => {
-            let raw = (item.read_file())?;
-            let data = (serde_yaml::from_str::<Mapping>(&raw))?;
-            (serde_yaml::to_string(&data).context("failed to convert yaml to string"))?
-        }
-        _ => (item.read_file())?,
-    };
-    Ok(data)
+    let item = profiles.get_item(&uid)?;
+    let raw = item.read_file()?;
+    let data = serde_yaml::from_str::<Mapping>(&raw)?;
+    Ok(serde_yaml::to_string(&data).context("failed to convert yaml to string")?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_profile_file(uid: String, file_data: Option<String>) -> Result {
-    if file_data.is_none() {
-        return Ok(());
-    }
-
+pub fn save_profile_file(uid: String, file_data: String) -> Result {
     let profiles = Config::profiles();
     let profiles = profiles.latest();
-    let item = (profiles.get_item(&uid))?;
-    (item.save_file(file_data.unwrap()))?;
+    let item = profiles.get_item(&uid)?;
+    if matches!(item.kind(), ProfileItemType::Remote) {
+        return Err(anyhow!("remote profiles are updater-owned").into());
+    }
+    serde_yaml::from_str::<Mapping>(&file_data).context("failed to parse profile YAML")?;
+    item.save_file(file_data)?;
     Ok(())
 }
 
 /// create a new profile
 #[tauri::command]
 #[specta::specta]
-pub async fn create_profile(item: ProfileBuilder, file_data: Option<String>) -> Result {
+pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<String>) -> Result {
+    let item = ProfileBuilder::from(item);
     let is_remote = matches!(&item, ProfileBuilder::Remote(_));
 
     let profile: crate::config::profile::item::Profile = match item {
