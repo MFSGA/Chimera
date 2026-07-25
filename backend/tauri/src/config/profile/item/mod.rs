@@ -2,6 +2,7 @@ use std::{borrow::Borrow, io::Write};
 
 use ambassador::{Delegate, delegatable_trait};
 use anyhow::{Context, Result, bail};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_macro::EnumWrapperCombined;
 
 use crate::{
@@ -57,18 +58,12 @@ impl Profile {
         std::fs::read_to_string(path).context("failed to read the file")
     }
 
-    /// save the file data
+    /// save the file data atomically
     pub fn save_file<T: Borrow<String>>(&self, data: T) -> Result<()> {
-        let file = self.file();
-        let path = dirs::app_profiles_dir()?.join(file);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(path)
-            .context("failed to open the file")?;
-        file.write_all(data.borrow().as_bytes())
-            .context("failed to save the file")
+        let path = dirs::app_profiles_dir()?.join(self.file());
+        AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+            .write(|file| file.write_all(data.borrow().as_bytes()))
+            .with_context(|| format!("failed to atomically save profile file {}", path.display()))
     }
 }
 
