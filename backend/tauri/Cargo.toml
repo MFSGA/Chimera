@@ -76,7 +76,7 @@ smol-cancellation-token = "0.1"
 backon = { version = "1.0.1", features = ["tokio-sleep"] }                # for backoff retry
 ractor = "0.15"
 
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 percent-encoding = "2.3.1"
 
