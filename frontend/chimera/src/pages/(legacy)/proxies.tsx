@@ -29,6 +29,13 @@ export const Route = createFileRoute('/(legacy)/proxies')({
   component: ProxyPage,
 });
 
+const MODE_LABELS: Record<string, string> = {
+  rule: 'Rule',
+  global: 'Global',
+  direct: 'Direct',
+  script: 'Script',
+};
+
 function SideBar() {
   const [proxiesFilter, setProxiesFilter] = useAtom(proxiesFilterAtom);
 
@@ -111,13 +118,6 @@ function ProxyPage() {
     await upsert(key);
   });
 
-  const modeLabels: Record<string, string> = {
-    rule: 'Rule',
-    global: 'Global',
-    direct: 'Direct',
-    script: 'Script',
-  };
-
   const Header = useMemo(() => {
     return (
       <div className="flex items-center gap-1">
@@ -140,7 +140,7 @@ function ProxyPage() {
               selected={enabled}
             >
               {enabled && <Check className="mr-[0.1rem] -ml-2 scale-75" />}
-              {modeLabels[key] ?? key}
+              {MODE_LABELS[key] ?? key}
             </ToggleButton>
           ))}
         </ToggleButtonGroup>

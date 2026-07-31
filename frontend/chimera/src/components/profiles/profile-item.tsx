@@ -182,34 +182,30 @@ export const ProfileItem = memo(function ProfileItem({
     Delete: m.profile_delete_title(),
   };
 
-  const MenuComp = useMemo(() => {
-    const handleClick = (func: () => void) => {
-      setAnchorEl(null);
-      func();
-    };
+  const handleMenuClick = (func: () => void) => {
+    setAnchorEl(null);
+    func();
+  };
 
-    return (
-      <Menu
-        anchorEl={anchorEl}
-        open={Boolean(anchorEl)}
-        onClose={() => setAnchorEl(null)}
-      >
-        {Object.entries(menuMapping).map(([key, func], index) => {
-          return (
-            <MenuItem
-              key={index}
-              onClick={(e) => {
-                cleanDeepClickEvent(e);
-                handleClick(func);
-              }}
-            >
-              {menuLabels[key]}
-            </MenuItem>
-          );
-        })}
-      </Menu>
-    );
-  }, [anchorEl, menuMapping]);
+  const MenuComp = (
+    <Menu
+      anchorEl={anchorEl}
+      open={Boolean(anchorEl)}
+      onClose={() => setAnchorEl(null)}
+    >
+      {Object.entries(menuMapping).map(([key, func]) => (
+        <MenuItem
+          key={key}
+          onClick={(event) => {
+            cleanDeepClickEvent(event);
+            handleMenuClick(func);
+          }}
+        >
+          {menuLabels[key]}
+        </MenuItem>
+      ))}
+    </Menu>
+  );
 
   const [open, setOpen] = useState(false);
 
