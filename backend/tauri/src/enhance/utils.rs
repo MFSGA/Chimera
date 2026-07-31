@@ -6,7 +6,7 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::profile::{item_type::ProfileUid, profiles::Profiles},
-    enhance::{chain::ChainItem, script::runner::RunnerManager},
+    enhance::chain::ChainItem,
 };
 
 pub fn convert_uids_to_scripts(profiles: &Profiles, uids: &[ProfileUid]) -> Vec<ChainItem> {
@@ -28,14 +28,11 @@ pub type Logs = Vec<(LogSpan, String)>;
 
 /// 处理链
 pub async fn process_chain(
-    mut config: Mapping,
-    nodes: &[ChainItem],
+    config: Mapping,
+    _nodes: &[ChainItem],
 ) -> (Mapping, IndexMap<ProfileUid, Logs>) {
-    let mut result_map = IndexMap::new();
-
-    let mut script_runner = RunnerManager::new();
     log::debug!("todo: impl script_runner");
-    (config, result_map)
+    (config, IndexMap::new())
 }
 
 /// 合并多个配置

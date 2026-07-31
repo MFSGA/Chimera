@@ -15,8 +15,6 @@ use crate::{
 mod chain;
 /// 3
 mod field;
-/// 4
-mod script;
 /// 5
 mod tun;
 /// 2
@@ -28,20 +26,17 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
     // config.yaml 的配置
     let clash_config = { Config::clash().latest().0.clone() };
 
-    let (clash_core, enable_tun, enable_builtin, enable_filter) = {
+    let (enable_tun, enable_filter) = {
         let verge = Config::verge();
         let verge = verge.latest();
         (
-            verge.clash_core,
             verge.enable_tun_mode.unwrap_or(false),
-            // todo: will changed to true in the future
-            verge.enable_builtin_enhanced.unwrap_or(false),
             verge.enable_clash_fields.unwrap_or(true),
         )
     };
 
     // 从profiles里拿东西·
-    let (profiles, profile_chain, global_chain, valid) = {
+    let (profiles, profile_chain, valid) = {
         let profiles = Config::profiles();
         let profiles = profiles.latest();
 
@@ -75,11 +70,9 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
 
-        let global_chain = utils::convert_uids_to_scripts(&profiles, &profiles.chain);
-
         let valid = profiles.valid.clone();
 
-        (current_mappings, profile_chain_mapping, global_chain, valid)
+        (current_mappings, profile_chain_mapping, valid)
     };
 
     let mut postprocessing_output = PostProcessingOutput::default();
