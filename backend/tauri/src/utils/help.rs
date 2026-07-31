@@ -194,10 +194,13 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     // let _ = super::resolve::save_window_state(app_handle, true);
     resolve::resolve_reset();
     /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
+    let connector = app_handle
+        .try_state::<crate::core::clash::ws::ClashConnectionsConnector>()
+        .map(|state| state.inner().clone());
     let _ = nyanpasu_utils::runtime::block_on(async {
-        /* if let Err(e) = widget_manager.stop().await {
-            log::error!("failed to stop widget manager: {e:?}");
-        }; */
+        if let Some(connector) = connector {
+            connector.stop().await;
+        }
         CoreManager::global().stop_core().await
     });
     #[cfg(windows)]

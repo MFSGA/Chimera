@@ -236,15 +236,22 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
         apply_clash_runtime_change(&plan).await?;
         run_clash_patch_side_effects(&plan);
         Config::runtime().draft().patch_config(patch);
-        Ok(())
+        Ok(plan)
     }
     .await;
 
     match result {
-        Ok(()) => {
+        Ok(plan) => {
             Config::clash().apply();
             Config::runtime().apply();
             Config::clash().data().save_config()?;
+            if plan.mode_changed {
+                log_err!(
+                    crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change()
+                        .await,
+                    "failed to interrupt connections after mode change"
+                );
+            }
             Ok(())
         }
         Err(err) => {
