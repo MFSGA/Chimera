@@ -64,6 +64,26 @@ export const CLASH_RULES_PROVIDER_QUERY_KEY = 'clash-rules-provider';
 export const CLASH_CORE_QUERY_KEY = 'clash-core';
 
 /**
+ * Clash core runtime status query key.
+ */
+export const CLASH_CORE_STATUS_QUERY_KEY = 'clash-core-status';
+
+/**
+ * Local HTTP server port query key.
+ */
+export const SERVER_PORT_QUERY_KEY = 'server-port';
+
+/**
+ * Core directory query key.
+ */
+export const CORE_DIR_QUERY_KEY = 'core-dir';
+
+/**
+ * Manual service installation prompt query key.
+ */
+export const SERVICE_PROMPT_QUERY_KEY = 'service-prompt';
+
+/**
  * Clash version query key, used to fetch clash version from query
  */
 export const CLASH_VERSION_QUERY_KEY = 'clash-version';
