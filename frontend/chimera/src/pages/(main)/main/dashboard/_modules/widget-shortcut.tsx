@@ -15,9 +15,9 @@
  */
 
 import {
-  getCoreStatus,
   useClashConfig,
   useClashCores,
+  useCoreStatus,
   useSetting,
   useSystemProxy,
   useSystemService,
@@ -28,7 +28,6 @@ import { Link } from '@tanstack/react-router';
 import NetworkPing from '~icons/material-symbols/network-ping';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import { useMemo } from 'react';
-import useSWR from 'swr';
 import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
 import { Button } from '@/components/ui/button';
 import TextMarquee from '@/components/ui/text-marquee';
@@ -177,13 +176,10 @@ const CoreStatusBadge = () => {
     query: { data: serviceStatus },
   } = useSystemService();
 
-  const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
-    refreshInterval: 2000,
-    revalidateOnFocus: false,
-  });
+  const coreStatusQuery = useCoreStatus();
 
   const message = useMemo<string>(() => {
-    const status = coreStatusSWR.data?.[0];
+    const status = coreStatusQuery.data?.status;
     const coreState = status as CoreState | undefined;
     const isRunning = coreState === 'Running';
 
@@ -228,7 +224,7 @@ const CoreStatusBadge = () => {
     }
 
     return `${stoppedMessage} ${serviceMessage}`;
-  }, [serviceStatus, coreStatusSWR.data]);
+  }, [serviceStatus, coreStatusQuery.data]);
 
   return (
     <div
@@ -252,12 +248,9 @@ const CoreStatusBadge = () => {
 const CurrentCoreCard = () => {
   const { query: clashCores } = useClashCores();
   const { value: currentCoreKey } = useSetting('clash_core');
-  const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
-    refreshInterval: 2000,
-    revalidateOnFocus: false,
-  });
+  const coreStatusQuery = useCoreStatus();
 
-  const status = coreStatusSWR.data?.[0] as CoreState | undefined;
+  const status = coreStatusQuery.data?.status as CoreState | undefined;
   const isRunning = status === 'Running';
   const currentCore = currentCoreKey ? clashCores.data?.[currentCoreKey] : null;
 
