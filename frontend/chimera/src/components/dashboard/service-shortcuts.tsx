@@ -1,4 +1,4 @@
-import { getCoreStatus, useSystemService } from '@chimera/interface';
+import { useCoreStatus, useSystemService } from '@chimera/interface';
 import { alpha } from '@chimera/ui';
 import { Box, CircularProgress, Paper, Tooltip } from '@mui/material';
 import Grid from '@mui/material/Grid';
@@ -7,7 +7,6 @@ import dayjs from 'dayjs';
 import { useAtomValue } from 'jotai';
 import { isObject } from 'lodash-es';
 import { useMemo } from 'react';
-import useSWR from 'swr';
 import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 
@@ -23,11 +22,7 @@ export const ServiceShortcuts = () => {
     query: { data: serviceStatus },
   } = useSystemService();
 
-  // TODO: refactor to use tanstack query
-  const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
-    refreshInterval: 2000,
-    revalidateOnFocus: false,
-  });
+  const coreStatusQuery = useCoreStatus();
 
   const status: Status = useMemo(() => {
     switch (serviceStatus?.status) {
@@ -71,12 +66,12 @@ export const ServiceShortcuts = () => {
   }, [serviceStatus]);
 
   const coreStatus: Status = useMemo(() => {
-    const status = coreStatusSWR.data || [{ Stopped: null }, 0, 'normal'];
+    const status = coreStatusQuery.data?.status ?? { Stopped: null };
     if (
-      isObject(status[0]) &&
-      Object.prototype.hasOwnProperty.call(status[0], 'Stopped')
+      isObject(status) &&
+      Object.prototype.hasOwnProperty.call(status, 'Stopped')
     ) {
-      const { Stopped } = status[0];
+      const { Stopped } = status;
       return {
         label:
           !!Stopped && Stopped.trim()
@@ -92,7 +87,7 @@ export const ServiceShortcuts = () => {
     }
     return {
       label:
-        status[2] === 'normal'
+        coreStatusQuery.data?.type === 'normal'
           ? m.dashboard_widget_core_status_running_by_child_process()
           : m.dashboard_widget_core_status_running_by_service(),
       sx: ((theme) => ({
@@ -102,7 +97,7 @@ export const ServiceShortcuts = () => {
         }),
       })) as SxProps<Theme>,
     };
-  }, [coreStatusSWR.data]);
+  }, [coreStatusQuery.data]);
 
   return (
     <Grid
@@ -136,8 +131,8 @@ export const ServiceShortcuts = () => {
                 <div>{m.dashboard_widget_core_status()}</div>
                 <Tooltip
                   title={
-                    !!coreStatusSWR.data?.[1] &&
-                    `Last changed ${dayjs(coreStatusSWR.data[1]).fromNow()}`
+                    !!coreStatusQuery.data?.startAt &&
+                    `Last changed ${dayjs(coreStatusQuery.data.startAt).fromNow()}`
                   }
                 >
                   <div>{coreStatus.label}</div>

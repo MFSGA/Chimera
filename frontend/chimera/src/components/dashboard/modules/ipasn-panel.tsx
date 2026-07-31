@@ -40,7 +40,7 @@ const EmojiCountry = ({ countryCode }: { countryCode: string }) => {
 };
 
 export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
-  const { data, mutate, isValidating } = useIPSB();
+  const { data, refetch, isFetching } = useIPSB();
   const [showIPAddress, setShowIPAddress] = useState(false);
   const isDrawer = useAtomValue(atomIsDrawer);
   const { value } = useSetting('clash_core');
@@ -69,10 +69,10 @@ export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
                 <Tooltip title={m.dashboard_refresh_now_tooltip()}>
                   <Button
                     className="!size-8 !min-w-0"
-                    loading={isValidating}
-                    onClick={() => mutate()}
+                    loading={isFetching}
+                    onClick={() => void refetch()}
                   >
-                    {!isValidating && (
+                    {!isFetching && (
                       <CircularProgress
                         size={16}
                         variant="determinate"

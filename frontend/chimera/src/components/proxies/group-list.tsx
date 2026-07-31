@@ -1,4 +1,4 @@
-import { getServerPort, useClashProxies } from '@chimera/interface';
+import { useClashProxies, useServerPort } from '@chimera/interface';
 import { alpha, LazyImage } from '@chimera/ui';
 import {
   ListItem,
@@ -9,17 +9,12 @@ import {
 } from '@mui/material';
 import { useAtom, useAtomValue } from 'jotai';
 import { memo, RefObject, useDeferredValue, useMemo } from 'react';
-import useSWR from 'swr';
 import { Virtualizer } from 'virtua';
 import { proxyGroupAtom } from '@/store';
 import { proxiesFilterAtom } from '@/store/proxies';
 
 const IconRender = memo(function IconRender({ icon }: { icon: string }) {
-  const {
-    data: serverPort,
-    isLoading,
-    error,
-  } = useSWR('/getServerPort', getServerPort);
+  const { data: serverPort, isLoading, error } = useServerPort();
   const src = icon.trim().startsWith('<svg')
     ? `data:image/svg+xml;base64,${btoa(icon)}`
     : icon;

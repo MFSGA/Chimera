@@ -5,7 +5,6 @@ import { StyledEngineProvider } from '@mui/material/styles';
 import { createFileRoute, useLocation } from '@tanstack/react-router';
 import { useAtom, useSetAtom } from 'jotai';
 import { PropsWithChildren, useEffect } from 'react';
-import { SWRConfig } from 'swr';
 import { AppContainer } from '@/components/app/app-container';
 import NoticeProvider from '@/components/layout/notice-provider';
 import PageTransition from '@/components/layout/page-transition';
@@ -47,31 +46,22 @@ function Layout() {
   }, [breakpoint, setIsDrawer]);
 
   return (
-    <SWRConfig
-      value={{
-        errorRetryCount: 5,
-        revalidateOnMount: true,
-        revalidateOnFocus: true,
-        refreshInterval: 5000,
-      }}
-    >
-      <QueryLoaderProvider>
-        <StyledEngineProvider injectFirst>
-          <ThemeModeProvider>
-            <CssBaseline />
-            <NoticeProvider />
-            <SchemeProvider />
-            <UpdaterDialog />
-            <UpdaterProvider />
+    <QueryLoaderProvider>
+      <StyledEngineProvider injectFirst>
+        <ThemeModeProvider>
+          <CssBaseline />
+          <NoticeProvider />
+          <SchemeProvider />
+          <UpdaterDialog />
+          <UpdaterProvider />
 
-            <AppContainer isDrawer={isDrawer}>
-              <PageTransition
-                className={cn('absolute inset-4 top-10', !isDrawer && 'left-0')}
-              />
-            </AppContainer>
-          </ThemeModeProvider>
-        </StyledEngineProvider>
-      </QueryLoaderProvider>
-    </SWRConfig>
+          <AppContainer isDrawer={isDrawer}>
+            <PageTransition
+              className={cn('absolute inset-4 top-10', !isDrawer && 'left-0')}
+            />
+          </AppContainer>
+        </ThemeModeProvider>
+      </StyledEngineProvider>
+    </QueryLoaderProvider>
   );
 }

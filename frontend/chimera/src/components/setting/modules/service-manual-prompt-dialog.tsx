@@ -1,11 +1,10 @@
-import { getCoreDir, getServiceInstallPrompt } from '@chimera/interface';
+import { useCoreDir, useServicePrompt } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
 import ContentPasteIcon from '@mui/icons-material/ContentPaste';
 import { IconButton, Tooltip, useColorScheme } from '@mui/material';
 import { useAsyncEffect } from 'ahooks';
 import { useAtom, useSetAtom } from 'jotai';
 import { useCallback, useMemo, useState } from 'react';
-import useSWR from 'swr';
 import { OS } from '@/consts';
 import * as m from '@/paraglide/messages';
 import { serviceManualPromptDialogAtom } from '@/store/service';
@@ -58,11 +57,10 @@ export default function ServerManualPromptDialog({
   ...props
 }: ServerManualPromptDialogProps) {
   const { mode } = useColorScheme();
-  const { data: serviceInstallPrompt, error } = useSWR(
-    operation === 'install' ? '/service_install_prompt' : null,
-    getServiceInstallPrompt,
+  const { data: serviceInstallPrompt, error } = useServicePrompt(
+    operation === 'install',
   );
-  const { data: coreDir } = useSWR('/core_dir', () => getCoreDir());
+  const { data: coreDir } = useCoreDir();
   const commands = useMemo(() => {
     if (operation === 'install' && serviceInstallPrompt) {
       return `cd "${coreDir}"\n${serviceInstallPrompt}`;
@@ -121,7 +119,7 @@ export default function ServerManualPromptDialog({
           {m.settings_service_manual_operation_failed() +
             (operation ?? 'unknown')}
         </p>
-        {error && <p className="text-red-500">{error.message}</p>}
+        {error && <p className="text-red-500">{String(error)}</p>}
         {!!codes && (
           <div className="relative">
             <div

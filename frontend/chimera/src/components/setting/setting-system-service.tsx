@@ -1,6 +1,6 @@
 import {
-  getCoreStatus,
   restartSidecar,
+  useCoreStatus,
   useSetting,
   useSystemService,
 } from '@chimera/interface';
@@ -15,7 +15,6 @@ import {
 import { useMemoizedFn } from 'ahooks';
 import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
-import useSWR from 'swr';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -26,10 +25,7 @@ import {
 
 export const SettingSystemService = () => {
   const { query, upsert } = useSystemService();
-  const coreStatusSWR = useSWR('/coreStatus', getCoreStatus, {
-    refreshInterval: 2000,
-    revalidateOnFocus: false,
-  });
+  const coreStatusQuery = useCoreStatus();
 
   const getInstallButtonString = () => {
     switch (query.data?.status) {
@@ -153,7 +149,7 @@ export const SettingSystemService = () => {
   const [refreshPending, startRefresh] = useTransition();
   const handleRefreshClick = useMemoizedFn(() => {
     startRefresh(async () => {
-      await Promise.all([query.refetch(), coreStatusSWR.mutate()]);
+      await Promise.all([query.refetch(), coreStatusQuery.refetch()]);
     });
   });
 
@@ -177,7 +173,7 @@ export const SettingSystemService = () => {
   };
 
   const currentCoreStatus = (() => {
-    const status = coreStatusSWR.data?.[0];
+    const status = coreStatusQuery.data?.status;
     if (!status) return m.common_unknown();
     if (
       isObject(status) &&
@@ -191,9 +187,7 @@ export const SettingSystemService = () => {
     return m.dashboard_widget_core_status_running();
   })();
 
-  const currentRunType = coreStatusSWR.data?.[2]
-    ? coreStatusSWR.data[2]
-    : m.common_unknown();
+  const currentRunType = coreStatusQuery.data?.type ?? m.common_unknown();
 
   const serviceCoreType = (() => {
     const type = serviceCoreInfos?.type;
@@ -201,7 +195,7 @@ export const SettingSystemService = () => {
     return typeof type === 'string' ? type : type.clash;
   })();
 
-  const currentCoreChangedAt = coreStatusSWR.data?.[1];
+  const currentCoreChangedAt = coreStatusQuery.data?.startAt;
   const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
 
   return (
