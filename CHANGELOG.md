@@ -1,3 +1,23 @@
+## [0.18.1] - 2026-07-31 10:22:11
+
+### ✨ Features
+
+- **profiles:** Complete profile editor window by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **profiles:** Save profile files atomically by @MFSGA
+
+- For overflow by @MFSGA
+
+### 🔨 Refactor
+
+- **profiles:** Expose typed profile IPC by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.18.0...v0.18.1
+
 ## [0.18.0] - 2026-07-23 10:20:47
 
 ### ✨ Features
