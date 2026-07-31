@@ -92,9 +92,16 @@ pub fn run() -> std::io::Result<()> {
                 } else {
                     "npx"
                 };
-                let _ = std::process::Command::new(npx_command)
+                let output = std::process::Command::new(npx_command)
                     .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
-                    .output();
+                    .output()
+                    .expect("failed to format TypeScript bindings");
+                assert!(
+                    output.status.success(),
+                    "Prettier failed for TypeScript bindings"
+                );
+                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)
+                    .expect("failed to normalize TypeScript bindings");
                 log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
             }
             Err(e) => {

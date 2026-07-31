@@ -1,9 +1,121 @@
 //! Single source of truth for runtime command registration and TypeScript bindings.
 
+use std::{fs, io, path::Path};
+
 use tauri_specta::{collect_commands, collect_events};
 
 #[cfg(feature = "agent")]
 use crate::features;
+
+const GENERATED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
+    typedError<ProfilesResponse_Serialize, string>(
+      __TAURI_INVOKE('get_profiles'),
+    ),"#;
+const FLATTENED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
+    typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),"#;
+
+const GENERATED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
+  | { type: 'remote'; profile: RemoteProfileBuilder }
+  | { type: 'local'; profile: LocalProfileBuilder_Deserialize };
+
+export type ProfileBuilderRequest_Serialize =
+  | { type: 'remote'; profile: RemoteProfileBuilder }
+  | { type: 'local'; profile: LocalProfileBuilder_Serialize };"#;
+const FLATTENED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
+  | ({ type: 'remote' } & RemoteProfileBuilder)
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
+
+export type ProfileBuilderRequest_Serialize =
+  | ({ type: 'remote' } & RemoteProfileBuilder)
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize);"#;
+
+const GENERATED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
+  ProfileResponse_Serialize | ProfileResponse_Deserialize;
+
+export type ProfileResponse_Deserialize =
+  | { type: 'remote'; profile: RemoteProfile_Deserialize }
+  | { type: 'local'; profile: LocalProfile_Deserialize };
+
+export type ProfileResponse_Serialize =
+  | { type: 'remote'; profile: RemoteProfile_Serialize }
+  | { type: 'local'; profile: LocalProfile_Serialize };"#;
+const FLATTENED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
+  | ({ type: 'remote' } & RemoteProfile_Serialize)
+  | ({ type: 'local' } & LocalProfile_Serialize);"#;
+
+const GENERATED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse =
+  ProfilesResponse_Serialize | ProfilesResponse_Deserialize;
+
+export type ProfilesResponse_Deserialize = {
+  current: string | null;
+  items: ProfileResponse_Deserialize[];
+  valid: string[];
+  global_transforms: string[];
+};
+
+export type ProfilesResponse_Serialize = {
+  current: string | null;
+  items: ProfileResponse_Serialize[];
+  valid: string[];
+  global_transforms: string[];
+};"#;
+const FLATTENED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse = {
+  current: string | null;
+  items: ProfileResponse[];
+  valid: string[];
+  global_transforms: string[];
+};"#;
+
+fn apply_binding_rewrite(
+    contents: &mut String,
+    generated: &str,
+    replacement: &str,
+    label: &str,
+) -> io::Result<()> {
+    if !contents.contains(generated) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("generated TypeScript binding pattern changed: {label}"),
+        ));
+    }
+
+    *contents = contents.replacen(generated, replacement, 1);
+    Ok(())
+}
+
+/// Align Specta output with serde's flattened Profile enum representation.
+pub(crate) fn normalize_typescript_bindings(path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+    let mut contents = fs::read_to_string(path)?;
+    let rewrites = [
+        (
+            GENERATED_GET_PROFILES_BINDING,
+            FLATTENED_GET_PROFILES_BINDING,
+            "get_profiles return type",
+        ),
+        (
+            GENERATED_PROFILE_BUILDER_BINDING,
+            FLATTENED_PROFILE_BUILDER_BINDING,
+            "ProfileBuilderRequest",
+        ),
+        (
+            GENERATED_PROFILE_RESPONSE_BINDING,
+            FLATTENED_PROFILE_RESPONSE_BINDING,
+            "ProfileResponse",
+        ),
+        (
+            GENERATED_PROFILES_RESPONSE_BINDING,
+            FLATTENED_PROFILES_RESPONSE_BINDING,
+            "ProfilesResponse",
+        ),
+    ];
+
+    for (generated, replacement, label) in rewrites {
+        apply_binding_rewrite(&mut contents, generated, replacement, label)?;
+    }
+
+    fs::write(path, contents)
+}
 
 macro_rules! build_builder {
     ($($command_root:ident $(:: $command_path:ident)*),* $(,)?) => {
@@ -111,7 +223,7 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 mod tests {
     use std::path::Path;
 
-    use super::build_specta_builder;
+    use super::{build_specta_builder, normalize_typescript_bindings};
 
     const BINDINGS_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -155,6 +267,8 @@ mod tests {
         let generated_path = directory.path().join("bindings.ts");
         export_bindings(&generated_path);
         format_bindings(&generated_path);
+        normalize_typescript_bindings(&generated_path)
+            .expect("failed to normalize generated TypeScript bindings");
         let generated = std::fs::read_to_string(generated_path)
             .expect("failed to read generated TypeScript bindings");
         let checked_in = std::fs::read_to_string(BINDINGS_PATH)
@@ -171,5 +285,7 @@ mod tests {
         let path = Path::new(BINDINGS_PATH);
         export_bindings(path);
         format_bindings(path);
+        normalize_typescript_bindings(path)
+            .expect("failed to normalize generated TypeScript bindings");
     }
 }
