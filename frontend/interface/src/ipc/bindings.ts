@@ -325,7 +325,7 @@ export type AgentCoreSnapshot = {
   applied_consistency: AgentAppliedState;
 };
 
-export type AgentCoreState = 'running' | 'stopped' | 'unknown';
+export type AgentCoreState = 'running' | 'stopped';
 
 export type AgentFinding = {
   code: AgentFindingCode;
@@ -416,7 +416,7 @@ export type AgentProposal = {
 
 export type AgentRoutingMode = 'rule' | 'global' | 'direct';
 
-export type AgentRunType = 'normal' | 'service' | 'elevated' | 'unknown';
+export type AgentRunType = 'normal' | 'service' | 'elevated';
 
 export type AgentServiceSnapshot = {
   desired_enabled: boolean;
