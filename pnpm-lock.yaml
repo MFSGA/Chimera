@@ -26,7 +26,7 @@ importers:
         version: 21.2.0
       '@ianvs/prettier-plugin-sort-imports':
         specifier: 4.7.1
-        version: 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)
+        version: 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)
       '@tauri-apps/cli':
         specifier: 2.11.4
         version: 2.11.4
@@ -56,7 +56,7 @@ importers:
         version: 2.1.7(prettier@3.9.6)
       prettier-plugin-tailwindcss:
         specifier: 0.8.1
-        version: 0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6)
+        version: 0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6)
       prettier-plugin-toml:
         specifier: 2.0.6
         version: 2.0.6(prettier@3.9.6)
@@ -503,8 +503,8 @@ importers:
         specifier: 7.5.20
         version: 7.5.20
       undici:
-        specifier: 8.8.0
-        version: 8.8.0
+        specifier: 8.9.0
+        version: 8.9.0
 
 packages:
 
@@ -6555,8 +6555,8 @@ packages:
     resolution: {integrity: sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg==}
     engines: {node: '>=18.17'}
 
-  undici@8.8.0:
-    resolution: {integrity: sha512-ubshXMXwF3MQIMF1y/WxZdNBnjEKeSg2wF5mcGUtU55YTw34tnVVpKRlLf7ruDXZ5344KokPVX4RBx1wJm64Bw==}
+  undici@8.9.0:
+    resolution: {integrity: sha512-aWZpUj7XoGonMClx4gdDRfgBjqeA+F473aDmROQQbM9n6PRfK/u1q/a0X4wMTgcHfT8H6fpbt98PFuDUwFg2YA==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.4.0:
@@ -6954,7 +6954,7 @@ snapshots:
       '@babel/helpers': 7.29.7
       '@babel/parser': 7.29.7
       '@babel/template': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
       '@jridgewell/remapping': 2.3.5
       convert-source-map: 2.0.0
@@ -6985,7 +6985,7 @@ snapshots:
 
   '@babel/helper-module-imports@7.29.7':
     dependencies:
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
@@ -6995,7 +6995,7 @@ snapshots:
       '@babel/core': 7.29.7
       '@babel/helper-module-imports': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -7022,7 +7022,7 @@ snapshots:
       '@babel/parser': 7.29.7
       '@babel/types': 7.29.7
 
-  '@babel/traverse@7.29.7':
+  '@babel/traverse@7.29.7(supports-color@10.2.2)':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/generator': 7.29.7
@@ -7514,11 +7514,11 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  '@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)':
+  '@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)':
     dependencies:
       '@babel/generator': 7.29.7
       '@babel/parser': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
       prettier: 3.9.6
       semver: 7.8.5
@@ -9951,7 +9951,7 @@ snapshots:
     dependencies:
       '@babel/core': 7.29.7
       '@babel/parser': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
@@ -12040,17 +12040,17 @@ snapshots:
 
   prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6):
     dependencies:
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       content-tag: 4.2.0
       prettier: 3.9.6
     transitivePeerDependencies:
       - supports-color
 
-  prettier-plugin-tailwindcss@0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6):
+  prettier-plugin-tailwindcss@0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6):
     dependencies:
       prettier: 3.9.6
     optionalDependencies:
-      '@ianvs/prettier-plugin-sort-imports': 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)
+      '@ianvs/prettier-plugin-sort-imports': 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)
       '@prettier/plugin-oxc': 0.2.2
 
   prettier-plugin-toml@2.0.6(prettier@3.9.6):
@@ -12942,7 +12942,7 @@ snapshots:
 
   undici@6.27.0: {}
 
-  undici@8.8.0: {}
+  undici@8.9.0: {}
 
   unicorn-magic@0.4.0: {}
 
