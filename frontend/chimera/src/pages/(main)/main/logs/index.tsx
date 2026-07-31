@@ -126,7 +126,7 @@ function Viewer({
         behavior: 'smooth',
       });
     }
-  }, [filteredLogs, rowVirtualizer]);
+  }, [filteredLogs, rowVirtualizer, scrollRef]);
 
   // 空状态
   if (filteredLogs.length === 0) {
