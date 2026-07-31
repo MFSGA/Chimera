@@ -26,7 +26,7 @@ importers:
         version: 21.2.0
       '@ianvs/prettier-plugin-sort-imports':
         specifier: 4.7.1
-        version: 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)
+        version: 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)
       '@tauri-apps/cli':
         specifier: 2.11.4
         version: 2.11.4
@@ -56,7 +56,7 @@ importers:
         version: 2.1.7(prettier@3.9.6)
       prettier-plugin-tailwindcss:
         specifier: 0.8.1
-        version: 0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6)
+        version: 0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6)
       prettier-plugin-toml:
         specifier: 2.0.6
         version: 2.0.6(prettier@3.9.6)
@@ -238,8 +238,8 @@ importers:
         specifier: 1.1.2
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       virtua:
-        specifier: 0.49.3
-        version: 0.49.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: 0.50.0
+        version: 0.50.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -6725,15 +6725,21 @@ packages:
   vfile@6.0.3:
     resolution: {integrity: sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q==}
 
-  virtua@0.49.3:
-    resolution: {integrity: sha512-k1Yn988Vz/L40uDtEWPjfdVo15Suumh4tU4/z5Srs0elNcU9DgBskqdh3llpHyAlXrCeHWTfcclYvY1uU4MmIg==}
+  virtua@0.50.0:
+    resolution: {integrity: sha512-W4lBvBqCIdNORXAVHHQbN+raBnViVZwKLk8BFhUAOOv8RashH/SU5DUSOk+RsS4UvqdZOaAylWC4pncw3JSaMQ==}
     peerDependencies:
+      '@angular/common': '>=20.0.0'
+      '@angular/core': '>=20.0.0'
       react: '>=16.14.0'
       react-dom: '>=16.14.0'
       solid-js: '>=1.0'
       svelte: '>=5.0'
       vue: '>=3.2'
     peerDependenciesMeta:
+      '@angular/common':
+        optional: true
+      '@angular/core':
+        optional: true
       react:
         optional: true
       react-dom:
@@ -6954,7 +6960,7 @@ snapshots:
       '@babel/helpers': 7.29.7
       '@babel/parser': 7.29.7
       '@babel/template': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
       '@jridgewell/remapping': 2.3.5
       convert-source-map: 2.0.0
@@ -6985,7 +6991,7 @@ snapshots:
 
   '@babel/helper-module-imports@7.29.7':
     dependencies:
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
@@ -6995,7 +7001,7 @@ snapshots:
       '@babel/core': 7.29.7
       '@babel/helper-module-imports': 7.29.7
       '@babel/helper-validator-identifier': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
     transitivePeerDependencies:
       - supports-color
 
@@ -7022,7 +7028,7 @@ snapshots:
       '@babel/parser': 7.29.7
       '@babel/types': 7.29.7
 
-  '@babel/traverse@7.29.7':
+  '@babel/traverse@7.29.7(supports-color@10.2.2)':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/generator': 7.29.7
@@ -7514,11 +7520,11 @@ snapshots:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
 
-  '@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)':
+  '@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)':
     dependencies:
       '@babel/generator': 7.29.7
       '@babel/parser': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
       prettier: 3.9.6
       semver: 7.8.5
@@ -9951,7 +9957,7 @@ snapshots:
     dependencies:
       '@babel/core': 7.29.7
       '@babel/parser': 7.29.7
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       '@babel/types': 7.29.7
     transitivePeerDependencies:
       - supports-color
@@ -12040,17 +12046,17 @@ snapshots:
 
   prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6):
     dependencies:
-      '@babel/traverse': 7.29.7
+      '@babel/traverse': 7.29.7(supports-color@10.2.2)
       content-tag: 4.2.0
       prettier: 3.9.6
     transitivePeerDependencies:
       - supports-color
 
-  prettier-plugin-tailwindcss@0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6):
+  prettier-plugin-tailwindcss@0.8.1(@ianvs/prettier-plugin-sort-imports@4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2))(@prettier/plugin-oxc@0.2.2)(prettier@3.9.6):
     dependencies:
       prettier: 3.9.6
     optionalDependencies:
-      '@ianvs/prettier-plugin-sort-imports': 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)
+      '@ianvs/prettier-plugin-sort-imports': 4.7.1(@prettier/plugin-oxc@0.2.2)(content-tag@4.2.0)(prettier-plugin-ember-template-tag@2.1.7(prettier@3.9.6))(prettier@3.9.6)(supports-color@10.2.2)
       '@prettier/plugin-oxc': 0.2.2
 
   prettier-plugin-toml@2.0.6(prettier@3.9.6):
@@ -13091,7 +13097,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  virtua@0.49.3(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  virtua@0.50.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     optionalDependencies:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)
