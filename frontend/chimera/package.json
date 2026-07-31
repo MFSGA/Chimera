@@ -44,7 +44,7 @@
     "less": "4.7.0",
     "lodash-es": "4.18.1",
     "material-react-table": "3.2.1",
-    "monaco-editor": "0.55.1",
+    "monaco-editor": "0.56.0",
     "motion": "12.42.2",
     "mui-color-input": "9.0.0",
     "radix-ui": "1.6.4",
