@@ -1,7 +1,9 @@
 packages:
   - 'frontend/*'
   - 'scripts'
+  - 'tests/*'
 overrides:
+  '@wdio/native-utils': 2.5.0
   material-react-table: npm:@greenhat616/material-react-table@4.0.0
 #patchedDependencies:
 #  monaco-worker-manager@2.0.1: patches/monaco-worker-manager@2.0.1.patch
@@ -9,8 +11,10 @@ allowBuilds:
   '@parcel/watcher': true
   '@tailwindcss/oxide': true
   core-js-pure: true
+  edgedriver: false
   electron: true
   esbuild: true
+  geckodriver: false
   meta-json-schema: true
   oxc-resolver: true
 minimumReleaseAgeExclude:
