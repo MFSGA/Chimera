@@ -6,6 +6,8 @@ import { consola } from './logger';
 
 const CHIMERA_SERVICE_REPO = 'MFSGA/Chimera_Service';
 const CHIMERA_SERVICE_NAME = 'chimera-service';
+// Keep the sidecar aligned with chimera-ipc 1.8.0 in backend/Cargo.lock.
+const CHIMERA_SERVICE_VERSION = 'v1.8.0';
 
 export const getChimeraServiceLatestVersion = async () => {
   try {
@@ -51,7 +53,7 @@ export const getChimeraServiceInfo = async ({
 }): Promise<BinInfo> => {
   const isWin = SIDECAR_HOST?.includes('windows');
   const urlExt = isWin ? 'zip' : 'tar.gz';
-  const version = await getChimeraServiceLatestVersion();
+  const version = CHIMERA_SERVICE_VERSION;
   const downloadURL = `https://github.com/${CHIMERA_SERVICE_REPO}/releases/download/${version}/${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
   const exeFile = `${CHIMERA_SERVICE_NAME}${isWin ? '.exe' : ''}`;
   const tmpFile = `${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
