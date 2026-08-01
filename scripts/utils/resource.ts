@@ -12,6 +12,8 @@ import { SIDECAR_HOST } from './consts';
 import { consola } from './logger';
 
 const SERVICE_REPO = 'libnyanpasu/nyanpasu-service';
+// Keep the sidecar aligned with nyanpasu-ipc 1.4.4 in backend/Cargo.lock.
+const NYANPASU_SERVICE_VERSION = 'v1.4.4';
 
 type NodeArch = NodeJS.Architecture | 'armel';
 
@@ -249,8 +251,7 @@ export const getNyanpasuServiceInfo = async ({
   const name = `nyanpasu-service`;
   const isWin = SIDECAR_HOST?.includes('windows');
   const urlExt = isWin ? 'zip' : 'tar.gz';
-  // first we had to get the latest tag
-  const version = await getNyanpasuServiceLatestVersion();
+  const version = NYANPASU_SERVICE_VERSION;
   const downloadURL = `https://github.com/${SERVICE_REPO}/releases/download/${version}/${name}-${sidecarHost}.${urlExt}`;
   const exeFile = `${name}${isWin ? '.exe' : ''}`;
   const tmpFile = `${name}-${sidecarHost}.${urlExt}`;
