@@ -113,11 +113,23 @@ pub fn run() -> std::io::Result<()> {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
-    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[cfg(feature = "e2e")]
+    {
+        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    }
+
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        not(feature = "e2e")
+    ))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             resolve::create_window(app);
         }));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    {
         builder = builder.plugin(tauri_plugin_deep_link::init());
     }
 
