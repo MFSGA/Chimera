@@ -1,3 +1,17 @@
+## [0.18.2] - 2026-08-01 06:51:25
+
+### 🐛 Bug Fixes
+
+- **scripts:** Pin service sidecars to IPC versions by @MFSGA
+
+### 🔨 Refactor
+
+- **interface:** Migrate shared queries to React Query by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.18.1...v0.18.2
+
 ## [0.18.1] - 2026-07-31 10:22:11
 
 ### ✨ Features
