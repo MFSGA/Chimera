@@ -12,15 +12,6 @@ export const commands = {
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
     typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
-  getRuntimeTransformDiagnostics: () =>
-    typedError<
-      {
-        revision: number;
-        output: PostProcessingOutput;
-        failure: RuntimeTransformFailureDiagnostics | null;
-      } | null,
-      string
-    >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,
@@ -33,54 +24,44 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<MutationOutcome<string>, string>(
-      __TAURI_INVOKE('import_profile', { url, option }),
-    ),
+    typedError<null, string>(__TAURI_INVOKE('import_profile', { url, option })),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
   reorderProfile: (activeId: string, overId: string) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('reorder_profile', { activeId, overId }),
     ),
   reorderProfilesByList: (list: string[]) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('reorder_profiles_by_list', { list }),
     ),
   activateProfile: (uid: string | null) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
     ),
   setProfileValidFields: (fields: string[]) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
-    ),
-  setProfileTransformChain: (uid: string, transforms: string[]) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('set_profile_transform_chain', { uid, transforms }),
-    ),
-  setGlobalTransformChain: (transforms: string[]) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('set_global_transform_chain', { transforms }),
     ),
   patchProfileMetadata: (
     uid: string,
     patch: ProfileMetadataPatch_Deserialize,
   ) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('patch_profile_metadata', { uid, patch }),
     ),
   patchRemoteProfileOptions: (
     uid: string,
     patch: RemoteProfileOptionsPatch_Deserialize,
   ) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('patch_remote_profile_options', { uid, patch }),
     ),
   replaceProfileDefinition: (
     uid: string,
     definition: ProfileDefinition_Deserialize,
   ) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<RebuildOutcome, string>(
       __TAURI_INVOKE('replace_profile_definition', { uid, definition }),
     ),
   updateProfile: (
@@ -94,21 +75,15 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('update_profile', { uid, option }),
-    ),
+    typedError<null, string>(__TAURI_INVOKE('update_profile', { uid, option })),
   patchProfile: (uid: string, profile: ProfileBuilderRequest_Deserialize) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('patch_profile', { uid, profile }),
-    ),
+    typedError<null, string>(__TAURI_INVOKE('patch_profile', { uid, profile })),
   deleteProfile: (uid: string) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('delete_profile', { uid }),
-    ),
+    typedError<null, string>(__TAURI_INVOKE('delete_profile', { uid })),
   readProfileFile: (uid: string) =>
     typedError<string, string>(__TAURI_INVOKE('read_profile_file', { uid })),
   saveProfileFile: (uid: string, fileData: string) =>
-    typedError<MutationOutcome<null>, string>(
+    typedError<null, string>(
       __TAURI_INVOKE('save_profile_file', { uid, fileData }),
     ),
   /**  create a new profile */
@@ -116,7 +91,7 @@ export const commands = {
     item: ProfileBuilderRequest_Deserialize,
     fileData: string | null,
   ) =>
-    typedError<MutationOutcome<string>, string>(
+    typedError<null, string>(
       __TAURI_INVOKE('create_profile', { item, fileData }),
     ),
   createEditorWindow: (windowType: EditorWindowType, uid: string | null) =>
@@ -177,10 +152,6 @@ export const commands = {
     typedError<string | null, string>(__TAURI_INVOKE('get_custom_app_dir')),
   setCustomAppDir: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('set_custom_app_dir', { path })),
-  clashApiGetConfigs: () =>
-    typedError<ClashRuntimeConfig, string>(
-      __TAURI_INVOKE('clash_api_get_configs'),
-    ),
   clashApiGetProxyDelay: (name: string, url: string | null) =>
     typedError<DelayRes, string>(
       __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
@@ -295,19 +266,44 @@ export const commands = {
     typedError<null, string>(__TAURI_INVOKE('create_main_window')),
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
+  agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
   agentGetNetworkSnapshot: () =>
-    __TAURI_INVOKE<AgentNetworkSnapshot>('agent_get_network_snapshot'),
+    typedError<AgentNetworkSnapshot, AgentCommandError>(
+      __TAURI_INVOKE('agent_get_network_snapshot'),
+    ),
+  agentResolveIntent: (request: AgentIntentRequest) =>
+    __TAURI_INVOKE<AgentIntentResolution>('agent_resolve_intent', { request }),
+  agentGetHistory: () =>
+    typedError<AgentHistorySnapshot, AgentCommandError>(
+      __TAURI_INVOKE('agent_get_history'),
+    ),
+  agentClearHistory: () =>
+    typedError<AgentHistorySnapshot, AgentCommandError>(
+      __TAURI_INVOKE('agent_clear_history'),
+    ),
   agentProposeNetworkAction: (action: AgentActionRequest) =>
-    typedError<AgentProposal, string>(
+    typedError<AgentProposal, AgentCommandError>(
       __TAURI_INVOKE('agent_propose_network_action', { action }),
     ),
   agentExecuteNetworkAction: (proposalId: string, digest: string) =>
-    typedError<AgentActionResult, string>(
+    typedError<AgentActionResult, AgentCommandError>(
       __TAURI_INVOKE('agent_execute_network_action', { proposalId, digest }),
     ),
   agentCancelNetworkAction: (proposalId: string) =>
-    typedError<boolean, string>(
+    typedError<boolean, AgentCommandError>(
       __TAURI_INVOKE('agent_cancel_network_action', { proposalId }),
+    ),
+  startAgentBridge: () =>
+    typedError<AgentBridgeStartResult, AgentCommandError>(
+      __TAURI_INVOKE('start_agent_bridge'),
+    ),
+  getAgentBridgeStatus: () =>
+    typedError<AgentBridgeStatus, AgentCommandError>(
+      __TAURI_INVOKE('get_agent_bridge_status'),
+    ),
+  stopAgentBridge: () =>
+    typedError<AgentBridgeStatus, AgentCommandError>(
+      __TAURI_INVOKE('stop_agent_bridge'),
     ),
 };
 
@@ -323,10 +319,32 @@ export const events = {
 };
 
 /* Types */
-export type AgentActionKind = 'set_routing_mode' | 'disable_stale_system_proxy';
+export type AgentActionKind =
+  | 'set_routing_mode'
+  | 'set_tun_enabled'
+  | 'set_system_proxy_enabled'
+  | 'set_service_mode'
+  | 'start_core'
+  | 'restart_core'
+  | 'reconnect_telemetry'
+  | 'start_service'
+  | 'stop_service'
+  | 'restart_service'
+  | 'repair_system_proxy_endpoint'
+  | 'disable_stale_system_proxy';
 
 export type AgentActionRequest =
   | { action: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { action: 'set_tun_enabled'; enabled: boolean }
+  | { action: 'set_system_proxy_enabled'; enabled: boolean }
+  | { action: 'set_service_mode'; enabled: boolean }
+  | { action: 'start_core' }
+  | { action: 'restart_core' }
+  | { action: 'reconnect_telemetry' }
+  | { action: 'start_service' }
+  | { action: 'stop_service' }
+  | { action: 'restart_service' }
+  | { action: 'repair_system_proxy_endpoint' }
   | { action: 'disable_stale_system_proxy' };
 
 export type AgentActionResult = {
@@ -336,9 +354,73 @@ export type AgentActionResult = {
   snapshot: AgentNetworkSnapshot;
 };
 
-export type AgentActionRisk = 'traffic_change' | 'host_network_change';
+export type AgentActionRisk =
+  | 'traffic_change'
+  | 'host_network_change'
+  | 'service_control'
+  | 'telemetry_recovery';
 
 export type AgentAppliedState = 'consistent' | 'stale' | 'unknown';
+
+export type AgentAuditHistoryEntry = {
+  schema_version: number;
+  recorded_at: number;
+  proposal_id: string;
+  action: AgentActionKind;
+  snapshot_revision: string;
+  outcome: AgentAuditOutcome;
+};
+
+export type AgentAuditOutcome =
+  | 'proposed'
+  | 'verified'
+  | 'action_not_available'
+  | 'proposal_not_found'
+  | 'proposal_expired'
+  | 'digest_mismatch'
+  | 'state_changed'
+  | 'rate_limited'
+  | 'limit_reached'
+  | 'confirmation_declined'
+  | 'action_failed'
+  | 'partial_apply'
+  | 'verification_failed'
+  | 'bridge_start_failed'
+  | 'history_clear_failed';
+
+export type AgentBridgeStartResult = {
+  running: boolean;
+  base_url: string;
+  token: string | null;
+};
+
+export type AgentBridgeStatus = {
+  running: boolean;
+  base_url: string | null;
+};
+
+export type AgentClarificationChoice = {
+  code: AgentClarificationCode;
+  intent: AgentIntent;
+};
+
+export type AgentClarificationCode =
+  'enable_tun' | 'use_global_routing' | 'diagnose_network';
+
+export type AgentCommandError =
+  | 'agent_action_not_available'
+  | 'agent_proposal_not_found'
+  | 'agent_proposal_expired'
+  | 'agent_proposal_digest_mismatch'
+  | 'agent_network_state_changed'
+  | 'agent_proposal_rate_limited'
+  | 'agent_proposal_limit_reached'
+  | 'agent_confirmation_declined'
+  | 'agent_action_failed'
+  | 'agent_action_partially_applied'
+  | 'agent_action_verification_failed'
+  | 'agent_bridge_start_failed'
+  | 'agent_history_clear_failed';
 
 export type AgentConnectorState =
   'disconnected' | 'connecting' | 'connected' | 'unknown';
@@ -346,7 +428,7 @@ export type AgentConnectorState =
 export type AgentCoreSnapshot = {
   state: AgentCoreState;
   run_type: AgentRunType;
-  selected_core: string;
+  selected_core: AgentSelectedCore;
   state_changed_at: number;
   runtime_config_present: boolean;
   routing_mode: AgentRoutingMode | null;
@@ -355,6 +437,17 @@ export type AgentCoreSnapshot = {
 };
 
 export type AgentCoreState = 'running' | 'stopped' | 'unknown';
+
+export type AgentDiagnosticHistoryEntry = {
+  schema_version: number;
+  captured_at: number;
+  revision: string;
+  health: AgentHealth;
+  core_state: AgentCoreState;
+  service_state: AgentServiceState;
+  finding_codes: AgentFindingCode[];
+  probe_failure_codes: AgentProbeCode[];
+};
 
 export type AgentFinding = {
   code: AgentFindingCode;
@@ -372,25 +465,86 @@ export type AgentFindingCode =
   | 'tun_runtime_mismatch'
   | 'recent_core_errors';
 
+export type AgentFindingHistoryCount = {
+  code: AgentFindingCode;
+  count: number;
+};
+
 export type AgentFindingSeverity = 'info' | 'warning' | 'critical';
 
 export type AgentHealth = 'healthy' | 'warning' | 'critical' | 'degraded';
+
+export type AgentHealthTrend =
+  'insufficient_data' | 'stable' | 'improving' | 'worsening';
+
+export type AgentHistorySnapshot = {
+  summary: AgentHistorySummary;
+  diagnostics: AgentDiagnosticHistoryEntry[];
+  audits: AgentAuditHistoryEntry[];
+};
+
+export type AgentHistorySummary = {
+  diagnostic_samples: number;
+  unhealthy_samples: number;
+  latest_health: AgentHealth | null;
+  health_trend: AgentHealthTrend;
+  finding_counts: AgentFindingHistoryCount[];
+  probe_failure_counts: AgentProbeFailureHistoryCount[];
+  action_attempts: number;
+  verified_actions: number;
+  attention_actions: number;
+  partial_actions: number;
+};
 
 export type AgentHostScope = 'loopback' | 'non_loopback' | 'unknown';
 
 export type AgentImpact =
   | 'existing_connections_may_change'
+  | 'core_may_restart'
+  | 'host_dns_may_change'
+  | 'admin_permission_may_be_required'
   | 'traffic_may_bypass_proxy'
   | 'all_traffic_uses_proxy'
   | 'restore_rule_routing'
-  | 'host_system_proxy_disabled';
+  | 'host_system_proxy_enabled'
+  | 'host_system_proxy_disabled'
+  | 'host_system_proxy_endpoint_changed'
+  | 'service_availability_may_change'
+  | 'telemetry_may_be_unavailable';
+
+export type AgentIntent =
+  | { intent: 'diagnose' }
+  | { intent: 'set_tun_enabled'; enabled: boolean }
+  | { intent: 'set_system_proxy_enabled'; enabled: boolean }
+  | { intent: 'set_service_mode'; enabled: boolean }
+  | { intent: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { intent: 'start_core' }
+  | { intent: 'restart_core' }
+  | { intent: 'reconnect_telemetry' }
+  | { intent: 'control_service'; operation: AgentServiceOperation }
+  | { intent: 'repair_system_proxy_endpoint' }
+  | { intent: 'disable_stale_system_proxy' };
+
+export type AgentIntentRequest = {
+  text: string;
+};
+
+export type AgentIntentResolution =
+  | { status: 'resolved'; intent: AgentIntent }
+  | { status: 'needs_clarification'; choices: AgentClarificationChoice[] }
+  | { status: 'unsupported'; reason: AgentUnsupportedIntentReason };
+
+export type AgentManifest = {
+  schema_version: number;
+  tools: AgentToolManifest[];
+};
 
 export type AgentNetworkSnapshot = {
   schema_version: number;
   revision: string;
   captured_at: number;
   app_version: string;
-  os_family: string;
+  os_family: AgentOsFamily;
   health: AgentHealth;
   core: AgentCoreSnapshot;
   service: AgentServiceSnapshot;
@@ -400,8 +554,21 @@ export type AgentNetworkSnapshot = {
   telemetry: AgentTelemetrySnapshot;
   findings: AgentFinding[];
   probe_failures: AgentProbeFailure[];
+  recommendations: AgentRecommendation[];
   privacy: AgentPrivacyBoundary;
 };
+
+export type AgentOsFamily =
+  | 'windows'
+  | 'macos'
+  | 'ios'
+  | 'linux'
+  | 'android'
+  | 'freebsd'
+  | 'dragonfly'
+  | 'openbsd'
+  | 'netbsd'
+  | 'unknown';
 
 export type AgentPrivacyBoundary = {
   contains_raw_logs: boolean;
@@ -412,7 +579,7 @@ export type AgentPrivacyBoundary = {
 };
 
 export type AgentProbeCode =
-  | 'core_status_unavailable'
+  | 'core_status_timeout'
   | 'core_config_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
@@ -421,6 +588,11 @@ export type AgentProbeCode =
 
 export type AgentProbeFailure = {
   code: AgentProbeCode;
+};
+
+export type AgentProbeFailureHistoryCount = {
+  code: AgentProbeCode;
+  count: number;
 };
 
 export type AgentProfileSnapshot = {
@@ -444,9 +616,30 @@ export type AgentProposal = {
   requires_confirmation: boolean;
 };
 
+export type AgentRecommendation = {
+  action: AgentActionRequest;
+  available: boolean;
+  unavailable_reason: AgentRecommendationUnavailableReason | null;
+  risk: AgentActionRisk | null;
+  impacts: AgentImpact[];
+};
+
+export type AgentRecommendationUnavailableReason =
+  'current_state_not_supported';
+
 export type AgentRoutingMode = 'rule' | 'global' | 'direct';
 
-export type AgentRunType = 'normal' | 'service' | 'elevated';
+export type AgentRunType = 'normal' | 'service' | 'elevated' | 'unknown';
+
+export type AgentSelectedCore =
+  | 'clash'
+  | 'clash-rs'
+  | 'mihomo'
+  | 'chimera-client'
+  | 'mihomo-alpha'
+  | 'clash-rs-alpha';
+
+export type AgentServiceOperation = 'start' | 'stop' | 'restart';
 
 export type AgentServiceSnapshot = {
   desired_enabled: boolean;
@@ -459,10 +652,34 @@ export type AgentServiceState =
   'not_installed' | 'stopped' | 'running' | 'unknown';
 
 export type AgentStateChange = {
-  field: string;
-  before: string;
-  after: string;
+  field: AgentStateField;
+  before: AgentStateValue;
+  after: AgentStateValue;
 };
+
+export type AgentStateField =
+  | 'routing_mode'
+  | 'tun'
+  | 'core_process'
+  | 'telemetry_connector'
+  | 'service'
+  | 'service_mode'
+  | 'system_proxy_endpoint'
+  | 'system_proxy';
+
+export type AgentStateValue =
+  | 'rule'
+  | 'global'
+  | 'direct'
+  | 'running'
+  | 'stopped'
+  | 'restarted'
+  | 'connected'
+  | 'disconnected'
+  | 'unexpected'
+  | 'expected_loopback_endpoint'
+  | 'enabled'
+  | 'disabled';
 
 export type AgentSystemProxySnapshot = {
   desired_enabled: boolean;
@@ -478,10 +695,34 @@ export type AgentTelemetrySnapshot = {
   active_connection_count: number | null;
   upload_speed: number | null;
   download_speed: number | null;
-  upload_total: string | null;
-  download_total: string | null;
+  upload_total: number | null;
+  download_total: number | null;
   recent_error_count: number;
 };
+
+export type AgentToolManifest = {
+  name: AgentToolName;
+  version: number;
+  description: string;
+  input_schema_version: number;
+  output_schema_version: number;
+  read_only: boolean;
+  risk: AgentToolRisk;
+  requires_authentication: boolean;
+  timeout_ms: number;
+};
+
+export type AgentToolName =
+  | 'system.snapshot'
+  | 'network.diagnose'
+  | 'network.probe'
+  | 'core.status'
+  | 'proxy.status'
+  | 'tun.status'
+  | 'profile.summary'
+  | 'service.status';
+
+export type AgentToolRisk = 'read_only';
 
 export type AgentTunSnapshot = {
   desired_enabled: boolean;
@@ -489,6 +730,9 @@ export type AgentTunSnapshot = {
   observed_active: AgentAppliedState;
   applied_consistency: AgentAppliedState;
 };
+
+export type AgentUnsupportedIntentReason =
+  'empty_input' | 'input_too_long' | 'no_matching_intent';
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
@@ -558,22 +802,6 @@ export type ClashInfo = {
   /**  same as `external-controller` */
   server: string;
   /**  clash secret */
-  secret: string | null;
-};
-
-/**  Runtime state returned by the running core's `GET /configs` endpoint. */
-export type ClashRuntimeConfig = {
-  port: number | null;
-  mode: string | null;
-  ipv6: boolean | null;
-  'socket-port': number | null;
-  'allow-lan': boolean | null;
-  'log-level': string | null;
-  'mixed-port': number | null;
-  'redir-port': number | null;
-  'socks-port': number | null;
-  'tproxy-port': number | null;
-  'external-controller': string | null;
   secret: string | null;
 };
 
@@ -658,25 +886,6 @@ export type CoreInfos = {
 export type CoreState = 'Running' | { Stopped: string | null };
 
 export type CoreType = { clash: ClashCoreType } | 'singbox';
-
-export type Degradation = {
-  phase: DegradationPhase;
-  code: string;
-  message: string;
-  retryable: boolean;
-};
-
-export type DegradationPhase =
-  | 'legacy_mirror'
-  | 'profile_materialization'
-  | 'runtime_build'
-  | 'runtime_check'
-  | 'runtime_promote'
-  | 'runtime_publish'
-  | 'runtime_apply'
-  | 'core_rollback'
-  | 'system_effect'
-  | 'ui_effect';
 
 export type DelayRes = {
   delay: number;
@@ -963,8 +1172,6 @@ export type LocalProfile_Serialize = {
   chain: string[];
 } & ProfileShared;
 
-export type LogSpan = 'log' | 'info' | 'warn' | 'error';
-
 export type LoggingLevel = LoggingLevel_Serialize | LoggingLevel_Deserialize;
 
 export type LoggingLevel_Deserialize =
@@ -990,17 +1197,6 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
-export type MergeProfile = ProfileShared;
-
-/**
- *  Public mutation wire aligned with REF: desired state is committed first;
- *  post-commit side-effect failures degrade instead of turning the mutation
- *  into an error that would imply the commit was rolled back.
- */
-export type MutationOutcome<T> =
-  | { status: 'applied'; value: T }
-  | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
-
 export type PatchClashCoreConfig =
   PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
 
@@ -1016,11 +1212,9 @@ export type PatchClashCoreConfig_Serialize = {
   'external-controller'?: string | null;
 };
 
-/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig =
   PatchRuntimeConfig_Serialize | PatchRuntimeConfig_Deserialize;
 
-/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Deserialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;
@@ -1028,7 +1222,6 @@ export type PatchRuntimeConfig_Deserialize = {
   mode?: string | null;
 };
 
-/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Serialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;
@@ -1036,38 +1229,16 @@ export type PatchRuntimeConfig_Serialize = {
   mode?: string | null;
 };
 
-/**  后处理输出 */
-export type PostProcessingOutput = {
-  /**  Per-source transform chain output, keyed by source profile UID and transform UID. */
-  scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
-  /**  Global transform chain output, keyed by transform UID. */
-  global: { [key in string]: [LogSpan, string][] };
-};
-
 export type ProfileBuilderRequest =
   ProfileBuilderRequest_Serialize | ProfileBuilderRequest_Deserialize;
 
 export type ProfileBuilderRequest_Deserialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type?: ScriptType;
-    };
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
 
 export type ProfileBuilderRequest_Serialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type: ScriptType;
-    };
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize);
 
 export type ProfileDefinition =
   ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
@@ -1097,9 +1268,7 @@ export type ProfileMetadataPatch_Serialize = {
 
 export type ProfileResponse =
   | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize)
-  | ({ type: 'merge' } & MergeProfile)
-  | ({ type: 'script' } & ScriptProfile);
+  | ({ type: 'local' } & LocalProfile_Serialize);
 
 export type ProfileShared = {
   /**  Profile ID */
@@ -1245,6 +1414,9 @@ export type ProxyItem_Serialize = {
   icon?: string | null;
 };
 
+export type RebuildOutcome =
+  { status: 'ok' } | { status: 'degraded'; error: string };
+
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 
 /** Builder for [`RemoteProfile`](struct.RemoteProfile.html). */
@@ -1343,26 +1515,6 @@ export type RuntimeInfos = {
   nyanpasu_config_dir: string;
   nyanpasu_data_dir: string;
 };
-
-export type RuntimeTransformDiagnostics = {
-  revision: number;
-  output: PostProcessingOutput;
-  failure: RuntimeTransformFailureDiagnostics | null;
-};
-
-export type RuntimeTransformFailureDiagnostics = {
-  attempt_revision: number;
-  transform_uid: string;
-  scope_uid: string | null;
-  script_type: ScriptType | null;
-  message: string;
-};
-
-export type ScriptProfile = {
-  script_type?: ScriptType;
-} & ProfileShared;
-
-export type ScriptType = 'javascript' | 'lua';
 
 export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 
