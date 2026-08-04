@@ -209,10 +209,17 @@ macro_rules! build_builder {
 pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     #[cfg(feature = "agent")]
     let builder = build_builder![
+        features::agent::commands::agent_get_manifest,
         features::agent::commands::agent_get_network_snapshot,
+        features::agent::commands::agent_resolve_intent,
+        features::agent::commands::agent_get_history,
+        features::agent::commands::agent_clear_history,
         features::agent::commands::agent_propose_network_action,
         features::agent::commands::agent_execute_network_action,
         features::agent::commands::agent_cancel_network_action,
+        features::agent::commands::start_agent_bridge,
+        features::agent::commands::get_agent_bridge_status,
+        features::agent::commands::stop_agent_bridge,
     ];
     #[cfg(not(feature = "agent"))]
     let builder = build_builder![];
@@ -230,6 +237,11 @@ mod tests {
         "/../../frontend/interface/src/ipc/bindings.ts"
     );
     const PRETTIER_CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../.prettierrc.cjs");
+    #[cfg(feature = "agent")]
+    const AGENT_INTERFACE_DIRECTORY: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../frontend/interface/src/features/agent"
+    );
 
     fn export_bindings(path: &Path) {
         build_specta_builder()
@@ -253,6 +265,83 @@ mod tests {
             .status()
             .expect("failed to run Prettier");
         assert!(status.success(), "Prettier failed for generated bindings");
+    }
+
+    #[cfg(not(feature = "agent"))]
+    #[test]
+    fn agent_bindings_are_absent_without_feature() {
+        let directory = tempfile::tempdir().expect("failed to create binding test directory");
+        let generated_path = directory.path().join("bindings.ts");
+        export_bindings(&generated_path);
+        let generated = std::fs::read_to_string(generated_path)
+            .expect("failed to read generated TypeScript bindings");
+
+        for command in [
+            "agentGetManifest:",
+            "agentGetNetworkSnapshot:",
+            "agentResolveIntent:",
+            "agentGetHistory:",
+            "agentClearHistory:",
+            "agentProposeNetworkAction:",
+            "agentExecuteNetworkAction:",
+            "agentCancelNetworkAction:",
+            "startAgentBridge:",
+            "getAgentBridgeStatus:",
+            "stopAgentBridge:",
+        ] {
+            assert!(
+                !generated.contains(command),
+                "Agent command leaked into bindings without the agent feature: {command}"
+            );
+        }
+        for command_literal in [
+            "'agent_",
+            "'start_agent_bridge'",
+            "'get_agent_bridge_status'",
+            "'stop_agent_bridge'",
+        ] {
+            assert!(
+                !generated.contains(command_literal),
+                "Agent IPC literal leaked into bindings without the agent feature: {command_literal}"
+            );
+        }
+        assert!(
+            !generated.contains("export type Agent"),
+            "Agent types leaked into bindings without the agent feature"
+        );
+    }
+
+    #[cfg(feature = "agent")]
+    #[test]
+    fn frontend_agent_interface_uses_only_generated_ipc_commands() {
+        let mut inspected_files = 0;
+        for entry in std::fs::read_dir(AGENT_INTERFACE_DIRECTORY)
+            .expect("failed to read frontend Agent interface directory")
+        {
+            let path = entry.expect("failed to read Agent interface entry").path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("ts") {
+                continue;
+            }
+            inspected_files += 1;
+            let source = std::fs::read_to_string(&path)
+                .expect("failed to read frontend Agent interface source");
+            for forbidden in [
+                "__TAURI_INVOKE",
+                "invoke(",
+                "invoke<",
+                "@tauri-apps/api/core",
+            ] {
+                assert!(
+                    !source.contains(forbidden),
+                    "frontend Agent interface must use generated commands, found {forbidden} in {}",
+                    path.display()
+                );
+            }
+        }
+        assert!(
+            inspected_files > 0,
+            "expected frontend Agent interface files"
+        );
     }
 
     #[test]
