@@ -3,43 +3,37 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_yaml::{Mapping, Value};
 use sha2::Digest;
-use sysproxy::Sysproxy;
-use tauri::{AppHandle, WebviewWindow};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-use tokio::sync::Mutex;
-
-use crate::{config::chimera::IVerge, feat};
+use subtle::ConstantTimeEq;
 
 use super::{
-    collect_network_snapshot, core_probe,
-    diagnostics::host_scope,
+    client::AgentHistoryClient,
+    history::AgentAuditOutcome,
     model::{
-        AgentActionRequest, AgentActionResult, AgentActionRisk, AgentAppliedState,
-        AgentCommandError, AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot,
-        AgentProposal, AgentResult, AgentRoutingMode, AgentStateChange,
+        AgentActionRequest, AgentActionResult, AgentCommandError, AgentConnectorState,
+        AgentCoreState, AgentNetworkSnapshot, AgentProposal, AgentResult,
     },
+    planning::{ActionPreconditions, plan_action, validate_preconditions, verify_action},
+    ports::{AgentConfirmationPort, AgentRuntimePort},
+};
+
+#[cfg(test)]
+use super::planning::{
+    plan_proxy_endpoint_repair, plan_reconnect_telemetry, plan_restart_core, plan_routing_mode,
+    plan_service_control, plan_service_mode_change, plan_start_core, plan_system_proxy_change,
+    plan_tun_change, recommendations, tun_impacts,
 };
 
 const PROPOSAL_TTL: Duration = Duration::from_secs(60);
 const MIN_PROPOSAL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_PENDING_PROPOSALS: usize = 24;
 const MAX_PENDING_PER_OWNER: usize = 4;
-const CORE_ACTION_TIMEOUT: Duration = Duration::from_secs(3);
-
-#[derive(Debug, Clone)]
-enum ActionPreconditions {
-    SetRoutingMode {
-        before: AgentRoutingMode,
-        core_state_changed_at: i64,
-    },
-    DisableStaleSystemProxy {
-        core_state_changed_at: i64,
-        expected_port: u16,
-        desired_before: bool,
-    },
-}
+const PROPOSAL_ID_LENGTH: usize = 32;
+const PROPOSAL_DIGEST_LENGTH: usize = 64;
+const TELEMETRY_STABILIZE_TIMEOUT: Duration = Duration::from_secs(10);
+const TELEMETRY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const SERVICE_STABILIZE_TIMEOUT: Duration = Duration::from_secs(15);
+const SERVICE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingProposal {
@@ -55,32 +49,32 @@ pub(super) struct ProposalStore {
     last_proposed_at: HashMap<String, Instant>,
 }
 
-pub(crate) struct AgentFeatureState {
-    pub(super) proposals: Mutex<ProposalStore>,
-    pub(super) execution: Mutex<()>,
+pub(crate) struct AgentProposalState {
+    proposals: ProposalStore,
+    history: AgentHistoryClient,
 }
 
-struct ActionPlan {
-    risk: AgentActionRisk,
-    impacts: Vec<AgentImpact>,
-    changes: Vec<AgentStateChange>,
-    preconditions: ActionPreconditions,
-}
+impl AgentProposalState {
+    pub(crate) fn new(history: AgentHistoryClient) -> Self {
+        Self {
+            proposals: ProposalStore::default(),
+            history,
+        }
+    }
 
-impl AgentFeatureState {
     pub(crate) async fn propose(
-        &self,
-        app: &AppHandle,
+        &mut self,
+        runtime: &dyn AgentRuntimePort,
         owner_label: &str,
         action: AgentActionRequest,
     ) -> AgentResult<AgentProposal> {
-        self.reserve_proposal_slot(owner_label).await?;
-        let snapshot = collect_network_snapshot(app).await;
+        self.reserve_proposal_slot(owner_label)?;
+        let snapshot = runtime.snapshot().await;
         let plan = plan_action(&snapshot, &action)?;
         let created_at = chrono::Utc::now().timestamp_millis();
         let expires_at = created_at + PROPOSAL_TTL.as_millis() as i64;
-        let id = nanoid::nanoid!();
-        let digest = proposal_digest(&id, &action, &snapshot.revision, expires_at);
+        let id = hex::encode(rand::random::<[u8; 16]>());
+        let digest = proposal_digest(&id, &action, &snapshot.revision, expires_at)?;
         let proposal = AgentProposal {
             id: id.clone(),
             digest,
@@ -101,107 +95,128 @@ impl AgentFeatureState {
                 owner_label: owner_label.to_owned(),
                 expires_at: Instant::now() + PROPOSAL_TTL,
             },
-        )
-        .await?;
-        audit_proposal(&proposal, "proposed");
+        )?;
+        audit_proposal(&proposal, AgentAuditOutcome::Proposed);
+        self.history
+            .record_audit(
+                &proposal.id,
+                &proposal.action,
+                &proposal.snapshot_revision,
+                AgentAuditOutcome::Proposed,
+            )
+            .await;
         Ok(proposal)
     }
 
     pub(crate) async fn execute(
-        &self,
-        app: &AppHandle,
-        window: &WebviewWindow,
+        &mut self,
+        runtime: &dyn AgentRuntimePort,
+        confirmation: &dyn AgentConfirmationPort,
+        owner_label: &str,
         proposal_id: &str,
         digest: &str,
     ) -> AgentResult<AgentActionResult> {
-        let _execution = self.execution.lock().await;
-        let pending = self.take_proposal(window.label(), proposal_id).await?;
-        let result = execute_pending(app, window, pending.clone(), digest).await;
+        if !is_fixed_lower_hex(proposal_id, PROPOSAL_ID_LENGTH) {
+            return Err(AgentCommandError::ProposalNotFound);
+        }
+        if !is_fixed_lower_hex(digest, PROPOSAL_DIGEST_LENGTH) {
+            return Err(AgentCommandError::ProposalDigestMismatch);
+        }
+
+        let pending = self.take_proposal(owner_label, proposal_id, digest)?;
+        let result =
+            execute_pending(runtime, confirmation, owner_label, pending.clone(), digest).await;
         let outcome = result
             .as_ref()
-            .map(|_| "verified")
-            .unwrap_or_else(|error| error.audit_code());
+            .map(|_| AgentAuditOutcome::Verified)
+            .unwrap_or_else(|error| error.audit_outcome());
         audit_proposal(&pending.proposal, outcome);
+        self.history
+            .record_audit(
+                &pending.proposal.id,
+                &pending.proposal.action,
+                &pending.proposal.snapshot_revision,
+                outcome,
+            )
+            .await;
         result
     }
 
-    pub(crate) async fn cancel(&self, owner_label: &str, proposal_id: &str) -> bool {
-        let mut store = self.proposals.lock().await;
-        let is_owner = store
+    pub(crate) fn cancel(&mut self, owner_label: &str, proposal_id: &str) -> bool {
+        if !is_fixed_lower_hex(proposal_id, PROPOSAL_ID_LENGTH) {
+            return false;
+        }
+
+        let is_owner = self
+            .proposals
             .pending
             .get(proposal_id)
             .is_some_and(|pending| pending.owner_label == owner_label);
         if is_owner {
-            store.pending.remove(proposal_id);
+            self.proposals.pending.remove(proposal_id);
         }
         is_owner
     }
 
-    async fn reserve_proposal_slot(&self, owner_label: &str) -> AgentResult<()> {
+    fn reserve_proposal_slot(&mut self, owner_label: &str) -> AgentResult<()> {
         let now = Instant::now();
-        let mut store = self.proposals.lock().await;
-        cleanup_store(&mut store, now);
-        if store
+        cleanup_store(&mut self.proposals, now);
+        if self
+            .proposals
             .last_proposed_at
             .get(owner_label)
             .is_some_and(|last| now.duration_since(*last) < MIN_PROPOSAL_INTERVAL)
         {
             return Err(AgentCommandError::ProposalRateLimited);
         }
-        enforce_store_limits(&store, owner_label)?;
-        store.last_proposed_at.insert(owner_label.to_owned(), now);
+        enforce_store_limits(&self.proposals, owner_label)?;
+        self.proposals
+            .last_proposed_at
+            .insert(owner_label.to_owned(), now);
         Ok(())
     }
 
-    async fn insert_proposal(&self, id: String, pending: PendingProposal) -> AgentResult<()> {
-        let mut store = self.proposals.lock().await;
-        cleanup_store(&mut store, Instant::now());
-        enforce_store_limits(&store, &pending.owner_label)?;
-        store.pending.insert(id, pending);
+    fn insert_proposal(&mut self, id: String, pending: PendingProposal) -> AgentResult<()> {
+        cleanup_store(&mut self.proposals, Instant::now());
+        enforce_store_limits(&self.proposals, &pending.owner_label)?;
+        self.proposals.pending.insert(id, pending);
         Ok(())
     }
 
-    async fn take_proposal(
-        &self,
+    fn take_proposal(
+        &mut self,
         owner_label: &str,
         proposal_id: &str,
+        digest: &str,
     ) -> AgentResult<PendingProposal> {
-        let mut store = self.proposals.lock().await;
-        let is_owner = store
-            .pending
-            .get(proposal_id)
-            .is_some_and(|pending| pending.owner_label == owner_label);
-        if !is_owner {
-            return Err(AgentCommandError::ProposalNotFound);
-        }
-        store
-            .pending
-            .remove(proposal_id)
-            .ok_or(AgentCommandError::ProposalNotFound)
+        take_owned_proposal(&mut self.proposals, owner_label, proposal_id, digest)
     }
 }
 
 impl AgentCommandError {
-    fn audit_code(&self) -> &'static str {
+    fn audit_outcome(&self) -> AgentAuditOutcome {
         match self {
-            Self::ActionNotAvailable => "action_not_available",
-            Self::ProposalNotFound => "proposal_not_found",
-            Self::ProposalExpired => "proposal_expired",
-            Self::ProposalDigestMismatch => "digest_mismatch",
-            Self::NetworkStateChanged => "state_changed",
-            Self::ProposalRateLimited => "rate_limited",
-            Self::ProposalLimitReached => "limit_reached",
-            Self::ConfirmationDeclined => "confirmation_declined",
-            Self::ActionFailed => "action_failed",
-            Self::PartialApply => "partial_apply",
-            Self::VerificationFailed => "verification_failed",
+            Self::ActionNotAvailable => AgentAuditOutcome::ActionNotAvailable,
+            Self::ProposalNotFound => AgentAuditOutcome::ProposalNotFound,
+            Self::ProposalExpired => AgentAuditOutcome::ProposalExpired,
+            Self::ProposalDigestMismatch => AgentAuditOutcome::DigestMismatch,
+            Self::NetworkStateChanged => AgentAuditOutcome::StateChanged,
+            Self::ProposalRateLimited => AgentAuditOutcome::RateLimited,
+            Self::ProposalLimitReached => AgentAuditOutcome::LimitReached,
+            Self::ConfirmationDeclined => AgentAuditOutcome::ConfirmationDeclined,
+            Self::ActionFailed => AgentAuditOutcome::ActionFailed,
+            Self::PartialApply => AgentAuditOutcome::PartialApply,
+            Self::VerificationFailed => AgentAuditOutcome::VerificationFailed,
+            Self::BridgeStartFailed => AgentAuditOutcome::BridgeStartFailed,
+            Self::HistoryClearFailed => AgentAuditOutcome::HistoryClearFailed,
         }
     }
 }
 
 async fn execute_pending(
-    app: &AppHandle,
-    window: &WebviewWindow,
+    runtime: &dyn AgentRuntimePort,
+    confirmation: &dyn AgentConfirmationPort,
+    owner_label: &str,
     pending: PendingProposal,
     digest: &str,
 ) -> AgentResult<AgentActionResult> {
@@ -209,20 +224,30 @@ async fn execute_pending(
     if proposal.digest != digest {
         return Err(AgentCommandError::ProposalDigestMismatch);
     }
-    if pending.expires_at <= Instant::now() {
-        return Err(AgentCommandError::ProposalExpired);
-    }
-    if !confirm_network_change(window, proposal).await? {
+    let confirmation_budget = pending
+        .expires_at
+        .checked_duration_since(Instant::now())
+        .ok_or(AgentCommandError::ProposalExpired)?;
+    let confirmed = tokio::time::timeout(
+        confirmation_budget,
+        confirmation.confirm(owner_label, proposal),
+    )
+    .await
+    .map_err(|_| AgentCommandError::ProposalExpired)??;
+    if !confirmed {
         return Err(AgentCommandError::ConfirmationDeclined);
     }
     if pending.expires_at <= Instant::now() {
         return Err(AgentCommandError::ProposalExpired);
     }
-    let current = collect_network_snapshot(app).await;
+    let current = runtime.snapshot().await;
+    if pending.expires_at <= Instant::now() {
+        return Err(AgentCommandError::ProposalExpired);
+    }
     validate_preconditions(&current, &pending.preconditions)?;
-    execute_action(&current, &proposal.action, &pending.preconditions).await?;
-    let snapshot = collect_network_snapshot(app).await;
-    if !verify_action(&snapshot, &proposal.action) {
+    execute_action(runtime, &current, &proposal.action, &pending.preconditions).await?;
+    let snapshot = runtime.snapshot().await;
+    if !verify_action(&snapshot, &proposal.action, &pending.preconditions) {
         return Err(AgentCommandError::VerificationFailed);
     }
     Ok(AgentActionResult {
@@ -233,11 +258,39 @@ async fn execute_pending(
     })
 }
 
+fn is_fixed_lower_hex(value: &str, expected_length: usize) -> bool {
+    value.len() == expected_length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn cleanup_store(store: &mut ProposalStore, now: Instant) {
     store.pending.retain(|_, pending| pending.expires_at > now);
     store
         .last_proposed_at
         .retain(|_, last| now.duration_since(*last) < PROPOSAL_TTL);
+}
+
+fn take_owned_proposal(
+    store: &mut ProposalStore,
+    owner_label: &str,
+    proposal_id: &str,
+    digest: &str,
+) -> AgentResult<PendingProposal> {
+    let Some(pending) = store.pending.get(proposal_id) else {
+        return Err(AgentCommandError::ProposalNotFound);
+    };
+    if pending.owner_label != owner_label {
+        return Err(AgentCommandError::ProposalNotFound);
+    }
+    if !bool::from(pending.proposal.digest.as_bytes().ct_eq(digest.as_bytes())) {
+        return Err(AgentCommandError::ProposalDigestMismatch);
+    }
+    store
+        .pending
+        .remove(proposal_id)
+        .ok_or(AgentCommandError::ProposalNotFound)
 }
 
 fn enforce_store_limits(store: &ProposalStore, owner_label: &str) -> AgentResult<()> {
@@ -252,112 +305,8 @@ fn enforce_store_limits(store: &ProposalStore, owner_label: &str) -> AgentResult
     Ok(())
 }
 
-fn plan_action(
-    snapshot: &AgentNetworkSnapshot,
-    action: &AgentActionRequest,
-) -> AgentResult<ActionPlan> {
-    match action {
-        AgentActionRequest::SetRoutingMode { mode } => plan_routing_mode(snapshot, *mode),
-        AgentActionRequest::DisableStaleSystemProxy => plan_stale_proxy(snapshot),
-    }
-}
-
-fn plan_routing_mode(
-    snapshot: &AgentNetworkSnapshot,
-    target: AgentRoutingMode,
-) -> AgentResult<ActionPlan> {
-    let current = snapshot
-        .core
-        .routing_mode
-        .ok_or(AgentCommandError::ActionNotAvailable)?;
-    if current == target
-        || snapshot.core.state != AgentCoreState::Running
-        || snapshot.core.observed_routing_mode != Some(current)
-    {
-        return Err(AgentCommandError::ActionNotAvailable);
-    }
-    Ok(ActionPlan {
-        risk: AgentActionRisk::TrafficChange,
-        impacts: routing_impacts(target),
-        changes: vec![AgentStateChange {
-            field: "routing_mode".into(),
-            before: current.as_core_value().into(),
-            after: target.as_core_value().into(),
-        }],
-        preconditions: ActionPreconditions::SetRoutingMode {
-            before: current,
-            core_state_changed_at: snapshot.core.state_changed_at,
-        },
-    })
-}
-
-fn plan_stale_proxy(snapshot: &AgentNetworkSnapshot) -> AgentResult<ActionPlan> {
-    let proxy = &snapshot.system_proxy;
-    if snapshot.core.state != AgentCoreState::Stopped
-        || proxy.observed_enabled != Some(true)
-        || proxy.matches_expected_endpoint != Some(true)
-    {
-        return Err(AgentCommandError::ActionNotAvailable);
-    }
-    Ok(ActionPlan {
-        risk: AgentActionRisk::HostNetworkChange,
-        impacts: vec![AgentImpact::HostSystemProxyDisabled],
-        changes: vec![AgentStateChange {
-            field: "system_proxy".into(),
-            before: "enabled".into(),
-            after: "disabled".into(),
-        }],
-        preconditions: ActionPreconditions::DisableStaleSystemProxy {
-            core_state_changed_at: snapshot.core.state_changed_at,
-            expected_port: proxy.expected_mixed_port,
-            desired_before: proxy.desired_enabled,
-        },
-    })
-}
-
-fn validate_preconditions(
-    current: &AgentNetworkSnapshot,
-    preconditions: &ActionPreconditions,
-) -> AgentResult<()> {
-    let valid = match preconditions {
-        ActionPreconditions::SetRoutingMode {
-            before,
-            core_state_changed_at,
-        } => {
-            current.core.state == AgentCoreState::Running
-                && current.core.state_changed_at == *core_state_changed_at
-                && current.core.routing_mode == Some(*before)
-                && current.core.observed_routing_mode == Some(*before)
-        }
-        ActionPreconditions::DisableStaleSystemProxy {
-            core_state_changed_at,
-            expected_port,
-            ..
-        } => {
-            current.core.state == AgentCoreState::Stopped
-                && current.core.state_changed_at == *core_state_changed_at
-                && current.system_proxy.observed_enabled == Some(true)
-                && current.system_proxy.observed_host_scope == AgentHostScope::Loopback
-                && current.system_proxy.observed_port == Some(*expected_port)
-                && current.system_proxy.expected_mixed_port == *expected_port
-        }
-    };
-    valid
-        .then_some(())
-        .ok_or(AgentCommandError::NetworkStateChanged)
-}
-
-fn routing_impacts(mode: AgentRoutingMode) -> Vec<AgentImpact> {
-    let mut impacts = vec![AgentImpact::ExistingConnectionsMayChange];
-    impacts.push(match mode {
-        AgentRoutingMode::Rule => AgentImpact::RestoreRuleRouting,
-        AgentRoutingMode::Global => AgentImpact::AllTrafficUsesProxy,
-        AgentRoutingMode::Direct => AgentImpact::TrafficMayBypassProxy,
-    });
-    impacts
-}
-
 async fn execute_action(
+    runtime: &dyn AgentRuntimePort,
     snapshot: &AgentNetworkSnapshot,
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
@@ -366,7 +315,51 @@ async fn execute_action(
         (
             AgentActionRequest::SetRoutingMode { mode },
             ActionPreconditions::SetRoutingMode { before, .. },
-        ) => set_routing_mode(*before, *mode).await,
+        ) => runtime.set_routing_mode(*before, *mode).await,
+        (
+            AgentActionRequest::SetTunEnabled { enabled },
+            ActionPreconditions::SetTunEnabled { desired_before, .. },
+        ) => runtime.set_tun_enabled(*desired_before, *enabled).await,
+        (
+            AgentActionRequest::SetSystemProxyEnabled { enabled },
+            ActionPreconditions::SetSystemProxyEnabled { desired_before, .. },
+        ) => {
+            runtime
+                .set_system_proxy_enabled(*desired_before, *enabled)
+                .await
+        }
+        (
+            AgentActionRequest::SetServiceMode { enabled },
+            ActionPreconditions::SetServiceMode { desired_before, .. },
+        ) => runtime.set_service_mode(*desired_before, *enabled).await,
+        (AgentActionRequest::StartCore, ActionPreconditions::StartCore { .. }) => {
+            runtime.ensure_core_running().await
+        }
+        (AgentActionRequest::RestartCore, ActionPreconditions::RestartCore { .. }) => {
+            runtime.restart_core().await
+        }
+        (
+            AgentActionRequest::ReconnectTelemetry,
+            ActionPreconditions::ReconnectTelemetry { .. },
+        ) => reconnect_telemetry(runtime).await,
+        (
+            AgentActionRequest::StartService
+            | AgentActionRequest::StopService
+            | AgentActionRequest::RestartService,
+            ActionPreconditions::ControlService { .. },
+        ) => control_service(runtime, action, preconditions).await,
+        (
+            AgentActionRequest::RepairSystemProxyEndpoint,
+            ActionPreconditions::RepairSystemProxyEndpoint {
+                expected_port,
+                desired_before,
+                ..
+            },
+        ) => {
+            runtime
+                .repair_system_proxy_endpoint(snapshot, *expected_port, *desired_before)
+                .await
+        }
         (
             AgentActionRequest::DisableStaleSystemProxy,
             ActionPreconditions::DisableStaleSystemProxy {
@@ -374,202 +367,47 @@ async fn execute_action(
                 desired_before,
                 ..
             },
-        ) => disable_stale_system_proxy(snapshot, *expected_port, *desired_before).await,
+        ) => {
+            runtime
+                .disable_stale_system_proxy(snapshot, *expected_port, *desired_before)
+                .await
+        }
         _ => Err(AgentCommandError::NetworkStateChanged),
     }
 }
 
-async fn set_routing_mode(before: AgentRoutingMode, target: AgentRoutingMode) -> AgentResult<()> {
-    if patch_running_mode(target).await.is_err() {
-        return if rollback_routing_mode(before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    if persist_routing_mode(target).await.is_err() {
-        return if rollback_routing_mode(before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    if routing_mode_is_applied(target).await {
-        return Ok(());
-    }
-    if rollback_routing_mode(before).await {
-        Err(AgentCommandError::VerificationFailed)
-    } else {
-        Err(AgentCommandError::PartialApply)
+async fn reconnect_telemetry(runtime: &dyn AgentRuntimePort) -> AgentResult<()> {
+    runtime.reconnect_telemetry().await?;
+    let deadline = Instant::now() + TELEMETRY_STABILIZE_TIMEOUT;
+    loop {
+        let snapshot = runtime.snapshot().await;
+        if snapshot.telemetry.state == AgentConnectorState::Connected {
+            return Ok(());
+        }
+        if snapshot.core.state != AgentCoreState::Running || Instant::now() >= deadline {
+            return Err(AgentCommandError::VerificationFailed);
+        }
+        tokio::time::sleep(TELEMETRY_POLL_INTERVAL).await;
     }
 }
 
-async fn patch_running_mode(mode: AgentRoutingMode) -> AgentResult<()> {
-    let mapping = routing_mode_mapping(mode);
-    tokio::time::timeout(
-        CORE_ACTION_TIMEOUT,
-        crate::core::clash::api::patch_configs(&mapping),
-    )
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)?
-    .map_err(|_| AgentCommandError::ActionFailed)
-}
-
-async fn persist_routing_mode(mode: AgentRoutingMode) -> AgentResult<()> {
-    tokio::time::timeout(
-        CORE_ACTION_TIMEOUT,
-        feat::patch_clash(routing_mode_mapping(mode)),
-    )
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)?
-    .map_err(|_| AgentCommandError::ActionFailed)
-}
-
-async fn rollback_routing_mode(mode: AgentRoutingMode) -> bool {
-    let persisted = persist_routing_mode(mode).await.is_ok();
-    let running = patch_running_mode(mode).await.is_ok();
-    persisted && running && routing_mode_is_applied(mode).await
-}
-
-async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
-    let configured = crate::config::core::Config::runtime()
-        .latest()
-        .config
-        .as_ref()
-        .and_then(|config| config.get("mode"))
-        .and_then(serde_yaml::Value::as_str)
-        .and_then(AgentRoutingMode::parse);
-    configured == Some(mode) && core_probe::observed_routing_mode().await == Ok(mode)
-}
-
-fn routing_mode_mapping(mode: AgentRoutingMode) -> Mapping {
-    let mut mapping = Mapping::new();
-    mapping.insert(
-        Value::String("mode".into()),
-        Value::String(mode.as_core_value().into()),
-    );
-    mapping
-}
-
-async fn disable_stale_system_proxy(
-    snapshot: &AgentNetworkSnapshot,
-    expected_port: u16,
-    desired_before: bool,
+async fn control_service(
+    runtime: &dyn AgentRuntimePort,
+    action: &AgentActionRequest,
+    preconditions: &ActionPreconditions,
 ) -> AgentResult<()> {
-    if snapshot.core.state != AgentCoreState::Stopped {
-        return Err(AgentCommandError::NetworkStateChanged);
-    }
-    let original = read_system_proxy().await?;
-    if !is_expected_enabled_proxy(&original, expected_port) {
-        return Err(AgentCommandError::NetworkStateChanged);
-    }
-    if persist_system_proxy_desired(false).await.is_err() {
-        return if rollback_system_proxy(original, desired_before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    let mut disabled = original.clone();
-    disabled.enable = false;
-    if write_system_proxy(disabled).await.is_err() {
-        return if rollback_system_proxy(original, desired_before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    let observed = match read_system_proxy().await {
-        Ok(observed) => observed,
-        Err(_) => {
-            return if rollback_system_proxy(original, desired_before).await {
-                Err(AgentCommandError::VerificationFailed)
-            } else {
-                Err(AgentCommandError::PartialApply)
-            };
+    runtime.control_service(action).await?;
+    let deadline = Instant::now() + SERVICE_STABILIZE_TIMEOUT;
+    loop {
+        let snapshot = runtime.snapshot().await;
+        if verify_action(&snapshot, action, preconditions) {
+            return Ok(());
         }
-    };
-    if !observed.enable {
-        return Ok(());
-    }
-    if rollback_system_proxy(original, desired_before).await {
-        Err(AgentCommandError::VerificationFailed)
-    } else {
-        Err(AgentCommandError::PartialApply)
-    }
-}
-
-async fn persist_system_proxy_desired(enabled: bool) -> AgentResult<()> {
-    feat::patch_verge(IVerge {
-        enable_system_proxy: Some(enabled),
-        ..Default::default()
-    })
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)
-}
-
-async fn rollback_system_proxy(original: Sysproxy, desired_before: bool) -> bool {
-    let persisted = persist_system_proxy_desired(desired_before).await.is_ok();
-    let restored = write_system_proxy(original).await.is_ok();
-    persisted && restored
-}
-
-async fn read_system_proxy() -> AgentResult<Sysproxy> {
-    tokio::task::spawn_blocking(Sysproxy::get_system_proxy)
-        .await
-        .map_err(|_| AgentCommandError::ActionFailed)?
-        .map_err(|_| AgentCommandError::ActionFailed)
-}
-
-async fn write_system_proxy(proxy: Sysproxy) -> AgentResult<()> {
-    tokio::task::spawn_blocking(move || proxy.set_system_proxy())
-        .await
-        .map_err(|_| AgentCommandError::ActionFailed)?
-        .map_err(|_| AgentCommandError::ActionFailed)
-}
-
-fn is_expected_enabled_proxy(proxy: &Sysproxy, expected_port: u16) -> bool {
-    proxy.enable
-        && proxy.port == expected_port
-        && host_scope(&proxy.host) == AgentHostScope::Loopback
-}
-
-fn verify_action(snapshot: &AgentNetworkSnapshot, action: &AgentActionRequest) -> bool {
-    match action {
-        AgentActionRequest::SetRoutingMode { mode } => {
-            snapshot.core.routing_mode == Some(*mode)
-                && snapshot.core.observed_routing_mode == Some(*mode)
-                && snapshot.core.applied_consistency == AgentAppliedState::Consistent
+        if Instant::now() >= deadline {
+            return Err(AgentCommandError::PartialApply);
         }
-        AgentActionRequest::DisableStaleSystemProxy => {
-            snapshot.system_proxy.observed_enabled == Some(false)
-                && !snapshot.system_proxy.desired_enabled
-        }
+        tokio::time::sleep(SERVICE_POLL_INTERVAL).await;
     }
-}
-
-async fn confirm_network_change(
-    window: &WebviewWindow,
-    proposal: &AgentProposal,
-) -> AgentResult<bool> {
-    let window = window.clone();
-    let message = proposal
-        .changes
-        .first()
-        .map(|change| format!("{}\n{} → {}", change.field, change.before, change.after))
-        .unwrap_or_else(|| "Chimera network change".to_owned());
-    tokio::task::spawn_blocking(move || {
-        window
-            .dialog()
-            .message(message)
-            .title("Chimera")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::YesNo)
-            .parent(&window)
-            .blocking_show()
-    })
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)
 }
 
 fn proposal_digest(
@@ -577,180 +415,21 @@ fn proposal_digest(
     action: &AgentActionRequest,
     revision: &str,
     expires_at: i64,
-) -> String {
+) -> AgentResult<String> {
     let material = serde_json::to_vec(&(id, action, revision, expires_at))
-        .expect("agent proposal digest material must serialize");
-    hex::encode(sha2::Sha256::digest(material))
+        .map_err(|_| AgentCommandError::ActionFailed)?;
+    Ok(hex::encode(sha2::Sha256::digest(material)))
 }
 
-fn audit_proposal(proposal: &AgentProposal, outcome: &str) {
+fn audit_proposal(proposal: &AgentProposal, outcome: AgentAuditOutcome) {
     tracing::info!(
         target: "agent_audit",
-        proposal_id = %proposal.id,
         action = ?proposal.action.kind(),
-        snapshot_revision = %proposal.snapshot_revision,
-        outcome,
+        outcome = outcome.as_str(),
         "network action proposal"
     );
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use super::{
-        ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-        plan_routing_mode, proposal_digest, verify_action,
-    };
-    use crate::features::agent::model::{
-        AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot,
-        AgentCoreState, AgentHealth, AgentHostScope, AgentNetworkSnapshot, AgentPrivacyBoundary,
-        AgentProfileSnapshot, AgentProposal, AgentRoutingMode, AgentRunType, AgentServiceSnapshot,
-        AgentServiceState, AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
-    };
-
-    #[test]
-    fn proposal_digest_binds_action_revision_and_expiry() {
-        let action = AgentActionRequest::SetRoutingMode {
-            mode: AgentRoutingMode::Rule,
-        };
-        let digest = proposal_digest("id", &action, "revision", 123);
-        assert_ne!(digest, proposal_digest("id", &action, "changed", 123));
-        assert_ne!(digest, proposal_digest("id", &action, "revision", 124));
-    }
-
-    #[test]
-    fn routing_plan_requires_matching_observed_mode() {
-        let mut snapshot = snapshot();
-        snapshot.core.observed_routing_mode = None;
-        assert!(plan_routing_mode(&snapshot, AgentRoutingMode::Global).is_err());
-        snapshot.core.observed_routing_mode = Some(AgentRoutingMode::Rule);
-        assert!(plan_routing_mode(&snapshot, AgentRoutingMode::Global).is_ok());
-    }
-
-    #[test]
-    fn routing_verification_checks_configured_and_observed_modes() {
-        let mut snapshot = snapshot();
-        let action = AgentActionRequest::SetRoutingMode {
-            mode: AgentRoutingMode::Rule,
-        };
-        assert!(verify_action(&snapshot, &action));
-        snapshot.core.observed_routing_mode = Some(AgentRoutingMode::Direct);
-        assert!(!verify_action(&snapshot, &action));
-    }
-
-    #[test]
-    fn proposal_cleanup_uses_monotonic_expiry_and_enforces_owner_limit() {
-        let now = Instant::now();
-        let mut store = ProposalStore::default();
-        for index in 0..4 {
-            let expires_at = if index == 0 {
-                now - Duration::from_millis(1)
-            } else {
-                now + Duration::from_secs(30)
-            };
-            store
-                .pending
-                .insert(index.to_string(), pending("main", expires_at));
-        }
-        cleanup_store(&mut store, now);
-        assert_eq!(store.pending.len(), 3);
-        assert!(enforce_store_limits(&store, "main").is_ok());
-        store.pending.insert(
-            "fourth".into(),
-            pending("main", now + Duration::from_secs(30)),
-        );
-        assert!(enforce_store_limits(&store, "main").is_err());
-    }
-
-    fn pending(owner_label: &str, expires_at: Instant) -> PendingProposal {
-        PendingProposal {
-            proposal: AgentProposal {
-                id: "proposal".into(),
-                digest: "digest".into(),
-                action: AgentActionRequest::SetRoutingMode {
-                    mode: AgentRoutingMode::Global,
-                },
-                risk: crate::features::agent::model::AgentActionRisk::TrafficChange,
-                impacts: Vec::new(),
-                changes: Vec::new(),
-                snapshot_revision: "revision".into(),
-                created_at: 0,
-                expires_at: 1,
-                requires_confirmation: true,
-            },
-            preconditions: ActionPreconditions::SetRoutingMode {
-                before: AgentRoutingMode::Rule,
-                core_state_changed_at: 0,
-            },
-            owner_label: owner_label.into(),
-            expires_at,
-        }
-    }
-
-    fn snapshot() -> AgentNetworkSnapshot {
-        AgentNetworkSnapshot {
-            schema_version: 1,
-            revision: "revision".into(),
-            captured_at: 0,
-            app_version: "test".into(),
-            os_family: "test".into(),
-            health: AgentHealth::Healthy,
-            core: AgentCoreSnapshot {
-                state: AgentCoreState::Running,
-                run_type: AgentRunType::Normal,
-                selected_core: "test".into(),
-                state_changed_at: 0,
-                runtime_config_present: true,
-                routing_mode: Some(AgentRoutingMode::Rule),
-                observed_routing_mode: Some(AgentRoutingMode::Rule),
-                applied_consistency: AgentAppliedState::Consistent,
-            },
-            service: AgentServiceSnapshot {
-                desired_enabled: false,
-                state: AgentServiceState::NotInstalled,
-                ipc_connected: false,
-                runtime_compatible: None,
-            },
-            system_proxy: AgentSystemProxySnapshot {
-                desired_enabled: false,
-                observed_enabled: Some(false),
-                observed_host_scope: AgentHostScope::Loopback,
-                observed_port: Some(7890),
-                expected_mixed_port: 7890,
-                matches_expected_endpoint: Some(true),
-            },
-            tun: AgentTunSnapshot {
-                desired_enabled: false,
-                generated_runtime_enabled: Some(false),
-                observed_active: AgentAppliedState::Unknown,
-                applied_consistency: AgentAppliedState::Unknown,
-            },
-            profiles: AgentProfileSnapshot {
-                total_count: 1,
-                active_count: 1,
-                remote_count: 0,
-                local_count: 1,
-                active_references_valid: true,
-            },
-            telemetry: AgentTelemetrySnapshot {
-                state: AgentConnectorState::Connected,
-                active_connection_count: Some(0),
-                upload_speed: Some(0),
-                download_speed: Some(0),
-                upload_total: Some("0".into()),
-                download_total: Some("0".into()),
-                recent_error_count: 0,
-            },
-            findings: Vec::new(),
-            probe_failures: Vec::new(),
-            privacy: AgentPrivacyBoundary {
-                contains_raw_logs: false,
-                contains_profile_names: false,
-                contains_profile_urls: false,
-                contains_connection_targets: false,
-                contains_controller_secret: false,
-            },
-        }
-    }
-}
+#[path = "actions_tests.rs"]
+mod tests;
