@@ -14,6 +14,8 @@ use crate::{
 
 mod ipc;
 
+#[cfg(feature = "agent")]
+mod client;
 mod config;
 /// 5
 mod consts;
@@ -25,7 +27,8 @@ mod enhance;
 mod feat;
 mod features;
 /// 8
-#[cfg(windows)]
+#[cfg(feature = "agent")]
+mod setup;
 mod shutdown_hook;
 mod specta_export;
 /// 4
@@ -139,7 +142,7 @@ pub fn run() -> std::io::Result<()> {
             core::clash::setup(app)?;
 
             #[cfg(feature = "agent")]
-            features::agent::setup(app);
+            setup::setup(app)?;
 
             resolve::resolve_setup(app);
 
