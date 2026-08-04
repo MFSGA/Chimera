@@ -366,20 +366,96 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
     });
 }
 
-pub fn change_clash_mode(mode: String) {
-    tauri::async_runtime::spawn(async move {
-        let mut patch = Mapping::new();
-        patch.insert("mode".into(), mode.into());
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingMode {
+    Rule,
+    Global,
+    Direct,
+}
 
-        if let Err(err) = crate::core::clash::api::patch_configs(&patch).await {
-            log::error!(target: "app", "failed to patch clash mode api: {err:?}");
+impl RoutingMode {
+    const fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Rule => "rule",
+            Self::Global => "global",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+fn routing_mode_patch(mode: RoutingMode) -> Mapping {
+    let mut patch = Mapping::new();
+    patch.insert("mode".into(), mode.as_core_value().into());
+    patch
+}
+
+/// Apply an explicit routing-mode target to the running core and persisted Clash state.
+pub async fn set_routing_mode(mode: RoutingMode) -> Result<()> {
+    let patch = routing_mode_patch(mode);
+    crate::core::clash::api::patch_configs(&patch).await?;
+    patch_clash(patch).await
+}
+
+pub fn change_clash_mode(mode: String) {
+    let mode = match mode.as_str() {
+        "rule" => RoutingMode::Rule,
+        "global" => RoutingMode::Global,
+        "direct" => RoutingMode::Direct,
+        _ => {
+            log::error!(target: "app", "failed to change clash mode: unsupported mode");
             return;
         }
-
-        if let Err(err) = patch_clash(patch).await {
-            log::error!(target: "app", "failed to patch clash mode state: {err:?}");
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = set_routing_mode(mode).await {
+            log::error!(target: "app", "failed to change clash mode: {err:?}");
         }
     });
+}
+
+#[cfg(any(feature = "agent", test))]
+fn service_mode_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_service_mode: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+/// Apply an explicit service-mode target through the normal Verge persistence and core path.
+///
+/// A matching target returns without regenerating configuration or restarting the core.
+#[cfg(feature = "agent")]
+pub async fn set_service_mode(enabled: bool) -> Result<()> {
+    let current = Config::verge()
+        .latest()
+        .enable_service_mode
+        .unwrap_or(false);
+    if current == enabled {
+        return Ok(());
+    }
+    apply_service_mode(enabled).await
+}
+
+#[cfg(feature = "agent")]
+pub(crate) async fn restore_service_mode(enabled: bool) -> Result<()> {
+    apply_service_mode(enabled).await
+}
+
+#[cfg(feature = "agent")]
+async fn apply_service_mode(enabled: bool) -> Result<()> {
+    patch_verge(service_mode_patch(enabled)).await
+}
+
+fn system_proxy_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_system_proxy: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+/// Apply an explicit system-proxy target through the normal Verge persistence and host update path.
+pub async fn set_system_proxy_enabled(enabled: bool) -> Result<()> {
+    patch_verge(system_proxy_patch(enabled)).await
 }
 
 pub fn toggle_system_proxy() {
@@ -387,26 +463,65 @@ pub fn toggle_system_proxy() {
         .latest()
         .enable_system_proxy
         .unwrap_or(false);
-    tauri::async_runtime::spawn(async move {
-        let patch = IVerge {
-            enable_system_proxy: Some(!enabled),
-            ..IVerge::default()
-        };
-        if let Err(err) = patch_verge(patch).await {
-            log::error!(target: "app", "failed to toggle system proxy: {err:?}");
+    if enabled {
+        disable_system_proxy();
+    } else {
+        enable_system_proxy();
+    }
+}
+
+pub fn enable_system_proxy() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_system_proxy_enabled(true).await {
+            log::error!(target: "app", "failed to enable system proxy: {err:?}");
         }
     });
 }
 
+pub fn disable_system_proxy() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_system_proxy_enabled(false).await {
+            log::error!(target: "app", "failed to disable system proxy: {err:?}");
+        }
+    });
+}
+
+fn tun_mode_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_tun_mode: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+/// Apply an explicit TUN target through the same Verge persistence and runtime path as the UI.
+///
+/// Unlike `toggle_tun_mode`, this operation is idempotent and awaitable so controlled callers can
+/// verify the final runtime state before reporting success.
+pub async fn set_tun_enabled(enabled: bool) -> Result<()> {
+    patch_verge(tun_mode_patch(enabled)).await
+}
+
 pub fn toggle_tun_mode() {
     let enabled = Config::verge().latest().enable_tun_mode.unwrap_or(false);
-    tauri::async_runtime::spawn(async move {
-        let patch = IVerge {
-            enable_tun_mode: Some(!enabled),
-            ..IVerge::default()
-        };
-        if let Err(err) = patch_verge(patch).await {
-            log::error!(target: "app", "failed to toggle tun mode: {err:?}");
+    if enabled {
+        disable_tun_mode();
+    } else {
+        enable_tun_mode();
+    }
+}
+
+pub fn enable_tun_mode() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_tun_enabled(true).await {
+            log::error!(target: "app", "failed to enable tun mode: {err:?}");
+        }
+    });
+}
+
+pub fn disable_tun_mode() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_tun_enabled(false).await {
+            log::error!(target: "app", "failed to disable tun mode: {err:?}");
         }
     });
 }
@@ -419,4 +534,110 @@ pub fn restart_clash_core() {
         }
         log_err!(handle::Handle::update_systray_part());
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_yaml::Value;
+
+    use super::{
+        RoutingMode, routing_mode_patch, service_mode_patch, system_proxy_patch, tun_mode_patch,
+    };
+
+    #[test]
+    fn routing_mode_patch_is_closed_and_scoped() {
+        for (mode, expected) in [
+            (RoutingMode::Rule, "rule"),
+            (RoutingMode::Global, "global"),
+            (RoutingMode::Direct, "direct"),
+        ] {
+            let patch = routing_mode_patch(mode);
+            assert_eq!(patch.len(), 1);
+            assert_eq!(
+                patch.get(Value::String("mode".into())),
+                Some(&Value::String(expected.into()))
+            );
+        }
+    }
+
+    #[test]
+    fn service_mode_patch_is_explicit_and_scoped() {
+        for (enabled, expected) in [(true, true), (false, false)] {
+            let patch = service_mode_patch(enabled);
+            assert_eq!(patch.enable_service_mode, Some(expected));
+
+            let serialized = serde_yaml::to_value(patch).expect("service patch should serialize");
+            let mapping = serialized
+                .as_mapping()
+                .expect("verge patch should serialize as a mapping");
+            let non_null = mapping
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                non_null.len(),
+                1,
+                "service mode setter must not patch unrelated fields"
+            );
+            assert_eq!(
+                mapping.get(Value::String("enable_service_mode".into())),
+                Some(&Value::Bool(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn system_proxy_patch_is_explicit_and_scoped() {
+        for (enabled, expected) in [(true, true), (false, false)] {
+            let patch = system_proxy_patch(enabled);
+            assert_eq!(patch.enable_system_proxy, Some(expected));
+
+            let serialized = serde_yaml::to_value(patch).expect("proxy patch should serialize");
+            let mapping = serialized
+                .as_mapping()
+                .expect("verge patch should serialize as a mapping");
+            let non_null = mapping
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                non_null.len(),
+                1,
+                "system proxy setter must not patch unrelated fields"
+            );
+            assert_eq!(
+                mapping.get(Value::String("enable_system_proxy".into())),
+                Some(&Value::Bool(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn tun_mode_patch_is_explicit_and_scoped() {
+        for (enabled, expected) in [(true, true), (false, false)] {
+            let patch = tun_mode_patch(enabled);
+            assert_eq!(patch.enable_tun_mode, Some(expected));
+
+            let serialized = serde_yaml::to_value(patch).expect("tun patch should serialize");
+            let mapping = serialized
+                .as_mapping()
+                .expect("verge patch should serialize as a mapping");
+            let non_null = mapping
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                non_null.len(),
+                1,
+                "tun setter must not patch unrelated fields"
+            );
+            assert_eq!(
+                mapping.get(Value::String("enable_tun_mode".into())),
+                Some(&Value::Bool(expected))
+            );
+        }
+    }
 }
