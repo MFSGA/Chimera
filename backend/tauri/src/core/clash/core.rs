@@ -436,6 +436,25 @@ impl CoreManager {
         self.run_core_inner().await
     }
 
+    /// Start the core only when it is not already running.
+    ///
+    /// The state check and start share the lifecycle lock so a concurrent starter
+    /// cannot turn this idempotent operation into an unintended restart.
+    #[cfg(feature = "agent")]
+    pub async fn ensure_core_running(&self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
+        let instance = {
+            let instance = self.instance.lock();
+            instance.as_ref().cloned()
+        };
+        if let Some(instance) = instance
+            && matches!(instance.state().await.as_ref(), CoreState::Running)
+        {
+            return Ok(());
+        }
+        self.run_core_inner().await
+    }
+
     async fn run_core_inner(&self) -> Result<()> {
         {
             let instance = {
