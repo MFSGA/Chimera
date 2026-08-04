@@ -1,0 +1,223 @@
+name: Agent CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/agent-ci.yaml'
+      - 'backend/Cargo.lock'
+      - 'backend/tauri/Cargo.toml'
+      - 'backend/tauri/src/client.rs'
+      - 'backend/tauri/src/core/clash/core.rs'
+      - 'backend/tauri/src/feat.rs'
+      - 'backend/tauri/src/features/agent/**'
+      - 'backend/tauri/src/lib.rs'
+      - 'backend/tauri/src/setup.rs'
+      - 'backend/tauri/src/specta_export.rs'
+      - 'frontend/interface/src/features/agent/**'
+      - 'frontend/interface/src/ipc/bindings.ts'
+      - 'frontend/chimera/src/features/agent/**'
+      - 'frontend/chimera/messages/*.json'
+      - 'AGENT.md'
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - 'release-*'
+    paths:
+      - '.github/workflows/agent-ci.yaml'
+      - 'backend/Cargo.lock'
+      - 'backend/tauri/Cargo.toml'
+      - 'backend/tauri/src/client.rs'
+      - 'backend/tauri/src/core/clash/core.rs'
+      - 'backend/tauri/src/feat.rs'
+      - 'backend/tauri/src/features/agent/**'
+      - 'backend/tauri/src/lib.rs'
+      - 'backend/tauri/src/setup.rs'
+      - 'backend/tauri/src/specta_export.rs'
+      - 'frontend/interface/src/features/agent/**'
+      - 'frontend/interface/src/ipc/bindings.ts'
+      - 'frontend/chimera/src/features/agent/**'
+      - 'frontend/chimera/messages/*.json'
+      - 'AGENT.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  platform-safety:
+    name: Agent platform safety (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          libgtk-3-dev
+          libayatana-appindicator3-dev
+          libwebkit2gtk-4.1-dev
+          librsvg2-dev
+          libxdo-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          cache-on-failure: true
+          shared-key: agent-platform-${{ runner.os }}
+
+      - name: Check default Agent build
+        run: cargo check --locked --manifest-path backend/Cargo.toml -p chimera
+
+      - name: Check build without Agent
+        run: >-
+          cargo check --locked --manifest-path backend/Cargo.toml -p chimera
+          --no-default-features --features default-meta
+
+      - name: Run platform history safety tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::history::tests --lib
+
+      - name: Run platform Bridge lifecycle tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::bridge::tests --lib
+
+  verify:
+    name: Agent feature, protocol, and UI
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Tauri dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y
+          libgtk-3-dev
+          libayatana-appindicator3-dev
+          libwebkit2gtk-4.1-dev
+          librsvg2-dev
+          libxdo-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          run_install: false
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend -> target
+          cache-on-failure: true
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml --all -- --check
+
+      - name: Check default Agent build
+        run: cargo check --locked --manifest-path backend/Cargo.toml -p chimera
+
+      - name: Check build without Agent
+        run: >-
+          cargo check --locked --manifest-path backend/Cargo.toml -p chimera
+          --no-default-features --features default-meta
+
+      - name: Lint default Agent build
+        run: >-
+          cargo clippy --locked --manifest-path backend/Cargo.toml -p chimera
+          --all-targets
+
+      - name: Lint build without Agent
+        run: >-
+          cargo clippy --locked --manifest-path backend/Cargo.toml -p chimera
+          --no-default-features --features default-meta --all-targets
+
+      - name: Verify Agent IPC is absent without feature
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          --no-default-features --features default-meta
+          specta_export::tests::agent_bindings_are_absent_without_feature -- --exact
+
+      - name: Run Agent tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent --lib
+
+      - name: Verify generated TypeScript bindings
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          specta_export::tests::typescript_bindings_are_fresh -- --exact
+
+      - name: Verify Agent interface uses generated IPC commands
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          specta_export::tests::frontend_agent_interface_uses_only_generated_ipc_commands -- --exact
+
+      - name: Build interface package
+        run: pnpm --filter @chimera/interface build
+
+      - name: Run Agent frontend tests
+        run: >-
+          pnpm exec tsx --test
+          frontend/chimera/src/features/agent/components/bridge-token-lifecycle.test.ts
+          frontend/chimera/src/features/agent/components/issue-guidance.test.ts
+          frontend/chimera/src/features/agent/model/privacy-safe-context.test.ts
+
+      - name: Build Agent frontend
+        run: pnpm --filter chimera-ui build
+        env:
+          NODE_OPTIONS: '--max_old_space_size=4096'
+
+      - name: Check Agent frontend formatting
+        run: >-
+          pnpm exec prettier --check
+          frontend/chimera/src/features/agent
+          frontend/interface/src/features/agent
+          frontend/interface/src/ipc/bindings.ts
+          frontend/chimera/messages/en.json
+          frontend/chimera/messages/ru.json
+          frontend/chimera/messages/zh-cn.json
+          frontend/chimera/messages/zh-tw.json
+          .github/workflows/agent-ci.yaml
+          AGENT.md
+
+      - name: Lint Agent frontend
+        run: >-
+          pnpm exec oxlint
+          frontend/chimera/src/features/agent
+          frontend/interface/src/features/agent
