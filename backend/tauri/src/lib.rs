@@ -28,6 +28,7 @@ mod features;
 #[cfg(windows)]
 mod shutdown_hook;
 mod specta_export;
+mod transaction;
 /// 4
 mod utils;
 /// 9
@@ -78,9 +79,12 @@ pub fn run() -> std::io::Result<()> {
 
     let specta_builder = specta_export::build_specta_builder();
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(feature = "e2e")))]
     {
-        const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+        const SPECTA_BINDINGS_PATH: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../frontend/interface/src/ipc/bindings.ts"
+        );
 
         match specta_builder.export(
             specta_typescript::Typescript::default().header("/* oxlint-disable */\n// @ts-nocheck"),
@@ -113,11 +117,23 @@ pub fn run() -> std::io::Result<()> {
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
-    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[cfg(feature = "e2e")]
+    {
+        builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    }
+
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        not(feature = "e2e")
+    ))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             resolve::create_window(app);
         }));
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    {
         builder = builder.plugin(tauri_plugin_deep_link::init());
     }
 
@@ -136,7 +152,15 @@ pub fn run() -> std::io::Result<()> {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            #[cfg(not(feature = "e2e"))]
+            if let Err(error) = core::updater::recover_interrupted_updates_on_launch() {
+                log::error!(target: "updater", "failed to recover interrupted core update: {error:?}");
+            }
+
             core::clash::setup(app)?;
+
+            #[cfg(not(feature = "e2e"))]
+            feat::setup_profile_auto_update();
 
             #[cfg(feature = "agent")]
             features::agent::setup(app);

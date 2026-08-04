@@ -250,7 +250,7 @@ impl IVerge {
 
     /// Save IVerge App Config
     pub fn save_file(&self) -> Result<()> {
-        help::save_yaml(
+        help::save_yaml_atomic(
             &dirs::chimera_config_path()?,
             &self,
             Some("# Clash Chimera"),

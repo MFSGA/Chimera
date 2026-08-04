@@ -395,6 +395,19 @@ impl Instance {
     }
 }
 
+fn preserve_core_change_failure(
+    context: &str,
+    primary: anyhow::Error,
+    rollback: Result<()>,
+) -> anyhow::Error {
+    match rollback {
+        Ok(()) => primary.context(context.to_string()),
+        Err(rollback) => anyhow::anyhow!(
+            "{context}: {primary:#}; failed to restore the previous core: {rollback:#}"
+        ),
+    }
+}
+
 #[derive(Debug)]
 pub struct CoreManager {
     instance: Mutex<Option<Arc<Instance>>>,
@@ -433,10 +446,15 @@ impl CoreManager {
     /// 启动核心
     pub async fn run_core(&self) -> Result<()> {
         let _guard = self.run_lock.lock().await;
-        self.run_core_inner().await
+        self.run_core_inner(true).await
     }
 
-    async fn run_core_inner(&self) -> Result<()> {
+    pub async fn run_core_with_current_config(&self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
+        self.run_core_inner(false).await
+    }
+
+    async fn run_core_inner(&self, reload_clash: bool) -> Result<()> {
         {
             let instance = {
                 let instance = self.instance.lock();
@@ -450,8 +468,10 @@ impl CoreManager {
             }
         }
 
-        Config::clash().reload();
-        log::debug!(target: "app", "reloaded clash config from file");
+        if reload_clash {
+            Config::clash().reload();
+            log::debug!(target: "app", "reloaded clash config from file");
+        }
 
         // 检查端口是否可用
         Config::clash()
@@ -583,7 +603,7 @@ impl CoreManager {
             }
         }
 
-        if let Err(err) = self.run_core_inner().await {
+        if let Err(err) = self.run_core_inner(true).await {
             log::error!(target: "app", "failed to recover clash core");
             log::error!(target: "app", "{err:?}");
             drop(_guard);
@@ -643,22 +663,70 @@ impl CoreManager {
         // 清掉旧日志
         Logger::global().clear_log();
 
-        match self.run_core_inner().await {
-            Ok(_) => {
+        match self.run_core_inner(true).await {
+            Ok(()) => {
+                let persist_result = {
+                    let verge = Config::verge();
+                    let latest = verge.latest();
+                    latest.save_file()
+                };
+                if let Err(primary) = persist_result {
+                    Config::verge().discard();
+                    Config::runtime().discard();
+                    return Err(preserve_core_change_failure(
+                        "failed to persist the selected core",
+                        primary,
+                        self.run_core_inner(true).await,
+                    ));
+                }
+
                 tracing::info!("change core success");
                 Config::verge().apply();
                 Config::runtime().apply();
-                log_err!(Config::verge().latest().save_file());
                 Ok(())
             }
-            Err(err) => {
-                tracing::error!("failed to change core: {err:?}");
+            Err(primary) => {
+                tracing::error!("failed to change core: {primary:?}");
                 Config::verge().discard();
                 Config::runtime().discard();
-                self.run_core_inner().await?;
-                Err(err)
+                Err(preserve_core_change_failure(
+                    "failed to start the selected core",
+                    primary,
+                    self.run_core_inner(true).await,
+                ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preserve_core_change_failure;
+
+    #[test]
+    fn core_change_failure_preserves_primary_error_after_successful_restore() {
+        let error = preserve_core_change_failure(
+            "failed to switch core",
+            anyhow::anyhow!("injected primary failure"),
+            Ok(()),
+        );
+        let message = format!("{error:#}");
+
+        assert!(message.contains("failed to switch core"));
+        assert!(message.contains("injected primary failure"));
+    }
+
+    #[test]
+    fn core_change_failure_reports_primary_and_restore_errors() {
+        let error = preserve_core_change_failure(
+            "failed to switch core",
+            anyhow::anyhow!("injected primary failure"),
+            Err(anyhow::anyhow!("injected restore failure")),
+        );
+        let message = format!("{error:#}");
+
+        assert!(message.contains("injected primary failure"));
+        assert!(message.contains("injected restore failure"));
     }
 }
 

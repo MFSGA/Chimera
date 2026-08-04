@@ -26,6 +26,30 @@ fn format_exit_failure(action: &str, status: std::process::ExitStatus) -> anyhow
     )
 }
 
+#[cfg(feature = "e2e")]
+fn ensure_service_control_allowed(action: &str) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!(
+        "service control is disabled in E2E mode: {action}"
+    ))
+}
+
+#[cfg(not(feature = "e2e"))]
+fn ensure_service_control_allowed(_action: &str) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(feature = "e2e")]
+fn isolated_service_status<'a>() -> chimera_ipc::types::StatusInfo<'a> {
+    use std::borrow::Cow;
+
+    chimera_ipc::types::StatusInfo {
+        name: Cow::Borrowed("chimera-e2e"),
+        version: Cow::Borrowed(env!("CARGO_PKG_VERSION")),
+        status: chimera_ipc::types::ServiceStatus::NotInstalled,
+        server: None,
+    }
+}
+
 async fn run_service_command(action: &str, args: Vec<OsString>) -> anyhow::Result<()> {
     let action = action.to_owned();
     let status = tokio::task::spawn_blocking({
@@ -108,6 +132,7 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
 }
 
 pub async fn install_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("install service")?;
     run_service_command("install service", get_service_install_args().await?).await?;
     if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
         super::ipc::spawn_health_check();
@@ -116,10 +141,12 @@ pub async fn install_service() -> anyhow::Result<()> {
 }
 
 pub async fn update_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("update service")?;
     run_service_command("update service", vec!["update".into()]).await
 }
 
 pub async fn uninstall_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("uninstall service")?;
     run_service_command("uninstall service", vec!["uninstall".into()]).await?;
     let _ = super::ipc::KILL_FLAG.compare_exchange(
         false,
@@ -131,6 +158,7 @@ pub async fn uninstall_service() -> anyhow::Result<()> {
 }
 
 pub async fn start_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("start service")?;
     run_service_command("start service", vec!["start".into()]).await?;
     if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
         super::ipc::spawn_health_check();
@@ -139,6 +167,7 @@ pub async fn start_service() -> anyhow::Result<()> {
 }
 
 pub async fn stop_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("stop service")?;
     run_service_command("stop service", vec!["stop".into()]).await?;
     let _ = super::ipc::KILL_FLAG.compare_exchange_weak(
         false,
@@ -150,6 +179,7 @@ pub async fn stop_service() -> anyhow::Result<()> {
 }
 
 pub async fn restart_service() -> anyhow::Result<()> {
+    ensure_service_control_allowed("restart service")?;
     run_service_command("restart service", vec!["restart".into()]).await?;
     if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
         super::ipc::spawn_health_check();
@@ -159,16 +189,66 @@ pub async fn restart_service() -> anyhow::Result<()> {
 
 #[tracing::instrument]
 pub async fn status<'a>() -> anyhow::Result<chimera_ipc::types::StatusInfo<'a>> {
+    #[cfg(feature = "e2e")]
+    return Ok(isolated_service_status());
+
+    #[cfg(not(feature = "e2e"))]
     let mut cmd = tokio::process::Command::new(SERVICE_PATH.as_path());
-    cmd.args(["status", "--json"]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output().await?;
-    if !output.status.success() {
-        return Err(format_exit_failure("query service status", output.status));
+    #[cfg(not(feature = "e2e"))]
+    {
+        cmd.args(["status", "--json"]);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let output = cmd.output().await?;
+        if !output.status.success() {
+            return Err(format_exit_failure("query service status", output.status));
+        }
+
+        let status = String::from_utf8(output.stdout)?;
+        tracing::trace!("service status: {}", status);
+        Ok(serde_json::from_str(&status)?)
+    }
+}
+
+#[cfg(all(test, feature = "e2e"))]
+mod tests {
+    use super::{
+        install_service, restart_service, start_service, status, stop_service, uninstall_service,
+        update_service,
+    };
+
+    #[tokio::test]
+    async fn e2e_service_status_is_isolated_and_deterministic() {
+        let status = status()
+            .await
+            .expect("failed to get isolated service status");
+
+        assert_eq!(status.name, "chimera-e2e");
+        assert_eq!(status.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            status.status,
+            chimera_ipc::types::ServiceStatus::NotInstalled
+        );
+        assert!(status.server.is_none());
     }
 
-    let status = String::from_utf8(output.stdout)?;
-    tracing::trace!("service status: {}", status);
-    Ok(serde_json::from_str(&status)?)
+    #[tokio::test]
+    async fn e2e_service_mutations_are_rejected_before_process_launch() {
+        let results = [
+            ("install service", install_service().await),
+            ("update service", update_service().await),
+            ("uninstall service", uninstall_service().await),
+            ("start service", start_service().await),
+            ("stop service", stop_service().await),
+            ("restart service", restart_service().await),
+        ];
+
+        for (action, result) in results {
+            let error = result.expect_err("E2E service mutation unexpectedly succeeded");
+            assert_eq!(
+                error.to_string(),
+                format!("service control is disabled in E2E mode: {action}")
+            );
+        }
+    }
 }

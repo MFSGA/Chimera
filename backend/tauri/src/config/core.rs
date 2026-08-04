@@ -48,7 +48,7 @@ impl Config {
 
     /// 生成配置存好
     pub async fn generate() -> Result<()> {
-        let (config, _, _) = enhance::enhance().await;
+        let (config, _, _) = enhance::enhance().await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config),

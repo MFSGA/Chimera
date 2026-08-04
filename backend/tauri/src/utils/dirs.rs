@@ -36,12 +36,28 @@ pub const CLASH_CFG_GUARD_OVERRIDES: &str = "clash-guard-overrides.yaml";
 
 pub const STORAGE_DB: &str = "storage.db";
 
+#[cfg(feature = "e2e")]
+fn e2e_dir_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    value.map(PathBuf::from)
+}
+
+#[cfg(feature = "e2e")]
+fn e2e_dir(env_name: &str) -> Option<PathBuf> {
+    e2e_dir_from(std::env::var_os(env_name))
+}
+
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
 }
 
 pub fn app_config_dir() -> Result<PathBuf> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = e2e_dir("CHIMERA_E2E_CONFIG_DIR") {
+        create_dir_all(&path)?;
+        return Ok(path);
+    }
+
     let path: Option<PathBuf> = {
         #[cfg(target_os = "windows")]
         {
@@ -111,6 +127,12 @@ fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
 }
 
 pub fn app_data_dir() -> Result<PathBuf> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = e2e_dir("CHIMERA_E2E_DATA_DIR") {
+        create_dir_all(&path)?;
+        return Ok(path);
+    }
+
     let path: Option<PathBuf> = {
         #[cfg(target_os = "windows")]
         {
@@ -201,4 +223,42 @@ pub fn app_resources_dir() -> Result<PathBuf> {
         return Ok(res_dir);
     };
     Err(anyhow::anyhow!("failed to get the resource dir 2"))
+}
+
+#[cfg(all(test, feature = "e2e"))]
+mod tests {
+    use std::{ffi::OsString, fs};
+
+    use tempfile::tempdir;
+
+    use super::{create_dir_all, e2e_dir_from};
+
+    #[test]
+    fn e2e_override_preserves_the_configured_path() {
+        let path = std::path::PathBuf::from(r"C:\isolated\chimera\config");
+
+        assert_eq!(e2e_dir_from(Some(OsString::from(&path))), Some(path));
+        assert_eq!(e2e_dir_from(None), None);
+    }
+
+    #[test]
+    fn create_dir_all_creates_a_missing_isolation_directory() {
+        let root = tempdir().expect("failed to create temporary directory");
+        let target = root.path().join("runtime").join("config");
+
+        create_dir_all(&target).expect("failed to create isolation directory");
+
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn create_dir_all_replaces_a_colliding_file() {
+        let root = tempdir().expect("failed to create temporary directory");
+        let target = root.path().join("config");
+        fs::write(&target, "not a directory").expect("failed to create colliding file");
+
+        create_dir_all(&target).expect("failed to replace colliding file");
+
+        assert!(target.is_dir());
+    }
 }

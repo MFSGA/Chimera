@@ -1,9 +1,11 @@
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
@@ -131,22 +133,35 @@ pub fn open_file(app: tauri::AppHandle, path: PathBuf) -> Result<()> {
 
 /// save the data to the file
 /// can set `prefix` string to add some comments
+fn serialize_yaml<T: Serialize>(data: &T, prefix: Option<&str>) -> Result<String> {
+    let data = serde_yaml::to_string(data)?;
+    Ok(match prefix {
+        Some(prefix) => format!("{prefix}\n\n{data}"),
+        None => data,
+    })
+}
+
 pub fn save_yaml<T: Serialize, P: AsRef<Path>>(
     path: P,
     data: &T,
     prefix: Option<&str>,
 ) -> Result<()> {
     let path = path.as_ref();
-    let data_str = serde_yaml::to_string(data)?;
-
-    let yaml_str = match prefix {
-        Some(prefix) => format!("{prefix}\n\n{data_str}"),
-        None => data_str,
-    };
-
+    let yaml = serialize_yaml(data, prefix)?;
     let path_str = path.as_os_str().to_string_lossy().to_string();
-    fs::write(path, yaml_str.as_bytes())
-        .with_context(|| format!("failed to save file \"{path_str}\""))
+    fs::write(path, yaml.as_bytes()).with_context(|| format!("failed to save file \"{path_str}\""))
+}
+
+pub fn save_yaml_atomic<T: Serialize, P: AsRef<Path>>(
+    path: P,
+    data: &T,
+    prefix: Option<&str>,
+) -> Result<()> {
+    let path = path.as_ref();
+    let yaml = serialize_yaml(data, prefix)?;
+    AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| file.write_all(yaml.as_bytes()))
+        .with_context(|| format!("failed to atomically save file \"{}\"", path.display()))
 }
 
 /// read mapping from yaml fix #165
@@ -230,4 +245,46 @@ pub fn restart_application(app_handle: &AppHandle) {
         .expect("application failed to start");
     app_handle.exit(0);
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+    use tempfile::tempdir;
+
+    use super::save_yaml_atomic;
+
+    #[derive(Serialize)]
+    struct AtomicYamlFixture<'a> {
+        value: &'a str,
+    }
+
+    #[test]
+    fn atomic_yaml_save_replaces_existing_content_with_prefixed_valid_yaml() {
+        let directory = tempdir().expect("create atomic YAML test directory");
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "old truncated content").expect("seed an existing YAML destination");
+
+        save_yaml_atomic(
+            &path,
+            &AtomicYamlFixture { value: "new" },
+            Some("# Atomic fixture"),
+        )
+        .expect("atomically replace YAML content");
+
+        let content = std::fs::read_to_string(&path).expect("read atomically replaced YAML");
+        let yaml = content
+            .strip_prefix("# Atomic fixture\n\n")
+            .expect("preserve the configured YAML prefix");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(yaml).expect("replacement must remain valid YAML");
+        assert_eq!(parsed["value"], serde_yaml::Value::String("new".into()));
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list atomic YAML test directory")
+                .count(),
+            1,
+            "successful replacement must not leave transaction files"
+        );
+    }
 }

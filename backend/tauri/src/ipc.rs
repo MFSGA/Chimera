@@ -1,10 +1,16 @@
-use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::{Path, PathBuf},
+    result::Result as StdResult,
+};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
+#[cfg(not(feature = "e2e"))]
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -17,15 +23,20 @@ use crate::{
         profile::{
             builder::ProfileBuilder,
             item::{
-                Profile, ProfileKindGetter, ProfileMetaGetter,
+                MAX_PROFILE_YAML_BYTES, Profile, ProfileKindGetter, ProfileMetaGetter,
                 local::{LocalProfile, LocalProfileBuilder},
+                profile_cleanup_path, profile_file_path, profile_materialized_path,
+                read_file_bytes_with_limit,
                 remote::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
                     RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
+                shared::validate_profile_uid,
+                validate_profile_mapping_keys, write_profile_bytes_atomic,
             },
             item_type::{ProfileItemType, ProfileUid},
-            profiles::{Profiles, ProfilesBuilder},
+            profile_mutation_lock,
+            profiles::Profiles,
         },
         runtime::{PatchClashCoreConfig, PatchRuntimeConfig},
     },
@@ -37,13 +48,14 @@ use crate::{
         updater::{self, ManifestVersionLatest},
     },
     feat,
+    transaction::{TransactionOutcome, commit_then_apply_with_rollback},
     utils::{candy, collect::EnvInfo, dirs, help, resolve},
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
 
 #[allow(dead_code)]
-#[derive(specta::Type, serde::Serialize)]
+#[derive(Debug, specta::Type, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RebuildOutcome {
     Ok,
@@ -247,19 +259,36 @@ pub fn get_profiles() -> Result<ProfilesResponse> {
     Ok(Config::profiles().data().clone().into())
 }
 
+#[cfg(feature = "e2e")]
+fn isolated_sys_proxy_response() -> GetSysProxyResponse {
+    GetSysProxyResponse {
+        enable: false,
+        host: "127.0.0.1".to_string(),
+        port: 0,
+        bypass: String::new(),
+        server: "127.0.0.1:0".to_string(),
+    }
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
-    let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
-    let server = format!("{}:{}", current.host, current.port);
+    #[cfg(feature = "e2e")]
+    return Ok(isolated_sys_proxy_response());
 
-    Ok(GetSysProxyResponse {
-        enable: current.enable,
-        host: current.host,
-        port: current.port,
-        bypass: current.bypass,
-        server,
-    })
+    #[cfg(not(feature = "e2e"))]
+    {
+        let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
+        let server = format!("{}:{}", current.host, current.port);
+
+        Ok(GetSysProxyResponse {
+            enable: current.enable,
+            host: current.host,
+            port: current.port,
+            bypass: current.bypass,
+            server,
+        })
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -276,45 +305,53 @@ pub fn is_portable() -> Result<bool> {
     Ok(false)
 }
 
+fn ensure_remote_profile_url(url: &url::Url) -> anyhow::Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("remote profile URL must use HTTP or HTTPS");
+    }
+    if url.host_str().is_none() {
+        bail!("remote profile URL must include a host");
+    }
+    Ok(())
+}
+
+fn validate_remote_profile_url(url: url::Url) -> Result<url::Url> {
+    ensure_remote_profile_url(&url)?;
+    Ok(url)
+}
+
+fn parse_remote_profile_url(url: &str) -> Result<url::Url> {
+    let url = url::Url::parse(url).context("failed to parse the url")?;
+    validate_remote_profile_url(url)
+}
+
 #[tauri::command]
 #[specta::specta]
 /// later: check in the frontend
 pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
-    let url = url::Url::parse(&url).context("failed to parse the url")?;
+    let _profile_guard = profile_mutation_lock().lock().await;
+    let url = parse_remote_profile_url(&url)?;
     let mut builder = RemoteProfileBuilder::default();
     builder.url(url);
     if let Some(option) = option {
         builder.option(option.clone());
     }
-    let profile = builder
-        .build_no_blocking()
+    let (profile, content) = builder
+        .build_no_blocking_unpersisted()
         .await
         .context("failed to build a remote profile")?;
+    let profile: Profile = profile.into();
+    let snapshot = ProfileMaterializationSnapshot::capture(profile.file())?;
+    profile.save_file(content)?;
     log::debug!("import_profile 3");
-    // 根据是否为 Some(uid) 来判断是否要激活配置
-    let profile_id = {
-        if Config::profiles().draft().current.is_empty() {
-            Some(profile.uid().to_string())
-        } else {
-            None
-        }
-    };
-    {
-        let committer = Config::profiles().auto_commit();
-        (committer.draft().append_item(profile.into()))?;
-    }
-    // TODO: 使用 activate_profile 来激活配置
-    if let Some(profile_id) = profile_id {
-        let mut builder = ProfilesBuilder::default();
-        builder.current(vec![profile_id]);
-        patch_profiles_config(builder).await?;
-    }
+    persist_created_profile(profile, &snapshot, "profile import").await?;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
+    validate_profile_uid(&uid)?;
     let file = {
         Config::profiles()
             .latest()
@@ -323,7 +360,7 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
             .to_string()
     };
 
-    let path = (dirs::app_profiles_dir())?.join(file);
+    let path = profile_file_path(file)?;
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
     }
@@ -347,6 +384,7 @@ pub async fn create_editor_window(
             return Err(anyhow!("CSS editor is not supported yet").into());
         }
     };
+    validate_profile_uid(&uid)?;
 
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let handle = app_handle.clone();
@@ -378,50 +416,364 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
     Ok(())
 }
 
-/// Compatibility helper for callers that still construct the persisted builder.
-async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
-    Config::profiles().draft().apply(profiles);
+fn update_profiles_draft(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) -> Result {
+    let result = {
+        let mut draft = Config::profiles().draft();
+        update(&mut draft)
+    };
+    if let Err(error) = result {
+        Config::profiles().discard();
+        return Err(IpcError::from(error));
+    }
+    Ok(())
+}
 
-    match CoreManager::global()
+fn commit_profiles_draft() -> Result {
+    Config::profiles().persist_draft_with(Profiles::save_file)?;
+    handle::Handle::refresh_profiles();
+    Ok(())
+}
+
+fn restore_profiles_snapshot(snapshot: Profiles) -> Result {
+    Config::profiles()
+        .update_and_persist_with(
+            move |profiles| {
+                *profiles = snapshot;
+                Ok::<(), anyhow::Error>(())
+            },
+            Profiles::save_file,
+        )
+        .map_err(IpcError::from)?;
+    handle::Handle::refresh_profiles();
+    Ok(())
+}
+
+async fn commit_apply_and_report_profile_change<C, A, AFut, R, RFut>(
+    operation: &str,
+    commit: C,
+    apply: A,
+    rollback: R,
+) -> Result<RebuildOutcome>
+where
+    C: FnOnce() -> Result,
+    A: FnOnce() -> AFut,
+    AFut: Future<Output = Result>,
+    R: FnOnce() -> RFut,
+    RFut: Future<Output = Result>,
+{
+    match commit_then_apply_with_rollback(commit, apply, rollback).await? {
+        TransactionOutcome::Committed => Ok(RebuildOutcome::Ok),
+        TransactionOutcome::RolledBack { primary_error } => Ok(RebuildOutcome::Degraded {
+            error: format!(
+                "failed to apply {operation}; previous state was restored: {primary_error}"
+            ),
+        }),
+        TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error,
+        } => Err(anyhow!(
+            "failed to apply {operation}: {primary_error}; rollback also failed: {rollback_error}"
+        )
+        .into()),
+    }
+}
+
+async fn restart_core_for_profile_state() -> Result {
+    CoreManager::global()
         .restart_core_with_generated_config()
         .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            handle::Handle::refresh_profiles();
-            Config::profiles().apply();
-            (Config::profiles().data().save_file())?;
+        .map_err(IpcError::from)?;
+    handle::Handle::refresh_clash();
+    Ok(())
+}
 
-            // Interrupt connections based on configuration
-            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
+#[cfg(feature = "e2e")]
+fn forced_e2e_profile_rebuild_outcome(operation: &str) -> Option<RebuildOutcome> {
+    let requested = std::env::var("CHIMERA_E2E_DEGRADED_PROFILE_OPERATION").ok()?;
+    if requested != operation {
+        return None;
+    }
 
-            Ok(())
-        }
-        Err(err) => {
-            log::debug!(target: "app", "{err:?}");
+    Config::profiles().discard();
+    Some(RebuildOutcome::Degraded {
+        error: format!("E2E forced {operation} failure; previous profile state was restored"),
+    })
+}
 
-            Config::profiles().discard();
+async fn commit_profile_draft_then_rebuild(
+    previous_profiles: Profiles,
+    operation: &str,
+) -> Result<RebuildOutcome> {
+    #[cfg(feature = "e2e")]
+    if let Some(outcome) = forced_e2e_profile_rebuild_outcome(operation) {
+        return Ok(outcome);
+    }
 
-            Err(IpcError::from(err))
-        }
+    let outcome = commit_apply_and_report_profile_change(
+        operation,
+        commit_profiles_draft,
+        restart_core_for_profile_state,
+        move || async move {
+            restore_profiles_snapshot(previous_profiles)?;
+            restart_core_for_profile_state().await
+        },
+    )
+    .await?;
+
+    if matches!(&outcome, RebuildOutcome::Ok) {
+        let _ =
+            crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(
+            )
+            .await;
+    }
+    Ok(outcome)
+}
+
+fn require_profile_change_applied(outcome: RebuildOutcome) -> Result {
+    match outcome {
+        RebuildOutcome::Ok => Ok(()),
+        RebuildOutcome::Degraded { error } => Err(anyhow!(error).into()),
+    }
+}
+
+async fn commit_then_apply_profile_change<C, A, AFut, R, RFut>(
+    commit: C,
+    apply: A,
+    rollback: R,
+) -> Result
+where
+    C: FnOnce() -> Result,
+    A: FnOnce() -> AFut,
+    AFut: Future<Output = Result>,
+    R: FnOnce() -> RFut,
+    RFut: Future<Output = Result>,
+{
+    match commit_then_apply_with_rollback(commit, apply, rollback).await? {
+        TransactionOutcome::Committed => Ok(()),
+        TransactionOutcome::RolledBack { primary_error } => Err(anyhow!(
+            "failed to apply committed profile change; previous state was restored: {primary_error}"
+        )
+        .into()),
+        TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error,
+        } => Err(anyhow!(
+            "failed to apply committed profile change: {primary_error}; rollback also failed: {rollback_error}"
+        )
+        .into()),
     }
 }
 
 fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) -> Result {
-    let profiles = Config::profiles();
-    let result = {
-        let mut draft = profiles.draft();
-        update(&mut draft).and_then(|_| draft.save_file())
-    };
-
-    if let Err(err) = result {
-        profiles.discard();
-        return Err(IpcError::from(err));
-    }
-
-    profiles.apply();
+    Config::profiles()
+        .update_and_persist_with(update, Profiles::save_file)
+        .map_err(IpcError::from)?;
     handle::Handle::refresh_profiles();
     Ok(())
+}
+
+#[cfg(test)]
+fn profile_file_key(file: impl AsRef<Path>) -> String {
+    let key = file.as_ref().to_string_lossy();
+    #[cfg(target_os = "windows")]
+    return key.to_ascii_lowercase();
+
+    #[cfg(not(target_os = "windows"))]
+    key.into_owned()
+}
+
+fn path_entry_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to inspect profile path {}", path.display()))
+            .map_err(IpcError::from),
+    }
+}
+
+fn remove_profile_path_entry(path: &Path) -> std::io::Result<()> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::fs::FileTypeExt;
+
+        if file_type.is_symlink_dir() {
+            return std::fs::remove_dir(path);
+        }
+    }
+
+    if file_type.is_symlink() && std::fs::metadata(path).is_ok_and(|target| target.is_dir()) {
+        std::fs::remove_dir(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
+#[derive(Debug)]
+struct ProfileMaterializationSnapshot {
+    path: PathBuf,
+    content: Option<Vec<u8>>,
+}
+
+impl ProfileMaterializationSnapshot {
+    fn capture(file: &str) -> Result<Self> {
+        Self::capture_path(profile_materialized_path(file)?)
+    }
+
+    fn capture_path(path: PathBuf) -> Result<Self> {
+        let content = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => Some(
+                read_file_bytes_with_limit(&path, MAX_PROFILE_YAML_BYTES).with_context(|| {
+                    format!(
+                        "failed to snapshot profile materialization {}",
+                        path.display()
+                    )
+                })?,
+            ),
+            Ok(_) => {
+                return Err(anyhow!(
+                    "profile materialized path is not a regular file: {}",
+                    path.display()
+                )
+                .into());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| {
+                        format!(
+                            "failed to inspect profile materialization {}",
+                            path.display()
+                        )
+                    })
+                    .map_err(IpcError::from);
+            }
+        };
+        Ok(Self { path, content })
+    }
+
+    fn restore(&self) -> Result {
+        match &self.content {
+            Some(content) => write_profile_bytes_atomic(&self.path, content)
+                .with_context(|| {
+                    format!(
+                        "failed to restore profile materialization {}",
+                        self.path.display()
+                    )
+                })
+                .map_err(IpcError::from),
+            None => match std::fs::symlink_metadata(&self.path) {
+                Ok(metadata) if metadata.file_type().is_file() => std::fs::remove_file(&self.path)
+                    .with_context(|| {
+                        format!(
+                            "failed to remove new profile materialization {}",
+                            self.path.display()
+                        )
+                    })
+                    .map_err(IpcError::from),
+                Ok(_) => Err(anyhow!(
+                    "refusing to remove non-file profile replacement: {}",
+                    self.path.display()
+                )
+                .into()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error)
+                    .with_context(|| {
+                        format!(
+                            "failed to inspect profile materialization rollback path {}",
+                            self.path.display()
+                        )
+                    })
+                    .map_err(IpcError::from),
+            },
+        }
+    }
+}
+
+fn restore_profile_materialization_after_failed_persistence<T>(
+    result: Result<T>,
+    snapshot: &ProfileMaterializationSnapshot,
+) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(primary) => match snapshot.restore() {
+            Ok(()) => Err(primary),
+            Err(rollback) => Err(anyhow!(
+                "profile persistence failed: {primary}; materialization rollback also failed: {rollback}"
+            )
+            .into()),
+        },
+    }
+}
+
+#[cfg(test)]
+fn cleanup_profile_file_after_failed_persistence<T>(
+    result: Result<T>,
+    materialized_path: &Path,
+    existed_before: bool,
+) -> Result<T> {
+    if result.is_err() && !existed_before && path_entry_exists(materialized_path)? {
+        remove_profile_path_entry(materialized_path).with_context(|| {
+            format!(
+                "failed to remove orphaned profile file {}",
+                materialized_path.display()
+            )
+        })?;
+    }
+    result
+}
+
+fn cleanup_deleted_profile_file_after_persistence<T>(
+    result: Result<T>,
+    materialized_path: Option<&Path>,
+) -> Result<T> {
+    if let Some(materialized_path) = materialized_path
+        && result.is_ok()
+        && path_entry_exists(materialized_path)?
+    {
+        remove_profile_path_entry(materialized_path).with_context(|| {
+            format!(
+                "profile list was committed but failed to remove materialized file {}",
+                materialized_path.display()
+            )
+        })?;
+    }
+    result
+}
+
+fn stage_created_profile(profiles: &mut Profiles, profile: Profile) -> anyhow::Result<bool> {
+    let should_activate = profiles.current.is_empty();
+    let uid = profile.uid().to_string();
+    profiles.append_item(profile)?;
+    if should_activate {
+        profiles.activate(Some(&uid))?;
+    }
+    Ok(should_activate)
+}
+
+async fn persist_created_profile(
+    profile: Profile,
+    snapshot: &ProfileMaterializationSnapshot,
+    operation: &str,
+) -> Result {
+    let previous_profiles = Config::profiles().data().clone();
+    let mut should_activate = false;
+    update_profiles_draft(|profiles| {
+        should_activate = stage_created_profile(profiles, profile)?;
+        Ok(())
+    })?;
+
+    let result = if should_activate {
+        commit_profile_draft_then_rebuild(previous_profiles, operation)
+            .await
+            .and_then(require_profile_change_applied)
+    } else {
+        commit_profiles_draft()
+    };
+    restore_profile_materialization_after_failed_persistence(result, snapshot)
 }
 
 fn persist_profile_order(
@@ -431,52 +783,47 @@ fn persist_profile_order(
     Ok(RebuildOutcome::Ok)
 }
 
-async fn rebuild_after_profile_commit(operation: &str) -> RebuildOutcome {
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
-            RebuildOutcome::Ok
-        }
-        Err(err) => {
-            log::error!(target: "app", "failed to rebuild after {operation}: {err:?}");
-            RebuildOutcome::Degraded {
-                error: err.to_string(),
-            }
-        }
-    }
-}
-
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profile(active_id: ProfileUid, over_id: ProfileUid) -> Result<RebuildOutcome> {
+    validate_profile_uid(&active_id)?;
+    validate_profile_uid(&over_id)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
     persist_profile_order(|profiles| profiles.reorder(&active_id, &over_id))
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profiles_by_list(list: Vec<ProfileUid>) -> Result<RebuildOutcome> {
+    for uid in &list {
+        validate_profile_uid(uid)?;
+    }
+    let _profile_guard = profile_mutation_lock().lock().await;
     persist_profile_order(|profiles| profiles.reorder_by_list(&list))
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn activate_profile(uid: Option<ProfileUid>) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| profiles.activate(uid.as_deref()))?;
-    Ok(rebuild_after_profile_commit("profile activation").await)
+    if let Some(uid) = uid.as_deref() {
+        validate_profile_uid(uid)?;
+    }
+    let _profile_guard = profile_mutation_lock().lock().await;
+    let previous_profiles = Config::profiles().data().clone();
+    update_profiles_draft(|profiles| profiles.activate(uid.as_deref()))?;
+    commit_profile_draft_then_rebuild(previous_profiles, "profile activation").await
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn set_profile_valid_fields(fields: Vec<String>) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| {
+    let _profile_guard = profile_mutation_lock().lock().await;
+    let previous_profiles = Config::profiles().data().clone();
+    update_profiles_draft(|profiles| {
         profiles.valid = fields;
         Ok(())
     })?;
-    Ok(rebuild_after_profile_commit("profile valid fields update").await)
+    commit_profile_draft_then_rebuild(previous_profiles, "profile valid fields update").await
 }
 
 #[tauri::command]
@@ -485,6 +832,8 @@ pub async fn patch_profile_metadata(
     uid: ProfileUid,
     patch: ProfileMetadataPatch,
 ) -> Result<RebuildOutcome> {
+    validate_profile_uid(&uid)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
     persist_profiles(|profiles| profiles.patch_metadata(&uid, patch.name, patch.desc))?;
     Ok(RebuildOutcome::Ok)
 }
@@ -495,6 +844,8 @@ pub async fn patch_remote_profile_options(
     uid: ProfileUid,
     patch: RemoteProfileOptionsPatch,
 ) -> Result<RebuildOutcome> {
+    validate_profile_uid(&uid)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
     persist_profiles(|profiles| {
         profiles.patch_remote_options(
             &uid,
@@ -513,6 +864,8 @@ pub async fn replace_profile_definition(
     uid: ProfileUid,
     definition: ProfileDefinition,
 ) -> Result<RebuildOutcome> {
+    validate_profile_uid(&uid)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
     let ProfileDefinition::Config {
         config:
             ConfigDefinition::File {
@@ -531,6 +884,7 @@ pub async fn replace_profile_definition(
     if !transforms.is_empty() {
         return Err(anyhow!("scoped profile transforms are not supported yet").into());
     }
+    let url = validate_remote_profile_url(url)?;
 
     persist_profiles(|profiles| {
         profiles.replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
@@ -653,6 +1007,12 @@ pub fn cleanup_processes(app_handle: AppHandle) -> Result {
 /// Internal subsystems (e.g. task storage) use un-prefixed keys and are
 /// never exposed to the frontend through these IPC commands.
 const WEB_STORAGE_KEY_PREFIX: &str = "web:";
+const LEGACY_FRONTEND_STORAGE_KEYS: &[&str] = &[
+    "connections_table_columns",
+    "custom-css",
+    "custom-css-compiled",
+    "dashboard-widgets",
+];
 
 pub mod service {
     use super::Result;
@@ -762,9 +1122,7 @@ pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-    (crate::core::clash::api::patch_configs(&mapping).await)?;
-
-    if let Err(e) = feat::patch_clash(mapping).await {
+    if let Err(e) = feat::patch_clash_runtime(mapping).await {
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
@@ -973,7 +1331,7 @@ pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
 #[specta::specta]
 pub async fn change_clash_core(clash_core: Option<chimera::ClashCore>) -> Result {
     log::debug!("change_clash_core: {clash_core:?}");
-    (CoreManager::global().change_core(clash_core).await)?;
+    (feat::change_clash_core(clash_core).await)?;
     Ok(())
 }
 
@@ -1008,90 +1366,113 @@ pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummar
 #[tauri::command]
 #[specta::specta]
 pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
+    validate_profile_uid(&uid)?;
     (feat::update_profile(uid, option).await)?;
+    Ok(())
+}
+
+fn apply_profile_builder_patch(
+    current: &mut Profile,
+    profile: ProfileBuilder,
+) -> anyhow::Result<()> {
+    let original_uid = current.uid().to_string();
+    let original_file = current.file().to_string();
+    let mut updated = current.clone();
+
+    match (&mut updated, profile) {
+        (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
+            .patch_profile(item)
+            .context("failed to patch remote profile"),
+        (Profile::Local(item), ProfileBuilder::Local(builder)) => {
+            item.apply(builder);
+            Ok(())
+        }
+        _ => Err(anyhow!("profile type mismatch")),
+    }?;
+
+    if updated.uid() != original_uid {
+        bail!("profile identifier cannot be changed");
+    }
+    if updated.file() != original_file {
+        bail!("profile materialized file cannot be changed");
+    }
+    if let Profile::Remote(item) = &updated {
+        ensure_remote_profile_url(&item.url)?;
+    }
+
+    *current = updated;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Result {
+    validate_profile_uid(&uid)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
+    let previous_profiles = Config::profiles().data().clone();
     let profile = ProfileBuilder::from(profile);
-    {
-        let mut profiles = Config::profiles().draft();
+    update_profiles_draft(|profiles| {
         let current = profiles
             .items
             .iter_mut()
             .find(|item| item.uid() == uid)
             .ok_or_else(|| anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+        apply_profile_builder_patch(current, profile)
+    })?;
 
-        match (current, profile) {
-            (
-                crate::config::profile::item::Profile::Remote(item),
-                ProfileBuilder::Remote(builder),
-            ) => {
-                builder
-                    .patch_profile(item)
-                    .context("failed to patch remote profile")?;
-            }
-            (
-                crate::config::profile::item::Profile::Local(item),
-                ProfileBuilder::Local(builder),
-            ) => {
-                item.apply(builder);
-            }
-            _ => return Err(anyhow!("profile type mismatch").into()),
-        }
-    }
-
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            handle::Handle::refresh_profiles();
-            Config::profiles().apply();
-            Config::profiles().data().save_file()?;
-            Ok(())
-        }
-        Err(err) => {
-            Config::profiles().discard();
-            Err(IpcError::from(err))
-        }
-    }
+    require_profile_change_applied(
+        commit_profile_draft_then_rebuild(previous_profiles, "profile edit").await?,
+    )
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_profile(uid: String) -> Result {
-    let should_update = {
+    validate_profile_uid(&uid)?;
+    let _profile_guard = profile_mutation_lock().lock().await;
+    let previous_profiles = Config::profiles().data().clone();
+    let materialized_path = profile_cleanup_path(previous_profiles.get_item(&uid)?.file())?;
+    if materialized_path.is_none() {
+        log::warn!(target: "app", "removing profile metadata without touching an invalid historical materialized path");
+    }
+    let (should_update, _materialized_file) = {
         let mut profiles = Config::profiles().draft();
         profiles.delete_item(&uid)?
     };
 
-    if should_update {
-        match CoreManager::global()
-            .restart_core_with_generated_config()
-            .await
-        {
-            Ok(_) => handle::Handle::refresh_clash(),
-            Err(err) => {
-                Config::profiles().discard();
-                return Err(IpcError::from(err));
+    let transaction_result = commit_then_apply_profile_change(
+        commit_profiles_draft,
+        || async {
+            if should_update {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await
+                    .map_err(IpcError::from)?;
+                handle::Handle::refresh_clash();
             }
-        }
-    }
+            Ok(())
+        },
+        move || async move {
+            restore_profiles_snapshot(previous_profiles)?;
+            if should_update {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await
+                    .map_err(IpcError::from)?;
+                handle::Handle::refresh_clash();
+            }
+            Ok(())
+        },
+    )
+    .await;
 
-    Config::profiles().apply();
-    Config::profiles().data().save_file()?;
-    handle::Handle::refresh_profiles();
-
-    Ok(())
+    cleanup_deleted_profile_file_after_persistence(transaction_result, materialized_path.as_deref())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn read_profile_file(uid: String) -> Result<String> {
+    validate_profile_uid(&uid)?;
     let profiles = Config::profiles();
     let profiles = profiles.latest();
     let item = profiles.get_item(&uid)?;
@@ -1100,17 +1481,51 @@ pub fn read_profile_file(uid: String) -> Result<String> {
     Ok(serde_yaml::to_string(&data).context("failed to convert yaml to string")?)
 }
 
+fn validate_profile_yaml_with_limit(file_data: &str, max_bytes: usize) -> Result<()> {
+    if file_data.len() > max_bytes {
+        return Err(anyhow!("profile YAML exceeds the maximum size of {max_bytes} bytes").into());
+    }
+    if file_data.trim().is_empty() {
+        return Err(anyhow!("profile YAML must not be empty").into());
+    }
+    let mapping =
+        serde_yaml::from_str::<Mapping>(file_data).context("failed to parse profile YAML")?;
+    validate_profile_mapping_keys(&mapping).context("invalid profile YAML keys")?;
+    Ok(())
+}
+
+fn validate_profile_yaml(file_data: &str) -> Result<()> {
+    validate_profile_yaml_with_limit(file_data, MAX_PROFILE_YAML_BYTES)
+}
+
+fn local_profile_file_data_to_save<'a>(
+    is_remote: bool,
+    file_data: Option<&'a str>,
+) -> Result<Option<&'a str>> {
+    if is_remote {
+        return Ok(None);
+    }
+    let Some(file_data) = file_data.filter(|data| !data.is_empty()) else {
+        return Ok(None);
+    };
+    validate_profile_yaml(file_data)?;
+    Ok(Some(file_data))
+}
+
 #[tauri::command]
 #[specta::specta]
-pub fn save_profile_file(uid: String, file_data: String) -> Result {
-    let profiles = Config::profiles();
-    let profiles = profiles.latest();
-    let item = profiles.get_item(&uid)?;
-    if matches!(item.kind(), ProfileItemType::Remote) {
-        return Err(anyhow!("remote profiles are updater-owned").into());
+pub async fn save_profile_file(uid: String, file_data: String) -> Result {
+    validate_profile_uid(&uid)?;
+    {
+        let profiles = Config::profiles();
+        let profiles = profiles.latest();
+        let item = profiles.get_item(&uid)?;
+        if matches!(item.kind(), ProfileItemType::Remote) {
+            return Err(anyhow!("remote profiles are updater-owned").into());
+        }
     }
-    serde_yaml::from_str::<Mapping>(&file_data).context("failed to parse profile YAML")?;
-    item.save_file(file_data)?;
+    validate_profile_yaml(&file_data)?;
+    feat::save_local_profile_file(uid, file_data).await?;
     Ok(())
 }
 
@@ -1118,72 +1533,101 @@ pub fn save_profile_file(uid: String, file_data: String) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<String>) -> Result {
+    let _profile_guard = profile_mutation_lock().lock().await;
     let item = ProfileBuilder::from(item);
     let is_remote = matches!(&item, ProfileBuilder::Remote(_));
+    let local_file_data =
+        local_profile_file_data_to_save(is_remote, file_data.as_deref())?.map(str::to_owned);
 
-    let profile: crate::config::profile::item::Profile = match item {
-        ProfileBuilder::Remote(mut builder) => builder
-            .build_no_blocking()
-            .await
-            .context("failed to build remote profile")?
-            .into(),
-        ProfileBuilder::Local(builder) => builder
-            .build()
-            .context("failed to build local profile")?
-            .into(),
+    let (profile, materialized_content): (Profile, Option<String>) = match item {
+        ProfileBuilder::Remote(mut builder) => {
+            let (profile, content) = builder
+                .build_no_blocking_unpersisted()
+                .await
+                .context("failed to build remote profile")?;
+            (profile.into(), Some(content))
+        }
+        ProfileBuilder::Local(builder) => (
+            builder
+                .build()
+                .context("failed to build local profile")?
+                .into(),
+            local_file_data,
+        ),
     };
 
-    if let Some(file_data) = file_data
-        && !file_data.is_empty()
-        && !is_remote
-    {
-        profile.save_file(file_data)?;
+    let snapshot = ProfileMaterializationSnapshot::capture(profile.file())?;
+    if let Some(content) = materialized_content {
+        profile.save_file(content)?;
     }
 
-    let profile_id = if Config::profiles().draft().current.is_empty() {
-        Some(profile.uid().to_string())
+    persist_created_profile(profile, &snapshot, "profile creation").await?;
+
+    Ok(())
+}
+
+fn frontend_storage_key(key: &str) -> String {
+    if key.starts_with(WEB_STORAGE_KEY_PREFIX) {
+        key.to_string()
     } else {
-        None
-    };
+        format!("{WEB_STORAGE_KEY_PREFIX}{key}")
+    }
+}
 
-    {
-        let committer = Config::profiles().auto_commit();
-        committer.draft().append_item(profile)?;
+fn is_legacy_frontend_storage_key(key: &str) -> bool {
+    LEGACY_FRONTEND_STORAGE_KEYS.contains(&key)
+}
+
+fn get_frontend_storage_item(storage: &Storage, key: &str) -> Result<Option<String>> {
+    let namespaced_key = frontend_storage_key(key);
+    if let Some(value) = storage.get_item(&namespaced_key)? {
+        return Ok(Some(value));
     }
 
-    if let Some(profile_id) = profile_id {
-        let mut builder = ProfilesBuilder::default();
-        builder.current(vec![profile_id]);
-        patch_profiles_config(builder).await?;
-    } else {
-        handle::Handle::refresh_profiles();
+    if is_legacy_frontend_storage_key(key) {
+        let legacy_value = storage.get_item::<String>(key)?;
+        if let Some(value) = legacy_value {
+            storage.set_item(&namespaced_key, &value)?;
+            storage.remove_item(key)?;
+            return Ok(Some(value));
+        }
     }
 
+    Ok(None)
+}
+
+fn set_frontend_storage_item(storage: &Storage, key: &str, value: &str) -> Result {
+    storage.set_item(frontend_storage_key(key), &value)?;
+    if is_legacy_frontend_storage_key(key) && storage.get_item::<String>(key)?.is_some() {
+        storage.remove_item(key)?;
+    }
+    Ok(())
+}
+
+fn remove_frontend_storage_item(storage: &Storage, key: &str) -> Result {
+    storage.remove_item(frontend_storage_key(key))?;
+    if is_legacy_frontend_storage_key(key) && storage.get_item::<String>(key)?.is_some() {
+        storage.remove_item(key)?;
+    }
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<String>> {
-    let storage = app_handle.state::<Storage>();
-    let value = (storage.get_item(&key))?;
-    Ok(value)
+    get_frontend_storage_item(&app_handle.state::<Storage>(), &key)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Result {
-    let storage = app_handle.state::<Storage>();
-    (storage.set_item(&key, &value))?;
-    Ok(())
+    set_frontend_storage_item(&app_handle.state::<Storage>(), &key, &value)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
-    let storage = app_handle.state::<Storage>();
-    (storage.remove_item(&key))?;
-    Ok(())
+    remove_frontend_storage_item(&app_handle.state::<Storage>(), &key)
 }
 
 #[tauri::command]
@@ -1312,12 +1756,9 @@ pub struct StorageEntry {
 
 /// Debug: returns all frontend KV entries (keys with the `web:` prefix).
 /// Internal storage entries used by other subsystems are excluded.
-#[tauri::command]
-#[specta::specta]
-pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
-    let storage = app_handle.state::<Storage>();
-    let items = storage.get_all()?;
-    Ok(items
+fn frontend_storage_entries(storage: &Storage) -> Result<Vec<StorageEntry>> {
+    Ok(storage
+        .get_all()?
         .into_iter()
         .filter_map(|(raw_key, value)| {
             raw_key
@@ -1330,22 +1771,34 @@ pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>>
         .collect())
 }
 
+fn clear_frontend_storage(storage: &Storage) -> Result {
+    let mut frontend_keys: Vec<String> = storage
+        .get_all()?
+        .into_iter()
+        .filter(|(key, _)| {
+            key.starts_with(WEB_STORAGE_KEY_PREFIX) || is_legacy_frontend_storage_key(key)
+        })
+        .map(|(key, _)| key)
+        .collect();
+    frontend_keys.sort();
+    storage.remove_items(&frontend_keys)?;
+    Ok(())
+}
+
+/// Debug: returns all frontend KV entries (keys with the `web:` prefix).
+/// Internal storage entries used by other subsystems are excluded.
+#[tauri::command]
+#[specta::specta]
+pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
+    frontend_storage_entries(&app_handle.state::<Storage>())
+}
+
 /// Debug: clears all frontend KV entries (keys with the `web:` prefix).
 /// Internal storage entries used by other subsystems are left intact.
 #[tauri::command]
 #[specta::specta]
 pub fn clear_storage(app_handle: AppHandle) -> Result {
-    let storage = app_handle.state::<Storage>();
-    let web_keys: Vec<String> = storage
-        .get_all()?
-        .into_iter()
-        .filter(|(k, _)| k.starts_with(WEB_STORAGE_KEY_PREFIX))
-        .map(|(k, _)| k)
-        .collect();
-    for key in web_keys {
-        storage.remove_item(&key)?;
-    }
-    Ok(())
+    clear_frontend_storage(&app_handle.state::<Storage>())
 }
 
 #[tauri::command]
@@ -1413,4 +1866,1406 @@ pub async fn clash_api_get_group_delay(
 #[specta::specta]
 pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
     Ok(clash::api::delete_connections(id.as_deref()).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use tempfile::tempdir;
+
+    #[cfg(target_os = "windows")]
+    fn create_directory_junction(target: &std::path::Path, junction: &std::path::Path) {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(junction)
+            .arg(target)
+            .output()
+            .expect("failed to invoke mklink for junction fixture");
+
+        assert!(
+            output.status.success(),
+            "failed to create junction fixture: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(feature = "e2e")]
+    use super::isolated_sys_proxy_response;
+    use super::{
+        ProfileMaterializationSnapshot, activate_profile, apply_profile_builder_patch,
+        cleanup_deleted_profile_file_after_persistence,
+        cleanup_profile_file_after_failed_persistence, clear_frontend_storage,
+        commit_apply_and_report_profile_change, commit_then_apply_profile_change,
+        frontend_storage_entries, frontend_storage_key, get_frontend_storage_item,
+        local_profile_file_data_to_save, parse_remote_profile_url, path_entry_exists,
+        profile_file_key, read_profile_file, remove_frontend_storage_item,
+        restore_profile_materialization_after_failed_persistence, set_frontend_storage_item,
+        stage_created_profile, update_profile, validate_profile_yaml,
+        validate_profile_yaml_with_limit, validate_remote_profile_url,
+    };
+    use crate::{
+        config::profile::{
+            builder::ProfileBuilder,
+            item::{
+                Profile,
+                local::{LocalProfile, LocalProfileBuilder},
+                remote::{
+                    RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions, SubscriptionInfo,
+                },
+                shared::{ProfileShared, ProfileSharedBuilder},
+            },
+            profiles::Profiles,
+        },
+        core::storage::{Storage, WebStorage},
+    };
+
+    #[tokio::test]
+    async fn profile_ipc_rejects_control_character_uids_before_state_access() {
+        let invalid = "profile\nforged-log-entry".to_string();
+        let errors = [
+            read_profile_file(invalid.clone())
+                .expect_err("profile reads must reject invalid identifiers before state access"),
+            activate_profile(Some(invalid.clone()))
+                .await
+                .expect_err("profile activation must reject invalid identifiers before locking"),
+            update_profile(invalid, None)
+                .await
+                .expect_err("profile updates must reject invalid identifiers before leasing"),
+        ];
+
+        for error in errors {
+            let message = error.to_string();
+            assert!(message.contains("control characters"));
+            assert!(!message.contains("forged-log-entry"));
+        }
+    }
+
+    fn local_profile_fixture() -> Profile {
+        let mut profile = LocalProfile::builder()
+            .build()
+            .expect("build local profile fixture");
+        profile.shared.uid = "profile-a".into();
+        profile.shared.file = "profile-a.yaml".into();
+        profile.shared.name = "Original".into();
+        Profile::Local(profile)
+    }
+
+    fn local_profile_fixture_with_uid(uid: &str) -> Profile {
+        let mut profile = local_profile_fixture();
+        let Profile::Local(profile) = &mut profile else {
+            unreachable!("local profile fixture must remain local");
+        };
+        profile.shared.uid = uid.into();
+        profile.shared.file = format!("{uid}.yaml");
+        profile.shared.name = uid.into();
+        Profile::Local(profile.clone())
+    }
+
+    #[test]
+    fn staging_the_first_created_profile_activates_it_atomically() {
+        let mut profiles = Profiles::default();
+        let profile = local_profile_fixture_with_uid("profile-first");
+
+        let should_activate = stage_created_profile(&mut profiles, profile)
+            .expect("first created profile must stage successfully");
+
+        assert!(should_activate);
+        assert_eq!(profiles.items.len(), 1);
+        assert_eq!(profiles.current, vec!["profile-first"]);
+    }
+
+    #[test]
+    fn staging_an_additional_profile_preserves_the_active_profile() {
+        let mut profiles = Profiles::default();
+        profiles
+            .append_item(local_profile_fixture_with_uid("profile-active"))
+            .expect("append active profile fixture");
+        profiles
+            .activate(Some("profile-active"))
+            .expect("activate profile fixture");
+
+        let should_activate = stage_created_profile(
+            &mut profiles,
+            local_profile_fixture_with_uid("profile-added"),
+        )
+        .expect("additional created profile must stage successfully");
+
+        assert!(!should_activate);
+        assert_eq!(profiles.items.len(), 2);
+        assert_eq!(profiles.current, vec!["profile-active"]);
+    }
+
+    #[test]
+    fn failed_created_profile_staging_preserves_the_complete_collection() {
+        let mut profiles = Profiles::default();
+        profiles
+            .append_item(local_profile_fixture_with_uid("profile-existing"))
+            .expect("append existing profile fixture");
+        let before = serde_yaml::to_string(&profiles).expect("serialize profile staging fixture");
+
+        let error = stage_created_profile(
+            &mut profiles,
+            local_profile_fixture_with_uid("profile-existing"),
+        )
+        .expect_err("duplicate created profile must be rejected");
+
+        assert!(error.to_string().contains("duplicate"));
+        assert_eq!(
+            serde_yaml::to_string(&profiles).expect("serialize preserved profile collection"),
+            before
+        );
+    }
+
+    fn local_patch(uid: Option<&str>, file: Option<&str>, name: Option<&str>) -> ProfileBuilder {
+        let mut shared = ProfileSharedBuilder::default();
+        if let Some(uid) = uid {
+            shared.uid(uid.to_string());
+        }
+        if let Some(file) = file {
+            shared.file(file.to_string());
+        }
+        if let Some(name) = name {
+            shared.name(name.to_string());
+        }
+        let mut builder = LocalProfileBuilder::default();
+        builder.shared(shared);
+        ProfileBuilder::Local(builder)
+    }
+
+    fn remote_profile_fixture() -> Profile {
+        Profile::Remote(RemoteProfile {
+            url: url::Url::parse("https://example.com/profile.yaml")
+                .expect("valid remote fixture URL"),
+            option: RemoteProfileOptions::default(),
+            shared: ProfileShared {
+                uid: "profile-a".into(),
+                name: "Remote".into(),
+                file: "profile-a.yaml".into(),
+                desc: None,
+                updated: 0,
+            },
+            chain: vec![],
+            extra: SubscriptionInfo::default(),
+        })
+    }
+
+    #[test]
+    fn profile_patch_rejects_identifier_changes_without_mutating_the_profile() {
+        let mut profile = local_profile_fixture();
+        let before = serde_yaml::to_string(&profile).unwrap();
+
+        let error = apply_profile_builder_patch(
+            &mut profile,
+            local_patch(Some("changed-profile"), None, Some("Changed")),
+        )
+        .expect_err("profile identifier change must be rejected");
+
+        assert!(error.to_string().contains("identifier cannot be changed"));
+        assert_eq!(serde_yaml::to_string(&profile).unwrap(), before);
+    }
+
+    #[test]
+    fn profile_patch_rejects_materialized_file_changes_without_mutation() {
+        let mut profile = local_profile_fixture();
+        let before = serde_yaml::to_string(&profile).unwrap();
+
+        let error = apply_profile_builder_patch(
+            &mut profile,
+            local_patch(None, Some("other.yaml"), Some("Changed")),
+        )
+        .expect_err("profile materialized file change must be rejected");
+
+        assert!(error.to_string().contains("file cannot be changed"));
+        assert_eq!(serde_yaml::to_string(&profile).unwrap(), before);
+    }
+
+    #[test]
+    fn profile_patch_rejects_non_http_remote_urls_without_mutation() {
+        let mut profile = remote_profile_fixture();
+        let before = serde_yaml::to_string(&profile).unwrap();
+        let mut builder = RemoteProfileBuilder::default();
+        builder.url(url::Url::parse("file:///C:/profile.yaml").unwrap());
+
+        let error = apply_profile_builder_patch(&mut profile, ProfileBuilder::Remote(builder))
+            .expect_err("non-HTTP remote URL patch must be rejected");
+
+        assert!(error.to_string().contains("must use HTTP or HTTPS"));
+        assert_eq!(serde_yaml::to_string(&profile).unwrap(), before);
+    }
+
+    #[test]
+    fn profile_patch_rejects_type_mismatches_without_mutation() {
+        let mut profile = local_profile_fixture();
+        let before = serde_yaml::to_string(&profile).unwrap();
+
+        let error = apply_profile_builder_patch(
+            &mut profile,
+            ProfileBuilder::Remote(RemoteProfileBuilder::default()),
+        )
+        .expect_err("profile type mismatch must be rejected");
+
+        assert!(error.to_string().contains("profile type mismatch"));
+        assert_eq!(serde_yaml::to_string(&profile).unwrap(), before);
+    }
+
+    #[test]
+    fn profile_patch_commits_a_valid_metadata_change_atomically() {
+        let mut profile = local_profile_fixture();
+
+        apply_profile_builder_patch(&mut profile, local_patch(None, None, Some("Changed")))
+            .expect("valid metadata patch must succeed");
+
+        let Profile::Local(profile) = profile else {
+            panic!("local fixture changed profile type");
+        };
+        assert_eq!(profile.shared.uid, "profile-a");
+        assert_eq!(profile.shared.file, "profile-a.yaml");
+        assert_eq!(profile.shared.name, "Changed");
+    }
+
+    #[test]
+    fn profile_path_entry_detection_distinguishes_missing_and_existing_entries() {
+        let directory = tempdir().expect("temporary profile path directory");
+        let file = directory.path().join("profile.yaml");
+        let folder = directory.path().join("folder.yaml");
+        let missing = directory.path().join("missing.yaml");
+        std::fs::write(&file, "mixed-port: 7890").expect("write profile file fixture");
+        std::fs::create_dir(&folder).expect("create profile directory fixture");
+
+        assert!(path_entry_exists(&file).expect("inspect existing profile file"));
+        assert!(path_entry_exists(&folder).expect("inspect existing profile directory"));
+        assert!(!path_entry_exists(&missing).expect("inspect missing profile path"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn profile_path_entry_detection_counts_a_broken_symlink_as_existing() {
+        use std::os::windows::fs::symlink_file;
+
+        let directory = tempdir().expect("temporary profile symlink directory");
+        let link = directory.path().join("profile.yaml");
+        symlink_file(directory.path().join("missing-target.yaml"), &link)
+            .expect("create broken profile symlink fixture");
+
+        assert!(path_entry_exists(&link).expect("inspect broken profile symlink"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn profile_file_keys_are_case_insensitive_on_windows() {
+        assert_eq!(
+            profile_file_key("C:/Profiles/Profile.YAML"),
+            profile_file_key("c:/profiles/profile.yaml")
+        );
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn profile_file_keys_preserve_case_on_case_sensitive_platforms() {
+        assert_ne!(
+            profile_file_key("/profiles/Profile.yaml"),
+            profile_file_key("/profiles/profile.yaml")
+        );
+    }
+
+    #[test]
+    fn remote_profile_url_accepts_http_and_https() {
+        for value in [
+            "http://example.com/profile.yaml",
+            "https://example.com/profile.yaml?token=value",
+        ] {
+            let parsed =
+                parse_remote_profile_url(value).expect("HTTP remote profile URL must be accepted");
+            assert!(matches!(parsed.scheme(), "http" | "https"));
+            assert_eq!(parsed.host_str(), Some("example.com"));
+        }
+    }
+
+    #[test]
+    fn remote_profile_url_rejects_non_network_schemes() {
+        for value in [
+            "file:///C:/profile.yaml",
+            "ftp://example.com/profile.yaml",
+            "data:text/yaml,mixed-port%3A7890",
+        ] {
+            let error = parse_remote_profile_url(value)
+                .expect_err("non-HTTP remote profile URL must be rejected");
+            assert!(error.to_string().contains("must use HTTP or HTTPS"));
+        }
+    }
+
+    #[test]
+    fn remote_profile_url_rejects_relative_and_malformed_values() {
+        for value in ["profile.yaml", "://missing-scheme", "https://"] {
+            parse_remote_profile_url(value)
+                .expect_err("relative or malformed remote profile URL must be rejected");
+        }
+    }
+
+    #[test]
+    fn validated_remote_profile_url_preserves_the_original_url() {
+        let url = url::Url::parse("https://user:pass@example.com/a.yaml#fragment")
+            .expect("valid remote URL fixture");
+        let expected = url.clone();
+
+        let validated =
+            validate_remote_profile_url(url).expect("valid remote profile URL must remain valid");
+
+        assert_eq!(validated, expected);
+    }
+
+    #[test]
+    fn local_profile_initial_content_accepts_a_yaml_mapping() {
+        let yaml = "mixed-port: 7890\nmode: rule\n";
+
+        assert_eq!(
+            local_profile_file_data_to_save(false, Some(yaml))
+                .expect("valid local profile YAML must be accepted"),
+            Some(yaml)
+        );
+    }
+
+    #[test]
+    fn local_profile_initial_content_skips_empty_and_missing_values() {
+        assert_eq!(
+            local_profile_file_data_to_save(false, None)
+                .expect("missing local profile content must be accepted"),
+            None
+        );
+        assert_eq!(
+            local_profile_file_data_to_save(false, Some(""))
+                .expect("empty local profile content must be accepted"),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_profile_initial_content_is_ignored_even_when_invalid() {
+        assert_eq!(
+            local_profile_file_data_to_save(true, Some("not: [valid"))
+                .expect("remote profile materialization is updater-owned"),
+            None
+        );
+    }
+
+    #[test]
+    fn profile_yaml_rejects_empty_and_whitespace_only_documents() {
+        for yaml in ["", "   \r\n\t"] {
+            let error =
+                validate_profile_yaml(yaml).expect_err("empty profile YAML must be rejected");
+            assert!(error.to_string().contains("must not be empty"));
+        }
+    }
+
+    #[test]
+    fn profile_yaml_rejects_non_mapping_and_malformed_documents() {
+        for yaml in [
+            "null",
+            "- one\n- two\n",
+            "plain scalar",
+            "not: [valid",
+            "first: document\n---\nsecond: document\n",
+        ] {
+            let error =
+                validate_profile_yaml(yaml).expect_err("profile YAML root must be a valid mapping");
+            assert!(error.to_string().contains("failed to parse profile YAML"));
+        }
+    }
+
+    #[test]
+    fn profile_yaml_rejects_non_string_and_empty_top_level_keys() {
+        for yaml in ["1: value\n", "\"\": value\n", "\"   \": value\n"] {
+            let error = validate_profile_yaml(yaml)
+                .expect_err("invalid profile YAML top-level key must be rejected");
+            assert!(format!("{error:#}").contains("top-level keys"));
+        }
+    }
+
+    #[test]
+    fn profile_yaml_accepts_nonempty_unicode_top_level_keys() {
+        validate_profile_yaml("代理: true\n")
+            .expect("nonempty Unicode profile YAML key must be accepted");
+    }
+
+    #[test]
+    fn profile_yaml_size_limit_accepts_exactly_the_limit() {
+        let yaml = format!("value: {}", "x".repeat(9));
+        assert_eq!(yaml.len(), 16);
+
+        validate_profile_yaml_with_limit(&yaml, 16)
+            .expect("profile YAML exactly at the byte limit must be accepted");
+    }
+
+    #[test]
+    fn profile_yaml_size_limit_rejects_oversized_content_before_parsing() {
+        let error = validate_profile_yaml_with_limit("not: [valid and oversized", 8)
+            .expect_err("oversized profile YAML must be rejected");
+
+        let message = error.to_string();
+        assert!(message.contains("exceeds the maximum size"));
+        assert!(!message.contains("failed to parse"));
+    }
+
+    #[test]
+    fn profile_yaml_size_limit_counts_utf8_bytes_not_characters() {
+        let yaml = "name: 测试";
+        assert!(yaml.chars().count() < yaml.len());
+
+        validate_profile_yaml_with_limit(yaml, yaml.len())
+            .expect("UTF-8 YAML exactly at its byte length must be accepted");
+        validate_profile_yaml_with_limit(yaml, yaml.len() - 1)
+            .expect_err("UTF-8 YAML over the byte limit must be rejected");
+    }
+
+    #[test]
+    fn profile_yaml_accepts_an_empty_mapping_and_nested_values() {
+        for yaml in ["{}", "dns:\n  enable: true\n  nameserver:\n    - 1.1.1.1\n"] {
+            validate_profile_yaml(yaml).expect("valid profile mapping must be accepted");
+        }
+    }
+
+    #[tokio::test]
+    async fn reported_profile_change_returns_degraded_after_successful_rollback() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let commit_events = Arc::clone(&events);
+        let apply_events = Arc::clone(&events);
+        let rollback_events = Arc::clone(&events);
+
+        let outcome = commit_apply_and_report_profile_change(
+            "profile activation",
+            move || {
+                commit_events.lock().unwrap().push("commit");
+                Ok(())
+            },
+            move || async move {
+                apply_events.lock().unwrap().push("apply");
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected core apply failure"
+                )))
+            },
+            move || async move {
+                rollback_events.lock().unwrap().push("rollback");
+                Ok(())
+            },
+        )
+        .await
+        .expect("successful rollback must be reported as a degraded outcome");
+
+        let super::RebuildOutcome::Degraded { error } = outcome else {
+            panic!("failed apply with successful rollback must be degraded");
+        };
+        assert!(error.contains("profile activation"));
+        assert!(error.contains("injected core apply failure"));
+        assert!(error.contains("previous state was restored"));
+        assert_eq!(*events.lock().unwrap(), vec!["commit", "apply", "rollback"]);
+    }
+
+    #[tokio::test]
+    async fn reported_profile_change_does_not_apply_after_commit_failure() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let commit_events = Arc::clone(&events);
+        let apply_events = Arc::clone(&events);
+        let rollback_events = Arc::clone(&events);
+
+        let error = commit_apply_and_report_profile_change(
+            "profile edit",
+            move || {
+                commit_events.lock().unwrap().push("commit");
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected persistence failure"
+                )))
+            },
+            move || async move {
+                apply_events.lock().unwrap().push("apply");
+                Ok(())
+            },
+            move || async move {
+                rollback_events.lock().unwrap().push("rollback");
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("commit failure must stop apply and rollback");
+
+        assert!(error.to_string().contains("injected persistence failure"));
+        assert_eq!(*events.lock().unwrap(), vec!["commit"]);
+    }
+
+    #[tokio::test]
+    async fn committed_profile_change_stops_when_persistence_fails() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let commit_events = Arc::clone(&events);
+        let apply_events = Arc::clone(&events);
+        let rollback_events = Arc::clone(&events);
+
+        let error = commit_then_apply_profile_change(
+            move || {
+                commit_events.lock().unwrap().push("commit");
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected commit failure"
+                )))
+            },
+            move || async move {
+                apply_events.lock().unwrap().push("apply");
+                Ok(())
+            },
+            move || async move {
+                rollback_events.lock().unwrap().push("rollback");
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("commit failure must stop the profile change");
+
+        assert!(error.to_string().contains("injected commit failure"));
+        assert_eq!(*events.lock().unwrap(), vec!["commit"]);
+    }
+
+    #[tokio::test]
+    async fn failed_profile_change_application_runs_rollback_after_commit() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let commit_events = Arc::clone(&events);
+        let apply_events = Arc::clone(&events);
+        let rollback_events = Arc::clone(&events);
+
+        let error = commit_then_apply_profile_change(
+            move || {
+                commit_events.lock().unwrap().push("commit");
+                Ok(())
+            },
+            move || async move {
+                apply_events.lock().unwrap().push("apply");
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected core apply failure"
+                )))
+            },
+            move || async move {
+                rollback_events.lock().unwrap().push("rollback");
+                Ok(())
+            },
+        )
+        .await
+        .expect_err("core apply failure must be returned after rollback");
+
+        let message = error.to_string();
+        assert!(message.contains("injected core apply failure"));
+        assert!(message.contains("previous state was restored"));
+        assert_eq!(*events.lock().unwrap(), vec!["commit", "apply", "rollback"]);
+    }
+
+    #[tokio::test]
+    async fn failed_profile_change_reports_apply_and_rollback_failures() {
+        let error = commit_then_apply_profile_change(
+            || Ok(()),
+            || async {
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected core apply failure"
+                )))
+            },
+            || async {
+                Err(super::IpcError::from(anyhow::anyhow!(
+                    "injected rollback failure"
+                )))
+            },
+        )
+        .await
+        .expect_err("apply and rollback failures must both be returned");
+
+        let message = error.to_string();
+        assert!(message.contains("injected core apply failure"));
+        assert!(message.contains("injected rollback failure"));
+        assert!(message.contains("rollback also failed"));
+    }
+
+    #[test]
+    fn failed_created_profile_persistence_restores_overwritten_preexisting_content() {
+        let directory = tempdir().expect("failed to create profile snapshot directory");
+        let materialized = directory.path().join("existing-profile.yaml");
+        std::fs::write(&materialized, b"original: true\n")
+            .expect("failed to write original profile materialization");
+        let snapshot = ProfileMaterializationSnapshot::capture_path(materialized.clone())
+            .expect("failed to snapshot original profile materialization");
+        std::fs::write(&materialized, b"replacement: true\n")
+            .expect("failed to overwrite profile materialization fixture");
+
+        let error = restore_profile_materialization_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile persistence failure"
+            ))),
+            &snapshot,
+        )
+        .expect_err("profile persistence failure must be returned after rollback");
+
+        assert!(error.to_string().contains("profile persistence failure"));
+        assert_eq!(
+            std::fs::read(&materialized)
+                .expect("restored profile materialization must remain readable"),
+            b"original: true\n"
+        );
+    }
+
+    #[test]
+    fn failed_created_profile_persistence_removes_new_materialization() {
+        let directory = tempdir().expect("failed to create profile snapshot directory");
+        let materialized = directory.path().join("new-profile.yaml");
+        let snapshot = ProfileMaterializationSnapshot::capture_path(materialized.clone())
+            .expect("failed to snapshot missing profile materialization");
+        std::fs::write(&materialized, b"new: true\n")
+            .expect("failed to write new profile materialization fixture");
+
+        restore_profile_materialization_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile persistence failure"
+            ))),
+            &snapshot,
+        )
+        .expect_err("profile persistence failure must be returned after cleanup");
+
+        assert!(
+            !materialized.exists(),
+            "new profile materialization must be removed when metadata persistence fails"
+        );
+    }
+
+    #[test]
+    fn failed_created_profile_rollback_refuses_a_directory_replacement() {
+        let directory = tempdir().expect("failed to create profile snapshot directory");
+        let materialized = directory.path().join("profile.yaml");
+        let snapshot = ProfileMaterializationSnapshot::capture_path(materialized.clone())
+            .expect("failed to snapshot missing profile materialization");
+        std::fs::create_dir(&materialized)
+            .expect("failed to create hostile profile directory replacement");
+        let sentinel = materialized.join("sentinel.txt");
+        std::fs::write(&sentinel, b"keep")
+            .expect("failed to write profile directory replacement sentinel");
+
+        let error = restore_profile_materialization_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile persistence failure"
+            ))),
+            &snapshot,
+        )
+        .expect_err("directory replacement must make rollback fail safely");
+
+        let message = error.to_string();
+        assert!(message.contains("materialization rollback also failed"));
+        assert_eq!(
+            std::fs::read(&sentinel).expect("directory replacement sentinel must remain readable"),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn failed_profile_list_persistence_removes_a_new_materialized_file() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("new-profile.yaml");
+        std::fs::write(&materialized, "proxies: []")
+            .expect("failed to create materialized profile fixture");
+
+        let error = cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            format!("{error:?}").contains("injected profile list persistence failure"),
+            "unexpected error: {error:?}"
+        );
+        assert!(
+            !materialized.exists(),
+            "new profile materialization must be removed after list persistence fails"
+        );
+    }
+
+    #[test]
+    fn failed_profile_list_persistence_preserves_a_preexisting_file() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("existing-profile.yaml");
+        std::fs::write(&materialized, "existing: true")
+            .expect("failed to create preexisting profile fixture");
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            true,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert_eq!(
+            std::fs::read_to_string(&materialized)
+                .expect("preexisting profile file must remain readable"),
+            "existing: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_profile_list_persistence_removes_a_new_broken_symlink() {
+        use std::os::windows::fs::symlink_file;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("new-profile.yaml");
+        symlink_file(directory.path().join("missing-target.yaml"), &materialized)
+            .expect("failed to create broken profile symlink fixture");
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "new broken profile symlink must be removed after list persistence fails"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_profile_list_persistence_removes_directory_symlink_without_touching_target() {
+        use std::os::windows::fs::symlink_dir;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target directory");
+        let sentinel = external.path().join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create external directory sentinel");
+        let materialized = directory.path().join("new-profile.yaml");
+        symlink_dir(external.path(), &materialized)
+            .expect("failed to create profile directory symlink fixture");
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "orphan cleanup must remove only the directory symlink entry"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("external directory sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_profile_list_persistence_removes_junction_without_touching_target() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target directory");
+        let sentinel = external.path().join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create external junction sentinel");
+        let materialized = directory.path().join("new-profile.yaml");
+        create_directory_junction(external.path(), &materialized);
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "orphan cleanup must remove only the junction entry"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("external junction sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_profile_list_persistence_removes_a_broken_junction() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target parent");
+        let missing_target = external.path().join("removed-target");
+        std::fs::create_dir(&missing_target).expect("failed to create junction target fixture");
+        let materialized = directory.path().join("new-profile.yaml");
+        create_directory_junction(&missing_target, &materialized);
+        std::fs::remove_dir(&missing_target).expect("failed to invalidate junction target");
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "orphan cleanup must remove a broken junction entry"
+        );
+        assert!(
+            !missing_target.exists(),
+            "orphan cleanup must not recreate or touch the removed junction target"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn failed_profile_list_persistence_removes_a_broken_directory_symlink() {
+        use std::os::windows::fs::symlink_dir;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let missing_target = directory.path().join("missing-directory");
+        let materialized = directory.path().join("new-profile.yaml");
+        symlink_dir(&missing_target, &materialized)
+            .expect("failed to create broken profile directory symlink fixture");
+
+        cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("profile list persistence failure must be returned");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "orphan cleanup must remove a broken directory symlink entry"
+        );
+        assert!(
+            !missing_target.exists(),
+            "orphan cleanup must not create or touch the missing directory target"
+        );
+    }
+
+    #[test]
+    fn failed_profile_list_persistence_does_not_remove_a_replacement_directory() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("new-profile.yaml");
+        std::fs::create_dir(&materialized).expect("failed to create replacement directory fixture");
+        let sentinel = materialized.join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create replacement directory sentinel");
+
+        let error = cleanup_profile_file_after_failed_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile list persistence failure"
+            ))),
+            &materialized,
+            false,
+        )
+        .expect_err("directory replacement must make orphan cleanup fail safely");
+
+        assert!(
+            format!("{error:?}").contains("failed to remove orphaned profile file"),
+            "unexpected cleanup error: {error:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("replacement directory sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[test]
+    fn successful_profile_list_persistence_keeps_the_materialized_file() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("committed-profile.yaml");
+        std::fs::write(&materialized, "committed: true")
+            .expect("failed to create committed profile fixture");
+
+        cleanup_profile_file_after_failed_persistence(Ok(()), &materialized, false)
+            .expect("successful profile persistence must keep the materialized file");
+
+        assert_eq!(
+            std::fs::read_to_string(&materialized)
+                .expect("committed profile file must remain readable"),
+            "committed: true"
+        );
+    }
+
+    #[test]
+    fn failed_profile_deletion_persistence_keeps_the_materialized_file() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("delete-rollback.yaml");
+        std::fs::write(&materialized, "keep: true")
+            .expect("failed to create profile deletion fixture");
+
+        cleanup_deleted_profile_file_after_persistence(
+            Err::<(), _>(super::IpcError::from(anyhow::anyhow!(
+                "injected profile deletion persistence failure"
+            ))),
+            Some(&materialized),
+        )
+        .expect_err("profile deletion persistence failure must be returned");
+
+        assert_eq!(
+            std::fs::read_to_string(&materialized)
+                .expect("failed deletion must preserve the materialized profile"),
+            "keep: true"
+        );
+    }
+
+    #[test]
+    fn successful_profile_deletion_persistence_removes_the_materialized_file() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        std::fs::write(&materialized, "remove: true")
+            .expect("failed to create profile deletion fixture");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed profile deletion must remove its materialized file");
+
+        assert!(
+            !materialized.exists(),
+            "committed profile deletion must clean its materialized file"
+        );
+    }
+
+    #[test]
+    fn successful_profile_deletion_does_not_remove_a_replacement_directory() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        std::fs::create_dir(&materialized).expect("failed to create replacement directory fixture");
+        let sentinel = materialized.join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create replacement directory sentinel");
+
+        let error = cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect_err("directory replacement must make committed cleanup fail safely");
+
+        assert!(
+            format!("{error:?}")
+                .contains("profile list was committed but failed to remove materialized file"),
+            "unexpected cleanup error: {error:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("replacement directory sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_profile_deletion_removes_directory_symlink_without_touching_target() {
+        use std::os::windows::fs::symlink_dir;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target directory");
+        let sentinel = external.path().join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create external directory sentinel");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        symlink_dir(external.path(), &materialized)
+            .expect("failed to create profile directory symlink fixture");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed deletion must remove only the directory symlink entry");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "committed deletion must remove the directory symlink entry"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("external directory sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_profile_deletion_removes_junction_without_touching_target() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target directory");
+        let sentinel = external.path().join("sentinel.txt");
+        std::fs::write(&sentinel, "keep: true")
+            .expect("failed to create external junction sentinel");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        create_directory_junction(external.path(), &materialized);
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed deletion must remove only the junction entry");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "committed deletion must remove the junction entry"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&sentinel)
+                .expect("external junction sentinel must remain readable"),
+            "keep: true"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_profile_deletion_removes_a_broken_junction() {
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let external = tempdir().expect("failed to create external target parent");
+        let missing_target = external.path().join("removed-target");
+        std::fs::create_dir(&missing_target).expect("failed to create junction target fixture");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        create_directory_junction(&missing_target, &materialized);
+        std::fs::remove_dir(&missing_target).expect("failed to invalidate junction target");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed deletion must remove a broken junction entry");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "committed deletion must not leave a broken junction entry"
+        );
+        assert!(
+            !missing_target.exists(),
+            "committed deletion must not recreate or touch the removed junction target"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_profile_deletion_removes_a_broken_directory_symlink() {
+        use std::os::windows::fs::symlink_dir;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let missing_target = directory.path().join("missing-directory");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        symlink_dir(&missing_target, &materialized)
+            .expect("failed to create broken profile directory symlink fixture");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed deletion must remove a broken directory symlink entry");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "committed deletion must not leave a broken directory symlink entry"
+        );
+        assert!(
+            !missing_target.exists(),
+            "committed deletion must not create or touch the missing directory target"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn successful_profile_deletion_removes_a_broken_symlink_entry() {
+        use std::os::windows::fs::symlink_file;
+
+        let directory = tempdir().expect("failed to create profile temp directory");
+        let materialized = directory.path().join("deleted-profile.yaml");
+        symlink_file(directory.path().join("missing-target.yaml"), &materialized)
+            .expect("failed to create broken profile symlink fixture");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), Some(&materialized))
+            .expect("committed profile deletion must remove a broken symlink entry");
+
+        assert!(
+            std::fs::symlink_metadata(&materialized).is_err(),
+            "committed profile deletion must not leave a broken symlink entry"
+        );
+    }
+
+    #[test]
+    fn metadata_only_profile_deletion_never_touches_an_invalid_external_path() {
+        let directory = tempdir().expect("failed to create external temp directory");
+        let external = directory.path().join("outside.yaml");
+        std::fs::write(&external, "outside: true")
+            .expect("failed to create external profile fixture");
+
+        cleanup_deleted_profile_file_after_persistence(Ok(()), None)
+            .expect("metadata-only deletion must succeed without a cleanup target");
+
+        assert_eq!(
+            std::fs::read_to_string(&external)
+                .expect("metadata-only deletion must preserve the external file"),
+            "outside: true"
+        );
+    }
+
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn e2e_system_proxy_status_is_disabled_and_deterministic() {
+        let response = isolated_sys_proxy_response();
+
+        assert!(!response.enable);
+        assert_eq!(response.host, "127.0.0.1");
+        assert_eq!(response.port, 0);
+        assert!(response.bypass.is_empty());
+        assert_eq!(response.server, "127.0.0.1:0");
+    }
+
+    #[tokio::test]
+    async fn frontend_storage_crud_uses_namespaced_keys_and_notifications() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage = Storage::try_new(&directory.path().join("storage.db"))
+            .expect("failed to create storage");
+        let mut receiver = storage.get_rx();
+
+        set_frontend_storage_item(&storage, "theme", r#""dark""#)
+            .expect("failed to write frontend storage value");
+
+        assert_eq!(frontend_storage_key("theme"), "web:theme");
+        assert_eq!(frontend_storage_key("web:theme"), "web:theme");
+        assert_eq!(
+            storage
+                .get_item::<String>("web:theme")
+                .expect("failed to read namespaced storage value"),
+            Some(r#""dark""#.to_string())
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("theme")
+                .expect("failed to inspect legacy storage key"),
+            None
+        );
+        assert_eq!(
+            get_frontend_storage_item(&storage, "theme")
+                .expect("failed to read frontend storage value"),
+            Some(r#""dark""#.to_string())
+        );
+
+        let written = receiver
+            .recv()
+            .await
+            .expect("storage write notification channel closed");
+        assert_eq!(written.0, "web:theme");
+        assert_eq!(written.1, Some(br#""\"dark\"""#.to_vec()));
+
+        remove_frontend_storage_item(&storage, "theme")
+            .expect("failed to remove frontend storage value");
+        assert_eq!(
+            get_frontend_storage_item(&storage, "theme")
+                .expect("failed to read removed frontend storage value"),
+            None
+        );
+
+        let removed = receiver
+            .recv()
+            .await
+            .expect("storage remove notification channel closed");
+        assert_eq!(removed, ("web:theme".to_string(), None));
+    }
+
+    #[test]
+    fn frontend_storage_read_migrates_known_legacy_unprefixed_values() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage = Storage::try_new(&directory.path().join("storage.db"))
+            .expect("failed to create storage");
+        storage
+            .set_item("dashboard-widgets", &r#"{"layout":"compact"}"#)
+            .expect("failed to seed legacy frontend storage value");
+
+        assert_eq!(
+            get_frontend_storage_item(&storage, "dashboard-widgets")
+                .expect("failed to migrate legacy frontend storage value"),
+            Some(r#"{"layout":"compact"}"#.to_string())
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("web:dashboard-widgets")
+                .expect("failed to read migrated frontend storage value"),
+            Some(r#"{"layout":"compact"}"#.to_string())
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("dashboard-widgets")
+                .expect("failed to inspect migrated legacy key"),
+            None
+        );
+    }
+
+    #[test]
+    fn frontend_storage_crud_never_reads_or_deletes_unknown_internal_string_keys() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage = Storage::try_new(&directory.path().join("storage.db"))
+            .expect("failed to create storage");
+        storage
+            .set_item("task-history", &"internal-state")
+            .expect("failed to seed internal storage value");
+
+        assert_eq!(
+            get_frontend_storage_item(&storage, "task-history")
+                .expect("failed to read isolated frontend storage value"),
+            None
+        );
+
+        set_frontend_storage_item(&storage, "task-history", r#""frontend-state""#)
+            .expect("failed to write namespaced frontend storage value");
+        assert_eq!(
+            storage
+                .get_item::<String>("task-history")
+                .expect("failed to inspect internal storage value"),
+            Some("internal-state".to_string())
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("web:task-history")
+                .expect("failed to inspect namespaced frontend storage value"),
+            Some(r#""frontend-state""#.to_string())
+        );
+
+        remove_frontend_storage_item(&storage, "task-history")
+            .expect("failed to remove namespaced frontend storage value");
+        assert_eq!(
+            storage
+                .get_item::<String>("task-history")
+                .expect("failed to verify internal storage preservation"),
+            Some("internal-state".to_string())
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("web:task-history")
+                .expect("failed to verify frontend storage removal"),
+            None
+        );
+    }
+
+    #[test]
+    fn frontend_storage_listing_strips_prefix_and_excludes_internal_entries() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage = Storage::try_new(&directory.path().join("storage.db"))
+            .expect("failed to create storage");
+        storage
+            .set_item("web:theme", &"dark")
+            .expect("failed to write frontend storage value");
+        storage
+            .set_item("internal:task-history", &42_u32)
+            .expect("failed to write internal storage value");
+
+        let entries =
+            frontend_storage_entries(&storage).expect("failed to list frontend storage entries");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, "theme");
+        assert_eq!(entries[0].value, r#""dark""#);
+    }
+
+    #[tokio::test]
+    async fn clearing_frontend_storage_preserves_internal_entries_and_notifies_in_order() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage = Storage::try_new(&directory.path().join("storage.db"))
+            .expect("failed to create storage");
+        storage
+            .set_item("web:theme", &"dark")
+            .expect("failed to write frontend theme");
+        storage
+            .set_item("web:route", &"/settings")
+            .expect("failed to write frontend route");
+        storage
+            .set_item("dashboard-widgets", &"legacy-layout")
+            .expect("failed to write legacy frontend storage value");
+        storage
+            .set_item("internal:task-history", &42_u32)
+            .expect("failed to write internal storage value");
+        storage
+            .set_item("task-history", &"unknown-internal-value")
+            .expect("failed to write unknown internal storage value");
+        let mut receiver = storage.get_rx();
+
+        clear_frontend_storage(&storage).expect("failed to clear frontend storage");
+
+        assert!(
+            frontend_storage_entries(&storage)
+                .expect("failed to list cleared frontend storage")
+                .is_empty()
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("dashboard-widgets")
+                .expect("failed to inspect cleared legacy frontend storage value"),
+            None
+        );
+        assert_eq!(
+            storage
+                .get_item::<u32>("internal:task-history")
+                .expect("failed to read internal storage value"),
+            Some(42)
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("task-history")
+                .expect("failed to read unknown internal storage value"),
+            Some("unknown-internal-value".to_string())
+        );
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("legacy removal notification channel closed"),
+            ("dashboard-widgets".to_string(), None)
+        );
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("route removal notification channel closed"),
+            ("web:route".to_string(), None)
+        );
+        assert_eq!(
+            receiver
+                .recv()
+                .await
+                .expect("theme removal notification channel closed"),
+            ("web:theme".to_string(), None)
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn cleared_frontend_storage_stays_removed_after_database_reopen() {
+        let directory = tempdir().expect("failed to create storage temp directory");
+        let storage_path = directory.path().join("storage.db");
+
+        {
+            let storage = Storage::try_new(&storage_path).expect("failed to create storage");
+            storage
+                .set_item("web:theme", &"dark")
+                .expect("failed to write frontend theme");
+            storage
+                .set_item("dashboard-widgets", &"legacy-layout")
+                .expect("failed to write legacy frontend storage value");
+            storage
+                .set_item("internal:task-history", &42_u32)
+                .expect("failed to write internal storage value");
+
+            clear_frontend_storage(&storage).expect("failed to clear frontend storage");
+        }
+
+        let reopened = Storage::try_new(&storage_path).expect("failed to reopen storage");
+        assert!(
+            frontend_storage_entries(&reopened)
+                .expect("failed to list reopened frontend storage")
+                .is_empty()
+        );
+        assert_eq!(
+            reopened
+                .get_item::<String>("dashboard-widgets")
+                .expect("failed to inspect reopened legacy frontend storage value"),
+            None
+        );
+        assert_eq!(
+            reopened
+                .get_item::<u32>("internal:task-history")
+                .expect("failed to read reopened internal storage value"),
+            Some(42)
+        );
+    }
 }

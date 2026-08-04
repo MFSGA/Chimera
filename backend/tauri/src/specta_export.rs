@@ -72,15 +72,19 @@ fn apply_binding_rewrite(
     replacement: &str,
     label: &str,
 ) -> io::Result<()> {
-    if !contents.contains(generated) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("generated TypeScript binding pattern changed: {label}"),
-        ));
+    if contents.contains(generated) {
+        *contents = contents.replacen(generated, replacement, 1);
+        return Ok(());
     }
 
-    *contents = contents.replacen(generated, replacement, 1);
-    Ok(())
+    if contents.contains(replacement) {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("generated TypeScript binding pattern changed: {label}"),
+    ))
 }
 
 /// Align Specta output with serde's flattened Profile enum representation.
@@ -223,7 +227,7 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 mod tests {
     use std::path::Path;
 
-    use super::{build_specta_builder, normalize_typescript_bindings};
+    use super::{apply_binding_rewrite, build_specta_builder, normalize_typescript_bindings};
 
     const BINDINGS_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -253,6 +257,37 @@ mod tests {
             .status()
             .expect("failed to run Prettier");
         assert!(status.success(), "Prettier failed for generated bindings");
+    }
+
+    #[test]
+    fn binding_rewrite_accepts_already_normalized_output() {
+        let mut contents = "normalized binding".to_owned();
+
+        apply_binding_rewrite(
+            &mut contents,
+            "generated binding",
+            "normalized binding",
+            "fixture",
+        )
+        .expect("already normalized bindings should be accepted");
+
+        assert_eq!(contents, "normalized binding");
+    }
+
+    #[test]
+    fn binding_rewrite_rejects_unknown_output() {
+        let mut contents = "unexpected binding".to_owned();
+
+        let error = apply_binding_rewrite(
+            &mut contents,
+            "generated binding",
+            "normalized binding",
+            "fixture",
+        )
+        .expect_err("unknown binding output should fail validation");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("fixture"));
     }
 
     #[test]

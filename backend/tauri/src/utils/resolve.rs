@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use semver::Version;
+use sha2::{Digest, Sha256};
 use tauri::{App, AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
 use tracing::debug;
@@ -183,11 +184,20 @@ pub fn create_main_window(app_handle: &AppHandle) {
     log_err!(MainWindow.create(app_handle));
 }
 
-pub fn create_profile_editor_window(app_handle: &AppHandle, uid: &str) -> Result<()> {
+fn profile_editor_window_label(uid: &str) -> String {
+    let digest = hex::encode(Sha256::digest(uid.as_bytes()));
+    format!("profile-editor-{digest}")
+}
+
+fn profile_editor_window_url(uid: &str) -> String {
     let encoded_uid: String = url::form_urlencoded::byte_serialize(uid.as_bytes()).collect();
+    format!("/editor/profile?uid={encoded_uid}")
+}
+
+pub fn create_profile_editor_window(app_handle: &AppHandle, uid: &str) -> Result<()> {
     ProfileEditorWindow {
-        label: format!("profile-editor-{uid}"),
-        url: format!("/editor/profile?uid={encoded_uid}"),
+        label: profile_editor_window_label(uid),
+        url: profile_editor_window_url(uid),
     }
     .create(app_handle)
 }
@@ -244,8 +254,11 @@ pub fn resolve_setup(app: &mut App) {
     debug!("todo init handle for widget not tray");
     crate::consts::setup_app_handle(app.app_handle().clone());
 
-    log_err!(init::init_resources());
-    log_err!(init::init_service());
+    #[cfg(not(feature = "e2e"))]
+    {
+        log_err!(init::init_resources());
+        log_err!(init::init_service());
+    }
 
     resolve_random_mixed_port();
 
@@ -253,8 +266,11 @@ pub fn resolve_setup(app: &mut App) {
     log::trace!("init config");
     log_err!(Config::init_config());
 
-    log::trace!("launch core");
-    log_err!(CoreManager::global().init());
+    #[cfg(not(feature = "e2e"))]
+    {
+        log::trace!("launch core");
+        log_err!(CoreManager::global().init());
+    }
 
     log::trace!("init storage");
     log_err!(crate::core::storage::setup(app));
@@ -267,8 +283,11 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(crate::core::tasks::setup(app, storage));
     } */
 
-    log_err!(sysopt::Sysopt::global().init_launch());
-    log_err!(sysopt::Sysopt::global().init_sysproxy());
+    #[cfg(not(feature = "e2e"))]
+    {
+        log_err!(sysopt::Sysopt::global().init_launch());
+        log_err!(sysopt::Sysopt::global().init_sysproxy());
+    }
 
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     {
@@ -298,10 +317,51 @@ pub fn resolve_setup(app: &mut App) {
 
 /// reset runtime side effects before shutdown
 pub fn resolve_reset() {
+    #[cfg(not(feature = "e2e"))]
     log_err!(sysopt::Sysopt::global().reset_sysproxy());
 }
 
 /// resolve core version
+#[cfg(test)]
+mod tests {
+    use super::{profile_editor_window_label, profile_editor_window_url};
+
+    #[test]
+    fn profile_editor_window_labels_are_stable_ascii_and_uid_specific() {
+        let unicode_uid = "订阅 A&B/東京?";
+        let first = profile_editor_window_label(unicode_uid);
+        let second = profile_editor_window_label(unicode_uid);
+        let different = profile_editor_window_label("订阅 A&B/大阪?");
+
+        assert_eq!(first, second);
+        assert_ne!(first, different);
+        assert_eq!(first.len(), "profile-editor-".len() + 64);
+        assert!(first.starts_with("profile-editor-"));
+        assert!(
+            first
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        );
+        assert!(!first.contains(unicode_uid));
+    }
+
+    #[test]
+    fn profile_editor_window_urls_round_trip_special_unicode_uids() {
+        let uid = "订阅 A&B/東京?";
+        let path = profile_editor_window_url(uid);
+        let url = url::Url::parse(&format!("http://tauri.localhost{path}"))
+            .expect("profile editor URL must remain valid");
+        let decoded = url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "uid").then(|| value.into_owned()));
+
+        assert_eq!(decoded.as_deref(), Some(uid));
+        assert!(!path.contains(uid));
+        assert!(!path.contains('&'));
+        assert!(!path.contains('?') || path.starts_with("/editor/profile?uid="));
+    }
+}
+
 pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore) -> Result<String> {
     let shell = app_handle.shell();
     let core = core_type.clone().to_string();

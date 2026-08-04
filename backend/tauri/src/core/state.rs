@@ -49,6 +49,41 @@ where
     pub fn auto_commit(&self) -> ManagedStateAutoCommit<T> {
         ManagedStateAutoCommit(self)
     }
+
+    /// Persist the latest draft snapshot before making it the committed in-memory state.
+    /// A persistence failure discards the draft so subsequent reads keep seeing the old state.
+    pub fn persist_draft_with<E, F>(&self, persist: F) -> Result<(), E>
+    where
+        F: FnOnce(&T) -> Result<(), E>,
+    {
+        let snapshot = self.latest().clone();
+        if let Err(error) = persist(&snapshot) {
+            self.discard();
+            return Err(error);
+        }
+
+        self.apply();
+        Ok(())
+    }
+
+    /// Apply a mutation to a draft, then persist that exact snapshot before committing it.
+    /// Mutation and persistence failures both discard partial state.
+    pub fn update_and_persist_with<E, U, P>(&self, update: U, persist: P) -> Result<(), E>
+    where
+        U: FnOnce(&mut T) -> Result<(), E>,
+        P: FnOnce(&T) -> Result<(), E>,
+    {
+        let update_result = {
+            let mut draft = self.draft();
+            update(&mut draft)
+        };
+        if let Err(error) = update_result {
+            self.discard();
+            return Err(error);
+        }
+
+        self.persist_draft_with(persist)
+    }
 }
 
 pub struct ManagedStateAutoCommit<'a, T: Clone + Send + Sync>(&'a ManagedState<T>);
@@ -167,5 +202,70 @@ where
         self.is_dirty
             .store(false, std::sync::atomic::Ordering::Release);
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagedState;
+
+    #[test]
+    fn persistence_failure_discards_draft_without_changing_committed_state() {
+        let state = ManagedState::from(vec!["committed"]);
+        state.draft().push("draft");
+
+        let error = state
+            .persist_draft_with(|snapshot| {
+                assert_eq!(snapshot, &["committed", "draft"]);
+                Err::<(), _>("injected persistence failure")
+            })
+            .expect_err("persistence failure must be returned");
+
+        assert_eq!(error, "injected persistence failure");
+        assert_eq!(&*state.data(), &["committed"]);
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn mutation_failure_discards_partial_draft_without_running_persistence() {
+        let state = ManagedState::from(vec!["committed"]);
+        let mut persistence_called = false;
+
+        let error = state
+            .update_and_persist_with(
+                |draft| {
+                    draft.push("partial");
+                    Err::<(), _>("injected mutation failure")
+                },
+                |_| {
+                    persistence_called = true;
+                    Ok(())
+                },
+            )
+            .expect_err("mutation failure must be returned");
+
+        assert_eq!(error, "injected mutation failure");
+        assert!(!persistence_called);
+        assert_eq!(&*state.data(), &["committed"]);
+        assert!(!state.is_dirty());
+    }
+
+    #[test]
+    fn successful_persistence_commits_exact_saved_snapshot() {
+        let state = ManagedState::from(vec!["committed"]);
+        state.draft().push("draft");
+        let mut persisted = Vec::new();
+
+        state
+            .persist_draft_with(|snapshot| {
+                assert_eq!(&*state.data(), &["committed"]);
+                persisted = snapshot.clone();
+                Ok::<(), &'static str>(())
+            })
+            .expect("successful persistence must commit the draft");
+
+        assert_eq!(persisted, ["committed", "draft"]);
+        assert_eq!(&*state.data(), &["committed", "draft"]);
+        assert!(!state.is_dirty());
     }
 }

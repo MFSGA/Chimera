@@ -3,11 +3,14 @@ use indexmap::IndexMap;
 use serde_yaml::Mapping;
 
 use crate::{
-    config::{core::Config, profile::item::ProfileMetaGetter},
+    config::{
+        core::Config,
+        profile::item::{Profile, ProfileMetaGetter},
+    },
     enhance::{
         chain::PostProcessingOutput,
         field::{HANDLE_FIELDS, use_keys, use_valid_fields, use_whitelist_fields_filter},
-        utils::{merge_profiles, process_chain},
+        utils::{convert_uids_to_scripts, merge_profiles, process_chain},
     },
 };
 
@@ -20,9 +23,19 @@ mod tun;
 /// 2
 mod utils;
 
+#[cfg(feature = "clash-rs-compat")]
+fn apply_clash_rs_compat(config: &mut Mapping) {
+    use serde_yaml::Value;
+
+    if config.get("allow-lan") == Some(&Value::Bool(true)) {
+        // config.remove("allow-lan");
+        config.insert("bind-address".into(), Value::String("0.0.0.0".into()));
+    }
+}
+
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
-pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
+pub async fn enhance() -> anyhow::Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     // config.yaml 的配置
     let clash_config = { Config::clash().latest().0.clone() };
 
@@ -43,29 +56,21 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
         let profile_chain_mapping = profiles
             .get_current()
             .iter()
-            .filter_map(|uid| profiles.get_item(uid).ok())
-            .map(|item| {
-                (
+            .map(|uid| {
+                let item = profiles.get_item(uid)?;
+                let chain = match item {
+                    Profile::Remote(profile) => &profile.chain,
+                    Profile::Local(profile) => &profile.chain,
+                };
+                Ok((
                     item.uid().to_string(),
-                    match item {
-                        // todo: local
-                        /* profile if profile.is_local() => {
-                            let profile = profile.as_local().unwrap();
-                            utils::convert_uids_to_scripts(&profiles, &profile.chain)
-                        } */
-                        profile if profile.is_remote() => {
-                            let profile = profile.as_remote().unwrap();
-                            utils::convert_uids_to_scripts(&profiles, &profile.chain)
-                        }
-                        _ => vec![],
-                    },
-                )
+                    convert_uids_to_scripts(&profiles, chain)?,
+                ))
             })
-            .collect::<IndexMap<_, _>>();
+            .collect::<anyhow::Result<IndexMap<_, _>>>()?;
 
         let current_mappings = profiles
-            .current_mappings()
-            .unwrap_or_default()
+            .current_mappings()?
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
@@ -96,7 +101,7 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
     // 合并多个配置
     // TODO: 此步骤需要提供针对每个配置的 Meta 信息
     // TODO: 需要支持自定义合并逻辑
-    let mut config = merge_profiles(profiles);
+    let mut config = merge_profiles(profiles)?;
 
     // 执行全局 chain
     // let (mut config, global_chain_output) = process_chain(config, &global_chain).await;
@@ -115,7 +120,41 @@ pub async fn enhance() -> (Mapping, Vec<String>, PostProcessingOutput) {
             config.insert(key.to_owned(), value.clone());
         });
 
-    config = tun::use_tun(config, enable_tun);
+    config = tun::use_tun(config, enable_tun)?;
 
-    (config, exists_keys, postprocessing_output)
+    #[cfg(feature = "clash-rs-compat")]
+    apply_clash_rs_compat(&mut config);
+
+    Ok((config, exists_keys, postprocessing_output))
+}
+
+#[cfg(all(test, feature = "clash-rs-compat"))]
+mod tests {
+    use super::apply_clash_rs_compat;
+    use serde_yaml::{Mapping, Value};
+
+    #[test]
+    fn converts_allow_lan_to_bind_address() {
+        let mut config = Mapping::new();
+        config.insert("allow-lan".into(), Value::Bool(true));
+
+        apply_clash_rs_compat(&mut config);
+
+        assert!(!config.contains_key("allow-lan"));
+        assert_eq!(
+            config.get("bind-address"),
+            Some(&Value::String("0.0.0.0".into()))
+        );
+    }
+
+    #[test]
+    fn preserves_disabled_allow_lan() {
+        let mut config = Mapping::new();
+        config.insert("allow-lan".into(), Value::Bool(false));
+
+        apply_clash_rs_compat(&mut config);
+
+        assert_eq!(config.get("allow-lan"), Some(&Value::Bool(false)));
+        assert!(!config.contains_key("bind-address"));
+    }
 }

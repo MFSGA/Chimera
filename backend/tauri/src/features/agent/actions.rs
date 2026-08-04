@@ -514,6 +514,7 @@ async fn rollback_system_proxy(original: Sysproxy, desired_before: bool) -> bool
     persisted && restored
 }
 
+#[cfg(not(feature = "e2e"))]
 async fn read_system_proxy() -> AgentResult<Sysproxy> {
     tokio::task::spawn_blocking(Sysproxy::get_system_proxy)
         .await
@@ -521,11 +522,27 @@ async fn read_system_proxy() -> AgentResult<Sysproxy> {
         .map_err(|_| AgentCommandError::ActionFailed)
 }
 
+#[cfg(feature = "e2e")]
+async fn read_system_proxy() -> AgentResult<Sysproxy> {
+    Ok(Sysproxy {
+        enable: false,
+        host: "127.0.0.1".into(),
+        port: 0,
+        bypass: String::new(),
+    })
+}
+
+#[cfg(not(feature = "e2e"))]
 async fn write_system_proxy(proxy: Sysproxy) -> AgentResult<()> {
     tokio::task::spawn_blocking(move || proxy.set_system_proxy())
         .await
         .map_err(|_| AgentCommandError::ActionFailed)?
         .map_err(|_| AgentCommandError::ActionFailed)
+}
+
+#[cfg(feature = "e2e")]
+async fn write_system_proxy(_proxy: Sysproxy) -> AgentResult<()> {
+    Err(AgentCommandError::ActionNotAvailable)
 }
 
 fn is_expected_enabled_proxy(proxy: &Sysproxy, expected_port: u16) -> bool {
@@ -598,9 +615,12 @@ fn audit_proposal(proposal: &AgentProposal, outcome: &str) {
 mod tests {
     use std::time::{Duration, Instant};
 
+    #[cfg(feature = "e2e")]
+    use sysproxy::Sysproxy;
+
     use super::{
         ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-        plan_routing_mode, proposal_digest, verify_action,
+        plan_routing_mode, proposal_digest, read_system_proxy, verify_action, write_system_proxy,
     };
     use crate::features::agent::model::{
         AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot,
@@ -608,6 +628,29 @@ mod tests {
         AgentProfileSnapshot, AgentProposal, AgentRoutingMode, AgentRunType, AgentServiceSnapshot,
         AgentServiceState, AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
     };
+
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    async fn e2e_agent_system_proxy_access_is_read_only() {
+        let observed = read_system_proxy()
+            .await
+            .expect("E2E system proxy read should be deterministic");
+        assert!(!observed.enable);
+        assert_eq!(observed.host, "127.0.0.1");
+        assert_eq!(observed.port, 0);
+
+        let result = write_system_proxy(Sysproxy {
+            enable: true,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            bypass: String::new(),
+        })
+        .await;
+        assert!(matches!(
+            result,
+            Err(super::AgentCommandError::ActionNotAvailable)
+        ));
+    }
 
     #[test]
     fn proposal_digest_binds_action_revision_and_expiry() {

@@ -28,6 +28,23 @@ use super::{
     },
 };
 
+#[cfg(not(feature = "e2e"))]
+fn spawn_system_proxy_probe() -> tokio::task::JoinHandle<Result<Sysproxy, sysproxy::Error>> {
+    tokio::task::spawn_blocking(Sysproxy::get_system_proxy)
+}
+
+#[cfg(feature = "e2e")]
+fn spawn_system_proxy_probe() -> tokio::task::JoinHandle<Result<Sysproxy, sysproxy::Error>> {
+    tokio::task::spawn_blocking(|| {
+        Ok(Sysproxy {
+            enable: false,
+            host: "127.0.0.1".into(),
+            port: 0,
+            bypass: String::new(),
+        })
+    })
+}
+
 pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSnapshot {
     let verge = Config::verge().latest().clone();
     let clash = Config::clash().latest().clone();
@@ -54,7 +71,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
 
     let core_status = CoreManager::global().status();
     let service_status = tokio::time::timeout(Duration::from_secs(2), service::control::status());
-    let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
+    let system_proxy = spawn_system_proxy_probe();
     let (core_status, service_status, system_proxy) =
         tokio::join!(core_status, service_status, system_proxy);
 
@@ -447,7 +464,7 @@ fn snapshot_revision(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_scope, summarize_system_proxy};
+    use super::{host_scope, spawn_system_proxy_probe, summarize_system_proxy};
     use crate::features::agent::model::AgentHostScope;
     use sysproxy::Sysproxy;
 
@@ -457,6 +474,20 @@ mod tests {
         assert_eq!(host_scope("::1"), AgentHostScope::Loopback);
         assert_eq!(host_scope("localhost"), AgentHostScope::Loopback);
         assert_eq!(host_scope("192.168.1.1"), AgentHostScope::NonLoopback);
+    }
+
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    async fn e2e_system_proxy_probe_is_disabled_and_deterministic() {
+        let proxy = spawn_system_proxy_probe()
+            .await
+            .expect("E2E system proxy probe task failed")
+            .expect("E2E system proxy probe returned an error");
+
+        assert!(!proxy.enable);
+        assert_eq!(proxy.host, "127.0.0.1");
+        assert_eq!(proxy.port, 0);
+        assert!(proxy.bypass.is_empty());
     }
 
     #[test]

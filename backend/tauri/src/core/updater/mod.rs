@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -18,10 +19,33 @@ mod shared;
 
 pub use instance::UpdaterSummary;
 
+#[cfg(not(feature = "e2e"))]
+pub(crate) fn recover_interrupted_updates_on_launch() -> Result<()> {
+    const CORE_NAMES: [&str; 6] = [
+        "clash",
+        "clash-rs",
+        "mihomo",
+        "chimera-client",
+        "mihomo-alpha",
+        "clash-rs-alpha",
+    ];
+    let executable = tauri::utils::platform::current_exe()?;
+    let core_dir = executable
+        .parent()
+        .ok_or_else(|| anyhow!("failed to get core directory during updater recovery"))?;
+    instance::recover_interrupted_core_replacements_in_dir(core_dir, &CORE_NAMES)
+}
+
+const MIRROR_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+
+fn mirror_cache_is_fresh(cached_at: Option<Instant>, now: Instant) -> bool {
+    cached_at.is_some_and(|cached_at| now.saturating_duration_since(cached_at) < MIRROR_CACHE_TTL)
+}
+
 pub struct UpdaterManager {
     manifest_version: ManifestVersion,
     client: reqwest::Client,
-    mirror: Arc<parking_lot::RwLock<Option<(String, u64)>>>,
+    mirror: Arc<parking_lot::RwLock<Option<(String, Instant)>>>,
     instances: Arc<DashMap<usize, Arc<instance::Updater>>>,
 }
 
@@ -202,9 +226,10 @@ impl UpdaterManager {
     pub async fn mirror_speed_test(&self) -> Result<()> {
         {
             let mirror = self.mirror.read();
-            if let Some((_, timestamp)) = mirror.as_ref()
-                && chrono::Utc::now().timestamp() - (*timestamp as i64) < 3600
-            {
+            if mirror_cache_is_fresh(
+                mirror.as_ref().map(|(_, cached_at)| *cached_at),
+                Instant::now(),
+            ) {
                 return Ok(());
             }
         }
@@ -220,10 +245,7 @@ impl UpdaterManager {
         }
         {
             let mut mirror = self.mirror.write();
-            *mirror = Some((
-                fastest_mirror.to_string(),
-                chrono::Utc::now().timestamp() as u64,
-            ));
+            *mirror = Some((fastest_mirror.to_string(), Instant::now()));
         }
         Ok(())
     }
@@ -272,5 +294,31 @@ impl UpdaterManager {
             });
         }
         Some(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::mirror_cache_is_fresh;
+
+    #[test]
+    fn mirror_cache_freshness_uses_monotonic_one_hour_boundary() {
+        let now = Instant::now();
+        assert!(!mirror_cache_is_fresh(None, now));
+        assert!(mirror_cache_is_fresh(Some(now), now));
+        assert!(mirror_cache_is_fresh(
+            now.checked_sub(Duration::from_secs(3_599)),
+            now
+        ));
+        assert!(!mirror_cache_is_fresh(
+            now.checked_sub(Duration::from_secs(3_600)),
+            now
+        ));
+        assert!(!mirror_cache_is_fresh(
+            now.checked_sub(Duration::from_secs(3_601)),
+            now
+        ));
     }
 }

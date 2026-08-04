@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use serde_yaml::{Mapping, Value};
 
 use crate::config::{
@@ -21,18 +22,24 @@ macro_rules! append {
     };
 }
 
+fn mapping_field_or_empty(config: &Mapping, key: &str) -> Result<Mapping> {
+    match config.get(key) {
+        None => Ok(Mapping::new()),
+        Some(Value::Mapping(mapping)) => Ok(mapping.clone()),
+        Some(_) => bail!("`{key}` must be a mapping"),
+    }
+}
+
 #[tracing_attributes::instrument(skip(config))]
-pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
+pub fn use_tun(mut config: Mapping, enable: bool) -> Result<Mapping> {
     let tun_key = Value::from("tun");
     let tun_val = config.get(&tun_key);
     tracing::debug!("tun_val: {:?}", tun_val);
     if !enable && tun_val.is_none() {
-        return config;
+        return Ok(config);
     }
 
-    let mut tun_val = tun_val.map_or(Mapping::new(), |val| {
-        val.as_mapping().cloned().unwrap_or(Mapping::new())
-    });
+    let mut tun_val = mapping_field_or_empty(&config, "tun")?;
 
     revise!(tun_val, "enable", enable);
     if enable {
@@ -76,17 +83,12 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
     if enable {
         use_dns_for_tun(config)
     } else {
-        config
+        Ok(config)
     }
 }
 
-fn use_dns_for_tun(mut config: Mapping) -> Mapping {
-    let dns_key = Value::from("dns");
-    let dns_val = config.get(&dns_key);
-
-    let mut dns_val = dns_val.map_or(Mapping::new(), |value| {
-        value.as_mapping().cloned().unwrap_or(Mapping::new())
-    });
+fn use_dns_for_tun(mut config: Mapping) -> Result<Mapping> {
+    let mut dns_val = mapping_field_or_empty(&config, "dns")?;
 
     revise!(dns_val, "enable", true);
     append!(dns_val, "enhanced-mode", "fake-ip");
@@ -120,5 +122,81 @@ fn use_dns_for_tun(mut config: Mapping) -> Mapping {
     );
 
     revise!(config, "dns", dns_val);
-    config
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_yaml::{Mapping, Value};
+
+    use super::{use_dns_for_tun, use_tun};
+
+    fn mapping(yaml: &str) -> Mapping {
+        serde_yaml::from_str(yaml).expect("valid TUN mapping fixture")
+    }
+
+    #[test]
+    fn disabling_absent_tun_preserves_the_complete_config() {
+        let config = mapping("mixed-port: 7890\n");
+        let expected = config.clone();
+
+        let result = use_tun(config, false).expect("absent disabled TUN must be a no-op");
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn disabling_non_mapping_tun_is_rejected() {
+        for yaml in ["tun: invalid\n", "tun: []\n", "tun: null\n"] {
+            let error = use_tun(mapping(yaml), false)
+                .expect_err("non-mapping TUN field must not be silently replaced");
+            assert!(error.to_string().contains("`tun` must be a mapping"));
+        }
+    }
+
+    #[test]
+    fn disabling_existing_tun_preserves_custom_fields() {
+        let result = use_tun(mapping("tun:\n  stack: system\n  custom: true\n"), false)
+            .expect("valid TUN mapping must be updated");
+        let tun = result
+            .get("tun")
+            .and_then(Value::as_mapping)
+            .expect("updated TUN must remain a mapping");
+
+        assert_eq!(tun.get("enable"), Some(&Value::Bool(false)));
+        assert_eq!(tun.get("stack"), Some(&Value::String("system".into())));
+        assert_eq!(tun.get("custom"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn dns_for_tun_rejects_non_mapping_dns() {
+        for yaml in ["dns: invalid\n", "dns: []\n", "dns: null\n"] {
+            let error = use_dns_for_tun(mapping(yaml))
+                .expect_err("non-mapping DNS field must not be silently replaced");
+            assert!(error.to_string().contains("`dns` must be a mapping"));
+        }
+    }
+
+    #[test]
+    fn dns_for_tun_preserves_existing_values_and_adds_defaults() {
+        let result = use_dns_for_tun(mapping(
+            "dns:\n  nameserver:\n    - https://example.com/dns-query\n  custom: true\n",
+        ))
+        .expect("valid DNS mapping must be enhanced");
+        let dns = result
+            .get("dns")
+            .and_then(Value::as_mapping)
+            .expect("enhanced DNS must remain a mapping");
+
+        assert_eq!(dns.get("enable"), Some(&Value::Bool(true)));
+        assert_eq!(dns.get("custom"), Some(&Value::Bool(true)));
+        assert_eq!(
+            dns.get("nameserver")
+                .and_then(Value::as_sequence)
+                .and_then(|nameservers| nameservers.first())
+                .and_then(Value::as_str),
+            Some("https://example.com/dns-query")
+        );
+        assert!(dns.contains_key("default-nameserver"));
+    }
 }

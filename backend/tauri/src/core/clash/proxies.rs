@@ -3,7 +3,10 @@ use backon::Retryable;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use std::sync::{Arc, OnceLock};
+use std::{
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant},
+};
 use tokio::{sync::broadcast, try_join};
 use tracing::instrument;
 
@@ -166,8 +169,14 @@ impl Proxies {
 pub struct ProxiesGuard {
     inner: Proxies,
     checksum: Option<u32>,
-    updated_at: u64,
+    updated_at: Option<Instant>,
     sender: broadcast::Sender<()>,
+}
+
+fn proxy_cache_is_fresh(updated_at: Option<Instant>, now: Instant) -> bool {
+    updated_at.is_some_and(|updated_at| {
+        now.saturating_duration_since(updated_at) <= Duration::from_secs(3)
+    })
 }
 
 impl ProxiesGuard {
@@ -179,14 +188,13 @@ impl ProxiesGuard {
                 checksum: None,
                 sender: tx,
                 inner: Proxies::default(),
-                updated_at: 0,
+                updated_at: None,
             }))
         })
     }
 
     pub fn is_updated(&self) -> bool {
-        let now = chrono::Utc::now().timestamp() as u64;
-        now - self.updated_at <= 3
+        proxy_cache_is_fresh(self.updated_at, Instant::now())
     }
 
     pub fn inner(&self) -> &Proxies {
@@ -194,10 +202,9 @@ impl ProxiesGuard {
     }
 
     pub fn replace(&mut self, proxies: Proxies, checksum: u32) {
-        let now = chrono::Utc::now().timestamp() as u64;
         self.inner = proxies;
         self.checksum = Some(checksum);
-        self.updated_at = now;
+        self.updated_at = Some(Instant::now());
 
         if let Err(e) = self.sender.send(()) {
             log::warn!(
@@ -234,5 +241,27 @@ impl ProxiesGuardExt for ProxiesGuardSingleton {
         api::update_proxy(group, name).await?;
         self.update().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::proxy_cache_is_fresh;
+
+    #[test]
+    fn proxy_cache_freshness_uses_monotonic_time_boundaries() {
+        let now = Instant::now();
+        assert!(!proxy_cache_is_fresh(None, now));
+        assert!(proxy_cache_is_fresh(Some(now), now));
+        assert!(proxy_cache_is_fresh(
+            now.checked_sub(Duration::from_secs(3)),
+            now
+        ));
+        assert!(!proxy_cache_is_fresh(
+            now.checked_sub(Duration::from_secs(4)),
+            now
+        ));
     }
 }
