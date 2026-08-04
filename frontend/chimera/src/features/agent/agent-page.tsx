@@ -1,6 +1,7 @@
 import {
   useAgent,
   type AgentActionRequest,
+  type AgentIntentResolution,
   type AgentProposal,
 } from '@chimera/interface';
 import {
@@ -17,15 +18,28 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { ActionPanel } from './components/action-panel';
+import { BridgeCard } from './components/bridge-card';
 import { FindingList, ProbeFailureList } from './components/finding-list';
+import { HistoryCard } from './components/history-card';
+import { IntentCard } from './components/intent-card';
+import { IssueGuidanceCard } from './components/issue-guidance-card';
 import { ProposalDialog } from './components/proposal-dialog';
 import { SnapshotSummary } from './components/snapshot-summary';
-import { presentHealth } from './model/presenter';
+import { presentAgentError, presentHealth } from './model/presenter';
+import {
+  isPrivacySafeSnapshot,
+  serializePrivacySafeSnapshot,
+} from './model/privacy-safe-context';
 
 export function AgentPage() {
   const agent = useAgent();
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
+  const [intentResolution, setIntentResolution] =
+    useState<AgentIntentResolution | null>(null);
   const snapshot = agent.snapshot.data;
+  const privacySafeSnapshot = snapshot
+    ? serializePrivacySafeSnapshot(snapshot)
+    : null;
 
   const propose = async (action: AgentActionRequest) => {
     try {
@@ -35,8 +49,16 @@ export function AgentPage() {
         return;
       }
       setProposal(nextProposal);
-    } catch {
-      Notice.error(m.agent_error_title());
+    } catch (error) {
+      Notice.error(presentAgentError(error));
+    }
+  };
+
+  const resolveIntent = async (text: string) => {
+    try {
+      setIntentResolution(await agent.resolveIntent.mutateAsync(text));
+    } catch (error) {
+      Notice.error(presentAgentError(error));
     }
   };
 
@@ -58,18 +80,37 @@ export function AgentPage() {
     } catch (error) {
       setProposal(null);
       if (error !== 'agent_confirmation_declined') {
-        Notice.error(m.agent_error_title());
+        Notice.error(presentAgentError(error));
       }
     }
   };
 
+  const refreshDiagnostics = async () => {
+    await agent.snapshot.refetch();
+    await agent.history.refetch();
+  };
+
   const copyContext = async () => {
-    if (!snapshot) return;
+    if (!privacySafeSnapshot) {
+      Notice.error(m.agent_context_privacy_blocked());
+      return;
+    }
     try {
-      await writeText(JSON.stringify(snapshot, null, 2));
+      await writeText(privacySafeSnapshot);
       Notice.success(m.agent_context_copied());
-    } catch {
-      Notice.error(m.agent_error_title());
+    } catch (error) {
+      Notice.error(presentAgentError(error));
+    }
+  };
+
+  const clearHistory = async () => {
+    try {
+      await agent.clearHistory.mutateAsync();
+      Notice.success(m.agent_history_cleared());
+    } catch (error) {
+      if (error !== 'agent_confirmation_declined') {
+        Notice.error(presentAgentError(error));
+      }
     }
   };
 
@@ -93,7 +134,7 @@ export function AgentPage() {
             className="self-start"
             loading={agent.snapshot.isFetching}
             variant="flat"
-            onClick={() => void agent.snapshot.refetch()}
+            onClick={() => void refreshDiagnostics()}
           >
             {snapshot ? <RefreshRounded /> : <HealthAndSafetyRounded />}
             {snapshot ? m.agent_refresh() : m.agent_start_diagnostics()}
@@ -101,11 +142,24 @@ export function AgentPage() {
         </header>
 
         <PrivacyCard />
+        <BridgeCard />
+        <IntentCard
+          resolution={intentResolution}
+          resolving={agent.resolveIntent.isPending}
+          disabled={agent.propose.isPending || agent.snapshot.isFetching}
+          onResolve={(text) => void resolveIntent(text)}
+          onDiagnose={() => void refreshDiagnostics()}
+          onPropose={(action) => void propose(action)}
+        />
 
-        {agent.snapshot.isError && <ErrorCard />}
+        {agent.snapshot.isError && <ErrorCard error={agent.snapshot.error} />}
         {snapshot && (
           <>
-            <HealthCard snapshot={snapshot} onCopy={copyContext} />
+            <HealthCard
+              snapshot={snapshot}
+              canCopy={privacySafeSnapshot !== null}
+              onCopy={copyContext}
+            />
             <SnapshotSummary snapshot={snapshot} />
             <div className="grid gap-4 lg:grid-cols-2">
               <FindingList findings={snapshot.findings} />
@@ -119,6 +173,14 @@ export function AgentPage() {
             <ContextPreview snapshot={snapshot} />
           </>
         )}
+        <HistoryCard
+          history={agent.history.data}
+          loading={agent.history.isFetching}
+          clearing={agent.clearHistory.isPending}
+          onRefresh={() => void agent.history.refetch()}
+          onClear={() => void clearHistory()}
+        />
+        <IssueGuidanceCard snapshot={snapshot} />
       </main>
       <ProposalDialog
         proposal={proposal}
@@ -145,19 +207,21 @@ function PrivacyCard() {
   );
 }
 
-function ErrorCard() {
+function ErrorCard({ error }: { error: unknown }) {
   return (
     <Card variant="outline" className="border-error text-error">
-      <CardContent>{m.agent_error_title()}</CardContent>
+      <CardContent>{presentAgentError(error)}</CardContent>
     </Card>
   );
 }
 
 function HealthCard({
   snapshot,
+  canCopy,
   onCopy,
 }: {
   snapshot: NonNullable<ReturnType<typeof useAgent>['snapshot']['data']>;
+  canCopy: boolean;
   onCopy: () => void;
 }) {
   return (
@@ -175,7 +239,7 @@ function HealthCard({
             {new Date(snapshot.captured_at).toLocaleString()}
           </p>
         </div>
-        <Button variant="stroked" onClick={onCopy}>
+        <Button disabled={!canCopy} variant="stroked" onClick={onCopy}>
           <ContentCopyRounded />
           {m.agent_copy_context()}
         </Button>
@@ -189,20 +253,28 @@ function ContextPreview({
 }: {
   snapshot: NonNullable<ReturnType<typeof useAgent>['snapshot']['data']>;
 }) {
+  const serialized = serializePrivacySafeSnapshot(snapshot);
+
   return (
     <Card variant="outline">
       <CardContent>
-        <details>
-          <summary className="cursor-pointer font-medium">
-            {m.agent_context_preview()}
-          </summary>
-          <p className="text-on-surface-variant my-3 text-sm">
-            {m.agent_context_description()}
+        {isPrivacySafeSnapshot(snapshot) && serialized ? (
+          <details>
+            <summary className="cursor-pointer font-medium">
+              {m.agent_context_preview()}
+            </summary>
+            <p className="text-on-surface-variant my-3 text-sm">
+              {m.agent_context_description()}
+            </p>
+            <pre className="bg-surface-variant/30 overflow-x-auto rounded-2xl p-3 text-xs break-all whitespace-pre-wrap">
+              {serialized}
+            </pre>
+          </details>
+        ) : (
+          <p className="text-error text-sm">
+            {m.agent_context_privacy_blocked()}
           </p>
-          <pre className="bg-surface-variant/30 overflow-x-auto rounded-2xl p-3 text-xs break-all whitespace-pre-wrap">
-            {JSON.stringify(snapshot, null, 2)}
-          </pre>
-        </details>
+        )}
       </CardContent>
     </Card>
   );
