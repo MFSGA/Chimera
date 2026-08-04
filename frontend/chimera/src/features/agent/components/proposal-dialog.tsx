@@ -8,12 +8,20 @@ import {
 } from '@/components/ui/card';
 import { Modal, ModalContent, ModalTitle } from '@/components/ui/modal';
 import * as m from '@/paraglide/messages';
-import { presentImpact } from '../model/presenter';
+import { presentImpact, presentStateValue } from '../model/presenter';
 
-const presentRisk = (proposal: AgentProposal) =>
-  proposal.risk === 'traffic_change'
-    ? m.agent_risk_traffic_change()
-    : m.agent_risk_host_network_change();
+const presentRisk = (proposal: AgentProposal) => {
+  if (proposal.risk === 'traffic_change') {
+    return m.agent_risk_traffic_change();
+  }
+  if (proposal.risk === 'service_control') {
+    return m.agent_risk_service_control();
+  }
+  if (proposal.risk === 'telemetry_recovery') {
+    return m.agent_risk_telemetry_recovery();
+  }
+  return m.agent_risk_host_network_change();
+};
 
 export function ProposalDialog({
   proposal,
@@ -54,9 +62,13 @@ export function ProposalDialog({
                     className="bg-surface-variant/30 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 rounded-2xl p-3 text-sm"
                     key={change.field}
                   >
-                    <span className="truncate">{change.before}</span>
+                    <span className="truncate">
+                      {presentStateValue(change.before)}
+                    </span>
                     <span aria-hidden>→</span>
-                    <span className="truncate text-right">{change.after}</span>
+                    <span className="truncate text-right">
+                      {presentStateValue(change.after)}
+                    </span>
                   </div>
                 ))}
               </section>

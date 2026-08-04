@@ -1,15 +1,47 @@
 import type {
   AgentActionRequest,
   AgentNetworkSnapshot,
-  AgentRoutingMode,
+  AgentRecommendation,
 } from '@chimera/interface';
-import { BuildRounded, RouteRounded } from '@mui/icons-material';
+import { BuildRounded } from '@mui/icons-material';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { presentRoutingMode } from '../model/presenter';
 
-const modes: AgentRoutingMode[] = ['rule', 'global', 'direct'];
+const presentAction = (recommendation: AgentRecommendation) => {
+  const action = recommendation.action;
+  switch (action.action) {
+    case 'set_routing_mode':
+      return `${m.agent_set_mode()}: ${presentRoutingMode(action.mode)}`;
+    case 'set_tun_enabled':
+      return `${m.agent_tun_title()}: ${action.enabled ? m.agent_enabled() : m.agent_disabled()}`;
+    case 'set_system_proxy_enabled':
+      return `${m.agent_system_proxy_title()}: ${action.enabled ? m.agent_enabled() : m.agent_disabled()}`;
+    case 'set_service_mode':
+      return `${m.settings_system_proxy_service_mode_label()}: ${action.enabled ? m.agent_enabled() : m.agent_disabled()}`;
+    case 'start_core':
+      return m.agent_start_core();
+    case 'restart_core':
+      return m.agent_restart_core();
+    case 'reconnect_telemetry':
+      return m.agent_reconnect_telemetry();
+    case 'start_service':
+      return m.agent_start_service();
+    case 'stop_service':
+      return m.agent_stop_service();
+    case 'restart_service':
+      return m.agent_restart_service();
+    case 'repair_system_proxy_endpoint':
+      return m.agent_repair_proxy_endpoint();
+    case 'disable_stale_system_proxy':
+      return m.agent_disable_stale_proxy();
+    default: {
+      const exhaustive: never = action;
+      return exhaustive;
+    }
+  }
+};
 
 export function ActionPanel({
   snapshot,
@@ -20,10 +52,9 @@ export function ActionPanel({
   pending: boolean;
   onPropose: (action: AgentActionRequest) => void;
 }) {
-  const staleProxyCanBeDisabled =
-    snapshot.core.state === 'stopped' &&
-    snapshot.system_proxy.observed_enabled === true &&
-    snapshot.system_proxy.matches_expected_endpoint === true;
+  const available = snapshot.recommendations.filter(
+    (recommendation) => recommendation.available,
+  );
 
   return (
     <Card variant="outline">
@@ -35,40 +66,18 @@ export function ActionPanel({
         <p className="text-on-surface-variant text-sm">
           {m.agent_actions_description()}
         </p>
-        <div className="bg-surface-variant/25 flex flex-col gap-3 rounded-2xl p-3">
-          <div className="flex items-center gap-2 font-medium">
-            <RouteRounded className="size-5" />
-            {m.agent_set_mode()}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {modes.map((mode) => (
-              <Button
-                disabled={
-                  pending ||
-                  snapshot.core.state !== 'running' ||
-                  snapshot.core.routing_mode === null ||
-                  snapshot.core.observed_routing_mode !==
-                    snapshot.core.routing_mode ||
-                  snapshot.core.routing_mode === mode
-                }
-                key={mode}
-                variant="stroked"
-                onClick={() => onPropose({ action: 'set_routing_mode', mode })}
-              >
-                {presentRoutingMode(mode)}
-              </Button>
-            ))}
-          </div>
+        <div className="flex flex-wrap gap-2">
+          {available.map((recommendation) => (
+            <Button
+              disabled={pending}
+              key={JSON.stringify(recommendation.action)}
+              variant="stroked"
+              onClick={() => onPropose(recommendation.action)}
+            >
+              {presentAction(recommendation)}
+            </Button>
+          ))}
         </div>
-        {staleProxyCanBeDisabled && (
-          <Button
-            disabled={pending}
-            variant="stroked"
-            onClick={() => onPropose({ action: 'disable_stale_system_proxy' })}
-          >
-            {m.agent_disable_stale_proxy()}
-          </Button>
-        )}
       </CardContent>
     </Card>
   );
