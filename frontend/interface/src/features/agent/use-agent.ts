@@ -5,11 +5,10 @@ import {
   type AgentNetworkSnapshot,
 } from '../../ipc/bindings';
 import { unwrapResult } from '../../utils';
-
-export const AGENT_NETWORK_SNAPSHOT_QUERY_KEY = [
-  'agent',
-  'network-snapshot',
-] as const;
+import {
+  AGENT_HISTORY_QUERY_KEY,
+  AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
+} from './query-keys';
 
 export type AgentExecuteInput = {
   proposalId: string;
@@ -25,13 +24,26 @@ export const useAgent = () => {
 
   const snapshot = useQuery({
     queryKey: AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
-    queryFn: commands.agentGetNetworkSnapshot,
+    queryFn: async () => unwrapResult(await commands.agentGetNetworkSnapshot()),
     enabled: false,
     retry: false,
     refetchInterval: false,
     refetchOnMount: false,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
+  });
+
+  const history = useQuery({
+    queryKey: AGENT_HISTORY_QUERY_KEY,
+    queryFn: async () => unwrapResult(await commands.agentGetHistory()),
+    retry: false,
+    refetchInterval: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const resolveIntent = useMutation({
+    mutationFn: async (text: string) => commands.agentResolveIntent({ text }),
   });
 
   const propose = useMutation({
@@ -53,6 +65,7 @@ export const useAgent = () => {
         AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
         result.snapshot,
       );
+      void queryClient.invalidateQueries({ queryKey: AGENT_HISTORY_QUERY_KEY });
     },
   });
 
@@ -61,10 +74,22 @@ export const useAgent = () => {
       unwrapResult(await commands.agentCancelNetworkAction(proposalId)),
   });
 
+  const clearHistory = useMutation({
+    mutationFn: async () => unwrapResult(await commands.agentClearHistory()),
+    onSuccess: (result) => {
+      if (result) {
+        queryClient.setQueryData(AGENT_HISTORY_QUERY_KEY, result);
+      }
+    },
+  });
+
   return {
     snapshot,
+    history,
+    resolveIntent,
     propose,
     execute,
     cancel,
+    clearHistory,
   };
 };
