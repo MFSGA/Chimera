@@ -514,6 +514,27 @@ impl CoreManager {
         lease.rebuild_running_config().await
     }
 
+    /// Start the core only when it is not already running.
+    ///
+    /// The state check and start share the lifecycle lease so concurrent agent
+    /// requests cannot turn this idempotent operation into an unintended restart.
+    #[cfg(feature = "agent")]
+    pub async fn ensure_core_running(&self) -> Result<()> {
+        let lease = self.begin_lifecycle().await;
+        let instance = {
+            let instance = self.instance.lock();
+            instance.as_ref().cloned()
+        };
+
+        if let Some(instance) = instance
+            && matches!(instance.state().await.as_ref(), CoreState::Running)
+        {
+            return Ok(());
+        }
+
+        lease.rebuild_running_config().await
+    }
+
     fn selected_core() -> ClashCore {
         Config::verge()
             .latest()
