@@ -83,6 +83,7 @@ percent-encoding = "2.3.1"
 # todo: use another crate.
 serde_yaml = { version = "0.9" }
 sha2 = "0.11"
+subtle = { version = "2.6", optional = true }
 
 ambassador = "0.5.0"                                                      # for trait delegation
 
@@ -216,6 +217,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_System_Shutdown",
   "Win32_Graphics_Gdi",
+  "Win32_Storage_FileSystem",
 ] }
 windows-core = "0.61"
 # webview2-com = "0.38"
@@ -225,7 +227,7 @@ nix = { version = "0.31", features = ["user"] }
 
 [features]
 default = ["default-meta", "agent"]
-agent = []
+agent = ["dep:subtle"]
 nightly = []
 verge-dev = []
 default-meta = []
