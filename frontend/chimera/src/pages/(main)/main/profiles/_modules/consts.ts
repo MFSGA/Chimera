@@ -12,17 +12,9 @@
  */
 
 import * as m from '@/paraglide/messages';
+import { ProfileType } from './profile-type';
 
-/**
- * Profile 类型枚举
- * 用于按配置类型过滤和导航
- */
-export enum ProfileType {
-  Profile = 'profile',
-  JavaScript = 'javascript',
-  Lua = 'lua',
-  Merge = 'merge',
-}
+export { parseProfileType, ProfileType } from './profile-type';
 
 /**
  * Profile 类型到显示名称的映射

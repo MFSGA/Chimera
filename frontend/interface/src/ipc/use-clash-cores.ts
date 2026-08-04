@@ -11,6 +11,7 @@ import {
   CLASH_CORE_QUERY_KEY,
   CLASH_VERSION_QUERY_KEY,
 } from './consts';
+import { restartCoreSidecar } from './core-mutation';
 
 export const ClashCores = {
   // clash: 'Clash Premium',
@@ -114,9 +115,7 @@ export const useClashCores = () => {
     },
   });
 
-  const restartSidecar = async () => {
-    return await commands.restartSidecar();
-  };
+  const restartSidecar = () => restartCoreSidecar(commands);
 
   return {
     query,

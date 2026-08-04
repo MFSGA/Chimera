@@ -1,6 +1,7 @@
 import { commands } from './bindings';
 
 export * from './use-profile';
+export * from './profile-definition';
 export * from './consts';
 
 export { commands } from './bindings';

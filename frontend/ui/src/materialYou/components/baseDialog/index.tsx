@@ -120,7 +120,12 @@ export const BaseDialog = ({
   return (
     <AnimatePresence initial={false}>
       {mounted && (
-        <Portal.Root className="fixed top-0 left-0 z-50 h-dvh w-full">
+        <Portal.Root
+          className="fixed top-0 left-0 z-50 h-dvh w-full"
+          data-slot="base-dialog"
+          role="dialog"
+          aria-modal="true"
+        >
           {!full && (
             <Box
               component={motion.div}
@@ -218,6 +223,7 @@ export const BaseDialog = ({
             <div className={cn('m-2 flex justify-end gap-2', full && 'mx-6')}>
               {onClose && (
                 <Button
+                  data-slot="dialog-close-button"
                   disabled={loading || closeLoading}
                   loading={closeLoading || loading}
                   variant="outlined"

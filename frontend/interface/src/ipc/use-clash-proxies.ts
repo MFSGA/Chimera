@@ -9,6 +9,7 @@ import {
   type ProxyItem_Serialize,
 } from './bindings';
 import { CLASH_PROXIES_QUERY_KEY } from './consts';
+import { selectProxyAndRefresh } from './proxy-mutation';
 
 export type ClashProxiesQueryHelperFn = {
   mutateDelay: (options?: ClashDelayOptions) => Promise<void>;
@@ -65,10 +66,13 @@ export const useClashProxies = () => {
         mutateDelay: async (options?: ClashDelayOptions) => {
           await updateProxiesDelay.mutateAsync([proxy.name, options]);
         },
-        mutateSelect: async () => {
-          await commands.selectProxy(groupName, proxy.name);
-          await proxies.refetch();
-        },
+        mutateSelect: () =>
+          selectProxyAndRefresh(
+            commands,
+            groupName,
+            proxy.name,
+            proxies.refetch,
+          ),
       });
 
       const createGroupWithHelpers = (

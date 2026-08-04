@@ -1,4 +1,10 @@
-import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import {
+  getNextProfileUpdateTimestamp,
+  getProfileSubscriptionUsage,
+  getSafeProfileTimestamp,
+  useProfile,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import RuleSettingsRounded from '~icons/material-symbols/rule-settings-rounded';
 import dayjs from 'dayjs';
@@ -19,8 +25,6 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import UpdateOptionEditor from './update-option-editor';
 
-const clampPercentage = (value: number) => Math.min(100, Math.max(0, value));
-
 export default function SubscriptionCard({
   profile,
 }: {
@@ -29,13 +33,11 @@ export default function SubscriptionCard({
   const { update } = useProfile();
   const usage = useMemo(() => {
     if (profile.type !== 'remote') return { progress: 0, total: 0, used: 0 };
-    const total = profile.extra?.total ?? 0;
-    const used = (profile.extra?.download ?? 0) + (profile.extra?.upload ?? 0);
-    return {
-      total,
-      used,
-      progress: total > 0 ? clampPercentage((used / total) * 100) : 0,
-    };
+    return getProfileSubscriptionUsage(
+      profile.extra?.upload,
+      profile.extra?.download,
+      profile.extra?.total,
+    );
   }, [profile]);
 
   const task = useBlockTask(
@@ -55,12 +57,12 @@ export default function SubscriptionCard({
 
   if (profile.type !== 'remote') return null;
 
-  const updatedAt = profile.updated || null;
-  const expire = profile.extra?.expire || null;
-  const nextUpdate =
-    updatedAt && profile.option.update_interval_minutes
-      ? updatedAt + profile.option.update_interval_minutes * 60
-      : null;
+  const updatedAt = getSafeProfileTimestamp(profile.updated);
+  const expire = getSafeProfileTimestamp(profile.extra?.expire);
+  const nextUpdate = getNextProfileUpdateTimestamp(
+    updatedAt,
+    profile.option.update_interval_minutes,
+  );
 
   return (
     <Card className="col-span-2">

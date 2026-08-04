@@ -5,6 +5,7 @@ import {
 } from '@chimera/interface';
 import { createJSONStorage } from 'jotai/utils';
 import { type AsyncStringStorage } from 'jotai/vanilla/utils/atomWithStorage';
+import { reconcileStorageSnapshot } from './storage-resync';
 
 const subscribers: Map<
   string,
@@ -21,6 +22,12 @@ export function dispatchStorageValueChanged(
       callback(newValue);
     });
   }
+}
+
+export function applyStorageSnapshot(snapshot: Record<string, unknown>) {
+  reconcileStorageSnapshot(subscribers.keys(), snapshot, (key, value) => {
+    dispatchStorageValueChanged(key, typeof value === 'string' ? value : null);
+  });
 }
 
 export const ChimeraStorage = {

@@ -10,6 +10,7 @@ import {
   type RemoteProfileOptionsPatch_Deserialize,
 } from './bindings';
 import { RROFILES_QUERY_KEY } from './consts';
+import { runProfileRebuildMutation } from './profile-mutation';
 
 export type NormalizedProfile = ProfileResponse;
 
@@ -47,33 +48,6 @@ export type ProfileQueryResult = NonNullable<
 
 export type ProfileQueryResultItem = NormalizedProfile &
   Partial<ProfileHelperFn>;
-
-export const remoteProfileDefinitionOf = (
-  profile: ProfileQueryResultItem,
-): ProfileDefinition_Deserialize | null => {
-  if (profile.type !== 'remote') return null;
-
-  return {
-    type: 'config',
-    config: {
-      type: 'file',
-      transforms: [],
-      source: {
-        type: 'remote',
-        file: profile.file,
-        updated_at: profile.updated || null,
-        url: profile.url,
-        option: {
-          user_agent: profile.option.user_agent ?? null,
-          with_proxy: profile.option.with_proxy,
-          self_proxy: profile.option.self_proxy,
-          update_interval_minutes: profile.option.update_interval_minutes,
-        },
-        subscription: profile.extra,
-      },
-    },
-  };
-};
 
 export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const queryClient = useQueryClient();
@@ -158,18 +132,24 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
 
   const setValidFields = useMutation({
     mutationFn: async (fields: string[]) =>
-      unwrapResult(await commands.setProfileValidFields(fields)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+      runProfileRebuildMutation(
+        async () => unwrapResult(await commands.setProfileValidFields(fields)),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   const activate = useMutation({
     mutationFn: async (uid: string | null) =>
-      unwrapResult(await commands.activateProfile(uid)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+      runProfileRebuildMutation(
+        async () => unwrapResult(await commands.activateProfile(uid)),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   const patchMetadata = useMutation({
@@ -179,10 +159,15 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     }: {
       uid: string;
       patch: ProfileMetadataPatch_Deserialize;
-    }) => unwrapResult(await commands.patchProfileMetadata(uid, patch)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+    }) =>
+      runProfileRebuildMutation(
+        async () =>
+          unwrapResult(await commands.patchProfileMetadata(uid, patch)),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   const patchRemoteOptions = useMutation({
@@ -192,10 +177,15 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     }: {
       uid: string;
       patch: RemoteProfileOptionsPatch_Deserialize;
-    }) => unwrapResult(await commands.patchRemoteProfileOptions(uid, patch)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+    }) =>
+      runProfileRebuildMutation(
+        async () =>
+          unwrapResult(await commands.patchRemoteProfileOptions(uid, patch)),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   const replaceDefinition = useMutation({
@@ -206,10 +196,16 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
       uid: string;
       definition: ProfileDefinition_Deserialize;
     }) =>
-      unwrapResult(await commands.replaceProfileDefinition(uid, definition)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+      runProfileRebuildMutation(
+        async () =>
+          unwrapResult(
+            await commands.replaceProfileDefinition(uid, definition),
+          ),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   const drop = useMutation({
@@ -223,10 +219,13 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
 
   const sort = useMutation({
     mutationFn: async (uids: string[]) =>
-      unwrapResult(await commands.reorderProfilesByList(uids)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
-    },
+      runProfileRebuildMutation(
+        async () => unwrapResult(await commands.reorderProfilesByList(uids)),
+        () =>
+          queryClient.invalidateQueries({
+            queryKey: [RROFILES_QUERY_KEY],
+          }),
+      ),
   });
 
   return {

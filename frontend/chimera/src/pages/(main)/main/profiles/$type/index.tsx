@@ -26,10 +26,14 @@ import { DragDropProvider } from '@dnd-kit/react';
 import { Grid } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMemo } from 'react';
+import { Notice } from '@/components/base';
 import { filterProfiles } from '@/components/profiles/utils';
 import * as m from '@/paraglide/messages';
-import { ProfileType } from '../_modules/consts';
+import { formatError } from '@/utils';
+import { parseProfileType, ProfileType } from '../_modules/consts';
 import ImportButton from './_modules/import-button';
+import { runProfileOrderAction } from './_modules/profile-action';
+import { profileOrderChanged } from './_modules/profile-order';
 import ProfilesHeader from './_modules/profiles-header';
 import SortableProfileItem from './_modules/sortable-profile-item';
 
@@ -61,7 +65,18 @@ function RouteComponent() {
     return filterProfiles(query.data?.items);
   }, [query.data?.items]);
 
-  const profileType = type as ProfileType;
+  const profileType = parseProfileType(type);
+  if (!profileType) {
+    return (
+      <div
+        className="text-on-surface-variant flex min-h-0 flex-1 items-center justify-center text-sm"
+        data-slot="profile-type-unsupported"
+      >
+        {m.common_error()}: {type}
+      </div>
+    );
+  }
+
   const profileItems =
     profileType === ProfileType.Profile ? (profiles?.clash ?? []) : [];
   return (
@@ -83,23 +98,21 @@ function RouteComponent() {
                 const filteredUids = profileItems.map((item) => item.uid);
                 const nextFilteredUids = move(filteredUids, event);
 
-                if (
-                  filteredUids.every(
-                    (uid, index) => uid === nextFilteredUids[index],
-                  )
-                ) {
+                if (!profileOrderChanged(filteredUids, nextFilteredUids)) {
                   return;
                 }
 
-                const filteredSet = new Set(filteredUids);
-                let cursor = 0;
-                const fullOrder = (query.data?.items ?? []).map((item) =>
-                  filteredSet.has(item.uid)
-                    ? nextFilteredUids[cursor++]
-                    : item.uid,
+                void runProfileOrderAction(
+                  (query.data?.items ?? []).map((item) => item.uid),
+                  filteredUids,
+                  nextFilteredUids,
+                  (fullOrder) => sort.mutateAsync(fullOrder),
+                  (error) =>
+                    Notice.error(
+                      `${m.profile_error_set_profile()} ${formatError(error)}`,
+                      5000,
+                    ),
                 );
-
-                sort.mutate(fullOrder);
               }}
             >
               <Grid container spacing={2}>

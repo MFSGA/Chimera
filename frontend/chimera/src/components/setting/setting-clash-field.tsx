@@ -5,6 +5,7 @@ import Grid from '@mui/material/Grid';
 import { useMemo, useState } from 'react';
 import CLASH_FIELD from '@/assets/json/clash-field.json';
 import * as m from '@/paraglide/messages';
+import { formatError } from '@/utils';
 import { ClashFieldItem, LabelSwitch } from './modules/clash-field';
 
 type ClashFieldGroup = Record<string, string>;
@@ -88,6 +89,7 @@ const ClashFieldSwitch = () => {
 
 export const SettingClashField = () => {
   const { query, setValidFields } = useProfile();
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   const mergeFields = useMemo(
     () => [
@@ -119,31 +121,48 @@ export const SettingClashField = () => {
       ? valid.filter((item) => item !== key)
       : [...valid, key];
 
-    await setValidFields.mutateAsync(nextFields);
+    try {
+      await setValidFields.mutateAsync(nextFields);
+    } catch (error) {
+      setUpdateError(
+        `${m.profile_error_set_profile()} \n ${formatError(error)}`,
+      );
+    }
   };
 
   return (
-    <BaseCard label={m.settings_clash_settings_field_filter_label()}>
-      <Box sx={{ pt: 1, pb: 2 }}>
-        <ClashFieldSwitch />
-      </Box>
+    <>
+      <BaseCard label={m.settings_clash_settings_field_filter_label()}>
+        <Box sx={{ pt: 1, pb: 2 }}>
+          <ClashFieldSwitch />
+        </Box>
 
-      <Grid container spacing={2}>
-        {Object.entries(CLASH_FIELD).map(([key, value]) => {
-          const filtered = filteredField(value);
+        <Grid container spacing={2}>
+          {Object.entries(CLASH_FIELD).map(([key, value]) => {
+            const filtered = filteredField(value);
 
-          return (
-            <FieldsControl
-              key={key}
-              label={key}
-              fields={value}
-              enabledFields={filtered}
-              onChange={updateFiled}
-            />
-          );
-        })}
-      </Grid>
-    </BaseCard>
+            return (
+              <FieldsControl
+                key={key}
+                label={key}
+                fields={value}
+                enabledFields={filtered}
+                onChange={updateFiled}
+              />
+            );
+          })}
+        </Grid>
+      </BaseCard>
+
+      <BaseDialog
+        title={m.common_error()}
+        open={updateError !== null}
+        close={m.common_close()}
+        onClose={() => setUpdateError(null)}
+      >
+        <Typography sx={{ whiteSpace: 'pre-wrap' }}>{updateError}</Typography>
+      </BaseDialog>
+    </>
   );
 };
 
