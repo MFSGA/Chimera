@@ -1,202 +1,36 @@
-use std::{net::IpAddr, time::Duration};
+use std::net::IpAddr;
 
-use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
 use sha2::{Digest, Sha256};
-use sysproxy::Sysproxy;
-use tauri::{AppHandle, Manager};
 
-use crate::{
-    config::{core::Config, profile::item::Profile},
-    core::{
-        clash::{
-            client::NyanpasuClient,
-            core::RunType,
-            ws::{ClashConnectionsConnector, ClashConnectionsConnectorState},
-        },
-        service,
-    },
+use super::model::{
+    AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
+    AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostScope, AgentProbeCode,
+    AgentProbeFailure, AgentProfileSnapshot, AgentServiceSnapshot, AgentServiceState,
+    AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
+    NETWORK_SNAPSHOT_SCHEMA_VERSION,
 };
+use super::ports::{ServiceLifecycleStatus, SystemProxyConfiguration};
 
-use super::{
-    core_probe,
-    model::{
-        AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
-        AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostScope, AgentNetworkSnapshot,
-        AgentPrivacyBoundary, AgentProbeCode, AgentProbeFailure, AgentProfileSnapshot,
-        AgentRoutingMode, AgentRunType, AgentServiceSnapshot, AgentServiceState,
-        AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
-        NETWORK_SNAPSHOT_SCHEMA_VERSION,
-    },
-};
-
-pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSnapshot {
-    let verge = Config::verge().latest().clone();
-    let clash = Config::clash().latest().clone();
-    let runtime = Config::runtime().latest().clone();
-    let profiles = Config::profiles().data().clone();
-    let expected_mixed_port = verge
-        .verge_mixed_port
-        .unwrap_or_else(|| clash.get_mixed_port());
-    let selected_core = verge.clash_core.unwrap_or_default().to_string();
-    let runtime_config_present = runtime.config.is_some();
-    let routing_mode = runtime
-        .config
-        .as_ref()
-        .and_then(|config| config.get("mode"))
-        .and_then(serde_yaml::Value::as_str)
-        .and_then(AgentRoutingMode::parse);
-    let generated_runtime_enabled = generated_tun_enabled(runtime.config.as_ref());
-    let secret_is_weak = clash
-        .get_client_info()
-        .secret
-        .as_deref()
-        .map(|secret| secret.trim().is_empty() || secret == "chimera")
-        .unwrap_or(true);
-
-    let client = app.state::<NyanpasuClient>();
-    let core_status = client.core_status();
-    let service_status = tokio::time::timeout(Duration::from_secs(2), service::control::status());
-    let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
-    let (core_status, service_status, system_proxy) =
-        tokio::join!(core_status, service_status, system_proxy);
-
-    let mut failures = Vec::new();
-    let mut core = match core_status {
-        Ok(status) => AgentCoreSnapshot {
-            state: map_core_state(&status.state),
-            run_type: map_run_type(status.run_type),
-            selected_core,
-            state_changed_at: status.state_changed_at,
-            runtime_config_present,
-            routing_mode,
-            observed_routing_mode: None,
-            applied_consistency: AgentAppliedState::Unknown,
-        },
-        Err(err) => {
-            log::warn!(target: "app", "failed to read core status for agent diagnostics: {err}");
-            failures.push(AgentProbeFailure {
-                code: AgentProbeCode::CoreStatusUnavailable,
-            });
-            AgentCoreSnapshot {
-                state: AgentCoreState::Unknown,
-                run_type: AgentRunType::Normal,
-                selected_core,
-                state_changed_at: 0,
-                runtime_config_present,
-                routing_mode,
-                observed_routing_mode: None,
-                applied_consistency: AgentAppliedState::Unknown,
-            }
-        }
-    };
-    if core.state == AgentCoreState::Running {
-        match core_probe::observed_routing_mode().await {
-            Ok(mode) => {
-                core.observed_routing_mode = Some(mode);
-                core.applied_consistency = if core.routing_mode == Some(mode) {
-                    AgentAppliedState::Consistent
-                } else {
-                    AgentAppliedState::Stale
-                };
-            }
-            Err(()) => failures.push(AgentProbeFailure {
-                code: AgentProbeCode::CoreConfigUnavailable,
-            }),
-        }
-    }
-    let service = summarize_service(&verge, service_status, &mut failures);
-    let system_proxy = summarize_system_proxy(
-        verge.enable_system_proxy.unwrap_or(false),
-        expected_mixed_port,
-        system_proxy,
-        &mut failures,
-    );
-    let tun = AgentTunSnapshot {
-        desired_enabled: verge.enable_tun_mode.unwrap_or(false),
-        generated_runtime_enabled,
-        observed_active: AgentAppliedState::Unknown,
-        applied_consistency: AgentAppliedState::Unknown,
-    };
-    let profiles = summarize_profiles(&profiles);
-    let telemetry = summarize_telemetry(app, &mut failures);
-    let findings = derive_findings(
-        &core,
-        &service,
-        &system_proxy,
-        &tun,
-        &profiles,
-        &telemetry,
-        secret_is_weak,
-    );
-    let health = derive_health(&findings, &failures);
-    let revision = snapshot_revision(&core, &service, &system_proxy, &tun);
-
-    AgentNetworkSnapshot {
-        schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
-        revision,
-        captured_at: chrono::Utc::now().timestamp_millis(),
-        app_version: env!("CARGO_PKG_VERSION").to_owned(),
-        os_family: std::env::consts::OS.to_owned(),
-        health,
-        core,
-        service,
-        system_proxy,
-        tun,
-        profiles,
-        telemetry,
-        findings,
-        probe_failures: failures,
-        privacy: AgentPrivacyBoundary {
-            contains_raw_logs: false,
-            contains_profile_names: false,
-            contains_profile_urls: false,
-            contains_connection_targets: false,
-            contains_controller_secret: false,
-        },
+pub(super) fn tun_applied_consistency(desired: bool, generated: Option<bool>) -> AgentAppliedState {
+    match generated {
+        Some(enabled) if enabled == desired => AgentAppliedState::Consistent,
+        Some(_) => AgentAppliedState::Stale,
+        None => AgentAppliedState::Unknown,
     }
 }
 
-fn generated_tun_enabled(config: Option<&serde_yaml::Mapping>) -> Option<bool> {
-    config
-        .and_then(|config| config.get("tun"))
-        .and_then(serde_yaml::Value::as_mapping)
-        .and_then(|tun| tun.get("enable"))
-        .and_then(serde_yaml::Value::as_bool)
-}
-
-fn map_core_state(state: &CoreState) -> AgentCoreState {
-    match state {
-        CoreState::Running => AgentCoreState::Running,
-        CoreState::Stopped(_) => AgentCoreState::Stopped,
-    }
-}
-
-fn map_run_type(run_type: RunType) -> AgentRunType {
-    match run_type {
-        RunType::Normal => AgentRunType::Normal,
-        RunType::Service => AgentRunType::Service,
-        RunType::Elevated => AgentRunType::Elevated,
-    }
-}
-
-fn summarize_service(
-    verge: &crate::config::chimera::IVerge,
-    result: Result<anyhow::Result<chimera_ipc::types::StatusInfo<'_>>, tokio::time::error::Elapsed>,
+pub(super) fn summarize_service(
+    desired_enabled: bool,
+    ipc_connected: bool,
+    result: Result<anyhow::Result<ServiceLifecycleStatus>, tokio::time::error::Elapsed>,
     failures: &mut Vec<AgentProbeFailure>,
 ) -> AgentServiceSnapshot {
-    let desired_enabled = verge.enable_service_mode.unwrap_or(false);
-    let ipc_connected = service::ipc::get_ipc_state().is_connected();
     match result {
         Ok(Ok(status)) => AgentServiceSnapshot {
             desired_enabled,
-            state: match status.status {
-                ServiceStatus::NotInstalled => AgentServiceState::NotInstalled,
-                ServiceStatus::Stopped => AgentServiceState::Stopped,
-                ServiceStatus::Running => AgentServiceState::Running,
-            },
+            state: status.state,
             ipc_connected,
-            runtime_compatible: matches!(status.status, ServiceStatus::Running)
-                .then(|| service::is_service_runtime_compatible(&status)),
+            runtime_compatible: status.runtime_compatible,
         },
         Ok(Err(_)) => {
             failures.push(AgentProbeFailure {
@@ -223,18 +57,18 @@ fn summarize_service(
     }
 }
 
-fn summarize_system_proxy(
+pub(super) fn summarize_system_proxy(
     desired_enabled: bool,
     expected_mixed_port: u16,
-    result: Result<Result<sysproxy::Sysproxy, sysproxy::Error>, tokio::task::JoinError>,
+    observed: Option<SystemProxyConfiguration>,
     failures: &mut Vec<AgentProbeFailure>,
 ) -> AgentSystemProxySnapshot {
-    match result {
-        Ok(Ok(proxy)) => {
+    match observed {
+        Some(proxy) => {
             let scope = host_scope(&proxy.host);
             AgentSystemProxySnapshot {
                 desired_enabled,
-                observed_enabled: Some(proxy.enable),
+                observed_enabled: Some(proxy.enabled),
                 observed_host_scope: scope,
                 observed_port: Some(proxy.port),
                 expected_mixed_port,
@@ -273,83 +107,7 @@ pub(super) fn host_scope(host: &str) -> AgentHostScope {
     }
 }
 
-fn summarize_profiles(
-    profiles: &crate::config::profile::profiles::Profiles,
-) -> AgentProfileSnapshot {
-    let remote_count = profiles
-        .items
-        .iter()
-        .filter(|profile| matches!(profile, Profile::Remote(_)))
-        .count() as u32;
-    let active_references_valid = profiles.current.iter().all(|uid| {
-        profiles
-            .items
-            .iter()
-            .any(|profile| crate::config::profile::item::ProfileMetaGetter::uid(profile) == uid)
-    });
-    AgentProfileSnapshot {
-        total_count: profiles.items.len() as u32,
-        active_count: profiles.current.len() as u32,
-        remote_count,
-        local_count: profiles.items.len() as u32 - remote_count,
-        active_references_valid,
-    }
-}
-
-fn summarize_telemetry(
-    app: &AppHandle,
-    failures: &mut Vec<AgentProbeFailure>,
-) -> AgentTelemetrySnapshot {
-    let Some(connector) = app.try_state::<ClashConnectionsConnector>() else {
-        failures.push(AgentProbeFailure {
-            code: AgentProbeCode::TelemetryUnavailable,
-        });
-        return AgentTelemetrySnapshot {
-            state: AgentConnectorState::Unknown,
-            active_connection_count: None,
-            upload_speed: None,
-            download_speed: None,
-            upload_total: None,
-            download_total: None,
-            recent_error_count: 0,
-        };
-    };
-    let snapshot = connector.snapshot();
-    let latest = snapshot.connections.last();
-    AgentTelemetrySnapshot {
-        state: match snapshot.state {
-            ClashConnectionsConnectorState::Disconnected => AgentConnectorState::Disconnected,
-            ClashConnectionsConnectorState::Connecting => AgentConnectorState::Connecting,
-            ClashConnectionsConnectorState::Connected => AgentConnectorState::Connected,
-        },
-        active_connection_count: latest
-            .and_then(|sample| sample.connections.as_ref())
-            .map(|connections| connections.len() as u32),
-        upload_speed: latest.map(|sample| sample.upload_speed),
-        download_speed: latest.map(|sample| sample.download_speed),
-        upload_total: latest.map(|sample| sample.upload_total.to_string()),
-        download_total: latest.map(|sample| sample.download_total.to_string()),
-        recent_error_count: snapshot
-            .logs
-            .iter()
-            .filter(|entry| {
-                matches!(
-                    entry.log_type.to_ascii_lowercase().as_str(),
-                    "error" | "fatal"
-                )
-            })
-            .count() as u32,
-    }
-}
-
-fn system_proxy_without_running_core(
-    state: AgentCoreState,
-    observed_enabled: Option<bool>,
-) -> bool {
-    observed_enabled == Some(true) && state == AgentCoreState::Stopped
-}
-
-fn derive_findings(
+pub(super) fn derive_findings(
     core: &AgentCoreSnapshot,
     service: &AgentServiceSnapshot,
     proxy: &AgentSystemProxySnapshot,
@@ -367,7 +125,7 @@ fn derive_findings(
     );
     push_finding(
         &mut findings,
-        system_proxy_without_running_core(core.state, proxy.observed_enabled),
+        proxy.observed_enabled == Some(true) && core.state == AgentCoreState::Stopped,
         AgentFindingCode::SystemProxyWithoutRunningCore,
         AgentFindingSeverity::Critical,
     );
@@ -405,7 +163,8 @@ fn derive_findings(
     );
     push_finding(
         &mut findings,
-        tun.desired_enabled && tun.generated_runtime_enabled == Some(false),
+        tun.generated_runtime_enabled
+            .is_some_and(|generated| generated != tun.desired_enabled),
         AgentFindingCode::TunRuntimeMismatch,
         AgentFindingSeverity::Critical,
     );
@@ -429,7 +188,10 @@ fn push_finding(
     }
 }
 
-fn derive_health(findings: &[AgentFinding], failures: &[AgentProbeFailure]) -> AgentHealth {
+pub(super) fn derive_health(
+    findings: &[AgentFinding],
+    failures: &[AgentProbeFailure],
+) -> AgentHealth {
     if findings
         .iter()
         .any(|finding| finding.severity == AgentFindingSeverity::Critical)
@@ -447,7 +209,7 @@ fn derive_health(findings: &[AgentFinding], failures: &[AgentProbeFailure]) -> A
     }
 }
 
-fn snapshot_revision(
+pub(super) fn snapshot_revision(
     core: &AgentCoreSnapshot,
     service: &AgentServiceSnapshot,
     proxy: &AgentSystemProxySnapshot,
@@ -473,9 +235,14 @@ fn snapshot_revision(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_scope, summarize_system_proxy, system_proxy_without_running_core};
-    use crate::features::agent::model::{AgentCoreState, AgentHostScope};
-    use sysproxy::Sysproxy;
+    use super::{derive_findings, host_scope, summarize_system_proxy, tun_applied_consistency};
+    use crate::features::agent::model::{
+        AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState,
+        AgentFindingCode, AgentHostScope, AgentProbeCode, AgentProfileSnapshot, AgentRoutingMode,
+        AgentRunType, AgentSelectedCore, AgentServiceSnapshot, AgentServiceState,
+        AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
+    };
+    use crate::features::agent::ports::SystemProxyConfiguration;
 
     #[test]
     fn classifies_only_loopback_hosts_as_loopback() {
@@ -486,27 +253,109 @@ mod tests {
     }
 
     #[test]
+    fn tun_consistency_is_derived_from_desired_and_generated_state() {
+        assert_eq!(
+            tun_applied_consistency(true, Some(true)),
+            AgentAppliedState::Consistent
+        );
+        assert_eq!(
+            tun_applied_consistency(false, Some(false)),
+            AgentAppliedState::Consistent
+        );
+        assert_eq!(
+            tun_applied_consistency(true, Some(false)),
+            AgentAppliedState::Stale
+        );
+        assert_eq!(
+            tun_applied_consistency(false, Some(true)),
+            AgentAppliedState::Stale
+        );
+        assert_eq!(
+            tun_applied_consistency(true, None),
+            AgentAppliedState::Unknown
+        );
+    }
+
+    #[test]
     fn unknown_core_state_does_not_claim_the_core_is_stopped() {
-        assert!(system_proxy_without_running_core(
-            AgentCoreState::Stopped,
-            Some(true)
-        ));
-        assert!(!system_proxy_without_running_core(
-            AgentCoreState::Unknown,
-            Some(true)
-        ));
+        let core = AgentCoreSnapshot {
+            state: AgentCoreState::Unknown,
+            run_type: AgentRunType::Unknown,
+            selected_core: AgentSelectedCore::Mihomo,
+            state_changed_at: 0,
+            runtime_config_present: true,
+            routing_mode: Some(AgentRoutingMode::Rule),
+            observed_routing_mode: None,
+            applied_consistency: AgentAppliedState::Unknown,
+        };
+        let service = AgentServiceSnapshot {
+            desired_enabled: false,
+            state: AgentServiceState::Unknown,
+            ipc_connected: false,
+            runtime_compatible: None,
+        };
+        let proxy = AgentSystemProxySnapshot {
+            desired_enabled: true,
+            observed_enabled: Some(true),
+            observed_host_scope: AgentHostScope::Loopback,
+            observed_port: Some(7890),
+            expected_mixed_port: 7890,
+            matches_expected_endpoint: Some(true),
+        };
+        let tun = AgentTunSnapshot {
+            desired_enabled: false,
+            generated_runtime_enabled: Some(false),
+            observed_active: AgentAppliedState::Unknown,
+            applied_consistency: AgentAppliedState::Consistent,
+        };
+        let profiles = AgentProfileSnapshot {
+            total_count: 1,
+            active_count: 1,
+            remote_count: 0,
+            local_count: 1,
+            active_references_valid: true,
+        };
+        let telemetry = AgentTelemetrySnapshot {
+            state: AgentConnectorState::Unknown,
+            active_connection_count: None,
+            upload_speed: None,
+            download_speed: None,
+            upload_total: None,
+            download_total: None,
+            recent_error_count: 0,
+        };
+
+        let findings = derive_findings(&core, &service, &proxy, &tun, &profiles, &telemetry, false);
+        assert!(
+            !findings
+                .iter()
+                .any(|finding| { finding.code == AgentFindingCode::SystemProxyWithoutRunningCore })
+        );
+    }
+
+    #[test]
+    fn unavailable_system_proxy_probe_fails_closed() {
+        let mut failures = Vec::new();
+        let summary = summarize_system_proxy(true, 7890, None, &mut failures);
+
+        assert_eq!(summary.observed_enabled, None);
+        assert_eq!(summary.observed_host_scope, AgentHostScope::Unknown);
+        assert_eq!(summary.observed_port, None);
+        assert_eq!(summary.matches_expected_endpoint, None);
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].code, AgentProbeCode::SystemProxyUnavailable);
     }
 
     #[test]
     fn system_proxy_summary_does_not_serialize_raw_host_or_bypass() {
-        let raw = Sysproxy {
-            enable: true,
+        let raw = SystemProxyConfiguration {
+            enabled: true,
             host: "controller-secret.canary.example".into(),
             port: 7890,
             bypass: "subscription-token.canary".into(),
         };
         let mut failures = Vec::new();
-        let summary = summarize_system_proxy(true, 7890, Ok(Ok(raw)), &mut failures);
+        let summary = summarize_system_proxy(true, 7890, Some(raw), &mut failures);
         let serialized = serde_json::to_string(&summary).unwrap();
         assert!(!serialized.contains("controller-secret.canary.example"));
         assert!(!serialized.contains("subscription-token.canary"));
