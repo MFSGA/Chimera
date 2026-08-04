@@ -1,0 +1,36 @@
+{
+  "name": "@chimera/tauri-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm run test:quick && pnpm run test:desktop",
+    "test:quick": "pnpm run test:runtime && pnpm run test:service && pnpm run test:proxy && pnpm run test:core && pnpm run test:profile && pnpm run test:profile-action && pnpm run test:profile-order && pnpm run test:profile-definition && pnpm run test:profile-detail && pnpm run test:profile-type && pnpm run test:profile-time && pnpm run test:profile-subscription && pnpm run test:cleanup",
+    "test:runtime": "pnpm exec tsx --test ./runtime-path.test.ts",
+    "test:service": "pnpm exec tsx --test ./service-mutation.test.ts",
+    "test:proxy": "pnpm exec tsx --test ./proxy-mutation.test.ts",
+    "test:core": "pnpm exec tsx --test ./core-mutation.test.ts",
+    "test:profile": "pnpm exec tsx --test ./profile-mutation.test.ts",
+    "test:profile-action": "pnpm exec tsx --test ./profile-action.test.ts",
+    "test:profile-order": "pnpm exec tsx --test ./profile-order.test.ts",
+    "test:profile-definition": "pnpm exec tsx --test ./profile-definition.test.ts",
+    "test:profile-detail": "pnpm exec tsx --test ./profile-detail-state.test.ts",
+    "test:profile-type": "pnpm exec tsx --test ./profile-type.test.ts",
+    "test:profile-time": "pnpm exec tsx --test ./profile-time.test.ts",
+    "test:profile-subscription": "pnpm exec tsx --test ./profile-subscription.test.ts",
+    "test:cleanup": "pnpm exec tsx --test ./process-cleanup.test.ts",
+    "test:desktop": "wdio run ./wdio.conf.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@wdio/cli": "9.29.1",
+    "@wdio/globals": "9.29.1",
+    "@wdio/local-runner": "9.29.1",
+    "@wdio/mocha-framework": "9.29.1",
+    "@wdio/spec-reporter": "9.29.1",
+    "@wdio/tauri-service": "1.2.0",
+    "typescript": "7.0.2",
+    "webdriverio": "9.29.1"
+  }
+}
