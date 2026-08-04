@@ -405,6 +405,124 @@ pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
     });
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutingMode {
+    Rule,
+    Global,
+    Direct,
+}
+
+impl RoutingMode {
+    const fn as_core_value(self) -> &'static str {
+        match self {
+            Self::Rule => "rule",
+            Self::Global => "global",
+            Self::Direct => "direct",
+        }
+    }
+}
+
+fn routing_mode_patch(mode: RoutingMode) -> ClashConfigOverrides {
+    ClashConfigOverrides {
+        mode: Some(mode.as_core_value().into()),
+        ..ClashConfigOverrides::default()
+    }
+}
+
+/// Apply an explicit routing target through the shared runtime transaction path.
+#[cfg(feature = "agent")]
+pub async fn set_routing_mode(mode: RoutingMode) -> Result<()> {
+    let client = managed_client()?;
+    patch_running_clash_overrides(&client, routing_mode_patch(mode))
+        .await
+        .into_result()
+}
+
+#[cfg(any(feature = "agent", test))]
+fn service_mode_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_service_mode: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+#[cfg(feature = "agent")]
+pub async fn set_service_mode(enabled: bool) -> Result<()> {
+    let current = Config::verge()
+        .latest()
+        .enable_service_mode
+        .unwrap_or(false);
+    if current == enabled {
+        return Ok(());
+    }
+    patch_verge(service_mode_patch(enabled)).await
+}
+
+#[cfg(feature = "agent")]
+pub(crate) async fn restore_service_mode(enabled: bool) -> Result<()> {
+    patch_verge(service_mode_patch(enabled)).await
+}
+
+fn system_proxy_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_system_proxy: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+#[cfg(feature = "agent")]
+pub async fn set_system_proxy_enabled(enabled: bool) -> Result<()> {
+    patch_verge(system_proxy_patch(enabled)).await
+}
+
+fn tun_mode_patch(enabled: bool) -> IVerge {
+    IVerge {
+        enable_tun_mode: Some(enabled),
+        ..IVerge::default()
+    }
+}
+
+#[cfg(feature = "agent")]
+pub async fn set_tun_enabled(enabled: bool) -> Result<()> {
+    patch_verge(tun_mode_patch(enabled)).await
+}
+
+#[cfg(feature = "agent")]
+pub fn enable_system_proxy() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_system_proxy_enabled(true).await {
+            log::error!(target: "app", "failed to enable system proxy: {err:?}");
+        }
+    });
+}
+
+#[cfg(feature = "agent")]
+pub fn disable_system_proxy() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_system_proxy_enabled(false).await {
+            log::error!(target: "app", "failed to disable system proxy: {err:?}");
+        }
+    });
+}
+
+#[cfg(feature = "agent")]
+pub fn enable_tun_mode() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_tun_enabled(true).await {
+            log::error!(target: "app", "failed to enable tun mode: {err:?}");
+        }
+    });
+}
+
+#[cfg(feature = "agent")]
+pub fn disable_tun_mode() {
+    tauri::async_runtime::spawn(async {
+        if let Err(err) = set_tun_enabled(false).await {
+            log::error!(target: "app", "failed to disable tun mode: {err:?}");
+        }
+    });
+}
+
 pub fn toggle_system_proxy() {
     let enabled = Config::verge()
         .latest()
