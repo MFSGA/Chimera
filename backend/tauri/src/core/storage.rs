@@ -202,12 +202,32 @@ pub fn register_web_storage_listener(app_handle: &tauri::AppHandle) {
 
             while let Ok((key, value)) = rx.recv().await {
                 let value = value.map(|v| String::from_utf8_lossy(&v).to_string());
-                let payload = (key, value);
-                log_err!(app_handle.emit_filter(
-                    "storage_value_changed",
-                    payload,
-                    |t| matches!(t, tauri::EventTarget::WebviewWindow { label } if label == "main"),
-                ), "failed to emit storage_value_changed event");
+                let event = StorageValueChangedEvent {
+                    key: key.clone(),
+                    value: value.clone(),
+                };
+
+                log_err!(
+                    event.emit_filter(&app_handle, |target| matches!(
+                        target,
+                        tauri::EventTarget::WebviewWindow { label } if label == "main"
+                    )),
+                    "failed to emit typed storage value changed event"
+                );
+
+                // Keep the legacy tuple event while older Chimera storage
+                // subscribers are still mounted at the application root.
+                log_err!(
+                    app_handle.emit_filter(
+                        "storage_value_changed",
+                        (key, value),
+                        |target| matches!(
+                            target,
+                            tauri::EventTarget::WebviewWindow { label } if label == "main"
+                        ),
+                    ),
+                    "failed to emit legacy storage value changed event"
+                );
             }
         });
     });

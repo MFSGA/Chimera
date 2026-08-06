@@ -654,6 +654,10 @@ pub fn cleanup_processes(app_handle: AppHandle) -> Result {
 /// never exposed to the frontend through these IPC commands.
 const WEB_STORAGE_KEY_PREFIX: &str = "web:";
 
+fn web_key(key: &str) -> String {
+    format!("{WEB_STORAGE_KEY_PREFIX}{key}")
+}
+
 pub mod service {
     use super::Result;
     use crate::core::service;
@@ -1166,15 +1170,22 @@ pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<Strin
 #[specta::specta]
 pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<String>> {
     let storage = app_handle.state::<Storage>();
-    let value = (storage.get_item(&key))?;
-    Ok(value)
+    let namespaced_key = web_key(&key);
+
+    if let Some(value) = storage.get_item(&namespaced_key)? {
+        return Ok(Some(value));
+    }
+
+    // Compatibility fallback for values written before frontend KV entries
+    // were isolated under the `web:` namespace.
+    Ok(storage.get_item(&key)?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Result {
     let storage = app_handle.state::<Storage>();
-    (storage.set_item(&key, &value))?;
+    storage.set_item(web_key(&key), &value)?;
     Ok(())
 }
 
@@ -1182,7 +1193,7 @@ pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Re
 #[specta::specta]
 pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
     let storage = app_handle.state::<Storage>();
-    (storage.remove_item(&key))?;
+    storage.remove_item(web_key(&key))?;
     Ok(())
 }
 
