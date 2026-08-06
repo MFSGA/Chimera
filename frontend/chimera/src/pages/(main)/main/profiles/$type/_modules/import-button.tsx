@@ -15,11 +15,13 @@ import { Action, Route as IndexRoute } from '../index';
 type ImportType = NonNullable<AddProfileContextValue['type']>;
 
 const ImportOption = ({
+  type,
   label,
   className,
   onClick,
   children,
 }: {
+  type: ImportType;
   label: string;
   className?: string;
   onClick: () => void;
@@ -36,6 +38,7 @@ const ImportOption = ({
       size="small"
       color="default"
       aria-label={label}
+      data-profile-import-type={type}
       onClick={onClick}
     >
       {children}
@@ -96,6 +99,7 @@ export default function ImportButton() {
         data-slot="profile-import-button"
       >
         <ImportOption
+          type="remote"
           className="!bottom-28"
           label={m.profile_import_remote_title()}
           onClick={() => openImport('remote')}
@@ -104,6 +108,7 @@ export default function ImportButton() {
         </ImportOption>
 
         <ImportOption
+          type="local"
           className="!bottom-14"
           label={m.profile_import_local_title()}
           onClick={() => openImport('local')}
