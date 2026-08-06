@@ -11,6 +11,7 @@ pub mod api;
 pub mod core;
 /// 3
 pub mod proxies;
+pub(crate) mod transaction;
 pub mod ws;
 
 pub static CLASH_API_DEFAULT_BACKOFF_STRATEGY: Lazy<ExponentialBuilder> = Lazy::new(|| {
@@ -33,6 +34,8 @@ pub async fn restart_ws_connector<R: Runtime>(manager: &impl Manager<R>) -> anyh
 }
 
 pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
+    manager.manage(transaction::RuntimePatchCoordinator::default());
+
     let ws_connector = ws::ClashConnectionsConnector::new();
     manager.manage(ws_connector.clone());
     let app_handle = manager.app_handle().clone();

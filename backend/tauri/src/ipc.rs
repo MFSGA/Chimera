@@ -6,7 +6,7 @@ use specta_typescript::Any;
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
@@ -760,15 +760,24 @@ pub async fn get_service_install_prompt() -> Result<String> {
 // patch clash runtime config
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
+pub async fn patch_clash_config(
+    coordinator: State<'_, clash::transaction::RuntimePatchCoordinator>,
+    payload: PatchRuntimeConfig,
+) -> Result {
     tracing::debug!("patch clash runtime config: {payload:?}");
     let mapping = match serde_yaml::to_value(&payload)? {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-    (crate::core::clash::api::patch_configs(&mapping).await)?;
-
-    if let Err(e) = feat::patch_clash(mapping).await {
+    if let Err(e) = coordinator
+        .apply(
+            mapping,
+            clash::api::get_configs,
+            |patch| async move { clash::api::patch_configs(&patch).await },
+            |patch| async move { feat::patch_clash(patch).await },
+        )
+        .await
+    {
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
