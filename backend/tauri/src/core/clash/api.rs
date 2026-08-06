@@ -11,6 +11,30 @@ use tracing::instrument;
 
 use crate::config::core::Config;
 
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+pub struct ClashConfig {
+    pub port: Option<u16>,
+    pub mode: Option<String>,
+    pub ipv6: Option<bool>,
+    #[serde(rename = "socket-port")]
+    pub socket_port: Option<u16>,
+    #[serde(rename = "allow-lan")]
+    pub allow_lan: Option<bool>,
+    #[serde(rename = "log-level")]
+    pub log_level: Option<String>,
+    #[serde(rename = "mixed-port")]
+    pub mixed_port: Option<u16>,
+    #[serde(rename = "redir-port")]
+    pub redir_port: Option<u16>,
+    #[serde(rename = "socks-port")]
+    pub socks_port: Option<u16>,
+    #[serde(rename = "tproxy-port")]
+    pub tproxy_port: Option<u16>,
+    #[serde(rename = "external-controller")]
+    pub external_controller: Option<String>,
+    pub secret: Option<String>,
+}
+
 /// A newtype wrapper for query parameters
 struct Query<T>(T);
 /// A newtype wrapper for request body
@@ -188,6 +212,14 @@ pub struct ProxyItem {
 pub struct ProxiesRes {
     #[serde(default)]
     pub proxies: IndexMap<String, ProxyItem>,
+}
+
+/// GET /configs
+#[instrument]
+pub async fn get_configs() -> Result<ClashConfig> {
+    let path = "/configs";
+    let response: ClashConfig = perform_request((Method::GET, path)).await?.json().await?;
+    Ok(response)
 }
 
 /// GET /proxies

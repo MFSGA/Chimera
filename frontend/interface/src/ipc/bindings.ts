@@ -152,6 +152,8 @@ export const commands = {
     typedError<string | null, string>(__TAURI_INVOKE('get_custom_app_dir')),
   setCustomAppDir: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('set_custom_app_dir', { path })),
+  clashApiGetConfigs: () =>
+    typedError<ClashConfig, string>(__TAURI_INVOKE('clash_api_get_configs')),
   clashApiGetProxyDelay: (name: string, url: string | null) =>
     typedError<DelayRes, string>(
       __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
@@ -474,6 +476,21 @@ export type BuildInfo = {
   build_platform: string;
   rustc_version: string;
   llvm_version: string;
+};
+
+export type ClashConfig = {
+  port: number | null;
+  mode: string | null;
+  ipv6: boolean | null;
+  'socket-port': number | null;
+  'allow-lan': boolean | null;
+  'log-level': string | null;
+  'mixed-port': number | null;
+  'redir-port': number | null;
+  'socks-port': number | null;
+  'tproxy-port': number | null;
+  'external-controller': string | null;
+  secret: string | null;
 };
 
 export type ClashConnectionsConnectorEvent =
