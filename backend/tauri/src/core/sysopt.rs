@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use auto_launch::{AutoLaunch, AutoLaunchBuilder};
+use auto_launch::AutoLaunch;
+#[cfg(not(feature = "e2e"))]
+use auto_launch::AutoLaunchBuilder;
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use sysproxy::Sysproxy;
-use tauri::{async_runtime::Mutex as TokioMutex, utils::platform::current_exe};
+use tauri::async_runtime::Mutex as TokioMutex;
+#[cfg(not(feature = "e2e"))]
+use tauri::utils::platform::current_exe;
 
 #[cfg(target_os = "linux")]
 use tauri::Manager;
@@ -49,96 +53,112 @@ impl Sysopt {
 
     /// init the auto launch
     pub fn init_launch(&self) -> Result<()> {
-        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
-
-        let app_exe = current_exe()?;
-        let app_exe = dunce::canonicalize(app_exe)?;
-        let app_name = app_exe
-            .file_stem()
-            .and_then(|f| f.to_str())
-            .ok_or_else(|| anyhow::anyhow!("failed to get file stem"))?;
-        let app_path = app_exe
-            .as_os_str()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("failed to get app path"))?
-            .to_string();
-
-        #[cfg(target_os = "windows")]
-        let app_path = format!("\"{app_path}\"");
-
-        #[cfg(target_os = "macos")]
-        let app_path = (|| -> Option<String> {
-            let path = std::path::PathBuf::from(&app_path);
-            let path = path.parent()?.parent()?.parent()?;
-            let extension = path.extension()?.to_str()?;
-            (extension == "app").then(|| path.as_os_str().to_str().map(str::to_string))?
-        })()
-        .unwrap_or(app_path);
-
-        #[cfg(target_os = "linux")]
-        let app_path = {
-            let app_handle = crate::consts::app_handle();
-            let appimage_path = app_handle
-                .env()
-                .appimage
-                .and_then(|p| p.to_str().map(str::to_string));
-            let fallback_appimage = std::env::var("APPIMAGE").ok();
-            appimage_path.or(fallback_appimage).unwrap_or(app_path)
-        };
-
-        let auto = AutoLaunchBuilder::new()
-            .set_app_name(app_name)
-            .set_app_path(&app_path)
-            .build()?;
-
-        #[cfg(feature = "verge-dev")]
-        if !enable {
+        #[cfg(feature = "e2e")]
+        {
             return Ok(());
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(not(feature = "e2e"))]
         {
-            if enable && !auto.is_enabled().unwrap_or(false) {
-                let _ = auto.disable();
-                auto.enable()?;
-            } else if !enable {
-                let _ = auto.disable();
+            let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+
+            let app_exe = current_exe()?;
+            let app_exe = dunce::canonicalize(app_exe)?;
+            let app_name = app_exe
+                .file_stem()
+                .and_then(|f| f.to_str())
+                .ok_or_else(|| anyhow::anyhow!("failed to get file stem"))?;
+            let app_path = app_exe
+                .as_os_str()
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("failed to get app path"))?
+                .to_string();
+
+            #[cfg(target_os = "windows")]
+            let app_path = format!("\"{app_path}\"");
+
+            #[cfg(target_os = "macos")]
+            let app_path = (|| -> Option<String> {
+                let path = std::path::PathBuf::from(&app_path);
+                let path = path.parent()?.parent()?.parent()?;
+                let extension = path.extension()?.to_str()?;
+                (extension == "app").then(|| path.as_os_str().to_str().map(str::to_string))?
+            })()
+            .unwrap_or(app_path);
+
+            #[cfg(target_os = "linux")]
+            let app_path = {
+                let app_handle = crate::consts::app_handle();
+                let appimage_path = app_handle
+                    .env()
+                    .appimage
+                    .and_then(|p| p.to_str().map(str::to_string));
+                let fallback_appimage = std::env::var("APPIMAGE").ok();
+                appimage_path.or(fallback_appimage).unwrap_or(app_path)
+            };
+
+            let auto = AutoLaunchBuilder::new()
+                .set_app_name(app_name)
+                .set_app_path(&app_path)
+                .build()?;
+
+            #[cfg(feature = "verge-dev")]
+            if !enable {
+                return Ok(());
             }
-        }
 
-        #[cfg(not(target_os = "macos"))]
-        {
-            if enable {
-                auto.enable()?;
-            } else {
-                let _ = auto.disable();
+            #[cfg(target_os = "macos")]
+            {
+                if enable && !auto.is_enabled().unwrap_or(false) {
+                    let _ = auto.disable();
+                    auto.enable()?;
+                } else if !enable {
+                    let _ = auto.disable();
+                }
             }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                if enable {
+                    auto.enable()?;
+                } else {
+                    let _ = auto.disable();
+                }
+            }
+
+            *self.auto_launch.lock() = Some(auto);
+
+            Ok(())
         }
-
-        *self.auto_launch.lock() = Some(auto);
-
-        Ok(())
     }
 
     /// update the startup
     pub fn update_launch(&self) -> Result<()> {
-        let auto_launch = self.auto_launch.lock();
-
-        if auto_launch.is_none() {
-            drop(auto_launch);
-            return self.init_launch();
+        #[cfg(feature = "e2e")]
+        {
+            return Ok(());
         }
 
-        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
-        let auto_launch = auto_launch.as_ref().unwrap();
+        #[cfg(not(feature = "e2e"))]
+        {
+            let auto_launch = self.auto_launch.lock();
 
-        if enable {
-            auto_launch.enable()?;
-        } else {
-            log_err!(auto_launch.disable());
+            if auto_launch.is_none() {
+                drop(auto_launch);
+                return self.init_launch();
+            }
+
+            let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+            let auto_launch = auto_launch.as_ref().unwrap();
+
+            if enable {
+                auto_launch.enable()?;
+            } else {
+                log_err!(auto_launch.disable());
+            }
+
+            Ok(())
         }
-
-        Ok(())
     }
 
     /// update the system proxy
