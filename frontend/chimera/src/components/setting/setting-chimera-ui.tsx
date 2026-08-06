@@ -46,6 +46,7 @@ const ThemeSwitch = () => {
 
   return (
     <MenuItem
+      id="user-interface-theme-mode"
       label={m.settings_user_interface_theme_mode_label()}
       selectSx={commonSx}
       options={themeOptions}

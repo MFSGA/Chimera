@@ -37,6 +37,7 @@ const AllowLan = () => {
     <SwitchItem
       label={m.settings_clash_settings_allow_lan_label()}
       checked={Boolean(value)}
+      id="runtime-config-allow-lan"
       onChange={(_event, checked) => handleAllowLan(checked)}
     />
   );
@@ -46,16 +47,23 @@ const IPv6 = () => {
   const { query, upsert } = useClashConfig();
 
   const value = useMemo(() => query.data?.['ipv6'], [query.data]);
+  const handleIPv6 = useLockFn(async (input: boolean) => {
+    try {
+      await upsert.mutateAsync({ ipv6: input });
+    } catch (error) {
+      message(formatError(error), {
+        title: m.common_error(),
+        kind: 'error',
+      });
+    }
+  });
 
   return (
     <SwitchItem
       label={m.settings_clash_settings_ipv6_label()}
       checked={Boolean(value)}
-      onChange={async () => {
-        await upsert.mutateAsync({
-          ipv6: !value,
-        });
-      }}
+      id="runtime-config-ipv6"
+      onChange={(_event, checked) => handleIPv6(checked)}
     />
   );
 };
@@ -134,17 +142,24 @@ const LogLevel = () => {
   };
 
   const value = useMemo(() => query.data?.['log-level'], [query.data]);
+  const handleLogLevel = useLockFn(async (input: string) => {
+    try {
+      await upsert.mutateAsync({ 'log-level': input });
+    } catch (error) {
+      message(formatError(error), {
+        title: m.common_error(),
+        kind: 'error',
+      });
+    }
+  });
 
   return (
     <MenuItem
+      id="runtime-config-log-level"
       label={m.settings_clash_settings_log_level_label()}
       options={options}
       selected={value ?? 'debug'}
-      onSelected={async (value) => {
-        await upsert.mutateAsync({
-          'log-level': value as string,
-        });
-      }}
+      onSelected={(value) => handleLogLevel(value as string)}
     />
   );
 };
