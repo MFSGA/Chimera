@@ -1,0 +1,22 @@
+{
+  "name": "@chimera/tauri-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm run test:desktop",
+    "test:desktop": "wdio run ./wdio.conf.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@wdio/cli": "9.29.1",
+    "@wdio/globals": "9.29.1",
+    "@wdio/local-runner": "9.29.1",
+    "@wdio/mocha-framework": "9.29.1",
+    "@wdio/spec-reporter": "9.29.1",
+    "@wdio/tauri-service": "1.2.0",
+    "typescript": "7.0.2",
+    "webdriverio": "9.29.1"
+  }
+}
