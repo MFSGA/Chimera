@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClashConfig, useClashAPI } from '../service/clash-api';
 import { unwrapResult } from '../utils';
-import { commands, PatchRuntimeConfig } from './bindings';
+import { ClashConfig, commands, PatchRuntimeConfig } from './bindings';
 import { CLASH_CONFIG_QUERY_KEY } from './consts';
 
 /**
@@ -10,9 +9,9 @@ import { CLASH_CONFIG_QUERY_KEY } from './consts';
  * @remarks
  * This hook fetches the current Clash configuration using a query keyed by `['clash-config']`
  * and allows updates via an upsert mutation. The upsert mutation:
- * - First updates the local configuration using `setConfigs`.
- * - Then patches the remote configuration through `commands.patchClashConfig`.
- * - On success, it invalidates the `['clash-config']` query, prompting a refetch to keep the configuration up-to-date.
+ * - Patches the core and application configuration through `commands.patchClashConfig`.
+ * - On success, it invalidates the `['clash-config']` query so the UI reads the
+ *   value returned by the running core.
  *
  * @returns An object with:
  * - `query`: The result of the useQuery hook that retrieves the current configuration.
@@ -22,8 +21,6 @@ import { CLASH_CONFIG_QUERY_KEY } from './consts';
  * const { query, upsert } = useClashConfig();
  */
 export const useClashConfig = () => {
-  const { configs, isReady, patchConfigs } = useClashAPI();
-
   const queryClient = useQueryClient();
 
   /**
@@ -38,19 +35,17 @@ export const useClashConfig = () => {
    *
    * @see useQuery - For additional configuration options and usage details.
    */
-  const query = useQuery({
+  const query = useQuery<ClashConfig | undefined>({
     queryKey: [CLASH_CONFIG_QUERY_KEY],
-    queryFn: configs,
-    enabled: isReady,
+    queryFn: async () => unwrapResult(await commands.clashApiGetConfigs()),
   });
 
   /**
    * Performs an upsert operation to update or insert the Clash configuration.
    *
    * This mutation function accepts a payload that extends both PatchRuntimeConfig and a partial version
-   * of Clash.Config. It first updates the local configuration via the setConfigs function, then proceeds
-   * to patch the remote configuration with commands.patchClashConfig. On a successful operation, it
-   * invalidates the 'clash-config' query to prompt refetching of the newest configuration data.
+   * of Clash.Config. It patches the core and application configuration through commands.patchClashConfig. On a successful operation, it
+   * refetches the running core configuration.
    *
    * @remarks
    * Ensure that the payload conforms to both the PatchRuntimeConfig specifications and the partial structure
@@ -61,12 +56,12 @@ export const useClashConfig = () => {
    */
   const upsert = useMutation({
     mutationFn: async (payload: PatchRuntimeConfig & Partial<ClashConfig>) => {
-      await patchConfigs(payload);
-
       return unwrapResult(await commands.patchClashConfig(payload));
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [CLASH_CONFIG_QUERY_KEY] });
+      return queryClient.invalidateQueries({
+        queryKey: [CLASH_CONFIG_QUERY_KEY],
+      });
     },
   });
 

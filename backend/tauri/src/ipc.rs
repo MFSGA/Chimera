@@ -757,7 +757,7 @@ pub async fn get_service_install_prompt() -> Result<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(payload: PatchRuntimeConfig) -> Result {
-    tracing::debug!("todo: set for chimera_client core patch_clash_config: {payload:?}");
+    tracing::debug!("patch clash runtime config: {payload:?}");
     let mapping = match serde_yaml::to_value(&payload)? {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
@@ -1386,6 +1386,12 @@ pub async fn clear_clash_ws_history(
     let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
     ws_connector.clear_history(kind);
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_configs() -> Result<clash::api::ClashConfig> {
+    Ok(clash::api::get_configs().await?)
 }
 
 #[tauri::command]

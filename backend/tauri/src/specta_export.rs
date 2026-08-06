@@ -157,6 +157,7 @@ macro_rules! build_builder {
                 crate::ipc::collect_envs,
                 crate::ipc::get_custom_app_dir,
                 crate::ipc::set_custom_app_dir,
+                crate::ipc::clash_api_get_configs,
                 crate::ipc::clash_api_get_proxy_delay,
                 crate::ipc::clash_api_get_group_delay,
                 crate::ipc::clash_api_delete_connections,
