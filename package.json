@@ -35,7 +35,9 @@
     "updater": "pnpm --filter @chimera/scripts exec tsx updater.ts",
     "updater:nightly": "deno run -A scripts/updater-nightly.ts",
     "prepare:nightly": "deno run -A scripts/prepare-nightly.ts",
-    "lint:rustfmt": "cargo fmt --manifest-path ./backend/Cargo.toml --all -- --check"
+    "lint:rustfmt": "cargo fmt --manifest-path ./backend/Cargo.toml --all -- --check",
+    "e2e:tauri:build": "run-s web:build e2e:tauri:build:rust",
+    "e2e:tauri:build:rust": "cross-env AWS_LC_SYS_PREBUILT_NASM=1 CARGO_TARGET_DIR=backend/target/e2e TAURI_CONFIG={\\\"build\\\":{\\\"devUrl\\\":null}} cargo build --manifest-path ./backend/tauri/Cargo.toml --features e2e"
   },
   "dependencies": {
     "husky": "9.1.7",
@@ -62,6 +64,7 @@
     "lint-staged": "17.1.0",
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
+    "cross-env": "10.1.0",
     "tsx": "4.23.1",
     "@types/node": "24.13.3",
     "typescript": "7.0.2",
