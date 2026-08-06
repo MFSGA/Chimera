@@ -1,0 +1,19 @@
+mixed-port: 27890
+allow-lan: false
+mode: rule
+log-level: silent
+tun:
+  enable: false
+proxies:
+  - name: TDD 节点
+    type: socks5
+    server: 127.0.0.1
+    port: 65535
+proxy-groups:
+  - name: TDD 代理组
+    type: select
+    proxies:
+      - TDD 节点
+      - DIRECT
+rules:
+  - MATCH,TDD 代理组
