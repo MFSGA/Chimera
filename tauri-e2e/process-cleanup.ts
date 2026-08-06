@@ -80,7 +80,7 @@ export function buildWindowsCleanupScript(
     `$binaryRoot = ${powershellQuote(binaryRoot)}`,
     `$runtimeRoot = ${powershellQuote(runtimeRoot)}`,
     '$targets = Get-CimInstance Win32_Process | Where-Object {',
-    '  (($_.Name -in @("chimera.exe", "mihomo.exe")) -and ($_.ExecutablePath -like "$binaryRoot*")) -or',
+    '  (($_.Name -in @("chimera.exe", "mihomo.exe", "chimera-client.exe", "clash-rs.exe", "clash-rs-alpha.exe")) -and ($_.ExecutablePath -like "$binaryRoot*")) -or',
     '  (($_.Name -eq "msedgedriver.exe") -and ($_.CommandLine -like "*$runtimeRoot*"))',
     '}',
     'foreach ($process in $targets) {',
