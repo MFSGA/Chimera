@@ -12,8 +12,8 @@ use tokio::{
 
 use super::*;
 
-fn initial_config() -> ClashConfig {
-    ClashConfig {
+fn initial_config() -> ClashRuntimeConfig {
+    ClashRuntimeConfig {
         port: None,
         mode: Some("rule".to_string()),
         ipv6: Some(true),
@@ -37,7 +37,7 @@ fn mode_patch(mode: &str) -> Mapping {
     Mapping::from_iter([("mode".into(), Value::String(mode.to_string()))])
 }
 
-fn update_config(state: &Arc<Mutex<ClashConfig>>, patch: Mapping) -> Result<()> {
+fn update_config(state: &Arc<Mutex<ClashRuntimeConfig>>, patch: Mapping) -> Result<()> {
     let mut config = state.lock().expect("config mutex should not be poisoned");
     let mut value = serde_yaml::to_value(&*config)?;
     let mapping = value
@@ -48,7 +48,7 @@ fn update_config(state: &Arc<Mutex<ClashConfig>>, patch: Mapping) -> Result<()> 
     Ok(())
 }
 
-fn snapshot(state: &Arc<Mutex<ClashConfig>>) -> ClashConfig {
+fn snapshot(state: &Arc<Mutex<ClashRuntimeConfig>>) -> ClashRuntimeConfig {
     state.lock().expect("config mutex").clone()
 }
 
