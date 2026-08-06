@@ -85,9 +85,47 @@ async fn empty_patch_is_a_noop() {
             },
         )
         .await
+        .into_result()
         .expect("empty patch should succeed");
 
     assert_eq!(reads.load(Ordering::SeqCst), 0);
+    assert_eq!(patches.load(Ordering::SeqCst), 0);
+    assert_eq!(persists.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn initial_snapshot_failure_is_rejected_without_mutation() {
+    let coordinator = RuntimePatchCoordinator::default();
+    let patches = Arc::new(AtomicUsize::new(0));
+    let persists = Arc::new(AtomicUsize::new(0));
+
+    let outcome = coordinator
+        .apply(
+            allow_lan_patch(true),
+            || async { Err(anyhow!("runtime snapshot unavailable")) },
+            {
+                let patches = Arc::clone(&patches);
+                move |_patch| {
+                    patches.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                }
+            },
+            {
+                let persists = Arc::clone(&persists);
+                move |_patch| {
+                    persists.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                }
+            },
+        )
+        .await;
+
+    assert_eq!(
+        outcome,
+        TransactionOutcome::Rejected {
+            primary_error: "runtime snapshot unavailable".to_string(),
+        }
+    );
     assert_eq!(patches.load(Ordering::SeqCst), 0);
     assert_eq!(persists.load(Ordering::SeqCst), 0);
 }
@@ -127,6 +165,7 @@ async fn persists_after_core_verification() {
             },
         )
         .await
+        .into_result()
         .expect("verified patch should persist");
 
     assert_eq!(snapshot(&state).allow_lan, Some(true));
@@ -142,7 +181,7 @@ async fn compensates_a_partially_applied_patch_error() {
     let state = Arc::new(Mutex::new(initial_config()));
     let calls = Arc::new(AtomicUsize::new(0));
 
-    let error = coordinator
+    let outcome = coordinator
         .apply(
             allow_lan_patch(true),
             {
@@ -170,10 +209,14 @@ async fn compensates_a_partially_applied_patch_error() {
             },
             |_patch| async { panic!("persistence must not run") },
         )
-        .await
-        .expect_err("partial patch failure should be reported");
+        .await;
 
-    assert!(error.to_string().contains("partial apply"));
+    assert_eq!(
+        outcome,
+        TransactionOutcome::RolledBack {
+            primary_error: "patch endpoint failed after partial apply".to_string(),
+        }
+    );
     assert_eq!(snapshot(&state).allow_lan, Some(false));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -212,6 +255,7 @@ async fn compensates_when_read_back_fails() {
             |_patch| async { panic!("persistence must not run") },
         )
         .await
+        .into_result()
         .expect_err("read-back failure should be reported");
 
     assert!(error.to_string().contains("read-back unavailable"));
@@ -252,6 +296,7 @@ async fn compensates_when_core_ignores_the_requested_patch() {
             |_patch| async { panic!("persistence must not run") },
         )
         .await
+        .into_result()
         .expect_err("ignored patch should fail verification");
 
     assert!(error.to_string().contains("did not apply"));
@@ -293,6 +338,7 @@ async fn persistence_failure_rolls_back_only_requested_fields() {
             },
         )
         .await
+        .into_result()
         .expect_err("persistence failure should be reported");
 
     let restored = snapshot(&state);
@@ -307,7 +353,7 @@ async fn reports_primary_and_rollback_patch_failures() {
     let state = Arc::new(Mutex::new(initial_config()));
     let calls = Arc::new(AtomicUsize::new(0));
 
-    let error = coordinator
+    let outcome = coordinator
         .apply(
             allow_lan_patch(true),
             {
@@ -334,12 +380,15 @@ async fn reports_primary_and_rollback_patch_failures() {
             },
             |_patch| async { Err(anyhow!("desired state save failed")) },
         )
-        .await
-        .expect_err("rollback failure should be reported");
+        .await;
 
-    let message = error.to_string();
-    assert!(message.contains("desired state save failed"));
-    assert!(message.contains("rollback endpoint unavailable"));
+    assert_eq!(
+        outcome,
+        TransactionOutcome::RollbackFailed {
+            primary_error: "desired state save failed".to_string(),
+            rollback_error: "rollback patch failed: rollback endpoint unavailable".to_string(),
+        }
+    );
     assert_eq!(snapshot(&state).allow_lan, Some(true));
 }
 
@@ -377,6 +426,7 @@ async fn reports_when_rollback_read_back_fails() {
             |_patch| async { Err(anyhow!("persist failed")) },
         )
         .await
+        .into_result()
         .expect_err("rollback read failure should be reported");
 
     let message = error.to_string();
@@ -418,6 +468,7 @@ async fn reports_when_rollback_does_not_restore_the_snapshot() {
             |_patch| async { Err(anyhow!("persist failed")) },
         )
         .await
+        .into_result()
         .expect_err("unrestored rollback should be reported");
 
     assert!(error.to_string().contains("rollback verification failed"));
@@ -485,10 +536,12 @@ async fn coordinator_serializes_concurrent_transactions() {
     first
         .await
         .expect("first task should join")
+        .into_result()
         .expect("first transaction should commit");
     second
         .await
         .expect("second task should join")
+        .into_result()
         .expect("second transaction should commit");
 
     assert_eq!(max_active.load(Ordering::SeqCst), 1);
