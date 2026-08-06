@@ -10,6 +10,7 @@ export interface MenuItemProps {
   onSelected: (value: OptionValue) => void;
   selectSx?: SxProps;
   disabled?: boolean;
+  id?: string;
 }
 
 /**
@@ -39,13 +40,15 @@ export const MenuItem = ({
   onSelected,
   selectSx,
   disabled,
+  id,
 }: MenuItemProps) => {
   return (
     <BaseItem title={label}>
       <Select
+        id={id}
         size="small"
         value={selected}
-        inputProps={{ 'aria-label': 'Without label' }}
+        inputProps={{ 'aria-label': label }}
         onChange={(e) => {
           onSelected(e.target.value);
         }}

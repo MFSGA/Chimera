@@ -128,6 +128,7 @@ const LightenAnimationEffects = () => {
 
   return (
     <SwitchItem
+      id="nyanpasu-lighten-animation-effects"
       label={m.settings_nyanpasu_lighten_animations_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
