@@ -51,15 +51,15 @@ export const useClashAPI = () => {
    * Fetches Clash configurations from the server.
    */
   const configs = async () => {
-    return await getRequest()<ClashConfig>('/configs');
+    return await getRequest()<ClashApiConfig>('/configs');
   };
 
   /**
    * Update basic configuration; data must be sent in the format '{"mixed-port": 7890}',
    * modified as needed for the configuration items to be updated.
    */
-  const patchConfigs = async (config: Partial<ClashConfig>) => {
-    return await getRequest()<ClashConfig>('/configs', {
+  const patchConfigs = async (config: Partial<ClashApiConfig>) => {
+    return await getRequest()<ClashApiConfig>('/configs', {
       method: 'PATCH',
       body: config,
     });
@@ -145,7 +145,7 @@ export const useClashAPI = () => {
   };
 };
 
-export interface ClashConfig {
+export interface ClashApiConfig {
   port: number;
   mode: string;
   ipv6: boolean;
