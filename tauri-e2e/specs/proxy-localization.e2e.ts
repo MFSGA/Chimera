@@ -139,11 +139,14 @@ describe('legacy proxy localization', () => {
     await proxiesLink.click();
     await waitForPath('/proxies');
 
-    await (
-      await $('//*[normalize-space()="Proxy Groups"]')
-    ).waitForDisplayed({
-      timeout: 30_000,
-    });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const text = document.body.innerText;
+          return text.includes('Proxy Groups') || text.includes('代理集');
+        }),
+      { timeout: 30_000, timeoutMsg: 'The proxy page did not render.' },
+    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
