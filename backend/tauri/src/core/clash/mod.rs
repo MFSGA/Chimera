@@ -2,6 +2,7 @@ use backon::ExponentialBuilder;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+use tauri::{Manager, Runtime};
 use tauri_specta::Event;
 
 /// 2
@@ -22,7 +23,16 @@ pub static CLASH_API_DEFAULT_BACKOFF_STRATEGY: Lazy<ExponentialBuilder> = Lazy::
 #[derive(Serialize, Deserialize, Debug, Clone, Type, Event)]
 pub struct ClashConnectionsEvent(pub ws::ClashConnectionsConnectorEvent);
 
-pub fn setup<R: tauri::Runtime, M: tauri::Manager<R>>(manager: &M) -> anyhow::Result<()> {
+pub async fn restart_ws_connector<R: Runtime>(manager: &impl Manager<R>) -> anyhow::Result<()> {
+    let connector = manager
+        .try_state::<ws::ClashConnectionsConnector>()
+        .ok_or_else(|| anyhow::anyhow!("clash websocket connector is not managed"))?
+        .inner()
+        .clone();
+    connector.restart().await
+}
+
+pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let ws_connector = ws::ClashConnectionsConnector::new();
     manager.manage(ws_connector.clone());
     let app_handle = manager.app_handle().clone();
