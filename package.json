@@ -37,7 +37,7 @@
     "prepare:nightly": "deno run -A scripts/prepare-nightly.ts",
     "lint:rustfmt": "cargo fmt --manifest-path ./backend/Cargo.toml --all -- --check",
     "e2e:tauri:build": "run-s web:build e2e:tauri:build:rust",
-    "e2e:tauri:build:rust": "cross-env AWS_LC_SYS_PREBUILT_NASM=1 CARGO_TARGET_DIR=backend/target/e2e TAURI_CONFIG={\\\"build\\\":{\\\"devUrl\\\":null}} cargo build --manifest-path ./backend/tauri/Cargo.toml --features e2e,verge-dev",
+    "e2e:tauri:build:rust": "cross-env AWS_LC_SYS_PREBUILT_NASM=1 CARGO_TARGET_DIR=backend/target/e2e TAURI_CONFIG={\\\"build\\\":{\\\"devUrl\\\":null}} cargo build --manifest-path ./backend/tauri/Cargo.toml --features e2e",
     "e2e:tauri:test": "pnpm --filter @chimera/tauri-e2e test",
     "e2e:tauri": "run-s e2e:tauri:build e2e:tauri:test"
   },
