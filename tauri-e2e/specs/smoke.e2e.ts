@@ -39,6 +39,26 @@ describe('Chimera desktop smoke test', () => {
     assert.ok(state.bodyText.length > 0);
   });
 
+  it('loads the bundled country flag emoji font', async () => {
+    const state = await browser.execute(async () => {
+      const flag = String.fromCodePoint(0x1f1fa, 0x1f1f8);
+      const family = 'Color Emoji Flags';
+      const registeredFamilies = Array.from(document.fonts).map(
+        (font) => font.family,
+      );
+
+      await document.fonts.load(`48px "${family}"`, flag);
+
+      return {
+        isRegistered: registeredFamilies.includes(family),
+        isLoaded: document.fonts.check(`48px "${family}"`, flag),
+      };
+    });
+
+    assert.equal(state.isRegistered, true);
+    assert.equal(state.isLoaded, true);
+  });
+
   it('navigates from the sidebar to settings', async () => {
     const settings = await $('//*[normalize-space()="设置"]');
     await settings.waitForClickable({ timeout: 15_000 });
