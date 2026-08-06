@@ -36,12 +36,23 @@ pub const CLASH_CFG_GUARD_OVERRIDES: &str = "clash-guard-overrides.yaml";
 
 pub const STORAGE_DB: &str = "storage.db";
 
+#[cfg(feature = "e2e")]
+fn e2e_dir(name: &str) -> Option<PathBuf> {
+    std::env::var_os(name).map(PathBuf::from)
+}
+
 #[cfg(target_os = "windows")]
 pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
 }
 
 pub fn app_config_dir() -> Result<PathBuf> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = e2e_dir("CHIMERA_E2E_CONFIG_DIR") {
+        create_dir_all(&path)?;
+        return Ok(path);
+    }
+
     let path: Option<PathBuf> = {
         #[cfg(target_os = "windows")]
         {
@@ -111,6 +122,12 @@ fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
 }
 
 pub fn app_data_dir() -> Result<PathBuf> {
+    #[cfg(feature = "e2e")]
+    if let Some(path) = e2e_dir("CHIMERA_E2E_DATA_DIR") {
+        create_dir_all(&path)?;
+        return Ok(path);
+    }
+
     let path: Option<PathBuf> = {
         #[cfg(target_os = "windows")]
         {
