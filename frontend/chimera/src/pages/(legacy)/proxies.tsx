@@ -29,11 +29,11 @@ export const Route = createFileRoute('/(legacy)/proxies')({
   component: ProxyPage,
 });
 
-const MODE_LABELS: Record<string, string> = {
-  rule: 'Rule',
-  global: 'Global',
-  direct: 'Direct',
-  script: 'Script',
+const MODE_LABELS: Record<string, () => string> = {
+  rule: m.tray_menu_proxy_mode_rule,
+  global: m.tray_menu_proxy_mode_global,
+  direct: m.tray_menu_proxy_mode_direct,
+  script: m.tray_menu_proxy_mode_script,
 };
 
 function SideBar() {
@@ -45,7 +45,7 @@ function SideBar() {
       fullWidth
       autoComplete="off"
       spellCheck="false"
-      placeholder={'Filter conditions'}
+      placeholder={m.logs_filter_placeholder()}
       className="!pb-0"
       sx={{ input: { py: 1.2, fontSize: 14 } }}
       value={proxiesFilter || ''}
@@ -140,7 +140,7 @@ function ProxyPage() {
               selected={enabled}
             >
               {enabled && <Check className="mr-[0.1rem] -ml-2 scale-75" />}
-              {MODE_LABELS[key] ?? key}
+              {MODE_LABELS[key]?.() ?? key}
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
@@ -154,7 +154,7 @@ function ProxyPage() {
 
   return (
     <SidePage
-      title={'Proxy Groups'}
+      title={m.providers_proxies_title()}
       leftViewportRef={leftViewportRef}
       rightViewportRef={rightViewportRef}
       header={Header}
