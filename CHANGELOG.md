@@ -1,3 +1,33 @@
+## [0.19.2] - 2026-08-06 13:44:21
+
+### ✅ Testing
+
+- **config:** Cover typed runtime overrides by @MFSGA
+
+- **config:** Assert runtime patch outcomes by @MFSGA
+
+- **config:** Cover runtime patch compensation by @MFSGA
+
+- **e2e:** Cover runtime and UI setting persistence by @MFSGA
+
+- **e2e:** Cover profile draft validation by @MFSGA
+
+- **ui:** Expose stable controls for settings e2e by @MFSGA
+
+### ✨ Features
+
+- **config:** Expose runtime patch outcomes by @MFSGA
+
+- **config:** Coordinate runtime patch compensation by @MFSGA
+
+### 🔨 Refactor
+
+- **config:** Separate runtime state from overrides by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.19.1...v0.19.2
+
 ## [0.19.1] - 2026-08-06 09:13:37
 
 ### ✅ Testing
