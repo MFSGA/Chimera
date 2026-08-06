@@ -1,3 +1,4 @@
+import './assets/styles/fonts.css';
 import './assets/styles/tailwind.css';
 import { createRouter, RouterProvider } from '@tanstack/react-router';
 import React from 'react';
