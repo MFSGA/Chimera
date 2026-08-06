@@ -44,7 +44,7 @@ pub fn setup_shutdown_hook(f: impl Fn() + Send + Sync + 'static) -> anyhow::Resu
 
 struct WindowHandle {
     hwnd: HWND,
-    h_instance: HINSTANCE,
+    _h_instance: HINSTANCE,
 }
 
 impl Drop for WindowHandle {
@@ -164,7 +164,7 @@ fn setup_shutdown_hook_inner(
 
     let window_handle = WindowHandle {
         hwnd: hidden_window,
-        h_instance,
+        _h_instance: h_instance,
     };
 
     if let Err(e) = initd_tx.send(()) {
