@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use serde_yaml::Mapping;
 use tokio::sync::Mutex;
 
-use super::api::ClashConfig;
+use super::api::ClashRuntimeConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TransactionOutcome {
@@ -55,7 +55,7 @@ impl RuntimePatchCoordinator {
     ) -> TransactionOutcome
     where
         R: FnMut() -> RFut,
-        RFut: Future<Output = Result<ClashConfig>>,
+        RFut: Future<Output = Result<ClashRuntimeConfig>>,
         P: FnMut(Mapping) -> PFut,
         PFut: Future<Output = Result<()>>,
         S: FnMut(Mapping) -> SFut,
@@ -66,15 +66,15 @@ impl RuntimePatchCoordinator {
     }
 }
 
-fn config_mapping(config: &ClashConfig) -> Result<Mapping> {
+fn config_mapping(config: &ClashRuntimeConfig) -> Result<Mapping> {
     let value = serde_yaml::to_value(config)?;
     value
         .as_mapping()
         .cloned()
-        .ok_or_else(|| anyhow!("Clash config must serialize to a mapping"))
+        .ok_or_else(|| anyhow!("Clash runtime config must serialize to a mapping"))
 }
 
-fn values_for_patch(config: &ClashConfig, patch: &Mapping) -> Result<Mapping> {
+fn values_for_patch(config: &ClashRuntimeConfig, patch: &Mapping) -> Result<Mapping> {
     let current = config_mapping(config)?;
     let mut selected = Mapping::new();
 
@@ -82,27 +82,27 @@ fn values_for_patch(config: &ClashConfig, patch: &Mapping) -> Result<Mapping> {
         let value = current
             .get(key)
             .cloned()
-            .ok_or_else(|| anyhow!("core config does not contain field {key:?}"))?;
+            .ok_or_else(|| anyhow!("core runtime config does not contain field {key:?}"))?;
         selected.insert(key.clone(), value);
     }
 
     Ok(selected)
 }
 
-fn patch_matches_config(config: &ClashConfig, patch: &Mapping) -> Result<bool> {
+fn patch_matches_config(config: &ClashRuntimeConfig, patch: &Mapping) -> Result<bool> {
     Ok(values_for_patch(config, patch)? == *patch)
 }
 
 async fn rollback_after_failure<R, RFut, P, PFut>(
     read_core: &mut R,
     patch_core: &mut P,
-    previous: &ClashConfig,
+    previous: &ClashRuntimeConfig,
     requested: &Mapping,
     primary: anyhow::Error,
 ) -> TransactionOutcome
 where
     R: FnMut() -> RFut,
-    RFut: Future<Output = Result<ClashConfig>>,
+    RFut: Future<Output = Result<ClashRuntimeConfig>>,
     P: FnMut(Mapping) -> PFut,
     PFut: Future<Output = Result<()>>,
 {
@@ -162,7 +162,7 @@ async fn apply_runtime_patch_outcome<R, RFut, P, PFut, S, SFut>(
 ) -> TransactionOutcome
 where
     R: FnMut() -> RFut,
-    RFut: Future<Output = Result<ClashConfig>>,
+    RFut: Future<Output = Result<ClashRuntimeConfig>>,
     P: FnMut(Mapping) -> PFut,
     PFut: Future<Output = Result<()>>,
     S: FnMut(Mapping) -> SFut,

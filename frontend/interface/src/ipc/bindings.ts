@@ -153,7 +153,9 @@ export const commands = {
   setCustomAppDir: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('set_custom_app_dir', { path })),
   clashApiGetConfigs: () =>
-    typedError<ClashConfig, string>(__TAURI_INVOKE('clash_api_get_configs')),
+    typedError<ClashRuntimeConfig, string>(
+      __TAURI_INVOKE('clash_api_get_configs'),
+    ),
   clashApiGetProxyDelay: (name: string, url: string | null) =>
     typedError<DelayRes, string>(
       __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
@@ -478,21 +480,6 @@ export type BuildInfo = {
   llvm_version: string;
 };
 
-export type ClashConfig = {
-  port: number | null;
-  mode: string | null;
-  ipv6: boolean | null;
-  'socket-port': number | null;
-  'allow-lan': boolean | null;
-  'log-level': string | null;
-  'mixed-port': number | null;
-  'redir-port': number | null;
-  'socks-port': number | null;
-  'tproxy-port': number | null;
-  'external-controller': string | null;
-  secret: string | null;
-};
-
 export type ClashConnectionsConnectorEvent =
   | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
   | { kind: 'update'; data: ClashConnectionsInfo };
@@ -545,6 +532,22 @@ export type ClashInfo = {
   /**  same as `external-controller` */
   server: string;
   /**  clash secret */
+  secret: string | null;
+};
+
+/**  Runtime state returned by the running core's `GET /configs` endpoint. */
+export type ClashRuntimeConfig = {
+  port: number | null;
+  mode: string | null;
+  ipv6: boolean | null;
+  'socket-port': number | null;
+  'allow-lan': boolean | null;
+  'log-level': string | null;
+  'mixed-port': number | null;
+  'redir-port': number | null;
+  'socks-port': number | null;
+  'tproxy-port': number | null;
+  'external-controller': string | null;
   secret: string | null;
 };
 
@@ -955,9 +958,11 @@ export type PatchClashCoreConfig_Serialize = {
   'external-controller'?: string | null;
 };
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig =
   PatchRuntimeConfig_Serialize | PatchRuntimeConfig_Deserialize;
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Deserialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;
@@ -965,6 +970,7 @@ export type PatchRuntimeConfig_Deserialize = {
   mode?: string | null;
 };
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Serialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;

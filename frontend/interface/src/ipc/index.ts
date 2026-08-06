@@ -5,6 +5,8 @@ export * from './consts';
 
 export { commands } from './bindings';
 export type * from './bindings';
+/** @deprecated Use ClashRuntimeConfig for values returned by the running core. */
+export type { ClashRuntimeConfig as ClashConfig } from './bindings';
 export * from './use-settings';
 export * from './use-clash-config';
 export * from './use-clash-core-config';

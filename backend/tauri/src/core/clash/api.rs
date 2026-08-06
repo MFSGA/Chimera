@@ -11,8 +11,9 @@ use tracing::instrument;
 
 use crate::config::core::Config;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Type)]
-pub struct ClashConfig {
+/// Runtime state returned by the running core's `GET /configs` endpoint.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
+pub struct ClashRuntimeConfig {
     pub port: Option<u16>,
     pub mode: Option<String>,
     pub ipv6: Option<bool>,
@@ -216,9 +217,9 @@ pub struct ProxiesRes {
 
 /// GET /configs
 #[instrument]
-pub async fn get_configs() -> Result<ClashConfig> {
+pub async fn get_configs() -> Result<ClashRuntimeConfig> {
     let path = "/configs";
-    let response: ClashConfig = perform_request((Method::GET, path)).await?.json().await?;
+    let response: ClashRuntimeConfig = perform_request((Method::GET, path)).await?.json().await?;
     Ok(response)
 }
 
