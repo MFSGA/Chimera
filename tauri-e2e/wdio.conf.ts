@@ -14,7 +14,10 @@ const appBinaryPath =
   process.env.CHIMERA_E2E_BINARY ??
   path.resolve(configDirectory, '../backend/target/e2e/debug', binaryName);
 const runtimeRootDirectory = path.resolve(configDirectory, '.tmp/runtime');
-const hostProxySnapshot = captureWindowsProxySettings();
+const hostProxySnapshot =
+  process.env.CHIMERA_E2E_SKIP_PROXY_RESTORE === '1'
+    ? null
+    : captureWindowsProxySettings();
 const embeddedPort = Number(process.env.CHIMERA_E2E_WEBDRIVER_PORT ?? '4446');
 const runtimeDirectory = resolveRuntimeDirectory(
   runtimeRootDirectory,

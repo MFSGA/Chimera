@@ -6,6 +6,7 @@
   "scripts": {
     "test": "pnpm run test:desktop",
     "test:desktop": "wdio run ./wdio.conf.ts",
+    "test:lan": "wdio run ./wdio.conf.ts --spec ./specs/allow-lan.e2e.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
