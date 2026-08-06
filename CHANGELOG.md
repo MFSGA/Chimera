@@ -1,3 +1,13 @@
+## [0.19.3] - 2026-08-06 15:21:12
+
+### 🐛 Bug Fixes
+
+- **emoji:** Add the css file to show more emoji by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.19.2...v0.19.3
+
 ## [0.19.2] - 2026-08-06 13:44:21
 
 ### ✅ Testing
