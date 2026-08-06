@@ -6,6 +6,38 @@ use tokio::sync::Mutex;
 
 use super::api::ClashConfig;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransactionOutcome {
+    Committed,
+    Rejected {
+        primary_error: String,
+    },
+    RolledBack {
+        primary_error: String,
+    },
+    RollbackFailed {
+        primary_error: String,
+        rollback_error: String,
+    },
+}
+
+impl TransactionOutcome {
+    pub(crate) fn into_result(self) -> Result<()> {
+        match self {
+            Self::Committed => Ok(()),
+            Self::Rejected { primary_error } | Self::RolledBack { primary_error } => {
+                Err(anyhow!(primary_error))
+            }
+            Self::RollbackFailed {
+                primary_error,
+                rollback_error,
+            } => Err(anyhow!(
+                "{primary_error}; rollback failed: {rollback_error}"
+            )),
+        }
+    }
+}
+
 /// Serializes running-core patch transactions so snapshots and compensations
 /// cannot interleave across concurrent IPC requests.
 #[derive(Default)]
@@ -20,7 +52,7 @@ impl RuntimePatchCoordinator {
         read_core: R,
         patch_core: P,
         persist: S,
-    ) -> Result<()>
+    ) -> TransactionOutcome
     where
         R: FnMut() -> RFut,
         RFut: Future<Output = Result<ClashConfig>>,
@@ -30,7 +62,7 @@ impl RuntimePatchCoordinator {
         SFut: Future<Output = Result<()>>,
     {
         let _guard = self.gate.lock().await;
-        apply_runtime_patch(requested, read_core, patch_core, persist).await
+        apply_runtime_patch_outcome(requested, read_core, patch_core, persist).await
     }
 }
 
@@ -67,30 +99,53 @@ async fn rollback_after_failure<R, RFut, P, PFut>(
     previous: &ClashConfig,
     requested: &Mapping,
     primary: anyhow::Error,
-) -> Result<()>
+) -> TransactionOutcome
 where
     R: FnMut() -> RFut,
     RFut: Future<Output = Result<ClashConfig>>,
     P: FnMut(Mapping) -> PFut,
     PFut: Future<Output = Result<()>>,
 {
-    let rollback = values_for_patch(previous, requested)
-        .map_err(|error| anyhow!("{primary}; cannot build rollback patch: {error}"))?;
+    let primary_error = primary.to_string();
+    let rollback = match values_for_patch(previous, requested) {
+        Ok(rollback) => rollback,
+        Err(error) => {
+            return TransactionOutcome::RollbackFailed {
+                primary_error,
+                rollback_error: format!("cannot build rollback patch: {error}"),
+            };
+        }
+    };
 
-    patch_core(rollback.clone())
-        .await
-        .map_err(|error| anyhow!("{primary}; rollback patch failed: {error}"))?;
+    if let Err(error) = patch_core(rollback.clone()).await {
+        return TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error: format!("rollback patch failed: {error}"),
+        };
+    }
 
-    let restored = read_core()
-        .await
-        .map_err(|error| anyhow!("{primary}; rollback read-back failed: {error}"))?;
+    let restored = match read_core().await {
+        Ok(restored) => restored,
+        Err(error) => {
+            return TransactionOutcome::RollbackFailed {
+                primary_error,
+                rollback_error: format!("rollback read-back failed: {error}"),
+            };
+        }
+    };
 
     match patch_matches_config(&restored, &rollback) {
-        Ok(true) => Err(primary),
-        Ok(false) => Err(anyhow!("{primary}; rollback verification failed")),
-        Err(error) => Err(anyhow!(
-            "{primary}; rollback verification could not inspect the restored fields: {error}"
-        )),
+        Ok(true) => TransactionOutcome::RolledBack { primary_error },
+        Ok(false) => TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error: "rollback verification failed".to_string(),
+        },
+        Err(error) => TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error: format!(
+                "rollback verification could not inspect the restored fields: {error}"
+            ),
+        },
     }
 }
 
@@ -99,12 +154,12 @@ where
 /// Every failure after the initial snapshot triggers a field-scoped compensation.
 /// The compensation is also read back, so a successful return from the rollback
 /// endpoint is not treated as proof that the running core was restored.
-async fn apply_runtime_patch<R, RFut, P, PFut, S, SFut>(
+async fn apply_runtime_patch_outcome<R, RFut, P, PFut, S, SFut>(
     requested: Mapping,
     mut read_core: R,
     mut patch_core: P,
     mut persist: S,
-) -> Result<()>
+) -> TransactionOutcome
 where
     R: FnMut() -> RFut,
     RFut: Future<Output = Result<ClashConfig>>,
@@ -114,10 +169,17 @@ where
     SFut: Future<Output = Result<()>>,
 {
     if requested.is_empty() {
-        return Ok(());
+        return TransactionOutcome::Committed;
     }
 
-    let previous = read_core().await?;
+    let previous = match read_core().await {
+        Ok(previous) => previous,
+        Err(error) => {
+            return TransactionOutcome::Rejected {
+                primary_error: error.to_string(),
+            };
+        }
+    };
 
     if let Err(error) = patch_core(requested.clone()).await {
         return rollback_after_failure(
@@ -179,7 +241,7 @@ where
         .await;
     }
 
-    Ok(())
+    TransactionOutcome::Committed
 }
 
 #[cfg(test)]
