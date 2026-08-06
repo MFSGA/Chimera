@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use chimera_ipc::{
     api::{core::start::CoreStartReq, status::CoreState},
@@ -26,7 +26,6 @@ use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tokio::time::sleep;
 use tracing::instrument;
 
 use crate::{
@@ -36,7 +35,7 @@ use crate::{
     },
     core::{clash::api, logger::Logger},
     log_err,
-    utils::{dirs, help},
+    utils::dirs,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
@@ -478,40 +477,17 @@ impl CoreManager {
             *this = Some(instance.clone());
         }
         instance.start().await?;
-        crate::core::handle::Handle::refresh_clash();
-        Ok(())
-    }
-
-    /// 更新proxies那些
-    /// 如果涉及端口和外部控制则需要重启
-    pub async fn update_config(&self) -> Result<()> {
-        log::debug!(target: "app", "try to update clash config");
-
-        // 更新配置
-        Config::generate().await?;
-
-        // 检查配置是否正常
-        self.check_config().await?;
-
-        // 更新运行时配置
-        let path = Config::generate_file(ConfigType::Run)?;
-        let path = dirs::path_to_str(&path)?;
-
-        // 发送请求 发送5次
-        for i in 0..5 {
-            match api::put_configs(path).await {
-                Ok(_) => break,
-                Err(err) => {
-                    if i < 4 {
-                        log::info!(target: "app", "{err:?}");
-                    } else {
-                        bail!(err);
-                    }
-                }
-            }
-            sleep(Duration::from_millis(250)).await;
+        let app_handle = crate::core::handle::Handle::global()
+            .app_handle
+            .lock()
+            .clone();
+        if let Some(app_handle) = app_handle {
+            log_err!(
+                crate::core::clash::restart_ws_connector(&app_handle).await,
+                "failed to restart clash websocket connector"
+            );
         }
-
+        crate::core::handle::Handle::refresh_clash();
         Ok(())
     }
 

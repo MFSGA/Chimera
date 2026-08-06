@@ -160,14 +160,6 @@ pub fn clash_pid_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join("clash.pid"))
 }
 
-pub fn path_to_str(path: &PathBuf) -> Result<&str> {
-    let path_str = path
-        .as_os_str()
-        .to_str()
-        .ok_or(anyhow::anyhow!("failed to get path from {:?}", path))?;
-    Ok(path_str)
-}
-
 pub fn storage_path() -> Result<PathBuf> {
     Ok(app_data_dir()?.join(STORAGE_DB))
 }

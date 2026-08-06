@@ -63,20 +63,6 @@ struct PerformRequest<D = (), Q = ()> {
     data: Option<D>,
 }
 
-/// PUT /configs
-/// path 是绝对路径
-#[instrument]
-pub async fn put_configs(config_path: &str) -> Result<()> {
-    let path = "/configs";
-
-    let mut data = HashMap::new();
-    data.insert("path", config_path);
-
-    let _ = perform_request((Method::PUT, path, Data(data))).await?;
-
-    Ok(())
-}
-
 #[instrument(skip_all, fields(
     method = tracing::field::Empty,
     url = tracing::field::Empty,
