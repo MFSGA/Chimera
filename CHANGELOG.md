@@ -1,3 +1,35 @@
+## [0.19.0] - 2026-08-06 01:47:37
+
+### ✅ Testing
+
+- **e2e:** Cover Allow LAN persistence by @MFSGA
+
+- **e2e:** Add minimal Tauri desktop smoke test runner by @MFSGA
+
+### ✨ Features
+
+- **config:** Align Allow LAN state with core IPC by @MFSGA
+
+- **e2e:** Add isolated embedded WebDriver build support by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **frontend:** Resolve hook dependency warnings by @MFSGA
+
+- **interface:** Normalize flattened profile Specta bindings by @MFSGA
+
+- **windows:** Register system shutdown cleanup hook by @MFSGA
+
+- **windows:** Embed common controls manifest in test artifacts by @MFSGA
+
+### 🔨 Refactor
+
+- **core:** Synchronize runtime resource lifecycle by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.18.2...v0.19.0
+
 ## [0.18.2] - 2026-08-01 06:51:25
 
 ### 🐛 Bug Fixes
