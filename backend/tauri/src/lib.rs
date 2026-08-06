@@ -78,7 +78,7 @@ pub fn run() -> std::io::Result<()> {
 
     let specta_builder = specta_export::build_specta_builder();
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, not(feature = "e2e")))]
     {
         const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
 
