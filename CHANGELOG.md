@@ -1,3 +1,19 @@
+## [0.19.1] - 2026-08-06 09:13:37
+
+### ✅ Testing
+
+- **e2e:** Cover auto-update preference persistence by @MFSGA
+
+- **e2e:** Cover storage event resynchronization by @MFSGA
+
+### ✨ Features
+
+- **storage:** Align frontend kv event contract by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.19.0...v0.19.1
+
 ## [0.19.0] - 2026-08-06 01:47:37
 
 ### ✅ Testing
