@@ -769,17 +769,37 @@ pub async fn patch_clash_config(
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-    if let Err(e) = coordinator
+    let outcome = coordinator
         .apply(
             mapping,
             clash::api::get_configs,
             |patch| async move { clash::api::patch_configs(&patch).await },
             |patch| async move { feat::patch_clash(patch).await },
         )
-        .await
-    {
-        tracing::error!("{e}");
-        return Err(IpcError::from(e));
+        .await;
+
+    match &outcome {
+        clash::transaction::TransactionOutcome::Committed => {}
+        clash::transaction::TransactionOutcome::Rejected { primary_error } => {
+            tracing::warn!(%primary_error, "runtime patch rejected before core mutation");
+        }
+        clash::transaction::TransactionOutcome::RolledBack { primary_error } => {
+            tracing::warn!(%primary_error, "runtime patch failed and core state was restored");
+        }
+        clash::transaction::TransactionOutcome::RollbackFailed {
+            primary_error,
+            rollback_error,
+        } => {
+            tracing::error!(
+                %primary_error,
+                %rollback_error,
+                "runtime patch failed and core restoration could not be verified"
+            );
+        }
+    }
+
+    if let Err(error) = outcome.into_result() {
+        return Err(IpcError::from(error));
     }
 
     feat::update_proxies_buff(None);
