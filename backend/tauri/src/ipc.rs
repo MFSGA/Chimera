@@ -27,7 +27,7 @@ use crate::{
             item_type::{ProfileItemType, ProfileUid},
             profiles::{Profiles, ProfilesBuilder},
         },
-        runtime::{PatchClashCoreConfig, PatchRuntimeConfig},
+        runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
         clash,
@@ -764,17 +764,25 @@ pub async fn patch_clash_config(
     coordinator: State<'_, clash::transaction::RuntimePatchCoordinator>,
     payload: PatchRuntimeConfig,
 ) -> Result {
-    tracing::debug!("patch clash runtime config: {payload:?}");
-    let mapping = match serde_yaml::to_value(&payload)? {
-        serde_yaml::Value::Mapping(m) => m,
-        _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
-    };
+    tracing::debug!(
+        allow_lan = ?payload.allow_lan,
+        ipv6 = ?payload.ipv6,
+        log_level = ?payload.log_level,
+        mode = ?payload.mode,
+        "patch clash runtime config"
+    );
+    let overrides = ClashConfigOverrides::from(payload);
+    let mapping = overrides.to_mapping();
+    let persist_overrides = overrides.clone();
     let outcome = coordinator
         .apply(
             mapping,
             clash::api::get_configs,
             |patch| async move { clash::api::patch_configs(&patch).await },
-            |patch| async move { feat::patch_clash(patch).await },
+            move |_patch| {
+                let overrides = persist_overrides.clone();
+                async move { feat::patch_clash_overrides(overrides).await }
+            },
         )
         .await;
 
@@ -1430,7 +1438,7 @@ pub async fn clear_clash_ws_history(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_get_configs() -> Result<clash::api::ClashConfig> {
+pub async fn clash_api_get_configs() -> Result<clash::api::ClashRuntimeConfig> {
     Ok(clash::api::get_configs().await?)
 }
 

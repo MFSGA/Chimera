@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import { ClashConfig, commands, PatchRuntimeConfig } from './bindings';
+import { ClashRuntimeConfig, commands, PatchRuntimeConfig } from './bindings';
 import { CLASH_CONFIG_QUERY_KEY } from './consts';
 
 /**
@@ -35,7 +35,7 @@ export const useClashConfig = () => {
    *
    * @see useQuery - For additional configuration options and usage details.
    */
-  const query = useQuery<ClashConfig | undefined>({
+  const query = useQuery<ClashRuntimeConfig | undefined>({
     queryKey: [CLASH_CONFIG_QUERY_KEY],
     queryFn: async () => unwrapResult(await commands.clashApiGetConfigs()),
   });
@@ -43,19 +43,15 @@ export const useClashConfig = () => {
   /**
    * Performs an upsert operation to update or insert the Clash configuration.
    *
-   * This mutation function accepts a payload that extends both PatchRuntimeConfig and a partial version
-   * of Clash.Config. It patches the core and application configuration through commands.patchClashConfig. On a successful operation, it
-   * refetches the running core configuration.
-   *
-   * @remarks
-   * Ensure that the payload conforms to both the PatchRuntimeConfig specifications and the partial structure
-   * of Clash.Config as expected by the remote configuration endpoint.
+   * This mutation accepts only the persistent runtime override DTO. It does not
+   * accept a running-core snapshot, keeping desired state separate from the
+   * `GET /configs` response.
    *
    * @returns A Promise resolving to the updated configuration, obtained by unwrapping the result of the
    *          commands.patchClashConfig call.
    */
   const upsert = useMutation({
-    mutationFn: async (payload: PatchRuntimeConfig & Partial<ClashConfig>) => {
+    mutationFn: async (payload: PatchRuntimeConfig) => {
       return unwrapResult(await commands.patchClashConfig(payload));
     },
     onSuccess: () => {

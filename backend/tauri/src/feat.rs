@@ -10,6 +10,7 @@ use crate::{
         chimera::IVerge,
         core::Config,
         profile::item::remote::{RemoteProfileOptionsBuilder, RemoteProfileSubscription},
+        runtime::ClashConfigOverrides,
     },
     core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
     log_err,
@@ -226,8 +227,21 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
     Ok(())
 }
 
-/// 修改clash的配置
+/// Persists a typed set of runtime overrides without conflating it with a
+/// running-core snapshot.
+pub async fn patch_clash_overrides(overrides: ClashConfigOverrides) -> Result<()> {
+    let patch = overrides.to_mapping();
+    patch_clash_with_overrides(patch, overrides).await
+}
+
+/// Applies a general Clash mapping while extracting only supported persistent
+/// runtime overrides for the generated config.
 pub async fn patch_clash(patch: Mapping) -> Result<()> {
+    let overrides = ClashConfigOverrides::from_mapping(&patch)?;
+    patch_clash_with_overrides(patch, overrides).await
+}
+
+async fn patch_clash_with_overrides(patch: Mapping, overrides: ClashConfigOverrides) -> Result<()> {
     Config::clash().draft().patch_config(patch.clone());
     let result = async {
         let plan = plan_clash_patch(&patch)?;
@@ -235,7 +249,7 @@ pub async fn patch_clash(patch: Mapping) -> Result<()> {
         validate_external_controller_change(&plan).await?;
         apply_clash_runtime_change(&plan).await?;
         run_clash_patch_side_effects(&plan);
-        Config::runtime().draft().patch_config(patch);
+        Config::runtime().draft().patch_config(&overrides);
         Ok(plan)
     }
     .await;

@@ -1,5 +1,6 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_yaml::Mapping;
+use serde_yaml::{Mapping, Value};
 
 #[derive(Default, Debug, Clone)]
 pub struct IRuntime {
@@ -11,38 +12,68 @@ impl IRuntime {
         Self::default()
     }
 
-    // 这里只更改 allow-lan | ipv6 | log-level | mode
-    pub fn patch_config(&mut self, patch: Mapping) {
+    /// Applies only persistent runtime override fields to the generated config.
+    pub fn patch_config(&mut self, overrides: &ClashConfigOverrides) {
         tracing::debug!(
-            "todo: add the secret here patching runtime config: {:?}",
-            patch
+            allow_lan = ?overrides.allow_lan,
+            ipv6 = ?overrides.ipv6,
+            log_level = ?overrides.log_level,
+            mode = ?overrides.mode,
+            "patch generated runtime config overrides"
         );
-        if let Some(config) = self.config.as_mut() {
-            let patch_config: PatchRuntimeConfig =
-                serde_yaml::from_value(serde_yaml::Value::Mapping(patch.clone()))
-                    .unwrap_or_default();
 
-            [
-                (
-                    "allow-lan",
-                    patch_config.allow_lan.map(serde_yaml::Value::Bool),
-                ),
-                ("ipv6", patch_config.ipv6.map(serde_yaml::Value::Bool)),
-                (
-                    "log-level",
-                    patch_config.log_level.map(serde_yaml::Value::String),
-                ),
-                ("mode", patch_config.mode.map(serde_yaml::Value::String)),
-            ]
-            .into_iter()
-            .filter_map(|(key, value)| value.map(|v| (key.into(), v)))
-            .for_each(|(k, v)| {
-                config.insert(k, v);
-            });
+        if let Some(config) = self.config.as_mut() {
+            overrides.apply_to(config);
         }
     }
 }
 
+/// Persistent user overrides that are merged into the generated Clash config.
+///
+/// This is intentionally separate from `ClashRuntimeConfig`, which represents
+/// the running core's `GET /configs` response.
+#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct ClashConfigOverrides {
+    #[serde(default, rename = "allow-lan", skip_serializing_if = "Option::is_none")]
+    pub allow_lan: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ipv6: Option<bool>,
+    #[serde(default, rename = "log-level", skip_serializing_if = "Option::is_none")]
+    pub log_level: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+impl ClashConfigOverrides {
+    pub fn from_mapping(patch: &Mapping) -> Result<Self> {
+        serde_yaml::from_value(Value::Mapping(patch.clone()))
+            .context("invalid Clash config overrides")
+    }
+
+    pub fn to_mapping(&self) -> Mapping {
+        let mut mapping = Mapping::new();
+        self.apply_to(&mut mapping);
+        mapping
+    }
+
+    fn apply_to(&self, mapping: &mut Mapping) {
+        if let Some(value) = self.allow_lan {
+            mapping.insert("allow-lan".into(), Value::Bool(value));
+        }
+        if let Some(value) = self.ipv6 {
+            mapping.insert("ipv6".into(), Value::Bool(value));
+        }
+        if let Some(value) = &self.log_level {
+            mapping.insert("log-level".into(), Value::String(value.clone()));
+        }
+        if let Some(value) = &self.mode {
+            mapping.insert("mode".into(), Value::String(value.clone()));
+        }
+    }
+}
+
+/// Typed IPC payload for modifying persistent runtime overrides.
 #[derive(Default, Debug, Clone, Deserialize, Serialize, specta::Type)]
 #[serde(rename_all = "kebab-case")]
 pub struct PatchRuntimeConfig {
@@ -54,6 +85,17 @@ pub struct PatchRuntimeConfig {
     pub log_level: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+}
+
+impl From<PatchRuntimeConfig> for ClashConfigOverrides {
+    fn from(payload: PatchRuntimeConfig) -> Self {
+        Self {
+            allow_lan: payload.allow_lan,
+            ipv6: payload.ipv6,
+            log_level: payload.log_level,
+            mode: payload.mode,
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, specta::Type)]
@@ -73,3 +115,7 @@ pub struct PatchClashCoreConfig {
     )]
     pub external_controller: Option<String>,
 }
+
+#[cfg(test)]
+#[path = "runtime_tests.rs"]
+mod tests;
