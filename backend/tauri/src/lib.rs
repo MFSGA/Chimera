@@ -143,6 +143,14 @@ pub fn run() -> std::io::Result<()> {
 
             resolve::resolve_setup(app);
 
+            #[cfg(windows)]
+            {
+                let app_handle = app.handle().clone();
+                shutdown_hook::setup_shutdown_hook(move || {
+                    utils::help::cleanup_processes(&app_handle);
+                })?;
+            }
+
             #[cfg(debug_assertions)]
             setup_frontend_console_bridge(app);
 
