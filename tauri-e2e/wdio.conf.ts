@@ -65,7 +65,7 @@ async function prepareTauriServiceTeardown(): Promise<void> {
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: ['./specs/**/smoke.e2e.ts'],
+  specs: ['./specs/**/smoke.e2e.ts', './specs/**/proxy-localization.e2e.ts'],
   maxInstances: 1,
   logLevel: process.env.CI ? 'warn' : 'info',
   bail: 0,
