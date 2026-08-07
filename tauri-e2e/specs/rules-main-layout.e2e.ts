@@ -115,4 +115,67 @@ describe('main rules reference layout', () => {
       await browser.saveScreenshot(evidencePath);
     }
   });
+
+  it('uses the main ref tooltip for collapsed sidebar items', async () => {
+    const sidebar = await $('[data-slot="slider-sidebar"]');
+    const firstItem = await sidebar.$('a');
+    await firstItem.waitForDisplayed({ timeout: 15_000 });
+    await browser.execute(() => {
+      document
+        .querySelector<HTMLElement>('[data-slot="slider-sidebar"] a')
+        ?.focus();
+    });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() =>
+          Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
+        ),
+      { timeout: 15_000, timeoutMsg: 'Rules sidebar tooltip did not open.' },
+    );
+
+    const state = await browser.execute(() => {
+      const trigger = document.querySelector<HTMLElement>(
+        '[data-slot="slider-sidebar"] a',
+      );
+      const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
+      const rect = (element: HTMLElement | null) =>
+        element
+          ? {
+              x: Math.round(element.getBoundingClientRect().x),
+              y: Math.round(element.getBoundingClientRect().y),
+              width: Math.round(element.getBoundingClientRect().width),
+              height: Math.round(element.getBoundingClientRect().height),
+            }
+          : null;
+
+      return {
+        trigger: rect(trigger),
+        tooltip: rect(tooltip),
+        triggerText: trigger?.textContent?.trim() ?? '',
+        tooltipText: tooltip?.textContent?.trim() ?? '',
+        tooltipSide: tooltip?.dataset.side ?? '',
+      };
+    });
+
+    assert.ok(state.trigger, JSON.stringify(state, null, 2));
+    assert.ok(state.tooltip, JSON.stringify(state, null, 2));
+    assert.ok(state.triggerText.length > 0, JSON.stringify(state, null, 2));
+    assert.equal(
+      state.tooltipText,
+      state.triggerText,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(state.tooltipSide, 'right', JSON.stringify(state, null, 2));
+    assert.ok(
+      (state.tooltip?.x ?? 0) >
+        (state.trigger?.x ?? 0) + (state.trigger?.width ?? 0),
+      JSON.stringify(state, null, 2),
+    );
+
+    const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
+    if (evidencePath) {
+      fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+      await browser.saveScreenshot(evidencePath);
+    }
+  });
 });
