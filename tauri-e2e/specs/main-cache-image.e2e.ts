@@ -5,6 +5,9 @@ import path from 'node:path';
 const profileName = 'TDD Cache Icon Profile';
 const groupName = 'TDD Icon Group';
 const iconUrl = 'https://example.com/chimera-cache-icon.png';
+const svgGroupName = 'TDD SVG Group';
+const rawSvg =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" rx="2" fill="#ff4d4f"/></svg>';
 const fixture = `mixed-port: 27891
 allow-lan: false
 mode: rule
@@ -23,7 +26,14 @@ proxy-groups:
     proxies:
       - TDD Icon Node
       - DIRECT
+  - name: ${svgGroupName}
+    type: select
+    icon: '${rawSvg}'
+    proxies:
+      - TDD Icon Node
+      - DIRECT
 rules:
+  - DOMAIN-SUFFIX,example.com,${svgGroupName}
   - MATCH,${groupName}
 `;
 
@@ -193,5 +203,60 @@ describe('main cached proxy icons', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  it('keeps loaded Rules proxy artwork square like ref', async () => {
+    const rulesLink = await $('a[href="/main/rules"]');
+    await rulesLink.waitForClickable({ timeout: 15_000 });
+    await rulesLink.click();
+
+    await browser.waitUntil(
+      async () => browser.execute(() => location.pathname === '/main/rules'),
+      { timeout: 15_000, timeoutMsg: 'Rules route did not open.' },
+    );
+
+    const groupLabel = await $(`//*[normalize-space()="${svgGroupName}"]`);
+    await groupLabel.waitForDisplayed({ timeout: 30_000 });
+
+    const state = await browser.execute((expectedGroup) => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>('a'),
+      )
+        .filter((link) => link.innerText.trim() === expectedGroup)
+        .map((link) => {
+          const image = link.querySelector<HTMLImageElement>('img');
+          return {
+            imageSrc: image?.src ?? '',
+            imageClass: image?.className ?? '',
+            width: image?.getBoundingClientRect().width ?? 0,
+            height: image?.getBoundingClientRect().height ?? 0,
+          };
+        });
+      const image = candidates.find((candidate) =>
+        candidate.imageClass.split(/\s+/).includes('size-6'),
+      );
+
+      return {
+        imageFound: Boolean(image),
+        imageSrc: image?.imageSrc ?? '',
+        imageClass: image?.imageClass ?? '',
+        width: image?.width ?? 0,
+        height: image?.height ?? 0,
+        candidates,
+      };
+    }, svgGroupName);
+
+    assert.equal(state.imageFound, true, JSON.stringify(state, null, 2));
+    assert.ok(
+      state.imageSrc.startsWith('data:image/svg+xml;base64,'),
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.imageClass.includes('rounded-full'),
+      false,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(state.width, 24, JSON.stringify(state, null, 2));
+    assert.equal(state.height, 24, JSON.stringify(state, null, 2));
   });
 });
