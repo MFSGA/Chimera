@@ -16,14 +16,17 @@ import {
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { createFileRoute, Link } from '@tanstack/react-router';
+import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
+import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import dayjs from 'dayjs';
 import { filesize } from 'filesize';
 import type { ComponentProps, PropsWithChildren } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { LinearProgress } from '@/components/ui/linear-progress';
+import { LinearProgress } from '@/components/ui/progress';
 import TextMarquee from '@/components/ui/text-marquee';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -34,55 +37,6 @@ import { useRulesProviderUpdate } from './_modules/use-rules-provider-update';
 export const Route = createFileRoute('/(main)/main/providers/')({
   component: RouteComponent,
 });
-
-/** 全部更新图标 SVG */
-function RefreshAllIcon() {
-  return (
-    <svg
-      className="size-5"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M21 3v6h-6M3 21v-6h6" />
-      <path d="M3.05 11A9 9 0 0 1 20.3 6.3L21 6M20.95 13A9 9 0 0 1 3.7 17.7L3 18" />
-    </svg>
-  );
-}
-
-/** 单个刷新图标 SVG */
-function RefreshIcon() {
-  return (
-    <svg
-      className="size-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M21 3v6h-6M3 21v-6h6" />
-      <path d="M3.05 11A9 9 0 0 1 20.3 6.3L21 6M20.95 13A9 9 0 0 1 3.7 17.7L3 18" />
-    </svg>
-  );
-}
-
-/** 空列表图标 SVG */
-function AllInboxIcon() {
-  return (
-    <svg
-      className="size-10"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-    >
-      <path d="M21 9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9M3 9V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v4" />
-      <path d="M3 9h18" />
-      <path d="M15 13H9" />
-    </svg>
-  );
-}
 
 const NavigateButton = ({
   className,
@@ -143,7 +97,7 @@ const Empty = ({ children }: PropsWithChildren) => {
   return (
     <Card variant="outline">
       <CardContent className="min-h-40 items-center justify-center text-sm">
-        <AllInboxIcon />
+        <AllInboxRounded className="size-10" />
 
         {children}
       </CardContent>
@@ -157,7 +111,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
 
   const blockTask = useProxiesProviderUpdate(data);
 
-  const handleClick = blockTask.execute;
+  const handleClick = useLockFn(blockTask.execute);
 
   return (
     <NavigateButton className="flex flex-col gap-2">
@@ -189,7 +143,8 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
                   <div>{progress.toFixed(2)}%</div>
 
                   <div>
-                    {filesize(used)} / {filesize(total)}
+                    {filesize(used, { standard: 'iec' })} /{' '}
+                    {filesize(total, { standard: 'iec' })}
                   </div>
                 </div>
               </TextMarquee>
@@ -214,7 +169,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
               handleClick();
             }}
           >
-            <RefreshIcon />
+            <RefreshRounded />
           </Button>
         </div>
       </Link>
@@ -225,7 +180,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
 const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
   const blockTask = useRulesProviderUpdate(data);
 
-  const handleClick = blockTask.execute;
+  const handleClick = useLockFn(blockTask.execute);
 
   return (
     <NavigateButton className="flex flex-col gap-2">
@@ -264,7 +219,7 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
               handleClick();
             }}
           >
-            <RefreshIcon />
+            <RefreshRounded />
           </Button>
         </div>
       </Link>
@@ -300,7 +255,7 @@ function RouteComponent() {
     }
   });
 
-  const handleUpdateProxies = proxiesBlockTask.execute;
+  const handleUpdateProxies = useLockFn(proxiesBlockTask.execute);
 
   const rulesBlockTask = useBlockTask('update-rules-provider', async () => {
     if (!rules) {
@@ -318,7 +273,7 @@ function RouteComponent() {
     }
   });
 
-  const handleUpdateRules = rulesBlockTask.execute;
+  const handleUpdateRules = useLockFn(rulesBlockTask.execute);
 
   return (
     <div className="flex flex-col gap-4 p-4 pt-0">
@@ -331,7 +286,7 @@ function RouteComponent() {
             onClick={handleUpdateProxies}
             loading={proxiesBlockTask.isPending}
           >
-            <RefreshAllIcon />
+            <RefreshRounded />
           </Button>
         </GroupTitle>
 
@@ -365,7 +320,7 @@ function RouteComponent() {
             onClick={handleUpdateRules}
             loading={rulesBlockTask.isPending}
           >
-            <RefreshAllIcon />
+            <RefreshRounded />
           </Button>
         </GroupTitle>
 
