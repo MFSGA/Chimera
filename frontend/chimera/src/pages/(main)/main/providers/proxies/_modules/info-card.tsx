@@ -1,12 +1,5 @@
-/**
- * Proxies Provider Info 卡片
- *
- * 迁移自 ref: `ref/frontend/nyanpasu/src/pages/(main)/main/providers/proxies/_modules/info-card.tsx`
- *
- * 显示 proxy provider 的代理数量、类型、更新时间，并提供更新按钮
- */
-
 import type { ClashProxiesProviderQueryItem } from '@chimera/interface';
+import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import dayjs from 'dayjs';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,29 +8,16 @@ import {
   CardFooter,
   CardHeader,
 } from '@/components/ui/card';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { useProxiesProviderUpdate } from '../../_modules/use-proxies-provider-update';
-
-/** 刷新图标 SVG */
-function RefreshIcon() {
-  return (
-    <svg
-      className="size-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M21 3v6h-6M3 21v-6h6" />
-      <path d="M3.05 11A9 9 0 0 1 20.3 6.3L21 6M20.95 13A9 9 0 0 1 3.7 17.7L3 18" />
-    </svg>
-  );
-}
 
 export const InfoCard = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
   const blockTask = useProxiesProviderUpdate(data);
 
-  const handleRefreshClick = blockTask.execute;
+  const handleRefreshClick = useLockFn(async () => {
+    await blockTask.execute();
+  });
 
   return (
     <Card className="col-span-2 flex flex-col justify-between">
@@ -63,7 +43,7 @@ export const InfoCard = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
           onClick={handleRefreshClick}
           loading={blockTask.isPending}
         >
-          <RefreshIcon />
+          <RefreshRounded />
           <span>{m.providers_update_provider()}</span>
         </Button>
 
@@ -71,7 +51,7 @@ export const InfoCard = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
 
         <div className="hover:bg-surface-variant text-secondary rounded-full px-3 py-2 text-xs font-semibold">
           {m.profile_subscription_updated_at({
-            updated: data.updatedAt ? dayjs(data.updatedAt).fromNow() : '-',
+            updated: dayjs(data.updatedAt).fromNow(),
           })}
         </div>
       </CardFooter>
