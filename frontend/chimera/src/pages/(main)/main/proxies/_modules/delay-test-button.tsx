@@ -20,11 +20,15 @@
 
 import { useClashProxies } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { Tooltip } from '@mui/material';
 import BoltRounded from '~icons/material-symbols/bolt-rounded';
 import { useState } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { Route as NameRoute } from '../$name';
@@ -69,33 +73,37 @@ export default function DelayTestButton() {
         'data-[loading=false]:data-[success=false]:group-data-[bottom=true]/proxies-content:top-full',
       )}
     >
-      <Tooltip
-        title={
-          blockTask.isPending
-            ? m.proxies_group_delay_test_pending_title()
-            : m.proxies_group_delay_test_title()
-        }
-      >
-        <Button
-          data-slot="delay-test-button-trigger"
-          data-success={String(isSuccess)}
-          data-loading={String(blockTask.isPending)}
-          className={cn(
-            "**:data-[slot='circular-progress']:size-6",
-            'transition-colors',
-            'backdrop-blur',
-            'data-[loading=false]:bg-primary-container/35',
-            'data-[loading=false]:dark:bg-on-primary/35',
-            'data-[success=true]:bg-green-500/30',
-            'data-[success=true]:dark:bg-green-700/50',
-          )}
-          variant="fab"
-          icon
-          loading={blockTask.isPending}
-          onClick={handleClick}
-        >
-          <BoltRounded className="size-6" />
-        </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            data-slot="delay-test-button-trigger"
+            data-success={String(isSuccess)}
+            data-loading={String(blockTask.isPending)}
+            className={cn(
+              "**:data-[slot='circular-progress']:size-6",
+              'transition-colors',
+              'backdrop-blur',
+              'data-[loading=false]:bg-primary-container/35',
+              'data-[loading=false]:dark:bg-on-primary/35',
+              'data-[success=true]:bg-green-500/30',
+              'data-[success=true]:dark:bg-green-700/50',
+            )}
+            variant="fab"
+            icon
+            loading={blockTask.isPending}
+            onClick={handleClick}
+          >
+            <BoltRounded className="size-6" />
+          </Button>
+        </TooltipTrigger>
+
+        <TooltipContent data-slot="delay-test-button-tooltip">
+          <span>
+            {blockTask.isPending
+              ? m.proxies_group_delay_test_pending_title()
+              : m.proxies_group_delay_test_title()}
+          </span>
+        </TooltipContent>
       </Tooltip>
     </div>
   );
