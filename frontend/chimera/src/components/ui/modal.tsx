@@ -1,13 +1,8 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
+import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import { AnimatePresence, motion } from 'motion/react';
 import { Dialog as DialogPrimitive, Slot } from 'radix-ui';
-import {
-  createContext,
-  useContext,
-  useId,
-  useState,
-  type ComponentProps,
-} from 'react';
+import { createContext, useContext, useId, type ComponentProps } from 'react';
 import { Button, type ButtonProps } from './button';
 
 export const ModalPortal = DialogPrimitive.Portal;
@@ -35,20 +30,25 @@ export function ModalTrigger({
   const Comp = asChild ? Slot.Root : 'button';
 
   return (
-    <DialogPrimitive.Trigger {...props} asChild>
-      <Comp
-        className={cn('relative', className)}
-        data-slot="modal-trigger"
-        data-layout-id={layoutId}
-      >
+    <DialogPrimitive.Trigger
+      {...props}
+      asChild
+      data-slot="modal-trigger"
+      data-layout-id={layoutId}
+    >
+      <Comp className={cn('relative', className)}>
         <Slot.Slottable>{children}</Slot.Slottable>
-        <div className="@container-[size] absolute inset-0 -z-10 flex items-center justify-center">
+        <div
+          className="@container-[size] absolute inset-0 -z-10 flex items-center justify-center"
+          data-slot="modal-trigger-placeholder-container"
+        >
           <motion.div
             className="size-full"
             style={{
               maxWidth: 'min(100%, calc(4 * 100cqh))',
               maxHeight: 'min(100%, calc(4 * 100cqw))',
             }}
+            data-slot="modal-trigger-placeholder"
             layout
             layoutId={layoutId}
           />
@@ -132,20 +132,17 @@ export function ModalContent({
 }
 
 export function Modal({
-  open: controlledOpen,
+  open: inputOpen,
   defaultOpen,
   onOpenChange,
   ...props
 }: ComponentProps<typeof DialogPrimitive.Root>) {
   const layoutId = useId();
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(
-    defaultOpen ?? false,
-  );
-  const open = controlledOpen ?? uncontrolledOpen;
-  const setOpen = (next: boolean) => {
-    if (controlledOpen === undefined) setUncontrolledOpen(next);
-    onOpenChange?.(next);
-  };
+  const [open, setOpen] = useControllableState({
+    prop: inputOpen,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
 
   return (
     <ModalContext.Provider value={{ open, layoutId }}>

@@ -71,6 +71,14 @@ describe('main ref input primitive', () => {
 
     const trigger = await card.$('[data-slot="modal-trigger"]');
     await trigger.waitForClickable({ timeout: 15_000 });
+    const placeholderContainer = await trigger.$(
+      '[data-slot="modal-trigger-placeholder-container"]',
+    );
+    const placeholder = await trigger.$(
+      '[data-slot="modal-trigger-placeholder"]',
+    );
+    assert.equal(await placeholderContainer.isExisting(), true);
+    assert.equal(await placeholder.isExisting(), true);
     await trigger.click();
 
     const modal = await $('[data-slot="modal-content"]');
