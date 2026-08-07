@@ -52,6 +52,7 @@ import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/m
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
 import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
+import { Route as mainMainSettingsDebugIndexRouteImport } from './pages/(main)/main/settings/debug/index'
 import { Route as mainMainProfilesTypeDetailUidRouteImport } from './pages/(main)/main/profiles/$type/detail/$uid'
 
 const legacyRouteRoute = legacyRouteRouteImport.update({
@@ -281,6 +282,12 @@ const mainMainProvidersRulesKeyRoute =
     path: '/rules/$key',
     getParentRoute: () => mainMainProvidersRouteRoute,
   } as any)
+const mainMainSettingsDebugIndexRoute =
+  mainMainSettingsDebugIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => mainMainSettingsDebugRouteRoute,
+  } as any)
 const mainMainProfilesTypeDetailUidRoute =
   mainMainProfilesTypeDetailUidRouteImport.update({
     id: '/$type/detail/$uid',
@@ -312,7 +319,7 @@ export interface FileRoutesByFullPath {
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/main/settings/clash': typeof mainMainSettingsClashRouteRoute
-  '/main/settings/debug': typeof mainMainSettingsDebugRouteRoute
+  '/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
   '/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
@@ -330,6 +337,7 @@ export interface FileRoutesByFullPath {
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
+  '/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
   '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesByTo {
@@ -348,7 +356,6 @@ export interface FileRoutesByTo {
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/main/settings/clash': typeof mainMainSettingsClashRouteRoute
-  '/main/settings/debug': typeof mainMainSettingsDebugRouteRoute
   '/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
@@ -366,6 +373,7 @@ export interface FileRoutesByTo {
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
+  '/main/settings/debug': typeof mainMainSettingsDebugIndexRoute
   '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesById {
@@ -395,7 +403,7 @@ export interface FileRoutesById {
   '/(main)/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/(main)/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/(main)/main/settings/clash': typeof mainMainSettingsClashRouteRoute
-  '/(main)/main/settings/debug': typeof mainMainSettingsDebugRouteRoute
+  '/(main)/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
   '/(main)/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/(main)/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
@@ -413,6 +421,7 @@ export interface FileRoutesById {
   '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
+  '/(main)/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
   '/(main)/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRouteTypes {
@@ -459,6 +468,7 @@ export interface FileRouteTypes {
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type/'
+    | '/main/settings/debug/'
     | '/main/profiles/$type/detail/$uid'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -477,7 +487,6 @@ export interface FileRouteTypes {
     | '/main/profiles/inspect'
     | '/main/settings/about'
     | '/main/settings/clash'
-    | '/main/settings/debug'
     | '/main/settings/nyanpasu'
     | '/main/settings/system'
     | '/main/settings/user-interface'
@@ -495,6 +504,7 @@ export interface FileRouteTypes {
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type'
+    | '/main/settings/debug'
     | '/main/profiles/$type/detail/$uid'
   id:
     | '__root__'
@@ -541,6 +551,7 @@ export interface FileRouteTypes {
     | '/(main)/main/providers/proxies/$key'
     | '/(main)/main/providers/rules/$key'
     | '/(main)/main/profiles/$type/'
+    | '/(main)/main/settings/debug/'
     | '/(main)/main/profiles/$type/detail/$uid'
   fileRoutesById: FileRoutesById
 }
@@ -853,6 +864,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainProvidersRulesKeyRouteImport
       parentRoute: typeof mainMainProvidersRouteRoute
     }
+    '/(main)/main/settings/debug/': {
+      id: '/(main)/main/settings/debug/'
+      path: '/'
+      fullPath: '/main/settings/debug/'
+      preLoaderRoute: typeof mainMainSettingsDebugIndexRouteImport
+      parentRoute: typeof mainMainSettingsDebugRouteRoute
+    }
     '/(main)/main/profiles/$type/detail/$uid': {
       id: '/(main)/main/profiles/$type/detail/$uid'
       path: '/$type/detail/$uid'
@@ -991,10 +1009,24 @@ const mainMainRulesRouteRouteChildren: mainMainRulesRouteRouteChildren = {
 const mainMainRulesRouteRouteWithChildren =
   mainMainRulesRouteRoute._addFileChildren(mainMainRulesRouteRouteChildren)
 
+interface mainMainSettingsDebugRouteRouteChildren {
+  mainMainSettingsDebugIndexRoute: typeof mainMainSettingsDebugIndexRoute
+}
+
+const mainMainSettingsDebugRouteRouteChildren: mainMainSettingsDebugRouteRouteChildren =
+  {
+    mainMainSettingsDebugIndexRoute: mainMainSettingsDebugIndexRoute,
+  }
+
+const mainMainSettingsDebugRouteRouteWithChildren =
+  mainMainSettingsDebugRouteRoute._addFileChildren(
+    mainMainSettingsDebugRouteRouteChildren,
+  )
+
 interface mainMainSettingsRouteRouteChildren {
   mainMainSettingsAboutRouteRoute: typeof mainMainSettingsAboutRouteRoute
   mainMainSettingsClashRouteRoute: typeof mainMainSettingsClashRouteRoute
-  mainMainSettingsDebugRouteRoute: typeof mainMainSettingsDebugRouteRoute
+  mainMainSettingsDebugRouteRoute: typeof mainMainSettingsDebugRouteRouteWithChildren
   mainMainSettingsNyanpasuRouteRoute: typeof mainMainSettingsNyanpasuRouteRoute
   mainMainSettingsSystemRouteRoute: typeof mainMainSettingsSystemRouteRoute
   mainMainSettingsUserInterfaceRouteRoute: typeof mainMainSettingsUserInterfaceRouteRoute
@@ -1005,7 +1037,7 @@ interface mainMainSettingsRouteRouteChildren {
 const mainMainSettingsRouteRouteChildren: mainMainSettingsRouteRouteChildren = {
   mainMainSettingsAboutRouteRoute: mainMainSettingsAboutRouteRoute,
   mainMainSettingsClashRouteRoute: mainMainSettingsClashRouteRoute,
-  mainMainSettingsDebugRouteRoute: mainMainSettingsDebugRouteRoute,
+  mainMainSettingsDebugRouteRoute: mainMainSettingsDebugRouteRouteWithChildren,
   mainMainSettingsNyanpasuRouteRoute: mainMainSettingsNyanpasuRouteRoute,
   mainMainSettingsSystemRouteRoute: mainMainSettingsSystemRouteRoute,
   mainMainSettingsUserInterfaceRouteRoute:
