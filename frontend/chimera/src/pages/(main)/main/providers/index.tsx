@@ -231,12 +231,10 @@ function RouteComponent() {
   const proxiesProvider = useClashProxiesProvider();
   const rulesProvider = useClashRulesProvider();
 
-  const proxiesLoading = proxiesProvider.isLoading;
   const proxies = proxiesProvider.data
     ? Object.entries(proxiesProvider.data)
     : null;
 
-  const rulesLoading = rulesProvider.isLoading;
   const rules = rulesProvider.data ? Object.entries(rulesProvider.data) : null;
 
   const proxiesBlockTask = useBlockTask('update-proxies-provider', async () => {
@@ -290,15 +288,7 @@ function RouteComponent() {
           </Button>
         </GroupTitle>
 
-        {proxiesLoading ? (
-          <GroupContent>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Card key={i} variant="outline">
-                <CardContent className="bg-on-background/5 h-32 animate-pulse" />
-              </Card>
-            ))}
-          </GroupContent>
-        ) : proxies && proxies.length ? (
+        {proxies && proxies.length ? (
           <GroupContent>
             {proxies.map(([key, data]) => (
               <Proxies key={key} data={data} />
@@ -324,15 +314,7 @@ function RouteComponent() {
           </Button>
         </GroupTitle>
 
-        {rulesLoading ? (
-          <GroupContent>
-            {Array.from({ length: 6 }).map((_, i) => (
-              <Card key={i} variant="outline">
-                <CardContent className="bg-on-background/5 h-32 animate-pulse" />
-              </Card>
-            ))}
-          </GroupContent>
-        ) : rules && rules.length ? (
+        {rules && rules.length ? (
           <GroupContent>
             {rules.map(([key, data]) => (
               <Rules key={key} data={data} />
