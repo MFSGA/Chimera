@@ -14,9 +14,10 @@
  */
 
 import { useClashProxies } from '@chimera/interface';
-import { cn, LazyImage } from '@chimera/ui';
+import { cn } from '@chimera/ui';
 import { Link, useLocation } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
+import { CacheImage } from '@/components/ui/image';
 
 /**
  * 代理组导航组件
@@ -61,8 +62,8 @@ export default function ProxiesNavigate() {
               {/* 代理组图标（如果有） */}
               {group.icon && (
                 <div className="size-8">
-                  <LazyImage
-                    src={group.icon}
+                  <CacheImage
+                    icon={group.icon}
                     className="size-8"
                     loadingClassName="rounded-full"
                   />
