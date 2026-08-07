@@ -1,6 +1,5 @@
 import { useClashRules } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { Tooltip } from '@mui/material';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import ListRounded from '~icons/material-symbols/lists-rounded';
 import {
@@ -19,6 +18,11 @@ import {
   SidebarToggleButton,
   useSidebar,
 } from '@/components/ui/slider-sidebar';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
 import ProxyIcon from './_modules/proxy-icon';
@@ -53,35 +57,41 @@ const Item = ({
   };
 
   return (
-    <Tooltip title={open ? '' : children} placement="right">
-      <Button
-        variant="fab"
-        data-active={String(item === proxy)}
-        className={cn(
-          'h-12 min-w-0 px-3',
-          'flex items-center gap-2',
-          'data-[active=true]:bg-surface-variant/50',
-          'data-[active=false]:bg-transparent',
-          'data-[active=false]:shadow-none',
-          'data-[active=false]:hover:shadow-none',
-          'data-[active=false]:hover:bg-surface-variant/30',
-        )}
-        onClick={handleClick}
-        asChild
-      >
-        <Link
-          to="."
-          search={{
-            proxy: item,
-          }}
+    <Tooltip open={open ? false : undefined}>
+      <TooltipTrigger asChild>
+        <Button
+          variant="fab"
+          data-active={String(item === proxy)}
+          className={cn(
+            'h-12 min-w-0 px-3',
+            'flex items-center gap-2',
+            'data-[active=true]:bg-surface-variant/50',
+            'data-[active=false]:bg-transparent',
+            'data-[active=false]:shadow-none',
+            'data-[active=false]:hover:shadow-none',
+            'data-[active=false]:hover:bg-surface-variant/30',
+          )}
+          onClick={handleClick}
+          asChild
         >
-          <div className="text-md grid size-6 shrink-0 place-content-center">
-            {icon}
-          </div>
+          <Link
+            to="."
+            search={{
+              proxy: item,
+            }}
+          >
+            <div className="text-md grid size-6 shrink-0 place-content-center">
+              {icon}
+            </div>
 
-          <SidebarLabelItem>{children}</SidebarLabelItem>
-        </Link>
-      </Button>
+            <SidebarLabelItem>{children}</SidebarLabelItem>
+          </Link>
+        </Button>
+      </TooltipTrigger>
+
+      <TooltipContent side="right">
+        <p>{children}</p>
+      </TooltipContent>
     </Tooltip>
   );
 };
