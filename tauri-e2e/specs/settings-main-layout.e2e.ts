@@ -72,6 +72,22 @@ describe('main settings reference layout', () => {
       const animatedOutlet = content?.firstElementChild as HTMLElement | null;
       const routeContent =
         animatedOutlet?.firstElementChild as HTMLElement | null;
+      const systemLink = sidebar?.querySelector<HTMLElement>(
+        'a[href="/main/settings/system"]',
+      );
+      const systemLabel = systemLink?.querySelector<HTMLElement>(
+        '.text-sm.font-medium',
+      );
+      const systemDescription =
+        systemLink?.querySelector<HTMLElement>('[class*="text-xs"]');
+      const externalCoreIcon = sidebar?.querySelector<HTMLImageElement>(
+        'a[href="/main/settings/web-ui"] img',
+      );
+      const zincProbe = document.createElement('div');
+      zincProbe.className = 'text-zinc-500';
+      document.body.append(zincProbe);
+      const zinc500Color = getComputedStyle(zincProbe).color;
+      zincProbe.remove();
       const rect = (element: HTMLElement | null) =>
         element
           ? {
@@ -98,6 +114,18 @@ describe('main settings reference layout', () => {
         animatedOutlet: rect(animatedOutlet),
         animatedOutletStyle: style(animatedOutlet),
         routeContent: rect(routeContent),
+        systemLink: rect(systemLink ?? null),
+        externalCoreIcon: rect(externalCoreIcon ?? null),
+        systemLabelStyle: systemLabel
+          ? {
+              textOverflow: getComputedStyle(systemLabel).textOverflow,
+              whiteSpace: getComputedStyle(systemLabel).whiteSpace,
+            }
+          : null,
+        systemDescriptionColor: systemDescription
+          ? getComputedStyle(systemDescription).color
+          : null,
+        zinc500Color,
       };
     });
 
@@ -127,6 +155,32 @@ describe('main settings reference layout', () => {
       JSON.stringify(state, null, 2),
     );
     assert.ok(state.routeContent, JSON.stringify(state, null, 2));
+    assert.ok(state.systemLink, JSON.stringify(state, null, 2));
+    assert.equal(
+      state.externalCoreIcon?.width,
+      30,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.externalCoreIcon?.height,
+      30,
+      JSON.stringify(state, null, 2),
+    );
+    assert.notEqual(
+      state.systemLabelStyle?.textOverflow,
+      'ellipsis',
+      JSON.stringify(state, null, 2),
+    );
+    assert.notEqual(
+      state.systemLabelStyle?.whiteSpace,
+      'nowrap',
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.systemDescriptionColor,
+      state.zinc500Color,
+      JSON.stringify(state, null, 2),
+    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
