@@ -1,7 +1,11 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import {
+  createContext,
+  isValidElement,
+  useContext,
   useEffect,
+  useMemo,
   useState,
   type ChangeEvent,
   type ComponentProps,
@@ -9,27 +13,52 @@ import {
 
 export const inputContainerVariants = cva(
   [
-    'group relative box-border inline-flex h-14 w-full flex-auto cursor-pointer items-center justify-between px-4 py-4 outline-hidden',
+    'group relative box-border inline-flex w-full flex-auto items-baseline',
+    'cursor-pointer',
+    'px-4 py-4 outline-hidden',
+    // TODO: size variants, fix this
+    'flex h-14 items-center justify-between',
     'dark:text-on-surface',
   ],
   {
     variants: {
       variant: {
         filled: 'rounded-t bg-surface-variant/30 dark:bg-surface',
+        // outlined use inputLabelFieldsetVariants
         outlined: '',
       },
     },
-    defaultVariants: { variant: 'filled' },
+    defaultVariants: {
+      variant: 'filled',
+    },
   },
 );
 
+export type InputContainerVariants = VariantProps<
+  typeof inputContainerVariants
+>;
+
 export const inputVariants = cva(
-  'peer w-full border-none bg-transparent p-0 placeholder-transparent outline-hidden transition-[margin] duration-200',
+  [
+    'peer',
+    'w-full border-none p-0',
+    'bg-transparent placeholder-transparent outline-hidden',
+    'transition-[margin] duration-200',
+  ],
   {
     variants: {
-      variant: { filled: '', outlined: '' },
-      haveValue: { true: '', false: '' },
-      haveLabel: { true: '', false: '' },
+      variant: {
+        filled: '',
+        outlined: '',
+      },
+      haveValue: {
+        true: '',
+        false: '',
+      },
+      haveLabel: {
+        true: '',
+        false: '',
+      },
     },
     compoundVariants: [
       {
@@ -39,106 +68,349 @@ export const inputVariants = cva(
         className: 'mt-3!',
       },
     ],
+    defaultVariants: {
+      variant: 'filled',
+      haveValue: false,
+      haveLabel: false,
+    },
   },
 );
 
-export type InputProps = ComponentProps<'input'> &
-  VariantProps<typeof inputContainerVariants> & { label?: string };
+export type InputVariants = VariantProps<typeof inputVariants>;
+
+export const inputLabelVariants = cva(
+  [
+    'absolute',
+    'top-4 left-4',
+    'pointer-events-none',
+    'text-base select-none',
+    // TODO: only transition position, not text color
+    'transition-all duration-200',
+  ],
+  {
+    variants: {
+      variant: {
+        filled: [
+          'group-data-[state=open]:top-2 group-data-[state=open]:dark:text-surface',
+          'group-data-[state=open]:text-xs group-data-[state=open]:text-primary',
+        ],
+        outlined: [
+          'group-data-[state=open]:-top-2',
+          'group-data-[state=open]:text-sm',
+          'group-data-[state=open]:text-primary',
+
+          'dark:group-data-[state=open]:text-inverse-primary',
+          'dark:group-data-[state=closed]:text-primary-container',
+
+          // "before:absolute before:inset-0 before:content-['']",
+          // "before:-z-10 before:-mx-1",
+          // 'before:bg-transparent ',
+          // 'before:inline-block',
+        ],
+      },
+      focus: {
+        true: '',
+        false: '',
+      },
+    },
+    compoundVariants: [
+      {
+        variant: 'filled',
+        focus: true,
+        className: 'top-2 text-xs',
+      },
+      {
+        variant: 'outlined',
+        focus: true,
+        className: '-top-2 text-sm',
+      },
+    ],
+    defaultVariants: {
+      variant: 'filled',
+      focus: false,
+    },
+  },
+);
+
+export type InputLabelVariants = VariantProps<typeof inputLabelVariants>;
+
+export const inputLineVariants = cva('', {
+  variants: {
+    variant: {
+      filled: [
+        'border-b-outline-variant absolute inset-x-0 bottom-0 w-full border-b',
+        'transition-all duration-200',
+        // pseudo elements be overlay parent element, will not affect the box size
+        'after:absolute after:inset-x-0 after:bottom-0 after:z-10',
+        "after:scale-x-0 after:border-b-2 after:opacity-0 after:content-['']",
+        'after:transition-all after:duration-200',
+        'after:border-primary dark:after:border-on-primary-container',
+        // sync parent group state, state from radix-ui
+        'group-data-[state=open]:border-b-0',
+        'group-data-[state=open]:after:scale-x-100',
+        'group-data-[state=open]:after:opacity-100',
+        'peer-focus:border-b-0',
+        'peer-focus:after:scale-x-100',
+        'peer-focus:after:opacity-100',
+      ],
+      // hidden line for outlined variant
+      outlined: 'hidden',
+    },
+  },
+  defaultVariants: {
+    variant: 'filled',
+  },
+});
+
+export type InputLineVariants = VariantProps<typeof inputLineVariants>;
+
+export const inputLabelFieldsetVariants = cva('pointer-events-none', {
+  variants: {
+    variant: {
+      // only for outlined variant
+      filled: 'hidden',
+      outlined: [
+        'absolute inset-0 text-left',
+        'rounded transition-all duration-200',
+        // may open border width will be 1.5, idk
+        'group-data-[state=closed]:border',
+        'group-data-[state=open]:border-2',
+        'peer-not-focus:border',
+        'peer-focus:border-2',
+        // different material web border color, i think this looks better
+        'group-data-[state=closed]:border-outline-variant',
+        'group-data-[state=open]:border-primary',
+        'peer-not-focus:border-primary-container',
+        'peer-focus:border-primary',
+        // dark must be prefixed
+        'dark:group-data-[state=closed]:border-outline-variant',
+        'dark:group-data-[state=open]:border-primary-container',
+        'dark:peer-not-focus:border-outline-variant',
+        'dark:peer-focus:border-primary-container',
+      ],
+    },
+  },
+  defaultVariants: {
+    variant: 'filled',
+  },
+});
+
+export type InputLabelFieldsetVariants = VariantProps<
+  typeof inputLabelFieldsetVariants
+>;
+
+export const inputLabelLegendVariants = cva('', {
+  variants: {
+    variant: {
+      // only for outlined variant
+      filled: 'hidden',
+      outlined: 'invisible ml-2 h-0 px-2 text-sm',
+    },
+    haveValue: {
+      true: '',
+      false: '',
+    },
+  },
+  compoundVariants: [
+    {
+      variant: 'outlined',
+      haveValue: false,
+      className: ['group-data-[state=closed]:hidden', 'group-not-focus:hidden'],
+    },
+  ],
+  defaultVariants: {
+    variant: 'filled',
+    haveValue: false,
+  },
+});
+
+export type InputLabelLegendVariants = VariantProps<
+  typeof inputLabelLegendVariants
+>;
+
+type InputContextType = {
+  haveLabel?: boolean;
+  haveValue?: boolean;
+} & InputContainerVariants;
+
+const InputContext = createContext<InputContextType | null>(null);
+
+const useInputContext = () => {
+  const context = useContext(InputContext);
+
+  if (!context) {
+    throw new Error('InputContext is undefined');
+  }
+
+  return context;
+};
+
+export const InputContainer = ({
+  className,
+  ...props
+}: ComponentProps<'div'>) => {
+  const { variant } = useInputContext();
+
+  return (
+    <div
+      className={cn(
+        inputContainerVariants({
+          variant,
+        }),
+        className,
+      )}
+      {...props}
+    />
+  );
+};
+
+export const InputLine = ({ className, ...props }: ComponentProps<'input'>) => {
+  const { variant } = useInputContext();
+
+  return (
+    <div
+      className={cn(
+        inputLineVariants({
+          variant,
+        }),
+        className,
+      )}
+      {...props}
+    />
+  );
+};
+
+export type InputProps = ComponentProps<'input'> & {
+  label?: string;
+} & InputContainerVariants;
 
 export const Input = ({
-  variant = 'filled',
+  variant,
   className,
   label,
+  children,
   onChange,
-  value,
-  defaultValue,
   ...props
 }: InputProps) => {
-  const [haveValue, setHaveValue] = useState(
-    Boolean(value ?? defaultValue ?? ''),
-  );
+  const [haveValue, setHaveValue] = useState(false);
+
+  const haveLabel = useMemo(() => {
+    if (label) {
+      return true;
+    }
+
+    if (isValidElement(children)) {
+      if (typeof children.type !== 'string') {
+        if ('displayName' in children.type) {
+          if (children.type.displayName === InputLabel.displayName) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }, [children, label]);
 
   useEffect(() => {
-    setHaveValue(Boolean(value ?? defaultValue ?? ''));
-  }, [value, defaultValue]);
+    if (props.value || props.defaultValue) {
+      setHaveValue(true);
+    } else {
+      setHaveValue(false);
+    }
+  }, [props.value, props.defaultValue]);
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
     setHaveValue(event.target.value.length > 0);
     onChange?.(event);
   };
-  const open = haveValue;
+
+  useEffect(() => {
+    setHaveValue(Boolean(props.value || props.defaultValue));
+  }, [props.value, props.defaultValue]);
 
   return (
-    <div
-      className={inputContainerVariants({ variant })}
-      data-state={open ? 'open' : 'closed'}
+    <InputContext.Provider
+      value={{
+        haveLabel,
+        haveValue,
+        variant,
+      }}
     >
-      <input
-        className={cn(
-          inputVariants({ variant, haveValue, haveLabel: Boolean(label) }),
-          className,
-        )}
-        autoComplete="off"
-        autoCapitalize="off"
-        autoCorrect="off"
-        spellCheck={false}
-        value={value}
-        defaultValue={defaultValue}
-        onChange={handleChange}
-        {...props}
-      />
+      <InputContainer>
+        <input
+          className={cn(
+            inputVariants({
+              variant,
+              haveValue,
+              haveLabel,
+            }),
+            className,
+          )}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onChange={handleChange}
+          {...props}
+        />
 
-      {label && (
-        <>
-          <fieldset
-            className={cn(
-              'pointer-events-none absolute inset-0 rounded text-left transition-all duration-200',
-              variant === 'filled' && 'hidden',
-              variant === 'outlined' && [
-                'group-data-[state=closed]:border group-data-[state=open]:border-2',
-                'group-data-[state=closed]:border-outline-variant group-data-[state=open]:border-primary',
-                'peer-focus:border-primary dark:group-data-[state=open]:border-primary-container',
-              ],
-            )}
-          >
-            <legend
+        {label && (
+          <>
+            <fieldset
               className={cn(
-                'invisible ml-2 h-0 px-2 text-sm',
-                variant === 'filled' && 'hidden',
-                variant === 'outlined' && !haveValue && 'hidden',
+                inputLabelFieldsetVariants({
+                  variant,
+                }),
               )}
             >
-              {label}
-            </legend>
-          </fieldset>
+              <legend
+                className={cn(
+                  inputLabelLegendVariants({
+                    variant,
+                    haveValue,
+                  }),
+                )}
+              >
+                {label}
+              </legend>
+            </fieldset>
 
-          <label
-            className={cn(
-              'pointer-events-none absolute top-4 left-4 text-base transition-all duration-200 select-none',
-              open && 'text-primary text-xs',
-              variant === 'filled' && open && 'top-2',
-              variant === 'outlined' && open && '-top-2 text-sm',
-            )}
-          >
-            {label}
-          </label>
-        </>
-      )}
+            <InputLabel>{label}</InputLabel>
+          </>
+        )}
 
-      {variant === 'filled' && (
-        <div
-          className={cn(
-            'border-b-outline-variant absolute inset-x-0 bottom-0 w-full border-b transition-all',
-            'after:border-primary after:absolute after:inset-x-0 after:bottom-0 after:scale-x-0 after:border-b-2 after:opacity-0 after:transition-all after:content-[""]',
-            'peer-focus:after:scale-x-100 peer-focus:after:opacity-100',
-          )}
-        />
-      )}
-    </div>
+        {children}
+
+        <InputLine />
+      </InputContainer>
+    </InputContext.Provider>
   );
 };
 
 Input.displayName = 'Input';
+
+export const InputLabel = ({
+  className,
+  ...props
+}: ComponentProps<'label'>) => {
+  const { haveValue, variant } = useInputContext();
+
+  return (
+    <label
+      className={cn(
+        inputLabelVariants({
+          variant,
+          focus: haveValue,
+        }),
+        className,
+      )}
+      {...props}
+    />
+  );
+};
+
+InputLabel.displayName = 'InputLabel';
 
 export type NumericInputProps = Omit<
   ComponentProps<'input'>,
@@ -152,71 +424,114 @@ export type NumericInputProps = Omit<
   max?: number;
   decimalScale?: number;
   allowNegative?: boolean;
-} & VariantProps<typeof inputContainerVariants>;
+} & InputContainerVariants;
 
 export const NumericInput = ({
+  label,
+  variant,
+  className,
+  onChange,
   value,
   defaultValue,
-  onChange,
   min,
   max,
   decimalScale,
   allowNegative = true,
   ...props
 }: NumericInputProps) => {
-  const [inputValue, setInputValue] = useState(() => {
+  const [inputValue, setInputValue] = useState<string>(() => {
     const initialValue = value ?? defaultValue;
-    return initialValue == null ? '' : String(initialValue);
+    return initialValue != null ? String(initialValue) : '';
   });
 
   useEffect(() => {
-    setInputValue(value == null ? '' : String(value));
+    setInputValue(value != null ? String(value) : '');
   }, [value]);
 
-  const normalize = (number: number) => {
-    let next = allowNegative ? number : Math.max(0, number);
-    if (min != null) next = Math.max(min, next);
-    if (max != null) next = Math.min(max, next);
-    return decimalScale == null ? next : Number(next.toFixed(decimalScale));
+  const validateAndFormatValue = (numValue: number): number => {
+    let validated = numValue;
+
+    if (!allowNegative && validated < 0) {
+      validated = 0;
+    }
+
+    if (min != null && validated < min) {
+      validated = min;
+    }
+
+    if (max != null && validated > max) {
+      validated = max;
+    }
+
+    if (decimalScale != null) {
+      validated = Number(validated.toFixed(decimalScale));
+    }
+
+    return validated;
   };
 
-  const commit = (rawValue: string) => {
-    if (!rawValue || rawValue === '-') {
+  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const rawValue = event.target.value;
+
+    // Allow empty string
+    if (rawValue === '') {
       setInputValue('');
       onChange?.(null);
       return;
     }
-    const parsed = Number(rawValue);
-    if (!Number.isNaN(parsed)) {
-      const next = normalize(parsed);
-      setInputValue(String(next));
-      onChange?.(next);
+
+    // Allow minus sign for negative numbers
+    if (rawValue === '-' && allowNegative) {
+      setInputValue('-');
+      return;
+    }
+
+    // Allow decimal point
+    if (rawValue.endsWith('.') || rawValue.endsWith(',')) {
+      setInputValue(rawValue);
+      return;
+    }
+
+    const numValue = Number(rawValue);
+
+    // Check if it's a valid number
+    if (!Number.isNaN(numValue)) {
+      setInputValue(rawValue);
+
+      // Only validate and callback when it's a complete number
+      if (!rawValue.endsWith('.') && !rawValue.endsWith(',')) {
+        const validated = validateAndFormatValue(numValue);
+        onChange?.(validated);
+      }
+    }
+  };
+
+  const handleBlur = () => {
+    if (inputValue === '' || inputValue === '-') {
+      setInputValue('');
+      onChange?.(null);
+      return;
+    }
+
+    const numValue = Number(inputValue);
+    if (!Number.isNaN(numValue)) {
+      const validated = validateAndFormatValue(numValue);
+      setInputValue(String(validated));
+      onChange?.(validated);
     }
   };
 
   return (
     <Input
-      {...props}
+      label={label}
+      variant={variant}
+      className={className}
+      value={inputValue}
+      onChange={handleChange}
+      onBlur={handleBlur}
       type="text"
       inputMode="decimal"
-      value={inputValue}
-      onChange={(event) => {
-        const rawValue = event.target.value;
-        if (
-          rawValue === '' ||
-          (rawValue === '-' && allowNegative) ||
-          rawValue.endsWith('.') ||
-          !Number.isNaN(Number(rawValue))
-        ) {
-          setInputValue(rawValue);
-          if (rawValue && rawValue !== '-' && !rawValue.endsWith('.')) {
-            onChange?.(normalize(Number(rawValue)));
-          } else if (!rawValue) {
-            onChange?.(null);
-          }
-        }
-      }}
-      onBlur={() => commit(inputValue)}
+      {...props}
     />
   );
 };
