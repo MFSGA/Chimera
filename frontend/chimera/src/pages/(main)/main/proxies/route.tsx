@@ -22,6 +22,7 @@ import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { ProfileType } from '../profiles/_modules/consts';
 import ProxiesNavigate from './_modules/proxies-navigate';
 
 /**
@@ -92,7 +93,11 @@ const Empty = () => {
         </div>
       ) : (
         <Button variant="raised" data-slot="proxies-no-proxies-button" asChild>
-          <Link className="flex items-center gap-2" to="/main/profiles">
+          <Link
+            className="flex items-center gap-2"
+            to="/main/profiles/$type"
+            params={{ type: ProfileType.Profile }}
+          >
             {m.proxies_group_empty_button_text()}
           </Link>
         </Button>
