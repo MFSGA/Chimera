@@ -18,17 +18,17 @@ export const SubscriptionCard = ({
   }
 
   return (
-    <Card className="col-span-2">
-      <CardHeader>{m.profile_subscription_title()}</CardHeader>
+    <Card className="col-span-2 flex flex-col justify-between">
+      <CardHeader>{m.providers_subscription_title()}</CardHeader>
 
       <CardContent>
         <LinearProgress value={progress} />
 
-        <div className="mt-2 flex items-center justify-between px-1">
+        <div className="flex items-center justify-between pb-2">
           <div className="text-sm font-bold">{progress.toFixed(2)}%</div>
 
           <div className="text-sm font-bold">
-            {filesize(used, { standard: 'iec' })} /{' '}
+            {filesize(used, { standard: 'iec' })} /
             {filesize(total, { standard: 'iec' })}
           </div>
         </div>
