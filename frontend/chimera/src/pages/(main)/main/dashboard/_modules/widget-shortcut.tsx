@@ -1,19 +1,3 @@
-/**
- * Dashboard 快捷操作 Widget
- *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/widget-shortcut.tsx`
- *
- * 两个 Widget 组件：
- * 1. ProxyShortcutsWidget — 系统代理 / TUN 模式快捷开关
- * 2. CoreShortcutsWidget — 当前运行核心状态卡片
- *
- * 适配说明：
- * - 使用 Chimera 的 PaperSwitchButton 替代 ref 的 SystemProxyButton/TunModeButton
- * - 核心状态显示使用 Chimera 的 getCoreStatus 接口
- * - 使用 div 基础卡片样式替代 ref 的 Card/CardHeader/CardContent 组件
- * - 使用 @chimera/interface 的 hooks 替代 @nyanpasu/interface
- */
-
 import {
   useClashConfig,
   useClashCores,
@@ -23,19 +7,21 @@ import {
   useSystemService,
   type CoreState,
 } from '@chimera/interface';
-import { cn } from '@chimera/utils';
+import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
-import NetworkPing from '~icons/material-symbols/network-ping';
-import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import { useMemo } from 'react';
-import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
+import {
+  SystemProxyButton,
+  TunModeButton,
+} from '@/components/settings/system-proxy';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import TextMarquee from '@/components/ui/text-marquee';
-import { m } from '@/paraglide/messages';
+import useCoreIcon from '@/hooks/use-core-icon';
+import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import WidgetItem from './widget-item';
 
-/** 代理状态枚举 */
 enum ProxyStatus {
   SYSTEM = 'system',
   TUN = 'tun',
@@ -43,10 +29,7 @@ enum ProxyStatus {
   DISABLED = 'disabled',
 }
 
-/**
- * 代理状态标题行
- * 显示当前系统代理/TUN 模式状态和相应颜色的标签
- */
+/** Resolve and render the current proxy mode badge. */
 const ProxyTitleRow = () => {
   const { value: enableSystemProxy } = useSetting('enable_system_proxy');
   const { value: enableTunMode } = useSetting('enable_tun_mode');
@@ -60,16 +43,14 @@ const ProxyTitleRow = () => {
       return ProxyStatus.TUN;
     }
 
-    if (enableSystemProxy) {
-      if (systemProxyStatus?.enable) {
-        const port = Number(systemProxyStatus.server.split(':')[1]);
+    if (enableSystemProxy && systemProxyStatus?.enable) {
+      const port = Number(systemProxyStatus.server.split(':')[1]);
 
-        if (port === clashConfigs?.['mixed-port']) {
-          return ProxyStatus.SYSTEM;
-        }
-
-        return ProxyStatus.OCCUPIED;
+      if (port === clashConfigs?.['mixed-port']) {
+        return ProxyStatus.SYSTEM;
       }
+
+      return ProxyStatus.OCCUPIED;
     }
 
     return ProxyStatus.DISABLED;
@@ -83,7 +64,7 @@ const ProxyTitleRow = () => {
   };
 
   return (
-    <div className="flex items-center gap-3 px-1">
+    <CardHeader className="flex items-center gap-3">
       <span className="shrink-0 font-bold">
         {m.dashboard_widget_proxy_status()}
       </span>
@@ -103,118 +84,73 @@ const ProxyTitleRow = () => {
         )}
         asChild
       >
-        <Link to="/settings">
+        <Link to="/main/settings/system">
           <TextMarquee className="px-2" fadeEdges fadeWidth={8}>
             {messages[status]}
           </TextMarquee>
         </Link>
       </Button>
-    </div>
+    </CardHeader>
   );
 };
 
-/**
- * ProxyShortcutsWidget — 系统代理 / TUN 模式快捷开关
- *
- * 显示：
- * - 当前代理状态标题
- * - 系统代理开关按钮
- * - TUN 模式开关按钮
- *
- * 使用 PaperSwitchButton 组件实现开关，与 Chimera 设置页面保持一致。
- */
+/** Render the system proxy and TUN shortcut controls. */
 export function ProxyShortcutsWidget({
   id,
   onCloseClick,
 }: WidgetComponentProps) {
-  const systemProxy = useSetting('enable_system_proxy');
-  const tunMode = useSetting('enable_tun_mode');
-
   return (
     <WidgetItem id={id} minW={3} minH={2} onCloseClick={onCloseClick}>
-      <div className="bg-surface-variant/30 flex size-full flex-col justify-between rounded-3xl">
+      <Card className="flex size-full flex-col justify-between">
         <ProxyTitleRow />
 
-        <div className="flex flex-1 gap-3 p-2">
-          {/* 系统代理按钮 */}
-          <PaperSwitchButton
-            checked={systemProxy.value || false}
-            onClick={() => systemProxy.upsert(!systemProxy.value)}
-          >
-            <div className="flex flex-col items-center gap-2">
-              <NetworkPing className="size-6" />
-              <span className="text-sm">
-                {m.settings_system_proxy_system_proxy_label()}
-              </span>
-            </div>
-          </PaperSwitchButton>
-
-          {/* TUN 模式按钮 */}
-          <PaperSwitchButton
-            checked={tunMode.value || false}
-            onClick={() => tunMode.upsert(!tunMode.value)}
-          >
-            <div className="flex flex-col items-center gap-2">
-              <SettingsEthernet className="size-6" />
-              <span className="text-sm">
-                {m.settings_system_proxy_tun_mode_label()}
-              </span>
-            </div>
-          </PaperSwitchButton>
-        </div>
-      </div>
+        <CardContent className="flex-1 gap-3">
+          <SystemProxyButton className="h-full rounded-3xl" />
+          <TunModeButton className="h-full rounded-3xl" />
+        </CardContent>
+      </Card>
     </WidgetItem>
   );
 }
 
-/**
- * 核心状态徽章
- * 显示核心运行状态的文本描述
- */
+/** Build the explanatory badge for the current core/service state. */
 const CoreStatusBadge = () => {
   const {
     query: { data: serviceStatus },
   } = useSystemService();
-
   const coreStatusQuery = useCoreStatus();
 
   const message = useMemo<string>(() => {
-    const status = coreStatusQuery.data?.status;
-    const coreState = status as CoreState | undefined;
-    const isRunning = coreState === 'Running';
+    const coreState = coreStatusQuery.data?.status as CoreState | undefined;
 
-    if (isRunning) {
+    if (coreState === 'Running') {
       if (serviceStatus?.server?.core_infos?.state === 'Running') {
         return m.dashboard_widget_core_status_running_by_service();
       }
+
       return m.dashboard_widget_core_status_running_by_child_process();
     }
-
-    let stoppedMessage: string;
-    let serviceMessage: string;
 
     const stoppedInfo =
       coreState && typeof coreState === 'object' && 'Stopped' in coreState
         ? coreState.Stopped
         : null;
 
-    if (serviceStatus?.status === 'running') {
-      serviceMessage = m.dashboard_widget_core_service_running();
+    const serviceMessage =
+      serviceStatus?.status === 'running'
+        ? m.dashboard_widget_core_service_running()
+        : serviceStatus?.status === 'stopped'
+          ? m.dashboard_widget_core_service_stopped()
+          : m.dashboard_widget_core_service_not_installed();
 
-      if (stoppedInfo) {
-        stoppedMessage =
-          m.dashboard_widget_core_stopped_by_service_with_message({
+    let stoppedMessage = m.dashboard_widget_core_stopped_unknown();
+
+    if (serviceStatus?.status === 'running') {
+      stoppedMessage = stoppedInfo
+        ? m.dashboard_widget_core_stopped_by_service_with_message({
             message: stoppedInfo,
-          });
-      } else {
-        stoppedMessage = m.dashboard_widget_core_stopped_by_service_unknown();
-      }
-    } else if (serviceStatus?.status === 'stopped') {
-      serviceMessage = m.dashboard_widget_core_service_stopped();
-      stoppedMessage = m.dashboard_widget_core_stopped_unknown();
-    } else {
-      serviceMessage = m.dashboard_widget_core_service_not_installed();
-      stoppedMessage = m.dashboard_widget_core_stopped_unknown();
+          })
+        : m.dashboard_widget_core_stopped_by_service_unknown();
     }
 
     if (stoppedInfo) {
@@ -241,18 +177,15 @@ const CoreStatusBadge = () => {
   );
 };
 
-/**
- * 当前核心卡片
- * 显示当前选中的核心名称、版本和运行状态
- */
+/** Render the selected core, version, and live status. */
 const CurrentCoreCard = () => {
   const { query: clashCores } = useClashCores();
   const { value: currentCoreKey } = useSetting('clash_core');
+  const currentCoreIcon = useCoreIcon(currentCoreKey);
+  const currentCore = currentCoreKey && clashCores.data?.[currentCoreKey];
   const coreStatusQuery = useCoreStatus();
-
-  const status = coreStatusQuery.data?.status as CoreState | undefined;
-  const isRunning = status === 'Running';
-  const currentCore = currentCoreKey ? clashCores.data?.[currentCoreKey] : null;
+  const coreState = coreStatusQuery.data?.status as CoreState | undefined;
+  const isRunning = coreState === 'Running';
 
   return (
     <Button
@@ -265,14 +198,13 @@ const CurrentCoreCard = () => {
       data-slot="current-core-card"
       asChild
     >
-      <Link to="/settings">
-        {/* 核心图标区域 */}
-        <div
-          className="bg-surface-variant flex size-12 shrink-0 items-center justify-center rounded-full"
+      <Link to="/main/settings/clash">
+        <img
+          src={currentCoreIcon}
+          alt={currentCore?.name ?? currentCoreKey ?? ''}
+          className="size-12 shrink-0"
           data-slot="core-icon"
-        >
-          <SettingsEthernet className="size-6" />
-        </div>
+        />
 
         <div
           className="flex flex-1 flex-col items-start gap-1 truncate"
@@ -325,33 +257,25 @@ const CurrentCoreCard = () => {
   );
 };
 
-/**
- * CoreShortcutsWidget — 当前运行核心状态卡片
- *
- * 显示：
- * - 核心状态徽章（运行中/已停止/服务状态）
- * - 当前核心的详细信息卡片（名称、版本、运行状态指示器）
- * - 点击进入设置-核心页面
- */
+/** Render the core status shortcut card. */
 export function CoreShortcutsWidget({
   id,
   onCloseClick,
 }: WidgetComponentProps) {
   return (
     <WidgetItem id={id} minW={4} minH={2} onCloseClick={onCloseClick}>
-      <div className="bg-surface-variant/30 flex size-full flex-col justify-between rounded-3xl p-2">
-        <div className="flex items-center gap-3 px-1">
+      <Card className="flex size-full flex-col justify-between">
+        <CardHeader>
           <span className="shrink-0 font-bold">
             {m.dashboard_widget_core_status()}
           </span>
-
           <CoreStatusBadge />
-        </div>
+        </CardHeader>
 
-        <div className="flex-1 pt-2">
+        <CardContent className="flex-1">
           <CurrentCoreCard />
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </WidgetItem>
   );
 }
