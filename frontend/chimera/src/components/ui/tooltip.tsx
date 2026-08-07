@@ -1,4 +1,5 @@
 import { cn } from '@chimera/ui';
+import { motion } from 'motion/react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
 import type { ComponentProps } from 'react';
 
@@ -35,12 +36,15 @@ export function TooltipTrigger(props: TooltipTriggerProps) {
 
 export type TooltipContentProps = ComponentProps<
   typeof TooltipPrimitive.Content
->;
+> & {
+  layout?: boolean | 'position' | 'size' | 'preserve-aspect';
+};
 
 /** Render the ref-style translucent rounded tooltip surface. */
 export function TooltipContent({
   className,
   children,
+  layout = 'preserve-aspect',
   sideOffset = 10,
   ...props
 }: TooltipContentProps) {
@@ -49,15 +53,18 @@ export function TooltipContent({
       <TooltipPrimitive.Content
         sideOffset={sideOffset}
         className={cn(
-          'z-50 w-fit rounded-full px-3 py-1.5 text-xs text-balance',
-          'dark:text-on-surface backdrop-blur-lg',
+          'z-50 w-fit rounded-full text-xs text-balance',
+          'dark:text-on-surface',
+          'backdrop-blur-lg',
           'bg-primary-container/20 dark:bg-primary/10',
           'dark:shadow-inverse-on-surface/30 shadow-on-primary-container/30 shadow-sm',
           className,
         )}
         {...props}
       >
-        {children}
+        <motion.div className="overflow-hidden px-3 py-1.5 text-xs text-balance">
+          <motion.div layout={layout}>{children}</motion.div>
+        </motion.div>
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   );
