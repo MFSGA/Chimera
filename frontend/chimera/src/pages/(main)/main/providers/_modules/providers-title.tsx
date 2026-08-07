@@ -1,35 +1,10 @@
-/**
- * Providers 页面标题组件
- *
- * 迁移自 ref: `ref/frontend/nyanpasu/src/pages/(main)/main/providers/_modules/providers-title.tsx`
- *
- * 功能：
- * - 提供返回按钮，导航到 /main/providers
- * - 滚动时显示/隐藏大标题（sticky 效果）
- * - 使用 motion 实现标题过渡动画
- */
-
 import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
+import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, type ComponentProps } from 'react';
 import { Button } from '@/components/ui/button';
 import { useScrollArea } from '@/components/ui/scroll-area';
-
-/** 返回按钮 SVG */
-function BackArrowIcon() {
-  return (
-    <svg
-      className="size-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-    >
-      <path d="M20 12H4M10 18l-6-6 6-6" />
-    </svg>
-  );
-}
 
 const BackButton = () => {
   return (
@@ -40,7 +15,7 @@ const BackButton = () => {
       asChild
     >
       <Link to="/main/providers">
-        <BackArrowIcon />
+        <ArrowBackIosNewRounded className="size-4" />
       </Link>
     </Button>
   );
@@ -70,9 +45,7 @@ export function ProvidersTitle({
   ...props
 }: ComponentProps<'div'>) {
   const { offset } = useScrollArea();
-
   const id = useId();
-
   const showTopTitle = offset.top > 40;
 
   return (
