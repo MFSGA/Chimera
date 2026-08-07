@@ -17,12 +17,6 @@
  * - 添加 ProxyNodeButton（单节点选择 + 延迟测试）
  * - 使用 useContainerBreakpointValue 响应式调整列数（xs~xl）
  * - 使用 useCurrentGroupConnection 显示组流量（download/upload）
- *
- * 已完成：
- * - Step 4: 搜索/过滤功能（通过父路由 validateSearch 传入 searchQuery，已实现并应用于 filteredProxies）
- *
- * 后续计划：
- * - 添加排序功能（按延迟或名称）
  */
 
 import {
@@ -31,7 +25,7 @@ import {
   type ClashProxiesQueryGroupItem,
 } from '@chimera/interface';
 import { useContainerBreakpointValue } from '@chimera/ui';
-import { createFileRoute, useSearch } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import ArrowDownwardAltRounded from '~icons/material-symbols/arrow-downward-alt-rounded';
 import ArrowUpwardAltRounded from '~icons/material-symbols/arrow-upward-alt-rounded';
@@ -65,18 +59,10 @@ export const Route = createFileRoute('/(main)/main/proxies/$name')({
  * - Virtualized Grid：多列虚拟化网格（每个 ProxyNodeButton）
  * - DelayTestButton：浮动延迟测试按钮
  *
- * 搜索过滤（Step 4）：
- * - 通过 useSearch({ from: '/(main)/main/proxies' }) 读取父路由的 searchQuery
- * - 基于 searchQuery 对 currentGroup.all 进行大小写不敏感的模糊匹配
- * - 过滤后的列表用于虚拟滚动，搜索时自动调整 virtualizer 的 count
- * - 在 GroupHeader 旁显示搜索结果计数（"共 N 个节点"）
  */
 function RouteComponent() {
   // 从路由参数中获取代理组名称
   const { name: proxyGroupName } = Route.useParams();
-
-  // 从父路由读取 searchQuery 搜索参数
-  const { searchQuery } = useSearch({ from: '/(main)/main/proxies' });
 
   const {
     proxies: { data: proxies },
@@ -92,28 +78,6 @@ function RouteComponent() {
 
     return proxies?.groups.find((group) => group.name === proxyGroupName);
   }, [proxies, proxyGroupName, proxyMode]);
-
-  // 搜索过滤：基于 searchQuery 对节点名称进行大小写不敏感的模糊匹配
-  const filteredProxies = useMemo(() => {
-    const all = currentGroup?.all;
-
-    if (!all || !all.length) {
-      return [];
-    }
-
-    if (!searchQuery) {
-      return all;
-    }
-
-    const lowerQuery = searchQuery.toLowerCase();
-
-    return all.filter(
-      (proxy) =>
-        proxy.name.toLowerCase().includes(lowerQuery) ||
-        // 也匹配节点类型（如 Shadowsocks、Vmess 等）
-        proxy.type?.toLowerCase().includes(lowerQuery),
-    );
-  }, [currentGroup?.all, searchQuery]);
 
   // 获取 AppContentScrollArea 的 viewportRef（用于同步虚拟滚动）
   const { viewportRef } = useScrollArea();
@@ -132,9 +96,8 @@ function RouteComponent() {
   );
 
   // 初始化 @tanstack/react-virtual 多列虚拟化
-  // 注意：count 使用 filteredProxies.length 而非 currentGroup.all.length
   const virtualizer = useVirtualizer({
-    count: filteredProxies.length,
+    count: currentGroup?.all?.length || 0,
     getScrollElement: () => viewportRef.current,
     estimateSize: () => 60,
     overscan: 5,
@@ -145,19 +108,18 @@ function RouteComponent() {
   const virtualItems = virtualizer.getVirtualItems();
 
   // 滚动到当前选中节点（便于用户在列表中快速定位）
-  // 注意：在 filteredProxies 中搜索当前节点索引，而非 currentGroup.all
   const handleScrollToCurrentNode = useCallback(() => {
-    const index = filteredProxies.findIndex(
+    const index = currentGroup?.all?.findIndex(
       (proxy) => proxy.name === currentGroup?.now,
     );
 
-    if (index !== undefined && index >= 0) {
+    if (index !== undefined) {
       virtualizer.scrollToIndex(index, {
         align: 'center',
         behavior: 'smooth',
       });
     }
-  }, [filteredProxies, currentGroup?.now, virtualizer]);
+  }, [currentGroup?.all, currentGroup?.now, virtualizer]);
 
   // 获取经过当前组的连接流量（用于显示 download/upload 速率）
   const currentGroupConnection = useCurrentGroupConnection(currentGroup);
@@ -172,20 +134,15 @@ function RouteComponent() {
         <div className="flex items-center gap-2">
           <div>{currentGroup?.name}</div>
 
-          {/* 搜索匹配数（仅在有搜索条件时显示） */}
-          {searchQuery && (
-            <span className="text-on-surface-variant/70 text-xs">
-              匹配 {filteredProxies.length} / {currentGroup?.all?.length ?? 0}{' '}
-              个节点
-            </span>
-          )}
-
           {/* 下载流量 */}
           <div className="flex items-center">
             <ArrowDownwardAltRounded className="size-6" />
 
             <span className="text-sm">
-              {filesize(currentGroupConnection?.download ?? 0)}/s
+              {filesize(currentGroupConnection?.download ?? 0, {
+                standard: 'iec',
+              })}
+              /s
             </span>
           </div>
 
@@ -194,7 +151,10 @@ function RouteComponent() {
             <ArrowUpwardAltRounded className="size-6" />
 
             <span className="text-sm">
-              {filesize(currentGroupConnection?.upload ?? 0)}/s
+              {filesize(currentGroupConnection?.upload ?? 0, {
+                standard: 'iec',
+              })}
+              /s
             </span>
           </div>
         </div>
@@ -220,8 +180,7 @@ function RouteComponent() {
         }}
       >
         {virtualItems.map((virtualItem) => {
-          // 使用 filteredProxies 而非 currentGroup.all，以支持搜索过滤
-          const proxy = filteredProxies[virtualItem.index];
+          const proxy = currentGroup?.all?.[virtualItem.index];
 
           if (!proxy) {
             return null;

@@ -8,27 +8,14 @@
  * - 左侧 SidebarContent 显示 ProxiesNavigate（代理组导航）
  * - 右侧内容区域通过 AnimatedOutletPreset 渲染组详情
  * - 空状态：无代理时显示 Empty 提示（直连模式引导切换 / 空组引导添加订阅）
- * - 搜索功能：通过 validateSearch 解析 searchQuery 参数，传递给子路由
- *
- * 当前阶段（Step 4 — 添加搜索功能）：
- * - searchQuery 从 validateSearch 解析，绑定到 URL search 参数
- * - 内容区顶部显示搜索输入框，输入即搜索（实时更新 URL）
- * - 子路由 $name.tsx 通过 useSearch({ from: parentRouteId }) 读取 searchQuery
- * - 搜索框使用防抖处理（200ms）避免 URL 更新过于频繁
- *
- * 已完成阶段回顾：
- * - Step 1: 双栏布局 + 组导航 + AnimatedOutletPreset
- * - Step 2: searchQuery validateSearch + Empty + AppContentScrollArea + proxyMode
- * - Step 3: @tanstack/react-virtual 多列网格 + GroupHeader + ProxyNodeButton
+ * - 内容区结构、空状态和代理组导航与 ref 保持一致
  */
 
 import { ProxyMode, useClashProxies, useProxyMode } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import DirectionsRunRounded from '~icons/material-symbols/directions-run-rounded';
-import Search from '~icons/material-symbols/search';
-import { useCallback, useRef, useState } from 'react';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { Button } from '@/components/ui/button';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
@@ -45,10 +32,6 @@ import ProxiesNavigate from './_modules/proxies-navigate';
  */
 export const Route = createFileRoute('/(main)/main/proxies')({
   component: RouteComponent,
-  validateSearch: (search: Record<string, unknown>) => ({
-    searchQuery:
-      typeof search.searchQuery === 'string' ? search.searchQuery : undefined,
-  }),
 });
 
 /**
@@ -123,17 +106,12 @@ const Empty = () => {
  *
  * 使用 Sidebar 组件提供双栏布局：
  * - 左侧：代理组导航列表（SidebarContent + ProxiesNavigate）
- * - 右侧：代理节点详情（AppContentScrollArea + 搜索框 + AnimatedOutletPreset）
- *
- * 搜索功能：
- * - 在右侧内容区顶部显示搜索输入框
- * - 输入即时更新 URL searchQuery 参数（通过 navigate）
- * - 子路由 $name.tsx 读取 searchQuery 过滤节点
+ * - 右侧：代理节点详情（AppContentScrollArea + AnimatedOutletPreset）
  *
  * 条件显示：
  * - 直连模式：隐藏侧栏 + Empty 空状态
  * - 无代理组：隐藏侧栏 + Empty 空状态
- * - Rule/Script 模式且有组：侧栏 + 内容区（含搜索框）
+ * - Rule/Script 模式且有组：侧栏 + 内容区
  */
 function RouteComponent() {
   const {
@@ -144,35 +122,6 @@ function RouteComponent() {
   const isNoProxies = !proxies?.groups?.length || proxies?.groups?.length === 0;
 
   const proxyMode = useProxyMode();
-
-  // 搜索功能
-  const { searchQuery } = Route.useSearch();
-  const navigate = useNavigate();
-  // 防抖定时器引用，匹配 codebase 中 `as never` 的 search 参数风格
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-
-  const handleSearchChange = useCallback(
-    (value: string) => {
-      // 防抖 200ms，避免每次输入都更新 URL
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-
-      debounceRef.current = setTimeout(() => {
-        navigate({
-          search: (prev: { searchQuery?: string }) => ({
-            ...prev,
-            searchQuery: value || undefined,
-          }),
-          // TanStack Router 的 navigate search 类型较严格，
-          // 使用 `as never` 匹配 codebase 模式（参见 scheme-provider.tsx:56）
-        } as never);
-      }, 200);
-    },
-    [navigate],
-  );
 
   return (
     <Sidebar data-slot="proxies-container">
@@ -209,33 +158,6 @@ function RouteComponent() {
             )}
             data-slot="proxies-content"
           >
-            {/* 搜索输入框 — 仅在非空状态时显示 */}
-            <div
-              className="sticky top-0 z-10 flex items-center gap-2 p-3"
-              data-slot="proxies-search-bar"
-            >
-              <div
-                className={cn(
-                  'flex h-10 w-full max-w-xs items-center gap-2 rounded-full px-4',
-                  'bg-surface-variant/30',
-                  'focus-within:ring-primary/30 focus-within:ring-2',
-                )}
-              >
-                <Search className="text-on-surface-variant size-5 shrink-0" />
-
-                <input
-                  className={cn(
-                    'h-full w-full bg-transparent text-sm outline-none',
-                    'placeholder:text-on-surface-variant/50',
-                  )}
-                  placeholder={m.proxies_search_placeholder()}
-                  defaultValue={searchQuery ?? ''}
-                  onChange={(e) => handleSearchChange(e.target.value)}
-                  data-slot="proxies-search-input"
-                />
-              </div>
-            </div>
-
             <AnimatedOutletPreset className="flex flex-1 flex-col" />
           </div>
         )}

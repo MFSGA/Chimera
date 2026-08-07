@@ -56,9 +56,6 @@ export default function ProxiesNavigate() {
             params={{
               name: group.name,
             }}
-            search={(prev) => ({
-              searchQuery: prev.searchQuery,
-            })}
           >
             <div className="flex items-center gap-2.5">
               {/* 代理组图标（如果有） */}
