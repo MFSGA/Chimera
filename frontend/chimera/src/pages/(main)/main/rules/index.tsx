@@ -9,67 +9,13 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useState } from 'react';
+import HighlightText from '@/components/ui/highlight-text';
 import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
 import { Route as IndexRoute } from './route';
 
 export const Route = createFileRoute('/(main)/main/rules/')({
   component: RouteComponent,
 });
-
-function HighlightText({
-  searchText,
-  children,
-}: {
-  searchText: string;
-  children: string;
-}) {
-  if (!searchText.trim()) {
-    return <span>{children}</span>;
-  }
-
-  const parts: { text: string; isHighlight: boolean }[] = [];
-  const searchLower = searchText.toLowerCase();
-  const textLower = children.toLowerCase();
-  let lastIndex = 0;
-  let index = textLower.indexOf(searchLower, lastIndex);
-
-  while (index !== -1) {
-    if (index > lastIndex) {
-      parts.push({
-        text: children.slice(lastIndex, index),
-        isHighlight: false,
-      });
-    }
-
-    parts.push({
-      text: children.slice(index, index + searchText.length),
-      isHighlight: true,
-    });
-    lastIndex = index + searchText.length;
-    index = textLower.indexOf(searchLower, lastIndex);
-  }
-
-  if (lastIndex < children.length) {
-    parts.push({ text: children.slice(lastIndex), isHighlight: false });
-  }
-
-  return (
-    <span>
-      {parts.map((part, partIndex) =>
-        part.isHighlight ? (
-          <mark
-            key={partIndex}
-            className="rounded bg-yellow-400 px-0.5 text-black dark:bg-yellow-500"
-          >
-            {part.text}
-          </mark>
-        ) : (
-          <span key={partIndex}>{part.text}</span>
-        ),
-      )}
-    </span>
-  );
-}
 
 const Viewer = ({ search }: { search: string }) => {
   const { data } = useClashRules();

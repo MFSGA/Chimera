@@ -14,6 +14,7 @@
 import { useClashProxies } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useMemo } from 'react';
+import { CacheImage } from '@/components/ui/image';
 
 /**
  * 代理图标组件
@@ -33,13 +34,11 @@ export default function ProxyIcon({ groupName }: { groupName: string }) {
     return proxyInfo?.icon;
   }, [groupName, proxies]);
 
-  // 如果有 icon URL 则渲染图片，否则显示文字 fallback
   return icon ? (
-    <img
-      className="size-6 rounded-full"
-      src={icon}
-      alt={groupName}
-      loading="lazy"
+    <CacheImage
+      className="size-6"
+      loadingClassName="rounded-full"
+      icon={icon}
     />
   ) : (
     <div
