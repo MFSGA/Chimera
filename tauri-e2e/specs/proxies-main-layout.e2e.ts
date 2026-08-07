@@ -113,4 +113,22 @@ describe('main proxies reference layout', () => {
       await browser.saveScreenshot(evidencePath);
     }
   });
+
+  it('opens the profile list from the empty-state action', async () => {
+    const addProfile = await $('[data-slot="proxies-no-proxies-button"]');
+    await addProfile.waitForClickable({ timeout: 15_000 });
+
+    const href = await addProfile.getAttribute('href');
+    assert.equal(href, '/main/profiles/profile');
+
+    await addProfile.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => location.pathname === '/main/profiles/profile'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The empty-state action did not open the profile list.',
+      },
+    );
+  });
 });
