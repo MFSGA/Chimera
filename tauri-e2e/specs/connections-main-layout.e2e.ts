@@ -91,6 +91,12 @@ describe('main connections reference layout', () => {
             }
           : null;
 
+      const toolbarStyle = toolbar ? getComputedStyle(toolbar) : null;
+      const searchStyle = search ? getComputedStyle(search) : null;
+      const closeButtonStyle = closeButton
+        ? getComputedStyle(closeButton)
+        : null;
+
       return {
         layout: rect(layout),
         container: rect(container),
@@ -100,6 +106,11 @@ describe('main connections reference layout', () => {
         closeButton: rect(closeButton),
         search: rect(search),
         emptyText: empty?.innerText ?? '',
+        toolbarDisplay: toolbarStyle?.display ?? '',
+        toolbarGap: toolbarStyle?.gap ?? '',
+        toolbarPaddingInline: toolbarStyle?.paddingInline ?? '',
+        searchBorderRadius: searchStyle?.borderRadius ?? '',
+        closeButtonBorderRadius: closeButtonStyle?.borderRadius ?? '',
         viewport: { width: window.innerWidth, height: window.innerHeight },
       };
     });
@@ -118,6 +129,21 @@ describe('main connections reference layout', () => {
       JSON.stringify(state, null, 2),
     );
     assert.ok(state.emptyText.length > 0, JSON.stringify(state, null, 2));
+    assert.equal(state.toolbarDisplay, 'flex', JSON.stringify(state, null, 2));
+    assert.equal(state.toolbarGap, '12px', JSON.stringify(state, null, 2));
+    assert.equal(
+      state.toolbarPaddingInline,
+      '16px',
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(
+      Number.parseFloat(state.searchBorderRadius) > 10_000,
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(
+      Number.parseFloat(state.closeButtonBorderRadius) > 10_000,
+      JSON.stringify(state, null, 2),
+    );
 
     const closeButton = await $('[data-slot="connections-toolbar"] button');
     await closeButton.waitForClickable({ timeout: 5_000 });
