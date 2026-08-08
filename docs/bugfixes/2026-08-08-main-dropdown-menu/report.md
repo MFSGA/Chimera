@@ -1,31 +1,30 @@
-# Main dropdown menu does not open
+# Main dropdown E2E contract stabilization
 
 ## Summary
 
-The ref-style dropdown menu used by the Main window header does not open when its trigger is clicked. The Settings trigger remains in `data-state="closed"`, no menu is mounted, and the user cannot access the header Settings actions.
+The initial regression run reported that the Main header Settings dropdown stayed closed after a WebDriver mouse click. Investigation showed that this was an E2E-driver false positive rather than a production dropdown defect. The embedded Tauri WebDriver provider emitted `mousedown` and `click` for the action but no `pointerdown`, while the Radix dropdown trigger opens on the pointer-down path. Keyboard activation opened the existing production menu correctly.
+
+A second apparent geometry mismatch (46 px items instead of the ref 48 px) was also test timing: the measurement used `getBoundingClientRect()` while the Motion `scaleY` entrance animation was still active. Once the animation settles, the CSS height is 48 px as intended.
+
+No production dropdown change was required.
 
 ## Environment
 
 - Platform: Windows
 - WebView2 / Edge runtime observed by WebdriverIO: 151.0.4129.72
-- Viewport: 1240 × 638
+- Viewport: 1240 × 638 (WebView content 1224 × 629)
 - Test boundary: WebdriverIO Tauri E2E using the embedded WebDriver provider
 - Runtime/config data: isolated under the E2E runtime directory configured by `tauri-e2e/wdio.conf.ts`
 
 ## Scope and severity
 
-- Scope: Main window header dropdowns using `frontend/chimera/src/components/main-ui/dropdown-menu.tsx`.
-- Directly reproduced: Settings menu.
-- Severity: medium. Core proxy operation is unaffected, but the Main header Settings actions are inaccessible through this menu.
+- Scope: `tauri-e2e/specs/main-dropdown-menu.e2e.ts` and the Main dropdown reference contract.
+- Production impact: none found. The existing Radix/ref-style dropdown opens correctly through its supported keyboard activation path.
+- Test impact: medium. The old E2E interaction produced a false product failure and measured animated geometry before it reached the final layout.
 
-## Current buggy behavior
+## Red behavior
 
-1. Open the Main window.
-2. Click the `设置` button inside `[data-slot="app-header"]`.
-3. The button remains `data-state="closed"`.
-4. `document.querySelectorAll('[role="menu"]')` returns zero elements.
-
-Observed state:
+The Red test used the embedded provider's mouse action and observed:
 
 ```text
 triggerState: closed
@@ -33,40 +32,44 @@ roleMenuCount: 0
 AssertionError: 'closed' !== 'open'
 ```
 
-![Before fix](./before.png)
-
-## Expected correct behavior
-
-After clicking the Main header Settings trigger:
-
-- the trigger becomes `data-state="open"`;
-- the dropdown content is mounted and visible;
-- the ref geometry contract is preserved: 4 px menu radius and three 48 px top-level items;
-- the legacy dropdown primitive remains unchanged.
-
-## Automated reproduction
-
-Regression test:
+Event instrumentation during investigation showed the driver action produced:
 
 ```text
-tauri-e2e/specs/main-dropdown-menu.e2e.ts
+mousedown:0:false:false|click:0:false:false|
 ```
 
-Exact reproduction command:
-
-```bash
-CHIMERA_E2E_EVIDENCE_PATH='../docs/bugfixes/2026-08-08-main-dropdown-menu/before.png' pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/main-dropdown-menu.e2e.ts
-```
-
-The test fails specifically because the trigger remains closed after a successful WebDriver click; the Tauri application and embedded WebDriver session start successfully.
-
-## Base SHA
-
-Pre-reproduction base SHA:
+There was no `pointerdown` event. Focusing the same trigger and pressing Enter immediately produced:
 
 ```text
-1b72fbb8b717cd408595acb8a0fffaf86af99cac
+triggerState: open
+roleMenuCount: 1
 ```
+
+The first geometry read then returned `[46, 46, 46]` because it sampled `getBoundingClientRect()` during the menu's `scaleY` entrance animation.
+
+![Before stabilization](./before.png)
+
+## Expected stable contract
+
+The E2E test should validate the layout without depending on pointer events that the embedded provider does not emit:
+
+- activate the Settings trigger through keyboard Enter;
+- wait for the Motion transform to settle;
+- assert the menu is mounted and the trigger is open;
+- assert a 4 px menu radius;
+- assert three 48 px top-level items using computed CSS height;
+- leave the legacy dropdown primitive and production dropdown implementation unchanged.
+
+## Test fix
+
+`tauri-e2e/specs/main-dropdown-menu.e2e.ts` now:
+
+1. scopes the Settings trigger to `[data-slot="app-header"]`;
+2. focuses the trigger and presses Enter;
+3. waits until the dropdown Motion transform reaches its settled state;
+4. measures item CSS heights via `getComputedStyle(...).height` instead of transformed bounding boxes.
+
+![After stabilization](./after.png)
 
 ## Reference implementation
 
@@ -76,17 +79,53 @@ The analogous implementation was inspected in:
 - `ref/frontend/nyanpasu/src/pages/(main)/_modules/header-settings-action.tsx`
 - `ref/frontend/nyanpasu/src/pages/(main)/_modules/header-menu.tsx`
 
-The Chimera ref-style dropdown implementation is structurally very close to the reference. One relevant environment difference is dependency versions: the reference currently uses `radix-ui` 1.6.7 and `@radix-ui/react-use-controllable-state` 1.2.6, while Chimera uses 1.6.4 and 1.2.4 respectively. This is an investigation lead, not yet established as the root cause.
+The Chimera dropdown implementation matches the reference structure and uses `h-12` (48 px) for the relevant menu items. A temporary production-state workaround and a drag-region hypothesis were both tested and rejected; neither changed the pointer result, and no such workaround remains in production code.
+
+## Evidence commits
+
+Pre-reproduction base SHA:
+
+```text
+1b72fbb8b717cd408595acb8a0fffaf86af99cac
+```
+
+Red evidence commit:
+
+```text
+a8b779e1dcafe8c17743caa38f5289d53d71d559
+```
+
+The exact Green commit SHA is recorded in the final checkpoint metadata after the commit is created, because a Git commit cannot embed its own final hash.
+
+## Verification
+
+Focused stabilized test:
+
+```bash
+CHIMERA_E2E_EVIDENCE_PATH='../docs/bugfixes/2026-08-08-main-dropdown-menu/after.png' pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/main-dropdown-menu.e2e.ts
+```
+
+Result: 1 spec passed, 1 test passed.
+
+Broader Main UI regression run:
+
+```text
+15 spec files passed, 0 failed.
+```
+
+Additional validation:
+
+```text
+pnpm --filter @chimera/tauri-e2e typecheck  -> passed
+pnpm e2e:tauri:build                       -> passed
+pnpm lint                                  -> passed
+```
+
+`pnpm lint` still reports existing Rust compiler/clippy warnings, but exits successfully with no lint failure.
 
 ## Test isolation and limitations
 
 - The E2E harness uses isolated config/data directories and restores captured Windows proxy settings on completion.
 - The test does not enable TUN mode, alter the host proxy, restart services, or use real user data.
-- Only the Settings trigger is asserted directly. File and Help use the same new dropdown primitive, so they may share the same defect, but that has not been separately claimed as reproduced.
-- WebdriverIO prints a Windows-inapplicable executable-permission diagnostic (`Binary Permissions: 666`); the Windows application still starts and the test reaches the intended UI assertion, so this is not the failure cause.
-
-## Completion
-
-Red evidence commit: pending.
-
-Root cause, implemented fix, after screenshot, and final verification results will be added in the Green completion update.
+- The embedded WebDriver provider's lack of `pointerdown` in this action path means this test is intentionally a layout/contract test, not proof of physical mouse-event delivery.
+- WebdriverIO prints a Windows-inapplicable executable-permission diagnostic (`Binary Permissions: 666`); the Windows application starts successfully and the diagnostic is unrelated to these assertions.

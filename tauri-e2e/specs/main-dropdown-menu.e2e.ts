@@ -43,7 +43,8 @@ describe('main ref dropdown menu', () => {
     const appHeader = await $('[data-slot="app-header"]');
     const settingsButton = await appHeader.$('button=设置');
     await settingsButton.waitForClickable({ timeout: 15_000 });
-    await settingsButton.click();
+    await browser.execute((button) => button.focus(), settingsButton);
+    await browser.keys('Enter');
 
     const openState = await browser.execute(() => {
       const trigger = Array.from(
@@ -59,12 +60,6 @@ describe('main ref dropdown menu', () => {
     });
     console.log('main dropdown open state', openState);
 
-    const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
-    if (evidencePath) {
-      fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
-      await browser.saveScreenshot(evidencePath);
-    }
-
     assert.equal(
       openState.triggerState,
       'open',
@@ -73,6 +68,25 @@ describe('main ref dropdown menu', () => {
 
     const content = await $('[data-slot="main-dropdown-menu-motion-content"]');
     await content.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const menu = document.querySelector<HTMLElement>(
+            '[data-slot="main-dropdown-menu-motion-content"]',
+          );
+          const transform = menu ? getComputedStyle(menu).transform : '';
+          return (
+            transform === 'none' || transform === 'matrix(1, 0, 0, 1, 0, 0)'
+          );
+        }),
+      { timeout: 15_000, timeoutMsg: 'Dropdown animation did not settle.' },
+    );
+
+    const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
+    if (evidencePath) {
+      fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+      await browser.saveScreenshot(evidencePath);
+    }
 
     const state = await browser.execute(() => {
       const menu = document.querySelector<HTMLElement>(
@@ -85,7 +99,7 @@ describe('main ref dropdown menu', () => {
         borderRadius: style?.borderRadius ?? '',
         backgroundColor: style?.backgroundColor ?? '',
         itemHeights: items.map((item) =>
-          Math.round(item.getBoundingClientRect().height),
+          Math.round(Number.parseFloat(getComputedStyle(item).height)),
         ),
         viewport: { width: innerWidth, height: innerHeight },
       };
