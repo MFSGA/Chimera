@@ -89,7 +89,7 @@ export default function PathUtilsCard() {
   ];
 
   return (
-    <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
       {items.map(({ label, action }) => (
         <PathButton key={label} action={action}>
           {label}
