@@ -40,4 +40,10 @@ docs/
 target/
 ref/
 
+# Tauri E2E runtime/evidence scratch files
+/tauri-e2e/tmp/
+/tauri-e2e/tauri-e2e/tmp/
+/tauri-e2e/*.tmp*.png
+/nul
+
 .direnv/*

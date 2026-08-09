@@ -126,7 +126,11 @@ Red evidence commit:
 dbf7277d1a334b6bd0c68f580a90d722706c84a3
 ```
 
-The exact Green commit SHA is recorded in the final checkpoint metadata after the commit is created, because a Git commit cannot embed its own final hash.
+Green fix commit:
+
+```text
+2c60557187151c2f8dd1e5ab9ec1db414e9db906
+```
 
 ## Reference implementation
 
