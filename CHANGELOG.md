@@ -1,3 +1,43 @@
+## [0.20.2] - 2026-08-09 06:57:27
+
+### ✅ Testing
+
+- **main:** Stabilize logs layout state by @MFSGA
+
+- **main:** Reproduce proxies empty-state route by @MFSGA
+
+- **main:** Cover rules proxy icon rendering by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **main:** Open profiles from proxies empty state by @MFSGA
+
+### 🔨 Refactor
+
+- **main:** Align proxy node cards with ref by @MFSGA in [#316](https://github.com/MFSGA/Chimera/pull/316)
+
+- **main:** Align rules tooltip with ref by @MFSGA
+
+- **main:** Align modal primitive with ref by @MFSGA
+
+- **main:** Align tooltip surface with ref by @MFSGA
+
+- **main:** Align input primitive with ref by @MFSGA
+
+- **main:** Align cached proxy icons with ref by @MFSGA
+
+- **main:** Finish providers visual alignment by @MFSGA
+
+- **main:** Align debug settings with ref by @MFSGA
+
+- **main:** Align settings navigation with ref by @MFSGA
+
+- **main:** Align settings content layout with ref by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.20.1...v0.20.2
+
 ## [0.20.1] - 2026-08-09 05:31:29
 
 ### ✅ Testing
