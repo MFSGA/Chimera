@@ -1,3 +1,57 @@
+## [0.20.1] - 2026-08-09 05:31:29
+
+### ✅ Testing
+
+- **e2e:** Cover main profile import action by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **main:** Restore legacy ui switch button by @MFSGA in [#315](https://github.com/MFSGA/Chimera/pull/315)
+
+### 🔨 Refactor
+
+- **connections:** Align connections page by @MFSGA
+
+- **main:** Align global css baseline with ref by @MFSGA
+
+- **main:** Align logs with ref by @MFSGA
+
+- **main:** Align rules with ref by @MFSGA in [#314](https://github.com/MFSGA/Chimera/pull/314)
+
+- **main:** Align dashboard shortcuts with ref by @MFSGA
+
+- **main:** Align proxies with ref by @MFSGA
+
+- **main:** Align providers with ref by @MFSGA
+
+- **profiles:** Finish profile alignment by @MFSGA
+
+- **profiles:** Align profile import flow by @MFSGA
+
+- **settings:** Align web ui settings by @MFSGA in [#312](https://github.com/MFSGA/Chimera/pull/312)
+
+- **settings:** Align user interface settings by @MFSGA
+
+- **settings:** Align nyanpasu settings by @MFSGA
+
+- **settings:** Align system settings by @MFSGA
+
+- **settings:** Align debug settings by @MFSGA
+
+- **settings:** Align clash settings by @MFSGA
+
+- **settings:** Align settings navigation by @MFSGA
+
+- **settings:** Add settings primitives by @MFSGA
+
+- **ui:** Add highlight text and tooltip primitives by @MFSGA
+
+- **ui:** Align card and sidebar primitives by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.20.0...v0.20.1
+
 ## [0.20.0] - 2026-08-09 04:30:29
 
 ### ✅ Testing
