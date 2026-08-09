@@ -30,8 +30,6 @@ import {
   type ClashConnectionItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { CloseRounded, InboxOutlined } from '@mui/icons-material';
-import { IconButton, Tooltip } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import {
   ColumnDef,
@@ -44,21 +42,26 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useLocalStorage } from '@uidotdev/usehooks';
-import { useLockFn } from 'ahooks';
+import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
+import CloseRounded from '~icons/material-symbols/close-rounded';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from 'react';
+  RegisterContextMenu,
+  RegisterContextMenuContent,
+  RegisterContextMenuTrigger,
+} from '@/components/providers/context-menu-provider';
 import { Button } from '@/components/ui/button';
+import { ContextMenuItem } from '@/components/ui/context-menu';
+import HighlightText from '@/components/ui/highlight-text';
+import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
 import {
-  AppContentScrollArea,
-  useScrollArea,
-} from '@/components/ui/scroll-area';
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { containsSearchTerm } from '@/utils';
 import parseTraffic from '@/utils/parse-traffic';
@@ -87,40 +90,6 @@ const COLUMN_SIZING_STORAGE_KEY = 'connections-column-sizing-v2';
 export const Route = createFileRoute('/(main)/main/connections/')({
   component: RouteComponent,
 });
-
-/**
- * 高亮搜索匹配文本的组件
- * 将文本按搜索词分割，匹配部分加亮色背景
- */
-function HighlightText({
-  text,
-  search,
-}: {
-  text: string;
-  search: string;
-}): ReactNode {
-  if (!search || !text) {
-    return text;
-  }
-
-  const lowerText = text.toLowerCase();
-  const lowerSearch = search.toLowerCase();
-  const idx = lowerText.indexOf(lowerSearch);
-
-  if (idx === -1) {
-    return text;
-  }
-
-  return (
-    <>
-      {text.slice(0, idx)}
-      <mark className="bg-primary/20 dark:bg-primary/40 rounded px-0.5">
-        {text.slice(idx, idx + search.length)}
-      </mark>
-      {text.slice(idx + search.length)}
-    </>
-  );
-}
 
 /**
  * 连接表格查看器（Viewer）
@@ -428,7 +397,7 @@ function Viewer({ search }: { search: string }) {
         className="absolute inset-0 flex flex-col items-center justify-center gap-4"
         data-slot="connections-no-connections"
       >
-        <InboxOutlined className="text-surface-variant size-16" />
+        <BoxOutlineRounded className="text-surface-variant size-16" />
 
         <p
           className="text-surface-variant text-sm"
@@ -567,18 +536,26 @@ function RouteComponent() {
       className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
       data-slot="connections-container"
     >
-      {/* 
-        可滚动区域（使用 ScrollArea 包裹 Viewer）
-        ScrollArea 提供 viewportRef，供 @tanstack/react-virtual 使用
-      */}
-      <AppContentScrollArea data-slot="connections-scroll-wrapper">
-        <Viewer search={search} />
-      </AppContentScrollArea>
+      <RegisterContextMenu>
+        <RegisterContextMenuTrigger asChild>
+          <ScrollArea
+            className="min-h-0 flex-1"
+            scrollbars="both"
+            type="hover"
+            data-slot="connections-scroll-wrapper"
+          >
+            <Viewer search={search} />
+          </ScrollArea>
+        </RegisterContextMenuTrigger>
 
-      {/* 
-        底部工具栏：搜索框 + 关闭全部连接
-        与 ref 的 toolbar 设计一致
-      */}
+        <RegisterContextMenuContent>
+          <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
+            <CloseRounded className="size-4" />
+            <span>{m.connections_close_all_connections()}</span>
+          </ContextMenuItem>
+        </RegisterContextMenuContent>
+      </RegisterContextMenu>
+
       <div
         className="bg-mixed-background flex h-16 shrink-0 items-center gap-3 px-4"
         data-slot="connections-toolbar"
@@ -591,17 +568,19 @@ function RouteComponent() {
           )}
           placeholder={m.connections_search_placeholder()}
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
+          onChange={(event) => setSearch(event.target.value)}
         />
 
-        <Tooltip title={m.connections_close_all_connections()}>
-          <IconButton
-            size="small"
-            color="inherit"
-            onClick={handleCloseAllConnections}
-          >
-            <CloseRounded />
-          </IconButton>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={handleCloseAllConnections} icon>
+              <CloseRounded />
+            </Button>
+          </TooltipTrigger>
+
+          <TooltipContent>
+            {m.connections_close_all_connections()}
+          </TooltipContent>
         </Tooltip>
       </div>
     </div>
