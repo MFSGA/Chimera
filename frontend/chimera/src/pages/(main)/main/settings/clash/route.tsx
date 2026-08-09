@@ -1,13 +1,17 @@
 import { createFileRoute } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
-import { SettingsGroup, SettingsLabel } from '../_modules/settings-card';
+import {
+  SettingsCard,
+  SettingsCardContent,
+  SettingsGroup,
+  SettingsLabel,
+} from '../_modules/settings-card';
 import { SettingsTitle } from '../_modules/settings-title';
 import {
   AllowLanSwitch,
   IPv6Switch,
   LogLevelSelector,
   TunStackSelector,
-  UWPTool,
 } from './_modules/base-settings';
 import CoreManager from './_modules/core-manager';
 import { FieldFilterCard, FieldFilterSwitch } from './_modules/field-filter';
@@ -18,49 +22,62 @@ export const Route = createFileRoute('/(main)/main/settings/clash')({
 });
 
 const PatchSettings = () => (
-  <section data-slot="patch-settings-container">
+  <div data-slot="patch-settings-container">
     <SettingsLabel>{m.settings_clash_settings_title()}</SettingsLabel>
     <SettingsGroup>
-      <AllowLanSwitch />
-      <IPv6Switch />
+      <SettingsCard>
+        <SettingsCardContent>
+          <AllowLanSwitch />
+        </SettingsCardContent>
+      </SettingsCard>
+      <SettingsCard>
+        <SettingsCardContent>
+          <IPv6Switch />
+        </SettingsCardContent>
+      </SettingsCard>
       <TunStackSelector />
       <LogLevelSelector />
-      <UWPTool />
     </SettingsGroup>
-  </section>
+  </div>
 );
 
 const PortSettings = () => (
-  <section data-slot="port-settings-container">
+  <div data-slot="port-settings-container">
     <SettingsLabel>{m.settings_clash_settings_port_label()}</SettingsLabel>
     <SettingsGroup>
       <MixedPortConfig />
-      <RandomPortSwitch />
+      <SettingsCard>
+        <SettingsCardContent>
+          <RandomPortSwitch />
+        </SettingsCardContent>
+      </SettingsCard>
     </SettingsGroup>
-  </section>
+  </div>
 );
 
 const CoreManagerSettings = () => (
-  <section data-slot="core-manager-settings-container">
+  <div data-slot="core-manager-settings-container">
     <SettingsLabel>{m.settings_clash_core_manager_card_title()}</SettingsLabel>
     <SettingsGroup>
       <CoreManager />
     </SettingsGroup>
-  </section>
+  </div>
 );
 
 const FieldFilterSettings = () => (
-  <section data-slot="field-filter-settings-container">
+  <div data-slot="field-filter-settings-container">
     <SettingsLabel>
       {m.settings_clash_settings_field_filter_label()}
     </SettingsLabel>
     <div className="space-y-2">
-      <SettingsGroup>
-        <FieldFilterSwitch />
-      </SettingsGroup>
+      <SettingsCard>
+        <SettingsCardContent>
+          <FieldFilterSwitch />
+        </SettingsCardContent>
+      </SettingsCard>
       <FieldFilterCard />
     </div>
-  </section>
+  </div>
 );
 
 function RouteComponent() {

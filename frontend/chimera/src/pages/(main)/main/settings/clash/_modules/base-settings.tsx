@@ -1,46 +1,45 @@
 import {
-  openUWPTool,
   useClashConfig,
   useRuntimeProfile,
   useSetting,
   type TunStack,
 } from '@chimera/interface';
 import { useMemo } from 'react';
-import {
-  SelectorCard,
-  SwitchCard,
-} from '@/components/settings/setting-control';
+import { SelectorCard } from '@/components/settings/setting-control';
 import {
   ItemContainer,
   ItemLabel,
   ItemLabelText,
-  SettingsCard,
-  SettingsCardContent,
 } from '@/components/settings/settings-card';
-import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import { useCoreType } from '@/hooks/use-store';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
-import getSystem from '@/utils/get-system';
 import { message } from '@/utils/notification';
 
 export const AllowLanSwitch = () => {
   const { query, upsert } = useClashConfig();
 
   return (
-    <SwitchCard
-      label={m.settings_clash_settings_allow_lan_label()}
-      checked={Boolean(query.data?.['allow-lan'])}
-      loading={upsert.isPending}
-      onCheckedChange={(checked) =>
-        void upsert.mutateAsync({ 'allow-lan': checked }).catch((error) =>
-          message(formatError(error), {
-            title: m.common_error(),
-            kind: 'error',
-          }),
-        )
-      }
-    />
+    <ItemContainer data-slot="allow-lan-switch-container">
+      <ItemLabel>
+        <ItemLabelText>
+          {m.settings_clash_settings_allow_lan_label()}
+        </ItemLabelText>
+      </ItemLabel>
+      <Switch
+        checked={Boolean(query.data?.['allow-lan'])}
+        loading={upsert.isPending}
+        onCheckedChange={(checked) =>
+          void upsert.mutateAsync({ 'allow-lan': checked }).catch((error) =>
+            message(formatError(error), {
+              title: m.common_error(),
+              kind: 'error',
+            }),
+          )
+        }
+      />
+    </ItemContainer>
   );
 };
 
@@ -48,19 +47,23 @@ export const IPv6Switch = () => {
   const { query, upsert } = useClashConfig();
 
   return (
-    <SwitchCard
-      label={m.settings_clash_settings_ipv6_label()}
-      checked={Boolean(query.data?.ipv6)}
-      loading={upsert.isPending}
-      onCheckedChange={(checked) =>
-        void upsert.mutateAsync({ ipv6: checked }).catch((error) =>
-          message(formatError(error), {
-            title: m.common_error(),
-            kind: 'error',
-          }),
-        )
-      }
-    />
+    <ItemContainer data-slot="ipv6-switch-container">
+      <ItemLabel>
+        <ItemLabelText>{m.settings_clash_settings_ipv6_label()}</ItemLabelText>
+      </ItemLabel>
+      <Switch
+        checked={Boolean(query.data?.ipv6)}
+        loading={upsert.isPending}
+        onCheckedChange={(checked) =>
+          void upsert.mutateAsync({ ipv6: checked }).catch((error) =>
+            message(formatError(error), {
+              title: m.common_error(),
+              kind: 'error',
+            }),
+          )
+        }
+      />
+    </ItemContainer>
   );
 };
 
@@ -126,37 +129,5 @@ export const LogLevelSelector = () => {
       options={options}
       onSelect={(value) => void upsert.mutateAsync({ 'log-level': value })}
     />
-  );
-};
-
-export const UWPTool = () => {
-  if (getSystem() !== 'windows') return null;
-
-  const handleOpen = async () => {
-    try {
-      await openUWPTool();
-    } catch (error) {
-      message(
-        `${m.settings_clash_uwp_tool_open_failed()}\n${formatError(error)}`,
-        { title: m.common_error(), kind: 'error' },
-      );
-    }
-  };
-
-  return (
-    <SettingsCard>
-      <SettingsCardContent>
-        <ItemContainer>
-          <ItemLabel>
-            <ItemLabelText>
-              {m.settings_clash_open_uwp_tool_label()}
-            </ItemLabelText>
-          </ItemLabel>
-          <Button variant="raised" onClick={() => void handleOpen()}>
-            {m.common_open()}
-          </Button>
-        </ItemContainer>
-      </SettingsCardContent>
-    </SettingsCard>
   );
 };
