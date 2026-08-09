@@ -150,9 +150,14 @@ function ScrollBar({
       )}
       {...props}
     >
+      {/* The shadow keeps the narrow thumb distinguishable in both themes. */}
       <ScrollAreaPrimitive.ScrollAreaThumb
         data-slot="scroll-area-thumb"
-        className="bg-surface-variant relative flex-1 rounded-full"
+        className="bg-surface-variant relative flex-1 rounded-full shadow-sm"
+        style={{
+          boxShadow:
+            '0 1px 3px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.14)',
+        }}
       />
     </ScrollAreaPrimitive.ScrollAreaScrollbar>
   );
@@ -175,7 +180,8 @@ function ScrollAreaProvider({
     <ScrollAreaContext.Provider value={{ ...tracking, viewportRef }}>
       <Root
         data-slot={slot}
-        type="scroll"
+        // Keep the content scrollbar discoverable even when the page is idle.
+        type="always"
         scrollHideDelay={600}
         className={className}
         data-scrolling={String(tracking.isScrolling)}
