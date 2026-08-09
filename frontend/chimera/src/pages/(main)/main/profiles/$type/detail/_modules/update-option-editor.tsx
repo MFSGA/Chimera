@@ -1,4 +1,5 @@
 import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import { AnimatePresence } from 'motion/react';
 import { useState, type ComponentProps } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import AnimatedErrorItem from '../../../_modules/error-item';
 
 export default function UpdateOptionEditor({
   profile,
@@ -93,29 +95,43 @@ export default function UpdateOptionEditor({
     >
       <ModalTrigger {...props} />
       <ModalContent>
-        <Card className="w-96 max-w-[calc(100vw-2rem)]">
+        <Card className="w-96">
           <CardHeader>
             <ModalTitle>{m.profile_update_option_editor_title()}</ModalTitle>
           </CardHeader>
 
           <CardContent>
-            <Input
-              label={m.profile_user_agent_label()}
-              variant="outlined"
-              value={userAgent}
-              onChange={(event) => setUserAgent(event.target.value)}
-            />
-            <NumericInput
-              label={m.profile_update_interval_label()}
-              variant="outlined"
-              min={1}
-              value={interval}
-              onChange={(value) => {
-                setInterval(value);
-                setError(null);
-              }}
-            />
-            {error && <p className="text-error text-sm">{error}</p>}
+            <div className="mt-2 flex items-center gap-2">
+              <Input
+                label={m.profile_user_agent_label()}
+                variant="outlined"
+                value={userAgent}
+                onChange={(event) => setUserAgent(event.target.value)}
+              />
+            </div>
+
+            <div className="mt-2 flex items-center gap-2">
+              <NumericInput
+                label={m.profile_update_interval_label()}
+                variant="outlined"
+                min={1}
+                step={1}
+                value={interval}
+                onChange={(value) => {
+                  setInterval(value);
+                  setError(null);
+                }}
+              />
+
+              <AnimatePresence>
+                {error && (
+                  <AnimatedErrorItem className="text-error">
+                    {error}
+                  </AnimatedErrorItem>
+                )}
+              </AnimatePresence>
+            </div>
+
             <SwitchItem checked={withProxy} onCheckedChange={setWithProxy}>
               <span>{m.profile_with_proxy_label()}</span>
             </SwitchItem>

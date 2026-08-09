@@ -30,7 +30,9 @@ export default function ProfilesHeader() {
   return (
     <div
       className={cn(
-        'bg-mixed-background sticky top-0 z-10 flex items-center gap-2 p-4',
+        'flex items-center gap-2 p-4',
+        'sticky top-0 z-50',
+        'bg-mixed-background',
       )}
       data-slot="profiles-header"
     >

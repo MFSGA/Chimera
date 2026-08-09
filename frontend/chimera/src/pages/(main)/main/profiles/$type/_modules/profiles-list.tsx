@@ -11,7 +11,12 @@ import SortableProfileItem from './sortable-profile-item';
 import { categoryProfiles } from './utils';
 
 const EmptyList = ({ children }: { children?: React.ReactNode }) => (
-  <div className="text-on-surface-variant flex min-h-full flex-1 items-center justify-center text-center text-sm">
+  <div
+    className={cn(
+      'flex min-h-full flex-1 items-center justify-center text-center text-sm',
+      'text-on-surface-variant dark:text-on-surface-variant-dark',
+    )}
+  >
     {children ?? m.profile_empty_list_message()}
   </div>
 );
@@ -45,8 +50,9 @@ export default function ProfilesList({
   return (
     <>
       <div
-        className="flex min-h-full flex-1 flex-col gap-4"
+        className={cn('flex min-h-full flex-1 flex-col gap-4')}
         data-slot="profiles-list"
+        {...props}
       >
         <DragDropProvider
           onDragEnd={(event) => {
@@ -67,11 +73,12 @@ export default function ProfilesList({
           <div
             className={cn(
               'grid content-start gap-2',
-              'dxl:grid-cols-4 md:grid-cols-2 lg:grid-cols-3',
+              'md:grid-cols-2',
+              'lg:grid-cols-3',
+              'dxl:grid-cols-4',
               className,
             )}
-            data-slot="profiles-grid"
-            {...props}
+            data-slot="profiles-navigate"
           >
             {filteredProfiles.map((profile, index) => (
               <SortableProfileItem
