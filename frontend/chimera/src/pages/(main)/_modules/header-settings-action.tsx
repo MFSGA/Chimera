@@ -1,10 +1,5 @@
 import { useProxyMode, type ProxyMode } from '@chimera/interface';
 import type { PropsWithChildren } from 'react';
-import { useLanguage } from '@/components/providers/language-provider';
-import {
-  ThemeMode,
-  useExperimentalThemeContext,
-} from '@/components/providers/theme-provider';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -16,7 +11,12 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@/components/main-ui/dropdown-menu';
+import { useLanguage } from '@/components/providers/language-provider';
+import {
+  ThemeMode,
+  useExperimentalThemeContext,
+} from '@/components/providers/theme-provider';
 import { CircularProgress } from '@/components/ui/progress';
 import { useSystemProxy, useTunMode } from '@/hooks/use-proxy-settings';
 import * as m from '@/paraglide/messages';
@@ -96,7 +96,7 @@ const ProxySettings = () => {
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
         <DropdownMenuCheckboxItem
-          className="group"
+          className="group relative"
           checked={systemProxy.isActive}
           onCheckedChange={() => void systemProxy.execute()}
           data-loading={String(systemProxy.isPending)}
@@ -105,12 +105,12 @@ const ProxySettings = () => {
             {m.settings_system_proxy_system_proxy_label()}
           </span>
           <CircularProgress
-            className="invisible ml-auto size-4 group-data-[loading=true]:visible"
+            className="invisible size-4 group-data-[loading=true]:visible"
             indeterminate
           />
         </DropdownMenuCheckboxItem>
         <DropdownMenuCheckboxItem
-          className="group"
+          className="group relative"
           checked={tunMode.isActive}
           onCheckedChange={() => void tunMode.execute()}
           data-loading={String(tunMode.isPending)}
@@ -119,7 +119,7 @@ const ProxySettings = () => {
             {m.settings_system_proxy_tun_mode_label()}
           </span>
           <CircularProgress
-            className="invisible ml-auto size-4 group-data-[loading=true]:visible"
+            className="invisible size-4 group-data-[loading=true]:visible"
             indeterminate
           />
         </DropdownMenuCheckboxItem>
@@ -129,7 +129,11 @@ const ProxySettings = () => {
           onValueChange={(value) => void proxyMode.upsert(value as ProxyMode)}
         >
           {Object.keys(proxyMode.value).map((mode) => (
-            <DropdownMenuRadioItem key={mode} value={mode}>
+            <DropdownMenuRadioItem
+              key={mode}
+              className="[&>div]:pl-1.5"
+              value={mode}
+            >
               {labels[mode as ProxyMode]}
             </DropdownMenuRadioItem>
           ))}
@@ -143,7 +147,7 @@ export default function HeaderSettingsAction({ children }: PropsWithChildren) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
-      <DropdownMenuContent align="start">
+      <DropdownMenuContent>
         <LanguageSelector />
         <ThemeModeSelector />
         <ProxySettings />
