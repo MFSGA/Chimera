@@ -1,3 +1,47 @@
+## [0.20.3] - 2026-08-09 07:50:32
+
+### ✅ Testing
+
+- **e2e:** Cover remaining main ui alignment by @MFSGA
+
+- **main:** Reproduce debug path grid mismatch by @MFSGA
+
+- **main:** Reproduce dropdown menu open failure by @MFSGA
+
+- **main:** Lock about ref css contract by @MFSGA
+
+- **main:** Lock connections ref css contract by @MFSGA
+
+- **ui:** Reproduce agent scrollbar bug by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **e2e:** Stabilize main dropdown contract by @MFSGA
+
+- **main:** Restore legacy navbar export by @MFSGA
+
+- **main:** Align debug path grid with ref by @MFSGA
+
+- **ui:** Show agent scrollbar thumb by @MFSGA in [#317](https://github.com/MFSGA/Chimera/pull/317)
+
+- **ui:** Show settings scrollbar with shadow by @MFSGA
+
+### 🔨 Refactor
+
+- **main:** Align dropdown and header actions by @MFSGA
+
+- **settings:** Align settings navigation follow-up by @MFSGA
+
+- **settings:** Finish nyanpasu user interface and web ui by @MFSGA
+
+- **settings:** Add system tools by @MFSGA
+
+- **settings:** Finish clash alignment by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.20.2...v0.20.3
+
 ## [0.20.2] - 2026-08-09 06:57:27
 
 ### ✅ Testing
