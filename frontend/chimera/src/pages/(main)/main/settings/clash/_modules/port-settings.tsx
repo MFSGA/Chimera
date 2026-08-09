@@ -5,7 +5,6 @@ import {
 } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { useEffect, useMemo, useState } from 'react';
-import { SwitchCard } from '@/components/settings/setting-control';
 import {
   ItemContainer,
   ItemLabel,
@@ -29,6 +28,7 @@ import {
   ModalTitle,
   ModalTrigger,
 } from '@/components/ui/modal';
+import { Switch } from '@/components/ui/switch';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -146,11 +146,17 @@ export const RandomPortSwitch = () => {
   };
 
   return (
-    <SwitchCard
-      label={m.settings_clash_settings_random_port_label()}
-      checked={Boolean(setting.value)}
-      loading={setting.isPending}
-      onCheckedChange={(checked) => void handleChange(checked)}
-    />
+    <ItemContainer data-slot="random-port-switch-container">
+      <ItemLabel>
+        <ItemLabelText>
+          {m.settings_clash_settings_random_port_label()}
+        </ItemLabelText>
+      </ItemLabel>
+      <Switch
+        checked={Boolean(setting.value)}
+        loading={setting.isPending}
+        onCheckedChange={(checked) => void handleChange(checked)}
+      />
+    </ItemContainer>
   );
 };
