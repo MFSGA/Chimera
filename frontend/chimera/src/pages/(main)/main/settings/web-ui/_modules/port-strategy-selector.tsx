@@ -1,0 +1,70 @@
+import {
+  useSetting,
+  type ExternalControllerPortStrategy,
+} from '@chimera/interface';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import * as m from '@/paraglide/messages';
+import {
+  ItemContainer,
+  ItemLabel,
+  ItemLabelDescription,
+  ItemLabelText,
+  SettingsCard,
+  SettingsCardContent,
+} from '../../_modules/settings-card';
+
+export default function PortStrategySelector() {
+  const { value, upsert } = useSetting('clash_strategy');
+  const labels = {
+    allow_fallback: m.settings_clash_settings_allow_fallback_label(),
+    fixed: m.settings_clash_settings_fixed_label(),
+    random: m.settings_clash_settings_random_label(),
+  } satisfies Record<ExternalControllerPortStrategy, string>;
+  const current = value?.external_controller_port_strategy || 'allow_fallback';
+
+  return (
+    <SettingsCard data-slot="port-strategy-selector-card">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <SettingsCardContent asChild>
+            <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
+              <ItemContainer>
+                <ItemLabel>
+                  <ItemLabelText>
+                    {m.settings_clash_settings_port_strategy_label()}
+                  </ItemLabelText>
+                  <ItemLabelDescription>{labels[current]}</ItemLabelDescription>
+                </ItemLabel>
+                <ArrowForwardIosRounded />
+              </ItemContainer>
+            </Button>
+          </SettingsCardContent>
+        </DropdownMenuTrigger>
+
+        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+          {Object.entries(labels).map(([strategy, label]) => (
+            <DropdownMenuCheckboxItem
+              checked={current === strategy}
+              key={strategy}
+              onSelect={() =>
+                void upsert({
+                  external_controller_port_strategy:
+                    strategy as ExternalControllerPortStrategy,
+                })
+              }
+            >
+              {label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </SettingsCard>
+  );
+}
