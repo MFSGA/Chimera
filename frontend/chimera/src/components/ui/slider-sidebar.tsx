@@ -1,0 +1,145 @@
+import { cn } from '@chimera/utils';
+import { useControllableState } from '@radix-ui/react-use-controllable-state';
+import MenuOpenRounded from '~icons/material-symbols/menu-open-rounded';
+import { merge } from 'lodash-es';
+import { motion } from 'motion/react';
+import {
+  createContext,
+  useContext,
+  type ComponentProps,
+  type PropsWithChildren,
+} from 'react';
+import { Button } from './button';
+
+const DEFAULT_SIDEBAR_WIDTH = {
+  open: 280,
+  closed: 64,
+};
+
+const SidebarContext = createContext<{
+  open: boolean;
+  setOpen: (isOpen: boolean) => void;
+} | null>(null);
+
+export const useSidebar = () => {
+  const context = useContext(SidebarContext);
+
+  if (!context) {
+    throw new Error('useSidebar must be used within a SidebarProvider');
+  }
+
+  return context;
+};
+
+export function SidebarProvider({
+  open: inputOpen,
+  onOpenChange,
+  defaultOpen,
+  children,
+}: PropsWithChildren & {
+  open?: boolean;
+  onOpenChange?: (isOpen: boolean) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useControllableState({
+    prop: inputOpen,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
+
+  return (
+    <SidebarContext.Provider value={{ open, setOpen }}>
+      {children}
+    </SidebarContext.Provider>
+  );
+}
+
+export function Sidebar({
+  className,
+  animate,
+  transition,
+  width = DEFAULT_SIDEBAR_WIDTH,
+  ...props
+}: ComponentProps<typeof motion.aside> & {
+  width?: {
+    open?: number;
+    closed?: number;
+  };
+}) {
+  const { open } = useSidebar();
+
+  return (
+    <>
+      <div
+        className="h-full md:hidden"
+        data-slot="slider-sidebar-placeholder"
+        style={{ width: width.closed }}
+      />
+
+      <motion.aside
+        className={cn(
+          'bg-mixed-background absolute h-full md:static md:h-auto',
+          className,
+        )}
+        initial={false}
+        animate={merge(
+          {
+            width: open ? width.open : width.closed,
+          },
+          animate,
+        )}
+        transition={{
+          type: 'spring',
+          stiffness: 300,
+          damping: 30,
+          ...transition,
+        }}
+        data-slot="slider-sidebar"
+        {...props}
+      />
+    </>
+  );
+}
+
+export function SidebarLabelItem({
+  className,
+  animate,
+  transition,
+  ...props
+}: ComponentProps<typeof motion.span>) {
+  const { open } = useSidebar();
+
+  return (
+    <motion.span
+      data-open={String(open)}
+      className={cn('overflow-hidden whitespace-nowrap', className)}
+      initial={false}
+      animate={merge(
+        {
+          width: open ? '100%' : 0,
+        },
+        animate,
+      )}
+      transition={{
+        duration: 0.2,
+        ease: 'easeOut',
+        ...transition,
+      }}
+      {...props}
+    />
+  );
+}
+
+export const SidebarToggleButton = () => {
+  const { open, setOpen } = useSidebar();
+
+  return (
+    <Button
+      className="flex size-12 min-w-0 items-center gap-2 rounded-2xl px-3 text-left"
+      variant="raised"
+      onClick={() => setOpen(!open)}
+    >
+      <MenuOpenRounded className="size-6 shrink-0" />
+    </Button>
+  );
+};
