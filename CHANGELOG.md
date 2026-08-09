@@ -1,3 +1,19 @@
+## [0.20.0] - 2026-08-09 04:30:29
+
+### ✅ Testing
+
+- **e2e:** Isolate auto launch settings by @MFSGA in [#311](https://github.com/MFSGA/Chimera/pull/311)
+
+- **proxies:** Reproduce legacy localization bug by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **proxies:** Localize legacy proxy controls by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.19.3...v0.20.0
+
 ## [0.19.3] - 2026-08-06 15:21:12
 
 ### 🐛 Bug Fixes
