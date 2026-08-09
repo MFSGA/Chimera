@@ -3,13 +3,13 @@ import {
   type ExternalControllerPortStrategy,
 } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@/components/main-ui/dropdown-menu';
+import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,

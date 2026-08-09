@@ -1,19 +1,64 @@
 import { createFileRoute } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
+import { SettingsGroup, SettingsLabel } from '../_modules/settings-card';
 import { SettingsTitle } from '../_modules/settings-title';
-import UserInterfaceSettings from './_modules/user-interface-settings';
+import CustomCssCard from './_modules/custom-css-card';
+import LanguageSelector from './_modules/language-selector';
+import ThemeColorConfig from './_modules/theme-color-config';
+import ThemeModeSelector from './_modules/theme-mode-selector';
 
 export const Route = createFileRoute('/(main)/main/settings/user-interface')({
   component: RouteComponent,
+  head: () => ({
+    meta: [
+      {
+        title: m.settings_user_interface_title(),
+      },
+    ],
+  }),
 });
+
+const LanguageSettings = () => (
+  <div data-slot="language-settings-container">
+    <SettingsLabel>{m.settings_user_interface_language_group()}</SettingsLabel>
+    <SettingsGroup>
+      <LanguageSelector />
+    </SettingsGroup>
+  </div>
+);
+
+const ThemeModeSettings = () => (
+  <div data-slot="theme-mode-settings-container">
+    <SettingsLabel>
+      {m.settings_user_interface_theme_mode_group()}
+    </SettingsLabel>
+    <SettingsGroup>
+      <ThemeModeSelector />
+      <ThemeColorConfig />
+    </SettingsGroup>
+  </div>
+);
+
+const CustomCssSettings = () => (
+  <div data-slot="custom-css-settings-container">
+    <SettingsLabel>
+      {m.settings_user_interface_custom_css_group()}
+    </SettingsLabel>
+    <SettingsGroup>
+      <CustomCssCard />
+    </SettingsGroup>
+  </div>
+);
 
 function RouteComponent() {
   return (
     <>
-      <SettingsTitle>{m.settings_label_user_interface()}</SettingsTitle>
+      <SettingsTitle>{m.settings_user_interface_title()}</SettingsTitle>
 
       <div className="space-y-4 px-4 pb-4">
-        <UserInterfaceSettings />
+        <LanguageSettings />
+        <ThemeModeSettings />
+        <CustomCssSettings />
       </div>
     </>
   );
