@@ -152,6 +152,8 @@ function ScrollBar({
     >
       {/* The shadow keeps the narrow thumb distinguishable in both themes. */}
       <ScrollAreaPrimitive.ScrollAreaThumb
+        // Keep the thumb mounted so always-visible scrollbars remain discoverable.
+        forceMount
         data-slot="scroll-area-thumb"
         className="bg-surface-variant relative flex-1 rounded-full shadow-sm"
         style={{
