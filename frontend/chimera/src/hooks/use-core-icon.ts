@@ -11,6 +11,8 @@ export default function useCoreIcon(core?: ClashCore | null) {
       return Clash;
     case 'clash-rs':
     case 'clash-rs-alpha':
+    case 'chimera-client':
+    case 'chimera_client':
       return ClashRs;
     default:
       return ClashMeta;
