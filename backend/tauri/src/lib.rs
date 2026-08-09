@@ -118,11 +118,22 @@ pub fn run() -> std::io::Result<()> {
         builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     }
 
-    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        not(feature = "e2e")
+    ))]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             resolve::create_window(app);
         }));
+        builder = builder.plugin(tauri_plugin_deep_link::init());
+    }
+
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        feature = "e2e"
+    ))]
+    {
         builder = builder.plugin(tauri_plugin_deep_link::init());
     }
 
