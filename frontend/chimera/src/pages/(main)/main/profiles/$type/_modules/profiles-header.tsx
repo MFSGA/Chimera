@@ -1,11 +1,11 @@
 import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
-import { QuickImport } from '@/components/profiles/quick-import';
 import { Button } from '@/components/ui/button';
 import useIsMobile from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
+import ProfileQuickImport from '../../_modules/profile-quick-import';
 import { Route as IndexRoute } from '../index';
 
 const BackButton = () => (
@@ -36,7 +36,7 @@ export default function ProfilesHeader() {
     >
       {isMobile && <BackButton />}
       {isProfileType ? (
-        <QuickImport />
+        <ProfileQuickImport />
       ) : (
         <p className="text-lg font-bold">{labels[type as ProfileType]}</p>
       )}
