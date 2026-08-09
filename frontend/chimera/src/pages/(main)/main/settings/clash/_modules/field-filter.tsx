@@ -4,7 +4,11 @@ import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-ro
 import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
 import { useMemo, type PropsWithChildren } from 'react';
 import CLASH_FIELD from '@/assets/json/clash-field.json';
-import { SwitchCard } from '@/components/settings/setting-control';
+import {
+  ItemContainer,
+  ItemLabel,
+  ItemLabelText,
+} from '@/components/settings/settings-card';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -20,6 +24,7 @@ import {
   ModalTrigger,
 } from '@/components/ui/modal';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
 import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 
@@ -155,12 +160,18 @@ export const FieldFilterSwitch = () => {
   const setting = useSetting('enable_clash_fields');
 
   return (
-    <SwitchCard
-      label={m.settings_clash_settings_field_filter_label()}
-      checked={Boolean(setting.value)}
-      loading={setting.isPending}
-      onCheckedChange={(checked) => void setting.upsert(checked)}
-    />
+    <ItemContainer data-slot="field-filter-switch-container">
+      <ItemLabel>
+        <ItemLabelText>
+          {m.settings_clash_settings_field_filter_label()}
+        </ItemLabelText>
+      </ItemLabel>
+      <Switch
+        checked={Boolean(setting.value)}
+        loading={setting.isPending}
+        onCheckedChange={(checked) => void setting.upsert(checked)}
+      />
+    </ItemContainer>
   );
 };
 
