@@ -1,52 +1,48 @@
 import { cn } from '@chimera/ui';
-import CloudDownloadRounded from '@mui/icons-material/CloudDownloadRounded';
-import FileOpenRounded from '@mui/icons-material/FileOpenRounded';
-import NoteAddRounded from '@mui/icons-material/NoteAddRounded';
-import { Fab, Tooltip } from '@mui/material';
+import CloudDownloadRounded from '~icons/material-symbols/cloud-download-rounded';
+import FileOpenRounded from '~icons/material-symbols/file-open-rounded';
+import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AddProfileContext,
   ProfileDialog,
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
+import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
+import { ProfileType } from '../../_modules/consts';
 import { Action, Route as IndexRoute } from '../index';
 
 type ImportType = NonNullable<AddProfileContextValue['type']>;
 
-const ImportOption = ({
-  type,
+const SelectButton = ({
   label,
   className,
   onClick,
   children,
 }: {
-  type: ImportType;
   label: string;
   className?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) => (
-  <Tooltip title={label} placement="left">
-    <Fab
-      className={cn(
-        '!absolute !left-1/2 !size-10 !-translate-x-1/2 !scale-0 !opacity-0',
-        '!pointer-events-none !transition-[bottom,opacity,transform] !duration-300',
-        'group-data-[expanded=true]:!pointer-events-auto group-data-[expanded=true]:!scale-100 group-data-[expanded=true]:!opacity-100',
-        className,
-      )}
-      size="small"
-      color="default"
-      aria-label={label}
-      data-profile-import-type={type}
-      onClick={onClick}
-    >
-      {children}
-    </Fab>
-  </Tooltip>
+  <Button
+    variant="fab"
+    icon
+    title={label}
+    aria-label={label}
+    className={cn(
+      'bg-primary-container dark:bg-surface-variant/30 flex size-10 items-center justify-center',
+      className,
+    )}
+    onClick={onClick}
+  >
+    {children}
+  </Button>
 );
 
 export default function ImportButton() {
+  const { type } = IndexRoute.useParams();
   const { action } = IndexRoute.useSearch();
   const navigate = IndexRoute.useNavigate();
   const [expanded, setExpanded] = useState(false);
@@ -61,25 +57,12 @@ export default function ImportButton() {
 
   const contextValue = useMemo<AddProfileContextValue | null>(
     () =>
-      importType
-        ? {
-            type: importType,
-            name: null,
-            desc: null,
-            url: '',
-          }
-        : null,
+      importType ? { type: importType, name: null, desc: null, url: '' } : null,
     [importType],
   );
 
-  const openImport = (type: ImportType) => {
-    setExpanded(false);
-    setImportType(type);
-  };
-
   const closeImport = () => {
     setImportType(null);
-
     if (action === Action.ImportLocalProfile) {
       void navigate({
         replace: true,
@@ -91,39 +74,55 @@ export default function ImportButton() {
     }
   };
 
+  if (type !== ProfileType.Profile) return null;
+
   return (
     <AddProfileContext.Provider value={contextValue}>
       <div
-        className="group fixed right-8 bottom-8 z-10 size-14"
-        data-expanded={String(expanded)}
+        className={cn(
+          'absolute right-4 z-20 ml-auto w-fit',
+          'top-[calc(100vh-40px-64px-72px)] sm:top-[calc(100vh-40px-48px-72px)]',
+        )}
         data-slot="profile-import-button"
       >
-        <ImportOption
-          type="remote"
-          className="!bottom-28"
-          label={m.profile_import_remote_title()}
-          onClick={() => openImport('remote')}
-        >
-          <CloudDownloadRounded fontSize="small" />
-        </ImportOption>
+        <div className="relative">
+          <Button
+            className="z-10"
+            variant="fab"
+            icon
+            aria-label={m.profile_create_title()}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <NoteStackAddRounded className="size-6" />
+          </Button>
 
-        <ImportOption
-          type="local"
-          className="!bottom-14"
-          label={m.profile_import_local_title()}
-          onClick={() => openImport('local')}
-        >
-          <FileOpenRounded fontSize="small" />
-        </ImportOption>
-
-        <Fab
-          className="!size-14"
-          color="primary"
-          aria-label={m.profile_create_title()}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <NoteAddRounded />
-        </Fab>
+          <div
+            className={cn(
+              'absolute top-0 flex w-full flex-col items-center gap-4',
+              'scale-0 opacity-0 transition-[top,opacity,scale] duration-300 ease-in-out',
+              expanded && '-top-28 scale-100 opacity-100',
+            )}
+          >
+            <SelectButton
+              label={m.profile_import_remote_title()}
+              onClick={() => {
+                setExpanded(false);
+                setImportType('remote');
+              }}
+            >
+              <CloudDownloadRounded className="size-5" />
+            </SelectButton>
+            <SelectButton
+              label={m.profile_import_local_title()}
+              onClick={() => {
+                setExpanded(false);
+                setImportType('local');
+              }}
+            >
+              <FileOpenRounded className="size-5" />
+            </SelectButton>
+          </div>
+        </div>
       </div>
 
       {importType && <ProfileDialog open onClose={closeImport} />}
