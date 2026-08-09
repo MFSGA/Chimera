@@ -1,28 +1,15 @@
-/**
- * Card UI 组件
- *
- * 迁移自 ref: `ref/frontend/nyanpasu/src/components/ui/card.tsx`
- * 提供 Card、CardContent、CardHeader、CardFooter 四个组件，
- * 支持 basic / raised / outline 三种变体，以及 divider 分割线选项。
- */
-
 import { cn } from '@chimera/ui';
 import { cva, type VariantProps } from 'class-variance-authority';
-import {
-  createContext,
-  useContext,
-  type HTMLAttributes,
-  type PropsWithChildren,
-} from 'react';
+import { Slot } from 'radix-ui';
+import { createContext, useContext, type HTMLAttributes } from 'react';
 
-export const cardVariants = cva('rounded-3xl text-on-surface overflow-hidden', {
+export const cardVariants = cva('overflow-hidden rounded-3xl text-on-surface', {
   variants: {
     variant: {
-      basic: ['shadow-sm', 'bg-surface dark:bg-surface'],
-      raised: ['shadow-sm', 'bg-primary-container dark:bg-on-primary'],
+      basic: ['bg-surface shadow-sm dark:bg-surface'],
+      raised: ['bg-primary-container shadow-sm dark:bg-on-primary'],
       outline: [
-        'bg-surface dark:bg-surface',
-        'border border-outline-variant dark:border-outline-variant',
+        'border border-outline-variant bg-surface dark:border-outline-variant dark:bg-surface',
       ],
     },
   },
@@ -34,9 +21,10 @@ export const cardVariants = cva('rounded-3xl text-on-surface overflow-hidden', {
 export type CardVariantsProps = VariantProps<typeof cardVariants>;
 
 export const cardContentVariants = cva(['flex flex-col gap-4 p-4']);
+export type CardContentVariantsProps = VariantProps<typeof cardContentVariants>;
 
 export const cardHeaderVariants = cva(
-  ['flex items-center gap-4 text-xl', 'px-4'],
+  ['flex items-center gap-4 px-4 text-xl'],
   {
     variants: {
       variant: {
@@ -45,7 +33,7 @@ export const cardHeaderVariants = cva(
         outline: 'border-outline-variant dark:border-outline-variant',
       },
       divider: {
-        true: 'border-b py-4 ',
+        true: 'border-b py-4',
         false: 'pt-4',
       },
     },
@@ -55,9 +43,10 @@ export const cardHeaderVariants = cva(
     },
   },
 );
+export type CardHeaderVariantsProps = VariantProps<typeof cardHeaderVariants>;
 
 export const cardFooterVariants = cva(
-  ['flex flex-row-reverse items-center gap-4', 'px-2'],
+  ['flex flex-row-reverse items-center gap-4 px-2'],
   {
     variants: {
       variant: {
@@ -76,10 +65,12 @@ export const cardFooterVariants = cva(
     },
   },
 );
+export type CardFooterVariantsProps = VariantProps<typeof cardFooterVariants>;
 
 type CardContextType = {
   variant: CardVariantsProps['variant'];
-  divider: boolean | undefined;
+  divider: CardHeaderVariantsProps['divider'] &
+    CardFooterVariantsProps['divider'];
 };
 
 const CardContext = createContext<CardContextType | null>(null);
@@ -105,108 +96,100 @@ export interface CardProps
 export const Card = ({
   variant,
   divider,
+  asChild,
   className,
-  children,
   ...props
-}: PropsWithChildren<CardProps>) => {
+}: CardProps) => {
+  const Comp = asChild ? Slot.Root : 'div';
+
   return (
-    <CardContext.Provider
-      value={{
-        variant,
-        divider,
-      }}
-    >
-      <div
+    <CardContext.Provider value={{ variant, divider }}>
+      <Comp
         className={cn(cardVariants({ variant }), className)}
         data-slot="card-root"
         {...props}
-      >
-        {children}
-      </div>
+      />
     </CardContext.Provider>
   );
 };
 
-export type CardContentProps = HTMLAttributes<HTMLDivElement> & {
-  asChild?: boolean;
-};
+export type CardContentProps = HTMLAttributes<HTMLDivElement> &
+  CardContentVariantsProps & {
+    asChild?: boolean;
+  };
 
 export const CardContent = ({
   className,
-  children,
+  asChild,
   ...props
-}: PropsWithChildren<CardContentProps>) => {
+}: CardContentProps) => {
+  const Comp = asChild ? Slot.Root : 'div';
+
   return (
-    <div
+    <Comp
       className={cn(cardContentVariants(), className)}
       data-slot="card-content"
       {...props}
-    >
-      {children}
-    </div>
+    />
   );
 };
 
-export type CardHeaderProps = HTMLAttributes<HTMLDivElement> & {
-  asChild?: boolean;
-  divider?: boolean;
-  variant?: CardVariantsProps['variant'];
-};
+export type CardHeaderProps = HTMLAttributes<HTMLDivElement> &
+  CardHeaderVariantsProps & {
+    asChild?: boolean;
+  };
 
 export const CardHeader = ({
   divider,
   variant,
   className,
-  children,
+  asChild,
   ...props
-}: PropsWithChildren<CardHeaderProps>) => {
+}: CardHeaderProps) => {
   const context = useCardContext();
+  const Comp = asChild ? Slot.Root : 'div';
 
   return (
-    <div
+    <Comp
       className={cn(
         cardHeaderVariants({
-          divider: context?.divider ?? divider,
-          variant: context?.variant ?? variant,
+          divider: context.divider ?? divider,
+          variant: context.variant ?? variant,
         }),
         className,
       )}
       data-slot="card-header"
       {...props}
-    >
-      {children}
-    </div>
+    />
   );
 };
 
 export interface CardFooterProps
-  extends
-    HTMLAttributes<HTMLDivElement>,
-    CardVariantsProps,
-    Partial<Pick<CardContextType, 'divider'>> {}
+  extends HTMLAttributes<HTMLDivElement>, CardFooterVariantsProps {
+  asChild?: boolean;
+}
 
 export const CardFooter = ({
   divider,
   variant,
   className,
-  children,
+  asChild,
   ...props
-}: PropsWithChildren<CardFooterProps>) => {
+}: CardFooterProps) => {
   const context = useCardContext();
+  const Comp = asChild ? Slot.Root : 'div';
 
   return (
-    <div
+    <Comp
       className={cn(
         cardFooterVariants({
-          divider: context?.divider ?? divider,
-          variant: context?.variant ?? variant,
+          divider: context.divider ?? divider,
+          variant: context.variant ?? variant,
         }),
         className,
       )}
       data-slot="card-footer"
       {...props}
-    >
-      {children}
-    </div>
+    />
   );
 };
