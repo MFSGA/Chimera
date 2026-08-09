@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const targetPath = '/main/assistant';
 
@@ -64,7 +66,9 @@ describe('network assistant scrollbar', () => {
           const viewport = document.querySelector<HTMLElement>(
             '[data-slot="agent-page-scroll-area"] [data-slot="scroll-area-viewport"]',
           );
-          return Boolean(viewport && viewport.scrollHeight > viewport.clientHeight);
+          return Boolean(
+            viewport && viewport.scrollHeight > viewport.clientHeight,
+          );
         }),
       {
         timeout: 30_000,
@@ -94,6 +98,9 @@ describe('network assistant scrollbar', () => {
           hasScrollbar: Boolean(scrollbar),
           hasThumb: Boolean(thumb),
           scrollbarHtml: scrollbar?.outerHTML.slice(0, 500),
+          scrollHeight: 0,
+          clientHeight: 0,
+          scrollTop: 0,
         };
       }
 
@@ -101,7 +108,10 @@ describe('network assistant scrollbar', () => {
       viewport.scrollTop = Math.min(240, maxScrollTop);
 
       return {
-        rootOverflowY: getComputedStyle(root).overflowY,
+        hasRoot: true,
+        hasViewport: true,
+        hasScrollbar: true,
+        hasThumb: true,
         scrollHeight: viewport.scrollHeight,
         clientHeight: viewport.clientHeight,
         scrollTop: viewport.scrollTop,
@@ -115,10 +125,25 @@ describe('network assistant scrollbar', () => {
     assert.ok(state.hasViewport, JSON.stringify(state));
     assert.ok(state.hasScrollbar, JSON.stringify(state));
     assert.ok(state.hasThumb, JSON.stringify(state));
+
+    if (
+      !('scrollHeight' in state) ||
+      !('clientHeight' in state) ||
+      !('scrollTop' in state)
+    ) {
+      assert.fail(JSON.stringify(state));
+    }
+
     assert.ok(state.scrollHeight > state.clientHeight, JSON.stringify(state));
     assert.ok(state.scrollTop > 0, JSON.stringify(state));
     assert.equal(state.scrollbarState, 'visible', JSON.stringify(state));
     assert.equal(state.scrollbarOpacity, '1', JSON.stringify(state));
     assert.ok(state.thumbHeight > 0, JSON.stringify(state));
+
+    const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
+    if (evidencePath) {
+      fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
+      await browser.saveScreenshot(evidencePath);
+    }
   });
 });
