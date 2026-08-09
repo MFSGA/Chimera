@@ -1,4 +1,5 @@
 import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import { AnimatePresence } from 'motion/react';
 import { useState, type ComponentProps } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
@@ -19,6 +20,7 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import AnimatedErrorItem from '../../../_modules/error-item';
 
 export default function ProfileNameEditor({
   profile,
@@ -70,22 +72,31 @@ export default function ProfileNameEditor({
       <ModalTrigger {...props} />
 
       <ModalContent>
-        <Card className="w-96 max-w-[calc(100vw-2rem)]">
+        <Card className="w-96">
           <CardHeader>
             <ModalTitle>{m.profile_name_editor_title()}</ModalTitle>
           </CardHeader>
 
-          <CardContent className="gap-2">
-            <Input
-              label={m.profile_name_label()}
-              variant="outlined"
-              value={name}
-              onChange={(event) => {
-                setName(event.target.value);
-                setError(null);
-              }}
-            />
-            {error && <p className="text-error text-sm">{error}</p>}
+          <CardContent>
+            <div className="space-y-2">
+              <Input
+                label={m.profile_name_label()}
+                variant="outlined"
+                value={name}
+                onChange={(event) => {
+                  setName(event.target.value);
+                  setError(null);
+                }}
+              />
+
+              <AnimatePresence>
+                {error && (
+                  <AnimatedErrorItem className="text-error">
+                    {error}
+                  </AnimatedErrorItem>
+                )}
+              </AnimatePresence>
+            </div>
           </CardContent>
 
           <CardFooter className="gap-1">
