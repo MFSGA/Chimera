@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 
 const settingsPath = '/main/settings/nyanpasu';
-const settingSelector = '#nyanpasu-lighten-animation-effects';
+const settingSelector =
+  '[data-slot="app-settings-container"]:last-child [role="switch"]';
 
 async function waitForApp() {
   await browser.waitUntil(

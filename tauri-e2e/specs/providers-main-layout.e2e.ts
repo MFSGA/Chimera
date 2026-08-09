@@ -85,11 +85,42 @@ describe('main providers reference layout', () => {
             }
           : null;
 
+      const style = (element: HTMLElement | null) => {
+        if (!element) return null;
+        const computed = getComputedStyle(element);
+        return {
+          display: computed.display,
+          gap: computed.gap,
+          paddingTop: computed.paddingTop,
+          paddingRight: computed.paddingRight,
+          paddingBottom: computed.paddingBottom,
+          paddingLeft: computed.paddingLeft,
+          fontSize: computed.fontSize,
+          fontWeight: computed.fontWeight,
+          position: computed.position,
+          top: computed.top,
+          zIndex: computed.zIndex,
+          gridTemplateColumns: computed.gridTemplateColumns,
+        };
+      };
+
+      const groupContents = groups.map((group) =>
+        group.querySelector<HTMLElement>(
+          '[data-slot="providers-group-content"]',
+        ),
+      );
+
+      const page = groups[0]?.parentElement ?? null;
+
       return {
         content: rect(content),
+        contentStyle: style(page),
         groups: groups.map(rect),
+        groupStyles: groups.map(style),
         titles: titles.map(rect),
+        titleStyles: titles.map(style),
         emptyCards: emptyCards.map(rect),
+        groupContentStyles: groupContents.map(style),
         viewport: { width: window.innerWidth, height: window.innerHeight },
       };
     });
@@ -112,6 +143,51 @@ describe('main providers reference layout', () => {
       true,
     );
     assert.equal((state.groups[0]?.x ?? 0) - (state.content?.x ?? 0), 16);
+    assert.deepEqual(state.contentStyle, {
+      display: 'flex',
+      gap: '16px',
+      paddingTop: '0px',
+      paddingRight: '16px',
+      paddingBottom: '16px',
+      paddingLeft: '16px',
+      fontSize: '16px',
+      fontWeight: '400',
+      position: 'static',
+      top: 'auto',
+      zIndex: 'auto',
+      gridTemplateColumns: 'none',
+    });
+    assert.equal(
+      state.groupStyles.every(
+        (style) => style?.display === 'flex' && style.gap === '4px',
+      ),
+      true,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.titleStyles.every(
+        (style) =>
+          style?.display === 'flex' &&
+          style.fontSize === '18px' &&
+          style.fontWeight === '600' &&
+          style.position === 'sticky' &&
+          style.top === '0px' &&
+          style.zIndex === '10',
+      ),
+      true,
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(
+      state.groupContentStyles.every(
+        (style) =>
+          !style ||
+          (style.display === 'grid' &&
+            style.gap === '8px' &&
+            style.gridTemplateColumns !== 'none'),
+      ),
+      true,
+      JSON.stringify(state, null, 2),
+    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
