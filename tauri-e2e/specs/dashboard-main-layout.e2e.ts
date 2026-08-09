@@ -71,6 +71,9 @@ describe('main dashboard reference layout', () => {
     );
 
     const state = await browser.execute(() => {
+      const dashboard = document.querySelector<HTMLElement>(
+        '[data-slot="dashboard-container"]',
+      );
       const container = document.querySelector<HTMLElement>(
         '[data-slot="dashboard-widget-container"]',
       );
@@ -94,6 +97,34 @@ describe('main dashboard reference layout', () => {
       const shortcutHeaders = Array.from(
         document.querySelectorAll<HTMLElement>('[data-slot="card-header"]'),
       );
+      const firstTitle = document.querySelector<HTMLElement>(
+        '[data-slot="widget-sparkline-card-title"]',
+      );
+      const firstValue = document.querySelector<HTMLElement>(
+        '[data-slot="widget-sparkline-card-content"].text-2xl',
+      );
+      const firstCard = sparklines[0] ?? null;
+      const style = (element: HTMLElement | null) => {
+        if (!element) return null;
+        const computed = getComputedStyle(element);
+        return {
+          position: computed.position,
+          display: computed.display,
+          flexDirection: computed.flexDirection,
+          overflowX: computed.overflowX,
+          overflowY: computed.overflowY,
+          paddingTop: computed.paddingTop,
+          paddingRight: computed.paddingRight,
+          paddingBottom: computed.paddingBottom,
+          paddingLeft: computed.paddingLeft,
+          gap: computed.gap,
+          fontSize: computed.fontSize,
+          fontWeight: computed.fontWeight,
+          lineHeight: computed.lineHeight,
+          width: computed.width,
+          height: computed.height,
+        };
+      };
       const rect = (element: HTMLElement | null) =>
         element
           ? {
@@ -105,7 +136,11 @@ describe('main dashboard reference layout', () => {
           : null;
 
       return {
-        container: rect(container),
+        dashboard: { rect: rect(dashboard), style: style(dashboard) },
+        container: { rect: rect(container), style: style(container) },
+        firstCardStyle: style(firstCard),
+        firstTitleStyle: style(firstTitle),
+        firstValueStyle: style(firstValue),
         sparklineCount: sparklines.length,
         sparklineRects: sparklines.map(rect),
         currentCore: rect(currentCore),
@@ -125,7 +160,30 @@ describe('main dashboard reference layout', () => {
 
     assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
     assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
-    assert.ok(state.container, JSON.stringify(state, null, 2));
+    assert.ok(state.container.rect, JSON.stringify(state, null, 2));
+    assert.equal(state.dashboard.style?.position, 'relative');
+    assert.equal(state.dashboard.style?.display, 'flex');
+    assert.equal(state.dashboard.style?.flexDirection, 'column');
+    assert.equal(state.dashboard.style?.overflowX, 'hidden');
+    assert.equal(state.dashboard.style?.overflowY, 'hidden');
+    assert.deepEqual(
+      [
+        state.container.style?.paddingTop,
+        state.container.style?.paddingRight,
+        state.container.style?.paddingBottom,
+        state.container.style?.paddingLeft,
+      ],
+      ['16px', '16px', '16px', '16px'],
+      JSON.stringify(state, null, 2),
+    );
+    assert.equal(state.container.style?.display, 'flex');
+    assert.equal(state.container.style?.flexDirection, 'column');
+    assert.equal(state.firstCardStyle?.position, 'relative');
+    assert.equal(state.firstTitleStyle?.display, 'flex');
+    assert.equal(state.firstTitleStyle?.gap, '8px');
+    assert.equal(state.firstValueStyle?.fontSize, '24px');
+    assert.equal(state.firstValueStyle?.fontWeight, '700');
+    assert.equal(state.firstValueStyle?.lineHeight, '32px');
     assert.ok(state.sparklineCount >= 4, JSON.stringify(state, null, 2));
     assert.equal(state.hasSystemLink, true, JSON.stringify(state, null, 2));
     assert.equal(state.hasClashLink, true, JSON.stringify(state, null, 2));
