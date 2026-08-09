@@ -9,9 +9,9 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import ViewQuilt from '~icons/material-symbols/view-quilt-rounded';
 import type { ComponentProps, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
-import { getImage } from '@/components/setting/modules/clash-core';
 import { Button } from '@/components/ui/button';
 import TextMarquee from '@/components/ui/text-marquee';
+import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 
 const ChimeraLogo = () => (
@@ -28,14 +28,9 @@ const CurrentCoreIcon = ({
   ...props
 }: Omit<ComponentProps<'img'>, 'src'>) => {
   const { value } = useSetting('clash_core');
+  const icon = useCoreIcon(value ?? 'mihomo');
 
-  return (
-    <img
-      src={getImage(value ?? 'mihomo')}
-      className={cn('size-full', className)}
-      {...props}
-    />
-  );
+  return <img src={icon} className={cn('size-full', className)} {...props} />;
 };
 
 const NavigateButton = ({
