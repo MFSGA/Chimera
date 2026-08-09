@@ -12,21 +12,21 @@ export const Route = createFileRoute('/(main)/main/settings/web-ui')({
 });
 
 const ExternalController = () => (
-  <section data-slot="external-controller-settings-container">
+  <div data-slot="theme-mode-settings-container">
     <SettingsLabel>{m.settings_label_external_controll()}</SettingsLabel>
     <SettingsGroup>
       <ExternalControllerConfig />
       <PortStrategySelector />
       <CoreSecretConfig />
     </SettingsGroup>
-  </section>
+  </div>
 );
 
 const WebUISettings = () => (
-  <section data-slot="web-ui-settings-container">
+  <div data-slot="theme-mode-settings-container">
     <SettingsLabel>{m.settings_web_ui_title()}</SettingsLabel>
     <WebUI />
-  </section>
+  </div>
 );
 
 function RouteComponent() {

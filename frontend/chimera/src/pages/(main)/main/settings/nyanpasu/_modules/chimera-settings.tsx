@@ -184,15 +184,15 @@ const MaxLogFiles = () => {
 export default function ChimeraSettings() {
   return (
     <>
-      <section data-slot="app-log-settings-container">
+      <div data-slot="app-settings-container">
         <SettingsLabel>{m.settings_nyanpasu_logs()}</SettingsLabel>
         <SettingsGroup>
           <AppLogLevel />
           <MaxLogFiles />
         </SettingsGroup>
-      </section>
+      </div>
 
-      <section data-slot="enhance-settings-container">
+      <div data-slot="app-settings-container">
         <SettingsLabel>{m.settings_nyanpasu_enhance_label()}</SettingsLabel>
         <SettingsGroup>
           <BreakWhenProxyChange />
@@ -200,21 +200,21 @@ export default function ChimeraSettings() {
           <BreakWhenModeChange />
           <EnableBuiltinEnhanced />
         </SettingsGroup>
-      </section>
+      </div>
 
-      <section data-slot="tray-settings-container">
+      <div data-slot="app-settings-container">
         <SettingsLabel>{m.settings_nyanpasu_tray()}</SettingsLabel>
         <SettingsGroup>
           <TrayProxiesSelector />
         </SettingsGroup>
-      </section>
+      </div>
 
-      <section data-slot="appearance-settings-container">
+      <div data-slot="app-settings-container">
         <SettingsLabel>{m.settings_label_user_interface()}</SettingsLabel>
         <SettingsGroup>
           <LightenAnimationEffects />
         </SettingsGroup>
-      </section>
+      </div>
     </>
   );
 }
