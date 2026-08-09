@@ -1,12 +1,12 @@
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useLanguage } from '@/components/providers/language-provider';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@/components/main-ui/dropdown-menu';
+import { useLanguage } from '@/components/providers/language-provider';
+import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import type { Locale } from '@/paraglide/runtime';
 import { languageOptions } from '@/utils/language';
