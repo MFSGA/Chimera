@@ -1,9 +1,11 @@
 use std::{
+    io::Write,
     path::{Path, PathBuf},
     str::FromStr,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
@@ -145,8 +147,9 @@ pub fn save_yaml<T: Serialize, P: AsRef<Path>>(
     };
 
     let path_str = path.as_os_str().to_string_lossy().to_string();
-    fs::write(path, yaml_str.as_bytes())
-        .with_context(|| format!("failed to save file \"{path_str}\""))
+    AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| file.write_all(yaml_str.as_bytes()))
+        .with_context(|| format!("failed to atomically save file \"{path_str}\""))
 }
 
 /// read mapping from yaml fix #165
@@ -205,6 +208,52 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     });
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::ser::{Error as _, Serializer};
+
+    use super::*;
+
+    struct SerializationFailure;
+
+    impl Serialize for SerializationFailure {
+        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("expected serialization failure"))
+        }
+    }
+
+    #[test]
+    fn save_yaml_atomically_replaces_existing_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.yaml");
+        std::fs::write(&path, "old: value\n").unwrap();
+
+        save_yaml(
+            &path,
+            &serde_yaml::from_str::<Value>("new: value").unwrap(),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "new: value\n");
+    }
+
+    #[test]
+    fn save_yaml_serialization_failure_preserves_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("profiles.yaml");
+        std::fs::write(&path, "old: value\n").unwrap();
+
+        let error = save_yaml(&path, &SerializationFailure, None).unwrap_err();
+
+        assert!(error.to_string().contains("expected serialization failure"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "old: value\n");
+    }
 }
 
 #[instrument(skip(app_handle))]

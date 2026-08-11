@@ -91,7 +91,7 @@ const ProxySettings = () => {
 
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
+      <DropdownMenuSubTrigger data-slot="proxy-settings-trigger">
         {m.header_settings_action_proxy_settings()}
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
@@ -133,6 +133,7 @@ const ProxySettings = () => {
               key={mode}
               className="[&>div]:pl-1.5"
               value={mode}
+              data-proxy-mode={mode}
             >
               {labels[mode as ProxyMode]}
             </DropdownMenuRadioItem>

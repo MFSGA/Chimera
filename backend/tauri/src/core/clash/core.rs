@@ -1,7 +1,6 @@
 use std::{
     borrow::Cow,
-    fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicI64, Ordering},
@@ -29,11 +28,18 @@ use specta::Type;
 use tracing::instrument;
 
 use crate::{
-    config::{
-        chimera::ClashCore,
-        core::{Config, ConfigType},
+    config::{chimera::ClashCore, core::Config},
+    core::{
+        clash::{
+            api,
+            runtime_product::{
+                CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
+                RuntimeSnapshot, RuntimeTransactionSnapshot, capture_runtime_transaction,
+                check_and_promote_candidate, restore_failed_apply,
+            },
+        },
+        logger::Logger,
     },
-    core::{clash::api, logger::Logger},
     log_err,
     utils::dirs,
 };
@@ -50,22 +56,49 @@ pub enum RunType {
     Elevated,
 }
 
-impl Default for RunType {
-    fn default() -> Self {
-        let enable_service = {
-            *Config::verge()
-                .latest()
-                .enable_service_mode
-                .as_ref()
-                .unwrap_or(&false)
-        };
+impl RunType {
+    fn from_service_mode(enable_service: bool) -> Self {
         if enable_service && crate::core::service::ipc::get_ipc_state().is_connected() {
             tracing::info!("run core as service");
-            RunType::Service
+            Self::Service
         } else {
             tracing::info!("run core as child process");
-            RunType::Normal
+            Self::Normal
         }
+    }
+}
+
+impl Default for RunType {
+    fn default() -> Self {
+        let enable_service = Config::verge()
+            .latest()
+            .enable_service_mode
+            .unwrap_or(false);
+        Self::from_service_mode(enable_service)
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RuntimeRestartError {
+    #[error("failed to prepare runtime candidate: {0}")]
+    Prepare(#[source] anyhow::Error),
+    #[error("runtime candidate check failed: {0}")]
+    Check(#[source] anyhow::Error),
+    #[error("failed to promote runtime candidate: {0}")]
+    Promote(#[source] anyhow::Error),
+    #[error("failed to start core with promoted runtime product: {0}")]
+    Start(#[source] anyhow::Error),
+    #[error("runtime restart failed: {primary}; recovery also failed: {recovery}")]
+    Recovery { primary: String, recovery: String },
+}
+
+impl RuntimeRestartError {
+    /// Recovery is only required after the product may have changed or core apply began.
+    fn requires_recovery(&self) -> bool {
+        matches!(
+            self,
+            Self::Promote(_) | Self::Start(_) | Self::Recovery { .. }
+        )
     }
 }
 
@@ -186,24 +219,16 @@ impl Instance {
         }
     }
 
-    pub fn try_new(run_type: RunType) -> Result<Self> {
-        let clash_core = Config::verge()
-            .latest()
-            .clash_core
-            .as_ref()
-            .unwrap_or(&ClashCore::Mihomo)
-            .to_owned();
-        let core_type: chimera_utils::core::CoreType = { (&clash_core).into() };
+    pub fn try_new(run_type: RunType, clash_core: ClashCore, config_path: PathBuf) -> Result<Self> {
+        let core_type: chimera_utils::core::CoreType = (&clash_core).into();
         let service_core_type: chimera_utils::core::CoreType = (&clash_core).into();
 
         let data_dir = camino::Utf8PathBuf::from_path_buf(dirs::app_data_dir()?)
             .map_err(|e| anyhow::anyhow!("failed to convert data dir to utf8 path: {:?}", e))?;
         let binary = camino::Utf8PathBuf::from_path_buf(find_binary_path(&core_type)?)
             .map_err(|e| anyhow::anyhow!("failed to convert binary path to utf8 path: {:?}", e))?;
-        let config_path = camino::Utf8PathBuf::from_path_buf(Config::generate_file(
-            ConfigType::Run,
-        )?)
-        .map_err(|e| anyhow::anyhow!("failed to convert config path to utf8 path: {:?}", e))?;
+        let config_path = camino::Utf8PathBuf::from_path_buf(config_path)
+            .map_err(|e| anyhow::anyhow!("failed to convert config path to utf8 path: {:?}", e))?;
 
         let pid_path = camino::Utf8PathBuf::from_path_buf(dirs::clash_pid_path()?)
             .map_err(|e| anyhow::anyhow!("failed to convert pid path to utf8 path: {:?}", e))?;
@@ -401,7 +426,8 @@ pub struct CoreManager {
     /// Serializes core lifecycle operations triggered by startup, IPC state changes and user
     /// actions. Without this, service health checks can race the initial launch and leave the UI
     /// pointing at a config that the service never applied.
-    run_lock: tokio::sync::Mutex<()>,
+    run_lock: RuntimeRebuildGate,
+    runtime_lifecycle: RuntimeLifecycle,
 }
 
 impl CoreManager {
@@ -409,7 +435,8 @@ impl CoreManager {
         static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
         CORE_MANAGER.get_or_init(|| CoreManager {
             instance: Mutex::new(None),
-            run_lock: tokio::sync::Mutex::new(()),
+            run_lock: RuntimeRebuildGate::default(),
+            runtime_lifecycle: RuntimeLifecycle::default(),
         })
     }
 
@@ -430,38 +457,58 @@ impl CoreManager {
         }
     }
 
-    /// 启动核心
+    /// Start the core from one generated candidate that is checked, promoted and applied under
+    /// the same lifecycle lock.
     pub async fn run_core(&self) -> Result<()> {
         let _guard = self.run_lock.lock().await;
-        self.run_core_inner().await
+        self.rebuild_and_run_locked(Self::selected_core()).await
     }
 
-    async fn run_core_inner(&self) -> Result<()> {
-        {
-            let instance = {
-                let instance = self.instance.lock();
-                instance.as_ref().cloned()
-            };
-            if let Some(instance) = instance.as_ref()
-                && matches!(instance.state().await.as_ref(), CoreState::Running)
-            {
-                log::debug!(target: "app", "core is already running, stop it first...");
-                instance.stop().await?;
-            }
-        }
-
-        Config::clash().reload();
-        log::debug!(target: "app", "reloaded clash config from file");
-
-        // 检查端口是否可用
-        Config::clash()
+    fn selected_core() -> ClashCore {
+        Config::verge()
             .latest()
-            .prepare_external_controller_port()?;
-        // Rebuild the runtime config after port fallback so the core process and
-        // frontend observe the same controller address and secret.
-        Config::generate().await?;
-        let run_type = RunType::default();
-        let instance = Arc::new(Instance::try_new(run_type)?);
+            .clash_core
+            .unwrap_or(ClashCore::Mihomo)
+    }
+
+    fn committed_core() -> ClashCore {
+        Config::verge()
+            .data()
+            .clash_core
+            .unwrap_or(ClashCore::Mihomo)
+    }
+
+    fn committed_run_type() -> RunType {
+        let enable_service = Config::verge().data().enable_service_mode.unwrap_or(false);
+        RunType::from_service_mode(enable_service)
+    }
+
+    async fn stop_running_instance(&self) -> Result<()> {
+        let instance = {
+            let instance = self.instance.lock();
+            instance.as_ref().cloned()
+        };
+        if let Some(instance) = instance
+            && matches!(instance.state().await.as_ref(), CoreState::Running)
+        {
+            log::debug!(target: "app", "core is already running, stop it first...");
+            instance.stop().await?;
+        }
+        Ok(())
+    }
+
+    async fn run_core_from_product_inner(
+        &self,
+        product: &Path,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> Result<()> {
+        self.stop_running_instance().await?;
+        let instance = Arc::new(Instance::try_new(
+            run_type,
+            target_core,
+            product.to_path_buf(),
+        )?);
 
         #[cfg(target_os = "macos")]
         {
@@ -491,74 +538,177 @@ impl CoreManager {
         Ok(())
     }
 
-    /// Apply the generated config by restarting the core.
-    /// This is used for restart-required changes such as profile source switches
-    /// and tun mode changes. In service mode this will stop/start via service IPC.
-    pub async fn restart_core_with_generated_config(&self) -> Result<()> {
-        log::debug!(target: "app", "restart core with regenerated config");
-        Config::generate().await?;
-        let result = async {
-            self.check_config().await?;
-            self.run_core().await
-        }
-        .await;
+    async fn check_candidate_path(&self, path: &Path, target_core: ClashCore) -> Result<()> {
+        use chimera_utils::core::instance::CoreInstance;
 
-        match result {
-            Ok(()) => {
-                Config::runtime().apply();
-                Ok(())
-            }
-            Err(err) => {
-                Config::runtime().discard();
-                Err(err)
-            }
-        }
+        let config_path = Utf8PathBuf::from_path_buf(path.to_path_buf())
+            .map_err(|_| anyhow::anyhow!("failed to convert candidate path to utf8"))?;
+        let core_type: chimera_utils::core::CoreType = (&target_core).into();
+        let app_dir = Utf8PathBuf::from_path_buf(dirs::app_data_dir()?)
+            .map_err(|_| anyhow::anyhow!("failed to convert app dir to utf8 path"))?;
+        let binary_path = Utf8PathBuf::from_path_buf(find_binary_path(&core_type)?)
+            .map_err(|_| anyhow::anyhow!("failed to convert binary path to utf8 path"))?;
+
+        log::debug!(target: "app", "check candidate config in `{core_type}`");
+        CoreInstance::check_config_(&core_type, &config_path, &binary_path, &app_dir)
+            .await
+            .context("failed to check runtime candidate")
     }
 
-    /// 检查配置是否正确
-    pub async fn check_config(&self) -> Result<()> {
-        use chimera_utils::core::instance::CoreInstance;
-        let config_path = self.generate_check_config_file()?;
-        let config_path = Utf8PathBuf::from_path_buf(config_path)
-            .map_err(|_| anyhow::anyhow!("failed to convert config path to utf8 path"))?;
+    async fn promote_and_start_locked(
+        &self,
+        paths: &RuntimePaths,
+        target_core: ClashCore,
+    ) -> std::result::Result<(), RuntimeRestartError> {
+        Config::clash().reload();
+        log::debug!(target: "app", "reloaded clash config from file");
+        Config::clash()
+            .latest()
+            .prepare_external_controller_port()
+            .map_err(RuntimeRestartError::Prepare)?;
 
-        let clash_core = { Config::verge().latest().clash_core };
-        let clash_core = clash_core.unwrap_or(ClashCore::Mihomo);
-        let clash_core: chimera_utils::core::CoreType = (&clash_core).into();
+        let config = Config::generate_runtime_mapping()
+            .await
+            .map_err(RuntimeRestartError::Prepare)?;
+        let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
+        let candidate = paths
+            .create_candidate(&bytes)
+            .await
+            .map_err(RuntimeRestartError::Prepare)?;
+        let revision = self
+            .runtime_lifecycle
+            .allocate_revision()
+            .map_err(RuntimeRestartError::Prepare)?;
 
-        let app_dir = dirs::app_data_dir()?;
-        let app_dir = Utf8PathBuf::from_path_buf(app_dir)
-            .map_err(|_| anyhow::anyhow!("failed to convert app dir to utf8 path"))?;
-        let binary_path = find_binary_path(&clash_core)?;
-        let binary_path = Utf8PathBuf::from_path_buf(binary_path)
-            .map_err(|_| anyhow::anyhow!("failed to convert binary path to utf8 path"))?;
-        log::debug!(target: "app", "check config in `{clash_core}`");
-        let check_result =
-            CoreInstance::check_config_(&clash_core, &config_path, &binary_path, &app_dir)
-                .await
-                .context("failed to check config")
-                .inspect_err(|e| log::error!(target: "app", "failed to check config: {e:?}"));
+        let promoted_bytes =
+            check_and_promote_candidate(&candidate, paths.product(), |candidate_path| async move {
+                self.check_candidate_path(&candidate_path, target_core)
+                    .await
+            })
+            .await
+            .map_err(|error| match error {
+                CheckedPromotionError::Check(error) | CheckedPromotionError::Verify(error) => {
+                    RuntimeRestartError::Check(error)
+                }
+                CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
+            })?;
+        let snapshot = Arc::new(RuntimeSnapshot::new(
+            revision,
+            target_core,
+            promoted_bytes,
+            config,
+        ));
+        self.runtime_lifecycle.publish_promoted(snapshot.clone());
 
-        if let Err(err) = fs::remove_file(config_path.as_std_path()) {
-            log::warn!(target: "app", "failed to remove check config `{config_path}`: {err:?}");
+        self.run_core_from_product_inner(paths.product(), target_core, RunType::default())
+            .await
+            .map_err(RuntimeRestartError::Start)?;
+        self.runtime_lifecycle
+            .publish_applied(snapshot)
+            .map_err(RuntimeRestartError::Promote)?;
+        Config::runtime().apply();
+
+        if let Err(error) = candidate.cleanup().await {
+            log::warn!(target: "app", "failed to clean runtime candidate: {error:?}");
         }
-
-        check_result?;
-
         Ok(())
     }
 
-    fn generate_check_config_file(&self) -> Result<PathBuf> {
-        let path = Config::generate_file(ConfigType::Check)?;
+    async fn restore_after_restart_failure(
+        &self,
+        paths: &RuntimePaths,
+        transaction: RuntimeTransactionSnapshot,
+        previous_clash: crate::config::clash::IClashTemp,
+        recovery_target: ClashCore,
+    ) -> Result<()> {
+        *Config::clash().data() = previous_clash;
+        restore_failed_apply(
+            paths,
+            &self.runtime_lifecycle,
+            transaction,
+            |had_product| async move {
+                if had_product {
+                    self.run_core_from_product_inner(
+                        paths.product(),
+                        recovery_target,
+                        Self::committed_run_type(),
+                    )
+                    .await
+                } else {
+                    self.stop_running_instance().await?;
+                    self.instance.lock().take();
+                    Ok(())
+                }
+            },
+        )
+        .await
+    }
 
-        /* if matches!(
-            crate::core::service::ipc::get_ipc_state(),
-            crate::core::service::ipc::IpcState::Connected
-        ) {
-            self.patch_check_config_ports(&path)?;
-        } */
+    async fn rebuild_and_run_locked(&self, target_core: ClashCore) -> Result<()> {
+        let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
+        if let Err(error) = paths
+            .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
+            .await
+        {
+            log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
+        }
+        let transaction = capture_runtime_transaction(&paths, &self.runtime_lifecycle)
+            .await
+            .map_err(RuntimeRestartError::Prepare)?;
+        let recovery_target = transaction
+            .lifecycle
+            .applied
+            .as_ref()
+            .map(|snapshot| snapshot.target_core)
+            .unwrap_or_else(Self::committed_core);
+        let previous_clash = Config::clash().data().clone();
 
-        Ok(path)
+        match self.promote_and_start_locked(&paths, target_core).await {
+            Ok(()) => Ok(()),
+            Err(primary) => {
+                Config::runtime().discard();
+                if !primary.requires_recovery() {
+                    *Config::clash().data() = previous_clash;
+                    return Err(primary.into());
+                }
+                match self
+                    .restore_after_restart_failure(
+                        &paths,
+                        transaction,
+                        previous_clash,
+                        recovery_target,
+                    )
+                    .await
+                {
+                    Ok(()) => Err(primary.into()),
+                    Err(recovery) => Err(RuntimeRestartError::Recovery {
+                        primary: primary.to_string(),
+                        recovery: recovery.to_string(),
+                    }
+                    .into()),
+                }
+            }
+        }
+    }
+
+    /// Apply one generated candidate by checking, promoting and restarting from the exact product.
+    pub async fn restart_core_with_generated_config(&self) -> Result<()> {
+        log::debug!(target: "app", "restart core with checked runtime product");
+        let _guard = self.run_lock.lock().await;
+        self.rebuild_and_run_locked(Self::selected_core()).await
+    }
+
+    /// Check the exact generated candidate without promoting or applying it.
+    pub async fn check_config(&self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
+        let paths = RuntimePaths::from_app_config_dir()?;
+        let config = Config::generate_runtime_mapping().await?;
+        let bytes = Config::render_runtime_bytes(&config)?;
+        let candidate = paths.create_candidate(&bytes).await?;
+        self.check_candidate_path(candidate.path(), Self::selected_core())
+            .await?;
+        candidate.read_verified().await?;
+        candidate.cleanup().await
     }
 
     #[cfg(target_os = "macos")]
@@ -569,25 +719,11 @@ impl CoreManager {
     /// 重启内核
     pub async fn recover_core(&'static self) -> Result<()> {
         let _guard = self.run_lock.lock().await;
-        // 清除原来的实例
-        {
-            let instance = {
-                let mut this = self.instance.lock();
-                this.take()
-            };
-            if let Some(instance) = instance
-                && matches!(instance.state().await.as_ref(), CoreState::Running)
-            {
-                log::debug!(target: "app", "core is running, stop it first...");
-                instance.stop().await?;
-            }
-        }
-
-        if let Err(err) = self.run_core_inner().await {
+        if let Err(err) = self.rebuild_and_run_locked(Self::selected_core()).await {
             log::error!(target: "app", "failed to recover clash core");
             log::error!(target: "app", "{err:?}");
             drop(_guard);
-            tokio::time::sleep(Duration::from_secs(5)).await; // sleep 5s
+            tokio::time::sleep(Duration::from_secs(5)).await;
             std::thread::spawn(move || {
                 block_on(async {
                     let _ = CoreManager::global().recover_core().await;
@@ -635,19 +771,13 @@ impl CoreManager {
 
         Config::verge().draft().clash_core = Some(clash_core);
 
-        // 更新配置
-        Config::generate().await?;
-
-        self.check_config().await?;
-
         // 清掉旧日志
         Logger::global().clear_log();
 
-        match self.run_core_inner().await {
+        match self.rebuild_and_run_locked(clash_core).await {
             Ok(_) => {
                 tracing::info!("change core success");
                 Config::verge().apply();
-                Config::runtime().apply();
                 log_err!(Config::verge().latest().save_file());
                 Ok(())
             }
@@ -655,7 +785,6 @@ impl CoreManager {
                 tracing::error!("failed to change core: {err:?}");
                 Config::verge().discard();
                 Config::runtime().discard();
-                self.run_core_inner().await?;
                 Err(err)
             }
         }
@@ -684,4 +813,24 @@ pub fn find_binary_path(
         std::io::ErrorKind::NotFound,
         format!("{} not found", core_type.get_executable_name()),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeRestartError;
+
+    #[test]
+    fn recovery_only_runs_after_product_or_core_may_have_changed() {
+        assert!(!RuntimeRestartError::Prepare(anyhow::anyhow!("prepare")).requires_recovery());
+        assert!(!RuntimeRestartError::Check(anyhow::anyhow!("check")).requires_recovery());
+        assert!(RuntimeRestartError::Promote(anyhow::anyhow!("promote")).requires_recovery());
+        assert!(RuntimeRestartError::Start(anyhow::anyhow!("start")).requires_recovery());
+        assert!(
+            RuntimeRestartError::Recovery {
+                primary: "start".to_string(),
+                recovery: "restart".to_string(),
+            }
+            .requires_recovery()
+        );
+    }
 }
