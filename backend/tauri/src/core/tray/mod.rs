@@ -134,9 +134,9 @@ impl Tray {
     pub fn on_menu_item_event(app_handle: &AppHandle, event: MenuEvent) {
         match event.id().0.as_str() {
             "open_window" => resolve::create_window(app_handle),
-            "rule_mode" => feat::change_clash_mode("rule".to_string()),
-            "global_mode" => feat::change_clash_mode("global".to_string()),
-            "direct_mode" => feat::change_clash_mode("direct".to_string()),
+            "rule_mode" => feat::change_clash_mode(app_handle, "rule".to_string()),
+            "global_mode" => feat::change_clash_mode(app_handle, "global".to_string()),
+            "direct_mode" => feat::change_clash_mode(app_handle, "direct".to_string()),
             "system_proxy" => feat::toggle_system_proxy(),
             "tun_mode" => feat::toggle_tun_mode(),
             "open_app_config_dir" => crate::log_err!(ipc::open_app_config_dir()),

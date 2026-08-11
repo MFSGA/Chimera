@@ -3,6 +3,7 @@ use std::borrow::Borrow;
 use anyhow::{Result, bail};
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
+use tauri::{AppHandle, Manager};
 use tracing::debug;
 
 use crate::{
@@ -12,7 +13,16 @@ use crate::{
         profile::item::remote::{RemoteProfileOptionsBuilder, RemoteProfileSubscription},
         runtime::ClashConfigOverrides,
     },
-    core::{clash::core::CoreManager, handle, service::ipc::get_ipc_state, sysopt},
+    core::{
+        clash::{
+            self,
+            core::CoreManager,
+            transaction::{RuntimePatchCoordinator, TransactionOutcome},
+        },
+        handle,
+        service::ipc::get_ipc_state,
+        sysopt,
+    },
     log_err,
     utils::{self, help::get_clash_external_port},
 };
@@ -117,8 +127,9 @@ async fn apply_clash_runtime_change(plan: &ClashPatchPlan) -> Result<()> {
         return Ok(());
     }
 
-    Config::generate().await?;
-    CoreManager::global().run_core().await?;
+    CoreManager::global()
+        .restart_core_with_generated_config()
+        .await?;
     handle::Handle::refresh_clash();
     Ok(())
 }
@@ -176,8 +187,9 @@ async fn apply_verge_runtime_change(plan: &VergePatchPlan) -> Result<()> {
         && ipc_state.is_connected()
     {
         log::debug!(target: "app", "change service mode to {}", service_mode);
-        Config::generate().await?;
-        CoreManager::global().run_core().await?;
+        CoreManager::global()
+            .restart_core_with_generated_config()
+            .await?;
     }
 
     if plan.tun_mode.is_some() {
@@ -232,6 +244,28 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
 pub async fn patch_clash_overrides(overrides: ClashConfigOverrides) -> Result<()> {
     let patch = overrides.to_mapping();
     patch_clash_with_overrides(patch, overrides).await
+}
+
+/// Applies typed overrides to the running core and desired state through the
+/// shared transaction coordinator used by IPC and non-window entry points.
+pub async fn patch_running_clash_overrides(
+    coordinator: &RuntimePatchCoordinator,
+    overrides: ClashConfigOverrides,
+) -> TransactionOutcome {
+    let mapping = overrides.to_mapping();
+    let persist_overrides = overrides.clone();
+
+    coordinator
+        .apply(
+            mapping,
+            clash::api::get_configs,
+            |patch| async move { clash::api::patch_configs(&patch).await },
+            move |_patch| {
+                let overrides = persist_overrides.clone();
+                async move { patch_clash_overrides(overrides).await }
+            },
+        )
+        .await
 }
 
 /// Applies a general Clash mapping while extracting only supported persistent
@@ -380,18 +414,23 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
     });
 }
 
-pub fn change_clash_mode(mode: String) {
+pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
+    let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let mut patch = Mapping::new();
-        patch.insert("mode".into(), mode.into());
-
-        if let Err(err) = crate::core::clash::api::patch_configs(&patch).await {
-            log::error!(target: "app", "failed to patch clash mode api: {err:?}");
+        let Some(coordinator) = app_handle.try_state::<RuntimePatchCoordinator>() else {
+            log::error!(target: "app", "runtime patch coordinator is not managed");
             return;
-        }
+        };
+        let overrides = ClashConfigOverrides {
+            mode: Some(mode),
+            ..ClashConfigOverrides::default()
+        };
 
-        if let Err(err) = patch_clash(patch).await {
-            log::error!(target: "app", "failed to patch clash mode state: {err:?}");
+        if let Err(error) = patch_running_clash_overrides(&coordinator, overrides)
+            .await
+            .into_result()
+        {
+            log::error!(target: "app", "failed to change clash mode transactionally: {error:#}");
         }
     });
 }

@@ -67,7 +67,9 @@ export default function HeaderMenu({
       </HeaderFileAction>
 
       <HeaderSettingsAction>
-        <MenuButton>{m.header_settings_action_title()}</MenuButton>
+        <MenuButton data-slot="header-settings-menu">
+          {m.header_settings_action_title()}
+        </MenuButton>
       </HeaderSettingsAction>
 
       <HeaderHelpAction>
