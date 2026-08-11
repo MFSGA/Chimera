@@ -23,6 +23,7 @@ use crate::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
                     RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
+                utils::resolve_managed_profile_path,
             },
             item_type::{ProfileItemType, ProfileUid},
             profiles::{Profiles, ProfilesBuilder},
@@ -323,7 +324,7 @@ pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
             .to_string()
     };
 
-    let path = (dirs::app_profiles_dir())?.join(file);
+    let path = resolve_managed_profile_path(&file)?;
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
     }
@@ -425,9 +426,11 @@ fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) ->
 }
 
 fn persist_profile_order(
+    coordinator: &clash::rebuild::RebuildCoordinator,
     update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>,
 ) -> Result<RebuildOutcome> {
     persist_profiles(update)?;
+    coordinator.notifier().request_rebuild();
     Ok(RebuildOutcome::Ok)
 }
 
@@ -452,14 +455,23 @@ async fn rebuild_after_profile_commit(operation: &str) -> RebuildOutcome {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn reorder_profile(active_id: ProfileUid, over_id: ProfileUid) -> Result<RebuildOutcome> {
-    persist_profile_order(|profiles| profiles.reorder(&active_id, &over_id))
+pub async fn reorder_profile(
+    coordinator: State<'_, clash::rebuild::RebuildCoordinator>,
+    active_id: ProfileUid,
+    over_id: ProfileUid,
+) -> Result<RebuildOutcome> {
+    persist_profile_order(&coordinator, |profiles| {
+        profiles.reorder(&active_id, &over_id)
+    })
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn reorder_profiles_by_list(list: Vec<ProfileUid>) -> Result<RebuildOutcome> {
-    persist_profile_order(|profiles| profiles.reorder_by_list(&list))
+pub async fn reorder_profiles_by_list(
+    coordinator: State<'_, clash::rebuild::RebuildCoordinator>,
+    list: Vec<ProfileUid>,
+) -> Result<RebuildOutcome> {
+    persist_profile_order(&coordinator, |profiles| profiles.reorder_by_list(&list))
 }
 
 #[tauri::command]
@@ -772,19 +784,7 @@ pub async fn patch_clash_config(
         "patch clash runtime config"
     );
     let overrides = ClashConfigOverrides::from(payload);
-    let mapping = overrides.to_mapping();
-    let persist_overrides = overrides.clone();
-    let outcome = coordinator
-        .apply(
-            mapping,
-            clash::api::get_configs,
-            |patch| async move { clash::api::patch_configs(&patch).await },
-            move |_patch| {
-                let overrides = persist_overrides.clone();
-                async move { feat::patch_clash_overrides(overrides).await }
-            },
-        )
-        .await;
+    let outcome = feat::patch_running_clash_overrides(&coordinator, overrides).await;
 
     match &outcome {
         clash::transaction::TransactionOutcome::Committed => {}

@@ -11,6 +11,8 @@ pub mod api;
 pub mod core;
 /// 3
 pub mod proxies;
+pub(crate) mod rebuild;
+pub(crate) mod runtime_product;
 pub(crate) mod transaction;
 pub mod ws;
 
@@ -35,6 +37,20 @@ pub async fn restart_ws_connector<R: Runtime>(manager: &impl Manager<R>) -> anyh
 
 pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     manager.manage(transaction::RuntimePatchCoordinator::default());
+
+    let rebuild = rebuild::RebuildCoordinator::new();
+    rebuild.start_worker(|| async {
+        crate::core::clash::core::CoreManager::global()
+            .restart_core_with_generated_config()
+            .await?;
+        crate::core::handle::Handle::refresh_clash();
+        let _ =
+            crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(
+            )
+            .await;
+        Ok(())
+    });
+    manager.manage(rebuild);
 
     let ws_connector = ws::ClashConnectionsConnector::new();
     manager.manage(ws_connector.clone());

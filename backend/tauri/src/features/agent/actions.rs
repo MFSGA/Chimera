@@ -3,14 +3,17 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_yaml::{Mapping, Value};
 use sha2::Digest;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, WebviewWindow};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::Mutex;
 
-use crate::{config::chimera::IVerge, feat};
+use crate::{
+    config::{chimera::IVerge, runtime::ClashConfigOverrides},
+    core::clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
+    feat,
+};
 
 use super::{
     collect_network_snapshot, core_probe,
@@ -220,7 +223,7 @@ async fn execute_pending(
     }
     let current = collect_network_snapshot(app).await;
     validate_preconditions(&current, &pending.preconditions)?;
-    execute_action(&current, &proposal.action, &pending.preconditions).await?;
+    execute_action(app, &current, &proposal.action, &pending.preconditions).await?;
     let snapshot = collect_network_snapshot(app).await;
     if !verify_action(&snapshot, &proposal.action) {
         return Err(AgentCommandError::VerificationFailed);
@@ -358,6 +361,7 @@ fn routing_impacts(mode: AgentRoutingMode) -> Vec<AgentImpact> {
 }
 
 async fn execute_action(
+    app: &AppHandle,
     snapshot: &AgentNetworkSnapshot,
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
@@ -366,7 +370,7 @@ async fn execute_action(
         (
             AgentActionRequest::SetRoutingMode { mode },
             ActionPreconditions::SetRoutingMode { before, .. },
-        ) => set_routing_mode(*before, *mode).await,
+        ) => set_routing_mode(app, *before, *mode).await,
         (
             AgentActionRequest::DisableStaleSystemProxy,
             ActionPreconditions::DisableStaleSystemProxy {
@@ -379,56 +383,61 @@ async fn execute_action(
     }
 }
 
-async fn set_routing_mode(before: AgentRoutingMode, target: AgentRoutingMode) -> AgentResult<()> {
-    if patch_running_mode(target).await.is_err() {
-        return if rollback_routing_mode(before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
+async fn set_routing_mode(
+    app: &AppHandle,
+    before: AgentRoutingMode,
+    target: AgentRoutingMode,
+) -> AgentResult<()> {
+    let outcome = apply_routing_mode_transaction(app, target).await?;
+    if let Some(error) = routing_transaction_error(&outcome) {
+        return Err(error);
     }
-    if persist_routing_mode(target).await.is_err() {
-        return if rollback_routing_mode(before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    if routing_mode_is_applied(target).await {
+
+    if routing_mode_is_applied_with_timeout(target).await {
         return Ok(());
     }
-    if rollback_routing_mode(before).await {
+
+    let restored = matches!(
+        apply_routing_mode_transaction(app, before).await,
+        Ok(TransactionOutcome::Committed)
+    ) && routing_mode_is_applied_with_timeout(before).await;
+
+    if restored {
         Err(AgentCommandError::VerificationFailed)
     } else {
         Err(AgentCommandError::PartialApply)
     }
 }
 
-async fn patch_running_mode(mode: AgentRoutingMode) -> AgentResult<()> {
-    let mapping = routing_mode_mapping(mode);
-    tokio::time::timeout(
-        CORE_ACTION_TIMEOUT,
-        crate::core::clash::api::patch_configs(&mapping),
-    )
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)?
-    .map_err(|_| AgentCommandError::ActionFailed)
+fn routing_transaction_error(outcome: &TransactionOutcome) -> Option<AgentCommandError> {
+    match outcome {
+        TransactionOutcome::Committed => None,
+        TransactionOutcome::Rejected { .. } | TransactionOutcome::RolledBack { .. } => {
+            Some(AgentCommandError::ActionFailed)
+        }
+        TransactionOutcome::RollbackFailed { .. } => Some(AgentCommandError::PartialApply),
+    }
 }
 
-async fn persist_routing_mode(mode: AgentRoutingMode) -> AgentResult<()> {
-    tokio::time::timeout(
-        CORE_ACTION_TIMEOUT,
-        feat::patch_clash(routing_mode_mapping(mode)),
-    )
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)?
-    .map_err(|_| AgentCommandError::ActionFailed)
+async fn apply_routing_mode_transaction(
+    app: &AppHandle,
+    mode: AgentRoutingMode,
+) -> AgentResult<TransactionOutcome> {
+    let coordinator = app
+        .try_state::<RuntimePatchCoordinator>()
+        .ok_or(AgentCommandError::ActionFailed)?;
+    let overrides = ClashConfigOverrides {
+        mode: Some(mode.as_core_value().into()),
+        ..ClashConfigOverrides::default()
+    };
+
+    Ok(feat::patch_running_clash_overrides(&coordinator, overrides).await)
 }
 
-async fn rollback_routing_mode(mode: AgentRoutingMode) -> bool {
-    let persisted = persist_routing_mode(mode).await.is_ok();
-    let running = patch_running_mode(mode).await.is_ok();
-    persisted && running && routing_mode_is_applied(mode).await
+async fn routing_mode_is_applied_with_timeout(mode: AgentRoutingMode) -> bool {
+    tokio::time::timeout(CORE_ACTION_TIMEOUT, routing_mode_is_applied(mode))
+        .await
+        .unwrap_or(false)
 }
 
 async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
@@ -440,15 +449,6 @@ async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
         .and_then(serde_yaml::Value::as_str)
         .and_then(AgentRoutingMode::parse);
     configured == Some(mode) && core_probe::observed_routing_mode().await == Ok(mode)
-}
-
-fn routing_mode_mapping(mode: AgentRoutingMode) -> Mapping {
-    let mut mapping = Mapping::new();
-    mapping.insert(
-        Value::String("mode".into()),
-        Value::String(mode.as_core_value().into()),
-    );
-    mapping
 }
 
 async fn disable_stale_system_proxy(
@@ -600,8 +600,9 @@ mod tests {
 
     use super::{
         ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-        plan_routing_mode, proposal_digest, verify_action,
+        plan_routing_mode, proposal_digest, routing_transaction_error, verify_action,
     };
+    use crate::core::clash::transaction::TransactionOutcome;
     use crate::features::agent::model::{
         AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot,
         AgentCoreState, AgentHealth, AgentHostScope, AgentNetworkSnapshot, AgentPrivacyBoundary,
@@ -637,6 +638,36 @@ mod tests {
         assert!(verify_action(&snapshot, &action));
         snapshot.core.observed_routing_mode = Some(AgentRoutingMode::Direct);
         assert!(!verify_action(&snapshot, &action));
+    }
+
+    #[test]
+    fn routing_transaction_outcomes_preserve_agent_error_semantics() {
+        assert!(routing_transaction_error(&TransactionOutcome::Committed).is_none());
+        assert_eq!(
+            routing_transaction_error(&TransactionOutcome::Rejected {
+                primary_error: "read failed".into(),
+            })
+            .expect("rejected transaction should fail")
+            .to_string(),
+            "agent_action_failed"
+        );
+        assert_eq!(
+            routing_transaction_error(&TransactionOutcome::RolledBack {
+                primary_error: "persist failed".into(),
+            })
+            .expect("compensated transaction should fail")
+            .to_string(),
+            "agent_action_failed"
+        );
+        assert_eq!(
+            routing_transaction_error(&TransactionOutcome::RollbackFailed {
+                primary_error: "persist failed".into(),
+                rollback_error: "restore failed".into(),
+            })
+            .expect("failed compensation should be partial")
+            .to_string(),
+            "agent_action_partially_applied"
+        );
     }
 
     #[test]

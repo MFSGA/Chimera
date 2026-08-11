@@ -72,15 +72,18 @@ fn apply_binding_rewrite(
     replacement: &str,
     label: &str,
 ) -> io::Result<()> {
-    if !contents.contains(generated) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("generated TypeScript binding pattern changed: {label}"),
-        ));
+    if contents.contains(generated) {
+        *contents = contents.replacen(generated, replacement, 1);
+        return Ok(());
+    }
+    if contents.contains(replacement) {
+        return Ok(());
     }
 
-    *contents = contents.replacen(generated, replacement, 1);
-    Ok(())
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("generated TypeScript binding pattern changed: {label}"),
+    ))
 }
 
 /// Align Specta output with serde's flattened Profile enum representation.
@@ -224,7 +227,7 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 mod tests {
     use std::path::Path;
 
-    use super::{build_specta_builder, normalize_typescript_bindings};
+    use super::{apply_binding_rewrite, build_specta_builder, normalize_typescript_bindings};
 
     const BINDINGS_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -254,6 +257,22 @@ mod tests {
             .status()
             .expect("failed to run Prettier");
         assert!(status.success(), "Prettier failed for generated bindings");
+    }
+
+    #[test]
+    fn binding_rewrite_is_idempotent() {
+        let mut contents = "before generated after".to_string();
+        apply_binding_rewrite(&mut contents, "generated", "flattened", "test").unwrap();
+        apply_binding_rewrite(&mut contents, "generated", "flattened", "test").unwrap();
+        assert_eq!(contents, "before flattened after");
+    }
+
+    #[test]
+    fn binding_rewrite_rejects_unknown_shape() {
+        let mut contents = "before changed after".to_string();
+        let error = apply_binding_rewrite(&mut contents, "generated", "flattened", "test")
+            .expect_err("unknown binding shape must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]
