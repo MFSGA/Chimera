@@ -5,12 +5,9 @@ use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_macro::EnumWrapperCombined;
 
-use crate::{
-    config::profile::{
-        item::{local::LocalProfile, remote::RemoteProfile},
-        item_type::ProfileItemType,
-    },
-    utils::dirs,
+use crate::config::profile::{
+    item::{local::LocalProfile, remote::RemoteProfile, utils::resolve_managed_profile_path},
+    item_type::ProfileItemType,
 };
 
 /// 0
@@ -50,8 +47,7 @@ impl Profile {
 
     /// get the file data
     pub fn read_file(&self) -> Result<String> {
-        let file = self.file();
-        let path = dirs::app_profiles_dir()?.join(file);
+        let path = resolve_managed_profile_path(self.file())?;
         if !path.exists() {
             bail!("file does not exist");
         }
@@ -60,7 +56,7 @@ impl Profile {
 
     /// save the file data atomically
     pub fn save_file<T: Borrow<String>>(&self, data: T) -> Result<()> {
-        let path = dirs::app_profiles_dir()?.join(self.file());
+        let path = resolve_managed_profile_path(self.file())?;
         AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
             .write(|file| file.write_all(data.borrow().as_bytes()))
             .with_context(|| format!("failed to atomically save profile file {}", path.display()))
