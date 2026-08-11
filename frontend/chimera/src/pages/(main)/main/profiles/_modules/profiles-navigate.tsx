@@ -1,11 +1,12 @@
 import { useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Link, useMatchRoute } from '@tanstack/react-router';
-import CallMergeRounded from '~icons/material-symbols/call-merge-rounded';
-import CodeRounded from '~icons/material-symbols/code-rounded';
 import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
 import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
-import MemoryRounded from '~icons/material-symbols/memory-rounded';
+import LuaIcon from '~icons/mdi/language-lua';
+import ChipLine from '~icons/mingcute/chip-line';
+import YamlIcon from '~icons/nonicons/yaml-16';
+import ScriptIcon from '~icons/streamline-plump/script-2-remix';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -41,23 +42,17 @@ const LinkButton = ({
   );
 };
 
-const ScriptBadge = ({ children }: PropsWithChildren) => (
-  <div className="relative">
-    <CodeRounded className="size-8" />
-    <span className="bg-surface absolute -right-1 bottom-0 flex size-4 items-center justify-center rounded text-[9px] font-black shadow-sm">
-      {children}
-    </span>
-  </div>
-);
-
 const ROUTES = {
   [ProfileType.Profile]: {
     label: m.profile_profile_label(),
     href: '/main/profiles/profile',
     icon: () => (
-      <div className="relative">
+      <div className="relative" data-profile-type-icon="profile">
         <DescriptionOutlineRounded className="size-8" />
-        <MemoryRounded className="bg-surface absolute -right-0.5 bottom-0 size-4 rotate-12 rounded p-0.5" />
+        <ChipLine
+          data-profile-type-badge="profile"
+          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-gray-300 p-0.5 dark:bg-gray-500"
+        />
       </div>
     ),
   },
@@ -65,23 +60,38 @@ const ROUTES = {
     label: m.profile_javascript_label(),
     href: '/main/profiles/javascript',
     icon: () => (
-      <ScriptBadge>
-        <JavascriptRounded className="size-4" />
-      </ScriptBadge>
+      <div className="relative" data-profile-type-icon="javascript">
+        <ScriptIcon className="size-8" />
+        <JavascriptRounded
+          data-profile-type-badge="javascript"
+          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-amber-400 dark:bg-amber-700"
+        />
+      </div>
     ),
   },
   [ProfileType.Lua]: {
     label: m.profile_lua_label(),
     href: '/main/profiles/lua',
-    icon: () => <ScriptBadge>Lua</ScriptBadge>,
+    icon: () => (
+      <div className="relative" data-profile-type-icon="lua">
+        <ScriptIcon className="size-8" />
+        <LuaIcon
+          data-profile-type-badge="lua"
+          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-blue-300 p-0.5 dark:bg-blue-700"
+        />
+      </div>
+    ),
   },
   [ProfileType.Merge]: {
     label: m.profile_merge_label(),
     href: '/main/profiles/merge',
     icon: () => (
-      <div className="relative">
-        <CodeRounded className="size-8" />
-        <CallMergeRounded className="bg-surface absolute -right-0.5 bottom-0 size-4 rotate-12 rounded p-0.5" />
+      <div className="relative" data-profile-type-icon="merge">
+        <ScriptIcon className="size-8" />
+        <YamlIcon
+          data-profile-type-badge="merge"
+          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-orange-400 p-0.75 dark:bg-orange-700"
+        />
       </div>
     ),
   },
