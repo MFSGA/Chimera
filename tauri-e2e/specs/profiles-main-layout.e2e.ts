@@ -120,6 +120,73 @@ describe('main profiles reference layout', () => {
     await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
   });
 
+  it('uses the reference tooltip surface for profile import actions', async () => {
+    const importToggle = await $(
+      '[data-slot="profile-import-button"] > div > button',
+    );
+    await importToggle.waitForClickable({ timeout: 15_000 });
+    await importToggle.click();
+
+    const remoteImport = await $(
+      '[data-slot="profile-import-button"] > div > div button:first-child',
+    );
+    await remoteImport.waitForDisplayed({ timeout: 15_000 });
+    const focused = await browser.execute((element) => {
+      (element as HTMLElement).focus();
+      return document.activeElement === element;
+    }, remoteImport);
+    assert.equal(focused, true, 'The remote import action was not focusable.');
+
+    const tooltip = await $('[role="tooltip"]');
+    await tooltip.waitForDisplayed({ timeout: 15_000 });
+    assert.equal((await tooltip.getText()).includes('远程配置'), true);
+
+    await importToggle.click();
+  });
+
+  it('uses the reference profile type icon compositions', async () => {
+    const icons = await browser.execute(() => {
+      const readIcon = (type: string, marker: string) => {
+        const icon = document.querySelector<HTMLElement>(
+          `[data-profile-type-icon="${type}"]`,
+        );
+        const badge = icon?.querySelector<HTMLElement>(
+          `[data-profile-type-badge="${type}"]`,
+        );
+        return {
+          hasPrimaryIcon: (icon?.querySelectorAll('svg').length ?? 0) > 0,
+          hasBadge: Boolean(badge),
+          hasMarker: (badge?.getAttribute('class') ?? '').includes(marker),
+        };
+      };
+
+      return {
+        profile: readIcon('profile', 'bg-gray-300'),
+        javascript: readIcon('javascript', 'bg-amber-400'),
+        lua: readIcon('lua', 'bg-blue-300'),
+        merge: readIcon('merge', 'bg-orange-400'),
+      };
+    });
+
+    for (const [type, icon] of Object.entries(icons)) {
+      assert.equal(
+        icon.hasPrimaryIcon,
+        true,
+        `${type} is missing its primary icon.`,
+      );
+      assert.equal(
+        icon.hasBadge,
+        true,
+        `${type} is missing its reference badge.`,
+      );
+      assert.equal(
+        icon.hasMarker,
+        true,
+        `${type} badge style is not ref-aligned.`,
+      );
+    }
+  });
+
   it('matches the reference desktop structure and remains visually balanced', async () => {
     const card = await $('[data-slot="profile-card"]');
     await card.waitForDisplayed({ timeout: 15_000 });

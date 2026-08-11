@@ -9,6 +9,12 @@ import {
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
 import { Button } from '@/components/ui/button';
+import { useScrollArea } from '@/components/ui/scroll-area';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
 import { Action, Route as IndexRoute } from '../index';
@@ -26,25 +32,32 @@ const SelectButton = ({
   onClick: () => void;
   children: React.ReactNode;
 }) => (
-  <Button
-    variant="fab"
-    icon
-    title={label}
-    aria-label={label}
-    className={cn(
-      'bg-primary-container dark:bg-surface-variant/30 flex size-10 items-center justify-center',
-      className,
-    )}
-    onClick={onClick}
-  >
-    {children}
-  </Button>
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button
+        variant="fab"
+        icon
+        aria-label={label}
+        className={cn(
+          'bg-primary-container dark:bg-surface-variant/30 flex size-10 items-center justify-center',
+          className,
+        )}
+        onClick={onClick}
+      >
+        {children}
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent side="left">
+      <span>{label}</span>
+    </TooltipContent>
+  </Tooltip>
 );
 
 export default function ImportButton() {
   const { type } = IndexRoute.useParams();
   const { action } = IndexRoute.useSearch();
   const navigate = IndexRoute.useNavigate();
+  const { isScrolling } = useScrollArea();
   const [expanded, setExpanded] = useState(false);
   const [importType, setImportType] = useState<ImportType | null>(null);
 
@@ -54,6 +67,12 @@ export default function ImportButton() {
       setImportType('local');
     }
   }, [action]);
+
+  useEffect(() => {
+    if (isScrolling && expanded) {
+      setExpanded(false);
+    }
+  }, [expanded, isScrolling]);
 
   const contextValue = useMemo<AddProfileContextValue | null>(
     () =>
