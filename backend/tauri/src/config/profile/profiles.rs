@@ -13,6 +13,7 @@ use crate::{
         item::{
             Profile, ProfileMetaGetter,
             remote::{RemoteProfileOptions, SubscriptionInfo},
+            utils::resolve_managed_profile_path,
         },
         item_type::ProfileUid,
     },
@@ -273,7 +274,7 @@ impl Profiles {
 
         let should_update = self.current.iter().any(|current| current == uid);
         let item = self.items.remove(index);
-        let file_path = dirs::app_profiles_dir()?.join(item.file());
+        let file_path = resolve_managed_profile_path(item.file())?;
         if file_path.exists() {
             std::fs::remove_file(file_path)?;
         }
@@ -294,7 +295,7 @@ impl Profiles {
         let (successes, failures): (Vec<(&str, Mapping)>, Vec<anyhow::Error>) = current
             .par_iter()
             .map(|item| {
-                let file_path = dirs::app_profiles_dir()?.join(item.file());
+                let file_path = resolve_managed_profile_path(item.file())?;
                 if !file_path.exists() {
                     return Err(anyhow::anyhow!("failed to find the file: {:?}", file_path));
                 }

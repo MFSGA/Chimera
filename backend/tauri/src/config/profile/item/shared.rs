@@ -1,11 +1,14 @@
+use std::io::Write;
+
 use ambassador::delegatable_trait;
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    config::profile::{item::ProfileMetaGetter, item_type::ProfileItemType},
-    utils::dirs::app_profiles_dir,
+use crate::config::profile::{
+    item::{ProfileMetaGetter, utils::resolve_managed_profile_path},
+    item_type::ProfileItemType,
 };
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Builder, BuilderUpdate, specta::Type)]
@@ -100,15 +103,14 @@ pub trait ProfileFileIo {
 
 impl ProfileFileIo for ProfileShared {
     async fn write_file(&self, content: String) -> std::io::Result<()> {
-        let path = app_profiles_dir().map_err(std::io::Error::other)?;
-        let file = path.join(&self.file);
-        let mut file = tokio::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&file)
-            .await?;
-        tokio::io::AsyncWriteExt::write_all(&mut file, content.as_bytes()).await
+        let path = resolve_managed_profile_path(&self.file).map_err(std::io::Error::other)?;
+        tokio::task::spawn_blocking(move || {
+            AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+                .write(|file| file.write_all(content.as_bytes()))
+                .map_err(std::io::Error::other)
+        })
+        .await
+        .map_err(std::io::Error::other)?
     }
 }
 
