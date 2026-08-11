@@ -58,6 +58,8 @@ export default function ProfileCard({
         <Card
           className="relative flex min-h-40 flex-col justify-between overflow-hidden"
           data-slot="profile-card"
+          data-profile-uid={profile.uid}
+          data-profile-active={String(activeProfile.isActive)}
           asChild
         >
           <div>
