@@ -30,10 +30,6 @@ use backon::Retryable;
 
 const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
 
-pub trait RemoteProfileSubscription {
-    async fn subscribe(&mut self, opts: Option<RemoteProfileOptionsBuilder>) -> anyhow::Result<()>;
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedSubscriptionUpdate {
     data: Mapping,
@@ -159,17 +155,6 @@ impl RemoteProfile {
     }
 }
 
-impl RemoteProfileSubscription for RemoteProfile {
-    #[tracing::instrument]
-    async fn subscribe(
-        &mut self,
-        partial: Option<RemoteProfileOptionsBuilder>,
-    ) -> anyhow::Result<()> {
-        let prepared = self.prepare_subscription_update(partial).await?;
-        self.commit_prepared_subscription_update(prepared).await
-    }
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum RemoteProfileBuilderError {
     /// 1
@@ -276,7 +261,6 @@ impl RemoteProfileBuilder {
 
 #[derive(Debug)]
 struct Subscription {
-    pub url: Url,
     pub filename: Option<String>,
     pub data: Mapping,
     pub info: SubscriptionInfo,
@@ -430,7 +414,6 @@ async fn subscribe_url(
     }
 
     Ok(Subscription {
-        url: url.clone(),
         filename,
         data: yaml,
         info: extra.unwrap_or_default(),

@@ -8,9 +8,7 @@ use tracing::debug;
 
 use crate::{
     config::{
-        chimera::IVerge,
-        core::Config,
-        profile::item::remote::{RemoteProfileOptionsBuilder, RemoteProfileSubscription},
+        chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
     core::{
@@ -296,6 +294,20 @@ async fn patch_clash_with_overrides(patch: Mapping, overrides: ClashConfigOverri
 /// 修改verge的配置
 /// 一般都是一个个的修改
 pub async fn patch_verge(patch: IVerge) -> Result<()> {
+    let client = {
+        let app_handle = handle::Handle::global().app_handle.lock();
+        let app_handle = app_handle
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
+        app_handle
+            .try_state::<NyanpasuClient>()
+            .map(|state| state.inner().clone())
+            .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))?
+    };
+    client.patch_verge(patch).await
+}
+
+pub(crate) async fn patch_verge_uncoordinated(patch: IVerge) -> Result<()> {
     Config::verge().draft().patch_config(patch.clone());
     let result = async {
         let plan = plan_verge_patch(&patch)?;
@@ -337,347 +349,23 @@ async fn update_core_config() -> Result<()> {
     }
 }
 
-pub(crate) async fn commit_profile_transaction<
-    ApplyRuntime,
-    ApplyRuntimeFuture,
-    PersistState,
-    PersistStateFuture,
-    Discard,
-    RestoreMaterialized,
-    RestoreMaterializedFuture,
-    RestoreRuntime,
-    RestoreRuntimeFuture,
->(
-    operation: &'static str,
-    apply_runtime: ApplyRuntime,
-    persist_state: PersistState,
-    discard: Discard,
-    restore_materialized: RestoreMaterialized,
-    restore_runtime: RestoreRuntime,
-) -> Result<()>
-where
-    ApplyRuntime: FnOnce() -> ApplyRuntimeFuture,
-    ApplyRuntimeFuture: std::future::Future<Output = Result<()>>,
-    PersistState: FnOnce() -> PersistStateFuture,
-    PersistStateFuture: std::future::Future<Output = Result<()>>,
-    Discard: FnOnce(),
-    RestoreMaterialized: FnOnce() -> RestoreMaterializedFuture,
-    RestoreMaterializedFuture: std::future::Future<Output = Result<()>>,
-    RestoreRuntime: FnOnce() -> RestoreRuntimeFuture,
-    RestoreRuntimeFuture: std::future::Future<Output = Result<()>>,
-{
-    if let Err(primary_error) = apply_runtime().await {
-        discard();
-        let materialized_restore = restore_materialized().await;
-        return Err(profile_transaction_error(
-            operation,
-            primary_error,
-            materialized_restore,
-            Ok(()),
-        ));
-    }
-
-    if let Err(primary_error) = persist_state().await {
-        discard();
-        let materialized_restore = restore_materialized().await;
-        let runtime_restore = restore_runtime().await;
-        return Err(profile_transaction_error(
-            operation,
-            primary_error,
-            materialized_restore,
-            runtime_restore,
-        ));
-    }
-
-    Ok(())
-}
-
-fn profile_transaction_error(
-    operation: &str,
-    primary_error: anyhow::Error,
-    materialized_restore: Result<()>,
-    runtime_restore: Result<()>,
-) -> anyhow::Error {
-    if materialized_restore.is_ok() && runtime_restore.is_ok() {
-        return primary_error;
-    }
-
-    anyhow::anyhow!(
-        "{operation} failed: {primary_error:#}; materialized restore: {}; runtime restore: {}",
-        format_restore_result(materialized_restore),
-        format_restore_result(runtime_restore)
-    )
-}
-
-fn format_restore_result(result: Result<()>) -> String {
-    result
-        .err()
-        .map(|error| format!("{error:#}"))
-        .unwrap_or_else(|| "ok".to_string())
-}
-
-fn compensate_profile_preparation<Restore>(
-    operation: &str,
-    primary_error: anyhow::Error,
-    restore_materialized: Restore,
-) -> anyhow::Error
-where
-    Restore: FnOnce() -> Result<()>,
-{
-    profile_transaction_error(operation, primary_error, restore_materialized(), Ok(()))
-}
-
 /// 更新某个profile
 /// 如果更新当前配置就激活配置
 pub async fn update_profile<T: Borrow<String>>(
     uid: T,
     opts: Option<RemoteProfileOptionsBuilder>,
-) -> Result<()> {
-    let uid = uid.borrow();
-    let profile_item = Config::profiles().latest().get_item(uid)?.clone();
-    let previous_file = profile_item.read_file()?;
-    let mut item = profile_item
-        .as_remote()
-        .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))?
-        .clone();
-    item.subscribe(opts).await?;
-
-    let should_update = {
-        let mut profiles = Config::profiles().draft();
-        match profiles.replace_item(uid, item.into()) {
-            Ok(()) => profiles.get_current().iter().any(|current| current == uid),
-            Err(primary_error) => {
-                Config::profiles().discard();
-                return Err(compensate_profile_preparation(
-                    "remote profile update preparation",
-                    primary_error,
-                    || profile_item.save_file(&previous_file),
-                ));
-            }
-        }
+) -> Result<crate::core::clash::client::MutationOutcome<()>> {
+    let client = {
+        let app_handle = handle::Handle::global().app_handle.lock();
+        let app_handle = app_handle
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
+        app_handle
+            .try_state::<NyanpasuClient>()
+            .map(|state| state.inner().clone())
+            .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))?
     };
-
-    commit_profile_transaction(
-        "remote profile update",
-        || async {
-            if should_update {
-                update_core_config().await?;
-            }
-            Ok(())
-        },
-        || async { Config::profiles().latest().save_file() },
-        || {
-            Config::profiles().discard();
-        },
-        || async { profile_item.save_file(&previous_file) },
-        || async {
-            if should_update {
-                update_core_config().await
-            } else {
-                Ok(())
-            }
-        },
-    )
-    .await?;
-
-    Config::profiles().apply();
-    handle::Handle::refresh_profiles();
-    Ok(())
-}
-
-#[cfg(test)]
-mod profile_transaction_tests {
-    use std::sync::{Arc, Mutex};
-
-    use super::*;
-
-    fn record(log: &Arc<Mutex<Vec<&'static str>>>, step: &'static str) {
-        log.lock().expect("step log lock").push(step);
-    }
-
-    #[test]
-    fn preparation_failure_restores_materialized_profile_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("profile.yaml");
-        std::fs::write(&path, "mode: global\n").unwrap();
-
-        let error = compensate_profile_preparation(
-            "remote profile update preparation",
-            anyhow::anyhow!("profile disappeared"),
-            {
-                let path = path.clone();
-                move || {
-                    std::fs::write(path, "mode: rule\n")?;
-                    Ok(())
-                }
-            },
-        );
-
-        assert_eq!(error.to_string(), "profile disappeared");
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "mode: rule\n");
-    }
-
-    #[test]
-    fn preparation_failure_reports_materialized_restore_failure() {
-        let error = compensate_profile_preparation(
-            "remote profile update preparation",
-            anyhow::anyhow!("profile disappeared"),
-            || anyhow::bail!("old file restore failed"),
-        );
-
-        let message = error.to_string();
-        assert!(message.contains("remote profile update preparation failed"));
-        assert!(message.contains("profile disappeared"));
-        assert!(message.contains("old file restore failed"));
-    }
-
-    #[tokio::test]
-    async fn profile_transaction_commits_runtime_then_state_without_compensation() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let result = commit_profile_transaction(
-            "profile patch",
-            step(&log, "runtime", Ok(())),
-            step(&log, "persist", Ok(())),
-            sync_step(&log, "discard"),
-            step(&log, "restore-file", Ok(())),
-            step(&log, "restore-runtime", Ok(())),
-        )
-        .await;
-
-        assert!(result.is_ok());
-        assert_eq!(*log.lock().unwrap(), vec!["runtime", "persist"]);
-    }
-
-    #[tokio::test]
-    async fn runtime_failure_discards_and_restores_materialized_without_second_restart() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let result = commit_profile_transaction(
-            "remote profile update",
-            step(&log, "runtime", Err(anyhow::anyhow!("rebuild failed"))),
-            step(&log, "persist", Ok(())),
-            sync_step(&log, "discard"),
-            step(&log, "restore-file", Ok(())),
-            step(&log, "restore-runtime", Ok(())),
-        )
-        .await;
-
-        assert_eq!(result.unwrap_err().to_string(), "rebuild failed");
-        assert_eq!(
-            *log.lock().unwrap(),
-            vec!["runtime", "discard", "restore-file"]
-        );
-    }
-
-    #[tokio::test]
-    async fn state_failure_restores_materialized_and_previous_runtime_in_order() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let result = commit_profile_transaction(
-            "remote profile update",
-            step(&log, "runtime", Ok(())),
-            step(
-                &log,
-                "persist",
-                Err(anyhow::anyhow!("profiles save failed")),
-            ),
-            sync_step(&log, "discard"),
-            step(&log, "restore-file", Ok(())),
-            step(&log, "restore-runtime", Ok(())),
-        )
-        .await;
-
-        assert_eq!(result.unwrap_err().to_string(), "profiles save failed");
-        assert_eq!(
-            *log.lock().unwrap(),
-            vec![
-                "runtime",
-                "persist",
-                "discard",
-                "restore-file",
-                "restore-runtime"
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn state_failure_reports_all_compensation_failures() {
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let result = commit_profile_transaction(
-            "remote profile update",
-            step(&log, "runtime", Ok(())),
-            step(
-                &log,
-                "persist",
-                Err(anyhow::anyhow!("profiles save failed")),
-            ),
-            sync_step(&log, "discard"),
-            step(
-                &log,
-                "restore-file",
-                Err(anyhow::anyhow!("old file restore failed")),
-            ),
-            step(
-                &log,
-                "restore-runtime",
-                Err(anyhow::anyhow!("old runtime restore failed")),
-            ),
-        )
-        .await;
-
-        let message = result.unwrap_err().to_string();
-        assert!(message.contains("remote profile update failed"));
-        assert!(message.contains("profiles save failed"));
-        assert!(message.contains("old file restore failed"));
-        assert!(message.contains("old runtime restore failed"));
-    }
-
-    #[tokio::test]
-    async fn state_failure_restores_deleted_profile_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("profile.yaml");
-        std::fs::write(&path, "mode: rule\n").unwrap();
-
-        let result = commit_profile_transaction(
-            "profile deletion",
-            || std::future::ready(Ok(())),
-            {
-                let path = path.clone();
-                move || {
-                    std::fs::remove_file(&path).unwrap();
-                    std::future::ready(Err(anyhow::anyhow!("profiles save failed")))
-                }
-            },
-            || {},
-            {
-                let path = path.clone();
-                move || {
-                    std::fs::write(&path, "mode: rule\n").unwrap();
-                    std::future::ready(Ok(()))
-                }
-            },
-            || std::future::ready(Ok(())),
-        )
-        .await;
-
-        assert_eq!(result.unwrap_err().to_string(), "profiles save failed");
-        assert_eq!(std::fs::read_to_string(path).unwrap(), "mode: rule\n");
-    }
-
-    fn step(
-        log: &Arc<Mutex<Vec<&'static str>>>,
-        name: &'static str,
-        result: Result<()>,
-    ) -> impl FnOnce() -> std::future::Ready<Result<()>> {
-        let log = Arc::clone(log);
-        move || {
-            record(&log, name);
-            std::future::ready(result)
-        }
-    }
-
-    fn sync_step(log: &Arc<Mutex<Vec<&'static str>>>, name: &'static str) -> impl FnOnce() {
-        let log = Arc::clone(log);
-        move || record(&log, name)
-    }
+    client.refresh_profile(uid.borrow().clone(), opts).await
 }
 
 pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
