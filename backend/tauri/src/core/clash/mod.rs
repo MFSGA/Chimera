@@ -11,6 +11,7 @@ pub mod api;
 pub mod core;
 /// 3
 pub mod proxies;
+#[allow(dead_code)]
 pub(crate) mod rebuild;
 pub(crate) mod runtime_product;
 pub(crate) mod transaction;

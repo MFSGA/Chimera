@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, anyhow};
 use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
@@ -16,24 +16,21 @@ use crate::{
         profile::{
             builder::ProfileBuilder,
             item::{
-                Profile, ProfileMetaGetter,
+                Profile,
                 local::{LocalProfile, LocalProfileBuilder},
                 remote::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
                     RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
-                shared::{PreparedProfileFile, ProfileSharedBuilder},
-                utils::{generate_uid, resolve_managed_profile_path},
             },
             item_type::{ProfileItemType, ProfileUid},
-            profiles::Profiles,
         },
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
         clash::{
             self,
-            client::NyanpasuClient,
+            client::{MutationOutcome, NyanpasuClient},
             core::{CoreManager, RunType},
         },
         handle,
@@ -45,17 +42,6 @@ use crate::{
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
-
-const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
-static PROFILE_CREATION_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-#[allow(dead_code)]
-#[derive(specta::Type, serde::Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum RebuildOutcome {
-    Ok,
-    Degraded { error: String },
-}
 
 #[derive(specta::Type, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -143,9 +129,9 @@ pub enum ProfileResponse {
     },
 }
 
-impl From<Profiles> for ProfilesResponse {
-    fn from(profiles: Profiles) -> Self {
-        let Profiles {
+impl From<crate::config::profile::profiles::Profiles> for ProfilesResponse {
+    fn from(profiles: crate::config::profile::profiles::Profiles) -> Self {
+        let crate::config::profile::profiles::Profiles {
             current,
             items,
             valid,
@@ -220,10 +206,8 @@ pub struct IpsbResponse {
 pub enum IpcError {
     #[error(transparent)]
     Anyhow(#[from] anyhow::Error),
-    /// first used for open_that
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// first used for read_profile_file
     #[error(transparent)]
     SerdeYaml(#[from] serde_yaml::Error),
     #[error(transparent)]
@@ -259,7 +243,6 @@ pub async fn get_profiles(client: State<'_, NyanpasuClient>) -> Result<ProfilesR
 pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
     let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
     let server = format!("{}:{}", current.host, current.port);
-
     Ok(GetSysProxyResponse {
         enable: current.enable,
         host: current.host,
@@ -285,12 +268,15 @@ pub fn is_portable() -> Result<bool> {
 
 #[tauri::command]
 #[specta::specta]
-/// later: check in the frontend
-pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
-    let _creation = PROFILE_CREATION_GATE.lock().await;
+pub async fn import_profile(
+    client: State<'_, NyanpasuClient>,
+    url: String,
+    option: Option<RemoteProfileOptionsBuilder>,
+) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
     let mut builder = RemoteProfileBuilder::default();
-    let (uid, mut prepared_file) = reserve_managed_profile_identity(&ProfileItemType::Remote)?;
+    let (uid, mut prepared_file) =
+        client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
     builder.assign_managed_identity(uid);
     builder.url(url);
     if let Some(option) = option {
@@ -300,12 +286,10 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
         .build_no_blocking()
         .await
         .context("failed to build a remote profile")?;
-    // 根据是否为 Some(uid) 来判断是否要激活配置
     prepared_file.mark_materialized();
-    commit_new_profile(profile.into()).await?;
+    let outcome = client.commit_new_profile(profile.into()).await?;
     prepared_file.commit();
-    // TODO: 使用 activate_profile 来激活配置
-    Ok(())
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -319,7 +303,6 @@ pub async fn view_profile(
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
     }
-
     help::open_file(app_handle, path)?;
     Ok(())
 }
@@ -339,7 +322,6 @@ pub async fn create_editor_window(
             return Err(anyhow!("CSS editor is not supported yet").into());
         }
     };
-
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let handle = app_handle.clone();
     app_handle
@@ -349,7 +331,6 @@ pub async fn create_editor_window(
             let _ = sender.send(result);
         })
         .context("failed to schedule profile editor window creation")?;
-
     receiver
         .await
         .context("profile editor window creation was cancelled")?
@@ -366,120 +347,8 @@ pub fn get_verge_config() -> Result<IVerge> {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_verge_config(payload: IVerge) -> Result {
-    (feat::patch_verge(payload).await)?;
+    feat::patch_verge(payload).await?;
     Ok(())
-}
-
-fn reserve_managed_profile_identity(
-    kind: &ProfileItemType,
-) -> anyhow::Result<(String, PreparedProfileFile)> {
-    let profiles = Config::profiles().latest();
-    for uid in std::iter::repeat_with(|| generate_uid(kind)).take(PROFILE_IDENTITY_ATTEMPTS) {
-        let file = ProfileSharedBuilder::default_file_name(kind, &uid);
-        let collides_with_state = profiles
-            .items
-            .iter()
-            .any(|profile| profile.uid() == uid || profile.file() == file);
-        if collides_with_state {
-            continue;
-        }
-        if let Some(prepared) = PreparedProfileFile::reserve(&file)? {
-            return Ok((uid, prepared));
-        }
-    }
-
-    bail!("failed to reserve a unique managed profile identity")
-}
-
-async fn commit_new_profile(profile: Profile) -> Result {
-    let uid = profile.uid().to_string();
-    let profile_path = resolve_managed_profile_path(profile.file())?;
-    let activate = Config::profiles().latest().current.is_empty();
-
-    {
-        let mut profiles = Config::profiles().draft();
-        profiles.append_item(profile)?;
-        if activate {
-            profiles.current = vec![uid];
-        }
-    }
-
-    feat::commit_profile_transaction(
-        "profile creation",
-        || async {
-            if activate {
-                CoreManager::global()
-                    .restart_core_with_generated_config()
-                    .await?;
-            }
-            Ok(())
-        },
-        || async { Config::profiles().latest().save_file() },
-        || {
-            Config::profiles().discard();
-        },
-        || async {
-            if profile_path.exists() {
-                std::fs::remove_file(&profile_path).with_context(|| {
-                    format!(
-                        "failed to remove uncommitted profile file {}",
-                        profile_path.display()
-                    )
-                })?;
-            }
-            Ok(())
-        },
-        || async {
-            if activate {
-                CoreManager::global()
-                    .restart_core_with_generated_config()
-                    .await
-            } else {
-                Ok(())
-            }
-        },
-    )
-    .await?;
-
-    Config::profiles().apply();
-    if activate {
-        handle::Handle::refresh_clash();
-        let _ =
-            crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(
-            )
-            .await;
-    }
-    handle::Handle::refresh_profiles();
-    Ok(())
-}
-
-fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) -> Result {
-    let profiles = Config::profiles();
-    let result = {
-        let mut draft = profiles.draft();
-        update(&mut draft).and_then(|_| draft.save_file())
-    };
-
-    if let Err(err) = result {
-        profiles.discard();
-        return Err(IpcError::from(err));
-    }
-
-    profiles.apply();
-    handle::Handle::refresh_profiles();
-    Ok(())
-}
-
-async fn rebuild_after_profile_commit(client: &NyanpasuClient, operation: &str) -> RebuildOutcome {
-    match client.rebuild_running_config().await {
-        Ok(_) => RebuildOutcome::Ok,
-        Err(err) => {
-            log::error!(target: "app", "failed to rebuild after {operation}: {err:?}");
-            RebuildOutcome::Degraded {
-                error: err.to_string(),
-            }
-        }
-    }
 }
 
 #[tauri::command]
@@ -488,9 +357,8 @@ pub async fn reorder_profile(
     client: State<'_, NyanpasuClient>,
     active_id: ProfileUid,
     over_id: ProfileUid,
-) -> Result<RebuildOutcome> {
-    client.reorder_profile(active_id, over_id).await?;
-    Ok(RebuildOutcome::Ok)
+) -> Result<MutationOutcome<()>> {
+    Ok(client.reorder_profile(active_id, over_id).await?)
 }
 
 #[tauri::command]
@@ -498,9 +366,8 @@ pub async fn reorder_profile(
 pub async fn reorder_profiles_by_list(
     client: State<'_, NyanpasuClient>,
     list: Vec<ProfileUid>,
-) -> Result<RebuildOutcome> {
-    client.reorder_profiles_by_list(list).await?;
-    Ok(RebuildOutcome::Ok)
+) -> Result<MutationOutcome<()>> {
+    Ok(client.reorder_profiles_by_list(list).await?)
 }
 
 #[tauri::command]
@@ -508,9 +375,8 @@ pub async fn reorder_profiles_by_list(
 pub async fn activate_profile(
     client: State<'_, NyanpasuClient>,
     uid: Option<ProfileUid>,
-) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| profiles.activate(uid.as_deref()))?;
-    Ok(rebuild_after_profile_commit(&client, "profile activation").await)
+) -> Result<MutationOutcome<()>> {
+    Ok(client.activate_profile(uid).await?)
 }
 
 #[tauri::command]
@@ -518,12 +384,8 @@ pub async fn activate_profile(
 pub async fn set_profile_valid_fields(
     client: State<'_, NyanpasuClient>,
     fields: Vec<String>,
-) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| {
-        profiles.valid = fields;
-        Ok(())
-    })?;
-    Ok(rebuild_after_profile_commit(&client, "profile valid fields update").await)
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_profile_valid_fields(fields).await?)
 }
 
 #[tauri::command]
@@ -532,11 +394,10 @@ pub async fn patch_profile_metadata(
     client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     patch: ProfileMetadataPatch,
-) -> Result<RebuildOutcome> {
-    client
+) -> Result<MutationOutcome<()>> {
+    Ok(client
         .patch_profile_metadata(uid, patch.name, patch.desc)
-        .await?;
-    Ok(RebuildOutcome::Ok)
+        .await?)
 }
 
 #[tauri::command]
@@ -545,8 +406,8 @@ pub async fn patch_remote_profile_options(
     client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     patch: RemoteProfileOptionsPatch,
-) -> Result<RebuildOutcome> {
-    client
+) -> Result<MutationOutcome<()>> {
+    Ok(client
         .patch_remote_profile_options(
             uid,
             patch.user_agent,
@@ -554,16 +415,16 @@ pub async fn patch_remote_profile_options(
             patch.self_proxy,
             patch.update_interval_minutes,
         )
-        .await?;
-    Ok(RebuildOutcome::Ok)
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn replace_profile_definition(
+    client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     definition: ProfileDefinition,
-) -> Result<RebuildOutcome> {
+) -> Result<MutationOutcome<()>> {
     let ProfileDefinition::Config {
         config:
             ConfigDefinition::File {
@@ -578,15 +439,12 @@ pub async fn replace_profile_definition(
                 transforms,
             },
     } = definition;
-
     if !transforms.is_empty() {
         return Err(anyhow!("scoped profile transforms are not supported yet").into());
     }
-
-    persist_profiles(|profiles| {
-        profiles.replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
-    })?;
-    Ok(RebuildOutcome::Ok)
+    Ok(client
+        .replace_remote_profile_definition(uid, file, updated_at, url, option, subscription)
+        .await?)
 }
 
 #[tauri::command]
@@ -596,7 +454,6 @@ pub fn get_clash_info() -> Result<ClashInfo> {
 }
 
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
-// TODO: a copied from updater metadata, and should be moved a separate updater module
 pub struct UpdateWrapper {
     rid: tauri::ResourceId,
     available: bool,
@@ -604,7 +461,6 @@ pub struct UpdateWrapper {
     version: String,
     date: Option<String>,
     body: Option<String>,
-    // TODO: specta 2.0.0-rc.25 cannot export recursive inline types (serde_json::Value).
     #[specta(type = Any)]
     raw_json: serde_json::Value,
 }
@@ -615,13 +471,11 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
     use crate::utils::config::{get_self_proxy, get_system_proxy};
     use std::cmp::Ordering;
     use tauri_plugin_updater::UpdaterExt;
-
     let build_time = time::OffsetDateTime::parse(
         crate::consts::BUILD_INFO.build_date,
         &time::format_description::well_known::Rfc3339,
     )
     .context("failed to parse build time")?;
-
     let mut builder = webview
         .updater_builder()
         .version_comparator(move |_, remote| {
@@ -631,11 +485,9 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
             match local {
                 Some(local) => {
                     if !local.build.is_empty() && !remote.version.build.is_empty() {
-                        // ignore build info to compare the version directly
                         match local.cmp_precedence(&remote.version) {
                             Ordering::Less => true,
                             Ordering::Equal => match remote.pub_date {
-                                // prefer newer build if pub_date is available
                                 Some(pub_date) => {
                                     local.build != remote.version.build && pub_date > build_time
                                 }
@@ -650,16 +502,12 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
                 None => false,
             }
         });
-
-    // apply proxy
     if let Ok(proxy) = get_self_proxy() {
         builder = builder.proxy(proxy.parse().context("failed to parse proxy")?);
     }
-
     if let Ok(Some(proxy)) = get_system_proxy() {
         builder = builder.proxy(proxy.parse().context("failed to parse system proxy")?);
     }
-
     let updater = builder.build().context("failed to build updater")?;
     let update = updater.check().await.context("failed to check update")?;
     Ok(update.map(|u| {
@@ -689,7 +537,7 @@ pub fn is_appimage() -> Result<bool> {
 #[tauri::command]
 #[specta::specta]
 pub fn open_that(path: String) -> Result {
-    (crate::utils::open::that(path))?;
+    crate::utils::open::that(path)?;
     Ok(())
 }
 
@@ -700,11 +548,7 @@ pub fn cleanup_processes(app_handle: AppHandle) -> Result {
     Ok(())
 }
 
-/// Namespace prefix for all frontend-visible KV entries.
-/// Internal subsystems (e.g. task storage) use un-prefixed keys and are
-/// never exposed to the frontend through these IPC commands.
 const WEB_STORAGE_KEY_PREFIX: &str = "web:";
-
 fn web_key(key: &str) -> String {
     format!("{WEB_STORAGE_KEY_PREFIX}{key}")
 }
@@ -712,27 +556,23 @@ fn web_key(key: &str) -> String {
 pub mod service {
     use super::Result;
     use crate::core::service;
-
     #[tauri::command]
     #[specta::specta]
     pub async fn status_service<'a>() -> Result<chimera_ipc::types::StatusInfo<'a>> {
         Ok(service::control::status().await?)
     }
-
     #[tauri::command]
     #[specta::specta]
     pub async fn install_service() -> Result {
         service::control::install_service().await?;
         Ok(())
     }
-
     #[tauri::command]
     #[specta::specta]
     pub async fn uninstall_service() -> Result {
         service::control::uninstall_service().await?;
         Ok(())
     }
-
     #[tauri::command]
     #[specta::specta]
     pub async fn start_service() -> Result {
@@ -751,7 +591,6 @@ pub mod service {
         }
         Ok(result?)
     }
-
     #[tauri::command]
     #[specta::specta]
     pub async fn stop_service() -> Result {
@@ -770,7 +609,6 @@ pub mod service {
         }
         Ok(result?)
     }
-
     #[tauri::command]
     #[specta::specta]
     pub async fn restart_service() -> Result {
@@ -807,8 +645,6 @@ pub async fn get_service_install_prompt() -> Result<String> {
     Ok(prompt)
 }
 
-// #[tracing_attributes::instrument]
-// patch clash runtime config
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(
@@ -824,7 +660,6 @@ pub async fn patch_clash_config(
     );
     let overrides = ClashConfigOverrides::from(payload);
     let outcome = feat::patch_running_clash_overrides(&client, overrides).await;
-
     match &outcome {
         clash::transaction::TransactionOutcome::Committed => {}
         clash::transaction::TransactionOutcome::Rejected { primary_error } => {
@@ -837,18 +672,12 @@ pub async fn patch_clash_config(
             primary_error,
             rollback_error,
         } => {
-            tracing::error!(
-                %primary_error,
-                %rollback_error,
-                "runtime patch failed and core restoration could not be verified"
-            );
+            tracing::error!(%primary_error, %rollback_error, "runtime patch failed and core restoration could not be verified");
         }
     }
-
     if let Err(error) = outcome.into_result() {
         return Err(IpcError::from(error));
     }
-
     feat::update_proxies_buff(None);
     Ok(())
 }
@@ -861,12 +690,10 @@ pub async fn patch_clash_core_config(payload: PatchClashCoreConfig) -> Result {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-
     if let Err(e) = feat::patch_clash(mapping).await {
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
-
     feat::update_proxies_buff(None);
     Ok(())
 }
@@ -881,12 +708,8 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
             return Ok(guard.inner().clone());
         }
     }
-
     match ProxiesGuard::global().update().await {
-        Ok(_) => {
-            let proxies = ProxiesGuard::global().read().inner().clone();
-            Ok(proxies)
-        }
+        Ok(_) => Ok(ProxiesGuard::global().read().inner().clone()),
         Err(err) => Err(err.into()),
     }
 }
@@ -895,13 +718,10 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
 #[specta::specta]
 pub async fn select_proxy(group: String, name: String) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
-    (ProxiesGuard::global().select_proxy(&group, &name).await)?;
+    ProxiesGuard::global().select_proxy(&group, &name).await?;
     handle::Handle::mutate_proxies();
-
-    // Interrupt connections based on configuration
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change()
         .await;
-
     Ok(())
 }
 
@@ -972,7 +792,6 @@ pub async fn collect_logs(app_handle: AppHandle) -> Result {
     else {
         return Ok(());
     };
-
     candy::collect_logs(&path)?;
     Ok(())
 }
@@ -992,7 +811,6 @@ pub fn get_custom_app_dir() -> Result<Option<String>> {
             crate::utils::winreg::get_app_dir()?.map(|path| path.to_string_lossy().to_string())
         );
     }
-
     #[cfg(not(windows))]
     {
         Ok(None)
@@ -1008,7 +826,6 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
         if !target.is_absolute() {
             return Err(IpcError::from(anyhow!("custom app dir must be absolute")));
         }
-
         let current = dirs::app_config_dir()?;
         if current != target {
             if target.starts_with(&current) {
@@ -1016,21 +833,17 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
                     "custom app dir cannot be inside the current app config dir"
                 )));
             }
-
             fs_extra::dir::create_all(&target, false)
                 .map_err(|err| anyhow!("failed to create custom app dir: {err:?}"))?;
-
             let mut options = fs_extra::dir::CopyOptions::new();
             options.overwrite = true;
             options.copy_inside = true;
             fs_extra::dir::copy(&current, &target, &options)
                 .map_err(|err| anyhow!("failed to migrate app config dir: {err:?}"))?;
         }
-
         crate::utils::winreg::set_app_dir(&target)?;
         return Ok(());
     }
-
     #[cfg(not(windows))]
     {
         let _ = path;
@@ -1063,20 +876,18 @@ pub async fn change_clash_core(
     Ok(())
 }
 
-/// restart the sidecar
 #[tauri::command]
 #[specta::specta]
 pub async fn restart_sidecar() -> Result {
-    (CoreManager::global().run_core().await)?;
+    CoreManager::global().run_core().await?;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
-    let mut updater = updater::UpdaterManager::global().write().await; // It is intended to block here
-    (updater.fetch_latest().await)?;
-    // TODO: result key should be kebab-case
+    let mut updater = updater::UpdaterManager::global().write().await;
+    updater.fetch_latest().await?;
     Ok(updater.get_latest_versions())
 }
 
@@ -1093,9 +904,11 @@ pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummar
 
 #[tauri::command]
 #[specta::specta]
-pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
-    (feat::update_profile(uid, option).await)?;
-    Ok(())
+pub async fn update_profile(
+    uid: String,
+    option: Option<RemoteProfileOptionsBuilder>,
+) -> Result<MutationOutcome<()>> {
+    Ok(feat::update_profile(uid, option).await?)
 }
 
 #[tauri::command]
@@ -1104,115 +917,19 @@ pub async fn patch_profile(
     client: State<'_, NyanpasuClient>,
     uid: String,
     profile: ProfileBuilderRequest,
-) -> Result {
-    let profile = ProfileBuilder::from(profile);
-    {
-        let mut profiles = Config::profiles().draft();
-        let current = profiles
-            .items
-            .iter_mut()
-            .find(|item| item.uid() == uid)
-            .ok_or_else(|| anyhow!("failed to get the profile item \"uid:{uid}\""))?;
-
-        match (current, profile) {
-            (
-                crate::config::profile::item::Profile::Remote(item),
-                ProfileBuilder::Remote(builder),
-            ) => {
-                builder
-                    .patch_profile(item)
-                    .context("failed to patch remote profile")?;
-            }
-            (
-                crate::config::profile::item::Profile::Local(item),
-                ProfileBuilder::Local(builder),
-            ) => {
-                item.apply(builder);
-            }
-            _ => return Err(anyhow!("profile type mismatch").into()),
-        }
-    }
-
-    feat::commit_profile_transaction(
-        "profile patch",
-        || async { client.regenerate_and_restart_for_legacy().await },
-        || async { Config::profiles().latest().save_file() },
-        || {
-            Config::profiles().discard();
-        },
-        || async { Ok::<(), anyhow::Error>(()) },
-        || async { client.regenerate_and_restart_for_legacy().await },
-    )
-    .await?;
-
-    Config::profiles().apply();
-    handle::Handle::refresh_clash();
-    handle::Handle::refresh_profiles();
-    Ok(())
+) -> Result<MutationOutcome<()>> {
+    Ok(client
+        .patch_profile(uid, ProfileBuilder::from(profile))
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn delete_profile(client: State<'_, NyanpasuClient>, uid: String) -> Result {
-    let profile_item = Config::profiles().latest().get_item(&uid)?.clone();
-    let file_path = resolve_managed_profile_path(profile_item.file())?;
-    let previous_file = if file_path.exists() {
-        Some(
-            std::fs::read_to_string(&file_path)
-                .with_context(|| format!("failed to snapshot {}", file_path.display()))?,
-        )
-    } else {
-        None
-    };
-
-    let should_update = {
-        let mut profiles = Config::profiles().draft();
-        profiles.delete_item(&uid)?
-    };
-
-    feat::commit_profile_transaction(
-        "profile deletion",
-        || async {
-            if should_update {
-                client.regenerate_and_restart_for_legacy().await?;
-            }
-            Ok(())
-        },
-        || async {
-            if file_path.exists() {
-                std::fs::remove_file(&file_path).with_context(|| {
-                    format!("failed to remove profile file {}", file_path.display())
-                })?;
-            }
-            Config::profiles().latest().save_file()
-        },
-        || {
-            Config::profiles().discard();
-        },
-        || async {
-            if let Some(previous_file) = previous_file.as_ref()
-                && !file_path.exists()
-            {
-                profile_item.save_file(previous_file)?;
-            }
-            Ok(())
-        },
-        || async {
-            if should_update {
-                client.regenerate_and_restart_for_legacy().await
-            } else {
-                Ok(())
-            }
-        },
-    )
-    .await?;
-
-    Config::profiles().apply();
-    if should_update {
-        handle::Handle::refresh_clash();
-    }
-    handle::Handle::refresh_profiles();
-    Ok(())
+pub async fn delete_profile(
+    client: State<'_, NyanpasuClient>,
+    uid: String,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.delete_profile(uid).await?)
 }
 
 #[tauri::command]
@@ -1230,23 +947,23 @@ pub async fn save_profile_file(
     client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     file_data: String,
-) -> Result {
-    client.save_profile_file(uid, file_data).await?;
-    Ok(())
+) -> Result<MutationOutcome<()>> {
+    Ok(client.save_profile_file(uid, file_data).await?)
 }
 
-/// create a new profile
 #[tauri::command]
 #[specta::specta]
-pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<String>) -> Result {
-    let _creation = PROFILE_CREATION_GATE.lock().await;
+pub async fn create_profile(
+    client: State<'_, NyanpasuClient>,
+    item: ProfileBuilderRequest,
+    file_data: Option<String>,
+) -> Result<MutationOutcome<ProfileUid>> {
     let mut item = ProfileBuilder::from(item);
     let kind = item.kind();
-    let (uid, mut prepared_file) = reserve_managed_profile_identity(&kind)?;
+    let (uid, mut prepared_file) = client.reserve_managed_profile_identity(&kind)?;
     item.assign_managed_identity(uid);
     let is_remote = matches!(&item, ProfileBuilder::Remote(_));
-
-    let profile: crate::config::profile::item::Profile = match item {
+    let profile: Profile = match item {
         ProfileBuilder::Remote(mut builder) => {
             let profile = builder
                 .build_no_blocking()
@@ -1260,7 +977,6 @@ pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<Strin
             .context("failed to build local profile")?
             .into(),
     };
-
     if let Some(file_data) = file_data
         && !file_data.is_empty()
         && !is_remote
@@ -1268,10 +984,9 @@ pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<Strin
         profile.save_file(file_data)?;
         prepared_file.mark_materialized();
     }
-
-    commit_new_profile(profile).await?;
+    let outcome = client.commit_new_profile(profile).await?;
     prepared_file.commit();
-    Ok(())
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -1279,29 +994,25 @@ pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<Strin
 pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<String>> {
     let storage = app_handle.state::<Storage>();
     let namespaced_key = web_key(&key);
-
     if let Some(value) = storage.get_item(&namespaced_key)? {
         return Ok(Some(value));
     }
-
-    // Compatibility fallback for values written before frontend KV entries
-    // were isolated under the `web:` namespace.
     Ok(storage.get_item(&key)?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Result {
-    let storage = app_handle.state::<Storage>();
-    storage.set_item(web_key(&key), &value)?;
+    app_handle
+        .state::<Storage>()
+        .set_item(web_key(&key), &value)?;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
-    let storage = app_handle.state::<Storage>();
-    storage.remove_item(web_key(&key))?;
+    app_handle.state::<Storage>().remove_item(web_key(&key))?;
     Ok(())
 }
 
@@ -1309,26 +1020,17 @@ pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
 #[specta::specta]
 pub fn save_window_size_state(app_handle: AppHandle, label: String) -> Result {
     match label.as_str() {
-        crate::consts::LEGACY_WINDOW_LABEL => {
-            resolve::save_legacy_window_state(&app_handle, true)?;
-        }
-        crate::consts::MAIN_WINDOW_LABEL => {
-            resolve::save_main_window_state(&app_handle, true)?;
-        }
-        _ => {
-            return Err(IpcError::Custom(format!("unknown window label: {label}")));
-        }
+        crate::consts::LEGACY_WINDOW_LABEL => resolve::save_legacy_window_state(&app_handle, true)?,
+        crate::consts::MAIN_WINDOW_LABEL => resolve::save_main_window_state(&app_handle, true)?,
+        _ => return Err(IpcError::Custom(format!("unknown window label: {label}"))),
     }
-
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn create_main_window(app_handle: AppHandle) -> Result<()> {
-    // Spawn window creation to avoid blocking
     std::thread::spawn(move || {
-        // Small delay to let the IPC return first
         std::thread::sleep(std::time::Duration::from_millis(10));
         let handle_inner = app_handle.clone();
         let _ = app_handle.run_on_main_thread(move || {
@@ -1357,27 +1059,24 @@ pub fn get_runtime_yaml() -> Result<String> {
     let runtime = Config::runtime();
     let runtime = runtime.latest();
     let config = runtime.config.as_ref();
-    let mapping = (config
-        .ok_or(anyhow::anyhow!("failed to parse config to yaml file"))
+    Ok(config
+        .ok_or(anyhow!("failed to parse config to yaml file"))
         .and_then(|config| {
             serde_yaml::to_string(config).context("failed to convert config to yaml")
-        }))?;
-    Ok(mapping)
+        })?)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn open_app_config_dir() -> Result<()> {
-    let config_dir = (dirs::app_config_dir())?;
-    (crate::utils::open::that(config_dir))?;
+    crate::utils::open::that(dirs::app_config_dir()?)?;
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn open_app_data_dir() -> Result<()> {
-    let data_dir = (dirs::app_data_dir())?;
-    (crate::utils::open::that(data_dir))?;
+    crate::utils::open::that(dirs::app_data_dir()?)?;
     Ok(())
 }
 
@@ -1393,8 +1092,7 @@ pub fn open_core_dir() -> Result<()> {
 #[tauri::command]
 #[specta::specta]
 pub fn open_logs_dir() -> Result<()> {
-    let log_dir = (dirs::app_logs_dir())?;
-    (crate::utils::open::that(log_dir))?;
+    crate::utils::open::that(dirs::app_logs_dir()?)?;
     Ok(())
 }
 
@@ -1402,11 +1100,10 @@ pub fn open_logs_dir() -> Result<()> {
 pub mod uwp {
     use super::Result;
     use crate::core::win_uwp;
-
     #[tauri::command]
     #[specta::specta]
     pub async fn invoke_uwp_tool() -> Result {
-        (win_uwp::invoke_uwptools().await)?;
+        win_uwp::invoke_uwptools().await?;
         Ok(())
     }
 }
@@ -1414,7 +1111,6 @@ pub mod uwp {
 #[cfg(not(windows))]
 pub mod uwp {
     use super::*;
-
     #[tauri::command]
     #[specta::specta]
     pub async fn invoke_uwp_tool() -> Result {
@@ -1425,12 +1121,9 @@ pub mod uwp {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct StorageEntry {
     pub key: String,
-    /// Raw JSON-encoded value string.
     pub value: String,
 }
 
-/// Debug: returns all frontend KV entries (keys with the `web:` prefix).
-/// Internal storage entries used by other subsystems are excluded.
 #[tauri::command]
 #[specta::specta]
 pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
@@ -1449,8 +1142,6 @@ pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>>
         .collect())
 }
 
-/// Debug: clears all frontend KV entries (keys with the `web:` prefix).
-/// Internal storage entries used by other subsystems are left intact.
 #[tauri::command]
 #[specta::specta]
 pub fn clear_storage(app_handle: AppHandle) -> Result {
@@ -1472,8 +1163,9 @@ pub fn clear_storage(app_handle: AppHandle) -> Result {
 pub async fn get_clash_ws_connections_state(
     app_handle: AppHandle,
 ) -> Result<crate::core::clash::ws::ClashConnectionsConnectorState> {
-    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
-    Ok(ws_connector.state())
+    Ok(app_handle
+        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
+        .state())
 }
 
 #[tauri::command]
@@ -1481,8 +1173,9 @@ pub async fn get_clash_ws_connections_state(
 pub async fn get_clash_ws_snapshot(
     app_handle: AppHandle,
 ) -> Result<crate::core::clash::ws::ClashWsSnapshot> {
-    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
-    Ok(ws_connector.snapshot())
+    Ok(app_handle
+        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
+        .snapshot())
 }
 
 #[tauri::command]
@@ -1492,8 +1185,9 @@ pub async fn set_clash_ws_recording(
     kind: crate::core::clash::ws::ClashWsKind,
     enabled: bool,
 ) -> Result<crate::core::clash::ws::ClashWsRecording> {
-    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
-    Ok(ws_connector.set_recording(kind, enabled))
+    Ok(app_handle
+        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
+        .set_recording(kind, enabled))
 }
 
 #[tauri::command]
@@ -1502,8 +1196,9 @@ pub async fn clear_clash_ws_history(
     app_handle: AppHandle,
     kind: crate::core::clash::ws::ClashWsKind,
 ) -> Result {
-    let ws_connector = app_handle.state::<crate::core::clash::ws::ClashConnectionsConnector>();
-    ws_connector.clear_history(kind);
+    app_handle
+        .state::<crate::core::clash::ws::ClashConnectionsConnector>()
+        .clear_history(kind);
     Ok(())
 }
 
