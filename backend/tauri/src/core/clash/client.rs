@@ -151,10 +151,11 @@ pub(crate) trait ProfilesReadPort: Send + Sync {
     fn snapshot(&self) -> anyhow::Result<Profiles>;
 }
 
+#[async_trait]
 pub(crate) trait ProfileFsPort: Send + Sync {
-    fn read(&self, file: &str) -> anyhow::Result<String>;
-    fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()>;
-    fn remove(&self, file: &str) -> anyhow::Result<()>;
+    async fn read(&self, file: &str) -> anyhow::Result<String>;
+    async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()>;
+    async fn remove(&self, file: &str) -> anyhow::Result<()>;
 }
 
 pub(crate) trait ProfilesWritePort: Send + Sync {
@@ -219,28 +220,47 @@ impl ProfilesReadPort for LegacyProfilesReadPort {
     }
 }
 
+#[async_trait]
 impl ProfileFsPort for LegacyProfileFsPort {
-    fn read(&self, file: &str) -> anyhow::Result<String> {
-        let path = crate::config::profile::item::utils::resolve_managed_profile_path(file)?;
-        std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read profile file {}", path.display()))
+    async fn read(&self, file: &str) -> anyhow::Result<String> {
+        let file = file.to_string();
+        tokio::task::spawn_blocking(move || {
+            let path = crate::config::profile::item::utils::resolve_managed_profile_path(&file)?;
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read profile file {}", path.display()))
+        })
+        .await
+        .context("profile file read task failed")?
     }
 
-    fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
-        let path = crate::config::profile::item::utils::resolve_managed_profile_path(file)?;
-        AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
-            .write(|target| target.write_all(content.as_bytes()))
-            .with_context(|| format!("failed to atomically save profile file {}", path.display()))
+    async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
+        let file = file.to_string();
+        let content = content.to_string();
+        tokio::task::spawn_blocking(move || {
+            let path = crate::config::profile::item::utils::resolve_managed_profile_path(&file)?;
+            AtomicFile::new(&path, OverwriteBehavior::AllowOverwrite)
+                .write(|target| target.write_all(content.as_bytes()))
+                .with_context(|| {
+                    format!("failed to atomically save profile file {}", path.display())
+                })
+        })
+        .await
+        .context("profile file write task failed")?
     }
 
-    fn remove(&self, file: &str) -> anyhow::Result<()> {
-        let path = crate::config::profile::item::utils::resolve_managed_profile_path(file)?;
-        match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error)
-                .with_context(|| format!("failed to remove profile file {}", path.display())),
-        }
+    async fn remove(&self, file: &str) -> anyhow::Result<()> {
+        let file = file.to_string();
+        tokio::task::spawn_blocking(move || {
+            let path = crate::config::profile::item::utils::resolve_managed_profile_path(&file)?;
+            match std::fs::remove_file(&path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error)
+                    .with_context(|| format!("failed to remove profile file {}", path.display())),
+            }
+        })
+        .await
+        .context("profile file removal task failed")?
     }
 }
 
@@ -585,9 +605,12 @@ impl NyanpasuClient {
             .cloned()
     }
 
-    fn remote_profile_snapshot(&self, uid: &ProfileUid) -> anyhow::Result<(RemoteProfile, String)> {
+    async fn remote_profile_snapshot(
+        &self,
+        uid: &ProfileUid,
+    ) -> anyhow::Result<(RemoteProfile, String)> {
         let remote = self.remote_profile_state_snapshot(uid)?;
-        let previous_file = self.inner.profile_files.read(&remote.shared.file)?;
+        let previous_file = self.inner.profile_files.read(&remote.shared.file).await?;
         Ok((remote, previous_file))
     }
 
@@ -627,7 +650,7 @@ impl NyanpasuClient {
     pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
         let profiles = self.inner.profiles.snapshot()?;
         let item = profiles.get_item(&uid)?;
-        let raw = self.inner.profile_files.read(item.file())?;
+        let raw = self.inner.profile_files.read(item.file()).await?;
         let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
         serde_yaml::to_string(&data).context("failed to convert yaml to string")
     }
@@ -641,7 +664,8 @@ impl NyanpasuClient {
         if let Some(content) = materialized_content {
             self.inner
                 .profile_files
-                .write_atomic(profile.file(), &content)?;
+                .write_atomic(profile.file(), &content)
+                .await?;
             prepared_file.mark_materialized();
         }
 
@@ -718,12 +742,18 @@ impl NyanpasuClient {
         let mut updated = current.clone();
         let content = updated.apply_prepared_subscription_update(prepared)?;
         let file = current.shared.file.clone();
-        self.inner.profile_files.write_atomic(&file, &content)?;
+        self.inner
+            .profile_files
+            .write_atomic(&file, &content)
+            .await?;
         let affects_current = match self.inner.profile_writes.commit_refreshed(&uid, updated) {
             Ok(affects_current) => affects_current,
             Err(error) => {
-                if let Err(restore_error) =
-                    self.inner.profile_files.write_atomic(&file, &previous_file)
+                if let Err(restore_error) = self
+                    .inner
+                    .profile_files
+                    .write_atomic(&file, &previous_file)
+                    .await
                 {
                     return Err(error.context(format!(
                         "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
@@ -756,7 +786,7 @@ impl NyanpasuClient {
                 .apply_remote_options(&uid, options)?;
             self.inner.ui_sink.refresh_profiles();
         }
-        let (initial, previous_file) = self.remote_profile_snapshot(&uid)?;
+        let (initial, previous_file) = self.remote_profile_snapshot(&uid).await?;
         let expected_fingerprint = Self::remote_profile_fingerprint(&initial)?;
         let prepared = initial.prepare_subscription_update(None).await?;
         self.commit_refreshed_profile(uid, expected_fingerprint, previous_file, prepared)
@@ -805,7 +835,7 @@ impl NyanpasuClient {
             result
         };
         let mut degradations = Vec::new();
-        if let Err(error) = self.inner.profile_files.remove(&file) {
+        if let Err(error) = self.inner.profile_files.remove(&file).await {
             degradations.push(Degradation {
                 phase: DegradationPhase::ProfileMaterialization,
                 code: "cleanup_deferred".into(),
@@ -909,7 +939,8 @@ impl NyanpasuClient {
                 .context("failed to parse profile YAML")?;
             self.inner
                 .profile_files
-                .write_atomic(item.file(), &file_data)?;
+                .write_atomic(item.file(), &file_data)
+                .await?;
             profiles.current.iter().any(|current| current == &uid)
         };
         if affects_current {
@@ -1025,14 +1056,15 @@ mod tests {
 
     struct NoopProfileFs;
 
+    #[async_trait]
     impl ProfileFsPort for NoopProfileFs {
-        fn read(&self, _file: &str) -> anyhow::Result<String> {
+        async fn read(&self, _file: &str) -> anyhow::Result<String> {
             Ok(String::new())
         }
-        fn write_atomic(&self, _file: &str, _content: &str) -> anyhow::Result<()> {
+        async fn write_atomic(&self, _file: &str, _content: &str) -> anyhow::Result<()> {
             Ok(())
         }
-        fn remove(&self, _file: &str) -> anyhow::Result<()> {
+        async fn remove(&self, _file: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -1044,13 +1076,14 @@ mod tests {
         fail_write: bool,
     }
 
+    #[async_trait]
     impl ProfileFsPort for RecordingProfileFs {
-        fn read(&self, file: &str) -> anyhow::Result<String> {
+        async fn read(&self, file: &str) -> anyhow::Result<String> {
             self.reads.lock().unwrap().push(file.to_string());
             Ok(self.previous_file.clone())
         }
 
-        fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
+        async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
             self.writes
                 .lock()
                 .unwrap()
@@ -1061,7 +1094,7 @@ mod tests {
             Ok(())
         }
 
-        fn remove(&self, _file: &str) -> anyhow::Result<()> {
+        async fn remove(&self, _file: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
@@ -1279,7 +1312,7 @@ mod tests {
             }),
         );
 
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).unwrap();
+        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
         assert_eq!(snapshot_file, previous_file);
 
         let mut data = serde_yaml::Mapping::new();
@@ -1343,7 +1376,7 @@ mod tests {
             }),
         );
 
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).unwrap();
+        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
         assert_eq!(snapshot_file, previous_file);
         assert_eq!(reads.lock().unwrap().as_slice(), ["r-test.yaml"]);
 
