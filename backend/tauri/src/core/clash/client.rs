@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use chimera_ipc::api::status::CoreState;
 
 use super::{
-    core::{CoreManager, RunType},
+    core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
     rebuild::RebuildCoordinator,
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
@@ -27,8 +27,15 @@ pub(crate) struct CoreStatusSnapshot {
 }
 
 #[async_trait]
+pub(crate) trait CoreLifecycleLease: Send {
+    async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
+    #[allow(dead_code)]
+    async fn stop(&mut self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
-    async fn rebuild_running_config(&self) -> anyhow::Result<()>;
+    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     async fn on_profile_change(&self);
 }
@@ -39,12 +46,30 @@ pub(crate) trait UiEventSink: Send + Sync {
 
 struct LegacyCoreLifecyclePort;
 
+struct LegacyCoreLifecycleLease {
+    lease: CoreManagerLifecycleLease<'static>,
+}
+
+#[async_trait]
+impl CoreLifecycleLease for LegacyCoreLifecycleLease {
+    async fn rebuild_running_config(&mut self) -> anyhow::Result<()> {
+        self.lease.rebuild_running_config().await
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        self.lease.stop_core().await
+    }
+}
+
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreLifecyclePort {
-    async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        CoreManager::global()
-            .restart_core_with_generated_config()
-            .await
+    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+        // TODO(actor-migration): temporary bridge to CoreManager::global().
+        // Reason: core ownership has not migrated to the CoreActor yet.
+        // Remove when: the composition root injects the actor-owned lifecycle port.
+        Ok(Box::new(LegacyCoreLifecycleLease {
+            lease: CoreManager::global().begin_lifecycle().await,
+        }))
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -149,7 +174,8 @@ impl NyanpasuClient {
     }
 
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        self.inner.core.rebuild_running_config().await?;
+        let mut lease = self.inner.core.begin().await?;
+        lease.rebuild_running_config().await?;
         self.inner.ui_sink.refresh_clash();
         self.inner.core.on_profile_change().await;
         Ok(())
@@ -171,14 +197,35 @@ mod tests {
         fail_rebuild: bool,
     }
 
+    struct RecordingLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        fail_rebuild: bool,
+    }
+
     #[async_trait]
-    impl CoreLifecyclePort for RecordingCore {
-        async fn rebuild_running_config(&self) -> anyhow::Result<()> {
+    impl CoreLifecycleLease for RecordingLease {
+        async fn rebuild_running_config(&mut self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("rebuild");
             if self.fail_rebuild {
                 anyhow::bail!("injected rebuild failure");
             }
             Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for RecordingCore {
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+            self.events.lock().unwrap().push("begin");
+            Ok(Box::new(RecordingLease {
+                events: self.events.clone(),
+                fail_rebuild: self.fail_rebuild,
+            }))
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -238,7 +285,7 @@ mod tests {
 
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["rebuild", "refresh-ui", "profile-change"]
+            ["begin", "rebuild", "refresh-ui", "profile-change"]
         );
         client.shutdown().await;
     }
@@ -250,7 +297,7 @@ mod tests {
         let error = client.rebuild_running_config().await.unwrap_err();
 
         assert!(error.to_string().contains("injected rebuild failure"));
-        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "rebuild"]);
         client.shutdown().await;
     }
 }
