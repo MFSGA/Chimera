@@ -15,7 +15,7 @@ use super::{
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
 use crate::{
-    config::runtime::ClashConfigOverrides,
+    config::{chimera::ClashCore, runtime::ClashConfigOverrides},
     core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
 };
 
@@ -31,6 +31,7 @@ pub(crate) trait CoreLifecycleLease: Send {
     async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
     #[allow(dead_code)]
     async fn stop(&mut self) -> anyhow::Result<()>;
+    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
 
 #[async_trait]
@@ -58,6 +59,10 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
 
     async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop_core().await
+    }
+
+    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()> {
+        self.lease.change_core(clash_core).await
     }
 }
 
@@ -149,6 +154,11 @@ impl NyanpasuClient {
         self.inner.core.status().await
     }
 
+    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.change_core(clash_core).await
+    }
+
     /// Serialize API-first runtime patches inside the client graph, matching REF's
     /// instance-owned patch gate direction while persistence still uses Chimera's
     /// legacy desired-state writer during this transition.
@@ -216,6 +226,11 @@ mod tests {
             self.events.lock().unwrap().push("stop");
             Ok(())
         }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("change-core");
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -274,6 +289,16 @@ mod tests {
         assert!(matches!(snapshot.state, CoreState::Stopped(None)));
         assert_eq!(snapshot.state_changed_at, 7);
         assert_eq!(snapshot.run_type, RunType::Normal);
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn change_core_runs_through_the_injected_lifecycle_lease() {
+        let (client, events) = recording_client(false);
+
+        client.change_core(ClashCore::Mihomo).await.unwrap();
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "change-core"]);
         client.shutdown().await;
     }
 
