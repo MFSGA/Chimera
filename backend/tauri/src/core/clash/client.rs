@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use async_trait::async_trait;
 use chimera_ipc::api::status::CoreState;
 
@@ -15,7 +16,15 @@ use super::{
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
 use crate::{
-    config::{chimera::ClashCore, runtime::ClashConfigOverrides},
+    config::{
+        chimera::ClashCore,
+        core::Config,
+        profile::{
+            item::ProfileKindGetter,
+            item_type::{ProfileItemType, ProfileUid},
+        },
+        runtime::ClashConfigOverrides,
+    },
     core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
 };
 
@@ -157,6 +166,33 @@ impl NyanpasuClient {
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let mut lease = self.inner.core.begin().await?;
         lease.change_core(clash_core).await
+    }
+
+    pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
+        let profiles = Config::profiles();
+        let profiles = profiles.latest();
+        let item = profiles.get_item(&uid)?;
+        let raw = item.read_file()?;
+        let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
+        serde_yaml::to_string(&data).context("failed to convert yaml to string")
+    }
+
+    pub(crate) async fn save_profile_file(
+        &self,
+        uid: ProfileUid,
+        file_data: String,
+    ) -> anyhow::Result<()> {
+        let profiles = Config::profiles();
+        let profiles = profiles.latest();
+        let item = profiles.get_item(&uid)?;
+        anyhow::ensure!(
+            !matches!(item.kind(), ProfileItemType::Remote),
+            "remote profiles are updater-owned"
+        );
+        serde_yaml::from_str::<serde_yaml::Mapping>(&file_data)
+            .context("failed to parse profile YAML")?;
+        item.save_file(file_data)?;
+        Ok(())
     }
 
     /// Serialize API-first runtime patches inside the client graph, matching REF's
