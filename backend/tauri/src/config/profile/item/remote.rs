@@ -128,12 +128,19 @@ impl RemoteProfileSubscription for RemoteProfile {
             opts.apply(partial);
         }
         let subscription = subscribe_url(&self.url, &opts).await?;
-        self.extra = subscription.info;
-
-        let content = serde_yaml::to_string(&subscription.data)?;
-        self.write_file(content).await?;
-        self.set_updated(chrono::Local::now().timestamp() as usize);
-        Ok(())
+        let shared = self.shared.clone();
+        commit_subscription_update(
+            self,
+            &subscription.data,
+            subscription.info,
+            move |content| async move {
+                shared
+                    .write_file(content)
+                    .await
+                    .map_err(anyhow::Error::from)
+            },
+        )
+        .await
     }
 }
 
@@ -405,12 +412,106 @@ async fn subscribe_url(
     })
 }
 
-#[derive(Default, Debug, Clone, Copy, Deserialize, Serialize, Type)]
+async fn commit_subscription_update<F, Fut>(
+    profile: &mut RemoteProfile,
+    data: &Mapping,
+    info: SubscriptionInfo,
+    write: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<()>>,
+{
+    let content = serde_yaml::to_string(data)?;
+    write(content).await?;
+    profile.extra = info;
+    profile.set_updated(chrono::Local::now().timestamp() as usize);
+    Ok(())
+}
+
+#[derive(Default, Debug, Clone, Copy, Deserialize, Serialize, Type, PartialEq, Eq)]
 pub struct SubscriptionInfo {
     pub upload: usize,
     pub download: usize,
     pub total: usize,
     pub expire: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_profile() -> RemoteProfile {
+        RemoteProfile {
+            url: Url::parse("https://example.com/profile.yaml").unwrap(),
+            option: RemoteProfileOptions::default(),
+            shared: ProfileShared {
+                uid: "r-test".into(),
+                name: "Test".into(),
+                file: "r-test.yaml".into(),
+                desc: None,
+                updated: 7,
+            },
+            chain: Vec::new(),
+            extra: SubscriptionInfo {
+                upload: 1,
+                download: 2,
+                total: 3,
+                expire: 4,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_file_replace_keeps_previous_metadata() {
+        let mut profile = test_profile();
+        let previous = profile.extra;
+        let mut data = Mapping::new();
+        data.insert("mode".into(), "rule".into());
+
+        let result = commit_subscription_update(
+            &mut profile,
+            &data,
+            SubscriptionInfo {
+                upload: 10,
+                download: 20,
+                total: 30,
+                expire: 40,
+            },
+            |_| async { anyhow::bail!("disk full") },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(profile.extra, previous);
+        assert_eq!(profile.shared.updated, 7);
+    }
+
+    #[tokio::test]
+    async fn successful_subscription_file_replace_commits_metadata_after_write() {
+        let mut profile = test_profile();
+        let mut data = Mapping::new();
+        data.insert("mode".into(), "global".into());
+        let next = SubscriptionInfo {
+            upload: 10,
+            download: 20,
+            total: 30,
+            expire: 40,
+        };
+
+        commit_subscription_update(&mut profile, &data, next, |content| async move {
+            anyhow::ensure!(
+                content.contains("mode: global"),
+                "serialized content missing"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(profile.extra, next);
+        assert!(profile.shared.updated > 7);
+    }
 }
 
 mod utils {
