@@ -153,6 +153,7 @@ pub(crate) trait ProfilesReadPort: Send + Sync {
 
 #[async_trait]
 pub(crate) trait ProfileFsPort: Send + Sync {
+    async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf>;
     async fn read(&self, file: &str) -> anyhow::Result<String>;
     async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()>;
     async fn remove(&self, file: &str) -> anyhow::Result<()>;
@@ -222,6 +223,15 @@ impl ProfilesReadPort for LegacyProfilesReadPort {
 
 #[async_trait]
 impl ProfileFsPort for LegacyProfileFsPort {
+    async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
+        let file = file.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::config::profile::item::utils::resolve_managed_profile_path(&file)
+        })
+        .await
+        .context("profile path resolution task failed")?
+    }
+
     async fn read(&self, file: &str) -> anyhow::Result<String> {
         let file = file.to_string();
         tokio::task::spawn_blocking(move || {
@@ -644,7 +654,7 @@ impl NyanpasuClient {
     ) -> anyhow::Result<std::path::PathBuf> {
         let profiles = self.inner.profiles.snapshot()?;
         let item = profiles.get_item(&uid)?;
-        crate::config::profile::item::utils::resolve_managed_profile_path(item.file())
+        self.inner.profile_files.resolve_path(item.file()).await
     }
 
     pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
@@ -1058,6 +1068,9 @@ mod tests {
 
     #[async_trait]
     impl ProfileFsPort for NoopProfileFs {
+        async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
+            Ok(std::path::PathBuf::from(file))
+        }
         async fn read(&self, _file: &str) -> anyhow::Result<String> {
             Ok(String::new())
         }
@@ -1078,6 +1091,9 @@ mod tests {
 
     #[async_trait]
     impl ProfileFsPort for RecordingProfileFs {
+        async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
+            Ok(std::path::PathBuf::from(file))
+        }
         async fn read(&self, file: &str) -> anyhow::Result<String> {
             self.reads.lock().unwrap().push(file.to_string());
             Ok(self.previous_file.clone())
