@@ -159,21 +159,22 @@ pub(crate) trait ProfileFsPort: Send + Sync {
     async fn remove(&self, file: &str) -> anyhow::Result<()>;
 }
 
+#[async_trait]
 pub(crate) trait ProfilesWritePort: Send + Sync {
-    fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)>;
+    async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)>;
 
-    fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)>;
+    async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)>;
 
-    fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()>;
+    async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()>;
 
-    fn patch_metadata(
+    async fn patch_metadata(
         &self,
         uid: &ProfileUid,
         name: Option<String>,
         desc: Option<Option<String>>,
     ) -> anyhow::Result<()>;
 
-    fn patch_remote_options(
+    async fn patch_remote_options(
         &self,
         uid: &ProfileUid,
         user_agent: Option<Option<String>>,
@@ -182,23 +183,27 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<()>;
 
-    fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()>;
+    async fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()>;
 
-    fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()>;
+    async fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()>;
 
-    fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()>;
+    async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()>;
 
-    fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()>;
+    async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()>;
 
-    fn apply_remote_options(
+    async fn apply_remote_options(
         &self,
         uid: &ProfileUid,
         options: RemoteProfileOptionsBuilder,
     ) -> anyhow::Result<()>;
 
-    fn commit_refreshed(&self, uid: &ProfileUid, updated: RemoteProfile) -> anyhow::Result<bool>;
+    async fn commit_refreshed(
+        &self,
+        uid: &ProfileUid,
+        updated: RemoteProfile,
+    ) -> anyhow::Result<bool>;
 
-    fn replace_remote_definition(
+    async fn replace_remote_definition(
         &self,
         uid: &ProfileUid,
         file: &str,
@@ -275,32 +280,38 @@ impl ProfileFsPort for LegacyProfileFsPort {
 }
 
 impl LegacyProfilesWritePort {
-    fn persist<T>(
-        &self,
-        update: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
-        let profiles = Config::profiles();
-        let result = {
-            let mut draft = profiles.draft();
-            update(&mut draft).and_then(|value| draft.save_file().map(|_| value))
-        };
-        match result {
-            Ok(value) => {
-                profiles.apply();
-                Ok(value)
+    async fn persist<T, F>(update: F) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Profiles) -> anyhow::Result<T> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            let profiles = Config::profiles();
+            let result = {
+                let mut draft = profiles.draft();
+                update(&mut draft).and_then(|value| draft.save_file().map(|_| value))
+            };
+            match result {
+                Ok(value) => {
+                    profiles.apply();
+                    Ok(value)
+                }
+                Err(error) => {
+                    profiles.discard();
+                    Err(error)
+                }
             }
-            Err(error) => {
-                profiles.discard();
-                Err(error)
-            }
-        }
+        })
+        .await
+        .context("profile state persistence task failed")?
     }
 }
 
+#[async_trait]
 impl ProfilesWritePort for LegacyProfilesWritePort {
-    fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
+    async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
         let uid = profile.uid().to_string();
-        self.persist(|profiles| {
+        Self::persist(move |profiles| {
             let activate = profiles.current.is_empty();
             profiles.append_item(profile)?;
             if activate {
@@ -308,18 +319,22 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
             }
             Ok((uid, activate))
         })
+        .await
     }
 
-    fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-        self.persist(|profiles| {
-            let file = profiles.get_item(uid)?.file().to_string();
-            let affects_current = profiles.delete_item(uid)?;
+    async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
+        let uid = uid.clone();
+        Self::persist(move |profiles| {
+            let file = profiles.get_item(&uid)?.file().to_string();
+            let affects_current = profiles.delete_item(&uid)?;
             Ok((file, affects_current))
         })
+        .await
     }
 
-    fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
-        self.persist(|profiles| {
+    async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
+        let uid = uid.clone();
+        Self::persist(move |profiles| {
             let current = profiles
                 .items
                 .iter_mut()
@@ -334,18 +349,20 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
             }
             Ok(())
         })
+        .await
     }
 
-    fn patch_metadata(
+    async fn patch_metadata(
         &self,
         uid: &ProfileUid,
         name: Option<String>,
         desc: Option<Option<String>>,
     ) -> anyhow::Result<()> {
-        self.persist(|profiles| profiles.patch_metadata(uid, name, desc))
+        let uid = uid.clone();
+        Self::persist(move |profiles| profiles.patch_metadata(&uid, name, desc)).await
     }
 
-    fn patch_remote_options(
+    async fn patch_remote_options(
         &self,
         uid: &ProfileUid,
         user_agent: Option<Option<String>>,
@@ -353,42 +370,51 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         self_proxy: Option<bool>,
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<()> {
-        self.persist(|profiles| {
+        let uid = uid.clone();
+        Self::persist(move |profiles| {
             profiles.patch_remote_options(
-                uid,
+                &uid,
                 user_agent,
                 with_proxy,
                 self_proxy,
                 update_interval_minutes,
             )
         })
+        .await
     }
 
-    fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()> {
-        self.persist(|profiles| profiles.reorder(active_id, over_id))
+    async fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()> {
+        let active_id = active_id.clone();
+        let over_id = over_id.clone();
+        Self::persist(move |profiles| profiles.reorder(&active_id, &over_id)).await
     }
 
-    fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()> {
-        self.persist(|profiles| profiles.reorder_by_list(list))
+    async fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()> {
+        let list = list.to_vec();
+        Self::persist(move |profiles| profiles.reorder_by_list(&list)).await
     }
 
-    fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()> {
-        self.persist(|profiles| profiles.activate(uid.map(String::as_str)))
+    async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()> {
+        let uid = uid.cloned();
+        Self::persist(move |profiles| profiles.activate(uid.as_deref())).await
     }
 
-    fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()> {
-        self.persist(|profiles| {
-            profiles.valid = fields.to_vec();
+    async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()> {
+        let fields = fields.to_vec();
+        Self::persist(move |profiles| {
+            profiles.valid = fields;
             Ok(())
         })
+        .await
     }
 
-    fn apply_remote_options(
+    async fn apply_remote_options(
         &self,
         uid: &ProfileUid,
         options: RemoteProfileOptionsBuilder,
     ) -> anyhow::Result<()> {
-        self.persist(|profiles| {
+        let uid = uid.clone();
+        Self::persist(move |profiles| {
             let item = profiles
                 .items
                 .iter_mut()
@@ -400,20 +426,27 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
             profile.option.apply(options);
             Ok(())
         })
+        .await
     }
 
-    fn commit_refreshed(&self, uid: &ProfileUid, updated: RemoteProfile) -> anyhow::Result<bool> {
-        self.persist(|profiles| {
+    async fn commit_refreshed(
+        &self,
+        uid: &ProfileUid,
+        updated: RemoteProfile,
+    ) -> anyhow::Result<bool> {
+        let uid = uid.clone();
+        Self::persist(move |profiles| {
             let affects_current = profiles
                 .current
                 .iter()
-                .any(|current_uid| current_uid == uid);
-            profiles.replace_item(uid, updated.into())?;
+                .any(|current_uid| current_uid == &uid);
+            profiles.replace_item(&uid, updated.into())?;
             Ok(affects_current)
         })
+        .await
     }
 
-    fn replace_remote_definition(
+    async fn replace_remote_definition(
         &self,
         uid: &ProfileUid,
         file: &str,
@@ -422,11 +455,21 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
     ) -> anyhow::Result<bool> {
-        self.persist(|profiles| {
-            let affects_current = profiles.current.iter().any(|current| current == uid);
-            profiles.replace_remote_definition(uid, file, updated_at, url, option, subscription)?;
+        let uid = uid.clone();
+        let file = file.to_string();
+        Self::persist(move |profiles| {
+            let affects_current = profiles.current.iter().any(|current| current == &uid);
+            profiles.replace_remote_definition(
+                &uid,
+                &file,
+                updated_at,
+                url,
+                option,
+                subscription,
+            )?;
             Ok(affects_current)
         })
+        .await
     }
 }
 
@@ -681,7 +724,7 @@ impl NyanpasuClient {
 
         let (uid, activate) = {
             let _commit = self.inner.profile_commit.lock().await;
-            let result = self.inner.profile_writes.add(profile)?;
+            let result = self.inner.profile_writes.add(profile).await?;
             self.inner.ui_sink.refresh_profiles();
             result
         };
@@ -701,7 +744,10 @@ impl NyanpasuClient {
     ) -> anyhow::Result<MutationOutcome<()>> {
         {
             let _commit = self.inner.profile_commit.lock().await;
-            self.inner.profile_writes.patch_profile(&uid, profile)?;
+            self.inner
+                .profile_writes
+                .patch_profile(&uid, profile)
+                .await?;
             self.inner.ui_sink.refresh_profiles();
         }
         Ok(self.after_profile_runtime_commit("profile patch").await)
@@ -714,7 +760,10 @@ impl NyanpasuClient {
         desc: Option<Option<String>>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let _commit = self.inner.profile_commit.lock().await;
-        self.inner.profile_writes.patch_metadata(&uid, name, desc)?;
+        self.inner
+            .profile_writes
+            .patch_metadata(&uid, name, desc)
+            .await?;
         self.inner.ui_sink.refresh_profiles();
         Ok(MutationOutcome::from_parts((), Vec::new()))
     }
@@ -728,13 +777,16 @@ impl NyanpasuClient {
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let _commit = self.inner.profile_commit.lock().await;
-        self.inner.profile_writes.patch_remote_options(
-            &uid,
-            user_agent,
-            with_proxy,
-            self_proxy,
-            update_interval_minutes,
-        )?;
+        self.inner
+            .profile_writes
+            .patch_remote_options(
+                &uid,
+                user_agent,
+                with_proxy,
+                self_proxy,
+                update_interval_minutes,
+            )
+            .await?;
         self.inner.ui_sink.refresh_profiles();
         Ok(MutationOutcome::from_parts((), Vec::new()))
     }
@@ -756,7 +808,12 @@ impl NyanpasuClient {
             .profile_files
             .write_atomic(&file, &content)
             .await?;
-        let affects_current = match self.inner.profile_writes.commit_refreshed(&uid, updated) {
+        let affects_current = match self
+            .inner
+            .profile_writes
+            .commit_refreshed(&uid, updated)
+            .await
+        {
             Ok(affects_current) => affects_current,
             Err(error) => {
                 if let Err(restore_error) = self
@@ -793,7 +850,8 @@ impl NyanpasuClient {
             let _commit = self.inner.profile_commit.lock().await;
             self.inner
                 .profile_writes
-                .apply_remote_options(&uid, options)?;
+                .apply_remote_options(&uid, options)
+                .await?;
             self.inner.ui_sink.refresh_profiles();
         }
         let (initial, previous_file) = self.remote_profile_snapshot(&uid).await?;
@@ -814,14 +872,11 @@ impl NyanpasuClient {
     ) -> anyhow::Result<MutationOutcome<()>> {
         let affects_current = {
             let _commit = self.inner.profile_commit.lock().await;
-            let affects_current = self.inner.profile_writes.replace_remote_definition(
-                &uid,
-                &file,
-                updated_at,
-                url,
-                option,
-                subscription,
-            )?;
+            let affects_current = self
+                .inner
+                .profile_writes
+                .replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
+                .await?;
             self.inner.ui_sink.refresh_profiles();
             affects_current
         };
@@ -840,7 +895,7 @@ impl NyanpasuClient {
     ) -> anyhow::Result<MutationOutcome<()>> {
         let (file, affects_current) = {
             let _commit = self.inner.profile_commit.lock().await;
-            let result = self.inner.profile_writes.delete(&uid)?;
+            let result = self.inner.profile_writes.delete(&uid).await?;
             self.inner.ui_sink.refresh_profiles();
             result
         };
@@ -871,7 +926,10 @@ impl NyanpasuClient {
         over_id: ProfileUid,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let _commit = self.inner.profile_commit.lock().await;
-        self.inner.profile_writes.reorder(&active_id, &over_id)?;
+        self.inner
+            .profile_writes
+            .reorder(&active_id, &over_id)
+            .await?;
         self.inner.ui_sink.refresh_profiles();
         Ok(MutationOutcome::from_parts((), Vec::new()))
     }
@@ -881,7 +939,7 @@ impl NyanpasuClient {
         list: Vec<ProfileUid>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let _commit = self.inner.profile_commit.lock().await;
-        self.inner.profile_writes.reorder_by_list(&list)?;
+        self.inner.profile_writes.reorder_by_list(&list).await?;
         self.inner.ui_sink.refresh_profiles();
         Ok(MutationOutcome::from_parts((), Vec::new()))
     }
@@ -910,7 +968,7 @@ impl NyanpasuClient {
     ) -> anyhow::Result<MutationOutcome<()>> {
         {
             let _commit = self.inner.profile_commit.lock().await;
-            self.inner.profile_writes.set_current(uid.as_ref())?;
+            self.inner.profile_writes.set_current(uid.as_ref()).await?;
             self.inner.ui_sink.refresh_profiles();
         }
         Ok(self
@@ -924,7 +982,7 @@ impl NyanpasuClient {
     ) -> anyhow::Result<MutationOutcome<()>> {
         {
             let _commit = self.inner.profile_commit.lock().await;
-            self.inner.profile_writes.set_valid_fields(&fields)?;
+            self.inner.profile_writes.set_valid_fields(&fields).await?;
             self.inner.ui_sink.refresh_profiles();
         }
         Ok(self
@@ -1122,20 +1180,25 @@ mod tests {
         patch_commits: Option<Arc<Mutex<usize>>>,
     }
 
+    #[async_trait]
     impl ProfilesWritePort for NoopProfilesWrite {
-        fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
+        async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
             Ok((profile.uid().to_string(), false))
         }
-        fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
+        async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
             Ok((format!("{uid}.yaml"), false))
         }
-        fn patch_profile(&self, _uid: &ProfileUid, _profile: ProfileBuilder) -> anyhow::Result<()> {
+        async fn patch_profile(
+            &self,
+            _uid: &ProfileUid,
+            _profile: ProfileBuilder,
+        ) -> anyhow::Result<()> {
             if let Some(commits) = &self.patch_commits {
                 *commits.lock().unwrap() += 1;
             }
             Ok(())
         }
-        fn patch_metadata(
+        async fn patch_metadata(
             &self,
             _uid: &ProfileUid,
             _name: Option<String>,
@@ -1143,7 +1206,7 @@ mod tests {
         ) -> anyhow::Result<()> {
             Ok(())
         }
-        fn patch_remote_options(
+        async fn patch_remote_options(
             &self,
             _uid: &ProfileUid,
             _user_agent: Option<Option<String>>,
@@ -1153,26 +1216,30 @@ mod tests {
         ) -> anyhow::Result<()> {
             Ok(())
         }
-        fn reorder(&self, _active_id: &ProfileUid, _over_id: &ProfileUid) -> anyhow::Result<()> {
+        async fn reorder(
+            &self,
+            _active_id: &ProfileUid,
+            _over_id: &ProfileUid,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
-        fn reorder_by_list(&self, _list: &[ProfileUid]) -> anyhow::Result<()> {
+        async fn reorder_by_list(&self, _list: &[ProfileUid]) -> anyhow::Result<()> {
             Ok(())
         }
-        fn set_current(&self, _uid: Option<&ProfileUid>) -> anyhow::Result<()> {
+        async fn set_current(&self, _uid: Option<&ProfileUid>) -> anyhow::Result<()> {
             Ok(())
         }
-        fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
+        async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
-        fn apply_remote_options(
+        async fn apply_remote_options(
             &self,
             _uid: &ProfileUid,
             _options: RemoteProfileOptionsBuilder,
         ) -> anyhow::Result<()> {
             Ok(())
         }
-        fn commit_refreshed(
+        async fn commit_refreshed(
             &self,
             _uid: &ProfileUid,
             _updated: RemoteProfile,
@@ -1185,7 +1252,7 @@ mod tests {
             }
             Ok(false)
         }
-        fn replace_remote_definition(
+        async fn replace_remote_definition(
             &self,
             _uid: &ProfileUid,
             _file: &str,
