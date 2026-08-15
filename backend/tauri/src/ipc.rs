@@ -932,9 +932,11 @@ pub fn get_core_dir() -> Result<String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_core_status() -> Result<(CoreState, i64, RunType)> {
-    let (state, ts, run_type) = CoreManager::global().status().await;
-    Ok((state.into_owned(), ts, run_type))
+pub async fn get_core_status(
+    client: State<'_, NyanpasuClient>,
+) -> Result<(CoreState, i64, RunType)> {
+    let status = client.core_status().await?;
+    Ok((status.state, status.state_changed_at, status.run_type))
 }
 
 #[tauri::command]
