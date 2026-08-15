@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     config::{chimera::IVerge, runtime::ClashConfigOverrides},
-    core::clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
+    core::clash::{client::NyanpasuClient, transaction::TransactionOutcome},
     feat,
 };
 
@@ -423,15 +423,15 @@ async fn apply_routing_mode_transaction(
     app: &AppHandle,
     mode: AgentRoutingMode,
 ) -> AgentResult<TransactionOutcome> {
-    let coordinator = app
-        .try_state::<RuntimePatchCoordinator>()
+    let client = app
+        .try_state::<NyanpasuClient>()
         .ok_or(AgentCommandError::ActionFailed)?;
     let overrides = ClashConfigOverrides {
         mode: Some(mode.as_core_value().into()),
         ..ClashConfigOverrides::default()
     };
 
-    Ok(feat::patch_running_clash_overrides(&coordinator, overrides).await)
+    Ok(feat::patch_running_clash_overrides(&client, overrides).await)
 }
 
 async fn routing_mode_is_applied_with_timeout(mode: AgentRoutingMode) -> bool {

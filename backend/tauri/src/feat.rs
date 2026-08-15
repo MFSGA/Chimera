@@ -14,11 +14,7 @@ use crate::{
         runtime::ClashConfigOverrides,
     },
     core::{
-        clash::{
-            self,
-            core::CoreManager,
-            transaction::{RuntimePatchCoordinator, TransactionOutcome},
-        },
+        clash::{client::NyanpasuClient, core::CoreManager, transaction::TransactionOutcome},
         handle,
         service::ipc::get_ipc_state,
         sysopt,
@@ -249,23 +245,10 @@ pub async fn patch_clash_overrides(overrides: ClashConfigOverrides) -> Result<()
 /// Applies typed overrides to the running core and desired state through the
 /// shared transaction coordinator used by IPC and non-window entry points.
 pub async fn patch_running_clash_overrides(
-    coordinator: &RuntimePatchCoordinator,
+    client: &NyanpasuClient,
     overrides: ClashConfigOverrides,
 ) -> TransactionOutcome {
-    let mapping = overrides.to_mapping();
-    let persist_overrides = overrides.clone();
-
-    coordinator
-        .apply(
-            mapping,
-            clash::api::get_configs,
-            |patch| async move { clash::api::patch_configs(&patch).await },
-            move |_patch| {
-                let overrides = persist_overrides.clone();
-                async move { patch_clash_overrides(overrides).await }
-            },
-        )
-        .await
+    client.patch_running_clash_overrides(overrides).await
 }
 
 /// Applies a general Clash mapping while extracting only supported persistent
@@ -721,8 +704,8 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
 pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let Some(coordinator) = app_handle.try_state::<RuntimePatchCoordinator>() else {
-            log::error!(target: "app", "runtime patch coordinator is not managed");
+        let Some(client) = app_handle.try_state::<NyanpasuClient>() else {
+            log::error!(target: "app", "nyanpasu client is not managed");
             return;
         };
         let overrides = ClashConfigOverrides {
@@ -730,7 +713,7 @@ pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
             ..ClashConfigOverrides::default()
         };
 
-        if let Err(error) = patch_running_clash_overrides(&coordinator, overrides)
+        if let Err(error) = patch_running_clash_overrides(&client, overrides)
             .await
             .into_result()
         {
