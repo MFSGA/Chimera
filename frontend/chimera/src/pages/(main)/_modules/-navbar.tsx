@@ -6,7 +6,7 @@ import Apps from '~icons/material-symbols/apps';
 import DashboardRounded from '~icons/material-symbols/dashboard-rounded';
 import DesignServicesRounded from '~icons/material-symbols/design-services-rounded';
 import ExitToAppRounded from '~icons/material-symbols/exit-to-app-rounded';
-import GridViewRounded from '~icons/material-symbols/grid-view-outline-rounded';
+import GridViewOutlineRounded from '~icons/material-symbols/grid-view-outline-rounded';
 import MenuRounded from '~icons/material-symbols/menu-rounded';
 import Public from '~icons/material-symbols/public';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
@@ -14,14 +14,14 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SmartToyRounded from '~icons/material-symbols/smart-toy-rounded';
 import TerminalRounded from '~icons/material-symbols/terminal-rounded';
 import { ComponentProps, ReactNode, useMemo } from 'react';
+import AnimatedTabs, { AnimatedTabsItem } from '@/components/ui/animated-tabs';
+import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
-import AnimatedTabs, { AnimatedTabsItem } from '@/components/ui/animated-tabs';
-import { Button } from '@/components/ui/button';
+} from '@/components/ui/dropdown-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
@@ -125,7 +125,7 @@ export const DefaultNavbar = () => {
       )}
 
       <NavbarButton to="/main/profiles/$type" params={{ type: 'profile' }}>
-        <GridViewRounded />
+        <GridViewOutlineRounded />
         <NavbarLabel>{m.navbar_label_profiles()}</NavbarLabel>
       </NavbarButton>
 
@@ -221,7 +221,7 @@ export const MobileNavbar = () => {
               to={'/main/profiles/$type' as never}
               params={{ type: 'profile' } as never}
             >
-              <GridViewRounded />
+              <GridViewOutlineRounded />
               <span>{m.navbar_label_profiles()}</span>
             </Link>
           </DropdownMenuItem>

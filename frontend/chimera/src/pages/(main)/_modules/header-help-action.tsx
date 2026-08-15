@@ -7,7 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
+} from '@/components/ui/dropdown-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatEnvInfos, formatError } from '@/utils';
