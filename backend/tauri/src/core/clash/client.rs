@@ -22,6 +22,7 @@ use crate::{
         profile::{
             item::ProfileKindGetter,
             item_type::{ProfileItemType, ProfileUid},
+            profiles::Profiles,
         },
         runtime::ClashConfigOverrides,
     },
@@ -52,6 +53,7 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
 
 pub(crate) trait UiEventSink: Send + Sync {
     fn refresh_clash(&self);
+    fn refresh_profiles(&self);
 }
 
 struct LegacyCoreLifecyclePort;
@@ -105,6 +107,10 @@ struct LegacyUiEventSink;
 impl UiEventSink for LegacyUiEventSink {
     fn refresh_clash(&self) {
         Handle::refresh_clash();
+    }
+
+    fn refresh_profiles(&self) {
+        Handle::refresh_profiles();
     }
 }
 
@@ -177,6 +183,52 @@ impl NyanpasuClient {
         serde_yaml::to_string(&data).context("failed to convert yaml to string")
     }
 
+    fn persist_profiles(
+        &self,
+        update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let profiles = Config::profiles();
+        let result = {
+            let mut draft = profiles.draft();
+            update(&mut draft).and_then(|_| draft.save_file())
+        };
+        if let Err(error) = result {
+            profiles.discard();
+            return Err(error);
+        }
+        profiles.apply();
+        self.inner.ui_sink.refresh_profiles();
+        Ok(())
+    }
+
+    pub(crate) async fn patch_profile_metadata(
+        &self,
+        uid: ProfileUid,
+        name: Option<String>,
+        desc: Option<Option<String>>,
+    ) -> anyhow::Result<()> {
+        self.persist_profiles(|profiles| profiles.patch_metadata(&uid, name, desc))
+    }
+
+    pub(crate) async fn patch_remote_profile_options(
+        &self,
+        uid: ProfileUid,
+        user_agent: Option<Option<String>>,
+        with_proxy: Option<bool>,
+        self_proxy: Option<bool>,
+        update_interval_minutes: Option<u64>,
+    ) -> anyhow::Result<()> {
+        self.persist_profiles(|profiles| {
+            profiles.patch_remote_options(
+                &uid,
+                user_agent,
+                with_proxy,
+                self_proxy,
+                update_interval_minutes,
+            )
+        })
+    }
+
     pub(crate) async fn save_profile_file(
         &self,
         uid: ProfileUid,
@@ -225,6 +277,11 @@ impl NyanpasuClient {
         self.inner.ui_sink.refresh_clash();
         self.inner.core.on_profile_change().await;
         Ok(())
+    }
+
+    pub(crate) async fn regenerate_and_restart_for_legacy(&self) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.rebuild_running_config().await
     }
 
     pub(crate) async fn shutdown(&self) {
@@ -299,6 +356,10 @@ mod tests {
     impl UiEventSink for RecordingUi {
         fn refresh_clash(&self) {
             self.events.lock().unwrap().push("refresh-ui");
+        }
+
+        fn refresh_profiles(&self) {
+            self.events.lock().unwrap().push("refresh-profiles");
         }
     }
 

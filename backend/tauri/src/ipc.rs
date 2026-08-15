@@ -540,28 +540,32 @@ pub async fn set_profile_valid_fields(
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_profile_metadata(
+    client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     patch: ProfileMetadataPatch,
 ) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| profiles.patch_metadata(&uid, patch.name, patch.desc))?;
+    client
+        .patch_profile_metadata(uid, patch.name, patch.desc)
+        .await?;
     Ok(RebuildOutcome::Ok)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_remote_profile_options(
+    client: State<'_, NyanpasuClient>,
     uid: ProfileUid,
     patch: RemoteProfileOptionsPatch,
 ) -> Result<RebuildOutcome> {
-    persist_profiles(|profiles| {
-        profiles.patch_remote_options(
-            &uid,
+    client
+        .patch_remote_profile_options(
+            uid,
             patch.user_agent,
             patch.with_proxy,
             patch.self_proxy,
             patch.update_interval_minutes,
         )
-    })?;
+        .await?;
     Ok(RebuildOutcome::Ok)
 }
 
@@ -1107,7 +1111,11 @@ pub async fn update_profile(uid: String, option: Option<RemoteProfileOptionsBuil
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Result {
+pub async fn patch_profile(
+    client: State<'_, NyanpasuClient>,
+    uid: String,
+    profile: ProfileBuilderRequest,
+) -> Result {
     let profile = ProfileBuilder::from(profile);
     {
         let mut profiles = Config::profiles().draft();
@@ -1138,21 +1146,13 @@ pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Resul
 
     feat::commit_profile_transaction(
         "profile patch",
-        || async {
-            CoreManager::global()
-                .restart_core_with_generated_config()
-                .await
-        },
+        || async { client.regenerate_and_restart_for_legacy().await },
         || async { Config::profiles().latest().save_file() },
         || {
             Config::profiles().discard();
         },
         || async { Ok::<(), anyhow::Error>(()) },
-        || async {
-            CoreManager::global()
-                .restart_core_with_generated_config()
-                .await
-        },
+        || async { client.regenerate_and_restart_for_legacy().await },
     )
     .await?;
 
@@ -1164,7 +1164,7 @@ pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Resul
 
 #[tauri::command]
 #[specta::specta]
-pub async fn delete_profile(uid: String) -> Result {
+pub async fn delete_profile(client: State<'_, NyanpasuClient>, uid: String) -> Result {
     let profile_item = Config::profiles().latest().get_item(&uid)?.clone();
     let file_path = resolve_managed_profile_path(profile_item.file())?;
     let previous_file = if file_path.exists() {
@@ -1185,9 +1185,7 @@ pub async fn delete_profile(uid: String) -> Result {
         "profile deletion",
         || async {
             if should_update {
-                CoreManager::global()
-                    .restart_core_with_generated_config()
-                    .await?;
+                client.regenerate_and_restart_for_legacy().await?;
             }
             Ok(())
         },
@@ -1212,9 +1210,7 @@ pub async fn delete_profile(uid: String) -> Result {
         },
         || async {
             if should_update {
-                CoreManager::global()
-                    .restart_core_with_generated_config()
-                    .await
+                client.regenerate_and_restart_for_legacy().await
             } else {
                 Ok(())
             }
