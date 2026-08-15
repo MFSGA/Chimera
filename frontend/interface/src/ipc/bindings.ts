@@ -24,44 +24,46 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<null, string>(__TAURI_INVOKE('import_profile', { url, option })),
+    typedError<MutationOutcome<string>, string>(
+      __TAURI_INVOKE('import_profile', { url, option }),
+    ),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
   reorderProfile: (activeId: string, overId: string) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('reorder_profile', { activeId, overId }),
     ),
   reorderProfilesByList: (list: string[]) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('reorder_profiles_by_list', { list }),
     ),
   activateProfile: (uid: string | null) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
     ),
   setProfileValidFields: (fields: string[]) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
     ),
   patchProfileMetadata: (
     uid: string,
     patch: ProfileMetadataPatch_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('patch_profile_metadata', { uid, patch }),
     ),
   patchRemoteProfileOptions: (
     uid: string,
     patch: RemoteProfileOptionsPatch_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('patch_remote_profile_options', { uid, patch }),
     ),
   replaceProfileDefinition: (
     uid: string,
     definition: ProfileDefinition_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('replace_profile_definition', { uid, definition }),
     ),
   updateProfile: (
@@ -75,15 +77,21 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<null, string>(__TAURI_INVOKE('update_profile', { uid, option })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('update_profile', { uid, option }),
+    ),
   patchProfile: (uid: string, profile: ProfileBuilderRequest_Deserialize) =>
-    typedError<null, string>(__TAURI_INVOKE('patch_profile', { uid, profile })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('patch_profile', { uid, profile }),
+    ),
   deleteProfile: (uid: string) =>
-    typedError<null, string>(__TAURI_INVOKE('delete_profile', { uid })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('delete_profile', { uid }),
+    ),
   readProfileFile: (uid: string) =>
     typedError<string, string>(__TAURI_INVOKE('read_profile_file', { uid })),
   saveProfileFile: (uid: string, fileData: string) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('save_profile_file', { uid, fileData }),
     ),
   /**  create a new profile */
@@ -91,7 +99,7 @@ export const commands = {
     item: ProfileBuilderRequest_Deserialize,
     fileData: string | null,
   ) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<string>, string>(
       __TAURI_INVOKE('create_profile', { item, fileData }),
     ),
   createEditorWindow: (windowType: EditorWindowType, uid: string | null) =>
@@ -633,6 +641,25 @@ export type CoreState = 'Running' | { Stopped: string | null };
 
 export type CoreType = { clash: ClashCoreType } | 'singbox';
 
+export type Degradation = {
+  phase: DegradationPhase;
+  code: string;
+  message: string;
+  retryable: boolean;
+};
+
+export type DegradationPhase =
+  | 'legacy_mirror'
+  | 'profile_materialization'
+  | 'runtime_build'
+  | 'runtime_check'
+  | 'runtime_promote'
+  | 'runtime_publish'
+  | 'runtime_apply'
+  | 'core_rollback'
+  | 'system_effect'
+  | 'ui_effect';
+
 export type DelayRes = {
   delay: number;
 };
@@ -943,6 +970,15 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
+/**
+ *  Public mutation wire aligned with REF: desired state is committed first;
+ *  post-commit side-effect failures degrade instead of turning the mutation
+ *  into an error that would imply the commit was rolled back.
+ */
+export type MutationOutcome<T> =
+  | { status: 'applied'; value: T }
+  | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
+
 export type PatchClashCoreConfig =
   PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
 
@@ -1162,9 +1198,6 @@ export type ProxyItem_Serialize = {
   udp: boolean;
   icon?: string | null;
 };
-
-export type RebuildOutcome =
-  { status: 'ok' } | { status: 'degraded'; error: string };
 
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 

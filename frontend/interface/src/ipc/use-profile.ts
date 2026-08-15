@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
 import {
   commands,
+  type MutationOutcome,
   type ProfileBuilderRequest_Deserialize,
   type ProfileDefinition_Deserialize,
   type ProfileMetadataPatch_Deserialize,
@@ -37,8 +38,10 @@ export type CreateParams =
 
 type ProfileHelperFn = {
   view: () => Promise<null | undefined>;
-  update: (option: RemoteProfileOptionsBuilder) => Promise<null | undefined>;
-  drop: () => Promise<null | undefined>;
+  update: (
+    option: RemoteProfileOptionsBuilder,
+  ) => Promise<MutationOutcome<null> | undefined>;
+  drop: () => Promise<MutationOutcome<null> | undefined>;
 };
 
 export type ProfileQueryResult = NonNullable<

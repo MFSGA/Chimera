@@ -1,6 +1,7 @@
 import {
   RemoteProfileOptionsBuilder,
   useProfile,
+  type MutationOutcome,
   type RemoteProfile,
 } from '@chimera/interface';
 import { SidePage } from '@chimera/ui';
@@ -138,7 +139,7 @@ function ProfilePage() {
           (item) => item.type === 'remote',
         ) as RemoteProfile[]) || [];
 
-      const updates: Array<Promise<void | null | undefined>> = [];
+      const updates: Array<Promise<MutationOutcome<null> | undefined>> = [];
 
       for (const profile of remoteProfiles) {
         const profileOption = profile.option;
