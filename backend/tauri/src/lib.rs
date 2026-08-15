@@ -1,9 +1,9 @@
 #[cfg(debug_assertions)]
 use std::{io::Write, time::SystemTime};
 
+use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Listener;
-use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -39,11 +39,6 @@ rust_i18n::i18n!("./locales");
 #[specta::specta]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
-}
-
-fn shutdown_background_rebuilds(app_handle: &tauri::AppHandle) {
-    let client = app_handle.state::<core::clash::client::NyanpasuClient>();
-    nyanpasu_utils::runtime::block_on(client.shutdown());
 }
 
 #[cfg(debug_assertions)]
@@ -230,7 +225,6 @@ pub fn run() -> std::io::Result<()> {
             // utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::ExitRequested { .. } => {
-            shutdown_background_rebuilds(app_handle);
             utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::WindowEvent {

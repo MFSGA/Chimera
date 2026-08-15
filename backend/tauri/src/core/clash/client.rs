@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
-    rebuild::RebuildCoordinator,
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
 const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
@@ -448,7 +447,6 @@ struct NyanpasuClientInner {
     profile_writes: Arc<dyn ProfilesWritePort>,
     ui_sink: Arc<dyn UiEventSink>,
     runtime_patch: RuntimePatchCoordinator,
-    rebuild: RebuildCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
     verge_patch: tokio::sync::Mutex<()>,
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
@@ -494,7 +492,6 @@ impl NyanpasuClient {
             profile_writes,
             ui_sink,
             runtime_patch: RuntimePatchCoordinator::default(),
-            rebuild: RebuildCoordinator::new(),
             profile_commit: tokio::sync::Mutex::new(()),
             verge_patch: tokio::sync::Mutex::new(()),
             pending_refreshes: StdMutex::new(HashSet::new()),
@@ -959,10 +956,6 @@ impl NyanpasuClient {
         self.inner.ui_sink.refresh_clash();
         self.inner.core.on_profile_change().await;
         Ok(())
-    }
-
-    pub(crate) async fn shutdown(&self) {
-        self.inner.rebuild.shutdown().await;
     }
 }
 
