@@ -27,7 +27,15 @@ const ProxyButton = ({
     {...props}
   >
     <div className="flex items-center gap-3 [&_svg]:size-7">{children}</div>
-    {loading && <CircularProgress className="size-6" indeterminate />}
+    {loading && (
+      <CircularProgress
+        className={cn(
+          'size-6 transition-opacity',
+          'group-data-[loading=false]:opacity-0 group-data-[loading=true]:opacity-100',
+        )}
+        indeterminate
+      />
+    )}
   </Button>
 );
 
