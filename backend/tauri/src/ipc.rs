@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
 
-use anyhow::{Context, anyhow};
+use anyhow::{Context, anyhow, bail};
 use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
@@ -23,10 +23,11 @@ use crate::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
                     RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
-                utils::resolve_managed_profile_path,
+                shared::{PreparedProfileFile, ProfileSharedBuilder},
+                utils::{generate_uid, resolve_managed_profile_path},
             },
             item_type::{ProfileItemType, ProfileUid},
-            profiles::{Profiles, ProfilesBuilder},
+            profiles::Profiles,
         },
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
@@ -42,6 +43,9 @@ use crate::{
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
+
+const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
+static PROFILE_CREATION_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[allow(dead_code)]
 #[derive(specta::Type, serde::Serialize)]
@@ -281,8 +285,11 @@ pub fn is_portable() -> Result<bool> {
 #[specta::specta]
 /// later: check in the frontend
 pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuilder>) -> Result {
+    let _creation = PROFILE_CREATION_GATE.lock().await;
     let url = url::Url::parse(&url).context("failed to parse the url")?;
     let mut builder = RemoteProfileBuilder::default();
+    let (uid, mut prepared_file) = reserve_managed_profile_identity(&ProfileItemType::Remote)?;
+    builder.assign_managed_identity(uid);
     builder.url(url);
     if let Some(option) = option {
         builder.option(option.clone());
@@ -291,25 +298,11 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
         .build_no_blocking()
         .await
         .context("failed to build a remote profile")?;
-    log::debug!("import_profile 3");
     // 根据是否为 Some(uid) 来判断是否要激活配置
-    let profile_id = {
-        if Config::profiles().draft().current.is_empty() {
-            Some(profile.uid().to_string())
-        } else {
-            None
-        }
-    };
-    {
-        let committer = Config::profiles().auto_commit();
-        (committer.draft().append_item(profile.into()))?;
-    }
+    prepared_file.mark_materialized();
+    commit_new_profile(profile.into()).await?;
+    prepared_file.commit();
     // TODO: 使用 activate_profile 来激活配置
-    if let Some(profile_id) = profile_id {
-        let mut builder = ProfilesBuilder::default();
-        builder.current(vec![profile_id]);
-        patch_profiles_config(builder).await?;
-    }
     Ok(())
 }
 
@@ -379,33 +372,87 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
     Ok(())
 }
 
-/// Compatibility helper for callers that still construct the persisted builder.
-async fn patch_profiles_config(profiles: ProfilesBuilder) -> Result {
-    Config::profiles().draft().apply(profiles);
-
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            handle::Handle::refresh_profiles();
-            Config::profiles().apply();
-            (Config::profiles().data().save_file())?;
-
-            // Interrupt connections based on configuration
-            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
-
-            Ok(())
+fn reserve_managed_profile_identity(
+    kind: &ProfileItemType,
+) -> anyhow::Result<(String, PreparedProfileFile)> {
+    let profiles = Config::profiles().latest();
+    for uid in std::iter::repeat_with(|| generate_uid(kind)).take(PROFILE_IDENTITY_ATTEMPTS) {
+        let file = ProfileSharedBuilder::default_file_name(kind, &uid);
+        let collides_with_state = profiles
+            .items
+            .iter()
+            .any(|profile| profile.uid() == uid || profile.file() == file);
+        if collides_with_state {
+            continue;
         }
-        Err(err) => {
-            log::debug!(target: "app", "{err:?}");
-
-            Config::profiles().discard();
-
-            Err(IpcError::from(err))
+        if let Some(prepared) = PreparedProfileFile::reserve(&file)? {
+            return Ok((uid, prepared));
         }
     }
+
+    bail!("failed to reserve a unique managed profile identity")
+}
+
+async fn commit_new_profile(profile: Profile) -> Result {
+    let uid = profile.uid().to_string();
+    let profile_path = resolve_managed_profile_path(profile.file())?;
+    let activate = Config::profiles().latest().current.is_empty();
+
+    {
+        let mut profiles = Config::profiles().draft();
+        profiles.append_item(profile)?;
+        if activate {
+            profiles.current = vec![uid];
+        }
+    }
+
+    feat::commit_profile_transaction(
+        "profile creation",
+        || async {
+            if activate {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await?;
+            }
+            Ok(())
+        },
+        || async { Config::profiles().latest().save_file() },
+        || {
+            Config::profiles().discard();
+        },
+        || async {
+            if profile_path.exists() {
+                std::fs::remove_file(&profile_path).with_context(|| {
+                    format!(
+                        "failed to remove uncommitted profile file {}",
+                        profile_path.display()
+                    )
+                })?;
+            }
+            Ok(())
+        },
+        || async {
+            if activate {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .await?;
+
+    Config::profiles().apply();
+    if activate {
+        handle::Handle::refresh_clash();
+        let _ =
+            crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change(
+            )
+            .await;
+    }
+    handle::Handle::refresh_profiles();
+    Ok(())
 }
 
 fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) -> Result {
@@ -1207,15 +1254,22 @@ pub fn save_profile_file(uid: String, file_data: String) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<String>) -> Result {
-    let item = ProfileBuilder::from(item);
+    let _creation = PROFILE_CREATION_GATE.lock().await;
+    let mut item = ProfileBuilder::from(item);
+    let kind = item.kind();
+    let (uid, mut prepared_file) = reserve_managed_profile_identity(&kind)?;
+    item.assign_managed_identity(uid);
     let is_remote = matches!(&item, ProfileBuilder::Remote(_));
 
     let profile: crate::config::profile::item::Profile = match item {
-        ProfileBuilder::Remote(mut builder) => builder
-            .build_no_blocking()
-            .await
-            .context("failed to build remote profile")?
-            .into(),
+        ProfileBuilder::Remote(mut builder) => {
+            let profile = builder
+                .build_no_blocking()
+                .await
+                .context("failed to build remote profile")?;
+            prepared_file.mark_materialized();
+            profile.into()
+        }
         ProfileBuilder::Local(builder) => builder
             .build()
             .context("failed to build local profile")?
@@ -1227,27 +1281,11 @@ pub async fn create_profile(item: ProfileBuilderRequest, file_data: Option<Strin
         && !is_remote
     {
         profile.save_file(file_data)?;
+        prepared_file.mark_materialized();
     }
 
-    let profile_id = if Config::profiles().draft().current.is_empty() {
-        Some(profile.uid().to_string())
-    } else {
-        None
-    };
-
-    {
-        let committer = Config::profiles().auto_commit();
-        committer.draft().append_item(profile)?;
-    }
-
-    if let Some(profile_id) = profile_id {
-        let mut builder = ProfilesBuilder::default();
-        builder.current(vec![profile_id]);
-        patch_profiles_config(builder).await?;
-    } else {
-        handle::Handle::refresh_profiles();
-    }
-
+    commit_new_profile(profile).await?;
+    prepared_file.commit();
     Ok(())
 }
 

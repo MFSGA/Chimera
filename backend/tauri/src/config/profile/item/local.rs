@@ -49,6 +49,12 @@ impl LocalProfile {
     }
 }
 
+impl LocalProfileBuilder {
+    pub fn assign_managed_identity(&mut self, uid: String) {
+        self.shared.assign_managed_identity(&PROFILE_TYPE, uid);
+    }
+}
+
 impl ProfileKindGetter for LocalProfile {
     fn kind(&self) -> ProfileItemType {
         PROFILE_TYPE

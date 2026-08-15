@@ -151,6 +151,10 @@ pub enum RemoteProfileBuilderError {
 }
 
 impl RemoteProfileBuilder {
+    pub fn assign_managed_identity(&mut self, uid: String) {
+        self.shared.assign_managed_identity(&PROFILE_TYPE, uid);
+    }
+
     fn validate(&self) -> Result<(), RemoteProfileBuilderError> {
         if self.url.is_none() {
             return Err(RemoteProfileBuilderError::Validation(
