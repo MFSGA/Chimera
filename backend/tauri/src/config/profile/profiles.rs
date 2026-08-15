@@ -358,4 +358,37 @@ mod tests {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
         }
     }
+
+    #[test]
+    fn append_item_only_mutates_draft_before_transaction_commit() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let mut profiles = Profiles::default();
+        profiles
+            .append_item(Profile::Local(LocalProfile {
+                shared: ProfileShared {
+                    uid: "l-create".to_string(),
+                    name: "Create me".to_string(),
+                    file: "l-create.yaml".to_string(),
+                    desc: None,
+                    updated: 1,
+                },
+                symlinks: None,
+                chain: Vec::new(),
+            }))
+            .unwrap();
+
+        let profiles_path = config_dir.path().join("profiles.yaml");
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+        assert!(
+            !profiles_path.exists(),
+            "profile state must remain unpersisted until the transaction commits"
+        );
+    }
 }
