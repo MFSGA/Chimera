@@ -820,7 +820,7 @@ pub async fn get_service_install_prompt() -> Result<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(
-    coordinator: State<'_, clash::transaction::RuntimePatchCoordinator>,
+    client: State<'_, NyanpasuClient>,
     payload: PatchRuntimeConfig,
 ) -> Result {
     tracing::debug!(
@@ -831,7 +831,7 @@ pub async fn patch_clash_config(
         "patch clash runtime config"
     );
     let overrides = ClashConfigOverrides::from(payload);
-    let outcome = feat::patch_running_clash_overrides(&coordinator, overrides).await;
+    let outcome = feat::patch_running_clash_overrides(&client, overrides).await;
 
     match &outcome {
         clash::transaction::TransactionOutcome::Committed => {}

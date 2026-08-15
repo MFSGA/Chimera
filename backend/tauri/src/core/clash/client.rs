@@ -8,8 +8,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use super::{core::CoreManager, rebuild::RebuildCoordinator};
-use crate::core::{connection_interruption::ConnectionInterruptionService, handle::Handle};
+use super::{
+    core::CoreManager,
+    rebuild::RebuildCoordinator,
+    transaction::{RuntimePatchCoordinator, TransactionOutcome},
+};
+use crate::{
+    config::runtime::ClashConfigOverrides,
+    core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
+};
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
@@ -52,6 +59,7 @@ pub(crate) struct NyanpasuClient {
 struct NyanpasuClientInner {
     core: Arc<dyn CoreLifecyclePort>,
     ui_sink: Arc<dyn UiEventSink>,
+    runtime_patch: RuntimePatchCoordinator,
     rebuild: RebuildCoordinator,
 }
 
@@ -67,6 +75,7 @@ impl NyanpasuClient {
         let inner = NyanpasuClientInner {
             core,
             ui_sink,
+            runtime_patch: RuntimePatchCoordinator::default(),
             rebuild: RebuildCoordinator::new(),
         };
         let client = Self {
@@ -91,6 +100,30 @@ impl NyanpasuClient {
 
     pub(crate) fn request_rebuild(&self) {
         self.inner.rebuild.notifier().request_rebuild();
+    }
+
+    /// Serialize API-first runtime patches inside the client graph, matching REF's
+    /// instance-owned patch gate direction while persistence still uses Chimera's
+    /// legacy desired-state writer during this transition.
+    pub(crate) async fn patch_running_clash_overrides(
+        &self,
+        overrides: ClashConfigOverrides,
+    ) -> TransactionOutcome {
+        let mapping = overrides.to_mapping();
+        let persist_overrides = overrides.clone();
+
+        self.inner
+            .runtime_patch
+            .apply(
+                mapping,
+                super::api::get_configs,
+                |patch| async move { super::api::patch_configs(&patch).await },
+                move |_patch| {
+                    let overrides = persist_overrides.clone();
+                    async move { crate::feat::patch_clash_overrides(overrides).await }
+                },
+            )
+            .await
     }
 
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
