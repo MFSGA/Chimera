@@ -38,7 +38,6 @@ pub async fn restart_ws_connector<R: Runtime>(manager: &impl Manager<R>) -> anyh
 }
 
 pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
-    manager.manage(transaction::RuntimePatchCoordinator::default());
     manager.manage(client::NyanpasuClient::legacy());
 
     let ws_connector = ws::ClashConnectionsConnector::new();
