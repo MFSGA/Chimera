@@ -4,7 +4,6 @@ use anyhow::{Context, anyhow, bail};
 use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
-use serde_yaml::Mapping;
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -17,7 +16,7 @@ use crate::{
         profile::{
             builder::ProfileBuilder,
             item::{
-                Profile, ProfileKindGetter, ProfileMetaGetter,
+                Profile, ProfileMetaGetter,
                 local::{LocalProfile, LocalProfileBuilder},
                 remote::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
@@ -1233,26 +1232,21 @@ pub async fn delete_profile(uid: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub fn read_profile_file(uid: String) -> Result<String> {
-    let profiles = Config::profiles();
-    let profiles = profiles.latest();
-    let item = profiles.get_item(&uid)?;
-    let raw = item.read_file()?;
-    let data = serde_yaml::from_str::<Mapping>(&raw)?;
-    Ok(serde_yaml::to_string(&data).context("failed to convert yaml to string")?)
+pub async fn read_profile_file(
+    client: State<'_, NyanpasuClient>,
+    uid: ProfileUid,
+) -> Result<String> {
+    Ok(client.read_profile_file(uid).await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_profile_file(uid: String, file_data: String) -> Result {
-    let profiles = Config::profiles();
-    let profiles = profiles.latest();
-    let item = profiles.get_item(&uid)?;
-    if matches!(item.kind(), ProfileItemType::Remote) {
-        return Err(anyhow!("remote profiles are updater-owned").into());
-    }
-    serde_yaml::from_str::<Mapping>(&file_data).context("failed to parse profile YAML")?;
-    item.save_file(file_data)?;
+pub async fn save_profile_file(
+    client: State<'_, NyanpasuClient>,
+    uid: ProfileUid,
+    file_data: String,
+) -> Result {
+    client.save_profile_file(uid, file_data).await?;
     Ok(())
 }
 
