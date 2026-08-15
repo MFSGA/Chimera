@@ -32,8 +32,11 @@ use crate::{
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
-        clash,
-        clash::core::{CoreManager, RunType},
+        clash::{
+            self,
+            client::NyanpasuClient,
+            core::{CoreManager, RunType},
+        },
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
         updater::{self, ManifestVersionLatest},
@@ -473,24 +476,17 @@ fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) ->
 }
 
 fn persist_profile_order(
-    coordinator: &clash::rebuild::RebuildCoordinator,
+    client: &NyanpasuClient,
     update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>,
 ) -> Result<RebuildOutcome> {
     persist_profiles(update)?;
-    coordinator.notifier().request_rebuild();
+    client.request_rebuild();
     Ok(RebuildOutcome::Ok)
 }
 
-async fn rebuild_after_profile_commit(operation: &str) -> RebuildOutcome {
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_profile_change().await;
-            RebuildOutcome::Ok
-        }
+async fn rebuild_after_profile_commit(client: &NyanpasuClient, operation: &str) -> RebuildOutcome {
+    match client.rebuild_running_config().await {
+        Ok(_) => RebuildOutcome::Ok,
         Err(err) => {
             log::error!(target: "app", "failed to rebuild after {operation}: {err:?}");
             RebuildOutcome::Degraded {
@@ -503,39 +499,43 @@ async fn rebuild_after_profile_commit(operation: &str) -> RebuildOutcome {
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profile(
-    coordinator: State<'_, clash::rebuild::RebuildCoordinator>,
+    client: State<'_, NyanpasuClient>,
     active_id: ProfileUid,
     over_id: ProfileUid,
 ) -> Result<RebuildOutcome> {
-    persist_profile_order(&coordinator, |profiles| {
-        profiles.reorder(&active_id, &over_id)
-    })
+    persist_profile_order(&client, |profiles| profiles.reorder(&active_id, &over_id))
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profiles_by_list(
-    coordinator: State<'_, clash::rebuild::RebuildCoordinator>,
+    client: State<'_, NyanpasuClient>,
     list: Vec<ProfileUid>,
 ) -> Result<RebuildOutcome> {
-    persist_profile_order(&coordinator, |profiles| profiles.reorder_by_list(&list))
+    persist_profile_order(&client, |profiles| profiles.reorder_by_list(&list))
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn activate_profile(uid: Option<ProfileUid>) -> Result<RebuildOutcome> {
+pub async fn activate_profile(
+    client: State<'_, NyanpasuClient>,
+    uid: Option<ProfileUid>,
+) -> Result<RebuildOutcome> {
     persist_profiles(|profiles| profiles.activate(uid.as_deref()))?;
-    Ok(rebuild_after_profile_commit("profile activation").await)
+    Ok(rebuild_after_profile_commit(&client, "profile activation").await)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn set_profile_valid_fields(fields: Vec<String>) -> Result<RebuildOutcome> {
+pub async fn set_profile_valid_fields(
+    client: State<'_, NyanpasuClient>,
+    fields: Vec<String>,
+) -> Result<RebuildOutcome> {
     persist_profiles(|profiles| {
         profiles.valid = fields;
         Ok(())
     })?;
-    Ok(rebuild_after_profile_commit("profile valid fields update").await)
+    Ok(rebuild_after_profile_commit(&client, "profile valid fields update").await)
 }
 
 #[tauri::command]
