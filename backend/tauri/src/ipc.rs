@@ -474,15 +474,6 @@ fn persist_profiles(update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>) ->
     Ok(())
 }
 
-fn persist_profile_order(
-    client: &NyanpasuClient,
-    update: impl FnOnce(&mut Profiles) -> anyhow::Result<()>,
-) -> Result<RebuildOutcome> {
-    persist_profiles(update)?;
-    client.request_rebuild();
-    Ok(RebuildOutcome::Ok)
-}
-
 async fn rebuild_after_profile_commit(client: &NyanpasuClient, operation: &str) -> RebuildOutcome {
     match client.rebuild_running_config().await {
         Ok(_) => RebuildOutcome::Ok,
@@ -502,7 +493,8 @@ pub async fn reorder_profile(
     active_id: ProfileUid,
     over_id: ProfileUid,
 ) -> Result<RebuildOutcome> {
-    persist_profile_order(&client, |profiles| profiles.reorder(&active_id, &over_id))
+    client.reorder_profile(active_id, over_id).await?;
+    Ok(RebuildOutcome::Ok)
 }
 
 #[tauri::command]
@@ -511,7 +503,8 @@ pub async fn reorder_profiles_by_list(
     client: State<'_, NyanpasuClient>,
     list: Vec<ProfileUid>,
 ) -> Result<RebuildOutcome> {
-    persist_profile_order(&client, |profiles| profiles.reorder_by_list(&list))
+    client.reorder_profiles_by_list(list).await?;
+    Ok(RebuildOutcome::Ok)
 }
 
 #[tauri::command]

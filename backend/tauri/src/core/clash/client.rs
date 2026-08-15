@@ -229,6 +229,25 @@ impl NyanpasuClient {
         })
     }
 
+    pub(crate) async fn reorder_profile(
+        &self,
+        active_id: ProfileUid,
+        over_id: ProfileUid,
+    ) -> anyhow::Result<()> {
+        self.persist_profiles(|profiles| profiles.reorder(&active_id, &over_id))?;
+        self.request_rebuild();
+        Ok(())
+    }
+
+    pub(crate) async fn reorder_profiles_by_list(
+        &self,
+        list: Vec<ProfileUid>,
+    ) -> anyhow::Result<()> {
+        self.persist_profiles(|profiles| profiles.reorder_by_list(&list))?;
+        self.request_rebuild();
+        Ok(())
+    }
+
     pub(crate) async fn save_profile_file(
         &self,
         uid: ProfileUid,
