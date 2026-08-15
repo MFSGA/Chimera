@@ -1,5 +1,6 @@
 //! Single source of truth for runtime command registration and TypeScript bindings.
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 use std::{fs, io, path::Path};
 
 use tauri_specta::{collect_commands, collect_events};
@@ -7,13 +8,16 @@ use tauri_specta::{collect_commands, collect_events};
 #[cfg(feature = "agent")]
 use crate::features;
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
     typedError<ProfilesResponse_Serialize, string>(
       __TAURI_INVOKE('get_profiles'),
     ),"#;
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
     typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),"#;
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
   | { type: 'remote'; profile: RemoteProfileBuilder }
   | { type: 'local'; profile: LocalProfileBuilder_Deserialize };
@@ -21,6 +25,7 @@ const GENERATED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderReq
 export type ProfileBuilderRequest_Serialize =
   | { type: 'remote'; profile: RemoteProfileBuilder }
   | { type: 'local'; profile: LocalProfileBuilder_Serialize };"#;
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
   | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
@@ -29,6 +34,7 @@ export type ProfileBuilderRequest_Serialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
   | ({ type: 'local' } & LocalProfileBuilder_Serialize);"#;
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
   ProfileResponse_Serialize | ProfileResponse_Deserialize;
 
@@ -39,10 +45,12 @@ export type ProfileResponse_Deserialize =
 export type ProfileResponse_Serialize =
   | { type: 'remote'; profile: RemoteProfile_Serialize }
   | { type: 'local'; profile: LocalProfile_Serialize };"#;
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
   | ({ type: 'remote' } & RemoteProfile_Serialize)
   | ({ type: 'local' } & LocalProfile_Serialize);"#;
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse =
   ProfilesResponse_Serialize | ProfilesResponse_Deserialize;
 
@@ -59,6 +67,7 @@ export type ProfilesResponse_Serialize = {
   valid: string[];
   global_transforms: string[];
 };"#;
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse = {
   current: string | null;
   items: ProfileResponse[];
@@ -66,6 +75,7 @@ const FLATTENED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesRespons
   global_transforms: string[];
 };"#;
 
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 fn apply_binding_rewrite(
     contents: &mut String,
     generated: &str,
@@ -87,6 +97,7 @@ fn apply_binding_rewrite(
 }
 
 /// Align Specta output with serde's flattened Profile enum representation.
+#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 pub(crate) fn normalize_typescript_bindings(path: impl AsRef<Path>) -> io::Result<()> {
     let path = path.as_ref();
     let mut contents = fs::read_to_string(path)?;
