@@ -42,8 +42,8 @@ fn greet(name: &str) -> String {
 }
 
 fn shutdown_background_rebuilds(app_handle: &tauri::AppHandle) {
-    let coordinator = app_handle.state::<core::clash::rebuild::RebuildCoordinator>();
-    nyanpasu_utils::runtime::block_on(coordinator.shutdown());
+    let client = app_handle.state::<core::clash::client::NyanpasuClient>();
+    nyanpasu_utils::runtime::block_on(client.shutdown());
 }
 
 #[cfg(debug_assertions)]
