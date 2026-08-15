@@ -645,7 +645,16 @@ impl NyanpasuClient {
     pub(crate) async fn commit_new_profile(
         &self,
         profile: Profile,
+        mut prepared_file: PreparedProfileFile,
+        materialized_content: Option<String>,
     ) -> anyhow::Result<MutationOutcome<ProfileUid>> {
+        if let Some(content) = materialized_content {
+            self.inner
+                .profile_files
+                .write_atomic(profile.file(), &content)?;
+            prepared_file.mark_materialized();
+        }
+
         let (uid, activate) = {
             let _commit = self.inner.profile_commit.lock().await;
             let result = self.inner.profile_writes.add(profile)?;
@@ -657,6 +666,7 @@ impl NyanpasuClient {
             let runtime = self.after_profile_runtime_commit("profile creation").await;
             outcome = outcome.extend_degradations(runtime.degradations().to_vec());
         }
+        prepared_file.commit();
         Ok(outcome)
     }
 

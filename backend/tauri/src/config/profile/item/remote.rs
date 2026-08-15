@@ -13,9 +13,7 @@ use crate::{
         item::{
             ProfileKindGetter, ProfileMetaGetter, ProfileMetaSetter,
             ambassador_impl_ProfileMetaGetter, ambassador_impl_ProfileMetaSetter,
-            shared::{
-                ProfileFileIo, ProfileShared, ProfileSharedBuilder, ambassador_impl_ProfileFileIo,
-            },
+            shared::{ProfileShared, ProfileSharedBuilder},
         },
         item_type::{ProfileItemType, ProfileUid},
     },
@@ -94,7 +92,6 @@ impl RemoteProfileOptions {
 // #[builder_update(patch_fn = "apply")]
 #[delegate(ProfileMetaGetter, target = "shared")]
 #[delegate(ProfileMetaSetter, target = "shared")]
-#[delegate(ProfileFileIo, target = "shared")]
 pub struct RemoteProfile {
     /// subscription url
     pub url: Url,
@@ -153,6 +150,18 @@ impl RemoteProfile {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedRemoteProfile {
+    profile: RemoteProfile,
+    content: String,
+}
+
+impl PreparedRemoteProfile {
+    pub(crate) fn into_parts(self) -> (RemoteProfile, String) {
+        (self.profile, self.content)
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum RemoteProfileBuilderError {
     /// 1
@@ -181,7 +190,9 @@ impl RemoteProfileBuilder {
         Ok(())
     }
 
-    pub async fn build_no_blocking(&mut self) -> Result<RemoteProfile, RemoteProfileBuilderError> {
+    pub async fn build_prepared(
+        &mut self,
+    ) -> Result<PreparedRemoteProfile, RemoteProfileBuilderError> {
         self.validate()?;
         if self.shared.get_uid().is_none() {
             self.shared
@@ -216,15 +227,9 @@ impl RemoteProfileBuilder {
             option: self.option.build().unwrap(),
             chain: self.chain.take().unwrap_or_default(),
         };
-        // write the profile to the file
-        profile
-            .shared
-            .write_file(
-                serde_yaml::to_string(&subscription.data)
-                    .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?,
-            )
-            .await?;
-        Ok(profile)
+        let content = serde_yaml::to_string(&subscription.data)
+            .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?;
+        Ok(PreparedRemoteProfile { profile, content })
     }
 
     pub fn patch_profile(

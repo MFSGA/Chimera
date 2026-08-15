@@ -275,21 +275,20 @@ pub async fn import_profile(
 ) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
     let mut builder = RemoteProfileBuilder::default();
-    let (uid, mut prepared_file) =
-        client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
+    let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
     builder.assign_managed_identity(uid);
     builder.url(url);
     if let Some(option) = option {
         builder.option(option.clone());
     }
-    let profile = builder
-        .build_no_blocking()
+    let prepared = builder
+        .build_prepared()
         .await
         .context("failed to build a remote profile")?;
-    prepared_file.mark_materialized();
-    let outcome = client.commit_new_profile(profile.into()).await?;
-    prepared_file.commit();
-    Ok(outcome)
+    let (profile, content) = prepared.into_parts();
+    Ok(client
+        .commit_new_profile(profile.into(), prepared_file, Some(content))
+        .await?)
 }
 
 #[tauri::command]
@@ -960,33 +959,28 @@ pub async fn create_profile(
 ) -> Result<MutationOutcome<ProfileUid>> {
     let mut item = ProfileBuilder::from(item);
     let kind = item.kind();
-    let (uid, mut prepared_file) = client.reserve_managed_profile_identity(&kind)?;
+    let (uid, prepared_file) = client.reserve_managed_profile_identity(&kind)?;
     item.assign_managed_identity(uid);
-    let is_remote = matches!(&item, ProfileBuilder::Remote(_));
-    let profile: Profile = match item {
+    let (profile, materialized_content): (Profile, Option<String>) = match item {
         ProfileBuilder::Remote(mut builder) => {
-            let profile = builder
-                .build_no_blocking()
+            let prepared = builder
+                .build_prepared()
                 .await
                 .context("failed to build remote profile")?;
-            prepared_file.mark_materialized();
-            profile.into()
+            let (profile, content) = prepared.into_parts();
+            (profile.into(), Some(content))
         }
-        ProfileBuilder::Local(builder) => builder
-            .build()
-            .context("failed to build local profile")?
-            .into(),
+        ProfileBuilder::Local(builder) => (
+            builder
+                .build()
+                .context("failed to build local profile")?
+                .into(),
+            file_data.filter(|data| !data.is_empty()),
+        ),
     };
-    if let Some(file_data) = file_data
-        && !file_data.is_empty()
-        && !is_remote
-    {
-        profile.save_file(file_data)?;
-        prepared_file.mark_materialized();
-    }
-    let outcome = client.commit_new_profile(profile).await?;
-    prepared_file.commit();
-    Ok(outcome)
+    Ok(client
+        .commit_new_profile(profile, prepared_file, materialized_content)
+        .await?)
 }
 
 #[tauri::command]
