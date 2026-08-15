@@ -1061,9 +1061,13 @@ pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn change_clash_core(clash_core: Option<chimera::ClashCore>) -> Result {
+pub async fn change_clash_core(
+    client: State<'_, NyanpasuClient>,
+    clash_core: Option<chimera::ClashCore>,
+) -> Result {
     log::debug!("change_clash_core: {clash_core:?}");
-    (CoreManager::global().change_core(clash_core).await)?;
+    let clash_core = clash_core.ok_or_else(|| anyhow!("clash core is null"))?;
+    client.change_core(clash_core).await?;
     Ok(())
 }
 
