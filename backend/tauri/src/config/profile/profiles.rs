@@ -312,3 +312,54 @@ impl Profiles {
         Ok(map)
     }
 }
+
+#[cfg(all(test, feature = "e2e"))]
+mod tests {
+    use std::sync::Mutex;
+
+    use crate::config::profile::item::{local::LocalProfile, shared::ProfileShared};
+
+    use super::*;
+
+    static CONFIG_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn delete_item_preserves_materialized_file_before_transaction_commit() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let profile_file = config_dir.path().join("profiles").join("l-delete.yaml");
+        std::fs::create_dir_all(profile_file.parent().expect("profile parent")).unwrap();
+        std::fs::write(&profile_file, "mode: rule\n").unwrap();
+
+        let mut profiles = Profiles {
+            current: vec!["l-delete".to_string()],
+            items: vec![Profile::Local(LocalProfile {
+                shared: ProfileShared {
+                    uid: "l-delete".to_string(),
+                    name: "Delete me".to_string(),
+                    file: "l-delete.yaml".to_string(),
+                    desc: None,
+                    updated: 1,
+                },
+                symlinks: None,
+                chain: Vec::new(),
+            })],
+            valid: Vec::new(),
+            chain: vec!["l-delete".to_string()],
+        };
+
+        profiles.delete_item("l-delete").unwrap();
+
+        assert!(
+            profile_file.exists(),
+            "the materialized file must remain until the transaction commits"
+        );
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+}
