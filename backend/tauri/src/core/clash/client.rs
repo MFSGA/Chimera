@@ -7,9 +7,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chimera_ipc::api::status::CoreState;
 
 use super::{
-    core::CoreManager,
+    core::{CoreManager, RunType},
     rebuild::RebuildCoordinator,
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
@@ -18,9 +19,17 @@ use crate::{
     core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
 };
 
+#[derive(Debug, Clone)]
+pub(crate) struct CoreStatusSnapshot {
+    pub(crate) state: CoreState,
+    pub(crate) state_changed_at: i64,
+    pub(crate) run_type: RunType,
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn rebuild_running_config(&self) -> anyhow::Result<()>;
+    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     async fn on_profile_change(&self);
 }
 
@@ -36,6 +45,15 @@ impl CoreLifecyclePort for LegacyCoreLifecyclePort {
         CoreManager::global()
             .restart_core_with_generated_config()
             .await
+    }
+
+    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        let (state, state_changed_at, run_type) = CoreManager::global().status().await;
+        Ok(CoreStatusSnapshot {
+            state: state.into_owned(),
+            state_changed_at,
+            run_type,
+        })
     }
 
     async fn on_profile_change(&self) {
@@ -102,6 +120,10 @@ impl NyanpasuClient {
         self.inner.rebuild.notifier().request_rebuild();
     }
 
+    pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        self.inner.core.status().await
+    }
+
     /// Serialize API-first runtime patches inside the client graph, matching REF's
     /// instance-owned patch gate direction while persistence still uses Chimera's
     /// legacy desired-state writer during this transition.
@@ -159,6 +181,14 @@ mod tests {
             Ok(())
         }
 
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 7,
+                run_type: RunType::Normal,
+            })
+        }
+
         async fn on_profile_change(&self) {
             self.events.lock().unwrap().push("profile-change");
         }
@@ -186,6 +216,18 @@ mod tests {
             }),
         );
         (client, events)
+    }
+
+    #[tokio::test]
+    async fn core_status_is_read_through_the_injected_lifecycle_port() {
+        let (client, _) = recording_client(false);
+
+        let snapshot = client.core_status().await.unwrap();
+
+        assert!(matches!(snapshot.state, CoreState::Stopped(None)));
+        assert_eq!(snapshot.state_changed_at, 7);
+        assert_eq!(snapshot.run_type, RunType::Normal);
+        client.shutdown().await;
     }
 
     #[tokio::test]
