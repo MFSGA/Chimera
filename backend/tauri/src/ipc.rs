@@ -266,6 +266,7 @@ pub fn is_portable() -> Result<bool> {
     Ok(false)
 }
 
+/// later: check in the frontend
 #[tauri::command]
 #[specta::specta]
 pub async fn import_profile(
@@ -875,6 +876,7 @@ pub async fn change_clash_core(
     Ok(())
 }
 
+/// restart the sidecar
 #[tauri::command]
 #[specta::specta]
 pub async fn restart_sidecar() -> Result {
@@ -950,6 +952,7 @@ pub async fn save_profile_file(
     Ok(client.save_profile_file(uid, file_data).await?)
 }
 
+/// create a new profile
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(
@@ -1115,9 +1118,12 @@ pub mod uwp {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct StorageEntry {
     pub key: String,
+    /// Raw JSON-encoded value string.
     pub value: String,
 }
 
+/// Debug: returns all frontend KV entries (keys with the `web:` prefix).
+/// Internal storage entries used by other subsystems are excluded.
 #[tauri::command]
 #[specta::specta]
 pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
@@ -1136,6 +1142,8 @@ pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>>
         .collect())
 }
 
+/// Debug: clears all frontend KV entries (keys with the `web:` prefix).
+/// Internal storage entries used by other subsystems are left intact.
 #[tauri::command]
 #[specta::specta]
 pub fn clear_storage(app_handle: AppHandle) -> Result {
