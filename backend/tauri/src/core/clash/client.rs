@@ -174,6 +174,20 @@ impl NyanpasuClient {
         lease.change_core(clash_core).await
     }
 
+    pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
+        Ok(Config::profiles().data().clone())
+    }
+
+    pub(crate) async fn get_profile_materialized_path(
+        &self,
+        uid: ProfileUid,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let profiles = Config::profiles();
+        let profiles = profiles.latest();
+        let item = profiles.get_item(&uid)?;
+        crate::config::profile::item::utils::resolve_managed_profile_path(item.file())
+    }
+
     pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
         let profiles = Config::profiles();
         let profiles = profiles.latest();
