@@ -1,4 +1,9 @@
-import { RootProvider } from '@chimera/interface';
+import {
+  RootProvider,
+  setMutationDegradationHandler,
+  type Degradation,
+  type DegradationPhase,
+} from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import {
   createRootRoute,
@@ -8,7 +13,7 @@ import {
 import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useMount } from 'ahooks';
-import { lazy } from 'react';
+import { lazy, useEffect } from 'react';
 import { useNyanpasuStorageSubscribers } from '@/hooks/use-store';
 import 'dayjs/locale/ru';
 import 'dayjs/locale/zh-cn';
@@ -16,10 +21,12 @@ import 'dayjs/locale/zh-tw';
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { Notice } from '@/components/base';
 import { BlockTaskProvider } from '@/components/providers/block-task-provider';
 import CustomCssProvider from '@/components/providers/custom-css-provider';
 import { LanguageProvider } from '@/components/providers/language-provider';
 import { ExperimentalThemeProvider } from '@/components/providers/theme-provider';
+import * as m from '@/paraglide/messages';
 
 dayjs.extend(relativeTime);
 dayjs.extend(customParseFormat);
@@ -81,6 +88,82 @@ export const Route = createRootRoute({
   pendingComponent: Pending,
 });
 
+function localizeDegradationPhase(phase: DegradationPhase): string {
+  switch (phase) {
+    case 'legacy_mirror':
+      return m.mutation_degradation_phase_legacy_mirror();
+    case 'profile_materialization':
+      return m.mutation_degradation_phase_profile_materialization();
+    case 'runtime_build':
+      return m.mutation_degradation_phase_runtime_build();
+    case 'runtime_check':
+      return m.mutation_degradation_phase_runtime_check();
+    case 'runtime_promote':
+      return m.mutation_degradation_phase_runtime_promote();
+    case 'runtime_publish':
+      return m.mutation_degradation_phase_runtime_publish();
+    case 'runtime_apply':
+      return m.mutation_degradation_phase_runtime_apply();
+    case 'core_rollback':
+      return m.mutation_degradation_phase_core_rollback();
+    case 'system_effect':
+      return m.mutation_degradation_phase_system_effect();
+    case 'ui_effect':
+      return m.mutation_degradation_phase_ui_effect();
+  }
+}
+
+function localizeDegradationCode(code: string): string {
+  switch (code) {
+    case 'journal_invalid':
+      return m.mutation_degradation_code_journal_invalid();
+    case 'materialization_deferred':
+      return m.mutation_degradation_code_materialization_deferred();
+    case 'cleanup_deferred':
+      return m.mutation_degradation_code_cleanup_deferred();
+    case 'runtime_rebuild_failed':
+      return m.mutation_degradation_code_runtime_rebuild_failed();
+    case 'profile_auto_activation_failed':
+      return m.mutation_degradation_code_profile_auto_activation_failed();
+    default:
+      return m.mutation_degradation_code_unknown({ code });
+  }
+}
+
+function formatDegradationItem(degradation: Degradation): string {
+  return m.mutation_degraded_item({
+    phase: localizeDegradationPhase(degradation.phase),
+    detail: localizeDegradationCode(degradation.code),
+  });
+}
+
+function MutationDegradationNotifier() {
+  useEffect(
+    () =>
+      setMutationDegradationHandler((degradations) => {
+        if (degradations.length === 0) return;
+
+        for (const degradation of degradations) {
+          console.warn('[mutation-degradation]', {
+            phase: degradation.phase,
+            code: degradation.code,
+            retryable: degradation.retryable,
+            message: degradation.message,
+          });
+        }
+
+        const items = degradations.map(formatDegradationItem).join('; ');
+        Notice({
+          type: 'warning',
+          message: `${m.mutation_degraded_title()}: ${m.mutation_degraded_summary({ items })}`,
+          duration: 5000,
+        });
+      }),
+    [],
+  );
+  return null;
+}
+
 export default function App() {
   useNyanpasuStorageSubscribers();
 
@@ -102,6 +185,7 @@ export default function App() {
 
   return (
     <RootProvider>
+      <MutationDegradationNotifier />
       <BlockTaskProvider>
         <LanguageProvider>
           <ExperimentalThemeProvider>
