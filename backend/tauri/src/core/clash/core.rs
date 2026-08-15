@@ -420,12 +420,39 @@ impl Instance {
     }
 }
 
+/// Exclusive guard for core lifecycle mutations.
+#[must_use = "the lifecycle lease releases the mutex when dropped"]
+pub(crate) struct CoreLifecycleLease<'a> {
+    manager: &'a CoreManager,
+    _guard: tokio::sync::MutexGuard<'a, ()>,
+}
+
+impl CoreLifecycleLease<'_> {
+    pub(crate) async fn rebuild_running_config(&self) -> Result<()> {
+        self.manager
+            .rebuild_and_run_locked(CoreManager::selected_core())
+            .await
+    }
+
+    pub(crate) async fn run_core_from(&self, config_path: &Path) -> Result<()> {
+        self.manager
+            .run_core_from_product_inner(
+                config_path,
+                CoreManager::selected_core(),
+                RunType::default(),
+            )
+            .await
+    }
+
+    pub(crate) async fn stop_core(&self) -> Result<()> {
+        self.manager.stop_core_with_lease(self).await
+    }
+}
+
 #[derive(Debug)]
 pub struct CoreManager {
     instance: Mutex<Option<Arc<Instance>>>,
-    /// Serializes core lifecycle operations triggered by startup, IPC state changes and user
-    /// actions. Without this, service health checks can race the initial launch and leave the UI
-    /// pointing at a config that the service never applied.
+    /// Single mutex domain for run/restart, stop, check, recover, and core changes.
     run_lock: RuntimeRebuildGate,
     runtime_lifecycle: RuntimeLifecycle,
 }
@@ -438,6 +465,13 @@ impl CoreManager {
             run_lock: RuntimeRebuildGate::default(),
             runtime_lifecycle: RuntimeLifecycle::default(),
         })
+    }
+
+    pub(crate) async fn begin_lifecycle(&self) -> CoreLifecycleLease<'_> {
+        CoreLifecycleLease {
+            manager: self,
+            _guard: self.run_lock.lock().await,
+        }
     }
 
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
@@ -460,8 +494,8 @@ impl CoreManager {
     /// Start the core from one generated candidate that is checked, promoted and applied under
     /// the same lifecycle lock.
     pub async fn run_core(&self) -> Result<()> {
-        let _guard = self.run_lock.lock().await;
-        self.rebuild_and_run_locked(Self::selected_core()).await
+        let lease = self.begin_lifecycle().await;
+        lease.rebuild_running_config().await
     }
 
     fn selected_core() -> ClashCore {
@@ -694,8 +728,8 @@ impl CoreManager {
     /// Apply one generated candidate by checking, promoting and restarting from the exact product.
     pub async fn restart_core_with_generated_config(&self) -> Result<()> {
         log::debug!(target: "app", "restart core with checked runtime product");
-        let _guard = self.run_lock.lock().await;
-        self.rebuild_and_run_locked(Self::selected_core()).await
+        let lease = self.begin_lifecycle().await;
+        lease.rebuild_running_config().await
     }
 
     /// Check the exact generated candidate without promoting or applying it.
@@ -745,6 +779,11 @@ impl CoreManager {
 
     /// 停止核心运行
     pub async fn stop_core(&self) -> Result<()> {
+        let lease = self.begin_lifecycle().await;
+        lease.stop_core().await
+    }
+
+    async fn stop_core_with_lease(&self, _lease: &CoreLifecycleLease<'_>) -> Result<()> {
         #[cfg(target_os = "macos")]
         let _ = self
             .change_default_network_dns(false)
