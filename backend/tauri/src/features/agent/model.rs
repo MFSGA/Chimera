@@ -17,7 +17,6 @@ pub enum AgentHealth {
 pub enum AgentCoreState {
     Running,
     Stopped,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
@@ -26,7 +25,6 @@ pub enum AgentRunType {
     Normal,
     Service,
     Elevated,
-    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
