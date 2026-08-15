@@ -31,12 +31,24 @@ const AppLogLevel = () => {
     silent: 'Silent',
   };
 
+  const handleSelect = async (value: LoggingLevel_Serialize) => {
+    try {
+      await setting.upsert(value);
+    } catch (error) {
+      message(
+        `${m.settings_nyanpasu_app_log_level_label()}\n${formatError(error)}`,
+        { title: m.common_error(), kind: 'error' },
+      );
+    }
+  };
+
   return (
     <SelectorCard
+      id="verge-app-log-level"
       label={m.settings_nyanpasu_app_log_level_label()}
       current={setting.value || 'info'}
       options={options}
-      onSelect={(value) => void setting.upsert(value)}
+      onSelect={(value) => void handleSelect(value)}
     />
   );
 };
