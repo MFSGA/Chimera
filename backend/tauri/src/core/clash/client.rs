@@ -25,7 +25,7 @@ const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
 
 use crate::{
     config::{
-        chimera::ClashCore,
+        chimera::{ClashCore, IVerge},
         core::Config,
         profile::{
             builder::ProfileBuilder,
@@ -479,6 +479,7 @@ struct NyanpasuClientInner {
     runtime_patch: RuntimePatchCoordinator,
     rebuild: RebuildCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
+    verge_patch: tokio::sync::Mutex<()>,
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
 }
 
@@ -524,28 +525,12 @@ impl NyanpasuClient {
             runtime_patch: RuntimePatchCoordinator::default(),
             rebuild: RebuildCoordinator::new(),
             profile_commit: tokio::sync::Mutex::new(()),
+            verge_patch: tokio::sync::Mutex::new(()),
             pending_refreshes: StdMutex::new(HashSet::new()),
         };
         Self {
             inner: Arc::new(inner),
         }
-    }
-
-    fn start_rebuild_worker(&self) {
-        let weak = Arc::downgrade(&self.inner);
-        self.inner.rebuild.start_worker(move || {
-            let weak = weak.clone();
-            async move {
-                let Some(inner) = weak.upgrade() else {
-                    return Ok(());
-                };
-                NyanpasuClient { inner }.rebuild_running_config().await
-            }
-        });
-    }
-
-    pub(crate) fn request_rebuild(&self) {
-        self.inner.rebuild.notifier().request_rebuild();
     }
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -555,6 +540,11 @@ impl NyanpasuClient {
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let mut lease = self.inner.core.begin().await?;
         lease.change_core(clash_core).await
+    }
+
+    pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
+        let _patch = self.inner.verge_patch.lock().await;
+        crate::feat::patch_verge_uncoordinated(patch).await
     }
 
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
@@ -989,11 +979,6 @@ impl NyanpasuClient {
         self.inner.ui_sink.refresh_clash();
         self.inner.core.on_profile_change().await;
         Ok(())
-    }
-
-    pub(crate) async fn regenerate_and_restart_for_legacy(&self) -> anyhow::Result<()> {
-        let mut lease = self.inner.core.begin().await?;
-        lease.rebuild_running_config().await
     }
 
     pub(crate) async fn shutdown(&self) {
