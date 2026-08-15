@@ -1,15 +1,15 @@
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
-import {
   ThemeMode,
   useExperimentalThemeContext,
 } from '@/components/providers/theme-provider';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,
@@ -49,7 +49,12 @@ export default function ThemeModeSelector() {
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+        <DropdownMenuContent
+          align="end"
+          sideOffset={-16}
+          alignOffset={16}
+          data-slot="theme-mode-selector-menu"
+        >
           {Object.entries(messages).map(([mode, label]) => (
             <DropdownMenuCheckboxItem
               checked={themeMode === mode}
