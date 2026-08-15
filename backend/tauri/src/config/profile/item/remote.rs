@@ -36,6 +36,13 @@ pub(crate) struct PreparedSubscriptionUpdate {
     info: SubscriptionInfo,
 }
 
+#[cfg(test)]
+impl PreparedSubscriptionUpdate {
+    pub(crate) fn for_test(data: Mapping, info: SubscriptionInfo) -> Self {
+        Self { data, info }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, BuilderUpdate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder_update(patch_fn = "apply", getter)]
@@ -135,23 +142,14 @@ impl RemoteProfile {
         })
     }
 
-    pub(crate) async fn commit_prepared_subscription_update(
+    pub(crate) fn apply_prepared_subscription_update(
         &mut self,
         prepared: PreparedSubscriptionUpdate,
-    ) -> anyhow::Result<()> {
-        let shared = self.shared.clone();
-        commit_subscription_update(
-            self,
-            &prepared.data,
-            prepared.info,
-            move |content| async move {
-                shared
-                    .write_file(content)
-                    .await
-                    .map_err(anyhow::Error::from)
-            },
-        )
-        .await
+    ) -> anyhow::Result<String> {
+        let content = serde_yaml::to_string(&prepared.data)?;
+        self.extra = prepared.info;
+        self.set_updated(chrono::Local::now().timestamp() as usize);
+        Ok(content)
     }
 }
 
@@ -421,23 +419,6 @@ async fn subscribe_url(
     })
 }
 
-async fn commit_subscription_update<F, Fut>(
-    profile: &mut RemoteProfile,
-    data: &Mapping,
-    info: SubscriptionInfo,
-    write: F,
-) -> anyhow::Result<()>
-where
-    F: FnOnce(String) -> Fut,
-    Fut: std::future::Future<Output = anyhow::Result<()>>,
-{
-    let content = serde_yaml::to_string(data)?;
-    write(content).await?;
-    profile.extra = info;
-    profile.set_updated(chrono::Local::now().timestamp() as usize);
-    Ok(())
-}
-
 #[derive(Default, Debug, Clone, Copy, Deserialize, Serialize, Type, PartialEq, Eq)]
 pub struct SubscriptionInfo {
     pub upload: usize,
@@ -471,33 +452,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn failed_subscription_file_replace_keeps_previous_metadata() {
-        let mut profile = test_profile();
-        let previous = profile.extra;
-        let mut data = Mapping::new();
-        data.insert("mode".into(), "rule".into());
-
-        let result = commit_subscription_update(
-            &mut profile,
-            &data,
-            SubscriptionInfo {
-                upload: 10,
-                download: 20,
-                total: 30,
-                expire: 40,
-            },
-            |_| async { anyhow::bail!("disk full") },
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert_eq!(profile.extra, previous);
-        assert_eq!(profile.shared.updated, 7);
-    }
-
-    #[tokio::test]
-    async fn successful_subscription_file_replace_commits_metadata_after_write() {
+    #[test]
+    fn prepared_subscription_update_materializes_content_and_metadata() {
         let mut profile = test_profile();
         let mut data = Mapping::new();
         data.insert("mode".into(), "global".into());
@@ -508,16 +464,11 @@ mod tests {
             expire: 40,
         };
 
-        commit_subscription_update(&mut profile, &data, next, |content| async move {
-            anyhow::ensure!(
-                content.contains("mode: global"),
-                "serialized content missing"
-            );
-            Ok(())
-        })
-        .await
-        .unwrap();
+        let content = profile
+            .apply_prepared_subscription_update(PreparedSubscriptionUpdate::for_test(data, next))
+            .unwrap();
 
+        assert!(content.contains("mode: global"));
         assert_eq!(profile.extra, next);
         assert!(profile.shared.updated > 7);
     }
