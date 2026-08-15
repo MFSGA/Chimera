@@ -11,8 +11,7 @@ use url::Url;
 use crate::{
     config::profile::{
         item::{
-            ProfileKindGetter, ProfileMetaGetter, ProfileMetaSetter,
-            ambassador_impl_ProfileMetaGetter, ambassador_impl_ProfileMetaSetter,
+            ProfileKindGetter, ProfileMetaGetter, ambassador_impl_ProfileMetaGetter,
             shared::{ProfileShared, ProfileSharedBuilder},
         },
         item_type::{ProfileItemType, ProfileUid},
@@ -91,7 +90,6 @@ impl RemoteProfileOptions {
 #[builder(build_fn(skip, error = "RemoteProfileBuilderError"))]
 // #[builder_update(patch_fn = "apply")]
 #[delegate(ProfileMetaGetter, target = "shared")]
-#[delegate(ProfileMetaSetter, target = "shared")]
 pub struct RemoteProfile {
     /// subscription url
     pub url: Url,
@@ -145,7 +143,7 @@ impl RemoteProfile {
     ) -> anyhow::Result<String> {
         let content = serde_yaml::to_string(&prepared.data)?;
         self.extra = prepared.info;
-        self.set_updated(chrono::Local::now().timestamp() as usize);
+        self.shared.updated = chrono::Local::now().timestamp() as usize;
         Ok(content)
     }
 }

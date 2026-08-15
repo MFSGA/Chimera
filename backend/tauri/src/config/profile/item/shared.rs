@@ -214,28 +214,6 @@ impl ProfileMetaGetter for ProfileShared {
     }
 }
 
-impl super::ProfileMetaSetter for ProfileShared {
-    fn set_uid(&mut self, uid: String) {
-        self.uid = uid;
-    }
-
-    fn set_name(&mut self, name: String) {
-        self.name = name;
-    }
-
-    fn set_desc(&mut self, desc: Option<String>) {
-        self.desc = desc;
-    }
-
-    fn set_file(&mut self, file: String) {
-        self.file = file;
-    }
-
-    fn set_updated(&mut self, updated: usize) {
-        self.updated = updated;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
