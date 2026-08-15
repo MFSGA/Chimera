@@ -1,3 +1,35 @@
+## [0.21.0] - 2026-08-15 19:20:32
+
+### ✅ Testing
+
+- **profile:** Reproduce premature profile persistence during creation by @MFSGA
+
+- **profile:** Reproduce materialized file loss before transaction commit by @MFSGA
+
+### ✨ Features
+
+- **runtime:** Integrate ref runtime lifecycle by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **main:** Restore legacy ui switch action by @MFSGA
+
+- **profile:** Commit subscription metadata after file replacement by @MFSGA
+
+- **profile:** Commit profile creation atomically and reconcile stale reservations by @MFSGA
+
+- **profile:** Preserve materialized files until profile transactions commit by @MFSGA
+
+- **profile:** Contain managed profile files by @MFSGA
+
+### 🔨 Refactor
+
+- **profiles:** Align profile navigation with ref by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.20.3...v0.21.0
+
 ## [0.20.3] - 2026-08-09 07:50:32
 
 ### ✅ Testing
