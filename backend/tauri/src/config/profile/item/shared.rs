@@ -1,7 +1,5 @@
 use std::{fs::OpenOptions, io::Write, path::PathBuf};
 
-use ambassador::delegatable_trait;
-use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_macro::BuilderUpdate;
 use derive_builder::Builder;
 use serde::{Deserialize, Serialize};
@@ -207,25 +205,6 @@ impl Drop for PreparedProfileFile {
                 "failed to remove profile reservation"
             );
         }
-    }
-}
-
-#[delegatable_trait]
-pub trait ProfileFileIo {
-    // async fn read_file(&self) -> std::io::Result<String>;
-    async fn write_file(&self, content: String) -> std::io::Result<()>;
-}
-
-impl ProfileFileIo for ProfileShared {
-    async fn write_file(&self, content: String) -> std::io::Result<()> {
-        let path = resolve_managed_profile_path(&self.file).map_err(std::io::Error::other)?;
-        tokio::task::spawn_blocking(move || {
-            AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
-                .write(|file| file.write_all(content.as_bytes()))
-                .map_err(std::io::Error::other)
-        })
-        .await
-        .map_err(std::io::Error::other)?
     }
 }
 
