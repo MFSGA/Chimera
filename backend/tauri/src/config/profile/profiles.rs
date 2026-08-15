@@ -273,11 +273,7 @@ impl Profiles {
         };
 
         let should_update = self.current.iter().any(|current| current == uid);
-        let item = self.items.remove(index);
-        let file_path = resolve_managed_profile_path(item.file())?;
-        if file_path.exists() {
-            std::fs::remove_file(file_path)?;
-        }
+        self.items.remove(index);
 
         self.current.retain(|current| current != uid);
         self.chain.retain(|chain_uid| chain_uid != uid);
