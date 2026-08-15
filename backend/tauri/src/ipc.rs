@@ -250,8 +250,8 @@ impl specta::Type for IpcError {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_profiles() -> Result<ProfilesResponse> {
-    Ok(Config::profiles().data().clone().into())
+pub async fn get_profiles(client: State<'_, NyanpasuClient>) -> Result<ProfilesResponse> {
+    Ok(client.get_profiles().await?.into())
 }
 
 #[tauri::command]
@@ -310,16 +310,12 @@ pub async fn import_profile(url: String, option: Option<RemoteProfileOptionsBuil
 
 #[tauri::command]
 #[specta::specta]
-pub fn view_profile(app_handle: tauri::AppHandle, uid: String) -> Result {
-    let file = {
-        Config::profiles()
-            .latest()
-            .get_item(&uid)?
-            .file()
-            .to_string()
-    };
-
-    let path = resolve_managed_profile_path(&file)?;
+pub async fn view_profile(
+    app_handle: tauri::AppHandle,
+    client: State<'_, NyanpasuClient>,
+    uid: String,
+) -> Result {
+    let path = client.get_profile_materialized_path(uid).await?;
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
     }
