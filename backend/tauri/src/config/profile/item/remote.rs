@@ -34,6 +34,12 @@ pub trait RemoteProfileSubscription {
     async fn subscribe(&mut self, opts: Option<RemoteProfileOptionsBuilder>) -> anyhow::Result<()>;
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedSubscriptionUpdate {
+    data: Mapping,
+    info: SubscriptionInfo,
+}
+
 #[derive(Debug, Deserialize, Serialize, Builder, Type, Clone, BuilderUpdate)]
 #[builder(derive(Debug, Deserialize, Type))]
 #[builder_update(patch_fn = "apply", getter)]
@@ -117,22 +123,31 @@ impl ProfileKindGetter for RemoteProfile {
     }
 }
 
-impl RemoteProfileSubscription for RemoteProfile {
-    #[tracing::instrument]
-    async fn subscribe(
-        &mut self,
+impl RemoteProfile {
+    pub(crate) async fn prepare_subscription_update(
+        &self,
         partial: Option<RemoteProfileOptionsBuilder>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<PreparedSubscriptionUpdate> {
         let mut opts = self.option.clone();
         if let Some(partial) = partial {
             opts.apply(partial);
         }
         let subscription = subscribe_url(&self.url, &opts).await?;
+        Ok(PreparedSubscriptionUpdate {
+            data: subscription.data,
+            info: subscription.info,
+        })
+    }
+
+    pub(crate) async fn commit_prepared_subscription_update(
+        &mut self,
+        prepared: PreparedSubscriptionUpdate,
+    ) -> anyhow::Result<()> {
         let shared = self.shared.clone();
         commit_subscription_update(
             self,
-            &subscription.data,
-            subscription.info,
+            &prepared.data,
+            prepared.info,
             move |content| async move {
                 shared
                     .write_file(content)
@@ -141,6 +156,17 @@ impl RemoteProfileSubscription for RemoteProfile {
             },
         )
         .await
+    }
+}
+
+impl RemoteProfileSubscription for RemoteProfile {
+    #[tracing::instrument]
+    async fn subscribe(
+        &mut self,
+        partial: Option<RemoteProfileOptionsBuilder>,
+    ) -> anyhow::Result<()> {
+        let prepared = self.prepare_subscription_update(partial).await?;
+        self.commit_prepared_subscription_update(prepared).await
     }
 }
 
