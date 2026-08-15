@@ -53,17 +53,55 @@ impl Default for Profiles {
 impl Profiles {
     pub fn new() -> Self {
         match dirs::profiles_path().and_then(|path| help::read_yaml::<Self, _>(&path)) {
-            Ok(profiles) => profiles,
+            Ok(profiles) => {
+                profiles.reconcile_reservations();
+                profiles
+            }
             Err(err) => {
                 log::error!(target: "app", "{err:?}\n - use the default profiles");
                 Self::default()
             }
         }
     }
+
+    fn reconcile_reservations(&self) {
+        let committed_files = self
+            .items
+            .iter()
+            .map(|profile| profile.file().to_string())
+            .collect::<HashSet<_>>();
+        let result = dirs::app_profiles_dir().and_then(|root| {
+            super::reservation_reconcile::reconcile_reservations(&root, &committed_files)
+        });
+        match result {
+            Ok(report) => {
+                if report.removed_reservations > 0 || report.removed_materializations > 0 {
+                    log::info!(
+                        target: "app",
+                        "reconciled profile reservations: removed {} reservations and {} materializations",
+                        report.removed_reservations,
+                        report.removed_materializations
+                    );
+                }
+                for degradation in report.degradations {
+                    log::warn!(
+                        target: "app",
+                        "profile reservation reconciliation deferred for {}: {}",
+                        degradation.path.display(),
+                        degradation.reason
+                    );
+                }
+            }
+            Err(error) => {
+                log::warn!(target: "app", "profile reservation reconciliation skipped: {error:#}");
+            }
+        }
+    }
+
     /// append new item
     pub fn append_item(&mut self, item: Profile) -> Result<()> {
         self.items.push(item);
-        self.save_file()
+        Ok(())
     }
 
     pub fn save_file(&self) -> Result<()> {
