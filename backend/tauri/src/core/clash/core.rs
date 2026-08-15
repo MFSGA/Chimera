@@ -447,6 +447,10 @@ impl CoreLifecycleLease<'_> {
     pub(crate) async fn stop_core(&self) -> Result<()> {
         self.manager.stop_core_with_lease(self).await
     }
+
+    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> Result<()> {
+        self.manager.change_core_with_lease(self, clash_core).await
+    }
 }
 
 #[derive(Debug)]
@@ -800,14 +804,13 @@ impl CoreManager {
     }
 
     /// 切换核心
-    #[instrument(skip(self))]
-    pub async fn change_core(&self, clash_core: Option<ClashCore>) -> Result<()> {
-        let clash_core = clash_core.ok_or(anyhow::anyhow!("clash core is null"))?;
-
+    #[instrument(skip(self, _lease))]
+    async fn change_core_with_lease(
+        &self,
+        _lease: &CoreLifecycleLease<'_>,
+        clash_core: ClashCore,
+    ) -> Result<()> {
         log::debug!(target: "app", "change core to `{clash_core}`");
-
-        let _guard = self.run_lock.lock().await;
-
         Config::verge().draft().clash_core = Some(clash_core);
 
         // 清掉旧日志
