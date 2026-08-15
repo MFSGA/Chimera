@@ -6,8 +6,7 @@ use std::path::PathBuf;
 
 use crate::config::profile::{
     item::{
-        ProfileKindGetter, ProfileMetaGetter, ProfileMetaSetter, ambassador_impl_ProfileMetaGetter,
-        ambassador_impl_ProfileMetaSetter,
+        ProfileKindGetter, ProfileMetaGetter, ambassador_impl_ProfileMetaGetter,
         shared::{ProfileShared, ProfileSharedBuilder},
     },
     item_type::{ProfileItemType, ProfileUid},
@@ -21,7 +20,6 @@ const PROFILE_TYPE: ProfileItemType = ProfileItemType::Local;
 #[builder(derive(Debug, Serialize, Deserialize, specta::Type))]
 #[builder_update(patch_fn = "apply")]
 #[delegate(ProfileMetaGetter, target = "shared")]
-#[delegate(ProfileMetaSetter, target = "shared")]
 pub struct LocalProfile {
     #[serde(flatten)]
     #[builder(field(
