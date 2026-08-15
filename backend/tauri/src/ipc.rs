@@ -1084,49 +1084,97 @@ pub async fn patch_profile(uid: String, profile: ProfileBuilderRequest) -> Resul
         }
     }
 
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
-        Ok(_) => {
-            handle::Handle::refresh_clash();
-            handle::Handle::refresh_profiles();
-            Config::profiles().apply();
-            Config::profiles().data().save_file()?;
-            Ok(())
-        }
-        Err(err) => {
+    feat::commit_profile_transaction(
+        "profile patch",
+        || async {
+            CoreManager::global()
+                .restart_core_with_generated_config()
+                .await
+        },
+        || async { Config::profiles().latest().save_file() },
+        || {
             Config::profiles().discard();
-            Err(IpcError::from(err))
-        }
-    }
+        },
+        || async { Ok::<(), anyhow::Error>(()) },
+        || async {
+            CoreManager::global()
+                .restart_core_with_generated_config()
+                .await
+        },
+    )
+    .await?;
+
+    Config::profiles().apply();
+    handle::Handle::refresh_clash();
+    handle::Handle::refresh_profiles();
+    Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_profile(uid: String) -> Result {
+    let profile_item = Config::profiles().latest().get_item(&uid)?.clone();
+    let file_path = resolve_managed_profile_path(profile_item.file())?;
+    let previous_file = if file_path.exists() {
+        Some(
+            std::fs::read_to_string(&file_path)
+                .with_context(|| format!("failed to snapshot {}", file_path.display()))?,
+        )
+    } else {
+        None
+    };
+
     let should_update = {
         let mut profiles = Config::profiles().draft();
         profiles.delete_item(&uid)?
     };
 
-    if should_update {
-        match CoreManager::global()
-            .restart_core_with_generated_config()
-            .await
-        {
-            Ok(_) => handle::Handle::refresh_clash(),
-            Err(err) => {
-                Config::profiles().discard();
-                return Err(IpcError::from(err));
+    feat::commit_profile_transaction(
+        "profile deletion",
+        || async {
+            if should_update {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await?;
             }
-        }
-    }
+            Ok(())
+        },
+        || async {
+            if file_path.exists() {
+                std::fs::remove_file(&file_path).with_context(|| {
+                    format!("failed to remove profile file {}", file_path.display())
+                })?;
+            }
+            Config::profiles().latest().save_file()
+        },
+        || {
+            Config::profiles().discard();
+        },
+        || async {
+            if let Some(previous_file) = previous_file.as_ref()
+                && !file_path.exists()
+            {
+                profile_item.save_file(previous_file)?;
+            }
+            Ok(())
+        },
+        || async {
+            if should_update {
+                CoreManager::global()
+                    .restart_core_with_generated_config()
+                    .await
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .await?;
 
     Config::profiles().apply();
-    Config::profiles().data().save_file()?;
+    if should_update {
+        handle::Handle::refresh_clash();
+    }
     handle::Handle::refresh_profiles();
-
     Ok(())
 }
 
