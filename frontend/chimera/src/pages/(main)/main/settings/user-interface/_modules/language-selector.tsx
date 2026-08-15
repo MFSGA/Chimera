@@ -1,12 +1,12 @@
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { useLanguage } from '@/components/providers/language-provider';
+import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
-import { useLanguage } from '@/components/providers/language-provider';
-import { Button } from '@/components/ui/button';
+} from '@/components/ui/dropdown-menu';
 import * as m from '@/paraglide/messages';
 import type { Locale } from '@/paraglide/runtime';
 import { languageOptions } from '@/utils/language';
@@ -44,7 +44,12 @@ export default function LanguageSelector() {
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+        <DropdownMenuContent
+          align="end"
+          sideOffset={-16}
+          alignOffset={16}
+          data-slot="language-selector-menu"
+        >
           {Object.entries(languageOptions).map(([locale, label]) => (
             <DropdownMenuCheckboxItem
               checked={currentLocale === locale}

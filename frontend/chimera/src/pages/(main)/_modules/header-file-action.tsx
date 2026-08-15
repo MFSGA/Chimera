@@ -5,7 +5,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
+} from '@/components/ui/dropdown-menu';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../main/profiles/_modules/consts';
 import { Action } from '../main/profiles/$type/index';

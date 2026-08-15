@@ -3,13 +3,13 @@ import {
   type ExternalControllerPortStrategy,
 } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/main-ui/dropdown-menu';
-import { Button } from '@/components/ui/button';
+} from '@/components/ui/dropdown-menu';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,
@@ -33,7 +33,10 @@ export default function PortStrategySelector() {
     <SettingsCard data-slot="port-strategy-selector-card">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <SettingsCardContent asChild>
+          <SettingsCardContent
+            data-slot="port-strategy-selector-trigger"
+            asChild
+          >
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
               <ItemContainer>
                 <ItemLabel>
