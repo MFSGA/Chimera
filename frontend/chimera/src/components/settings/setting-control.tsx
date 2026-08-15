@@ -54,11 +54,13 @@ export function SwitchCard({
 }
 
 export function SelectorCard<T extends string>({
+  id,
   label,
   current,
   options,
   onSelect,
 }: {
+  id?: string;
   label: string;
   current: T;
   options: Record<T, string>;
@@ -69,7 +71,10 @@ export function SelectorCard<T extends string>({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <SettingsCardContent asChild>
-            <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
+            <Button
+              id={id}
+              className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base"
+            >
               <ItemContainer>
                 <ItemLabel>
                   <ItemLabelText>{label}</ItemLabelText>
@@ -87,6 +92,7 @@ export function SelectorCard<T extends string>({
           {Object.entries<string>(options).map(([value, optionLabel]) => (
             <DropdownMenuCheckboxItem
               checked={current === value}
+              data-value={value}
               key={value}
               onSelect={() => onSelect(value as T)}
             >
