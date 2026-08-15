@@ -162,6 +162,8 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
 
     fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)>;
 
+    fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()>;
+
     fn patch_metadata(
         &self,
         uid: &ProfileUid,
@@ -283,6 +285,24 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
             let file = profiles.get_item(uid)?.file().to_string();
             let affects_current = profiles.delete_item(uid)?;
             Ok((file, affects_current))
+        })
+    }
+
+    fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
+        self.persist(|profiles| {
+            let current = profiles
+                .items
+                .iter_mut()
+                .find(|item| item.uid() == uid)
+                .ok_or_else(|| anyhow::anyhow!("failed to get the profile item `uid:{uid}`"))?;
+            match (current, profile) {
+                (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
+                    .patch_profile(item)
+                    .context("failed to patch remote profile")?,
+                (Profile::Local(item), ProfileBuilder::Local(builder)) => item.apply(builder),
+                _ => anyhow::bail!("profile type mismatch"),
+            }
+            Ok(())
         })
     }
 
@@ -612,36 +632,6 @@ impl NyanpasuClient {
         serde_yaml::to_string(&data).context("failed to convert yaml to string")
     }
 
-    async fn persist_profiles<T>(
-        &self,
-        update: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
-        let _commit = self.inner.profile_commit.lock().await;
-        self.persist_profiles_locked(update)
-    }
-
-    fn persist_profiles_locked<T>(
-        &self,
-        update: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T> {
-        let profiles = Config::profiles();
-        let result = {
-            let mut draft = profiles.draft();
-            update(&mut draft).and_then(|value| draft.save_file().map(|_| value))
-        };
-        match result {
-            Ok(value) => {
-                profiles.apply();
-                self.inner.ui_sink.refresh_profiles();
-                Ok(value)
-            }
-            Err(error) => {
-                profiles.discard();
-                Err(error)
-            }
-        }
-    }
-
     pub(crate) async fn commit_new_profile(
         &self,
         profile: Profile,
@@ -675,22 +665,11 @@ impl NyanpasuClient {
         uid: ProfileUid,
         profile: ProfileBuilder,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        self.persist_profiles(|profiles| {
-            let current = profiles
-                .items
-                .iter_mut()
-                .find(|item| item.uid() == uid)
-                .ok_or_else(|| anyhow::anyhow!("failed to get the profile item `uid:{uid}`"))?;
-            match (current, profile) {
-                (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
-                    .patch_profile(item)
-                    .context("failed to patch remote profile")?,
-                (Profile::Local(item), ProfileBuilder::Local(builder)) => item.apply(builder),
-                _ => anyhow::bail!("profile type mismatch"),
-            }
-            Ok(())
-        })
-        .await?;
+        {
+            let _commit = self.inner.profile_commit.lock().await;
+            self.inner.profile_writes.patch_profile(&uid, profile)?;
+            self.inner.ui_sink.refresh_profiles();
+        }
         Ok(self.after_profile_runtime_commit("profile patch").await)
     }
 
@@ -1091,6 +1070,7 @@ mod tests {
     struct NoopProfilesWrite {
         fail_refresh: bool,
         refresh_commits: Option<Arc<Mutex<usize>>>,
+        patch_commits: Option<Arc<Mutex<usize>>>,
     }
 
     impl ProfilesWritePort for NoopProfilesWrite {
@@ -1099,6 +1079,12 @@ mod tests {
         }
         fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
             Ok((format!("{uid}.yaml"), false))
+        }
+        fn patch_profile(&self, _uid: &ProfileUid, _profile: ProfileBuilder) -> anyhow::Result<()> {
+            if let Some(commits) = &self.patch_commits {
+                *commits.lock().unwrap() += 1;
+            }
+            Ok(())
         }
         fn patch_metadata(
             &self,
@@ -1386,6 +1372,47 @@ mod tests {
         assert!(writes[0].1.contains("mode: global"));
         assert_eq!(writes[1], ("r-test.yaml".to_string(), previous_file));
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn profile_patch_uses_injected_write_port_before_runtime_rebuild() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let patch_commits = Arc::new(Mutex::new(0));
+        let client = NyanpasuClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
+            }),
+            Arc::new(NoopProfileFs),
+            Arc::new(NoopProfilesWrite {
+                patch_commits: Some(patch_commits.clone()),
+                ..NoopProfilesWrite::default()
+            }),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+
+        let outcome = client
+            .patch_profile("l-test".into(), ProfileBuilder::Local(Default::default()))
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, MutationOutcome::Applied { .. }));
+        assert_eq!(*patch_commits.lock().unwrap(), 1);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "refresh-profiles",
+                "begin",
+                "rebuild",
+                "refresh-ui",
+                "profile-change"
+            ]
+        );
     }
 
     #[tokio::test]
