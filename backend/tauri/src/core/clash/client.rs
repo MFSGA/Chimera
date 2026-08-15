@@ -193,13 +193,7 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
         options: RemoteProfileOptionsBuilder,
     ) -> anyhow::Result<()>;
 
-    fn commit_refreshed(
-        &self,
-        uid: &ProfileUid,
-        current: RemoteProfile,
-        updated: RemoteProfile,
-        previous_file: &str,
-    ) -> anyhow::Result<bool>;
+    fn commit_refreshed(&self, uid: &ProfileUid, updated: RemoteProfile) -> anyhow::Result<bool>;
 
     fn replace_remote_definition(
         &self,
@@ -359,38 +353,15 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         })
     }
 
-    fn commit_refreshed(
-        &self,
-        uid: &ProfileUid,
-        current: RemoteProfile,
-        updated: RemoteProfile,
-        previous_file: &str,
-    ) -> anyhow::Result<bool> {
-        let profiles = Config::profiles();
-        let affects_current = profiles
-            .latest()
-            .current
-            .iter()
-            .any(|current_uid| current_uid == uid);
-        let result = {
-            let mut draft = profiles.draft();
-            draft
-                .replace_item(uid, updated.into())
-                .and_then(|_| draft.save_file())
-        };
-        if let Err(error) = result {
-            profiles.discard();
-            if let Err(restore_error) =
-                Profile::Remote(current).save_file(previous_file.to_string())
-            {
-                return Err(error.context(format!(
-                    "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
-                )));
-            }
-            return Err(error);
-        }
-        profiles.apply();
-        Ok(affects_current)
+    fn commit_refreshed(&self, uid: &ProfileUid, updated: RemoteProfile) -> anyhow::Result<bool> {
+        self.persist(|profiles| {
+            let affects_current = profiles
+                .current
+                .iter()
+                .any(|current_uid| current_uid == uid);
+            profiles.replace_item(uid, updated.into())?;
+            Ok(affects_current)
+        })
     }
 
     fn replace_remote_definition(
@@ -599,7 +570,7 @@ impl NyanpasuClient {
 
     fn remote_profile_snapshot(&self, uid: &ProfileUid) -> anyhow::Result<(RemoteProfile, String)> {
         let remote = self.remote_profile_state_snapshot(uid)?;
-        let previous_file = Profile::Remote(remote.clone()).read_file()?;
+        let previous_file = self.inner.profile_files.read(&remote.shared.file)?;
         Ok((remote, previous_file))
     }
 
@@ -759,13 +730,22 @@ impl NyanpasuClient {
         let current = self.remote_profile_state_snapshot(&uid)?;
         Self::ensure_refresh_is_current(&expected_fingerprint, &current)?;
         let mut updated = current.clone();
-        updated
-            .commit_prepared_subscription_update(prepared)
-            .await?;
-        let affects_current =
-            self.inner
-                .profile_writes
-                .commit_refreshed(&uid, current, updated, &previous_file)?;
+        let content = updated.apply_prepared_subscription_update(prepared)?;
+        let file = current.shared.file.clone();
+        self.inner.profile_files.write_atomic(&file, &content)?;
+        let affects_current = match self.inner.profile_writes.commit_refreshed(&uid, updated) {
+            Ok(affects_current) => affects_current,
+            Err(error) => {
+                if let Err(restore_error) =
+                    self.inner.profile_files.write_atomic(&file, &previous_file)
+                {
+                    return Err(error.context(format!(
+                        "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
+                    )));
+                }
+                return Err(error);
+            }
+        };
         self.inner.ui_sink.refresh_profiles();
         drop(_commit);
         if affects_current {
@@ -1075,7 +1055,40 @@ mod tests {
         }
     }
 
-    struct NoopProfilesWrite;
+    struct RecordingProfileFs {
+        previous_file: String,
+        reads: Arc<Mutex<Vec<String>>>,
+        writes: Arc<Mutex<Vec<(String, String)>>>,
+        fail_write: bool,
+    }
+
+    impl ProfileFsPort for RecordingProfileFs {
+        fn read(&self, file: &str) -> anyhow::Result<String> {
+            self.reads.lock().unwrap().push(file.to_string());
+            Ok(self.previous_file.clone())
+        }
+
+        fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((file.to_string(), content.to_string()));
+            if self.fail_write {
+                anyhow::bail!("injected profile file write failure");
+            }
+            Ok(())
+        }
+
+        fn remove(&self, _file: &str) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopProfilesWrite {
+        fail_refresh: bool,
+        refresh_commits: Option<Arc<Mutex<usize>>>,
+    }
 
     impl ProfilesWritePort for NoopProfilesWrite {
         fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
@@ -1124,10 +1137,14 @@ mod tests {
         fn commit_refreshed(
             &self,
             _uid: &ProfileUid,
-            _current: RemoteProfile,
             _updated: RemoteProfile,
-            _previous_file: &str,
         ) -> anyhow::Result<bool> {
+            if let Some(commits) = &self.refresh_commits {
+                *commits.lock().unwrap() += 1;
+            }
+            if self.fail_refresh {
+                anyhow::bail!("injected profile state failure");
+            }
             Ok(false)
         }
         fn replace_remote_definition(
@@ -1198,7 +1215,7 @@ mod tests {
             }),
             Arc::new(StaticProfilesRead { profiles }),
             Arc::new(NoopProfileFs),
-            Arc::new(NoopProfilesWrite),
+            Arc::new(NoopProfilesWrite::default()),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1237,6 +1254,135 @@ mod tests {
         let mut refreshed = profile;
         refreshed.shared.updated += 1;
         assert!(NyanpasuClient::ensure_refresh_is_current(&fingerprint, &refreshed).is_err());
+    }
+
+    #[tokio::test]
+    async fn refresh_file_write_failure_does_not_commit_profile_state() {
+        let remote = test_remote_profile();
+        let uid = remote.shared.uid.clone();
+        let profiles = Profiles {
+            items: vec![Profile::Remote(remote.clone())],
+            ..Profiles::default()
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let refresh_commits = Arc::new(Mutex::new(0));
+        let previous_file = "mode: rule\n".to_string();
+        let client = NyanpasuClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead { profiles }),
+            Arc::new(RecordingProfileFs {
+                previous_file: previous_file.clone(),
+                reads: reads.clone(),
+                writes: writes.clone(),
+                fail_write: true,
+            }),
+            Arc::new(NoopProfilesWrite {
+                refresh_commits: Some(refresh_commits.clone()),
+                ..NoopProfilesWrite::default()
+            }),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+
+        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).unwrap();
+        assert_eq!(snapshot_file, previous_file);
+
+        let mut data = serde_yaml::Mapping::new();
+        data.insert("mode".into(), "global".into());
+        let prepared = PreparedSubscriptionUpdate::for_test(
+            data,
+            SubscriptionInfo {
+                upload: 10,
+                download: 20,
+                total: 30,
+                expire: 40,
+            },
+        );
+        let fingerprint = NyanpasuClient::remote_profile_fingerprint(&remote).unwrap();
+
+        let error = client
+            .commit_refreshed_profile(uid, fingerprint, previous_file, prepared)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected profile file write failure")
+        );
+        assert_eq!(*refresh_commits.lock().unwrap(), 0);
+        assert_eq!(writes.lock().unwrap().len(), 1);
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_state_failure_restores_file_through_profile_fs_port() {
+        let remote = test_remote_profile();
+        let uid = remote.shared.uid.clone();
+        let profiles = Profiles {
+            items: vec![Profile::Remote(remote.clone())],
+            ..Profiles::default()
+        };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let reads = Arc::new(Mutex::new(Vec::new()));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let previous_file = "mode: rule\n".to_string();
+        let client = NyanpasuClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead { profiles }),
+            Arc::new(RecordingProfileFs {
+                previous_file: previous_file.clone(),
+                reads: reads.clone(),
+                writes: writes.clone(),
+                fail_write: false,
+            }),
+            Arc::new(NoopProfilesWrite {
+                fail_refresh: true,
+                ..NoopProfilesWrite::default()
+            }),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+
+        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).unwrap();
+        assert_eq!(snapshot_file, previous_file);
+        assert_eq!(reads.lock().unwrap().as_slice(), ["r-test.yaml"]);
+
+        let mut data = serde_yaml::Mapping::new();
+        data.insert("mode".into(), "global".into());
+        let prepared = PreparedSubscriptionUpdate::for_test(
+            data,
+            SubscriptionInfo {
+                upload: 10,
+                download: 20,
+                total: 30,
+                expire: 40,
+            },
+        );
+        let fingerprint = NyanpasuClient::remote_profile_fingerprint(&remote).unwrap();
+
+        let error = client
+            .commit_refreshed_profile(uid, fingerprint, previous_file.clone(), prepared)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("injected profile state failure"));
+        let writes = writes.lock().unwrap();
+        assert_eq!(writes.len(), 2);
+        assert_eq!(writes[0].0, "r-test.yaml");
+        assert!(writes[0].1.contains("mode: global"));
+        assert_eq!(writes[1], ("r-test.yaml".to_string(), previous_file));
+        assert!(events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
