@@ -11,6 +11,8 @@ pub fn generate_uid(kind: &ProfileItemType) -> String {
     match kind {
         ProfileItemType::Remote => help::get_uid("r"),
         ProfileItemType::Local => help::get_uid("l"),
+        ProfileItemType::Merge => help::get_uid("m"),
+        ProfileItemType::Script(_) => help::get_uid("s"),
     }
 }
 
