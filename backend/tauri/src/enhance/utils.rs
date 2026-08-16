@@ -1,13 +1,15 @@
 use std::borrow::Borrow;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 
 use crate::{
     config::profile::{item_type::ProfileUid, profiles::Profiles},
-    enhance::chain::{ChainItem, ChainTypeWrapper},
+    enhance::{
+        chain::{ChainItem, ChainTypeWrapper, Logs},
+        script::runner::{RunnerManager, ScriptRunRequest},
+    },
 };
 
 pub fn resolve_transform_chain(profiles: &Profiles, uids: &[ProfileUid]) -> Result<Vec<ChainItem>> {
@@ -21,17 +23,6 @@ pub fn resolve_transform_chain(profiles: &Profiles, uids: &[ProfileUid]) -> Resu
         })
         .collect()
 }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "lowercase")]
-pub enum LogSpan {
-    Log,
-    Info,
-    Warn,
-    Error,
-}
-
-pub type Logs = Vec<(LogSpan, String)>;
 
 fn merge_value(target: &mut Value, patch: Value) {
     match (target, patch) {
@@ -60,8 +51,16 @@ fn apply_merge_mapping(config: &mut Mapping, patch: Mapping) {
 
 /// Apply transform profiles in chain order.
 pub async fn process_chain(
+    config: Mapping,
+    nodes: &[ChainItem],
+) -> Result<(Mapping, IndexMap<ProfileUid, Logs>)> {
+    process_chain_with_runner(config, nodes, &RunnerManager::new()).await
+}
+
+async fn process_chain_with_runner(
     mut config: Mapping,
     nodes: &[ChainItem],
+    runner: &RunnerManager,
 ) -> Result<(Mapping, IndexMap<ProfileUid, Logs>)> {
     let mut result_map = IndexMap::new();
 
@@ -75,11 +74,24 @@ pub async fn process_chain(
                 script_type,
                 source,
             } => {
-                let _ = source;
-                bail!(
-                    "script transform {} ({script_type:?}) cannot run until the script runtime is available",
-                    node.uid
-                );
+                let output = runner
+                    .run(
+                        *script_type,
+                        ScriptRunRequest {
+                            uid: node.uid.clone(),
+                            source: source.clone(),
+                            config,
+                        },
+                    )
+                    .await
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "failed to execute script transform {}: {error:#}",
+                            node.uid
+                        )
+                    })?;
+                config = output.config;
+                result_map.insert(node.uid.clone(), output.logs);
             }
         }
     }
@@ -124,8 +136,39 @@ pub fn merge_profiles<T: Borrow<String>>(mappings: IndexMap<T, Mapping>) -> Resu
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+
     use super::*;
-    use crate::config::profile::item_type::ScriptType;
+    use crate::{
+        config::profile::item_type::ScriptType,
+        enhance::{
+            chain::LogSpan,
+            script::runner::{ScriptRunOutput, ScriptRunner},
+        },
+    };
+
+    struct TestScriptRunner;
+
+    #[async_trait]
+    impl ScriptRunner for TestScriptRunner {
+        async fn run(&self, mut request: ScriptRunRequest) -> Result<ScriptRunOutput> {
+            assert_eq!(request.uid, "sj-test");
+            assert_eq!(request.source, "test-script");
+            assert_eq!(
+                request.config.get("before").and_then(Value::as_bool),
+                Some(true)
+            );
+            request
+                .config
+                .insert(Value::String("script-ran".into()), Value::Bool(true));
+            Ok(ScriptRunOutput {
+                config: request.config,
+                logs: vec![(LogSpan::Info, "script executed".into())],
+            })
+        }
+    }
 
     fn mapping(source: &str) -> Mapping {
         serde_yaml::from_str(source).unwrap()
@@ -216,6 +259,44 @@ rules:
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].as_str(), Some("DOMAIN,example.com,DIRECT"));
         assert!(output.contains_key("m-test"));
+    }
+
+    #[tokio::test]
+    async fn injected_script_runner_receives_current_config_and_returns_logs() {
+        let runner =
+            RunnerManager::new().with_runner(ScriptType::JavaScript, Arc::new(TestScriptRunner));
+        let chain = vec![
+            ChainItem {
+                uid: "m-before".into(),
+                data: ChainTypeWrapper::Merge(mapping("before: true\n")),
+            },
+            ChainItem {
+                uid: "sj-test".into(),
+                data: ChainTypeWrapper::Script {
+                    script_type: ScriptType::JavaScript,
+                    source: "test-script".into(),
+                },
+            },
+            ChainItem {
+                uid: "m-after".into(),
+                data: ChainTypeWrapper::Merge(mapping("after: true\n")),
+            },
+        ];
+
+        let (config, output) = process_chain_with_runner(Mapping::new(), &chain, &runner)
+            .await
+            .unwrap();
+
+        assert_eq!(config.get("before").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            config.get("script-ran").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(config.get("after").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            output.get("sj-test"),
+            Some(&vec![(LogSpan::Info, "script executed".into())])
+        );
     }
 
     #[tokio::test]
