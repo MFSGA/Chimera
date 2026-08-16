@@ -337,7 +337,7 @@ export type AgentCoreSnapshot = {
   applied_consistency: AgentAppliedState;
 };
 
-export type AgentCoreState = 'running' | 'stopped';
+export type AgentCoreState = 'running' | 'stopped' | 'unknown';
 
 export type AgentFinding = {
   code: AgentFindingCode;
@@ -395,6 +395,7 @@ export type AgentPrivacyBoundary = {
 };
 
 export type AgentProbeCode =
+  | 'core_status_unavailable'
   | 'core_config_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
