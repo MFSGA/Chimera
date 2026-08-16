@@ -34,7 +34,7 @@ use crate::{
         clash::{
             self,
             client::{MutationOutcome, NyanpasuClient},
-            core::{CoreManager, RunType},
+            core::RunType,
         },
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
@@ -606,7 +606,7 @@ fn web_key(key: &str) -> String {
 }
 
 pub mod service {
-    use super::Result;
+    use super::{NyanpasuClient, Result, State};
     use crate::core::service;
     #[tauri::command]
     #[specta::specta]
@@ -627,54 +627,42 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn start_service() -> Result {
+    pub async fn start_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::start_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn stop_service() -> Result {
+    pub async fn stop_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::stop_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn restart_service() -> Result {
+    pub async fn restart_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::restart_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
@@ -931,8 +919,8 @@ pub async fn change_clash_core(
 /// restart the sidecar
 #[tauri::command]
 #[specta::specta]
-pub async fn restart_sidecar() -> Result {
-    CoreManager::global().run_core().await?;
+pub async fn restart_sidecar(client: State<'_, NyanpasuClient>) -> Result {
+    client.rebuild_running_config().await?;
     Ok(())
 }
 
