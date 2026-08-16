@@ -553,6 +553,7 @@
   "agent_probe_service_status_unavailable": "Не удалось прочитать состояние сервиса.",
   "agent_probe_service_status_timeout": "Истекло время ожидания проверки сервиса.",
   "agent_probe_telemetry_unavailable": "Телеметрия ядра сейчас недоступна.",
+  "agent_probe_core_status_unavailable": "Не удалось прочитать состояние жизненного цикла ядра. Состояние ядра будет показано как неизвестное.",
   "agent_probe_core_config_unavailable": "Не удалось прочитать фактический режим маршрутизации работающего ядра. Связанный статус считается неполным, а изменяющие действия недоступны.",
   "agent_impact_existing_connections_may_change": "Существующие подключения могут прерваться или изменить маршрут.",
   "agent_impact_traffic_may_bypass_proxy": "Трафик может пройти в обход прокси.",

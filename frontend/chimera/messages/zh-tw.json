@@ -553,6 +553,7 @@
   "agent_probe_service_status_unavailable": "無法讀取服務狀態。",
   "agent_probe_service_status_timeout": "服務狀態檢查逾時。",
   "agent_probe_telemetry_unavailable": "核心遙測目前無法使用。",
+  "agent_probe_core_status_unavailable": "無法讀取核心生命週期狀態，核心狀態將顯示為未知。",
   "agent_probe_core_config_unavailable": "無法讀取執行中核心的實際路由模式，相關狀態已降級，寫入操作無法使用。",
   "agent_impact_existing_connections_may_change": "現有連線可能會中斷或變更路由。",
   "agent_impact_traffic_may_bypass_proxy": "流量可能繞過代理。",
