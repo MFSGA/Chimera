@@ -44,6 +44,10 @@ impl Handle {
         *self.app_handle.lock() = Some(app_handle);
     }
 
+    pub fn app_handle() -> Option<AppHandle> {
+        Self::global().app_handle.lock().clone()
+    }
+
     pub fn get_window(&self) -> Option<WebviewWindow<Wry>> {
         self.app_handle
             .lock()
