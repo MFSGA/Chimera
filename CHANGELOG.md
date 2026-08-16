@@ -1,3 +1,39 @@
+## [0.21.3] - 2026-08-16 15:20:19
+
+### ✅ Testing
+
+- **e2e:** Cover cleanup and runtime isolation by @MFSGA
+
+### ✨ Features
+
+- **profile:** Support merge and script profiles by @MFSGA
+
+- **profile-ui:** Manage transform profiles by @MFSGA
+
+### 📚 Documentation
+
+- **ipc:** Source generated binding comments by @MFSGA
+
+### 🔨 Refactor
+
+- **bindings:** Scope normalization helpers to export builds by @MFSGA
+
+- **profile:** Remove obsolete metadata setter facade by @MFSGA
+
+- **profile:** Move profile state persistence off async workers by @MFSGA
+
+- **profile:** Resolve managed profile paths off async workers by @MFSGA
+
+- **profile:** Move profile filesystem work off async workers by @MFSGA
+
+- **profile:** Route profile patching through write port by @MFSGA
+
+- **profile:** Commit creation materialization through client by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.21.2...v0.21.3
+
 ## [0.21.2] - 2026-08-16 13:48:50
 
 ### ✨ Features
