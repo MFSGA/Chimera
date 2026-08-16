@@ -1,3 +1,33 @@
+## [0.21.2] - 2026-08-16 13:48:50
+
+### ✨ Features
+
+- **ipc:** Expose outcome-aware profile mutations by @MFSGA
+
+- **ui:** Surface degraded profile mutations by @MFSGA
+
+### 🔨 Refactor
+
+- **agent:** Remove unreachable unknown core states by @MFSGA
+
+- **profile:** Route remote refresh IO through client port by @MFSGA
+
+- **profile:** Introduce serialized profile commit machinery by @MFSGA
+
+- **profile:** Read profile state through NyanpasuClient by @MFSGA
+
+- **profile:** Route profile reordering through NyanpasuClient by @MFSGA
+
+- **profile:** Centralize profile mutations in NyanpasuClient by @MFSGA
+
+- **profile:** Move profile file IO behind NyanpasuClient by @MFSGA
+
+- **runtime:** Drop dormant rebuild coordinator ownership by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.21.1...v0.21.2
+
 ## [0.21.1] - 2026-08-16 13:23:06
 
 ### 🐛 Bug Fixes
