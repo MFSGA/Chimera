@@ -5,6 +5,7 @@ export const baseE2eSuites = {
     './specs/log-level-runtime-setting.e2e.ts',
     './specs/profile-reorder-rebuild.e2e.ts',
     './specs/profile-runtime-product.e2e.ts',
+    './specs/profile-transform-runtime.e2e.ts',
     './specs/proxy-mode-runtime-setting.e2e.ts',
     './specs/storage-event-resync.e2e.ts',
   ],
