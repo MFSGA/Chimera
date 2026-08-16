@@ -1,0 +1,123 @@
+name: Tauri E2E
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+      - release-*
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'tauri-e2e/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/e2e.yaml'
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - release-*
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'tauri-e2e/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/e2e.yaml'
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: E2E suite to run (network/all require a configured WSL/LAN client and remain local-only)
+        required: true
+        default: critical
+        type: choice
+        options:
+          - smoke
+          - critical
+          - runtime
+          - profiles
+          - settings
+          - main
+          - hermetic
+  schedule:
+    - cron: '45 20 * * *'
+
+concurrency:
+  group: tauri-e2e-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ github.event_name }})
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      E2E_SUITE: ${{ github.event_name == 'schedule' && 'hermetic' || github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'critical' || 'smoke' }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          run_install: false
+
+      - uses: Swatinem/rust-cache@v2
+        name: Cache Rust dependencies
+        with:
+          workspaces: |
+            backend -> target
+          cache-on-failure: true
+
+      - name: Get pnpm store directory
+        shell: pwsh
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $env:GITHUB_ENV
+
+      - uses: actions/cache@v6
+        name: Cache pnpm store
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate E2E harness
+        run: pnpm --filter @chimera/tauri-e2e test:unit
+
+      - name: Typecheck E2E harness
+        run: pnpm --filter @chimera/tauri-e2e typecheck
+
+      - name: Prepare sidecars and resources
+        run: pnpm check
+
+      - name: Build Tauri E2E binary
+        run: pnpm e2e:tauri:build
+        env:
+          NODE_OPTIONS: '--max_old_space_size=4096'
+
+      - name: Run ${{ env.E2E_SUITE }} suite
+        shell: pwsh
+        run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite $env:E2E_SUITE
