@@ -724,13 +724,16 @@ pub async fn patch_clash_config(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_clash_core_config(payload: PatchClashCoreConfig) -> Result {
+pub async fn patch_clash_core_config(
+    client: State<'_, NyanpasuClient>,
+    payload: PatchClashCoreConfig,
+) -> Result {
     tracing::debug!("patch clash core config: {payload:?}");
     let mapping = match serde_yaml::to_value(&payload)? {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-    if let Err(e) = feat::patch_clash(mapping).await {
+    if let Err(e) = feat::patch_clash(&client, mapping).await {
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
