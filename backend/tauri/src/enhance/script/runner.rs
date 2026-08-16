@@ -6,7 +6,7 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::profile::item_type::{ProfileUid, ScriptType},
-    enhance::chain::Logs,
+    enhance::{chain::Logs, script::lua::LuaRunner},
 };
 
 #[derive(Debug, Clone)]
@@ -27,10 +27,18 @@ pub trait ScriptRunner: Send + Sync {
     async fn run(&self, request: ScriptRunRequest) -> Result<ScriptRunOutput>;
 }
 
-#[derive(Default)]
 pub struct RunnerManager {
     javascript: Option<Arc<dyn ScriptRunner>>,
     lua: Option<Arc<dyn ScriptRunner>>,
+}
+
+impl Default for RunnerManager {
+    fn default() -> Self {
+        Self {
+            javascript: None,
+            lua: Some(Arc::new(LuaRunner::new())),
+        }
+    }
 }
 
 impl RunnerManager {

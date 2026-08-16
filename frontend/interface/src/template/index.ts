@@ -17,6 +17,11 @@ export default function (profile) {
 `;
 
 const luascript = `-- Clash Chimera Lua Transform Template
+--
+-- The current runtime config is available as the global \`config\` table.
+-- Return the complete config table after applying your changes.
+-- Logging: print(...), log(...), info(...), warn(...), error_log(...),
+-- or console.log/info/warn/error(...).
 
 return config;
 `;
