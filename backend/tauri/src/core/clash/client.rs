@@ -955,7 +955,7 @@ impl NyanpasuClient {
     }
 
     async fn after_profile_runtime_commit(&self, operation: &str) -> MutationOutcome<()> {
-        match self.rebuild_running_config().await {
+        match self.rebuild_profile_runtime().await {
             Ok(()) => MutationOutcome::from_parts((), Vec::new()),
             Err(error) => {
                 log::warn!(target: "app", "post-commit rebuild failed after {operation}; state stays committed: {error:?}");
@@ -1055,6 +1055,11 @@ impl NyanpasuClient {
         let mut lease = self.inner.core.begin().await?;
         lease.rebuild_running_config().await?;
         self.inner.ui_sink.refresh_clash();
+        Ok(())
+    }
+
+    async fn rebuild_profile_runtime(&self) -> anyhow::Result<()> {
+        self.rebuild_running_config().await?;
         self.inner.core.on_profile_change().await;
         Ok(())
     }
@@ -1568,12 +1573,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rebuild_runs_runtime_then_ui_then_profile_side_effects() {
+    async fn runtime_rebuild_does_not_emit_profile_change_side_effects() {
         let (client, events) = recording_client(false);
         client.rebuild_running_config().await.unwrap();
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui", "profile-change"]
+            ["begin", "rebuild", "refresh-ui"]
         );
     }
 
