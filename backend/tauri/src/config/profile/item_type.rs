@@ -31,6 +31,10 @@ impl ProfileItemType {
     pub fn is_transform(self) -> bool {
         matches!(self, Self::Merge | Self::Script(_))
     }
+
+    pub fn is_runtime_transform_supported(self) -> bool {
+        matches!(self, Self::Merge)
+    }
 }
 
 pub type ProfileUid = String;

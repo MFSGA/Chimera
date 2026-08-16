@@ -317,8 +317,14 @@ impl Profiles {
                 bail!("duplicate transform profile `{transform_uid}` in chain");
             }
             let transform = self.get_item(transform_uid)?;
-            if !transform.kind().is_transform() {
+            let kind = transform.kind();
+            if !kind.is_transform() {
                 bail!("profile `{transform_uid}` is not a transform profile");
+            }
+            if !kind.is_runtime_transform_supported() {
+                bail!(
+                    "transform profile `{transform_uid}` cannot run in this build because its runtime is unavailable"
+                );
             }
         }
         Ok(())
@@ -427,8 +433,11 @@ impl Profiles {
 mod tests {
     use std::sync::Mutex;
 
-    use crate::config::profile::item::{
-        local::LocalProfile, merge::MergeProfile, shared::ProfileShared,
+    use crate::config::profile::{
+        item::{
+            local::LocalProfile, merge::MergeProfile, script::ScriptProfile, shared::ProfileShared,
+        },
+        item_type::ScriptType,
     };
 
     use super::*;
@@ -499,6 +508,7 @@ mod tests {
     fn transform_chains_validate_targets_and_report_runtime_relevance() {
         let local_uid = "l-source".to_string();
         let merge_uid = "m-transform".to_string();
+        let script_uid = "sj-transform".to_string();
         let mut profiles = Profiles {
             current: vec![local_uid.clone()],
             items: vec![
@@ -521,6 +531,16 @@ mod tests {
                         desc: None,
                         updated: 1,
                     },
+                }),
+                Profile::Script(ScriptProfile {
+                    shared: ProfileShared {
+                        uid: script_uid.clone(),
+                        name: "Script".to_string(),
+                        file: "sj-transform.js".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    script_type: ScriptType::JavaScript,
                 }),
             ],
             ..Profiles::default()
@@ -555,6 +575,10 @@ mod tests {
             .set_global_transform_chain(vec![local_uid.clone()])
             .unwrap_err();
         assert!(invalid.to_string().contains("not a transform profile"));
+        let unsupported = profiles
+            .set_global_transform_chain(vec![script_uid])
+            .unwrap_err();
+        assert!(unsupported.to_string().contains("runtime is unavailable"));
         let missing = profiles
             .set_global_transform_chain(vec!["m-missing".to_string()])
             .unwrap_err();
