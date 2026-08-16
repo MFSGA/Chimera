@@ -4,9 +4,13 @@ use atomic_enum::atomic_enum;
 use chimera_ipc::types::ServiceStatus;
 use chimera_utils::runtime::block_on;
 use serde::Serialize;
+use tauri::Manager;
 use tracing::instrument;
 
-use crate::log_err;
+use crate::{
+    core::{RunType, clash::client::NyanpasuClient, handle::Handle},
+    log_err,
+};
 
 #[derive(PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -63,6 +67,13 @@ fn dispatch_connected() {
     }
 }
 
+fn should_rebuild_for_ipc_transition(state: IpcState, run_type: RunType) -> bool {
+    matches!(
+        (state, run_type),
+        (IpcState::Connected, RunType::Normal) | (IpcState::Disconnected, RunType::Service)
+    )
+}
+
 #[instrument]
 fn on_ipc_state_changed(state: IpcState) {
     tracing::info!("IPC state changed: {:?}", state);
@@ -73,18 +84,34 @@ fn on_ipc_state_changed(state: IpcState) {
             .as_ref()
             .unwrap_or(&false)
     };
+    let app_handle = Handle::app_handle();
     std::thread::spawn(move || {
         nyanpasu_utils::runtime::block_on(async move {
-            if enabled_service {
-                let (_, _, run_type) = crate::core::CoreManager::global().status().await;
-                match (state, run_type) {
-                    (IpcState::Connected, crate::core::RunType::Normal)
-                    | (IpcState::Disconnected, crate::core::RunType::Service) => {
-                        tracing::info!("Restarting core due to IPC state change");
-                        log_err!(crate::core::CoreManager::global().run_core().await);
-                    }
-                    _ => {}
+            if !enabled_service {
+                return;
+            }
+
+            let Some(app_handle) = app_handle else {
+                tracing::warn!("app handle is unavailable during service IPC transition");
+                return;
+            };
+            let Some(client) = app_handle.try_state::<NyanpasuClient>() else {
+                tracing::warn!("NyanpasuClient is unavailable during service IPC transition");
+                return;
+            };
+            let status = match client.core_status().await {
+                Ok(status) => status,
+                Err(err) => {
+                    tracing::warn!(
+                        "failed to read core status during service IPC transition: {err}"
+                    );
+                    return;
                 }
+            };
+
+            if should_rebuild_for_ipc_transition(state, status.run_type) {
+                tracing::info!("Restarting core due to IPC state change");
+                log_err!(client.rebuild_running_config().await);
             }
         })
     });
@@ -129,5 +156,35 @@ async fn health_check() {
             tracing::error!("IPC health check failed: {}", e);
             dispatch_disconnected();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IpcState, should_rebuild_for_ipc_transition};
+    use crate::core::RunType;
+
+    #[test]
+    fn service_ipc_transition_rebuilds_only_when_runtime_owner_changes() {
+        assert!(should_rebuild_for_ipc_transition(
+            IpcState::Connected,
+            RunType::Normal
+        ));
+        assert!(should_rebuild_for_ipc_transition(
+            IpcState::Disconnected,
+            RunType::Service
+        ));
+        assert!(!should_rebuild_for_ipc_transition(
+            IpcState::Connected,
+            RunType::Service
+        ));
+        assert!(!should_rebuild_for_ipc_transition(
+            IpcState::Disconnected,
+            RunType::Normal
+        ));
+        assert!(!should_rebuild_for_ipc_transition(
+            IpcState::Connected,
+            RunType::Elevated
+        ));
     }
 }
