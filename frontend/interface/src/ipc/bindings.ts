@@ -45,6 +45,14 @@ export const commands = {
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
     ),
+  setProfileTransformChain: (uid: string, transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_profile_transform_chain', { uid, transforms }),
+    ),
+  setGlobalTransformChain: (transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_global_transform_chain', { transforms }),
+    ),
   patchProfileMetadata: (
     uid: string,
     patch: ProfileMetadataPatch_Deserialize,
