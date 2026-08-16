@@ -6,7 +6,11 @@ import {
   cleanupE2eProcesses,
   restoreWindowsProxySettings,
 } from './process-cleanup.js';
-import { resolveRuntimeDirectory } from './runtime-path.js';
+import {
+  cleanupRuntimeDirectory,
+  pruneRuntimeDirectories,
+  resolveRuntimeDirectory,
+} from './runtime-path.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
@@ -19,12 +23,15 @@ const hostProxySnapshot =
     ? null
     : captureWindowsProxySettings();
 const embeddedPort = Number(process.env.CHIMERA_E2E_WEBDRIVER_PORT ?? '4446');
+const ownsRuntimeDirectory = !process.env.CHIMERA_E2E_RUNTIME_DIR;
 const runtimeDirectory = resolveRuntimeDirectory(
   runtimeRootDirectory,
   process.env.CHIMERA_E2E_RUNTIME_DIR,
 );
 
-if (!process.env.CHIMERA_E2E_RUNTIME_DIR) {
+pruneRuntimeDirectories(runtimeRootDirectory, { exclude: [runtimeDirectory] });
+
+if (ownsRuntimeDirectory) {
   process.env.CHIMERA_E2E_RUNTIME_DIR = runtimeDirectory;
 }
 
@@ -110,7 +117,13 @@ export const config: WebdriverIO.Config = {
         runtimeRootDirectory,
       );
     } finally {
-      restoreWindowsProxySettings(hostProxySnapshot);
+      try {
+        if (ownsRuntimeDirectory) {
+          cleanupRuntimeDirectory(runtimeRootDirectory, runtimeDirectory);
+        }
+      } finally {
+        restoreWindowsProxySettings(hostProxySnapshot);
+      }
     }
   },
 };
