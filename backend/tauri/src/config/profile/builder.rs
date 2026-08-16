@@ -1,4 +1,7 @@
-use crate::config::profile::item::{local::LocalProfileBuilder, remote::RemoteProfileBuilder};
+use crate::config::profile::item::{
+    local::LocalProfileBuilder, merge::MergeProfileBuilder, remote::RemoteProfileBuilder,
+    script::ScriptProfileBuilder,
+};
 use crate::config::profile::item_type::ProfileItemType;
 
 // todo: add the serde
@@ -7,8 +10,8 @@ use crate::config::profile::item_type::ProfileItemType;
 pub enum ProfileBuilder {
     Remote(RemoteProfileBuilder),
     Local(LocalProfileBuilder),
-    // Merge(MergeProfileBuilder),
-    // Script(ScriptProfileBuilder),
+    Merge(MergeProfileBuilder),
+    Script(ScriptProfileBuilder),
 }
 
 impl ProfileBuilder {
@@ -16,6 +19,8 @@ impl ProfileBuilder {
         match self {
             Self::Remote(_) => ProfileItemType::Remote,
             Self::Local(_) => ProfileItemType::Local,
+            Self::Merge(_) => ProfileItemType::Merge,
+            Self::Script(builder) => builder.kind(),
         }
     }
 
@@ -23,6 +28,8 @@ impl ProfileBuilder {
         match self {
             Self::Remote(builder) => builder.assign_managed_identity(uid),
             Self::Local(builder) => builder.assign_managed_identity(uid),
+            Self::Merge(builder) => builder.assign_managed_identity(uid),
+            Self::Script(builder) => builder.assign_managed_identity(uid),
         }
     }
 }
