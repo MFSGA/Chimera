@@ -12,6 +12,7 @@ export const baseE2eSuites = {
   profiles: [
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
+    './specs/profile-transform-chain-ui.e2e.ts',
     './specs/profiles-detail-main.e2e.ts',
     './specs/profiles-layout.e2e.ts',
     './specs/profiles-main-layout.e2e.ts',
