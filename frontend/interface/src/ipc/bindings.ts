@@ -970,6 +970,8 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
+export type MergeProfile = ProfileShared;
+
 /**
  *  Public mutation wire aligned with REF: desired state is committed first;
  *  post-commit side-effect failures degrade instead of turning the mutation
@@ -1019,11 +1021,25 @@ export type ProfileBuilderRequest =
 
 export type ProfileBuilderRequest_Deserialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type?: ScriptType;
+    };
 
 export type ProfileBuilderRequest_Serialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize);
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type: ScriptType;
+    };
 
 export type ProfileDefinition =
   ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
@@ -1053,7 +1069,9 @@ export type ProfileMetadataPatch_Serialize = {
 
 export type ProfileResponse =
   | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize);
+  | ({ type: 'local' } & LocalProfile_Serialize)
+  | ({ type: 'merge' } & MergeProfile)
+  | ({ type: 'script' } & ScriptProfile);
 
 export type ProfileShared = {
   /**  Profile ID */
@@ -1297,6 +1315,12 @@ export type RuntimeInfos = {
   nyanpasu_config_dir: string;
   nyanpasu_data_dir: string;
 };
+
+export type ScriptProfile = {
+  script_type?: ScriptType;
+} & ProfileShared;
+
+export type ScriptType = 'javascript' | 'lua';
 
 export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 

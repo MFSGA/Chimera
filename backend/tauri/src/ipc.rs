@@ -18,12 +18,15 @@ use crate::{
             item::{
                 Profile,
                 local::{LocalProfile, LocalProfileBuilder},
+                merge::MergeProfile,
                 remote::{
                     RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
                     RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
+                script::{ScriptProfile, ScriptProfileBuilder},
+                shared::ProfileSharedBuilder,
             },
-            item_type::{ProfileItemType, ProfileUid},
+            item_type::{ProfileItemType, ProfileUid, ScriptType},
         },
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
@@ -127,6 +130,14 @@ pub enum ProfileResponse {
         #[serde(flatten)]
         profile: LocalProfile,
     },
+    Merge {
+        #[serde(flatten)]
+        profile: MergeProfile,
+    },
+    Script {
+        #[serde(flatten)]
+        profile: ScriptProfile,
+    },
 }
 
 impl From<crate::config::profile::profiles::Profiles> for ProfilesResponse {
@@ -151,6 +162,8 @@ impl From<Profile> for ProfileResponse {
         match profile {
             Profile::Remote(profile) => Self::Remote { profile },
             Profile::Local(profile) => Self::Local { profile },
+            Profile::Merge(profile) => Self::Merge { profile },
+            Profile::Script(profile) => Self::Script { profile },
         }
     }
 }
@@ -166,6 +179,16 @@ pub enum ProfileBuilderRequest {
         #[serde(flatten)]
         profile: LocalProfileBuilder,
     },
+    Merge {
+        name: Option<String>,
+        desc: Option<String>,
+    },
+    Script {
+        name: Option<String>,
+        desc: Option<String>,
+        #[serde(default)]
+        script_type: ScriptType,
+    },
 }
 
 impl From<ProfileBuilderRequest> for ProfileBuilder {
@@ -173,6 +196,35 @@ impl From<ProfileBuilderRequest> for ProfileBuilder {
         match request {
             ProfileBuilderRequest::Remote { profile } => Self::Remote(profile),
             ProfileBuilderRequest::Local { profile } => Self::Local(profile),
+            ProfileBuilderRequest::Merge { name, desc } => {
+                let mut shared = ProfileSharedBuilder::default();
+                if let Some(name) = name {
+                    shared.name(name);
+                }
+                if let Some(desc) = desc {
+                    shared.desc(desc);
+                }
+                let mut builder =
+                    crate::config::profile::item::merge::MergeProfileBuilder::default();
+                builder.shared(shared);
+                Self::Merge(builder)
+            }
+            ProfileBuilderRequest::Script {
+                name,
+                desc,
+                script_type,
+            } => {
+                let mut shared = ProfileSharedBuilder::default();
+                if let Some(name) = name {
+                    shared.name(name);
+                }
+                if let Some(desc) = desc {
+                    shared.desc(desc);
+                }
+                let mut builder = ScriptProfileBuilder::default();
+                builder.shared(shared).script_type(script_type);
+                Self::Script(builder)
+            }
         }
     }
 }
@@ -980,6 +1032,30 @@ pub async fn create_profile(
                 .into(),
             file_data.filter(|data| !data.is_empty()),
         ),
+        ProfileBuilder::Merge(builder) => {
+            let content = file_data
+                .filter(|data| !data.is_empty())
+                .ok_or_else(|| anyhow!("merge profile content cannot be empty"))?;
+            (
+                builder
+                    .build()
+                    .context("failed to build merge profile")?
+                    .into(),
+                Some(content),
+            )
+        }
+        ProfileBuilder::Script(builder) => {
+            let content = file_data
+                .filter(|data| !data.is_empty())
+                .ok_or_else(|| anyhow!("script profile content cannot be empty"))?;
+            (
+                builder
+                    .build()
+                    .context("failed to build script profile")?
+                    .into(),
+                Some(content),
+            )
+        }
     };
     Ok(client
         .commit_new_profile(profile, prepared_file, materialized_content)

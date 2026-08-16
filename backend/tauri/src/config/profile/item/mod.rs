@@ -6,17 +6,24 @@ use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_macro::EnumWrapperCombined;
 
 use crate::config::profile::{
-    item::{local::LocalProfile, remote::RemoteProfile, utils::resolve_managed_profile_path},
+    item::{
+        local::LocalProfile, merge::MergeProfile, remote::RemoteProfile, script::ScriptProfile,
+        utils::resolve_managed_profile_path,
+    },
     item_type::ProfileItemType,
 };
 
 /// 0
 pub mod local;
 /// 1
-pub mod remote;
+pub mod merge;
 /// 2
-pub mod shared;
+pub mod remote;
 /// 3
+pub mod script;
+/// 4
+pub mod shared;
+/// 5
 pub mod utils;
 
 /// Some getter is provided due to `Profile` is a enum type, and could not be used directly.
@@ -35,6 +42,8 @@ pub trait ProfileMetaGetter {
 pub enum Profile {
     Remote(RemoteProfile),
     Local(LocalProfile),
+    Merge(MergeProfile),
+    Script(ScriptProfile),
 }
 
 impl Profile {
@@ -42,6 +51,8 @@ impl Profile {
         match self {
             Profile::Remote(profile) => &profile.shared.file,
             Profile::Local(profile) => &profile.shared.file,
+            Profile::Merge(profile) => &profile.shared.file,
+            Profile::Script(profile) => &profile.shared.file,
         }
     }
 
@@ -66,4 +77,53 @@ impl Profile {
 #[delegatable_trait]
 pub trait ProfileKindGetter {
     fn kind(&self) -> ProfileItemType;
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::profile::{
+        item::{merge::MergeProfile, script::ScriptProfile, shared::ProfileShared},
+        item_type::ScriptType,
+    };
+
+    use super::*;
+
+    fn shared(uid: &str, file: &str) -> ProfileShared {
+        ProfileShared {
+            uid: uid.to_string(),
+            name: uid.to_string(),
+            file: file.to_string(),
+            desc: None,
+            updated: 1,
+        }
+    }
+
+    #[test]
+    fn legacy_transform_profile_schema_round_trips() {
+        let merge = Profile::Merge(MergeProfile {
+            shared: shared("m-test", "m-test.yaml"),
+        });
+        let javascript = Profile::Script(ScriptProfile {
+            shared: shared("s-test", "s-test.js"),
+            script_type: ScriptType::JavaScript,
+        });
+
+        let merge_yaml = serde_yaml::to_string(&merge).unwrap();
+        let script_yaml = serde_yaml::to_string(&javascript).unwrap();
+
+        assert!(merge_yaml.contains("type: merge"));
+        assert!(script_yaml.contains("type: script"));
+        assert!(script_yaml.contains("script_type: javascript"));
+        assert!(matches!(
+            serde_yaml::from_str::<Profile>(&merge_yaml).unwrap(),
+            Profile::Merge(_)
+        ));
+        assert!(matches!(
+            serde_yaml::from_str::<Profile>(&script_yaml).unwrap(),
+            Profile::Script(ScriptProfile {
+                script_type: ScriptType::JavaScript,
+                ..
+            })
+        ));
+    }
 }

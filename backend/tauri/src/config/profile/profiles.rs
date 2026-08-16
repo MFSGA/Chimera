@@ -11,7 +11,7 @@ use serde_yaml::Mapping;
 use crate::{
     config::profile::{
         item::{
-            Profile, ProfileMetaGetter,
+            Profile, ProfileKindGetter, ProfileMetaGetter,
             remote::{RemoteProfileOptions, SubscriptionInfo},
             utils::resolve_managed_profile_path,
         },
@@ -200,7 +200,10 @@ impl Profiles {
     pub fn activate(&mut self, uid: Option<&str>) -> Result<()> {
         self.current = match uid {
             Some(uid) => {
-                self.get_item(uid)?;
+                let profile = self.get_item(uid)?;
+                if !profile.kind().is_config() {
+                    bail!("profile \"uid:{uid}\" is not activatable");
+                }
                 vec![uid.to_string()]
             }
             None => vec![],
@@ -222,6 +225,8 @@ impl Profiles {
         let shared = match profile {
             Profile::Remote(profile) => &mut profile.shared,
             Profile::Local(profile) => &mut profile.shared,
+            Profile::Merge(profile) => &mut profile.shared,
+            Profile::Script(profile) => &mut profile.shared,
         };
 
         if let Some(name) = name {
@@ -310,13 +315,39 @@ impl Profiles {
             bail!("failed to get the profile item \"uid:{uid}\"");
         };
 
-        let should_update = self.current.iter().any(|current| current == uid);
+        let should_update = self.is_runtime_relevant(uid);
         self.items.remove(index);
 
         self.current.retain(|current| current != uid);
         self.chain.retain(|chain_uid| chain_uid != uid);
+        for profile in &mut self.items {
+            match profile {
+                Profile::Local(profile) => profile.chain.retain(|chain_uid| chain_uid != uid),
+                Profile::Remote(profile) => profile.chain.retain(|chain_uid| chain_uid != uid),
+                Profile::Merge(_) | Profile::Script(_) => {}
+            }
+        }
 
         Ok(should_update)
+    }
+
+    pub fn is_runtime_relevant(&self, uid: &str) -> bool {
+        if self.current.iter().any(|current| current == uid)
+            || self.chain.iter().any(|transform| transform == uid)
+        {
+            return true;
+        }
+
+        self.items.iter().any(|profile| {
+            if !self.current.iter().any(|current| current == profile.uid()) {
+                return false;
+            }
+            match profile {
+                Profile::Local(profile) => profile.chain.iter().any(|transform| transform == uid),
+                Profile::Remote(profile) => profile.chain.iter().any(|transform| transform == uid),
+                Profile::Merge(_) | Profile::Script(_) => false,
+            }
+        })
     }
 
     /// 获取current指向的配置内容
@@ -351,7 +382,9 @@ impl Profiles {
 mod tests {
     use std::sync::Mutex;
 
-    use crate::config::profile::item::{local::LocalProfile, shared::ProfileShared};
+    use crate::config::profile::item::{
+        local::LocalProfile, merge::MergeProfile, shared::ProfileShared,
+    };
 
     use super::*;
 
@@ -395,6 +428,87 @@ mod tests {
         unsafe {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
         }
+    }
+
+    #[test]
+    fn transform_profiles_cannot_be_activated() {
+        let mut profiles = Profiles {
+            items: vec![Profile::Merge(MergeProfile {
+                shared: ProfileShared {
+                    uid: "m-transform".to_string(),
+                    name: "Transform".to_string(),
+                    file: "m-transform.yaml".to_string(),
+                    desc: None,
+                    updated: 1,
+                },
+            })],
+            ..Profiles::default()
+        };
+
+        let error = profiles.activate(Some("m-transform")).unwrap_err();
+        assert!(error.to_string().contains("not activatable"));
+        assert!(profiles.current.is_empty());
+    }
+
+    #[test]
+    fn delete_item_removes_dangling_scoped_transform_references() {
+        let mut profiles = Profiles {
+            current: vec!["l-keep".to_string()],
+            items: vec![
+                Profile::Local(LocalProfile {
+                    shared: ProfileShared {
+                        uid: "l-keep".to_string(),
+                        name: "Keep".to_string(),
+                        file: "l-keep.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    symlinks: None,
+                    chain: vec!["m-delete".to_string(), "t-keep".to_string()],
+                }),
+                Profile::Merge(MergeProfile {
+                    shared: ProfileShared {
+                        uid: "m-delete".to_string(),
+                        name: "Delete".to_string(),
+                        file: "m-delete.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                }),
+            ],
+            valid: Vec::new(),
+            chain: Vec::new(),
+        };
+
+        let affects_runtime = profiles.delete_item("m-delete").unwrap();
+
+        assert!(affects_runtime);
+        let Profile::Local(kept) = &profiles.items[0] else {
+            panic!("expected local profile");
+        };
+        assert_eq!(kept.chain, vec!["t-keep"]);
+    }
+
+    #[test]
+    fn deleting_global_transform_marks_runtime_rebuild_required() {
+        let mut profiles = Profiles {
+            items: vec![Profile::Merge(MergeProfile {
+                shared: ProfileShared {
+                    uid: "m-global".to_string(),
+                    name: "Global".to_string(),
+                    file: "m-global.yaml".to_string(),
+                    desc: None,
+                    updated: 1,
+                },
+            })],
+            chain: vec!["m-global".to_string()],
+            ..Profiles::default()
+        };
+
+        let affects_runtime = profiles.delete_item("m-global").unwrap();
+
+        assert!(affects_runtime);
+        assert!(profiles.chain.is_empty());
     }
 
     #[test]

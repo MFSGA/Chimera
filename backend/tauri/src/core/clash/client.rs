@@ -311,8 +311,9 @@ impl LegacyProfilesWritePort {
 impl ProfilesWritePort for LegacyProfilesWritePort {
     async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
         let uid = profile.uid().to_string();
+        let activatable = profile.kind().is_config();
         Self::persist(move |profiles| {
-            let activate = profiles.current.is_empty();
+            let activate = activatable && profiles.current.is_empty();
             profiles.append_item(profile)?;
             if activate {
                 profiles.current = vec![uid.clone()];
@@ -345,6 +346,8 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
                     .patch_profile(item)
                     .context("failed to patch remote profile")?,
                 (Profile::Local(item), ProfileBuilder::Local(builder)) => item.apply(builder),
+                (Profile::Merge(item), ProfileBuilder::Merge(builder)) => item.apply(builder),
+                (Profile::Script(item), ProfileBuilder::Script(builder)) => item.apply(builder),
                 _ => anyhow::bail!("profile type mismatch"),
             }
             Ok(())
@@ -704,6 +707,9 @@ impl NyanpasuClient {
         let profiles = self.inner.profiles.snapshot()?;
         let item = profiles.get_item(&uid)?;
         let raw = self.inner.profile_files.read(item.file()).await?;
+        if matches!(item.kind(), ProfileItemType::Script(_)) {
+            return Ok(raw);
+        }
         let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
         serde_yaml::to_string(&data).context("failed to convert yaml to string")
     }
@@ -999,17 +1005,20 @@ impl NyanpasuClient {
             let _commit = self.inner.profile_commit.lock().await;
             let profiles = self.inner.profiles.snapshot()?;
             let item = profiles.get_item(&uid)?;
+            let kind = item.kind();
             anyhow::ensure!(
-                !matches!(item.kind(), ProfileItemType::Remote),
+                !matches!(kind, ProfileItemType::Remote),
                 "remote profiles are updater-owned"
             );
-            serde_yaml::from_str::<serde_yaml::Mapping>(&file_data)
-                .context("failed to parse profile YAML")?;
+            if !matches!(kind, ProfileItemType::Script(_)) {
+                serde_yaml::from_str::<serde_yaml::Mapping>(&file_data)
+                    .context("failed to parse profile YAML")?;
+            }
             self.inner
                 .profile_files
                 .write_atomic(item.file(), &file_data)
                 .await?;
-            profiles.current.iter().any(|current| current == &uid)
+            profiles.is_runtime_relevant(&uid)
         };
         if affects_current {
             Ok(self.after_profile_runtime_commit("profile file save").await)

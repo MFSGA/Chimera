@@ -19,20 +19,70 @@ const FLATTENED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
 
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
-  | { type: 'remote'; profile: RemoteProfileBuilder }
-  | { type: 'local'; profile: LocalProfileBuilder_Deserialize };
+  | ({ type: 'remote'; profile: RemoteProfileBuilder } & {
+      desc?: never;
+      name?: never;
+      script_type?: never;
+    })
+  | ({ type: 'local'; profile: LocalProfileBuilder_Deserialize } & {
+      desc?: never;
+      name?: never;
+      script_type?: never;
+    })
+  | ({ type: 'merge'; name: string | null; desc: string | null } & {
+      profile?: never;
+      script_type?: never;
+    })
+  | ({
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type?: ScriptType;
+    } & { profile?: never });
 
 export type ProfileBuilderRequest_Serialize =
-  | { type: 'remote'; profile: RemoteProfileBuilder }
-  | { type: 'local'; profile: LocalProfileBuilder_Serialize };"#;
+  | ({ type: 'remote'; profile: RemoteProfileBuilder } & {
+      desc?: never;
+      name?: never;
+      script_type?: never;
+    })
+  | ({ type: 'local'; profile: LocalProfileBuilder_Serialize } & {
+      desc?: never;
+      name?: never;
+      script_type?: never;
+    })
+  | ({ type: 'merge'; name: string | null; desc: string | null } & {
+      profile?: never;
+      script_type?: never;
+    })
+  | ({
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type: ScriptType;
+    } & { profile?: never });"#;
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type?: ScriptType;
+    };
 
 export type ProfileBuilderRequest_Serialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize);"#;
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type: ScriptType;
+    };"#;
 
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
@@ -40,15 +90,21 @@ const GENERATED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse 
 
 export type ProfileResponse_Deserialize =
   | { type: 'remote'; profile: RemoteProfile_Deserialize }
-  | { type: 'local'; profile: LocalProfile_Deserialize };
+  | { type: 'local'; profile: LocalProfile_Deserialize }
+  | { type: 'merge'; profile: MergeProfile }
+  | { type: 'script'; profile: ScriptProfile };
 
 export type ProfileResponse_Serialize =
   | { type: 'remote'; profile: RemoteProfile_Serialize }
-  | { type: 'local'; profile: LocalProfile_Serialize };"#;
+  | { type: 'local'; profile: LocalProfile_Serialize }
+  | { type: 'merge'; profile: MergeProfile }
+  | { type: 'script'; profile: ScriptProfile };"#;
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const FLATTENED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
   | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize);"#;
+  | ({ type: 'local' } & LocalProfile_Serialize)
+  | ({ type: 'merge' } & MergeProfile)
+  | ({ type: 'script' } & ScriptProfile);"#;
 
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 const GENERATED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse =
