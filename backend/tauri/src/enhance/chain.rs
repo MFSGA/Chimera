@@ -3,13 +3,21 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 
-use crate::{
-    config::profile::{
-        item::{Profile, ProfileMetaGetter},
-        item_type::{ProfileUid, ScriptType},
-    },
-    enhance::utils::Logs,
+use crate::config::profile::{
+    item::{Profile, ProfileMetaGetter},
+    item_type::{ProfileUid, ScriptType},
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "lowercase")]
+pub enum LogSpan {
+    Log,
+    Info,
+    Warn,
+    Error,
+}
+
+pub type Logs = Vec<(LogSpan, String)>;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, specta::Type)]
 /// 后处理输出
