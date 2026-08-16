@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "pnpm run test:desktop",
+    "test:unit": "node --test ./process-cleanup.test.ts ./runtime-path.test.ts",
     "test:desktop": "wdio run ./wdio.conf.ts",
     "test:lan": "wdio run ./wdio.conf.ts --spec ./specs/allow-lan.e2e.ts",
     "typecheck": "tsc --noEmit"
