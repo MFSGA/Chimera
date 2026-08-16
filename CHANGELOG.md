@@ -1,3 +1,29 @@
+## [0.21.1] - 2026-08-16 13:23:06
+
+### 🐛 Bug Fixes
+
+- **settings:** Report app log level failures and verify persistence by @MFSGA
+
+- **settings:** Improve system proxy and service mode feedback by @MFSGA
+
+### 🔨 Refactor
+
+- **runtime:** Route core changes through the lifecycle lease by @MFSGA
+
+- **runtime:** Guard core lifecycle mutations with an exclusive lease by @MFSGA
+
+- **runtime:** Read core status through NyanpasuClient by @MFSGA
+
+- **runtime:** Serialize runtime patches inside NyanpasuClient by @MFSGA
+
+- **runtime:** Introduce NyanpasuClient as the lifecycle boundary by @MFSGA
+
+- **ui:** Standardize dropdown primitives across navigation and settings by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.21.0...v0.21.1
+
 ## [0.21.0] - 2026-08-15 19:20:32
 
 ### ✅ Testing
