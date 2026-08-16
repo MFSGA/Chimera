@@ -47,10 +47,20 @@ export default function ProfileCard({
   const isPending = activeProfile.isPending || deleteProfile.isPending;
   const isProxy = isProxyProfile(profile);
 
-  const typeLabel =
-    profile.type === 'remote'
-      ? m.profile_remote_label()
-      : m.profile_local_label();
+  const typeLabel = (() => {
+    switch (profile.type) {
+      case 'remote':
+        return m.profile_remote_label();
+      case 'local':
+        return m.profile_local_label();
+      case 'merge':
+        return m.profile_merge_label();
+      case 'script':
+        return profile.script_type === 'lua'
+          ? m.profile_lua_label()
+          : m.profile_javascript_label();
+    }
+  })();
 
   return (
     <RegisterContextMenu>

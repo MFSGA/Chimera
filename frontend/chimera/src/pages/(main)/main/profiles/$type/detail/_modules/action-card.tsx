@@ -16,6 +16,7 @@ import {
   useActiveProfile,
   useDeleteProfile,
 } from '../../_modules/profile-actions';
+import { isProxyProfile } from '../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
 import ViewContent from './view-content';
@@ -59,6 +60,7 @@ export default function ActionCard({
     }
   });
   const openLocally = useLockFn(openTask.execute);
+  const isProxy = isProxyProfile(profile);
   const isPending = active.isPending || deletion.isPending;
 
   return (
@@ -81,14 +83,16 @@ export default function ActionCard({
         </SubscriptionUrlEditor>
       )}
 
-      <ActionButton
-        disabled={isPending}
-        loading={active.isPending}
-        onClick={() => void active.handleClick()}
-      >
-        <DragClickRounded className="size-4 shrink-0" />
-        <span className="truncate">{m.profile_active_title()}</span>
-      </ActionButton>
+      {isProxy && (
+        <ActionButton
+          disabled={isPending}
+          loading={active.isPending}
+          onClick={() => void active.handleClick()}
+        >
+          <DragClickRounded className="size-4 shrink-0" />
+          <span className="truncate">{m.profile_active_title()}</span>
+        </ActionButton>
+      )}
 
       <ActionButton
         disabled={isPending}

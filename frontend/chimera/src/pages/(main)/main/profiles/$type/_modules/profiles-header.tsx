@@ -7,6 +7,7 @@ import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
 import ProfileQuickImport from '../../_modules/profile-quick-import';
 import { Route as IndexRoute } from '../index';
+import ChainProfileImport from './chain-profile-import';
 
 const BackButton = () => (
   <Button icon className="flex items-center justify-center md:hidden" asChild>
@@ -40,7 +41,12 @@ export default function ProfilesHeader() {
       {isProfileType ? (
         <ProfileQuickImport />
       ) : (
-        <p className="text-lg font-bold">{labels[type as ProfileType]}</p>
+        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+          <p className="truncate text-lg font-bold">
+            {labels[type as ProfileType]}
+          </p>
+          <ChainProfileImport />
+        </div>
       )}
     </div>
   );

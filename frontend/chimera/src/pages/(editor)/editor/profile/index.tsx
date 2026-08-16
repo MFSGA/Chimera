@@ -29,6 +29,13 @@ function RouteComponent() {
   const content = useProfileContent(uid);
   const profile = profiles.data?.items.find((item) => item.uid === uid);
   const readOnly = profile?.type === 'remote';
+  const language =
+    profile?.type === 'script'
+      ? profile.script_type === 'lua'
+        ? 'lua'
+        : 'javascript'
+      : 'yaml';
+  const schemaType = profile?.type === 'merge' ? 'merge' : 'clash';
   const markers = useRef<editor.IMarker[]>([]);
   const skipCloseGuard = useRef(false);
   const loadedContent = useRef<{ uid: string; value: string } | undefined>(
@@ -155,8 +162,8 @@ function RouteComponent() {
             <ProfileMonacoViewer
               className="h-full w-full"
               value={editorValue}
-              language="yaml"
-              schemaType="clash"
+              language={language}
+              schemaType={language === 'yaml' ? schemaType : undefined}
               readonly={readOnly}
               onChange={setEditorValue}
               onValidate={(nextMarkers) => {
