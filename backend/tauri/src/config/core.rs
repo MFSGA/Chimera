@@ -45,7 +45,7 @@ impl Config {
 
     /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.
     pub async fn generate_runtime_mapping() -> Result<Mapping> {
-        let (config, _exists_keys, _postprocessing_outputs) = enhance::enhance().await;
+        let (config, _exists_keys, _postprocessing_outputs) = enhance::enhance().await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
