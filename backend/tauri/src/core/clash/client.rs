@@ -130,7 +130,6 @@ pub(crate) struct CoreStatusSnapshot {
 #[async_trait]
 pub(crate) trait CoreLifecycleLease: Send {
     async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
-    #[allow(dead_code)]
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
@@ -604,6 +603,11 @@ impl NyanpasuClient {
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let mut lease = self.inner.core.begin().await?;
         lease.change_core(clash_core).await
+    }
+
+    pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.stop().await
     }
 
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
@@ -1554,6 +1558,13 @@ mod tests {
         let (client, events) = recording_client(false);
         client.change_core(ClashCore::Mihomo).await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["begin", "change-core"]);
+    }
+
+    #[tokio::test]
+    async fn stop_core_runs_through_the_injected_lifecycle_lease() {
+        let (client, events) = recording_client(false);
+        client.stop_core().await.unwrap();
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
     }
 
     #[tokio::test]
