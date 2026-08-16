@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::profile::{
     item::{ProfileMetaGetter, utils::resolve_managed_profile_path},
-    item_type::ProfileItemType,
+    item_type::{ProfileItemType, ScriptType},
 };
 
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Builder, BuilderUpdate, specta::Type)]
@@ -51,8 +51,9 @@ impl ProfileSharedBuilder {
         match kind {
             ProfileItemType::Remote => "Remote Profile",
             ProfileItemType::Local => "Local Profile",
-            // ProfileItemType::Merge => "Merge Profile",
-            // ProfileItemType::Script(_) => "Script Profile",
+            ProfileItemType::Merge => "Merge Profile",
+            ProfileItemType::Script(ScriptType::JavaScript) => "JavaScript Profile",
+            ProfileItemType::Script(ScriptType::Lua) => "Lua Profile",
         }
     }
 
@@ -60,9 +61,9 @@ impl ProfileSharedBuilder {
         match kind {
             ProfileItemType::Remote => format!("{uid}.yaml"),
             ProfileItemType::Local => format!("{uid}.yaml"),
-            // ProfileItemType::Merge => format!("{uid}.yaml"),
-            // ProfileItemType::Script(ScriptType::JavaScript) => format!("{uid}.js"),
-            // ProfileItemType::Script(ScriptType::Lua) => format!("{uid}.lua"),
+            ProfileItemType::Merge => format!("{uid}.yaml"),
+            ProfileItemType::Script(ScriptType::JavaScript) => format!("{uid}.js"),
+            ProfileItemType::Script(ScriptType::Lua) => format!("{uid}.lua"),
         }
     }
 
@@ -231,6 +232,26 @@ mod tests {
 
         assert_eq!(shared.uid, "l-server");
         assert_eq!(shared.file, "l-server.yaml");
+    }
+
+    #[test]
+    fn transform_identity_uses_runtime_specific_extensions() {
+        let mut merge = ProfileSharedBuilder::default();
+        merge.assign_managed_identity(&ProfileItemType::Merge, "m-test".to_string());
+        assert_eq!(
+            merge.build(&ProfileItemType::Merge).unwrap().file,
+            "m-test.yaml"
+        );
+
+        let javascript_kind = ProfileItemType::Script(ScriptType::JavaScript);
+        let mut javascript = ProfileSharedBuilder::default();
+        javascript.assign_managed_identity(&javascript_kind, "s-js".to_string());
+        assert_eq!(javascript.build(&javascript_kind).unwrap().file, "s-js.js");
+
+        let lua_kind = ProfileItemType::Script(ScriptType::Lua);
+        let mut lua = ProfileSharedBuilder::default();
+        lua.assign_managed_identity(&lua_kind, "s-lua".to_string());
+        assert_eq!(lua.build(&lua_kind).unwrap().file, "s-lua.lua");
     }
 
     #[test]
