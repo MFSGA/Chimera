@@ -63,7 +63,12 @@ export default function TransformChainEditor({
     [query.data?.items],
   );
   const runnableTransforms = useMemo(
-    () => transforms.filter((item) => item.type === 'merge'),
+    () =>
+      transforms.filter(
+        (item) =>
+          item.type === 'merge' ||
+          (item.type === 'script' && item.script_type === 'lua'),
+      ),
     [transforms],
   );
   const transformByUid = useMemo(

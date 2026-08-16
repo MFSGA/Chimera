@@ -300,6 +300,36 @@ rules:
     }
 
     #[tokio::test]
+    async fn lua_transform_runs_through_the_default_runner() {
+        let chain = vec![ChainItem {
+            uid: "sl-test".into(),
+            data: ChainTypeWrapper::Script {
+                script_type: ScriptType::Lua,
+                source: r#"
+config["unified-delay"] = true
+info("lua transform ran")
+return config
+"#
+                .into(),
+            },
+        }];
+
+        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain)
+            .await
+            .unwrap();
+        assert_eq!(
+            config
+                .get("unified-delay")
+                .and_then(serde_yaml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            output.get("sl-test"),
+            Some(&vec![(LogSpan::Info, "lua transform ran".into())])
+        );
+    }
+
+    #[tokio::test]
     async fn script_transform_fails_closed_until_runner_is_available() {
         let chain = vec![ChainItem {
             uid: "s-test".into(),

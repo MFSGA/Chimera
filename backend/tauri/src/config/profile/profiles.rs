@@ -509,6 +509,7 @@ mod tests {
         let local_uid = "l-source".to_string();
         let merge_uid = "m-transform".to_string();
         let script_uid = "sj-transform".to_string();
+        let lua_uid = "sl-transform".to_string();
         let mut profiles = Profiles {
             current: vec![local_uid.clone()],
             items: vec![
@@ -541,6 +542,16 @@ mod tests {
                         updated: 1,
                     },
                     script_type: ScriptType::JavaScript,
+                }),
+                Profile::Script(ScriptProfile {
+                    shared: ProfileShared {
+                        uid: lua_uid.clone(),
+                        name: "Lua".to_string(),
+                        file: "sl-transform.lua".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    script_type: ScriptType::Lua,
                 }),
             ],
             ..Profiles::default()
@@ -575,6 +586,12 @@ mod tests {
             .set_global_transform_chain(vec![local_uid.clone()])
             .unwrap_err();
         assert!(invalid.to_string().contains("not a transform profile"));
+        assert!(
+            profiles
+                .set_global_transform_chain(vec![lua_uid.clone()])
+                .unwrap()
+        );
+        assert_eq!(profiles.chain, vec![lua_uid]);
         let unsupported = profiles
             .set_global_transform_chain(vec![script_uid])
             .unwrap_err();
