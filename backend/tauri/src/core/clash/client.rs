@@ -130,6 +130,7 @@ pub(crate) struct CoreStatusSnapshot {
 #[async_trait]
 pub(crate) trait CoreLifecycleLease: Send {
     async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
+    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()>;
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
@@ -487,6 +488,10 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
         self.lease.rebuild_running_config().await
     }
 
+    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()> {
+        self.lease.run_core_from(config_path).await
+    }
+
     async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop_core().await
     }
@@ -533,6 +538,23 @@ impl UiEventSink for LegacyUiEventSink {
 #[derive(Clone)]
 pub(crate) struct NyanpasuClient {
     inner: Arc<NyanpasuClientInner>,
+}
+
+pub(crate) struct CoreUpdateLease {
+    lease: Box<dyn CoreLifecycleLease>,
+}
+
+impl CoreUpdateLease {
+    pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
+        self.lease.stop().await
+    }
+
+    pub(crate) async fn run_core_from(
+        &mut self,
+        config_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        self.lease.run_core_from(config_path).await
+    }
 }
 
 struct NyanpasuClientInner {
@@ -608,6 +630,12 @@ impl NyanpasuClient {
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
         let mut lease = self.inner.core.begin().await?;
         lease.stop().await
+    }
+
+    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
+        Ok(CoreUpdateLease {
+            lease: self.inner.core.begin().await?,
+        })
     }
 
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
@@ -1098,6 +1126,11 @@ mod tests {
             Ok(())
         }
 
+        async fn run_core_from(&mut self, _config_path: &std::path::Path) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("run-from");
+            Ok(())
+        }
+
         async fn stop(&mut self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("stop");
             Ok(())
@@ -1572,6 +1605,22 @@ mod tests {
         let (client, events) = recording_client(false);
         client.stop_core().await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+    }
+
+    #[tokio::test]
+    async fn core_update_lease_keeps_stop_and_restart_on_one_lifecycle_lease() {
+        let (client, events) = recording_client(false);
+        let mut lease = client.begin_core_update().await.unwrap();
+        lease.stop().await.unwrap();
+        lease
+            .run_core_from(std::path::Path::new("runtime.yaml"))
+            .await
+            .unwrap();
+        drop(lease);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "stop", "run-from"]
+        );
     }
 
     #[tokio::test]

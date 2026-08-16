@@ -898,11 +898,14 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
 
 #[tauri::command]
 #[specta::specta]
-pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
+pub async fn update_core(
+    client: State<'_, NyanpasuClient>,
+    core_type: chimera::ClashCore,
+) -> Result<usize> {
     let event_id = updater::UpdaterManager::global()
         .write()
         .await
-        .update_core(&core_type)
+        .update_core(&client, &core_type)
         .await?;
     Ok(event_id)
 }
