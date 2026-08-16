@@ -612,7 +612,7 @@ impl NyanpasuClient {
 
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
         let _patch = self.inner.verge_patch.lock().await;
-        crate::feat::patch_verge_uncoordinated(patch).await
+        crate::feat::patch_verge_uncoordinated(self, patch).await
     }
 
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
@@ -1037,6 +1037,7 @@ impl NyanpasuClient {
     ) -> TransactionOutcome {
         let mapping = overrides.to_mapping();
         let persist_overrides = overrides.clone();
+        let client = self.clone();
         self.inner
             .runtime_patch
             .apply(
@@ -1045,7 +1046,8 @@ impl NyanpasuClient {
                 |patch| async move { super::api::patch_configs(&patch).await },
                 move |_patch| {
                     let overrides = persist_overrides.clone();
-                    async move { crate::feat::patch_clash_overrides(overrides).await }
+                    let client = client.clone();
+                    async move { crate::feat::patch_clash_overrides(&client, overrides).await }
                 },
             )
             .await
