@@ -729,26 +729,6 @@ impl CoreManager {
         }
     }
 
-    /// Apply one generated candidate by checking, promoting and restarting from the exact product.
-    pub async fn restart_core_with_generated_config(&self) -> Result<()> {
-        log::debug!(target: "app", "restart core with checked runtime product");
-        let lease = self.begin_lifecycle().await;
-        lease.rebuild_running_config().await
-    }
-
-    /// Check the exact generated candidate without promoting or applying it.
-    pub async fn check_config(&self) -> Result<()> {
-        let _guard = self.run_lock.lock().await;
-        let paths = RuntimePaths::from_app_config_dir()?;
-        let config = Config::generate_runtime_mapping().await?;
-        let bytes = Config::render_runtime_bytes(&config)?;
-        let candidate = paths.create_candidate(&bytes).await?;
-        self.check_candidate_path(candidate.path(), Self::selected_core())
-            .await?;
-        candidate.read_verified().await?;
-        candidate.cleanup().await
-    }
-
     #[cfg(target_os = "macos")]
     pub async fn change_default_network_dns(&self, enabled: bool) -> Result<()> {
         todo!()
@@ -764,7 +744,7 @@ impl CoreManager {
             tokio::time::sleep(Duration::from_secs(5)).await;
             std::thread::spawn(move || {
                 block_on(async {
-                    let _ = CoreManager::global().recover_core().await;
+                    let _ = self.recover_core().await;
                 })
             });
         }
@@ -772,19 +752,13 @@ impl CoreManager {
         Ok(())
     }
 
-    pub fn init(&self) -> Result<()> {
-        tauri::async_runtime::spawn(async {
+    pub fn init(&'static self) -> Result<()> {
+        tauri::async_runtime::spawn(async move {
             // 启动clash
-            log_err!(Self::global().run_core().await);
+            log_err!(self.run_core().await);
         });
 
         Ok(())
-    }
-
-    /// 停止核心运行
-    pub async fn stop_core(&self) -> Result<()> {
-        let lease = self.begin_lifecycle().await;
-        lease.stop_core().await
     }
 
     async fn stop_core_with_lease(&self, _lease: &CoreLifecycleLease<'_>) -> Result<()> {
