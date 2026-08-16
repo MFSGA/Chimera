@@ -553,6 +553,7 @@
   "agent_probe_service_status_unavailable": "The service status could not be read.",
   "agent_probe_service_status_timeout": "The service status check timed out.",
   "agent_probe_telemetry_unavailable": "Core telemetry is currently unavailable.",
+  "agent_probe_core_status_unavailable": "The core lifecycle status could not be read. Core state is shown as unknown.",
   "agent_probe_core_config_unavailable": "The running core's actual routing mode could not be read. Related status is degraded and write actions are unavailable.",
   "agent_impact_existing_connections_may_change": "Existing connections may be interrupted or rerouted.",
   "agent_impact_traffic_may_bypass_proxy": "Traffic may bypass the proxy.",
