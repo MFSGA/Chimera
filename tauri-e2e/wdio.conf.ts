@@ -11,6 +11,7 @@ import {
   pruneRuntimeDirectories,
   resolveRuntimeDirectory,
 } from './runtime-path.js';
+import { e2eSuites } from './spec-suites.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
@@ -72,7 +73,10 @@ async function prepareTauriServiceTeardown(): Promise<void> {
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: ['./specs/**/smoke.e2e.ts', './specs/**/proxy-localization.e2e.ts'],
+  specs: [...e2eSuites.smoke],
+  suites: Object.fromEntries(
+    Object.entries(e2eSuites).map(([name, specs]) => [name, [...specs]]),
+  ),
   maxInstances: 1,
   logLevel: process.env.CI ? 'warn' : 'info',
   bail: 0,

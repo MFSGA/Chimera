@@ -4,10 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "pnpm run test:desktop",
-    "test:unit": "node --test ./process-cleanup.test.ts ./runtime-path.test.ts",
-    "test:desktop": "wdio run ./wdio.conf.ts",
-    "test:lan": "wdio run ./wdio.conf.ts --spec ./specs/allow-lan.e2e.ts",
+    "test": "pnpm run test:smoke",
+    "test:unit": "node --test ./process-cleanup.test.ts ./runtime-path.test.ts ./spec-suites.test.ts",
+    "test:desktop": "pnpm run test:smoke",
+    "test:smoke": "wdio run ./wdio.conf.ts --suite smoke",
+    "test:critical": "wdio run ./wdio.conf.ts --suite critical",
+    "test:runtime": "wdio run ./wdio.conf.ts --suite runtime",
+    "test:profiles": "wdio run ./wdio.conf.ts --suite profiles",
+    "test:settings": "wdio run ./wdio.conf.ts --suite settings",
+    "test:main": "wdio run ./wdio.conf.ts --suite main",
+    "test:network": "wdio run ./wdio.conf.ts --suite network",
+    "test:hermetic": "wdio run ./wdio.conf.ts --suite hermetic",
+    "test:all": "wdio run ./wdio.conf.ts --suite all",
+    "test:lan": "pnpm run test:network",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

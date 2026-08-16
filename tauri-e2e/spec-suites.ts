@@ -1,0 +1,75 @@
+export const baseE2eSuites = {
+  smoke: ['./specs/smoke.e2e.ts', './specs/proxy-localization.e2e.ts'],
+  runtime: [
+    './specs/ipv6-runtime-setting.e2e.ts',
+    './specs/log-level-runtime-setting.e2e.ts',
+    './specs/profile-reorder-rebuild.e2e.ts',
+    './specs/profile-runtime-product.e2e.ts',
+    './specs/proxy-mode-runtime-setting.e2e.ts',
+    './specs/storage-event-resync.e2e.ts',
+  ],
+  profiles: [
+    './specs/profile-local-draft.e2e.ts',
+    './specs/profile-remote-validation.e2e.ts',
+    './specs/profiles-detail-main.e2e.ts',
+    './specs/profiles-layout.e2e.ts',
+    './specs/profiles-main-layout.e2e.ts',
+  ],
+  settings: [
+    './specs/app-log-level-setting.e2e.ts',
+    './specs/auto-update-setting.e2e.ts',
+    './specs/clash-settings-main.e2e.ts',
+    './specs/core-manager-main.e2e.ts',
+    './specs/debug-main-layout.e2e.ts',
+    './specs/lighten-animation-setting.e2e.ts',
+    './specs/nyanpasu-settings-main-layout.e2e.ts',
+    './specs/settings-main-layout.e2e.ts',
+    './specs/system-tools-main.e2e.ts',
+    './specs/theme-mode-setting.e2e.ts',
+    './specs/user-interface-main.e2e.ts',
+    './specs/web-ui-main-layout.e2e.ts',
+  ],
+  main: [
+    './specs/about-main-layout.e2e.ts',
+    './specs/connections-main-layout.e2e.ts',
+    './specs/dashboard-main-layout.e2e.ts',
+    './specs/logs-main-layout.e2e.ts',
+    './specs/main-cache-image.e2e.ts',
+    './specs/main-dropdown-menu.e2e.ts',
+    './specs/main-global-css.e2e.ts',
+    './specs/main-input.e2e.ts',
+    './specs/main-tooltip.e2e.ts',
+    './specs/providers-main-layout.e2e.ts',
+    './specs/proxies-main-layout.e2e.ts',
+    './specs/proxies-node-main.e2e.ts',
+    './specs/rules-main-layout.e2e.ts',
+    './specs/rules-main-proxy-icon.e2e.ts',
+  ],
+  network: ['./specs/allow-lan.e2e.ts'],
+} as const;
+
+const combine = (...groups: readonly (readonly string[])[]) => groups.flat();
+
+export const e2eSuites = {
+  ...baseE2eSuites,
+  critical: combine(
+    baseE2eSuites.smoke,
+    baseE2eSuites.runtime,
+    baseE2eSuites.profiles,
+  ),
+  hermetic: combine(
+    baseE2eSuites.smoke,
+    baseE2eSuites.runtime,
+    baseE2eSuites.profiles,
+    baseE2eSuites.settings,
+    baseE2eSuites.main,
+  ),
+  all: combine(
+    baseE2eSuites.smoke,
+    baseE2eSuites.runtime,
+    baseE2eSuites.profiles,
+    baseE2eSuites.settings,
+    baseE2eSuites.main,
+    baseE2eSuites.network,
+  ),
+} satisfies Record<string, readonly string[]>;
