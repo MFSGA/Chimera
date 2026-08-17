@@ -37,7 +37,7 @@ use crate::{
                 shared::{PreparedProfileFile, ProfileSharedBuilder},
                 utils::generate_uid,
             },
-            item_type::{ProfileItemType, ProfileUid},
+            item_type::{ProfileItemType, ProfileUid, ScriptType},
             profiles::Profiles,
         },
         runtime::ClashConfigOverrides,
@@ -129,9 +129,19 @@ pub(crate) struct CoreStatusSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformFailureDiagnostics {
+    pub attempt_revision: u64,
+    pub transform_uid: ProfileUid,
+    pub scope_uid: Option<ProfileUid>,
+    pub script_type: ScriptType,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
 pub struct RuntimeTransformDiagnostics {
     pub revision: u64,
     pub output: PostProcessingOutput,
+    pub failure: Option<RuntimeTransformFailureDiagnostics>,
 }
 
 #[async_trait]
@@ -552,9 +562,23 @@ impl CoreLifecyclePort for LegacyCoreLifecyclePort {
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        Ok(CoreManager::global()
+        let core = CoreManager::global();
+        let failure =
+            core.runtime_transform_failure()
+                .map(|failure| RuntimeTransformFailureDiagnostics {
+                    attempt_revision: failure.attempt_revision.get(),
+                    transform_uid: failure.transform_uid,
+                    scope_uid: failure.scope_uid,
+                    script_type: failure.script_type,
+                    message: failure.message,
+                });
+        Ok(core
             .runtime_transform_output()
-            .map(|(revision, output)| RuntimeTransformDiagnostics { revision, output }))
+            .map(|(revision, output)| RuntimeTransformDiagnostics {
+                revision,
+                output,
+                failure,
+            }))
     }
 
     async fn on_profile_change(&self) {

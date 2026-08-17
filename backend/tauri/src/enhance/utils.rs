@@ -7,7 +7,7 @@ use serde_yaml::{Mapping, Value};
 use crate::{
     config::profile::{item_type::ProfileUid, profiles::Profiles},
     enhance::{
-        chain::{ChainItem, ChainTypeWrapper, Logs},
+        chain::{ChainItem, ChainTypeWrapper, Logs, TransformExecutionError},
         script::runner::{RunnerManager, ScriptRunRequest},
     },
 };
@@ -53,13 +53,15 @@ fn apply_merge_mapping(config: &mut Mapping, patch: Mapping) {
 pub async fn process_chain(
     config: Mapping,
     nodes: &[ChainItem],
+    scope_uid: Option<&ProfileUid>,
 ) -> Result<(Mapping, IndexMap<ProfileUid, Logs>)> {
-    process_chain_with_runner(config, nodes, &RunnerManager::new()).await
+    process_chain_with_runner(config, nodes, scope_uid, &RunnerManager::new()).await
 }
 
 async fn process_chain_with_runner(
     mut config: Mapping,
     nodes: &[ChainItem],
+    scope_uid: Option<&ProfileUid>,
     runner: &RunnerManager,
 ) -> Result<(Mapping, IndexMap<ProfileUid, Logs>)> {
     let mut result_map = IndexMap::new();
@@ -85,10 +87,12 @@ async fn process_chain_with_runner(
                     )
                     .await
                     .map_err(|error| {
-                        anyhow::anyhow!(
-                            "failed to execute script transform {}: {error:#}",
-                            node.uid
-                        )
+                        anyhow::Error::new(TransformExecutionError::new(
+                            node.uid.clone(),
+                            scope_uid.cloned(),
+                            *script_type,
+                            error,
+                        ))
                     })?;
                 config = output.config;
                 result_map.insert(node.uid.clone(), output.logs);
@@ -150,6 +154,7 @@ mod tests {
     };
 
     struct TestScriptRunner;
+    struct FailingScriptRunner;
 
     #[async_trait]
     impl ScriptRunner for TestScriptRunner {
@@ -167,6 +172,13 @@ mod tests {
                 config: request.config,
                 logs: vec![(LogSpan::Info, "script executed".into())],
             })
+        }
+    }
+
+    #[async_trait]
+    impl ScriptRunner for FailingScriptRunner {
+        async fn run(&self, _request: ScriptRunRequest) -> Result<ScriptRunOutput> {
+            anyhow::bail!("script exploded")
         }
     }
 
@@ -247,7 +259,7 @@ rules:
             data: ChainTypeWrapper::Merge(patch),
         }];
 
-        let (merged, output) = process_chain(config, &chain).await.unwrap();
+        let (merged, output) = process_chain(config, &chain, None).await.unwrap();
         let dns = merged.get("dns").unwrap().as_mapping().unwrap();
         assert_eq!(dns.get("enable").unwrap().as_bool(), Some(true));
         assert_eq!(dns.get("enhanced-mode").unwrap().as_str(), Some("fake-ip"));
@@ -283,7 +295,7 @@ rules:
             },
         ];
 
-        let (config, output) = process_chain_with_runner(Mapping::new(), &chain, &runner)
+        let (config, output) = process_chain_with_runner(Mapping::new(), &chain, None, &runner)
             .await
             .unwrap();
 
@@ -297,6 +309,30 @@ rules:
             output.get("sj-test"),
             Some(&vec![(LogSpan::Info, "script executed".into())])
         );
+    }
+
+    #[tokio::test]
+    async fn script_failure_preserves_transform_scope_and_runtime_identity() {
+        let runner =
+            RunnerManager::new().with_runner(ScriptType::JavaScript, Arc::new(FailingScriptRunner));
+        let scope_uid = "source-test".to_string();
+        let chain = vec![ChainItem {
+            uid: "sj-failing".into(),
+            data: ChainTypeWrapper::Script {
+                script_type: ScriptType::JavaScript,
+                source: "test-script".into(),
+            },
+        }];
+
+        let error = process_chain_with_runner(Mapping::new(), &chain, Some(&scope_uid), &runner)
+            .await
+            .unwrap_err();
+        let failure = error.downcast_ref::<TransformExecutionError>().unwrap();
+
+        assert_eq!(failure.transform_uid, "sj-failing");
+        assert_eq!(failure.scope_uid.as_deref(), Some("source-test"));
+        assert_eq!(failure.script_type, ScriptType::JavaScript);
+        assert!(failure.message().contains("script exploded"));
     }
 
     #[tokio::test]
@@ -314,7 +350,7 @@ return config
             },
         }];
 
-        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain)
+        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain, None)
             .await
             .unwrap();
         assert_eq!(
@@ -346,7 +382,7 @@ export default function (config) {
             },
         }];
 
-        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain)
+        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain, None)
             .await
             .unwrap();
         assert_eq!(
