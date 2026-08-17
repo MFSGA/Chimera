@@ -123,7 +123,7 @@ pub struct RuntimeTransformFailure {
     pub attempt_revision: RuntimeRevision,
     pub transform_uid: ProfileUid,
     pub scope_uid: Option<ProfileUid>,
-    pub script_type: ScriptType,
+    pub script_type: Option<ScriptType>,
     pub message: String,
 }
 
@@ -548,7 +548,7 @@ mod tests {
             attempt_revision: failed_revision,
             transform_uid: "sj-failed".into(),
             scope_uid: Some("source-test".into()),
-            script_type: ScriptType::JavaScript,
+            script_type: Some(ScriptType::JavaScript),
             message: "script exploded".into(),
         });
         assert_eq!(
@@ -762,7 +762,7 @@ mod tests {
             attempt_revision: lifecycle.allocate_revision().unwrap(),
             transform_uid: "sj-stale".into(),
             scope_uid: None,
-            script_type: ScriptType::JavaScript,
+            script_type: Some(ScriptType::JavaScript),
             message: "stale transform failure".into(),
         });
         let transaction = capture_runtime_transaction(&paths, &lifecycle)

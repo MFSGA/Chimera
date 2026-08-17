@@ -133,7 +133,7 @@ pub struct RuntimeTransformFailureDiagnostics {
     pub attempt_revision: u64,
     pub transform_uid: ProfileUid,
     pub scope_uid: Option<ProfileUid>,
-    pub script_type: ScriptType,
+    pub script_type: Option<ScriptType>,
     pub message: String,
 }
 

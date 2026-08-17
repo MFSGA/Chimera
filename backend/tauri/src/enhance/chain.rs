@@ -20,17 +20,30 @@ pub enum LogSpan {
 pub type Logs = Vec<(LogSpan, String)>;
 
 #[derive(Debug, thiserror::Error)]
-#[error("failed to execute {script_type:?} transform {transform_uid}: {source}")]
-pub(crate) struct TransformExecutionError {
+#[error("transform {transform_uid} failed: {source}")]
+pub(crate) struct TransformFailureError {
     pub(crate) transform_uid: ProfileUid,
     pub(crate) scope_uid: Option<ProfileUid>,
-    pub(crate) script_type: ScriptType,
+    pub(crate) script_type: Option<ScriptType>,
     #[source]
     source: anyhow::Error,
 }
 
-impl TransformExecutionError {
-    pub(crate) fn new(
+impl TransformFailureError {
+    pub(crate) fn merge(
+        transform_uid: ProfileUid,
+        scope_uid: Option<ProfileUid>,
+        source: anyhow::Error,
+    ) -> Self {
+        Self {
+            transform_uid,
+            scope_uid,
+            script_type: None,
+            source,
+        }
+    }
+
+    pub(crate) fn script(
         transform_uid: ProfileUid,
         scope_uid: Option<ProfileUid>,
         script_type: ScriptType,
@@ -39,7 +52,7 @@ impl TransformExecutionError {
         Self {
             transform_uid,
             scope_uid,
-            script_type,
+            script_type: Some(script_type),
             source,
         }
     }
