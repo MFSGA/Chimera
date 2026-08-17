@@ -144,6 +144,60 @@ async function waitForScopedRuntimeLog(
   return latest;
 }
 
+async function waitForGlobalRuntimeLog(
+  transformUid: string,
+  expected: [LogSpan, string],
+  afterRevision = 0,
+) {
+  await browser.waitUntil(
+    async () => {
+      const latest = await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
+      return (
+        (latest?.revision ?? 0) > afterRevision &&
+        JSON.stringify(latest?.output.global[transformUid] ?? []) ===
+          JSON.stringify([expected])
+      );
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `Global transform ${transformUid} did not publish ${JSON.stringify(expected)} after revision ${afterRevision}.`,
+    },
+  );
+  const latest = await invoke<RuntimeTransformDiagnostics | null>(
+    'get_runtime_transform_diagnostics',
+  );
+  assert.ok(latest);
+  return latest;
+}
+
+async function waitForGlobalRuntimeLogCleared(
+  transformUid: string,
+  afterRevision: number,
+) {
+  await browser.waitUntil(
+    async () => {
+      const latest = await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
+      return (
+        (latest?.revision ?? 0) > afterRevision &&
+        (latest?.output.global[transformUid] ?? []).length === 0
+      );
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `Global transform ${transformUid} logs were not cleared after revision ${afterRevision}.`,
+    },
+  );
+  const latest = await invoke<RuntimeTransformDiagnostics | null>(
+    'get_runtime_transform_diagnostics',
+  );
+  assert.ok(latest);
+  return latest;
+}
+
 async function waitForEditorClosed(scope: 'profile' | 'global') {
   await browser.waitUntil(
     async () => {
@@ -369,15 +423,23 @@ describe('main transform chain editor', () => {
     }
   });
 
-  it('edits the global transform chain from a transform list header', async () => {
-    assert.ok(mergeAUid);
+  it('edits the global transform chain and shows applied runtime diagnostics', async () => {
+    assert.ok(localUid && mergeAUid && javascriptUid);
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
+        uid: localUid,
+        transforms: [],
+      }),
+      'scoped chain reset before global diagnostics',
+    );
+    await waitForScopedChain(localUid, []);
     await openRoute('/main/profiles/merge');
 
     const trigger = await $('[data-slot="global-transform-chain"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
 
-    const editor = await $(
+    let editor = await $(
       '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
     );
     await editor.waitForDisplayed({ timeout: 15_000 });
@@ -386,10 +448,80 @@ describe('main transform chain editor', () => {
         `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
       )
       .click();
-    assert.deepEqual(await activeOrder('global'), [mergeAUid]);
+    await editor
+      .$(
+        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
+      )
+      .click();
+    assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
 
+    const beforeSaveDiagnostics =
+      await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([mergeAUid, javascriptUid]);
+    const firstApplied = await waitForGlobalRuntimeLog(
+      javascriptUid,
+      ['info', 'chain ui javascript log'],
+      beforeSaveDiagnostics?.revision ?? 0,
+    );
+    await waitForEditorClosed('global');
+
+    let currentTrigger = await $('[data-slot="global-transform-chain"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    let javascriptRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    let runtimeLog = await javascriptRow.$(
+      '[data-slot="transform-runtime-log"][data-log-span="info"]',
+    );
+    await runtimeLog.waitForDisplayed({ timeout: 15_000 });
+    assert.match(await runtimeLog.getText(), /chain ui javascript log/);
+    const diagnostics = await editor.$(
+      '[data-slot="transform-runtime-diagnostics"]',
+    );
+    assert.equal(
+      Number(await diagnostics.getAttribute('data-runtime-revision')),
+      firstApplied.revision,
+    );
+
+    await javascriptRow.$('[data-slot="transform-chain-move-up"]').click();
+    assert.deepEqual(await activeOrder('global'), [javascriptUid, mergeAUid]);
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([javascriptUid, mergeAUid]);
+    const reordered = await waitForGlobalRuntimeLog(
+      javascriptUid,
+      ['info', 'chain ui javascript log'],
+      firstApplied.revision,
+    );
+    await waitForEditorClosed('global');
+
+    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+    javascriptRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    await javascriptRow.$('[data-slot="transform-chain-remove"]').click();
+    assert.deepEqual(await activeOrder('global'), [mergeAUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
+    const cleared = await waitForGlobalRuntimeLogCleared(
+      javascriptUid,
+      reordered.revision,
+    );
+    assert.ok(cleared.revision > reordered.revision);
     await waitForEditorClosed('global');
   });
 });
