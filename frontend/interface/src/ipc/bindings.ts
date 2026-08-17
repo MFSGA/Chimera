@@ -12,6 +12,14 @@ export const commands = {
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
     typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
+  getRuntimeTransformDiagnostics: () =>
+    typedError<
+      {
+        revision: number;
+        output: PostProcessingOutput;
+      } | null,
+      string
+    >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,
@@ -954,6 +962,8 @@ export type LocalProfile_Serialize = {
   chain: string[];
 } & ProfileShared;
 
+export type LogSpan = 'log' | 'info' | 'warn' | 'error';
+
 export type LoggingLevel = LoggingLevel_Serialize | LoggingLevel_Deserialize;
 
 export type LoggingLevel_Deserialize =
@@ -1023,6 +1033,14 @@ export type PatchRuntimeConfig_Serialize = {
   ipv6?: boolean | null;
   'log-level'?: string | null;
   mode?: string | null;
+};
+
+/**  后处理输出 */
+export type PostProcessingOutput = {
+  /**  Per-source transform chain output, keyed by source profile UID and transform UID. */
+  scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
+  /**  Global transform chain output, keyed by transform UID. */
+  global: { [key in string]: [LogSpan, string][] };
 };
 
 export type ProfileBuilderRequest =
@@ -1323,6 +1341,11 @@ export type RuntimeInfos = {
   service_config_dir: string;
   nyanpasu_config_dir: string;
   nyanpasu_data_dir: string;
+};
+
+export type RuntimeTransformDiagnostics = {
+  revision: number;
+  output: PostProcessingOutput;
 };
 
 export type ScriptProfile = {

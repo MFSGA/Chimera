@@ -40,6 +40,7 @@ use crate::{
         },
         logger::Logger,
     },
+    enhance::PostProcessingOutput,
     log_err,
     utils::dirs,
 };
@@ -478,6 +479,13 @@ impl CoreManager {
         }
     }
 
+    pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
+        self.runtime_lifecycle
+            .snapshot()
+            .applied
+            .map(|snapshot| (snapshot.revision.get(), snapshot.transform_output.clone()))
+    }
+
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
         let instance = {
             let instance = self.instance.lock();
@@ -605,7 +613,7 @@ impl CoreManager {
             .prepare_external_controller_port()
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let config = Config::generate_runtime_mapping()
+        let (config, transform_output) = Config::generate_runtime_input()
             .await
             .map_err(RuntimeRestartError::Prepare)?;
         let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
@@ -630,11 +638,12 @@ impl CoreManager {
                 }
                 CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
             })?;
-        let snapshot = Arc::new(RuntimeSnapshot::new(
+        let snapshot = Arc::new(RuntimeSnapshot::new_with_transform_output(
             revision,
             target_core,
             promoted_bytes,
             config,
+            transform_output,
         ));
         self.runtime_lifecycle.publish_promoted(snapshot.clone());
 

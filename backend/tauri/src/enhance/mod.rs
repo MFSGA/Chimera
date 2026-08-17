@@ -9,7 +9,6 @@ use crate::{
         profile::item::{Profile, ProfileMetaGetter},
     },
     enhance::{
-        chain::PostProcessingOutput,
         field::{HANDLE_FIELDS, use_keys, use_valid_fields, use_whitelist_fields_filter},
         utils::{merge_profiles, process_chain},
     },
@@ -25,6 +24,8 @@ mod script;
 mod tun;
 /// 2
 mod utils;
+
+pub use chain::PostProcessingOutput;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
@@ -108,9 +109,10 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     let config = merge_profiles(profiles).context("failed to merge selected profiles")?;
 
     // Global transforms run after selected profiles have been combined.
-    let (mut config, _global_chain_output) = process_chain(config, &global_chain)
+    let (mut config, global_chain_output) = process_chain(config, &global_chain)
         .await
         .context("failed to process global transform chain")?;
+    postprocessing_output.global = global_chain_output;
 
     // 记录当前配置包含的键
     let exists_keys = use_keys(&config);

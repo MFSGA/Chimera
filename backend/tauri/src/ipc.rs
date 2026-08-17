@@ -33,7 +33,7 @@ use crate::{
     core::{
         clash::{
             self,
-            client::{MutationOutcome, NyanpasuClient},
+            client::{MutationOutcome, NyanpasuClient, RuntimeTransformDiagnostics},
             core::RunType,
         },
         handle,
@@ -288,6 +288,14 @@ impl specta::Type for IpcError {
 #[specta::specta]
 pub async fn get_profiles(client: State<'_, NyanpasuClient>) -> Result<ProfilesResponse> {
     Ok(client.get_profiles().await?.into())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_runtime_transform_diagnostics(
+    client: State<'_, NyanpasuClient>,
+) -> Result<Option<RuntimeTransformDiagnostics>> {
+    Ok(client.runtime_transform_diagnostics()?)
 }
 
 #[tauri::command]

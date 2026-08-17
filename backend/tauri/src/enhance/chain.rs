@@ -19,11 +19,13 @@ pub enum LogSpan {
 
 pub type Logs = Vec<(LogSpan, String)>;
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 /// 后处理输出
 pub struct PostProcessingOutput {
-    /// 1. 局部链的输出
+    /// Per-source transform chain output, keyed by source profile UID and transform UID.
     pub scopes: IndexMap<ProfileUid, IndexMap<ProfileUid, Logs>>,
+    /// Global transform chain output, keyed by transform UID.
+    pub global: IndexMap<ProfileUid, Logs>,
 }
 
 #[derive(Debug, Clone)]
