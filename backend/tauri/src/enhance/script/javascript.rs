@@ -13,7 +13,7 @@ use rquickjs::{Context, Ctx, Function, Module, Runtime, Value};
 use serde_yaml::Mapping;
 
 use crate::enhance::{
-    chain::{LogSpan, Logs},
+    chain::{LogSpan, Logs, push_script_log},
     script::runner::{ScriptRunOutput, ScriptRunRequest, ScriptRunner},
 };
 
@@ -245,7 +245,7 @@ fn install_log_functions(ctx: &Ctx<'_>, logs: Arc<Mutex<Logs>>) -> Result<()> {
                 "error" => LogSpan::Error,
                 _ => LogSpan::Log,
             };
-            sink.lock().push((span, message));
+            push_script_log(&mut sink.lock(), span, message);
         }),
         "failed to create javascript logger".into(),
     )?;
@@ -382,6 +382,38 @@ export default function (config) {
                 (LogSpan::Log, "hello\t7".into()),
                 (LogSpan::Warn, "careful".into()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn javascript_runner_bounds_retained_logs() {
+        use crate::enhance::chain::{SCRIPT_LOG_ENTRY_LIMIT, SCRIPT_LOG_MESSAGE_LIMIT_BYTES};
+
+        let output = JavaScriptRunner::new()
+            .run(request(
+                r#"
+export default function (config) {
+  console.log("x".repeat(6000));
+  for (let index = 0; index < 300; index += 1) {
+    console.info(`message-${index}`);
+  }
+  return config;
+}
+"#,
+                Mapping::new(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(output.logs.len(), SCRIPT_LOG_ENTRY_LIMIT);
+        assert!(output.logs[0].1.len() <= SCRIPT_LOG_MESSAGE_LIMIT_BYTES);
+        assert!(output.logs[0].1.ends_with("… [truncated]"));
+        assert_eq!(output.logs.last().map(|entry| entry.0), Some(LogSpan::Warn));
+        assert!(
+            output
+                .logs
+                .last()
+                .is_some_and(|entry| entry.1.contains("discarded"))
         );
     }
 
