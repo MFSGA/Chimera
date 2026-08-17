@@ -1,4 +1,9 @@
-import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import {
+  useProfile,
+  useRuntimeTransformDiagnostics,
+  type LogSpan,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
@@ -45,6 +50,31 @@ function TransformSummary({ profile }: { profile: ProfileQueryResultItem }) {
   );
 }
 
+function TransformRuntimeLogs({ logs }: { logs: [LogSpan, string][] }) {
+  if (logs.length === 0) return null;
+
+  return (
+    <div
+      className="mt-2 space-y-1 border-t pt-2"
+      data-slot="transform-runtime-logs"
+    >
+      {logs.map(([span, text], index) => (
+        <div
+          key={`${span}-${index}-${text}`}
+          className="flex min-w-0 gap-2 text-xs"
+          data-slot="transform-runtime-log"
+          data-log-span={span}
+        >
+          <span className="w-10 shrink-0 font-mono uppercase opacity-50">
+            {span}
+          </span>
+          <span className="min-w-0 break-words opacity-80">{text}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 type TransformChainEditorProps = {
   profile?: ProfileQueryResultItem;
   children: ReactElement;
@@ -57,6 +87,7 @@ export default function TransformChainEditor({
   const { query, setTransformChain, setGlobalTransformChain } = useProfile();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
+  const diagnostics = useRuntimeTransformDiagnostics(open);
 
   const transforms = useMemo(
     () => (query.data?.items ?? []).filter(isTransformProfile),
@@ -72,20 +103,29 @@ export default function TransformChainEditor({
     return profile.chain ?? [];
   }, [profile, query.data?.global_transforms]);
   const available = transforms.filter((item) => !draft.includes(item.uid));
+  const runtimeLogsByUid = useMemo(() => {
+    const current = diagnostics.data;
+    if (!current) return new Map<string, [LogSpan, string][]>();
+    const output = profile
+      ? (current.output.scopes[profile.uid] ?? {})
+      : current.output.global;
+    return new Map(Object.entries(output));
+  }, [diagnostics.data, profile]);
 
   const task = useBlockTask(
     `update-transform-chain-${profile?.uid ?? 'global'}`,
     async () => {
       try {
-        if (profile) {
-          await setTransformChain.mutateAsync({
-            uid: profile.uid,
-            transforms: draft,
-          });
-        } else {
-          await setGlobalTransformChain.mutateAsync(draft);
+        const outcome = profile
+          ? await setTransformChain.mutateAsync({
+              uid: profile.uid,
+              transforms: draft,
+            })
+          : await setGlobalTransformChain.mutateAsync(draft);
+        await diagnostics.refetch();
+        if (outcome?.status !== 'committed_degraded') {
+          setOpen(false);
         }
-        setOpen(false);
       } catch (error) {
         await message(formatError(error), {
           title: m.common_error(),
@@ -111,7 +151,10 @@ export default function TransformChainEditor({
       open={open}
       onOpenChange={(next) => {
         if (task.isPending) return;
-        if (next) setDraft([...sourceChain]);
+        if (next) {
+          setDraft([...sourceChain]);
+          void diagnostics.refetch();
+        }
         setOpen(next);
       }}
     >
@@ -131,6 +174,15 @@ export default function TransformChainEditor({
             </ModalTitle>
             {profile && (
               <p className="truncate text-sm opacity-60">{profile.name}</p>
+            )}
+            {diagnostics.data && (
+              <p
+                className="text-xs opacity-50"
+                data-slot="transform-runtime-diagnostics"
+                data-runtime-revision={diagnostics.data.revision}
+              >
+                {m.navbar_label_logs()} · r{diagnostics.data.revision}
+              </p>
             )}
           </CardHeader>
 
@@ -177,41 +229,46 @@ export default function TransformChainEditor({
                     return (
                       <div
                         key={uid}
-                        className="flex items-center gap-1 rounded-2xl border p-2"
+                        className="rounded-2xl border p-2"
                         data-slot="transform-chain-active-item"
                         data-profile-uid={uid}
                       >
-                        <TransformSummary profile={transform} />
-                        <Button
-                          icon
-                          className="size-8"
-                          disabled={index === 0}
-                          data-slot="transform-chain-move-up"
-                          onClick={() => move(index, -1)}
-                        >
-                          <ArrowUpwardRounded className="size-4" />
-                        </Button>
-                        <Button
-                          icon
-                          className="size-8"
-                          disabled={index === draft.length - 1}
-                          data-slot="transform-chain-move-down"
-                          onClick={() => move(index, 1)}
-                        >
-                          <ArrowDownwardRounded className="size-4" />
-                        </Button>
-                        <Button
-                          icon
-                          className="size-8"
-                          data-slot="transform-chain-remove"
-                          onClick={() =>
-                            setDraft((current) =>
-                              current.filter((item) => item !== uid),
-                            )
-                          }
-                        >
-                          <CloseRounded className="size-4" />
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <TransformSummary profile={transform} />
+                          <Button
+                            icon
+                            className="size-8"
+                            disabled={index === 0}
+                            data-slot="transform-chain-move-up"
+                            onClick={() => move(index, -1)}
+                          >
+                            <ArrowUpwardRounded className="size-4" />
+                          </Button>
+                          <Button
+                            icon
+                            className="size-8"
+                            disabled={index === draft.length - 1}
+                            data-slot="transform-chain-move-down"
+                            onClick={() => move(index, 1)}
+                          >
+                            <ArrowDownwardRounded className="size-4" />
+                          </Button>
+                          <Button
+                            icon
+                            className="size-8"
+                            data-slot="transform-chain-remove"
+                            onClick={() =>
+                              setDraft((current) =>
+                                current.filter((item) => item !== uid),
+                              )
+                            }
+                          >
+                            <CloseRounded className="size-4" />
+                          </Button>
+                        </div>
+                        <TransformRuntimeLogs
+                          logs={runtimeLogsByUid.get(uid) ?? []}
+                        />
                       </div>
                     );
                   })
