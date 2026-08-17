@@ -17,6 +17,7 @@ export const commands = {
       {
         revision: number;
         output: PostProcessingOutput;
+        failure: RuntimeTransformFailureDiagnostics | null;
       } | null,
       string
     >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
@@ -1346,6 +1347,15 @@ export type RuntimeInfos = {
 export type RuntimeTransformDiagnostics = {
   revision: number;
   output: PostProcessingOutput;
+  failure: RuntimeTransformFailureDiagnostics | null;
+};
+
+export type RuntimeTransformFailureDiagnostics = {
+  attempt_revision: number;
+  transform_uid: string;
+  scope_uid: string | null;
+  script_type: ScriptType;
+  message: string;
 };
 
 export type ScriptProfile = {
