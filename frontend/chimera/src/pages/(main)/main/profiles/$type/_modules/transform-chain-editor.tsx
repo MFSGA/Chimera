@@ -55,7 +55,7 @@ function TransformRuntimeLogs({ logs }: { logs: [LogSpan, string][] }) {
 
   return (
     <div
-      className="mt-2 space-y-1 border-t pt-2"
+      className="mt-2 max-h-28 space-y-1 overflow-y-auto border-t pt-2 pr-1"
       data-slot="transform-runtime-logs"
     >
       {logs.map(([span, text], index) => (
@@ -111,6 +111,10 @@ export default function TransformChainEditor({
       : current.output.global;
     return new Map(Object.entries(output));
   }, [diagnostics.data, profile]);
+  const hasRuntimeLogs = useMemo(
+    () => [...runtimeLogsByUid.values()].some((logs) => logs.length > 0),
+    [runtimeLogsByUid],
+  );
 
   const task = useBlockTask(
     `update-transform-chain-${profile?.uid ?? 'global'}`,
@@ -175,15 +179,41 @@ export default function TransformChainEditor({
             {profile && (
               <p className="truncate text-sm opacity-60">{profile.name}</p>
             )}
-            {diagnostics.data && (
+            {diagnostics.isFetching && diagnostics.data === undefined ? (
               <p
                 className="text-xs opacity-50"
-                data-slot="transform-runtime-diagnostics"
-                data-runtime-revision={diagnostics.data.revision}
+                data-slot="transform-runtime-diagnostics-loading"
               >
-                {m.navbar_label_logs()} · r{diagnostics.data.revision}
+                {m.profile_chain_editor_diagnostics_loading()}
               </p>
-            )}
+            ) : diagnostics.isError ? (
+              <p className="text-xs opacity-50">{m.common_error()}</p>
+            ) : diagnostics.data === null ? (
+              <p
+                className="text-xs opacity-50"
+                data-slot="transform-runtime-diagnostics-unavailable"
+              >
+                {m.profile_chain_editor_no_applied_runtime()}
+              </p>
+            ) : diagnostics.data ? (
+              <div className="space-y-0.5">
+                <p
+                  className="text-xs opacity-50"
+                  data-slot="transform-runtime-diagnostics"
+                  data-runtime-revision={diagnostics.data.revision}
+                >
+                  {m.navbar_label_logs()} · r{diagnostics.data.revision}
+                </p>
+                {!hasRuntimeLogs && (
+                  <p
+                    className="text-xs opacity-40"
+                    data-slot="transform-runtime-diagnostics-empty"
+                  >
+                    {m.profile_chain_editor_no_runtime_logs()}
+                  </p>
+                )}
+              </div>
+            ) : null}
           </CardHeader>
 
           <CardContent className="grid gap-4 md:grid-cols-2">
