@@ -523,5 +523,31 @@ describe('main transform chain editor', () => {
     );
     assert.ok(cleared.revision > reordered.revision);
     await waitForEditorClosed('global');
+
+    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+    const clearedDiagnostics = await editor.$(
+      '[data-slot="transform-runtime-diagnostics"]',
+    );
+    assert.equal(
+      Number(await clearedDiagnostics.getAttribute('data-runtime-revision')),
+      cleared.revision,
+    );
+    await editor
+      .$('[data-slot="transform-runtime-diagnostics-empty"]')
+      .waitForDisplayed({ timeout: 15_000 });
+    const mergeRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeAUid}"]`,
+    );
+    assert.equal(
+      await mergeRow.$('[data-slot="transform-runtime-logs"]').isExisting(),
+      false,
+      'merge-only global chain should not render an empty runtime log block',
+    );
   });
 });
