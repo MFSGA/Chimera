@@ -164,6 +164,7 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
 
 pub(crate) trait UiEventSink: Send + Sync {
     fn refresh_clash(&self);
+    fn refresh_runtime_transform_diagnostics(&self);
     fn refresh_profiles(&self);
 }
 
@@ -591,6 +592,10 @@ struct LegacyUiEventSink;
 impl UiEventSink for LegacyUiEventSink {
     fn refresh_clash(&self) {
         Handle::refresh_clash();
+    }
+
+    fn refresh_runtime_transform_diagnostics(&self) {
+        Handle::refresh_runtime_transform_diagnostics();
     }
 
     fn refresh_profiles(&self) {
@@ -1198,8 +1203,15 @@ impl NyanpasuClient {
     }
 
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        let mut lease = self.inner.core.begin().await?;
-        lease.rebuild_running_config().await?;
+        let result = async {
+            let mut lease = self.inner.core.begin().await?;
+            lease.rebuild_running_config().await
+        }
+        .await;
+        if let Err(error) = result {
+            self.inner.ui_sink.refresh_runtime_transform_diagnostics();
+            return Err(error);
+        }
         self.inner.ui_sink.refresh_clash();
         Ok(())
     }
@@ -1454,6 +1466,9 @@ mod tests {
     impl UiEventSink for RecordingUi {
         fn refresh_clash(&self) {
             self.events.lock().unwrap().push("refresh-ui");
+        }
+        fn refresh_runtime_transform_diagnostics(&self) {
+            self.events.lock().unwrap().push("refresh-diagnostics");
         }
         fn refresh_profiles(&self) {
             self.events.lock().unwrap().push("refresh-profiles");
@@ -1767,7 +1782,10 @@ mod tests {
         let (client, events) = recording_client(true);
         let error = client.rebuild_running_config().await.unwrap_err();
         assert!(error.to_string().contains("injected rebuild failure"));
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "rebuild"]);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "rebuild", "refresh-diagnostics"]
+        );
     }
 
     #[tokio::test]
@@ -1816,7 +1834,10 @@ mod tests {
         assert_eq!(degradation.code, "runtime_rebuild_failed");
         assert!(degradation.retryable);
         assert!(degradation.message.contains("injected rebuild failure"));
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "rebuild"]);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "rebuild", "refresh-diagnostics"]
+        );
     }
 
     #[test]

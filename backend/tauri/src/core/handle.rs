@@ -17,6 +17,7 @@ pub struct Handle {
 pub enum StateChanged {
     NyanpasuConfig,
     ClashConfig,
+    RuntimeTransformDiagnostics,
     Profiles,
     Proxies,
 }
@@ -61,6 +62,13 @@ impl Handle {
 
     pub fn refresh_clash() {
         log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
+    }
+
+    pub fn refresh_runtime_transform_diagnostics() {
+        log_err!(Self::emit(
+            STATE_CHANGED_URI,
+            StateChanged::RuntimeTransformDiagnostics
+        ));
     }
 
     pub fn refresh_verge() {
