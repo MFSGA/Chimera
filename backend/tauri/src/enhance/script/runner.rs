@@ -6,7 +6,10 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::profile::item_type::{ProfileUid, ScriptType},
-    enhance::{chain::Logs, script::lua::LuaRunner},
+    enhance::{
+        chain::Logs,
+        script::{javascript::JavaScriptRunner, lua::LuaRunner},
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -35,7 +38,7 @@ pub struct RunnerManager {
 impl Default for RunnerManager {
     fn default() -> Self {
         Self {
-            javascript: None,
+            javascript: Some(Arc::new(JavaScriptRunner::new())),
             lua: Some(Arc::new(LuaRunner::new())),
         }
     }
@@ -84,7 +87,11 @@ mod tests {
 
     #[tokio::test]
     async fn missing_runtime_fails_closed_with_transform_identity() {
-        let error = RunnerManager::new()
+        let manager = RunnerManager {
+            javascript: None,
+            lua: None,
+        };
+        let error = manager
             .run(
                 ScriptType::JavaScript,
                 ScriptRunRequest {

@@ -9,10 +9,13 @@ const merge = `# Clash Chimera Merge Template (YAML)
 `;
 
 const javascript = `// Clash Chimera JavaScript Transform Template
+//
+// The current runtime config is passed as \`config\`.
+// Return the complete config object synchronously after applying your changes.
+// Logging: console.log/info/warn/error(...), or print/log/info/warn/error_log(...).
 
-/** @type {config} */
-export default function (profile) {
-  return profile;
+export default function (config) {
+  return config;
 }
 `;
 
