@@ -588,14 +588,16 @@ mod tests {
         assert!(invalid.to_string().contains("not a transform profile"));
         assert!(
             profiles
+                .set_global_transform_chain(vec![script_uid.clone()])
+                .unwrap()
+        );
+        assert_eq!(profiles.chain, vec![script_uid]);
+        assert!(
+            profiles
                 .set_global_transform_chain(vec![lua_uid.clone()])
                 .unwrap()
         );
         assert_eq!(profiles.chain, vec![lua_uid]);
-        let unsupported = profiles
-            .set_global_transform_chain(vec![script_uid])
-            .unwrap_err();
-        assert!(unsupported.to_string().contains("runtime is unavailable"));
         let missing = profiles
             .set_global_transform_chain(vec!["m-missing".to_string()])
             .unwrap_err();

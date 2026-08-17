@@ -62,15 +62,6 @@ export default function TransformChainEditor({
     () => (query.data?.items ?? []).filter(isTransformProfile),
     [query.data?.items],
   );
-  const runnableTransforms = useMemo(
-    () =>
-      transforms.filter(
-        (item) =>
-          item.type === 'merge' ||
-          (item.type === 'script' && item.script_type === 'lua'),
-      ),
-    [transforms],
-  );
   const transformByUid = useMemo(
     () => new Map(transforms.map((item) => [item.uid, item])),
     [transforms],
@@ -80,9 +71,7 @@ export default function TransformChainEditor({
     if (profile.type !== 'local' && profile.type !== 'remote') return [];
     return profile.chain ?? [];
   }, [profile, query.data?.global_transforms]);
-  const available = runnableTransforms.filter(
-    (item) => !draft.includes(item.uid),
-  );
+  const available = transforms.filter((item) => !draft.includes(item.uid));
 
   const task = useBlockTask(
     `update-transform-chain-${profile?.uid ?? 'global'}`,
