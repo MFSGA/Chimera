@@ -330,20 +330,34 @@ return config
     }
 
     #[tokio::test]
-    async fn script_transform_fails_closed_until_runner_is_available() {
+    async fn javascript_transform_runs_through_the_default_runner() {
         let chain = vec![ChainItem {
-            uid: "s-test".into(),
+            uid: "sj-test".into(),
             data: ChainTypeWrapper::Script {
                 script_type: ScriptType::JavaScript,
-                source: "export default (config) => config".into(),
+                source: r#"
+export default function (config) {
+  config["unified-delay"] = true;
+  info("javascript transform ran");
+  return config;
+}
+"#
+                .into(),
             },
         }];
 
-        let error = process_chain(Mapping::new(), &chain)
+        let (config, output) = process_chain(mapping("unified-delay: false\n"), &chain)
             .await
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("s-test"));
-        assert!(error.contains("script runtime"));
+            .unwrap();
+        assert_eq!(
+            config
+                .get("unified-delay")
+                .and_then(serde_yaml::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            output.get("sj-test"),
+            Some(&vec![(LogSpan::Info, "javascript transform ran".into())])
+        );
     }
 }
