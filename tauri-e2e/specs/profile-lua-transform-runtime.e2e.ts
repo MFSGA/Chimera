@@ -11,6 +11,15 @@ type MutationOutcome<T> =
     };
 
 type CoreState = 'Running' | { Stopped: string | null };
+type LogSpan = 'log' | 'info' | 'warn' | 'error';
+
+interface RuntimeTransformDiagnostics {
+  revision: number;
+  output: {
+    scopes: Record<string, Record<string, Array<[LogSpan, string]>>>;
+    global: Record<string, Array<[LogSpan, string]>>;
+  };
+}
 
 interface ProfileResponse {
   type: 'remote' | 'local' | 'merge' | 'script';
@@ -186,9 +195,26 @@ describe('Chimera Lua transform runtime lifecycle', () => {
       const source = profiles.items.find((item) => item.uid === localUid);
       assert.deepEqual(source?.chain, [luaUid]);
 
+      const diagnostics = await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
+      assert.ok(diagnostics);
+      assert.ok(diagnostics.revision > 0);
+      assert.deepEqual(diagnostics.output.scopes[localUid]?.[luaUid], [
+        ['info', 'e2e lua transform executed'],
+      ]);
+
       await setScopedChain(localUid, []);
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
+
+      const detachedDiagnostics =
+        await invoke<RuntimeTransformDiagnostics | null>(
+          'get_runtime_transform_diagnostics',
+        );
+      assert.ok(detachedDiagnostics);
+      assert.ok(detachedDiagnostics.revision > diagnostics.revision);
+      assert.deepEqual(detachedDiagnostics.output.scopes[localUid], {});
     } finally {
       if (localUid) {
         await setScopedChain(localUid, []).catch(() => undefined);

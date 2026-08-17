@@ -356,6 +356,17 @@ describe('main transform chain editor', () => {
     );
     await runtimeLog.waitForDisplayed({ timeout: 15_000 });
     assert.match(await runtimeLog.getText(), /chain ui javascript log/);
+
+    for (const mergeUid of [mergeBUid, mergeAUid]) {
+      const mergeRow = await currentEditor.$(
+        `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeUid}"]`,
+      );
+      assert.equal(
+        await mergeRow.$('[data-slot="transform-runtime-logs"]').isExisting(),
+        false,
+        `merge transform ${mergeUid} should not render an empty runtime log block`,
+      );
+    }
   });
 
   it('edits the global transform chain from a transform list header', async () => {
