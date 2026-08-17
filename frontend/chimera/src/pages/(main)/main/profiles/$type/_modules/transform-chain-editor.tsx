@@ -115,6 +115,14 @@ export default function TransformChainEditor({
     () => [...runtimeLogsByUid.values()].some((logs) => logs.length > 0),
     [runtimeLogsByUid],
   );
+  const runtimeFailure = useMemo(() => {
+    const failure = diagnostics.data?.failure;
+    if (!failure) return null;
+    if (profile) {
+      return failure.scope_uid === profile.uid ? failure : null;
+    }
+    return failure.scope_uid === null ? failure : null;
+  }, [diagnostics.data?.failure, profile]);
 
   const task = useBlockTask(
     `update-transform-chain-${profile?.uid ?? 'global'}`,
@@ -299,6 +307,25 @@ export default function TransformChainEditor({
                         <TransformRuntimeLogs
                           logs={runtimeLogsByUid.get(uid) ?? []}
                         />
+                        {runtimeFailure?.transform_uid === uid && (
+                          <div
+                            className="border-error/40 text-error mt-2 max-h-28 space-y-1 overflow-y-auto border-t pt-2 text-xs"
+                            data-slot="transform-runtime-failure"
+                            data-attempt-revision={
+                              runtimeFailure.attempt_revision
+                            }
+                            data-script-type={runtimeFailure.script_type}
+                          >
+                            <p className="font-medium">
+                              {m.common_error()} ·{' '}
+                              {transformTypeLabel(transform)} · r
+                              {runtimeFailure.attempt_revision}
+                            </p>
+                            <p className="font-mono break-words opacity-80">
+                              {runtimeFailure.message}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -345,7 +372,11 @@ export default function TransformChainEditor({
             >
               {m.common_save()}
             </Button>
-            <Button onClick={() => setOpen(false)} disabled={task.isPending}>
+            <Button
+              onClick={() => setOpen(false)}
+              disabled={task.isPending}
+              data-slot="transform-chain-cancel"
+            >
               {m.common_cancel()}
             </Button>
           </CardFooter>

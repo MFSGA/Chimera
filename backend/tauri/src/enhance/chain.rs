@@ -19,6 +19,36 @@ pub enum LogSpan {
 
 pub type Logs = Vec<(LogSpan, String)>;
 
+#[derive(Debug, thiserror::Error)]
+#[error("failed to execute {script_type:?} transform {transform_uid}: {source}")]
+pub(crate) struct TransformExecutionError {
+    pub(crate) transform_uid: ProfileUid,
+    pub(crate) scope_uid: Option<ProfileUid>,
+    pub(crate) script_type: ScriptType,
+    #[source]
+    source: anyhow::Error,
+}
+
+impl TransformExecutionError {
+    pub(crate) fn new(
+        transform_uid: ProfileUid,
+        scope_uid: Option<ProfileUid>,
+        script_type: ScriptType,
+        source: anyhow::Error,
+    ) -> Self {
+        Self {
+            transform_uid,
+            scope_uid,
+            script_type,
+            source,
+        }
+    }
+
+    pub(crate) fn message(&self) -> String {
+        format!("{:#}", self.source)
+    }
+}
+
 pub(crate) const SCRIPT_LOG_ENTRY_LIMIT: usize = 256;
 pub(crate) const SCRIPT_LOG_MESSAGE_LIMIT_BYTES: usize = 4 * 1024;
 const SCRIPT_LOG_TRUNCATED_SUFFIX: &str = "… [truncated]";
