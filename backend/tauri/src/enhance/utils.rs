@@ -7,18 +7,37 @@ use serde_yaml::{Mapping, Value};
 use crate::{
     config::profile::{item_type::ProfileUid, profiles::Profiles},
     enhance::{
-        chain::{ChainItem, ChainTypeWrapper, Logs, TransformExecutionError},
+        chain::{ChainItem, ChainTypeWrapper, Logs, TransformFailureError},
         script::runner::{RunnerManager, ScriptRunRequest},
     },
 };
 
-pub fn resolve_transform_chain(profiles: &Profiles, uids: &[ProfileUid]) -> Result<Vec<ChainItem>> {
+pub fn resolve_transform_chain(
+    profiles: &Profiles,
+    uids: &[ProfileUid],
+    scope_uid: Option<&ProfileUid>,
+) -> Result<Vec<ChainItem>> {
     uids.iter()
         .map(|uid| {
             let item = profiles
                 .get_item(uid)
                 .with_context(|| format!("transform profile {uid} does not exist"))?;
             ChainItem::try_from(item)
+                .map_err(|error| match item {
+                    crate::config::profile::item::Profile::Merge(_) => anyhow::Error::new(
+                        TransformFailureError::merge(uid.clone(), scope_uid.cloned(), error),
+                    ),
+                    crate::config::profile::item::Profile::Script(profile) => {
+                        anyhow::Error::new(TransformFailureError::script(
+                            uid.clone(),
+                            scope_uid.cloned(),
+                            profile.script_type,
+                            error,
+                        ))
+                    }
+                    crate::config::profile::item::Profile::Local(_)
+                    | crate::config::profile::item::Profile::Remote(_) => error,
+                })
                 .with_context(|| format!("failed to resolve transform profile {uid}"))
         })
         .collect()
@@ -87,7 +106,7 @@ async fn process_chain_with_runner(
                     )
                     .await
                     .map_err(|error| {
-                        anyhow::Error::new(TransformExecutionError::new(
+                        anyhow::Error::new(TransformFailureError::script(
                             node.uid.clone(),
                             scope_uid.cloned(),
                             *script_type,
@@ -327,11 +346,11 @@ rules:
         let error = process_chain_with_runner(Mapping::new(), &chain, Some(&scope_uid), &runner)
             .await
             .unwrap_err();
-        let failure = error.downcast_ref::<TransformExecutionError>().unwrap();
+        let failure = error.downcast_ref::<TransformFailureError>().unwrap();
 
         assert_eq!(failure.transform_uid, "sj-failing");
         assert_eq!(failure.scope_uid.as_deref(), Some("source-test"));
-        assert_eq!(failure.script_type, ScriptType::JavaScript);
+        assert_eq!(failure.script_type, Some(ScriptType::JavaScript));
         assert!(failure.message().contains("script exploded"));
     }
 

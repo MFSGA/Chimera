@@ -1354,7 +1354,7 @@ export type RuntimeTransformFailureDiagnostics = {
   attempt_revision: number;
   transform_uid: string;
   scope_uid: string | null;
-  script_type: ScriptType;
+  script_type: ScriptType | null;
   message: string;
 };
 

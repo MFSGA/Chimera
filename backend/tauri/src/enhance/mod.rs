@@ -26,7 +26,7 @@ mod tun;
 mod utils;
 
 pub use chain::PostProcessingOutput;
-pub(crate) use chain::TransformExecutionError;
+pub(crate) use chain::TransformFailureError;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
@@ -59,10 +59,10 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
                     .with_context(|| format!("selected profile {uid} does not exist"))?;
                 let chain = match item {
                     Profile::Local(profile) => {
-                        utils::resolve_transform_chain(&profiles, &profile.chain)?
+                        utils::resolve_transform_chain(&profiles, &profile.chain, Some(uid))?
                     }
                     Profile::Remote(profile) => {
-                        utils::resolve_transform_chain(&profiles, &profile.chain)?
+                        utils::resolve_transform_chain(&profiles, &profile.chain, Some(uid))?
                     }
                     Profile::Merge(_) | Profile::Script(_) => {
                         bail!("transform profile {uid} cannot be selected as a source profile")
@@ -79,7 +79,7 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
             .map(|(k, v)| (k.to_string(), v))
             .collect::<IndexMap<_, _>>();
 
-        let global_chain = utils::resolve_transform_chain(&profiles, &profiles.chain)
+        let global_chain = utils::resolve_transform_chain(&profiles, &profiles.chain, None)
             .context("failed to resolve global transform chain")?;
         let valid = profiles.valid.clone();
 
