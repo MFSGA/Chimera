@@ -26,6 +26,7 @@ mod tun;
 mod utils;
 
 pub use chain::PostProcessingOutput;
+pub(crate) use chain::TransformExecutionError;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
@@ -91,7 +92,7 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     // Execute per-profile transform chains before combining selected profiles.
     let profiles_outputs = join_all(profiles.into_iter().map(|(uid, mapping)| async {
         let chain = profile_chain.get(&uid).map_or(&[] as &[_], |v| v);
-        let output = process_chain(mapping, chain).await;
+        let output = process_chain(mapping, chain, Some(&uid)).await;
         (uid, output)
     }))
     .await;
@@ -109,7 +110,7 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     let config = merge_profiles(profiles).context("failed to merge selected profiles")?;
 
     // Global transforms run after selected profiles have been combined.
-    let (mut config, global_chain_output) = process_chain(config, &global_chain)
+    let (mut config, global_chain_output) = process_chain(config, &global_chain, None)
         .await
         .context("failed to process global transform chain")?;
     postprocessing_output.global = global_chain_output;

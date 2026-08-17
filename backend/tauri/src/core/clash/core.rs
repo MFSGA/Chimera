@@ -34,13 +34,13 @@ use crate::{
             api,
             runtime_product::{
                 CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
-                RuntimeSnapshot, RuntimeTransactionSnapshot, capture_runtime_transaction,
-                check_and_promote_candidate, restore_failed_apply,
+                RuntimeSnapshot, RuntimeTransactionSnapshot, RuntimeTransformFailure,
+                capture_runtime_transaction, check_and_promote_candidate, restore_failed_apply,
             },
         },
         logger::Logger,
     },
-    enhance::PostProcessingOutput,
+    enhance::{PostProcessingOutput, TransformExecutionError},
     log_err,
     utils::dirs,
 };
@@ -486,6 +486,10 @@ impl CoreManager {
             .map(|snapshot| (snapshot.revision.get(), snapshot.transform_output.clone()))
     }
 
+    pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
+        self.runtime_lifecycle.snapshot().last_transform_failure
+    }
+
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
         let instance = {
             let instance = self.instance.lock();
@@ -613,17 +617,31 @@ impl CoreManager {
             .prepare_external_controller_port()
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let (config, transform_output) = Config::generate_runtime_input()
-            .await
+        let revision = self
+            .runtime_lifecycle
+            .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
+        let (config, transform_output) = match Config::generate_runtime_input().await {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(transform) = error.downcast_ref::<TransformExecutionError>() {
+                    self.runtime_lifecycle
+                        .publish_transform_failure(RuntimeTransformFailure {
+                            attempt_revision: revision,
+                            transform_uid: transform.transform_uid.clone(),
+                            scope_uid: transform.scope_uid.clone(),
+                            script_type: transform.script_type,
+                            message: transform.message(),
+                        });
+                }
+                return Err(RuntimeRestartError::Prepare(error));
+            }
+        };
+        self.runtime_lifecycle.clear_transform_failure();
         let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
         let candidate = paths
             .create_candidate(&bytes)
             .await
-            .map_err(RuntimeRestartError::Prepare)?;
-        let revision = self
-            .runtime_lifecycle
-            .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
 
         let promoted_bytes =

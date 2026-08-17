@@ -16,6 +16,13 @@ type RuntimeTransformDiagnostics = {
     scopes: Record<string, Record<string, Array<[LogSpan, string]>>>;
     global: Record<string, Array<[LogSpan, string]>>;
   };
+  failure: {
+    attempt_revision: number;
+    transform_uid: string;
+    scope_uid: string | null;
+    script_type: 'javascript' | 'lua';
+    message: string;
+  } | null;
 };
 
 type ProfileResponse = {
@@ -231,11 +238,13 @@ describe('main transform chain editor', () => {
   const mergeAName = `chain-ui-merge-a-${suffix}`;
   const mergeBName = `chain-ui-merge-b-${suffix}`;
   const javascriptName = `chain-ui-javascript-${suffix}`;
+  const failingJavascriptName = `chain-ui-javascript-failing-${suffix}`;
   let previousCurrent: string | null = null;
   let localUid: string | null = null;
   let mergeAUid: string | null = null;
   let mergeBUid: string | null = null;
   let javascriptUid: string | null = null;
+  let failingJavascriptUid: string | null = null;
 
   before(async () => {
     await browser.setWindowSize(1240, 720);
@@ -297,6 +306,23 @@ describe('main transform chain editor', () => {
       }),
       'JavaScript profile creation',
     );
+    failingJavascriptUid = requireApplied(
+      await invoke<MutationOutcome<string>>('create_profile', {
+        item: {
+          type: 'script',
+          name: failingJavascriptName,
+          desc: null,
+          script_type: 'javascript',
+        },
+        fileData: [
+          'export default function () {',
+          '  throw new Error("chain ui intentional failure");',
+          '}',
+          '',
+        ].join('\n'),
+      }),
+      'failing JavaScript profile creation',
+    );
     requireApplied(
       await invoke<MutationOutcome<null>>('activate_profile', {
         uid: localUid,
@@ -318,7 +344,13 @@ describe('main transform chain editor', () => {
         transforms: [],
       }).catch(() => undefined);
     }
-    for (const uid of [javascriptUid, mergeAUid, mergeBUid, localUid]) {
+    for (const uid of [
+      failingJavascriptUid,
+      javascriptUid,
+      mergeAUid,
+      mergeBUid,
+      localUid,
+    ]) {
       if (!uid) continue;
       await invoke<MutationOutcome<null>>('delete_profile', { uid }).catch(
         () => undefined,
@@ -608,5 +640,100 @@ describe('main transform chain editor', () => {
           'Open global transform diagnostics did not return to the empty state after external detachment.',
       },
     );
+    await editor.$('[data-slot="transform-chain-cancel"]').click();
+    await waitForEditorClosed('global');
+  });
+
+  it('pins a failed transform attempt to the responsible global script', async () => {
+    assert.ok(mergeAUid && failingJavascriptUid);
+    await openRoute('/main/profiles/merge');
+
+    const before = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    assert.ok(before);
+    assert.equal(before.failure, null);
+
+    const trigger = await $('[data-slot="global-transform-chain"]');
+    await trigger.waitForClickable({ timeout: 15_000 });
+    await trigger.click();
+    const editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    const failingTransform = await editor.$(
+      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
+    );
+    await failingTransform.click();
+    assert.deepEqual(await activeOrder('global'), [
+      mergeAUid,
+      failingJavascriptUid,
+    ]);
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([mergeAUid, failingJavascriptUid]);
+    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    const failingRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
+    );
+    const failure = await failingRow.$(
+      '[data-slot="transform-runtime-failure"]',
+    );
+    await failure.waitForDisplayed({ timeout: 30_000 });
+    const attemptRevision = Number(
+      await failure.getAttribute('data-attempt-revision'),
+    );
+    assert.ok(attemptRevision > before.revision);
+    assert.equal(await failure.getAttribute('data-script-type'), 'javascript');
+    assert.match(await failure.getText(), /chain ui intentional failure/);
+
+    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    assert.ok(failedDiagnostics?.failure);
+    assert.equal(
+      failedDiagnostics.revision,
+      before.revision,
+      'failed transform attempt must not replace the applied runtime revision',
+    );
+    assert.equal(failedDiagnostics.failure.attempt_revision, attemptRevision);
+    assert.equal(failedDiagnostics.failure.transform_uid, failingJavascriptUid);
+    assert.equal(failedDiagnostics.failure.scope_uid, null);
+    assert.equal(failedDiagnostics.failure.script_type, 'javascript');
+    assert.match(
+      failedDiagnostics.failure.message,
+      /chain ui intentional failure/,
+    );
+
+    const currentFailingRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
+    );
+    await currentFailingRow.$('[data-slot="transform-chain-remove"]').click();
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([mergeAUid]);
+    await waitForEditorClosed('global');
+
+    await browser.waitUntil(
+      async () => {
+        const latest = await invoke<RuntimeTransformDiagnostics | null>(
+          'get_runtime_transform_diagnostics',
+        );
+        return (
+          (latest?.revision ?? 0) > before.revision && latest?.failure === null
+        );
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'Transform failure diagnostics did not clear after repairing the global chain.',
+      },
+    );
+    const repaired = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    assert.ok(repaired);
+    assert.ok(repaired.revision > before.revision);
+    assert.equal(repaired.failure, null);
   });
 });
