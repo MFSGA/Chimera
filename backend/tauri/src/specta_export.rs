@@ -194,6 +194,7 @@ macro_rules! build_builder {
                 crate::greet,
                 crate::ipc::get_sys_proxy,
                 crate::ipc::get_profiles,
+                crate::ipc::get_runtime_transform_diagnostics,
                 crate::ipc::import_profile,
                 crate::ipc::view_profile,
                 crate::ipc::reorder_profile,

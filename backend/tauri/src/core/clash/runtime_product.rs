@@ -16,7 +16,7 @@ use parking_lot::RwLock;
 use serde_yaml::Mapping;
 use sha2::{Digest, Sha256};
 
-use crate::{config::chimera::ClashCore, utils::dirs};
+use crate::{config::chimera::ClashCore, enhance::PostProcessingOutput, utils::dirs};
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";
@@ -61,15 +61,33 @@ pub struct RuntimeSnapshot {
     pub target_core: ClashCore,
     pub product_sha256: [u8; 32],
     pub config: Mapping,
+    pub transform_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
 }
 
 impl RuntimeSnapshot {
+    #[cfg(test)]
     pub fn new(
         revision: RuntimeRevision,
         target_core: ClashCore,
         product_bytes: Vec<u8>,
         config: Mapping,
+    ) -> Self {
+        Self::new_with_transform_output(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            PostProcessingOutput::default(),
+        )
+    }
+
+    pub fn new_with_transform_output(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
     ) -> Self {
         let product_sha256 = Sha256::digest(&product_bytes).into();
         Self {
@@ -77,6 +95,7 @@ impl RuntimeSnapshot {
             target_core,
             product_sha256,
             config,
+            transform_output,
             product_bytes: product_bytes.into(),
         }
     }
@@ -475,6 +494,16 @@ mod tests {
         RuntimePaths::from_config_root(dir.path().to_path_buf())
     }
 
+    fn transform_output(message: &str) -> PostProcessingOutput {
+        serde_json::from_value(serde_json::json!({
+            "scopes": {},
+            "global": {
+                "s-test": [["info", message]],
+            },
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn runtime_revision_allocator_is_monotonic() {
         let allocator = RuntimeRevisionAllocator::default();
@@ -659,11 +688,13 @@ mod tests {
         restore_product(paths.product(), b"mode: rule\n")
             .await
             .unwrap();
-        let old = Arc::new(RuntimeSnapshot::new(
+        let old_output = transform_output("old runtime");
+        let old = Arc::new(RuntimeSnapshot::new_with_transform_output(
             lifecycle.allocate_revision().unwrap(),
             ClashCore::Mihomo,
             b"mode: rule\n".to_vec(),
             Mapping::new(),
+            old_output.clone(),
         ));
         lifecycle.publish_promoted(old.clone());
         lifecycle.publish_applied(old.clone()).unwrap();
@@ -674,11 +705,12 @@ mod tests {
         restore_product(paths.product(), b"mode: direct\n")
             .await
             .unwrap();
-        let replacement = Arc::new(RuntimeSnapshot::new(
+        let replacement = Arc::new(RuntimeSnapshot::new_with_transform_output(
             lifecycle.allocate_revision().unwrap(),
             ClashCore::ClashRs,
             b"mode: direct\n".to_vec(),
             Mapping::new(),
+            transform_output("replacement runtime"),
         ));
         lifecycle.publish_promoted(replacement.clone());
         lifecycle.publish_applied(replacement).unwrap();
@@ -689,7 +721,9 @@ mod tests {
         assert_eq!(std::fs::read(paths.product()).unwrap(), b"mode: rule\n");
         let restored = lifecycle.snapshot();
         assert_eq!(restored.promoted.unwrap().revision, old.revision);
-        assert_eq!(restored.applied.unwrap().revision, old.revision);
+        let applied = restored.applied.unwrap();
+        assert_eq!(applied.revision, old.revision);
+        assert_eq!(applied.transform_output, old_output);
     }
 
     #[tokio::test]
