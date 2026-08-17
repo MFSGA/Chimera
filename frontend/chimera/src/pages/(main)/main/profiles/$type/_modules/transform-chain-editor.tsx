@@ -314,7 +314,10 @@ export default function TransformChainEditor({
                             data-attempt-revision={
                               runtimeFailure.attempt_revision
                             }
-                            data-script-type={runtimeFailure.script_type}
+                            data-transform-type={transform.type}
+                            data-script-type={
+                              runtimeFailure.script_type ?? undefined
+                            }
                           >
                             <p className="font-medium">
                               {m.common_error()} ·{' '}

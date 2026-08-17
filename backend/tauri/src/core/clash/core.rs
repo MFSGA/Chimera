@@ -40,7 +40,7 @@ use crate::{
         },
         logger::Logger,
     },
-    enhance::{PostProcessingOutput, TransformExecutionError},
+    enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
     utils::dirs,
 };
@@ -624,7 +624,7 @@ impl CoreManager {
         let (config, transform_output) = match Config::generate_runtime_input().await {
             Ok(output) => output,
             Err(error) => {
-                if let Some(transform) = error.downcast_ref::<TransformExecutionError>() {
+                if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
                     self.runtime_lifecycle
                         .publish_transform_failure(RuntimeTransformFailure {
                             attempt_revision: revision,
