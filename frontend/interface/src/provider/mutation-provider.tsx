@@ -13,6 +13,7 @@ import {
   CLASH_RULES_QUERY_KEY,
   CLASH_VERSION_QUERY_KEY,
   RROFILES_QUERY_KEY,
+  RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
 } from '../ipc/consts';
 
 type EventPayload = 'nyanpasu_config' | 'clash_config' | 'profiles' | 'proxies';
@@ -31,6 +32,7 @@ const CLASH_CONFIG_MUTATION_KEYS = [
   CLASH_RULES_PROVIDER_QUERY_KEY,
   CLASH_RULES_QUERY_KEY,
   RROFILES_QUERY_KEY,
+  RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
 ] as const;
 
 const PROFILES_MUTATION_KEYS = [
