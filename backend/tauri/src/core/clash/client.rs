@@ -43,6 +43,7 @@ use crate::{
         runtime::ClashConfigOverrides,
     },
     core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
+    enhance::PostProcessingOutput,
 };
 
 /// Public mutation wire aligned with REF: desired state is committed first;
@@ -127,6 +128,12 @@ pub(crate) struct CoreStatusSnapshot {
     pub(crate) run_type: RunType,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformDiagnostics {
+    pub revision: u64,
+    pub output: PostProcessingOutput,
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecycleLease: Send {
     async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
@@ -139,6 +146,9 @@ pub(crate) trait CoreLifecycleLease: Send {
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        Ok(None)
+    }
     async fn on_profile_change(&self);
 }
 
@@ -541,6 +551,12 @@ impl CoreLifecyclePort for LegacyCoreLifecyclePort {
         })
     }
 
+    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        Ok(CoreManager::global()
+            .runtime_transform_output()
+            .map(|(revision, output)| RuntimeTransformDiagnostics { revision, output }))
+    }
+
     async fn on_profile_change(&self) {
         let _ = ConnectionInterruptionService::on_profile_change().await;
     }
@@ -643,6 +659,12 @@ impl NyanpasuClient {
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.inner.core.status().await
+    }
+
+    pub(crate) fn runtime_transform_diagnostics(
+        &self,
+    ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        self.inner.core.runtime_transform_diagnostics()
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
