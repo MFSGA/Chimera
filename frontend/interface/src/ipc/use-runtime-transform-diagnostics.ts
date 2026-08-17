@@ -1,9 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
 import { commands } from './bindings';
-
-export const RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY =
-  'runtime-transform-diagnostics';
+import { RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY } from './consts';
 
 export const useRuntimeTransformDiagnostics = (enabled = true) =>
   useQuery({

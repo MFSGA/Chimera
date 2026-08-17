@@ -549,5 +549,64 @@ describe('main transform chain editor', () => {
       false,
       'merge-only global chain should not render an empty runtime log block',
     );
+
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
+        transforms: [mergeAUid, javascriptUid],
+      }),
+      'external global script attachment',
+    );
+    await browser.waitUntil(
+      async () =>
+        browser.execute((afterRevision) => {
+          const diagnostics = document.querySelector(
+            '[data-slot="transform-chain-editor"][data-chain-scope="global"] [data-slot="transform-runtime-diagnostics"]',
+          );
+          const empty = document.querySelector(
+            '[data-slot="transform-chain-editor"][data-chain-scope="global"] [data-slot="transform-runtime-diagnostics-empty"]',
+          );
+          const revision = Number(
+            diagnostics?.getAttribute('data-runtime-revision') ?? 0,
+          );
+          return revision > afterRevision && empty === null;
+        }, cleared.revision),
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'Open global transform diagnostics did not refresh after an external runtime promotion.',
+      },
+    );
+    const externallyApplied = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    assert.ok(externallyApplied);
+    assert.ok(externallyApplied.revision > cleared.revision);
+
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
+        transforms: [mergeAUid],
+      }),
+      'external global script detachment',
+    );
+    await browser.waitUntil(
+      async () =>
+        browser.execute((afterRevision) => {
+          const diagnostics = document.querySelector(
+            '[data-slot="transform-chain-editor"][data-chain-scope="global"] [data-slot="transform-runtime-diagnostics"]',
+          );
+          const empty = document.querySelector(
+            '[data-slot="transform-chain-editor"][data-chain-scope="global"] [data-slot="transform-runtime-diagnostics-empty"]',
+          );
+          const revision = Number(
+            diagnostics?.getAttribute('data-runtime-revision') ?? 0,
+          );
+          return revision > afterRevision && empty !== null;
+        }, externallyApplied.revision),
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'Open global transform diagnostics did not return to the empty state after external detachment.',
+      },
+    );
   });
 });
