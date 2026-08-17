@@ -8,6 +8,16 @@ type MutationOutcome<T> =
       degradations: Array<{ message: string }>;
     };
 
+type LogSpan = 'log' | 'info' | 'warn' | 'error';
+
+type RuntimeTransformDiagnostics = {
+  revision: number;
+  output: {
+    scopes: Record<string, Record<string, Array<[LogSpan, string]>>>;
+    global: Record<string, Array<[LogSpan, string]>>;
+  };
+};
+
 type ProfileResponse = {
   uid: string;
   name: string;
@@ -107,6 +117,48 @@ async function waitForGlobalChain(expected: string[]) {
   );
 }
 
+async function waitForScopedRuntimeLog(
+  uid: string,
+  transformUid: string,
+  expected: [LogSpan, string],
+) {
+  await browser.waitUntil(
+    async () => {
+      const latest = await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
+      return (
+        JSON.stringify(latest?.output.scopes[uid]?.[transformUid] ?? []) ===
+        JSON.stringify([expected])
+      );
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `Scoped transform ${transformUid} did not publish ${JSON.stringify(expected)}.`,
+    },
+  );
+  const latest = await invoke<RuntimeTransformDiagnostics | null>(
+    'get_runtime_transform_diagnostics',
+  );
+  assert.ok(latest);
+  return latest;
+}
+
+async function waitForEditorClosed(scope: 'profile' | 'global') {
+  await browser.waitUntil(
+    async () => {
+      const currentEditor = await browser.$(
+        `[data-slot="transform-chain-editor"][data-chain-scope="${scope}"]`,
+      );
+      return !(await currentEditor.isDisplayed().catch(() => false));
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `${scope} transform chain editor did not close.`,
+    },
+  );
+}
+
 async function activeOrder(scope: 'profile' | 'global') {
   return browser.execute((chainScope) => {
     const editor = document.querySelector(
@@ -124,10 +176,12 @@ describe('main transform chain editor', () => {
   const localName = `chain-ui-source-${suffix}`;
   const mergeAName = `chain-ui-merge-a-${suffix}`;
   const mergeBName = `chain-ui-merge-b-${suffix}`;
+  const javascriptName = `chain-ui-javascript-${suffix}`;
   let previousCurrent: string | null = null;
   let localUid: string | null = null;
   let mergeAUid: string | null = null;
   let mergeBUid: string | null = null;
+  let javascriptUid: string | null = null;
 
   before(async () => {
     await browser.setWindowSize(1240, 720);
@@ -160,16 +214,40 @@ describe('main transform chain editor', () => {
     mergeAUid = requireApplied(
       await invoke<MutationOutcome<string>>('create_profile', {
         item: { type: 'merge', name: mergeAName, desc: null },
-        fileData: 'unified-delay: true\n',
+        fileData: '{}\n',
       }),
       'first merge profile creation',
     );
     mergeBUid = requireApplied(
       await invoke<MutationOutcome<string>>('create_profile', {
         item: { type: 'merge', name: mergeBName, desc: null },
-        fileData: 'tcp-concurrent: true\n',
+        fileData: '{}\n',
       }),
       'second merge profile creation',
+    );
+    javascriptUid = requireApplied(
+      await invoke<MutationOutcome<string>>('create_profile', {
+        item: {
+          type: 'script',
+          name: javascriptName,
+          desc: null,
+          script_type: 'javascript',
+        },
+        fileData: [
+          'export default function (config) {',
+          '  console.info("chain ui javascript log");',
+          '  return config;',
+          '}',
+          '',
+        ].join('\n'),
+      }),
+      'JavaScript profile creation',
+    );
+    requireApplied(
+      await invoke<MutationOutcome<null>>('activate_profile', {
+        uid: localUid,
+      }),
+      'local profile activation',
     );
 
     await openMainWindow();
@@ -186,7 +264,7 @@ describe('main transform chain editor', () => {
         transforms: [],
       }).catch(() => undefined);
     }
-    for (const uid of [mergeAUid, mergeBUid, localUid]) {
+    for (const uid of [javascriptUid, mergeAUid, mergeBUid, localUid]) {
       if (!uid) continue;
       await invoke<MutationOutcome<null>>('delete_profile', { uid }).catch(
         () => undefined,
@@ -200,7 +278,7 @@ describe('main transform chain editor', () => {
   });
 
   it('edits and reorders a scoped transform chain from profile details', async () => {
-    assert.ok(localUid && mergeAUid && mergeBUid);
+    assert.ok(localUid && mergeAUid && mergeBUid && javascriptUid);
     await openRoute(`/main/profiles/profile/detail/${localUid}`);
 
     const trigger = await $('[data-slot="profile-transform-chain"]');
@@ -218,19 +296,66 @@ describe('main transform chain editor', () => {
     const second = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeBUid}"]`,
     );
+    const javascript = await editor.$(
+      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
+    );
     await first.click();
     await second.click();
-    assert.deepEqual(await activeOrder('profile'), [mergeAUid, mergeBUid]);
+    await javascript.click();
+    assert.deepEqual(await activeOrder('profile'), [
+      mergeAUid,
+      mergeBUid,
+      javascriptUid,
+    ]);
 
     const secondRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeBUid}"]`,
     );
     await secondRow.$('[data-slot="transform-chain-move-up"]').click();
-    assert.deepEqual(await activeOrder('profile'), [mergeBUid, mergeAUid]);
+    assert.deepEqual(await activeOrder('profile'), [
+      mergeBUid,
+      mergeAUid,
+      javascriptUid,
+    ]);
 
+    const beforeSaveDiagnostics =
+      await invoke<RuntimeTransformDiagnostics | null>(
+        'get_runtime_transform_diagnostics',
+      );
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await editor.waitForDisplayed({ reverse: true, timeout: 30_000 });
-    await waitForScopedChain(localUid, [mergeBUid, mergeAUid]);
+    await waitForScopedChain(localUid, [mergeBUid, mergeAUid, javascriptUid]);
+    const appliedDiagnostics = await waitForScopedRuntimeLog(
+      localUid,
+      javascriptUid,
+      ['info', 'chain ui javascript log'],
+    );
+    assert.ok(
+      appliedDiagnostics.revision > (beforeSaveDiagnostics?.revision ?? 0),
+      'applied runtime revision did not advance after saving the scoped chain',
+    );
+    await waitForEditorClosed('profile');
+
+    const currentTrigger = await $('[data-slot="profile-transform-chain"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    const currentEditor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
+    );
+    await currentEditor.waitForDisplayed({ timeout: 15_000 });
+    const diagnostics = await currentEditor.$(
+      '[data-slot="transform-runtime-diagnostics"]',
+    );
+    await diagnostics.waitForDisplayed({ timeout: 15_000 });
+    assert.ok(await diagnostics.getAttribute('data-runtime-revision'));
+
+    const javascriptRow = await currentEditor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    const runtimeLog = await javascriptRow.$(
+      '[data-slot="transform-runtime-log"][data-log-span="info"]',
+    );
+    await runtimeLog.waitForDisplayed({ timeout: 15_000 });
+    assert.match(await runtimeLog.getText(), /chain ui javascript log/);
   });
 
   it('edits the global transform chain from a transform list header', async () => {
@@ -253,7 +378,7 @@ describe('main transform chain editor', () => {
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
 
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await editor.waitForDisplayed({ reverse: true, timeout: 30_000 });
     await waitForGlobalChain([mergeAUid]);
+    await waitForEditorClosed('global');
   });
 });
