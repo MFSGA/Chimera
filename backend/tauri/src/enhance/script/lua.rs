@@ -14,7 +14,7 @@ use mlua::{
 };
 
 use crate::enhance::{
-    chain::{LogSpan, Logs},
+    chain::{LogSpan, Logs, push_script_log},
     script::runner::{ScriptRunOutput, ScriptRunRequest, ScriptRunner},
 };
 
@@ -178,9 +178,10 @@ fn install_log_functions(lua: &Lua, environment: &Table) -> Result<Arc<Mutex<Log
                     .map(LuaValue::to_string)
                     .collect::<mlua::Result<Vec<_>>>()?
                     .join("\t");
-                sink.lock()
-                    .map_err(|_| mlua::Error::RuntimeError("lua log sink is poisoned".into()))?
-                    .push((span, message));
+                let mut logs = sink
+                    .lock()
+                    .map_err(|_| mlua::Error::RuntimeError("lua log sink is poisoned".into()))?;
+                push_script_log(&mut logs, span, message);
                 Ok(())
             }),
             format!("failed to create lua {name} logger"),
@@ -209,9 +210,10 @@ fn install_log_functions(lua: &Lua, environment: &Table) -> Result<Arc<Mutex<Log
                     .map(LuaValue::to_string)
                     .collect::<mlua::Result<Vec<_>>>()?
                     .join("\t");
-                sink.lock()
-                    .map_err(|_| mlua::Error::RuntimeError("lua log sink is poisoned".into()))?
-                    .push((span, message));
+                let mut logs = sink
+                    .lock()
+                    .map_err(|_| mlua::Error::RuntimeError("lua log sink is poisoned".into()))?;
+                push_script_log(&mut logs, span, message);
                 Ok(())
             }),
             format!("failed to create lua console.{name} logger"),
@@ -320,6 +322,36 @@ return config
                 (LogSpan::Log, "hello\t7".into()),
                 (LogSpan::Warn, "careful".into()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn lua_runner_bounds_retained_logs() {
+        use crate::enhance::chain::{SCRIPT_LOG_ENTRY_LIMIT, SCRIPT_LOG_MESSAGE_LIMIT_BYTES};
+
+        let output = LuaRunner::new()
+            .run(request(
+                r#"
+print(string.rep("x", 6000))
+for index = 1, 300 do
+  info("message-" .. index)
+end
+return config
+"#,
+                Mapping::new(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(output.logs.len(), SCRIPT_LOG_ENTRY_LIMIT);
+        assert!(output.logs[0].1.len() <= SCRIPT_LOG_MESSAGE_LIMIT_BYTES);
+        assert!(output.logs[0].1.ends_with("… [truncated]"));
+        assert_eq!(output.logs.last().map(|entry| entry.0), Some(LogSpan::Warn));
+        assert!(
+            output
+                .logs
+                .last()
+                .is_some_and(|entry| entry.1.contains("discarded"))
         );
     }
 
