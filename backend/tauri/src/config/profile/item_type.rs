@@ -33,7 +33,7 @@ impl ProfileItemType {
     }
 
     pub fn is_runtime_transform_supported(self) -> bool {
-        matches!(self, Self::Merge | Self::Script(ScriptType::Lua))
+        self.is_transform()
     }
 }
 
