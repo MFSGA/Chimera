@@ -41,6 +41,7 @@ export const RouteListItem = ({
 
   const listItemButton = (
     <ListItemButton
+      data-testid={`sidebar-route-${name}`}
       className={cn(
         onlyIcon ? '!mx-auto !size-16 !rounded-3xl' : '!rounded-full !pr-14',
       )}
