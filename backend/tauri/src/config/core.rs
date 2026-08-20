@@ -10,7 +10,7 @@ use crate::{
         runtime::IRuntime,
     },
     core::state::ManagedState,
-    enhance,
+    enhance::{self, PostProcessingOutput},
 };
 
 /// whole config
@@ -43,15 +43,22 @@ impl Config {
         Self::global().verge_config.clone()
     }
 
-    /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.
-    pub async fn generate_runtime_mapping() -> Result<Mapping> {
-        let (config, _exists_keys, _postprocessing_outputs) = enhance::enhance().await;
+    /// Generate the runtime mapping and transform output once from the same enhancement pass.
+    pub async fn generate_runtime_input() -> Result<(Mapping, PostProcessingOutput)> {
+        let (config, _exists_keys, postprocessing_output) = enhance::enhance().await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
         };
 
-        Ok(config)
+        Ok((config, postprocessing_output))
+    }
+
+    /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.
+    pub async fn generate_runtime_mapping() -> Result<Mapping> {
+        Self::generate_runtime_input()
+            .await
+            .map(|(config, _postprocessing_output)| config)
     }
 
     /// Legacy compatibility entry point for callers that only need the generated draft.

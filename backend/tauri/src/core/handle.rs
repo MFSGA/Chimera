@@ -17,6 +17,7 @@ pub struct Handle {
 pub enum StateChanged {
     NyanpasuConfig,
     ClashConfig,
+    RuntimeTransformDiagnostics,
     Profiles,
     Proxies,
 }
@@ -44,6 +45,10 @@ impl Handle {
         *self.app_handle.lock() = Some(app_handle);
     }
 
+    pub fn app_handle() -> Option<AppHandle> {
+        Self::global().app_handle.lock().clone()
+    }
+
     pub fn get_window(&self) -> Option<WebviewWindow<Wry>> {
         self.app_handle
             .lock()
@@ -57,6 +62,13 @@ impl Handle {
 
     pub fn refresh_clash() {
         log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
+    }
+
+    pub fn refresh_runtime_transform_diagnostics() {
+        log_err!(Self::emit(
+            STATE_CHANGED_URI,
+            StateChanged::RuntimeTransformDiagnostics
+        ));
     }
 
     pub fn refresh_verge() {
