@@ -1,6 +1,7 @@
 import type { ProfileQueryResultItem } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useNavigate } from '@tanstack/react-router';
+import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
@@ -16,6 +17,7 @@ import {
   useActiveProfile,
   useDeleteProfile,
 } from '../../_modules/profile-actions';
+import TransformChainEditor from '../../_modules/transform-chain-editor';
 import { isProxyProfile } from '../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
@@ -92,6 +94,18 @@ export default function ActionCard({
           <DragClickRounded className="size-4 shrink-0" />
           <span className="truncate">{m.profile_active_title()}</span>
         </ActionButton>
+      )}
+
+      {isProxy && (
+        <TransformChainEditor profile={profile}>
+          <ActionButton
+            disabled={isPending}
+            data-slot="profile-transform-chain"
+          >
+            <AccountTreeRounded className="size-4 shrink-0" />
+            <span className="truncate">{m.profile_menu_proxy_chains()}</span>
+          </ActionButton>
+        </TransformChainEditor>
       )}
 
       <ActionButton
