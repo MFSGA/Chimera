@@ -61,6 +61,7 @@ jobs:
     timeout-minutes: 120
     env:
       E2E_SUITE: ${{ github.event_name == 'schedule' && 'hermetic' || github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'critical' || 'smoke' }}
+      CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e
     steps:
       - uses: actions/checkout@v7
 
@@ -121,3 +122,11 @@ jobs:
       - name: Run ${{ env.E2E_SUITE }} suite
         shell: pwsh
         run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite $env:E2E_SUITE
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-e2e-diagnostics-${{ github.run_id }}
+          path: ${{ github.workspace }}/artifacts/e2e
+          if-no-files-found: ignore

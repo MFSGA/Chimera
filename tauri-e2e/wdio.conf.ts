@@ -38,6 +38,9 @@ if (ownsRuntimeDirectory) {
 
 const configDirectoryOverride = path.join(runtimeDirectory, 'config');
 const dataDirectoryOverride = path.join(runtimeDirectory, 'data');
+const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR
+  ? path.resolve(process.env.CHIMERA_E2E_ARTIFACT_DIR)
+  : null;
 
 fs.mkdirSync(configDirectoryOverride, { recursive: true });
 fs.mkdirSync(dataDirectoryOverride, { recursive: true });
@@ -69,6 +72,37 @@ async function prepareTauriServiceTeardown(): Promise<void> {
     'execute',
     guardedExecute as Parameters<typeof tauriBrowser.overwriteCommand>[1],
   );
+}
+
+function sanitizeArtifactPart(value: string): string {
+  return value.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '');
+}
+
+async function captureFailedTest(
+  test: { parent?: string; title?: string },
+  result: { passed: boolean; error?: unknown },
+): Promise<void> {
+  if (!artifactDirectory || result.passed || !browser.sessionId) return;
+
+  const name = [test.parent, test.title]
+    .filter((part): part is string => Boolean(part))
+    .map(sanitizeArtifactPart)
+    .filter(Boolean)
+    .join('-');
+  const artifactBase = path.join(
+    artifactDirectory,
+    name || `failed-test-${process.pid}`,
+  );
+
+  fs.mkdirSync(artifactDirectory, { recursive: true });
+  await browser.saveScreenshot(`${artifactBase}.png`).catch(() => undefined);
+  await browser
+    .getPageSource()
+    .then((source) => fs.writeFileSync(`${artifactBase}.html`, source))
+    .catch(() => undefined);
+  if (result.error) {
+    fs.writeFileSync(`${artifactBase}.error.txt`, String(result.error));
+  }
 }
 
 export const config: WebdriverIO.Config = {
@@ -109,10 +143,12 @@ export const config: WebdriverIO.Config = {
   ],
   framework: 'mocha',
   reporters: ['spec'],
+  outputDir: artifactDirectory ?? undefined,
   mochaOpts: {
     ui: 'bdd',
     timeout: 120_000,
   },
+  afterTest: captureFailedTest,
   after: prepareTauriServiceTeardown,
   onComplete: async () => {
     try {
