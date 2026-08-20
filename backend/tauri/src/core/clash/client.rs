@@ -37,12 +37,13 @@ use crate::{
                 shared::{PreparedProfileFile, ProfileSharedBuilder},
                 utils::generate_uid,
             },
-            item_type::{ProfileItemType, ProfileUid},
+            item_type::{ProfileItemType, ProfileUid, ScriptType},
             profiles::Profiles,
         },
         runtime::ClashConfigOverrides,
     },
     core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
+    enhance::PostProcessingOutput,
 };
 
 /// Public mutation wire aligned with REF: desired state is committed first;
@@ -127,10 +128,26 @@ pub(crate) struct CoreStatusSnapshot {
     pub(crate) run_type: RunType,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformFailureDiagnostics {
+    pub attempt_revision: u64,
+    pub transform_uid: ProfileUid,
+    pub scope_uid: Option<ProfileUid>,
+    pub script_type: Option<ScriptType>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+pub struct RuntimeTransformDiagnostics {
+    pub revision: u64,
+    pub output: PostProcessingOutput,
+    pub failure: Option<RuntimeTransformFailureDiagnostics>,
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecycleLease: Send {
     async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
-    #[allow(dead_code)]
+    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()>;
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
@@ -139,11 +156,15 @@ pub(crate) trait CoreLifecycleLease: Send {
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        Ok(None)
+    }
     async fn on_profile_change(&self);
 }
 
 pub(crate) trait UiEventSink: Send + Sync {
     fn refresh_clash(&self);
+    fn refresh_runtime_transform_diagnostics(&self);
     fn refresh_profiles(&self);
 }
 
@@ -190,6 +211,14 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
     async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()>;
 
     async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()>;
+
+    async fn set_profile_transform_chain(
+        &self,
+        uid: &ProfileUid,
+        transforms: &[ProfileUid],
+    ) -> anyhow::Result<bool>;
+
+    async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool>;
 
     async fn apply_remote_options(
         &self,
@@ -411,6 +440,21 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         .await
     }
 
+    async fn set_profile_transform_chain(
+        &self,
+        uid: &ProfileUid,
+        transforms: &[ProfileUid],
+    ) -> anyhow::Result<bool> {
+        let uid = uid.clone();
+        let transforms = transforms.to_vec();
+        Self::persist(move |profiles| profiles.set_profile_transform_chain(&uid, transforms)).await
+    }
+
+    async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
+        let transforms = transforms.to_vec();
+        Self::persist(move |profiles| profiles.set_global_transform_chain(transforms)).await
+    }
+
     async fn apply_remote_options(
         &self,
         uid: &ProfileUid,
@@ -488,6 +532,10 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
         self.lease.rebuild_running_config().await
     }
 
+    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()> {
+        self.lease.run_core_from(config_path).await
+    }
+
     async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop_core().await
     }
@@ -514,6 +562,26 @@ impl CoreLifecyclePort for LegacyCoreLifecyclePort {
         })
     }
 
+    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        let core = CoreManager::global();
+        let failure =
+            core.runtime_transform_failure()
+                .map(|failure| RuntimeTransformFailureDiagnostics {
+                    attempt_revision: failure.attempt_revision.get(),
+                    transform_uid: failure.transform_uid,
+                    scope_uid: failure.scope_uid,
+                    script_type: failure.script_type,
+                    message: failure.message,
+                });
+        Ok(core
+            .runtime_transform_output()
+            .map(|(revision, output)| RuntimeTransformDiagnostics {
+                revision,
+                output,
+                failure,
+            }))
+    }
+
     async fn on_profile_change(&self) {
         let _ = ConnectionInterruptionService::on_profile_change().await;
     }
@@ -526,6 +594,10 @@ impl UiEventSink for LegacyUiEventSink {
         Handle::refresh_clash();
     }
 
+    fn refresh_runtime_transform_diagnostics(&self) {
+        Handle::refresh_runtime_transform_diagnostics();
+    }
+
     fn refresh_profiles(&self) {
         Handle::refresh_profiles();
     }
@@ -534,6 +606,23 @@ impl UiEventSink for LegacyUiEventSink {
 #[derive(Clone)]
 pub(crate) struct NyanpasuClient {
     inner: Arc<NyanpasuClientInner>,
+}
+
+pub(crate) struct CoreUpdateLease {
+    lease: Box<dyn CoreLifecycleLease>,
+}
+
+impl CoreUpdateLease {
+    pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
+        self.lease.stop().await
+    }
+
+    pub(crate) async fn run_core_from(
+        &mut self,
+        config_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        self.lease.run_core_from(config_path).await
+    }
 }
 
 struct NyanpasuClientInner {
@@ -601,14 +690,31 @@ impl NyanpasuClient {
         self.inner.core.status().await
     }
 
+    pub(crate) fn runtime_transform_diagnostics(
+        &self,
+    ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        self.inner.core.runtime_transform_diagnostics()
+    }
+
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let mut lease = self.inner.core.begin().await?;
         lease.change_core(clash_core).await
     }
 
+    pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.stop().await
+    }
+
+    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
+        Ok(CoreUpdateLease {
+            lease: self.inner.core.begin().await?,
+        })
+    }
+
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
         let _patch = self.inner.verge_patch.lock().await;
-        crate::feat::patch_verge_uncoordinated(patch).await
+        crate::feat::patch_verge_uncoordinated(self, patch).await
     }
 
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
@@ -951,7 +1057,7 @@ impl NyanpasuClient {
     }
 
     async fn after_profile_runtime_commit(&self, operation: &str) -> MutationOutcome<()> {
-        match self.rebuild_running_config().await {
+        match self.rebuild_profile_runtime().await {
             Ok(()) => MutationOutcome::from_parts((), Vec::new()),
             Err(error) => {
                 log::warn!(target: "app", "post-commit rebuild failed after {operation}; state stays committed: {error:?}");
@@ -996,6 +1102,53 @@ impl NyanpasuClient {
             .await)
     }
 
+    pub(crate) async fn set_profile_transform_chain(
+        &self,
+        uid: ProfileUid,
+        transforms: Vec<ProfileUid>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let affects_current = {
+            let _commit = self.inner.profile_commit.lock().await;
+            let affects_current = self
+                .inner
+                .profile_writes
+                .set_profile_transform_chain(&uid, &transforms)
+                .await?;
+            self.inner.ui_sink.refresh_profiles();
+            affects_current
+        };
+        if affects_current {
+            Ok(self
+                .after_profile_runtime_commit("profile transform chain update")
+                .await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
+    }
+
+    pub(crate) async fn set_global_transform_chain(
+        &self,
+        transforms: Vec<ProfileUid>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let changed = {
+            let _commit = self.inner.profile_commit.lock().await;
+            let changed = self
+                .inner
+                .profile_writes
+                .set_global_transform_chain(&transforms)
+                .await?;
+            self.inner.ui_sink.refresh_profiles();
+            changed
+        };
+        if changed {
+            Ok(self
+                .after_profile_runtime_commit("global transform chain update")
+                .await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
+    }
+
     pub(crate) async fn save_profile_file(
         &self,
         uid: ProfileUid,
@@ -1033,6 +1186,7 @@ impl NyanpasuClient {
     ) -> TransactionOutcome {
         let mapping = overrides.to_mapping();
         let persist_overrides = overrides.clone();
+        let client = self.clone();
         self.inner
             .runtime_patch
             .apply(
@@ -1041,16 +1195,29 @@ impl NyanpasuClient {
                 |patch| async move { super::api::patch_configs(&patch).await },
                 move |_patch| {
                     let overrides = persist_overrides.clone();
-                    async move { crate::feat::patch_clash_overrides(overrides).await }
+                    let client = client.clone();
+                    async move { crate::feat::patch_clash_overrides(&client, overrides).await }
                 },
             )
             .await
     }
 
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        let mut lease = self.inner.core.begin().await?;
-        lease.rebuild_running_config().await?;
+        let result = async {
+            let mut lease = self.inner.core.begin().await?;
+            lease.rebuild_running_config().await
+        }
+        .await;
+        if let Err(error) = result {
+            self.inner.ui_sink.refresh_runtime_transform_diagnostics();
+            return Err(error);
+        }
         self.inner.ui_sink.refresh_clash();
+        Ok(())
+    }
+
+    async fn rebuild_profile_runtime(&self) -> anyhow::Result<()> {
+        self.rebuild_running_config().await?;
         self.inner.core.on_profile_change().await;
         Ok(())
     }
@@ -1084,6 +1251,11 @@ mod tests {
             if self.fail_rebuild {
                 anyhow::bail!("injected rebuild failure");
             }
+            Ok(())
+        }
+
+        async fn run_core_from(&mut self, _config_path: &std::path::Path) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("run-from");
             Ok(())
         }
 
@@ -1241,6 +1413,19 @@ mod tests {
         async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
+        async fn set_profile_transform_chain(
+            &self,
+            _uid: &ProfileUid,
+            _transforms: &[ProfileUid],
+        ) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn set_global_transform_chain(
+            &self,
+            _transforms: &[ProfileUid],
+        ) -> anyhow::Result<bool> {
+            Ok(false)
+        }
         async fn apply_remote_options(
             &self,
             _uid: &ProfileUid,
@@ -1281,6 +1466,9 @@ mod tests {
     impl UiEventSink for RecordingUi {
         fn refresh_clash(&self) {
             self.events.lock().unwrap().push("refresh-ui");
+        }
+        fn refresh_runtime_transform_diagnostics(&self) {
+            self.events.lock().unwrap().push("refresh-diagnostics");
         }
         fn refresh_profiles(&self) {
             self.events.lock().unwrap().push("refresh-profiles");
@@ -1557,12 +1745,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rebuild_runs_runtime_then_ui_then_profile_side_effects() {
+    async fn stop_core_runs_through_the_injected_lifecycle_lease() {
+        let (client, events) = recording_client(false);
+        client.stop_core().await.unwrap();
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+    }
+
+    #[tokio::test]
+    async fn core_update_lease_keeps_stop_and_restart_on_one_lifecycle_lease() {
+        let (client, events) = recording_client(false);
+        let mut lease = client.begin_core_update().await.unwrap();
+        lease.stop().await.unwrap();
+        lease
+            .run_core_from(std::path::Path::new("runtime.yaml"))
+            .await
+            .unwrap();
+        drop(lease);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "stop", "run-from"]
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_rebuild_does_not_emit_profile_change_side_effects() {
         let (client, events) = recording_client(false);
         client.rebuild_running_config().await.unwrap();
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui", "profile-change"]
+            ["begin", "rebuild", "refresh-ui"]
         );
     }
 
@@ -1571,7 +1782,10 @@ mod tests {
         let (client, events) = recording_client(true);
         let error = client.rebuild_running_config().await.unwrap_err();
         assert!(error.to_string().contains("injected rebuild failure"));
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "rebuild"]);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "rebuild", "refresh-diagnostics"]
+        );
     }
 
     #[tokio::test]
@@ -1620,7 +1834,10 @@ mod tests {
         assert_eq!(degradation.code, "runtime_rebuild_failed");
         assert!(degradation.retryable);
         assert!(degradation.message.contains("injected rebuild failure"));
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "rebuild"]);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["begin", "rebuild", "refresh-diagnostics"]
+        );
     }
 
     #[test]
