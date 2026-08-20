@@ -16,7 +16,8 @@ use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
 
 use crate::{
-    config::chimera::ExternalControllerPortStrategy, core::clash::core::CoreManager, utils::resolve,
+    config::chimera::ExternalControllerPortStrategy, core::clash::client::NyanpasuClient,
+    utils::resolve,
 };
 
 const ALPHABET: [char; 62] = [
@@ -200,12 +201,16 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     let connector = app_handle
         .try_state::<crate::core::clash::ws::ClashConnectionsConnector>()
         .map(|state| state.inner().clone());
-    let _ = nyanpasu_utils::runtime::block_on(async {
+    let client = app_handle
+        .try_state::<NyanpasuClient>()
+        .map(|state| state.inner().clone());
+    log_err!(nyanpasu_utils::runtime::block_on(async {
         if let Some(connector) = connector {
             connector.stop().await;
         }
-        CoreManager::global().stop_core().await
-    });
+        let client = client.ok_or_else(|| anyhow!("NyanpasuClient is not managed"))?;
+        client.stop_core().await
+    }));
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();
 }
