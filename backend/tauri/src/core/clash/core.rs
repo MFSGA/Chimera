@@ -34,12 +34,13 @@ use crate::{
             api,
             runtime_product::{
                 CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
-                RuntimeSnapshot, RuntimeTransactionSnapshot, capture_runtime_transaction,
-                check_and_promote_candidate, restore_failed_apply,
+                RuntimeSnapshot, RuntimeTransactionSnapshot, RuntimeTransformFailure,
+                capture_runtime_transaction, check_and_promote_candidate, restore_failed_apply,
             },
         },
         logger::Logger,
     },
+    enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
     utils::dirs,
 };
@@ -478,6 +479,17 @@ impl CoreManager {
         }
     }
 
+    pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
+        self.runtime_lifecycle
+            .snapshot()
+            .applied
+            .map(|snapshot| (snapshot.revision.get(), snapshot.transform_output.clone()))
+    }
+
+    pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
+        self.runtime_lifecycle.snapshot().last_transform_failure
+    }
+
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
         let instance = {
             let instance = self.instance.lock();
@@ -605,17 +617,31 @@ impl CoreManager {
             .prepare_external_controller_port()
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let config = Config::generate_runtime_mapping()
-            .await
+        let revision = self
+            .runtime_lifecycle
+            .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
+        let (config, transform_output) = match Config::generate_runtime_input().await {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
+                    self.runtime_lifecycle
+                        .publish_transform_failure(RuntimeTransformFailure {
+                            attempt_revision: revision,
+                            transform_uid: transform.transform_uid.clone(),
+                            scope_uid: transform.scope_uid.clone(),
+                            script_type: transform.script_type,
+                            message: transform.message(),
+                        });
+                }
+                return Err(RuntimeRestartError::Prepare(error));
+            }
+        };
+        self.runtime_lifecycle.clear_transform_failure();
         let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
         let candidate = paths
             .create_candidate(&bytes)
             .await
-            .map_err(RuntimeRestartError::Prepare)?;
-        let revision = self
-            .runtime_lifecycle
-            .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
 
         let promoted_bytes =
@@ -630,11 +656,12 @@ impl CoreManager {
                 }
                 CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
             })?;
-        let snapshot = Arc::new(RuntimeSnapshot::new(
+        let snapshot = Arc::new(RuntimeSnapshot::new_with_transform_output(
             revision,
             target_core,
             promoted_bytes,
             config,
+            transform_output,
         ));
         self.runtime_lifecycle.publish_promoted(snapshot.clone());
 
@@ -729,26 +756,6 @@ impl CoreManager {
         }
     }
 
-    /// Apply one generated candidate by checking, promoting and restarting from the exact product.
-    pub async fn restart_core_with_generated_config(&self) -> Result<()> {
-        log::debug!(target: "app", "restart core with checked runtime product");
-        let lease = self.begin_lifecycle().await;
-        lease.rebuild_running_config().await
-    }
-
-    /// Check the exact generated candidate without promoting or applying it.
-    pub async fn check_config(&self) -> Result<()> {
-        let _guard = self.run_lock.lock().await;
-        let paths = RuntimePaths::from_app_config_dir()?;
-        let config = Config::generate_runtime_mapping().await?;
-        let bytes = Config::render_runtime_bytes(&config)?;
-        let candidate = paths.create_candidate(&bytes).await?;
-        self.check_candidate_path(candidate.path(), Self::selected_core())
-            .await?;
-        candidate.read_verified().await?;
-        candidate.cleanup().await
-    }
-
     #[cfg(target_os = "macos")]
     pub async fn change_default_network_dns(&self, enabled: bool) -> Result<()> {
         todo!()
@@ -764,7 +771,7 @@ impl CoreManager {
             tokio::time::sleep(Duration::from_secs(5)).await;
             std::thread::spawn(move || {
                 block_on(async {
-                    let _ = CoreManager::global().recover_core().await;
+                    let _ = self.recover_core().await;
                 })
             });
         }
@@ -772,19 +779,13 @@ impl CoreManager {
         Ok(())
     }
 
-    pub fn init(&self) -> Result<()> {
-        tauri::async_runtime::spawn(async {
+    pub fn init(&'static self) -> Result<()> {
+        tauri::async_runtime::spawn(async move {
             // 启动clash
-            log_err!(Self::global().run_core().await);
+            log_err!(self.run_core().await);
         });
 
         Ok(())
-    }
-
-    /// 停止核心运行
-    pub async fn stop_core(&self) -> Result<()> {
-        let lease = self.begin_lifecycle().await;
-        lease.stop_core().await
     }
 
     async fn stop_core_with_lease(&self, _lease: &CoreLifecycleLease<'_>) -> Result<()> {
