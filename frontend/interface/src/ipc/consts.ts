@@ -39,6 +39,12 @@ export const CLASH_INFO_QUERY_KEY = 'clash-info';
 export const CLASH_CONFIG_QUERY_KEY = 'clash-config';
 
 /**
+ * Applied runtime transform diagnostics query key.
+ */
+export const RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY =
+  'runtime-transform-diagnostics';
+
+/**
  * Clash proxies query key, used by useClashProxies hook
  */
 export const CLASH_PROXIES_QUERY_KEY = 'clash-proxies';

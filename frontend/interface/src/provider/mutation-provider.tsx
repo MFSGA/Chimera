@@ -10,9 +10,15 @@ import {
   CLASH_PROXIES_QUERY_KEY,
   CLASH_VERSION_QUERY_KEY,
   RROFILES_QUERY_KEY,
+  RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
 } from '../ipc/consts';
 
-type EventPayload = 'nyanpasu_config' | 'clash_config' | 'profiles' | 'proxies';
+type EventPayload =
+  | 'nyanpasu_config'
+  | 'clash_config'
+  | 'runtime_transform_diagnostics'
+  | 'profiles'
+  | 'proxies';
 
 const CHIMERA_CONFIG_MUTATION_KEYS = [
   CHIMERA_SETTING_QUERY_KEY,
@@ -24,6 +30,11 @@ const CLASH_CONFIG_MUTATION_KEYS = [
   CLASH_INFO_QUERY_KEY,
   CLASH_CONFIG_QUERY_KEY,
   RROFILES_QUERY_KEY,
+  RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
+] as const;
+
+const RUNTIME_TRANSFORM_DIAGNOSTICS_MUTATION_KEYS = [
+  RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
 ] as const;
 
 const PROFILES_MUTATION_KEYS = [RROFILES_QUERY_KEY] as const;
@@ -54,6 +65,9 @@ export const MutationProvider = ({ children }: PropsWithChildren) => {
           break;
         case 'clash_config':
           invalidateQueries(CLASH_CONFIG_MUTATION_KEYS);
+          break;
+        case 'runtime_transform_diagnostics':
+          invalidateQueries(RUNTIME_TRANSFORM_DIAGNOSTICS_MUTATION_KEYS);
           break;
         case 'profiles':
           invalidateQueries(PROFILES_MUTATION_KEYS);
