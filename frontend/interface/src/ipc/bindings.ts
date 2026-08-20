@@ -12,6 +12,15 @@ export const commands = {
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
     typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
+  getRuntimeTransformDiagnostics: () =>
+    typedError<
+      {
+        revision: number;
+        output: PostProcessingOutput;
+        failure: RuntimeTransformFailureDiagnostics | null;
+      } | null,
+      string
+    >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,
@@ -44,6 +53,14 @@ export const commands = {
   setProfileValidFields: (fields: string[]) =>
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
+    ),
+  setProfileTransformChain: (uid: string, transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_profile_transform_chain', { uid, transforms }),
+    ),
+  setGlobalTransformChain: (transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_global_transform_chain', { transforms }),
     ),
   patchProfileMetadata: (
     uid: string,
@@ -337,7 +354,7 @@ export type AgentCoreSnapshot = {
   applied_consistency: AgentAppliedState;
 };
 
-export type AgentCoreState = 'running' | 'stopped';
+export type AgentCoreState = 'running' | 'stopped' | 'unknown';
 
 export type AgentFinding = {
   code: AgentFindingCode;
@@ -395,6 +412,7 @@ export type AgentPrivacyBoundary = {
 };
 
 export type AgentProbeCode =
+  | 'core_status_unavailable'
   | 'core_config_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
@@ -945,6 +963,8 @@ export type LocalProfile_Serialize = {
   chain: string[];
 } & ProfileShared;
 
+export type LogSpan = 'log' | 'info' | 'warn' | 'error';
+
 export type LoggingLevel = LoggingLevel_Serialize | LoggingLevel_Deserialize;
 
 export type LoggingLevel_Deserialize =
@@ -1014,6 +1034,14 @@ export type PatchRuntimeConfig_Serialize = {
   ipv6?: boolean | null;
   'log-level'?: string | null;
   mode?: string | null;
+};
+
+/**  后处理输出 */
+export type PostProcessingOutput = {
+  /**  Per-source transform chain output, keyed by source profile UID and transform UID. */
+  scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
+  /**  Global transform chain output, keyed by transform UID. */
+  global: { [key in string]: [LogSpan, string][] };
 };
 
 export type ProfileBuilderRequest =
@@ -1314,6 +1342,20 @@ export type RuntimeInfos = {
   service_config_dir: string;
   nyanpasu_config_dir: string;
   nyanpasu_data_dir: string;
+};
+
+export type RuntimeTransformDiagnostics = {
+  revision: number;
+  output: PostProcessingOutput;
+  failure: RuntimeTransformFailureDiagnostics | null;
+};
+
+export type RuntimeTransformFailureDiagnostics = {
+  attempt_revision: number;
+  transform_uid: string;
+  scope_uid: string | null;
+  script_type: ScriptType | null;
+  message: string;
 };
 
 export type ScriptProfile = {

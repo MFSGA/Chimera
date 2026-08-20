@@ -1,6 +1,7 @@
 import { commands } from './bindings';
 
 export * from './use-profile';
+export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 
 export { commands } from './bindings';
