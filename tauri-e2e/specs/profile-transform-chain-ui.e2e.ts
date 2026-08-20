@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { Key } from 'webdriverio';
 
 type MutationOutcome<T> =
   | { status: 'applied'; value: T }
@@ -78,6 +79,38 @@ async function openMainWindow() {
     { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
   );
   await browser.switchToWindow('main');
+}
+
+async function openProfileEditorWindow(uid: string) {
+  const label = `profile-editor-${uid}`;
+  await invoke('create_editor_window', { windowType: 'profile', uid });
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes(label),
+    {
+      timeout: 15_000,
+      timeoutMsg: `Profile editor window ${label} was not created.`,
+    },
+  );
+  await browser.switchToWindow(label);
+  await browser.waitUntil(
+    async () =>
+      browser.execute(() =>
+        Boolean(document.querySelector('[data-slot="profile-editor-save"]')),
+      ),
+    {
+      timeout: 30_000,
+      timeoutMsg: `Profile editor window ${label} did not render.`,
+    },
+  );
+  return label;
+}
+
+async function replaceProfileEditorContent(value: string) {
+  const input = await $('.monaco-editor textarea.ime-text-area');
+  await input.waitForDisplayed({ timeout: 30_000 });
+  await input.click();
+  await browser.keys([Key.Ctrl, 'a', Key.NULL]);
+  await browser.keys(value);
 }
 
 async function openRoute(pathname: string) {
@@ -463,6 +496,106 @@ describe('main transform chain editor', () => {
         `merge transform ${mergeUid} should not render an empty runtime log block`,
       );
     }
+  });
+
+  it('keeps the profile editor open and shows transform failures after a degraded save', async () => {
+    assert.ok(localUid && javascriptUid);
+    const sourceUid = localUid;
+    const transformUid = javascriptUid;
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
+        transforms: [],
+      }),
+      'global chain reset before profile editor diagnostics',
+    );
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
+        uid: sourceUid,
+        transforms: [transformUid],
+      }),
+      'scoped JavaScript chain before profile editor diagnostics',
+    );
+    await waitForScopedChain(sourceUid, [transformUid]);
+
+    const editorLabel = await openProfileEditorWindow(transformUid);
+    await replaceProfileEditorContent(
+      [
+        'export default function () {',
+        '  throw new Error("profile editor intentional failure");',
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const save = await $('[data-slot="profile-editor-save"]');
+    await browser.waitUntil(async () => await save.isEnabled(), {
+      timeout: 15_000,
+      timeoutMsg:
+        'Profile editor did not become dirty after replacing Monaco content.',
+    });
+    await save.waitForClickable({ timeout: 15_000 });
+    await save.click();
+
+    await browser.waitUntil(
+      async () =>
+        /profile editor intentional failure/.test(
+          await invoke<string>('read_profile_file', { uid: transformUid }),
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'Degraded profile editor save did not commit the edited file content.',
+      },
+    );
+
+    const failure = await $('[data-slot="profile-editor-runtime-failure"]');
+    await failure.waitForDisplayed({ timeout: 30_000 });
+    assert.match(await failure.getText(), /profile editor intentional failure/);
+    assert.equal(
+      (await browser.getWindowHandles()).includes(editorLabel),
+      true,
+      'degraded profile save unexpectedly closed the editor window',
+    );
+
+    const failed = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    const runtimeFailure = failed?.failure;
+    if (!runtimeFailure)
+      throw new Error('runtime failure diagnostics were not available');
+    const observedFailure = runtimeFailure!;
+    assert.equal(observedFailure.transform_uid, transformUid);
+    assert.equal(observedFailure.scope_uid, sourceUid);
+
+    await replaceProfileEditorContent(
+      [
+        'export default function (config) {',
+        '  console.info("profile editor repaired");',
+        '  return config;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    await save.click();
+    await browser.waitUntil(
+      async () => !(await browser.getWindowHandles()).includes(editorLabel),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'Applied profile save did not close the editor window.',
+      },
+    );
+    await browser.switchToWindow('main');
+
+    const repaired = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    if (!repaired) throw new Error('runtime diagnostics were not available');
+    const repairedDiagnostics = repaired!;
+    assert.equal(repairedDiagnostics.failure, null);
+    assert.deepEqual(
+      repairedDiagnostics.output.scopes[sourceUid]?.[transformUid] ?? [],
+      [['info', 'profile editor repaired']],
+    );
   });
 
   it('edits the global transform chain and shows applied runtime diagnostics', async () => {
