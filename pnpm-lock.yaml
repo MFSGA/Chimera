@@ -51,7 +51,7 @@ importers:
         version: 1.74.0
       postcss-scss:
         specifier: 4.0.9
-        version: 4.0.9(postcss@8.5.20)
+        version: 4.0.9(postcss@8.5.26)
       prettier:
         specifier: 3.9.6
         version: 3.9.6
@@ -321,8 +321,8 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       postcss:
-        specifier: 8.5.20
-        version: 8.5.20
+        specifier: 8.5.26
+        version: 8.5.26
       sass-embedded:
         specifier: 1.100.0
         version: 1.100.0
@@ -349,7 +349,7 @@ importers:
         version: 3.2.2(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0))
       vite-plugin-sass-dts:
         specifier: 1.3.37
-        version: 1.3.37(postcss@8.5.20)(prettier@3.9.6)(sass-embedded@1.100.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0))
+        version: 1.3.37(postcss@8.5.26)(prettier@3.9.6)(sass-embedded@1.100.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0))
 
   frontend/interface:
     dependencies:
@@ -526,7 +526,7 @@ importers:
         version: 9.29.1
       '@wdio/tauri-service':
         specifier: 1.2.0
-        version: 1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)
+        version: 1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -5404,7 +5404,7 @@ packages:
   glob@8.1.0:
     resolution: {integrity: sha512-r8hpEjiQEYlF2QU0df3dS+nxxSIreXQS1qRhMJM0Q5NDdR386C7jb7Hwwod8Fgiuex+k0GFjgft18yvxm5XoCQ==}
     engines: {node: '>=12'}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
@@ -6421,6 +6421,11 @@ packages:
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
+  nanoid@3.3.18:
+    resolution: {integrity: sha512-DTg4MJbGMWkfi6VZFdNt2/caMbQy4Ou+Op/hJQvGEWcnVfoA1QA+xzRKAzw9jD6+GVOOeYr/mIcuDSdug6F6+w==}
+    engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
+    hasBin: true
+
   nanoid@6.0.0:
     resolution: {integrity: sha512-mkUH+rPkwU2qPadJ0oJZOjeZ5Mxn8Q1UhevwkTRWNuUZzyia3h4rhzK39hxaHTk0o2OxB8W2SQ6A8k23ZDi1pQ==}
     engines: {node: ^22 || ^24 || >=26}
@@ -6790,6 +6795,10 @@ packages:
 
   postcss@8.5.20:
     resolution: {integrity: sha512-lW616l85ucIQL+FocMmL7pQFPqBmwejrCMg+iPxyImlrANNJG9NHq/RkyCZopDhd8C3LA03PHRJDjkbGu8vvug==}
+    engines: {node: ^10 || ^12 || >=14}
+
+  postcss@8.5.26:
+    resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
     engines: {node: ^10 || ^12 || >=14}
 
   prelude-ls@1.1.2:
@@ -10988,7 +10997,7 @@ snapshots:
       '@alloc/quick-lru': 5.2.0
       '@tailwindcss/node': 4.3.3
       '@tailwindcss/oxide': 4.3.3
-      postcss: 8.5.20
+      postcss: 8.5.26
       tailwindcss: 4.3.3
 
   '@tanstack/history@1.162.0': {}
@@ -11668,7 +11677,7 @@ snapshots:
 
   '@wdio/logger@9.29.1':
     dependencies:
-      chalk: 5.1.2
+      chalk: 5.4.1
       loglevel: 1.9.2
       loglevel-plugin-prefix: 0.8.4
       safe-regex2: 5.1.1
@@ -11688,7 +11697,7 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@wdio/native-core@1.0.0(tsx@4.23.1)':
+  '@wdio/native-core@1.0.0(supports-color@10.2.2)(tsx@4.23.1)':
     dependencies:
       '@wdio/logger': 9.18.0
       '@wdio/native-types': 2.3.1
@@ -11779,11 +11788,11 @@ snapshots:
       easy-table: 1.2.0
       pretty-ms: 9.3.0
 
-  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)':
+  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)':
     dependencies:
       '@wdio/globals': 9.27.1(expect-webdriverio@5.7.0)(webdriverio@9.29.1)
       '@wdio/logger': 9.18.0
-      '@wdio/native-core': 1.0.0(tsx@4.23.1)
+      '@wdio/native-core': 1.0.0(supports-color@10.2.2)(tsx@4.23.1)
       '@wdio/native-spy': 1.1.0
       '@wdio/native-types': 2.4.0
       '@wdio/native-utils': 2.5.0(tsx@4.23.1)
@@ -14353,6 +14362,8 @@ snapshots:
 
   nanoid@3.3.16: {}
 
+  nanoid@3.3.18: {}
+
   nanoid@6.0.0: {}
 
   needle@2.9.1:
@@ -14767,10 +14778,10 @@ snapshots:
       postcss: 8.5.20
       postcss-safe-parser: 6.0.0(postcss@8.5.20)
 
-  postcss-js@4.1.0(postcss@8.5.20):
+  postcss-js@4.1.0(postcss@8.5.26):
     dependencies:
       camelcase-css: 2.0.1
-      postcss: 8.5.20
+      postcss: 8.5.26
 
   postcss-media-query-parser@0.2.3: {}
 
@@ -14780,28 +14791,34 @@ snapshots:
     dependencies:
       postcss: 8.5.20
 
-  postcss-safe-parser@7.0.1(postcss@8.5.20):
+  postcss-safe-parser@7.0.1(postcss@8.5.26):
     dependencies:
-      postcss: 8.5.20
+      postcss: 8.5.26
 
-  postcss-scss@4.0.9(postcss@8.5.20):
+  postcss-scss@4.0.9(postcss@8.5.26):
     dependencies:
-      postcss: 8.5.20
+      postcss: 8.5.26
 
   postcss-selector-parser@7.1.4:
     dependencies:
       cssesc: 3.0.0
       util-deprecate: 1.0.2
 
-  postcss-sorting@10.0.0(postcss@8.5.20):
+  postcss-sorting@10.0.0(postcss@8.5.26):
     dependencies:
-      postcss: 8.5.20
+      postcss: 8.5.26
 
   postcss-value-parser@4.2.0: {}
 
   postcss@8.5.20:
     dependencies:
       nanoid: 3.3.16
+      picocolors: 1.1.1
+      source-map-js: 1.2.1
+
+  postcss@8.5.26:
+    dependencies:
+      nanoid: 3.3.18
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
@@ -15693,8 +15710,8 @@ snapshots:
 
   stylelint-order@8.1.1(stylelint@17.14.1(supports-color@10.2.2)(typescript@7.0.2)):
     dependencies:
-      postcss: 8.5.20
-      postcss-sorting: 10.0.0(postcss@8.5.20)
+      postcss: 8.5.26
+      postcss-sorting: 10.0.0(postcss@8.5.26)
       stylelint: 17.14.1(supports-color@10.2.2)(typescript@7.0.2)
 
   stylelint-scss@7.2.0(stylelint@17.14.1(supports-color@10.2.2)(typescript@7.0.2)):
@@ -15740,8 +15757,8 @@ snapshots:
       micromatch: 4.0.8
       normalize-path: 3.0.0
       picocolors: 1.1.1
-      postcss: 8.5.20
-      postcss-safe-parser: 7.0.1(postcss@8.5.20)
+      postcss: 8.5.26
+      postcss-safe-parser: 7.0.1(postcss@8.5.26)
       postcss-selector-parser: 7.1.4
       postcss-value-parser: 4.2.0
       string-width: 8.2.1
@@ -16139,10 +16156,10 @@ snapshots:
       pathe: 0.2.0
       vite: 8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0)
 
-  vite-plugin-sass-dts@1.3.37(postcss@8.5.20)(prettier@3.9.6)(sass-embedded@1.100.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0)):
+  vite-plugin-sass-dts@1.3.37(postcss@8.5.26)(prettier@3.9.6)(sass-embedded@1.100.0)(vite@8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0)):
     dependencies:
-      postcss: 8.5.20
-      postcss-js: 4.1.0(postcss@8.5.20)
+      postcss: 8.5.26
+      postcss-js: 4.1.0(postcss@8.5.26)
       prettier: 3.9.6
       sass-embedded: 1.100.0
       vite: 8.1.5(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(less@4.7.0)(sass-embedded@1.100.0)(sass@1.100.0)(terser@5.48.0)(tsx@4.23.1)(yaml@2.9.0)
@@ -16151,7 +16168,7 @@ snapshots:
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.5
-      postcss: 8.5.20
+      postcss: 8.5.26
       rolldown: 1.1.5
       tinyglobby: 0.2.17
     optionalDependencies:
