@@ -468,8 +468,8 @@ importers:
         version: 18.0.0
     devDependencies:
       '@octokit/types':
-        specifier: 16.0.0
-        version: 16.0.0
+        specifier: 17.0.0
+        version: 17.0.0
       '@types/adm-zip':
         specifier: 0.5.8
         version: 0.5.8
@@ -526,7 +526,7 @@ importers:
         version: 9.29.1
       '@wdio/tauri-service':
         specifier: 1.2.0
-        version: 1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)
+        version: 1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -1557,6 +1557,9 @@ packages:
   '@octokit/openapi-types@27.0.0':
     resolution: {integrity: sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA==}
 
+  '@octokit/openapi-types@28.0.0':
+    resolution: {integrity: sha512-0rFyLuyHvIj6uuZWuDslxkowFYdPXoNIkeAv4b27dzm2Tf4vGWXnPsMcxs7d65kLdMERgP3wc1AEPlqMz8e1cQ==}
+
   '@octokit/openapi-webhooks-types@12.1.0':
     resolution: {integrity: sha512-WiuzhOsiOvb7W3Pvmhf8d2C6qaLHXrWiLBP4nJ/4kydu+wpagV5Fkz9RfQwV2afYzv3PB+3xYgp4mAdNGjDprA==}
 
@@ -1600,6 +1603,9 @@ packages:
 
   '@octokit/types@16.0.0':
     resolution: {integrity: sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg==}
+
+  '@octokit/types@17.0.0':
+    resolution: {integrity: sha512-ByP1v7YL5SMveFPP7+sj0/ZuWCOOg/Chs4NafOMpq6WNIM/hdGY0S7C0TCGDBWu1aGmOxmUIhMx3cO+IdwYZ1Q==}
 
   '@octokit/webhooks-methods@6.0.0':
     resolution: {integrity: sha512-MFlzzoDJVw/GcbfzVC1RLR36QqkTLUf79vLVO3D+xn7r0QgxnFoLZgtrzxiQErAjFUOdH6fas2KeQJ1yr/qaXQ==}
@@ -5404,7 +5410,7 @@ packages:
   glob@8.1.0:
     resolution: {integrity: sha512-r8hpEjiQEYlF2QU0df3dS+nxxSIreXQS1qRhMJM0Q5NDdR386C7jb7Hwwod8Fgiuex+k0GFjgft18yvxm5XoCQ==}
     engines: {node: '>=12'}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
@@ -9495,6 +9501,8 @@ snapshots:
 
   '@octokit/openapi-types@27.0.0': {}
 
+  '@octokit/openapi-types@28.0.0': {}
+
   '@octokit/openapi-webhooks-types@12.1.0': {}
 
   '@octokit/plugin-paginate-graphql@6.0.0(@octokit/core@7.0.6)':
@@ -9540,6 +9548,10 @@ snapshots:
   '@octokit/types@16.0.0':
     dependencies:
       '@octokit/openapi-types': 27.0.0
+
+  '@octokit/types@17.0.0':
+    dependencies:
+      '@octokit/openapi-types': 28.0.0
 
   '@octokit/webhooks-methods@6.0.0': {}
 
@@ -11668,7 +11680,7 @@ snapshots:
 
   '@wdio/logger@9.29.1':
     dependencies:
-      chalk: 5.1.2
+      chalk: 5.4.1
       loglevel: 1.9.2
       loglevel-plugin-prefix: 0.8.4
       safe-regex2: 5.1.1
@@ -11688,7 +11700,7 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@wdio/native-core@1.0.0(tsx@4.23.1)':
+  '@wdio/native-core@1.0.0(supports-color@10.2.2)(tsx@4.23.1)':
     dependencies:
       '@wdio/logger': 9.18.0
       '@wdio/native-types': 2.3.1
@@ -11779,11 +11791,11 @@ snapshots:
       easy-table: 1.2.0
       pretty-ms: 9.3.0
 
-  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)':
+  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)':
     dependencies:
       '@wdio/globals': 9.27.1(expect-webdriverio@5.7.0)(webdriverio@9.29.1)
       '@wdio/logger': 9.18.0
-      '@wdio/native-core': 1.0.0(tsx@4.23.1)
+      '@wdio/native-core': 1.0.0(supports-color@10.2.2)(tsx@4.23.1)
       '@wdio/native-spy': 1.1.0
       '@wdio/native-types': 2.4.0
       '@wdio/native-utils': 2.5.0(tsx@4.23.1)
