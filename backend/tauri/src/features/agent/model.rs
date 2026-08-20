@@ -17,6 +17,7 @@ pub enum AgentHealth {
 pub enum AgentCoreState {
     Running,
     Stopped,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
@@ -149,6 +150,7 @@ pub struct AgentTelemetrySnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProbeCode {
+    CoreStatusUnavailable,
     CoreConfigUnavailable,
     SystemProxyUnavailable,
     ServiceStatusUnavailable,

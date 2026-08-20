@@ -2,8 +2,7 @@ use super::shared::{self, CoreTypeMeta};
 use crate::{
     config::{chimera::ClashCore, core::Config},
     core::{
-        CoreManager,
-        clash::runtime_product::RuntimePaths,
+        clash::{client::NyanpasuClient, runtime_product::RuntimePaths},
         download::{DownloadSession, DownloadStatus},
     },
 };
@@ -36,6 +35,7 @@ pub(super) struct Updater {
     artifact: String,
     inner: parking_lot::RwLock<UpdaterInner>,
     downloader: Arc<DownloadSession>,
+    runtime_client: NyanpasuClient,
 }
 
 struct UpdaterInner {
@@ -51,6 +51,7 @@ pub struct UpdaterSummary {
 
 pub(super) struct UpdaterBuilder {
     client: Option<reqwest::Client>,
+    runtime_client: Option<NyanpasuClient>,
     core_type: Option<ClashCore>,
     mirror: Option<String>,
     artifact: Option<String>,
@@ -61,6 +62,7 @@ impl UpdaterBuilder {
     pub fn new() -> Self {
         Self {
             client: None,
+            runtime_client: None,
             core_type: None,
             mirror: None,
             artifact: None,
@@ -70,6 +72,11 @@ impl UpdaterBuilder {
 
     pub fn set_client(mut self, client: reqwest::Client) -> Self {
         self.client = Some(client);
+        self
+    }
+
+    pub fn set_runtime_client(mut self, runtime_client: NyanpasuClient) -> Self {
+        self.runtime_client = Some(runtime_client);
         self
     }
 
@@ -95,6 +102,9 @@ impl UpdaterBuilder {
 
     pub async fn build(self) -> anyhow::Result<Updater> {
         let client = self.client.ok_or(anyhow::anyhow!("client is required"))?;
+        let runtime_client = self
+            .runtime_client
+            .ok_or(anyhow::anyhow!("runtime_client is required"))?;
         let core_type = self
             .core_type
             .ok_or(anyhow::anyhow!("core_type is required"))?;
@@ -125,6 +135,7 @@ impl UpdaterBuilder {
             inner: parking_lot::RwLock::new(inner),
             artifact,
             downloader,
+            runtime_client,
         })
     }
 }
@@ -199,17 +210,13 @@ impl Updater {
 
     async fn replace_core(&self) -> anyhow::Result<()> {
         self.dispatch_state(UpdaterState::Replacing);
-        let core_manager = CoreManager::global();
-        // TODO(actor-migration): temporary bridge to the legacy global core manager.
-        // Reason: the updater has not yet been injected with the core lifecycle port.
-        // Remove when: the updater receives the lifecycle port through the composition root.
-        let lifecycle = core_manager.begin_lifecycle().await;
+        let mut lifecycle = self.runtime_client.begin_core_update().await?;
         let current_core = Config::verge().latest().clash_core.unwrap_or_default();
         tracing::debug!("current core: {}", current_core);
         let runtime_paths = if current_core == self.core_type {
             let runtime_paths = RuntimePaths::from_app_config_dir()?;
             tracing::debug!("stopping core to replace");
-            lifecycle.stop_core().await?;
+            lifecycle.stop().await?;
             Some(runtime_paths)
         } else {
             None
