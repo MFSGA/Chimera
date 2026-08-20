@@ -310,6 +310,57 @@ impl Profiles {
         Ok(())
     }
 
+    fn validate_transform_chain(&self, transforms: &[ProfileUid]) -> Result<()> {
+        let mut seen = HashSet::with_capacity(transforms.len());
+        for transform_uid in transforms {
+            if !seen.insert(transform_uid) {
+                bail!("duplicate transform profile `{transform_uid}` in chain");
+            }
+            let transform = self.get_item(transform_uid)?;
+            let kind = transform.kind();
+            if !kind.is_transform() {
+                bail!("profile `{transform_uid}` is not a transform profile");
+            }
+            if !kind.is_runtime_transform_supported() {
+                bail!(
+                    "transform profile `{transform_uid}` cannot run in this build because its runtime is unavailable"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn set_profile_transform_chain(
+        &mut self,
+        uid: &str,
+        transforms: Vec<ProfileUid>,
+    ) -> Result<bool> {
+        self.validate_transform_chain(&transforms)?;
+        let affects_current = self.current.iter().any(|current| current == uid);
+        let profile = self
+            .items
+            .iter_mut()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| anyhow::anyhow!("failed to get the profile item \"uid:{uid}\""))?;
+        match profile {
+            Profile::Local(profile) => profile.chain = transforms,
+            Profile::Remote(profile) => profile.chain = transforms,
+            Profile::Merge(_) | Profile::Script(_) => {
+                bail!("transform profile `{uid}` cannot own a transform chain")
+            }
+        }
+        Ok(affects_current)
+    }
+
+    pub fn set_global_transform_chain(&mut self, transforms: Vec<ProfileUid>) -> Result<bool> {
+        self.validate_transform_chain(&transforms)?;
+        if self.chain == transforms {
+            return Ok(false);
+        }
+        self.chain = transforms;
+        Ok(true)
+    }
+
     pub fn delete_item(&mut self, uid: &str) -> Result<bool> {
         let Some(index) = self.items.iter().position(|profile| profile.uid() == uid) else {
             bail!("failed to get the profile item \"uid:{uid}\"");
@@ -382,8 +433,11 @@ impl Profiles {
 mod tests {
     use std::sync::Mutex;
 
-    use crate::config::profile::item::{
-        local::LocalProfile, merge::MergeProfile, shared::ProfileShared,
+    use crate::config::profile::{
+        item::{
+            local::LocalProfile, merge::MergeProfile, script::ScriptProfile, shared::ProfileShared,
+        },
+        item_type::ScriptType,
     };
 
     use super::*;
@@ -448,6 +502,110 @@ mod tests {
         let error = profiles.activate(Some("m-transform")).unwrap_err();
         assert!(error.to_string().contains("not activatable"));
         assert!(profiles.current.is_empty());
+    }
+
+    #[test]
+    fn transform_chains_validate_targets_and_report_runtime_relevance() {
+        let local_uid = "l-source".to_string();
+        let merge_uid = "m-transform".to_string();
+        let script_uid = "sj-transform".to_string();
+        let lua_uid = "sl-transform".to_string();
+        let mut profiles = Profiles {
+            current: vec![local_uid.clone()],
+            items: vec![
+                Profile::Local(LocalProfile {
+                    shared: ProfileShared {
+                        uid: local_uid.clone(),
+                        name: "Source".to_string(),
+                        file: "l-source.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    symlinks: None,
+                    chain: Vec::new(),
+                }),
+                Profile::Merge(MergeProfile {
+                    shared: ProfileShared {
+                        uid: merge_uid.clone(),
+                        name: "Transform".to_string(),
+                        file: "m-transform.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                }),
+                Profile::Script(ScriptProfile {
+                    shared: ProfileShared {
+                        uid: script_uid.clone(),
+                        name: "Script".to_string(),
+                        file: "sj-transform.js".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    script_type: ScriptType::JavaScript,
+                }),
+                Profile::Script(ScriptProfile {
+                    shared: ProfileShared {
+                        uid: lua_uid.clone(),
+                        name: "Lua".to_string(),
+                        file: "sl-transform.lua".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    script_type: ScriptType::Lua,
+                }),
+            ],
+            ..Profiles::default()
+        };
+
+        assert!(
+            profiles
+                .set_profile_transform_chain(&local_uid, vec![merge_uid.clone()])
+                .unwrap()
+        );
+        let Profile::Local(local) = &profiles.items[0] else {
+            panic!("expected local profile");
+        };
+        assert_eq!(local.chain, vec![merge_uid.clone()]);
+        assert!(
+            profiles
+                .set_global_transform_chain(vec![merge_uid.clone()])
+                .unwrap()
+        );
+        assert_eq!(profiles.chain, vec![merge_uid.clone()]);
+        assert!(
+            !profiles
+                .set_global_transform_chain(vec![merge_uid.clone()])
+                .unwrap()
+        );
+
+        let duplicate = profiles
+            .set_global_transform_chain(vec![merge_uid.clone(), merge_uid.clone()])
+            .unwrap_err();
+        assert!(duplicate.to_string().contains("duplicate transform"));
+        let invalid = profiles
+            .set_global_transform_chain(vec![local_uid.clone()])
+            .unwrap_err();
+        assert!(invalid.to_string().contains("not a transform profile"));
+        assert!(
+            profiles
+                .set_global_transform_chain(vec![script_uid.clone()])
+                .unwrap()
+        );
+        assert_eq!(profiles.chain, vec![script_uid]);
+        assert!(
+            profiles
+                .set_global_transform_chain(vec![lua_uid.clone()])
+                .unwrap()
+        );
+        assert_eq!(profiles.chain, vec![lua_uid]);
+        let missing = profiles
+            .set_global_transform_chain(vec!["m-missing".to_string()])
+            .unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("failed to get the profile item")
+        );
     }
 
     #[test]

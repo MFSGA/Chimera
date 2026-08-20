@@ -16,7 +16,14 @@ use parking_lot::RwLock;
 use serde_yaml::Mapping;
 use sha2::{Digest, Sha256};
 
-use crate::{config::chimera::ClashCore, utils::dirs};
+use crate::{
+    config::{
+        chimera::ClashCore,
+        profile::item_type::{ProfileUid, ScriptType},
+    },
+    enhance::PostProcessingOutput,
+    utils::dirs,
+};
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";
@@ -61,15 +68,33 @@ pub struct RuntimeSnapshot {
     pub target_core: ClashCore,
     pub product_sha256: [u8; 32],
     pub config: Mapping,
+    pub transform_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
 }
 
 impl RuntimeSnapshot {
+    #[cfg(test)]
     pub fn new(
         revision: RuntimeRevision,
         target_core: ClashCore,
         product_bytes: Vec<u8>,
         config: Mapping,
+    ) -> Self {
+        Self::new_with_transform_output(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            PostProcessingOutput::default(),
+        )
+    }
+
+    pub fn new_with_transform_output(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
     ) -> Self {
         let product_sha256 = Sha256::digest(&product_bytes).into();
         Self {
@@ -77,6 +102,7 @@ impl RuntimeSnapshot {
             target_core,
             product_sha256,
             config,
+            transform_output,
             product_bytes: product_bytes.into(),
         }
     }
@@ -92,10 +118,20 @@ impl RuntimeSnapshot {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeTransformFailure {
+    pub attempt_revision: RuntimeRevision,
+    pub transform_uid: ProfileUid,
+    pub scope_uid: Option<ProfileUid>,
+    pub script_type: Option<ScriptType>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RuntimeLifecycleState {
     pub promoted: Option<Arc<RuntimeSnapshot>>,
     pub applied: Option<Arc<RuntimeSnapshot>>,
+    pub last_transform_failure: Option<RuntimeTransformFailure>,
 }
 
 #[derive(Debug, Default)]
@@ -127,7 +163,16 @@ impl RuntimeLifecycle {
             bail!("Applied snapshot does not match the promoted runtime product");
         }
         state.applied = Some(snapshot);
+        state.last_transform_failure = None;
         Ok(())
+    }
+
+    pub fn publish_transform_failure(&self, failure: RuntimeTransformFailure) {
+        self.state.write().last_transform_failure = Some(failure);
+    }
+
+    pub fn clear_transform_failure(&self) {
+        self.state.write().last_transform_failure = None;
     }
 
     pub fn restore(&self, state: RuntimeLifecycleState) {
@@ -402,8 +447,10 @@ where
 {
     let RuntimeTransactionSnapshot {
         product,
-        lifecycle: previous_lifecycle,
+        lifecycle: mut previous_lifecycle,
     } = snapshot;
+    let current_transform_failure = lifecycle.snapshot().last_transform_failure;
+    previous_lifecycle.last_transform_failure = current_transform_failure;
     let had_product = product.is_some();
     restore_optional_product(paths.product(), product.as_deref()).await?;
 
@@ -475,12 +522,54 @@ mod tests {
         RuntimePaths::from_config_root(dir.path().to_path_buf())
     }
 
+    fn transform_output(message: &str) -> PostProcessingOutput {
+        serde_json::from_value(serde_json::json!({
+            "scopes": {},
+            "global": {
+                "s-test": [["info", message]],
+            },
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn runtime_revision_allocator_is_monotonic() {
         let allocator = RuntimeRevisionAllocator::default();
         assert_eq!(allocator.allocate().unwrap().get(), 1);
         assert_eq!(allocator.allocate().unwrap().get(), 2);
         assert_eq!(allocator.allocate().unwrap().get(), 3);
+    }
+
+    #[test]
+    fn successful_apply_clears_the_last_transform_failure() {
+        let lifecycle = RuntimeLifecycle::default();
+        let failed_revision = lifecycle.allocate_revision().unwrap();
+        lifecycle.publish_transform_failure(RuntimeTransformFailure {
+            attempt_revision: failed_revision,
+            transform_uid: "sj-failed".into(),
+            scope_uid: Some("source-test".into()),
+            script_type: Some(ScriptType::JavaScript),
+            message: "script exploded".into(),
+        });
+        assert_eq!(
+            lifecycle
+                .snapshot()
+                .last_transform_failure
+                .as_ref()
+                .map(|failure| failure.attempt_revision),
+            Some(failed_revision)
+        );
+
+        let applied = Arc::new(RuntimeSnapshot::new(
+            lifecycle.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+        ));
+        lifecycle.publish_promoted(applied.clone());
+        lifecycle.publish_applied(applied).unwrap();
+
+        assert!(lifecycle.snapshot().last_transform_failure.is_none());
     }
 
     #[tokio::test]
@@ -659,14 +748,23 @@ mod tests {
         restore_product(paths.product(), b"mode: rule\n")
             .await
             .unwrap();
-        let old = Arc::new(RuntimeSnapshot::new(
+        let old_output = transform_output("old runtime");
+        let old = Arc::new(RuntimeSnapshot::new_with_transform_output(
             lifecycle.allocate_revision().unwrap(),
             ClashCore::Mihomo,
             b"mode: rule\n".to_vec(),
             Mapping::new(),
+            old_output.clone(),
         ));
         lifecycle.publish_promoted(old.clone());
         lifecycle.publish_applied(old.clone()).unwrap();
+        lifecycle.publish_transform_failure(RuntimeTransformFailure {
+            attempt_revision: lifecycle.allocate_revision().unwrap(),
+            transform_uid: "sj-stale".into(),
+            scope_uid: None,
+            script_type: Some(ScriptType::JavaScript),
+            message: "stale transform failure".into(),
+        });
         let transaction = capture_runtime_transaction(&paths, &lifecycle)
             .await
             .unwrap();
@@ -674,11 +772,12 @@ mod tests {
         restore_product(paths.product(), b"mode: direct\n")
             .await
             .unwrap();
-        let replacement = Arc::new(RuntimeSnapshot::new(
+        let replacement = Arc::new(RuntimeSnapshot::new_with_transform_output(
             lifecycle.allocate_revision().unwrap(),
             ClashCore::ClashRs,
             b"mode: direct\n".to_vec(),
             Mapping::new(),
+            transform_output("replacement runtime"),
         ));
         lifecycle.publish_promoted(replacement.clone());
         lifecycle.publish_applied(replacement).unwrap();
@@ -689,7 +788,13 @@ mod tests {
         assert_eq!(std::fs::read(paths.product()).unwrap(), b"mode: rule\n");
         let restored = lifecycle.snapshot();
         assert_eq!(restored.promoted.unwrap().revision, old.revision);
-        assert_eq!(restored.applied.unwrap().revision, old.revision);
+        let applied = restored.applied.unwrap();
+        assert_eq!(applied.revision, old.revision);
+        assert_eq!(applied.transform_output, old_output);
+        assert!(
+            restored.last_transform_failure.is_none(),
+            "rollback must not resurrect a transform failure cleared by the newer attempt"
+        );
     }
 
     #[tokio::test]

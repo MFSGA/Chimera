@@ -33,8 +33,8 @@ use crate::{
     core::{
         clash::{
             self,
-            client::{MutationOutcome, NyanpasuClient},
-            core::{CoreManager, RunType},
+            client::{MutationOutcome, NyanpasuClient, RuntimeTransformDiagnostics},
+            core::RunType,
         },
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
@@ -292,6 +292,14 @@ pub async fn get_profiles(client: State<'_, NyanpasuClient>) -> Result<ProfilesR
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_runtime_transform_diagnostics(
+    client: State<'_, NyanpasuClient>,
+) -> Result<Option<RuntimeTransformDiagnostics>> {
+    Ok(client.runtime_transform_diagnostics()?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
     let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
     let server = format!("{}:{}", current.host, current.port);
@@ -438,6 +446,25 @@ pub async fn set_profile_valid_fields(
     fields: Vec<String>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.set_profile_valid_fields(fields).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_profile_transform_chain(
+    client: State<'_, NyanpasuClient>,
+    uid: ProfileUid,
+    transforms: Vec<ProfileUid>,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_profile_transform_chain(uid, transforms).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_global_transform_chain(
+    client: State<'_, NyanpasuClient>,
+    transforms: Vec<ProfileUid>,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_global_transform_chain(transforms).await?)
 }
 
 #[tauri::command]
@@ -606,7 +633,7 @@ fn web_key(key: &str) -> String {
 }
 
 pub mod service {
-    use super::Result;
+    use super::{NyanpasuClient, Result, State};
     use crate::core::service;
     #[tauri::command]
     #[specta::specta]
@@ -627,54 +654,42 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn start_service() -> Result {
+    pub async fn start_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::start_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn stop_service() -> Result {
+    pub async fn stop_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::stop_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn restart_service() -> Result {
+    pub async fn restart_service(client: State<'_, NyanpasuClient>) -> Result {
         let result = service::control::restart_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
             .as_ref()
             .unwrap_or(&false);
-        if enabled_service
-            && let Err(err) = crate::core::clash::core::CoreManager::global()
-                .run_core()
-                .await
-        {
+        if enabled_service && let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "{err}");
         }
         Ok(result?)
@@ -736,13 +751,16 @@ pub async fn patch_clash_config(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_clash_core_config(payload: PatchClashCoreConfig) -> Result {
+pub async fn patch_clash_core_config(
+    client: State<'_, NyanpasuClient>,
+    payload: PatchClashCoreConfig,
+) -> Result {
     tracing::debug!("patch clash core config: {payload:?}");
     let mapping = match serde_yaml::to_value(&payload)? {
         serde_yaml::Value::Mapping(m) => m,
         _ => return Err(IpcError::Custom("Expected a mapping".to_string())),
     };
-    if let Err(e) = feat::patch_clash(mapping).await {
+    if let Err(e) = feat::patch_clash(&client, mapping).await {
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
@@ -907,11 +925,14 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
 
 #[tauri::command]
 #[specta::specta]
-pub async fn update_core(core_type: chimera::ClashCore) -> Result<usize> {
+pub async fn update_core(
+    client: State<'_, NyanpasuClient>,
+    core_type: chimera::ClashCore,
+) -> Result<usize> {
     let event_id = updater::UpdaterManager::global()
         .write()
         .await
-        .update_core(&core_type)
+        .update_core(&client, &core_type)
         .await?;
     Ok(event_id)
 }
@@ -931,8 +952,8 @@ pub async fn change_clash_core(
 /// restart the sidecar
 #[tauri::command]
 #[specta::specta]
-pub async fn restart_sidecar() -> Result {
-    CoreManager::global().run_core().await?;
+pub async fn restart_sidecar(client: State<'_, NyanpasuClient>) -> Result {
+    client.rebuild_running_config().await?;
     Ok(())
 }
 
