@@ -12,7 +12,7 @@ use crate::{
         runtime::ClashConfigOverrides,
     },
     core::{
-        clash::{client::NyanpasuClient, core::CoreManager, transaction::TransactionOutcome},
+        clash::{client::NyanpasuClient, transaction::TransactionOutcome},
         handle,
         service::ipc::get_ipc_state,
         sysopt,
@@ -89,7 +89,10 @@ fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
     Ok(())
 }
 
-async fn validate_external_controller_change(plan: &ClashPatchPlan) -> Result<()> {
+async fn validate_external_controller_change(
+    client: &NyanpasuClient,
+    plan: &ClashPatchPlan,
+) -> Result<()> {
     if !plan.external_controller_changed {
         return Ok(());
     }
@@ -105,9 +108,9 @@ async fn validate_external_controller_change(plan: &ClashPatchPlan) -> Result<()
     let strategy = Config::verge()
         .latest()
         .get_external_controller_port_strategy();
-    let core_state = crate::core::CoreManager::global().status().await;
+    let core_state = client.core_status().await?;
 
-    if matches!(core_state.0.as_ref(), &CoreState::Running)
+    if matches!(&core_state.state, CoreState::Running)
         && get_clash_external_port(&strategy, port).is_err()
     {
         bail!("can not select fixed: current port is not available.");
@@ -116,15 +119,12 @@ async fn validate_external_controller_change(plan: &ClashPatchPlan) -> Result<()
     Ok(())
 }
 
-async fn apply_clash_runtime_change(plan: &ClashPatchPlan) -> Result<()> {
+async fn apply_clash_runtime_change(client: &NyanpasuClient, plan: &ClashPatchPlan) -> Result<()> {
     if !plan.requires_restart {
         return Ok(());
     }
 
-    CoreManager::global()
-        .restart_core_with_generated_config()
-        .await?;
-    handle::Handle::refresh_clash();
+    client.rebuild_running_config().await?;
     Ok(())
 }
 
@@ -174,16 +174,14 @@ fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
     })
 }
 
-async fn apply_verge_runtime_change(plan: &VergePatchPlan) -> Result<()> {
+async fn apply_verge_runtime_change(client: &NyanpasuClient, plan: &VergePatchPlan) -> Result<()> {
     let ipc_state = get_ipc_state();
 
     if let Some(service_mode) = plan.service_mode
         && ipc_state.is_connected()
     {
         log::debug!(target: "app", "change service mode to {}", service_mode);
-        CoreManager::global()
-            .restart_core_with_generated_config()
-            .await?;
+        client.rebuild_running_config().await?;
     }
 
     if plan.tun_mode.is_some() {
@@ -200,7 +198,7 @@ async fn apply_verge_runtime_change(plan: &VergePatchPlan) -> Result<()> {
                 log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
             };
         }
-        update_core_config().await?;
+        update_core_config(client).await?;
     }
 
     Ok(())
@@ -235,9 +233,12 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
 
 /// Persists a typed set of runtime overrides without conflating it with a
 /// running-core snapshot.
-pub async fn patch_clash_overrides(overrides: ClashConfigOverrides) -> Result<()> {
+pub async fn patch_clash_overrides(
+    client: &NyanpasuClient,
+    overrides: ClashConfigOverrides,
+) -> Result<()> {
     let patch = overrides.to_mapping();
-    patch_clash_with_overrides(patch, overrides).await
+    patch_clash_with_overrides(client, patch, overrides).await
 }
 
 /// Applies typed overrides to the running core and desired state through the
@@ -251,18 +252,22 @@ pub async fn patch_running_clash_overrides(
 
 /// Applies a general Clash mapping while extracting only supported persistent
 /// runtime overrides for the generated config.
-pub async fn patch_clash(patch: Mapping) -> Result<()> {
+pub async fn patch_clash(client: &NyanpasuClient, patch: Mapping) -> Result<()> {
     let overrides = ClashConfigOverrides::from_mapping(&patch)?;
-    patch_clash_with_overrides(patch, overrides).await
+    patch_clash_with_overrides(client, patch, overrides).await
 }
 
-async fn patch_clash_with_overrides(patch: Mapping, overrides: ClashConfigOverrides) -> Result<()> {
+async fn patch_clash_with_overrides(
+    client: &NyanpasuClient,
+    patch: Mapping,
+    overrides: ClashConfigOverrides,
+) -> Result<()> {
     Config::clash().draft().patch_config(patch.clone());
     let result = async {
         let plan = plan_clash_patch(&patch)?;
         validate_mixed_port_change(&plan)?;
-        validate_external_controller_change(&plan).await?;
-        apply_clash_runtime_change(&plan).await?;
+        validate_external_controller_change(client, &plan).await?;
+        apply_clash_runtime_change(client, &plan).await?;
         run_clash_patch_side_effects(&plan);
         Config::runtime().draft().patch_config(&overrides);
         Ok(plan)
@@ -291,27 +296,29 @@ async fn patch_clash_with_overrides(patch: Mapping, overrides: ClashConfigOverri
     }
 }
 
+fn managed_client() -> Result<NyanpasuClient> {
+    let app_handle = handle::Handle::app_handle()
+        .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
+    app_handle
+        .try_state::<NyanpasuClient>()
+        .map(|state| state.inner().clone())
+        .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))
+}
+
 /// 修改verge的配置
 /// 一般都是一个个的修改
 pub async fn patch_verge(patch: IVerge) -> Result<()> {
-    let client = {
-        let app_handle = handle::Handle::global().app_handle.lock();
-        let app_handle = app_handle
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
-        app_handle
-            .try_state::<NyanpasuClient>()
-            .map(|state| state.inner().clone())
-            .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))?
-    };
-    client.patch_verge(patch).await
+    managed_client()?.patch_verge(patch).await
 }
 
-pub(crate) async fn patch_verge_uncoordinated(patch: IVerge) -> Result<()> {
+pub(crate) async fn patch_verge_uncoordinated(
+    client: &NyanpasuClient,
+    patch: IVerge,
+) -> Result<()> {
     Config::verge().draft().patch_config(patch.clone());
     let result = async {
         let plan = plan_verge_patch(&patch)?;
-        apply_verge_runtime_change(&plan).await?;
+        apply_verge_runtime_change(client, &plan).await?;
         run_verge_patch_side_effects(&plan, &patch)?;
         Ok(())
     }
@@ -332,13 +339,9 @@ pub(crate) async fn patch_verge_uncoordinated(patch: IVerge) -> Result<()> {
 }
 
 /// 更新配置
-async fn update_core_config() -> Result<()> {
-    match CoreManager::global()
-        .restart_core_with_generated_config()
-        .await
-    {
+async fn update_core_config(client: &NyanpasuClient) -> Result<()> {
+    match client.rebuild_running_config().await {
         Ok(_) => {
-            handle::Handle::refresh_clash();
             handle::Handle::notice_message(&Message::SetConfig(Ok(())));
             Ok(())
         }
@@ -355,17 +358,9 @@ pub async fn update_profile<T: Borrow<String>>(
     uid: T,
     opts: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<crate::core::clash::client::MutationOutcome<()>> {
-    let client = {
-        let app_handle = handle::Handle::global().app_handle.lock();
-        let app_handle = app_handle
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
-        app_handle
-            .try_state::<NyanpasuClient>()
-            .map(|state| state.inner().clone())
-            .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))?
-    };
-    client.refresh_profile(uid.borrow().clone(), opts).await
+    managed_client()?
+        .refresh_profile(uid.borrow().clone(), opts)
+        .await
 }
 
 pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
@@ -440,8 +435,15 @@ pub fn toggle_tun_mode() {
 }
 
 pub fn restart_clash_core() {
-    tauri::async_runtime::spawn(async {
-        if let Err(err) = CoreManager::global().run_core().await {
+    let client = match managed_client() {
+        Ok(client) => client,
+        Err(err) => {
+            log::error!(target: "app", "failed to resolve client for core restart: {err:?}");
+            return;
+        }
+    };
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) = client.rebuild_running_config().await {
             log::error!(target: "app", "failed to restart clash core: {err:?}");
             return;
         }
