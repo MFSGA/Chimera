@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     config::chimera::ClashCore,
+    core::clash::client::NyanpasuClient,
     utils::candy::{ReqwestSpeedTestExt, parse_gh_url},
 };
 use anyhow::{Result, anyhow};
@@ -228,7 +229,11 @@ impl UpdaterManager {
         Ok(())
     }
 
-    pub async fn update_core(&mut self, core_type: &ClashCore) -> Result<usize> {
+    pub async fn update_core(
+        &mut self,
+        runtime_client: &NyanpasuClient,
+        core_type: &ClashCore,
+    ) -> Result<usize> {
         if self.manifest_version.manifest_version == 0 {
             self.fetch_latest().await?;
         } else {
@@ -242,6 +247,7 @@ impl UpdaterManager {
         let updater = Arc::new(
             instance::UpdaterBuilder::new()
                 .set_client(self.client.clone())
+                .set_runtime_client(runtime_client.clone())
                 .set_core_type(*core_type)
                 .set_mirror(mirror)
                 .set_artifact(artifact)
