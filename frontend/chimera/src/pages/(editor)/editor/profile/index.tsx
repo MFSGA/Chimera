@@ -1,4 +1,8 @@
-import { useProfile, useProfileContent } from '@chimera/interface';
+import {
+  useProfile,
+  useProfileContent,
+  useRuntimeTransformDiagnostics,
+} from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ask } from '@tauri-apps/plugin-dialog';
@@ -28,6 +32,12 @@ function RouteComponent() {
   const { query: profiles } = useProfile();
   const content = useProfileContent(uid);
   const profile = profiles.data?.items.find((item) => item.uid === uid);
+  const isTransform = profile?.type === 'merge' || profile?.type === 'script';
+  const diagnostics = useRuntimeTransformDiagnostics(isTransform);
+  const runtimeFailure =
+    diagnostics.data?.failure?.transform_uid === uid
+      ? diagnostics.data.failure
+      : null;
   const readOnly = profile?.type === 'remote';
   const language =
     profile?.type === 'script'
@@ -108,7 +118,11 @@ function RouteComponent() {
     }
 
     try {
-      await content.upsert.mutateAsync(editorValue);
+      const outcome = await content.upsert.mutateAsync(editorValue);
+      if (outcome?.status === 'committed_degraded') {
+        await diagnostics.refetch();
+        return;
+      }
       skipCloseGuard.current = true;
       await currentWindow.close();
     } catch (error) {
@@ -172,16 +186,44 @@ function RouteComponent() {
             />
           </div>
 
+          {runtimeFailure && (
+            <div
+              className="border-error/40 text-error bg-error-container/20 mx-3 mb-2 max-h-28 shrink-0 overflow-y-auto rounded-xl border px-3 py-2 text-xs"
+              data-slot="profile-editor-runtime-failure"
+              data-attempt-revision={runtimeFailure.attempt_revision}
+              data-script-type={runtimeFailure.script_type ?? undefined}
+            >
+              <p className="font-medium">
+                {m.common_error()} ·{' '}
+                {profile.type === 'merge'
+                  ? m.profile_merge_label()
+                  : profile.type === 'script' && profile.script_type === 'lua'
+                    ? m.profile_lua_label()
+                    : m.profile_javascript_label()}{' '}
+                · r{runtimeFailure.attempt_revision}
+              </p>
+              <p className="mt-1 font-mono break-words opacity-80">
+                {runtimeFailure.message}
+              </p>
+            </div>
+          )}
+
           <div className="bg-background flex h-12 shrink-0 items-center gap-2 px-3">
             <Button disabled={!dirty || readOnly} onClick={reset}>
               {m.common_reset()}
             </Button>
             <div className="flex-1" />
-            <Button onClick={() => void cancel()}>{m.common_cancel()}</Button>
+            <Button
+              data-slot="profile-editor-cancel"
+              onClick={() => void cancel()}
+            >
+              {m.common_cancel()}
+            </Button>
             <Button
               variant="flat"
               disabled={!dirty || readOnly}
               loading={saveTask.isPending}
+              data-slot="profile-editor-save"
               onClick={() => void save()}
             >
               {m.common_save()}
