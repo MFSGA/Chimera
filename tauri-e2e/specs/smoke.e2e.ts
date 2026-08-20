@@ -60,7 +60,7 @@ describe('Chimera desktop smoke test', () => {
   });
 
   it('navigates from the sidebar to settings', async () => {
-    const settings = await $('//*[normalize-space()="设置"]');
+    const settings = await $('[data-testid="sidebar-route-settings"]');
     await settings.waitForClickable({ timeout: 15_000 });
     await settings.click();
     await browser.waitUntil(
