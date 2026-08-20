@@ -9,7 +9,8 @@ use crate::{
     config::{core::Config, profile::item::Profile},
     core::{
         clash::{
-            core::{CoreManager, RunType},
+            client::NyanpasuClient,
+            core::RunType,
             ws::{ClashConnectionsConnector, ClashConnectionsConnectorState},
         },
         service,
@@ -52,24 +53,42 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .map(|secret| secret.trim().is_empty() || secret == "chimera")
         .unwrap_or(true);
 
-    let core_status = CoreManager::global().status();
+    let client = app.state::<NyanpasuClient>();
+    let core_status = client.core_status();
     let service_status = tokio::time::timeout(Duration::from_secs(2), service::control::status());
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
     let (core_status, service_status, system_proxy) =
         tokio::join!(core_status, service_status, system_proxy);
 
-    let mut core = AgentCoreSnapshot {
-        state: map_core_state(core_status.0.as_ref()),
-        run_type: map_run_type(core_status.2),
-        selected_core,
-        state_changed_at: core_status.1,
-        runtime_config_present,
-        routing_mode,
-        observed_routing_mode: None,
-        applied_consistency: AgentAppliedState::Unknown,
-    };
-
     let mut failures = Vec::new();
+    let mut core = match core_status {
+        Ok(status) => AgentCoreSnapshot {
+            state: map_core_state(&status.state),
+            run_type: map_run_type(status.run_type),
+            selected_core,
+            state_changed_at: status.state_changed_at,
+            runtime_config_present,
+            routing_mode,
+            observed_routing_mode: None,
+            applied_consistency: AgentAppliedState::Unknown,
+        },
+        Err(err) => {
+            log::warn!(target: "app", "failed to read core status for agent diagnostics: {err}");
+            failures.push(AgentProbeFailure {
+                code: AgentProbeCode::CoreStatusUnavailable,
+            });
+            AgentCoreSnapshot {
+                state: AgentCoreState::Unknown,
+                run_type: AgentRunType::Normal,
+                selected_core,
+                state_changed_at: 0,
+                runtime_config_present,
+                routing_mode,
+                observed_routing_mode: None,
+                applied_consistency: AgentAppliedState::Unknown,
+            }
+        }
+    };
     if core.state == AgentCoreState::Running {
         match core_probe::observed_routing_mode().await {
             Ok(mode) => {
@@ -323,6 +342,13 @@ fn summarize_telemetry(
     }
 }
 
+fn system_proxy_without_running_core(
+    state: AgentCoreState,
+    observed_enabled: Option<bool>,
+) -> bool {
+    observed_enabled == Some(true) && state == AgentCoreState::Stopped
+}
+
 fn derive_findings(
     core: &AgentCoreSnapshot,
     service: &AgentServiceSnapshot,
@@ -341,7 +367,7 @@ fn derive_findings(
     );
     push_finding(
         &mut findings,
-        proxy.observed_enabled == Some(true) && core.state != AgentCoreState::Running,
+        system_proxy_without_running_core(core.state, proxy.observed_enabled),
         AgentFindingCode::SystemProxyWithoutRunningCore,
         AgentFindingSeverity::Critical,
     );
@@ -447,8 +473,8 @@ fn snapshot_revision(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_scope, summarize_system_proxy};
-    use crate::features::agent::model::AgentHostScope;
+    use super::{host_scope, summarize_system_proxy, system_proxy_without_running_core};
+    use crate::features::agent::model::{AgentCoreState, AgentHostScope};
     use sysproxy::Sysproxy;
 
     #[test]
@@ -457,6 +483,18 @@ mod tests {
         assert_eq!(host_scope("::1"), AgentHostScope::Loopback);
         assert_eq!(host_scope("localhost"), AgentHostScope::Loopback);
         assert_eq!(host_scope("192.168.1.1"), AgentHostScope::NonLoopback);
+    }
+
+    #[test]
+    fn unknown_core_state_does_not_claim_the_core_is_stopped() {
+        assert!(system_proxy_without_running_core(
+            AgentCoreState::Stopped,
+            Some(true)
+        ));
+        assert!(!system_proxy_without_running_core(
+            AgentCoreState::Unknown,
+            Some(true)
+        ));
     }
 
     #[test]
