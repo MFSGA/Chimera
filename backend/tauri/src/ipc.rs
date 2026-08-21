@@ -442,6 +442,25 @@ pub async fn set_profile_valid_fields(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn set_profile_transform_chain(
+    client: State<'_, NyanpasuClient>,
+    uid: ProfileUid,
+    transforms: Vec<ProfileUid>,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_profile_transform_chain(uid, transforms).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_global_transform_chain(
+    client: State<'_, NyanpasuClient>,
+    transforms: Vec<ProfileUid>,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_global_transform_chain(transforms).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn patch_profile_metadata(
     client: State<'_, NyanpasuClient>,
     uid: ProfileUid,

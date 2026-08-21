@@ -1,17 +1,18 @@
 export const baseE2eSuites = {
-  smoke: ['./specs/smoke.e2e.ts'],
+  smoke: ['./specs/smoke.e2e.ts', './specs/proxy-localization.e2e.ts'],
   runtime: [
     './specs/ipv6-runtime-setting.e2e.ts',
     './specs/log-level-runtime-setting.e2e.ts',
     './specs/profile-reorder-rebuild.e2e.ts',
     './specs/profile-runtime-product.e2e.ts',
+    './specs/profile-transform-runtime.e2e.ts',
     './specs/proxy-mode-runtime-setting.e2e.ts',
     './specs/storage-event-resync.e2e.ts',
   ],
   profiles: [
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
-    './specs/proxy-localization.e2e.ts',
+    './specs/profile-transform-chain-ui.e2e.ts',
     './specs/profiles-detail-main.e2e.ts',
     './specs/profiles-layout.e2e.ts',
     './specs/profiles-main-layout.e2e.ts',
