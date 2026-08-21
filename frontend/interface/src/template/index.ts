@@ -1,6 +1,11 @@
 const merge = `# Clash Chimera Merge Template (YAML)
 #
 # This transform is applied after the selected profile is loaded.
+# YAML mappings are merged recursively. Scalars and lists replace existing values.
+#
+# Example:
+# dns:
+#   enable: true
 `;
 
 const javascript = `// Clash Chimera JavaScript Transform Template

@@ -1,0 +1,259 @@
+import assert from 'node:assert/strict';
+
+type MutationOutcome<T> =
+  | { status: 'applied'; value: T }
+  | {
+      status: 'committed_degraded';
+      value: T;
+      degradations: Array<{ message: string }>;
+    };
+
+type ProfileResponse = {
+  uid: string;
+  name: string;
+  type: 'remote' | 'local' | 'merge' | 'script';
+  chain?: string[];
+};
+
+type ProfilesResponse = {
+  current: string | null;
+  items: ProfileResponse[];
+  global_transforms: string[];
+};
+
+async function invoke<T>(command: string, args?: Record<string, unknown>) {
+  return browser.execute(
+    async (name, parameters) => {
+      const internals = (
+        window as typeof window & {
+          __TAURI_INTERNALS__: {
+            invoke: <R>(
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<R>;
+          };
+        }
+      ).__TAURI_INTERNALS__;
+      return internals.invoke<T>(name, parameters);
+    },
+    command,
+    args,
+  );
+}
+
+function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
+  assert.equal(
+    outcome.status,
+    'applied',
+    `${operation} degraded: ${
+      outcome.status === 'committed_degraded'
+        ? outcome.degradations.map((item) => item.message).join('; ')
+        : 'unknown outcome'
+    }`,
+  );
+  return outcome.value;
+}
+
+async function openMainWindow() {
+  await invoke('create_main_window');
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes('main'),
+    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
+  );
+  await browser.switchToWindow('main');
+}
+
+async function openRoute(pathname: string) {
+  const currentUrl = new URL(await browser.getUrl());
+  currentUrl.pathname = pathname;
+  currentUrl.search = '';
+  await browser.url(currentUrl.href);
+  await browser.waitUntil(
+    async () =>
+      browser.execute((expected) => location.pathname === expected, pathname),
+    {
+      timeout: 15_000,
+      timeoutMsg: `Route ${pathname} did not render.`,
+    },
+  );
+}
+
+async function waitForScopedChain(uid: string, expected: string[]) {
+  await browser.waitUntil(
+    async () => {
+      const profiles = await invoke<ProfilesResponse>('get_profiles');
+      const profile = profiles.items.find((item) => item.uid === uid);
+      return JSON.stringify(profile?.chain ?? []) === JSON.stringify(expected);
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `Scoped transform chain did not become ${JSON.stringify(expected)}.`,
+    },
+  );
+}
+
+async function waitForGlobalChain(expected: string[]) {
+  await browser.waitUntil(
+    async () => {
+      const profiles = await invoke<ProfilesResponse>('get_profiles');
+      return (
+        JSON.stringify(profiles.global_transforms) === JSON.stringify(expected)
+      );
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}.`,
+    },
+  );
+}
+
+async function activeOrder(scope: 'profile' | 'global') {
+  return browser.execute((chainScope) => {
+    const editor = document.querySelector(
+      `[data-slot="transform-chain-editor"][data-chain-scope="${chainScope}"]`,
+    );
+    return Array.from(
+      editor?.querySelectorAll('[data-slot="transform-chain-active-item"]') ??
+        [],
+    ).map((row) => row.getAttribute('data-profile-uid'));
+  }, scope);
+}
+
+describe('main transform chain editor', () => {
+  const suffix = Date.now();
+  const localName = `chain-ui-source-${suffix}`;
+  const mergeAName = `chain-ui-merge-a-${suffix}`;
+  const mergeBName = `chain-ui-merge-b-${suffix}`;
+  let previousCurrent: string | null = null;
+  let localUid: string | null = null;
+  let mergeAUid: string | null = null;
+  let mergeBUid: string | null = null;
+
+  before(async () => {
+    await browser.setWindowSize(1240, 720);
+    const initial = await invoke<ProfilesResponse>('get_profiles');
+    previousCurrent = initial.current;
+
+    requireApplied(
+      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
+        transforms: [],
+      }),
+      'global chain reset',
+    );
+
+    localUid = requireApplied(
+      await invoke<MutationOutcome<string>>('create_profile', {
+        item: {
+          type: 'local',
+          uid: null,
+          name: localName,
+          file: null,
+          desc: null,
+          updated: null,
+          symlinks: null,
+          chain: [],
+        },
+        fileData: 'proxies: []\nproxy-groups: []\nrules: []\n',
+      }),
+      'local profile creation',
+    );
+    mergeAUid = requireApplied(
+      await invoke<MutationOutcome<string>>('create_profile', {
+        item: { type: 'merge', name: mergeAName, desc: null },
+        fileData: 'unified-delay: true\n',
+      }),
+      'first merge profile creation',
+    );
+    mergeBUid = requireApplied(
+      await invoke<MutationOutcome<string>>('create_profile', {
+        item: { type: 'merge', name: mergeBName, desc: null },
+        fileData: 'tcp-concurrent: true\n',
+      }),
+      'second merge profile creation',
+    );
+
+    await openMainWindow();
+    await browser.setWindowSize(1240, 720);
+  });
+
+  after(async () => {
+    await invoke<MutationOutcome<null>>('set_global_transform_chain', {
+      transforms: [],
+    }).catch(() => undefined);
+    if (localUid) {
+      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
+        uid: localUid,
+        transforms: [],
+      }).catch(() => undefined);
+    }
+    for (const uid of [mergeAUid, mergeBUid, localUid]) {
+      if (!uid) continue;
+      await invoke<MutationOutcome<null>>('delete_profile', { uid }).catch(
+        () => undefined,
+      );
+    }
+    if (previousCurrent) {
+      await invoke<MutationOutcome<null>>('activate_profile', {
+        uid: previousCurrent,
+      }).catch(() => undefined);
+    }
+  });
+
+  it('edits and reorders a scoped transform chain from profile details', async () => {
+    assert.ok(localUid && mergeAUid && mergeBUid);
+    await openRoute(`/main/profiles/profile/detail/${localUid}`);
+
+    const trigger = await $('[data-slot="profile-transform-chain"]');
+    await trigger.waitForClickable({ timeout: 15_000 });
+    await trigger.click();
+
+    const editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    const first = await editor.$(
+      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
+    );
+    const second = await editor.$(
+      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeBUid}"]`,
+    );
+    await first.click();
+    await second.click();
+    assert.deepEqual(await activeOrder('profile'), [mergeAUid, mergeBUid]);
+
+    const secondRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeBUid}"]`,
+    );
+    await secondRow.$('[data-slot="transform-chain-move-up"]').click();
+    assert.deepEqual(await activeOrder('profile'), [mergeBUid, mergeAUid]);
+
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await editor.waitForDisplayed({ reverse: true, timeout: 30_000 });
+    await waitForScopedChain(localUid, [mergeBUid, mergeAUid]);
+  });
+
+  it('edits the global transform chain from a transform list header', async () => {
+    assert.ok(mergeAUid);
+    await openRoute('/main/profiles/merge');
+
+    const trigger = await $('[data-slot="global-transform-chain"]');
+    await trigger.waitForClickable({ timeout: 15_000 });
+    await trigger.click();
+
+    const editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+    await editor
+      .$(
+        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
+      )
+      .click();
+    assert.deepEqual(await activeOrder('global'), [mergeAUid]);
+
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await editor.waitForDisplayed({ reverse: true, timeout: 30_000 });
+    await waitForGlobalChain([mergeAUid]);
+  });
+});

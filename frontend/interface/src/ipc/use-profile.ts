@@ -167,6 +167,28 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     },
   });
 
+  const setTransformChain = useMutation({
+    mutationFn: async ({
+      uid,
+      transforms,
+    }: {
+      uid: string;
+      transforms: string[];
+    }) =>
+      unwrapResult(await commands.setProfileTransformChain(uid, transforms)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
+  const setGlobalTransformChain = useMutation({
+    mutationFn: async (transforms: string[]) =>
+      unwrapResult(await commands.setGlobalTransformChain(transforms)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [RROFILES_QUERY_KEY] });
+    },
+  });
+
   const activate = useMutation({
     mutationFn: async (uid: string | null) =>
       unwrapResult(await commands.activateProfile(uid)),
@@ -238,6 +260,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     update,
     patch,
     setValidFields,
+    setTransformChain,
+    setGlobalTransformChain,
     activate,
     patchMetadata,
     patchRemoteOptions,
