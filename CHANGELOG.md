@@ -1,3 +1,55 @@
+## [0.21.4] - 2026-08-21 20:06:45
+
+### ✅ Testing
+
+- **e2e:** Cover javascript transform runtime by @MFSGA
+
+- **e2e:** Cover lua transform runtime by @MFSGA
+
+- **e2e:** Prune isolated runtime artifacts by @MFSGA
+
+### ✨ Features
+
+- **enhance:** Execute javascript transform profiles by @MFSGA
+
+- **enhance:** Add javascript sandbox runner by @MFSGA
+
+- **enhance:** Execute lua transform profiles by @MFSGA
+
+- **profile:** Migrate transform chain foundation by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Stabilize tauri e2e smoke coverage by @MFSGA
+
+- **e2e:** Use stable sidebar navigation selector by @MFSGA
+
+- Add retry handling for downloads by @MFSGA
+
+### 🔨 Refactor
+
+- **agent:** Read core status through NyanpasuClient by @MFSGA
+
+- **enhance:** Define script runner contract by @MFSGA
+
+- **ipc:** Route core restarts through NyanpasuClient by @MFSGA
+
+- **runtime:** Remove obsolete core lifecycle facades by @MFSGA
+
+- **runtime:** Route config lifecycle through NyanpasuClient by @MFSGA
+
+- **runtime:** Separate rebuild from profile side effects by @MFSGA
+
+- **runtime:** Stop core through NyanpasuClient on shutdown by @MFSGA
+
+- **service:** Route IPC transitions through NyanpasuClient by @MFSGA
+
+- **updater:** Inject core lifecycle through NyanpasuClient by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.21.3...v0.21.4
+
 ## [0.21.3] - 2026-08-16 15:20:19
 
 ### ✅ Testing
