@@ -22,30 +22,52 @@ export const downloadFile = async (url: string, path: string) => {
     options.dispatcher = httpProxy;
   }
 
-  consola.debug(colorize`download {gray "${url}"} to {gray "${path}"}`);
+  const maxRetries = 5;
+  let lastError: unknown;
 
-  const response = await fetch(url, {
-    ...options,
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/octet-stream',
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
-    },
-  });
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      consola.debug(
+        colorize`download {gray "${url}"} to {gray "${path}"} (attempt ${attempt + 1}/${maxRetries + 1})`,
+      );
 
-  // check status code
-  if (response.status !== 200) {
-    throw new Error(`download failed: ${response.statusText}`);
+      const response = await fetch(url, {
+        ...options,
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `download failed: ${response.statusText} (${response.status})`,
+        );
+      }
+
+      const buffer = await response.arrayBuffer();
+      await fs.writeFile(path, new Uint8Array(buffer));
+
+      consola.success(
+        colorize`download finished {gray "${url.split('/').at(-1)}"}`,
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === maxRetries) break;
+
+      const delay = 1000 * 2 ** attempt;
+      consola.warn(
+        colorize`download retry {yellow "${attempt + 1}/${maxRetries}"} after {gray "${delay}ms"}: ${String(error)}`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
 
-  const buffer = await response.arrayBuffer();
-
-  await fs.writeFile(path, new Uint8Array(buffer));
-
-  consola.success(
-    colorize`download finished {gray "${url.split('/').at(-1)}"}`,
-  );
+  throw lastError;
 };
 
 export const resolveSidecar = async (
