@@ -200,6 +200,8 @@ macro_rules! build_builder {
                 crate::ipc::reorder_profiles_by_list,
                 crate::ipc::activate_profile,
                 crate::ipc::set_profile_valid_fields,
+                crate::ipc::set_profile_transform_chain,
+                crate::ipc::set_global_transform_chain,
                 crate::ipc::patch_profile_metadata,
                 crate::ipc::patch_remote_profile_options,
                 crate::ipc::replace_profile_definition,

@@ -191,6 +191,14 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
 
     async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()>;
 
+    async fn set_profile_transform_chain(
+        &self,
+        uid: &ProfileUid,
+        transforms: &[ProfileUid],
+    ) -> anyhow::Result<bool>;
+
+    async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool>;
+
     async fn apply_remote_options(
         &self,
         uid: &ProfileUid,
@@ -409,6 +417,21 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
             Ok(())
         })
         .await
+    }
+
+    async fn set_profile_transform_chain(
+        &self,
+        uid: &ProfileUid,
+        transforms: &[ProfileUid],
+    ) -> anyhow::Result<bool> {
+        let uid = uid.clone();
+        let transforms = transforms.to_vec();
+        Self::persist(move |profiles| profiles.set_profile_transform_chain(&uid, transforms)).await
+    }
+
+    async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
+        let transforms = transforms.to_vec();
+        Self::persist(move |profiles| profiles.set_global_transform_chain(transforms)).await
     }
 
     async fn apply_remote_options(
@@ -1028,6 +1051,53 @@ impl NyanpasuClient {
             .await)
     }
 
+    pub(crate) async fn set_profile_transform_chain(
+        &self,
+        uid: ProfileUid,
+        transforms: Vec<ProfileUid>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let affects_current = {
+            let _commit = self.inner.profile_commit.lock().await;
+            let affects_current = self
+                .inner
+                .profile_writes
+                .set_profile_transform_chain(&uid, &transforms)
+                .await?;
+            self.inner.ui_sink.refresh_profiles();
+            affects_current
+        };
+        if affects_current {
+            Ok(self
+                .after_profile_runtime_commit("profile transform chain update")
+                .await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
+    }
+
+    pub(crate) async fn set_global_transform_chain(
+        &self,
+        transforms: Vec<ProfileUid>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let changed = {
+            let _commit = self.inner.profile_commit.lock().await;
+            let changed = self
+                .inner
+                .profile_writes
+                .set_global_transform_chain(&transforms)
+                .await?;
+            self.inner.ui_sink.refresh_profiles();
+            changed
+        };
+        if changed {
+            Ok(self
+                .after_profile_runtime_commit("global transform chain update")
+                .await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
+    }
+
     pub(crate) async fn save_profile_file(
         &self,
         uid: ProfileUid,
@@ -1284,6 +1354,19 @@ mod tests {
         }
         async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
             Ok(())
+        }
+        async fn set_profile_transform_chain(
+            &self,
+            _uid: &ProfileUid,
+            _transforms: &[ProfileUid],
+        ) -> anyhow::Result<bool> {
+            Ok(false)
+        }
+        async fn set_global_transform_chain(
+            &self,
+            _transforms: &[ProfileUid],
+        ) -> anyhow::Result<bool> {
+            Ok(false)
         }
         async fn apply_remote_options(
             &self,
