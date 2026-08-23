@@ -5,7 +5,7 @@ import {
   type StorageListen,
   type StorageListenerEvent,
   type StorageUnlisten,
-} from '../frontend/chimera/src/services/storage-listeners.ts';
+} from '../frontend/chimera/src/services/storage-listeners.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -56,11 +56,15 @@ test('storage listeners unregister exactly once when registration resolves after
 
   registrations
     .get('storage_resync_required')
-    ?.resolve(() => unlistenCalls.push('resync'));
+    ?.resolve(() => {
+      unlistenCalls.push('resync');
+    });
   await Promise.resolve();
   registrations
     .get('storage_value_changed')
-    ?.resolve(() => unlistenCalls.push('value'));
+    ?.resolve(() => {
+      unlistenCalls.push('value');
+    });
   await Promise.resolve();
 
   assert.deepEqual(unlistenCalls, ['resync', 'value']);
@@ -240,7 +244,9 @@ test('storage listener keeps the successful registration when its peer fails', a
 
   registrations
     .get('storage_value_changed')
-    ?.resolve(() => valueUnlistenCalls++);
+    ?.resolve(() => {
+      valueUnlistenCalls++;
+    });
   registrations
     .get('storage_resync_required')
     ?.reject(new Error('resync registration unavailable'));
@@ -725,7 +731,9 @@ test('storage listener isolates unlisten failures during disposal', async () => 
         throw cleanupFailure;
       };
     }
-    return () => cleanupCalls.push(event);
+    return () => {
+      cleanupCalls.push(event);
+    };
   };
 
   const subscription = createStorageListenerSubscription({

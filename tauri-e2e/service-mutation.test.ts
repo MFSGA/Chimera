@@ -4,7 +4,7 @@ import {
   executeServiceMutation,
   type ServiceMutationCommands,
   type ServiceType,
-} from '../frontend/interface/src/ipc/service-mutation.ts';
+} from '../frontend/interface/src/ipc/service-mutation.js';
 
 const serviceTypes: ServiceType[] = [
   'install',
