@@ -3,12 +3,12 @@ import test from 'node:test';
 import {
   selectProxyAndRefresh,
   type SelectProxyCommand,
-} from '../frontend/interface/src/ipc/proxy-mutation.ts';
+} from '../frontend/interface/src/ipc/proxy-mutation.js';
 
 test('successful proxy selection refreshes the proxy query once', async () => {
   const calls: string[] = [];
   const commands: SelectProxyCommand = {
-    selectProxy: async (group, name) => {
+    selectProxy: async (group: string, name: string) => {
       calls.push(`select:${group}:${name}`);
       return { status: 'ok', data: null };
     },

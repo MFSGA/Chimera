@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   parseProfileType,
   ProfileType,
-} from '../frontend/chimera/src/pages/(main)/main/profiles/_modules/profile-type.ts';
+} from '../frontend/chimera/src/pages/(main)/main/profiles/_modules/profile-type.js';
 
 test('profile type parser accepts every supported route value', () => {
   for (const type of Object.values(ProfileType)) {

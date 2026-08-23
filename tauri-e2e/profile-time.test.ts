@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   getNextProfileUpdateTimestamp,
   getSafeProfileTimestamp,
-} from '../frontend/interface/src/utils/profile-time.ts';
+} from '../frontend/interface/src/utils/profile-time.js';
 
 test('profile timestamps accept only positive safe values inside the Date boundary', () => {
   assert.equal(getSafeProfileTimestamp(1_700_000_000), 1_700_000_000);
