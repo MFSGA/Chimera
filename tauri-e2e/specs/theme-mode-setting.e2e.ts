@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 
 const settingsPath = '/main/settings/user-interface';
-const themeModeSelect = '#user-interface-theme-mode';
-const themeModes = ['dark', 'light', 'system'] as const;
+const themeModeTrigger = '[data-slot="theme-mode-selector"] button';
+const themeModes = ['light', 'dark', 'system'] as const;
 type ThemeMode = (typeof themeModes)[number];
 
 async function waitForApp() {
@@ -20,40 +20,55 @@ async function openUserInterfaceSettings() {
   await browser.url(new URL(settingsPath, currentHref).href);
   await waitForApp();
 
-  const select = await $(themeModeSelect);
-  await select.waitForDisplayed({ timeout: 15_000 });
-  await select.waitForClickable({ timeout: 15_000 });
+  const trigger = await $(themeModeTrigger);
+  await trigger.waitForDisplayed({ timeout: 15_000 });
+  await trigger.waitForClickable({ timeout: 15_000 });
 }
 
 async function readThemeMode(): Promise<ThemeMode> {
-  const value = await browser.execute((selector) => {
-    const select = document.querySelector<HTMLElement>(selector);
-    const input = select?.closest('.MuiInputBase-root')?.querySelector('input');
-    return input?.value ?? null;
-  }, themeModeSelect);
+  return browser.execute(async () => {
+    const tauri = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string) => Promise<{ theme_mode?: ThemeMode }>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const config = await tauri.invoke('get_verge_config');
+    return config.theme_mode ?? 'system';
+  });
+}
 
-  assert.ok(
-    themeModes.includes(value as ThemeMode),
-    `Unexpected theme mode value: ${String(value)}`,
+async function openThemeModeMenu() {
+  const trigger = await $(themeModeTrigger);
+  await trigger.waitForClickable({ timeout: 15_000 });
+  const focused = await browser.execute((element) => {
+    (element as HTMLElement).focus();
+    return document.activeElement === element;
+  }, trigger);
+  assert.equal(focused, true, 'The theme-mode trigger was not focusable.');
+  await browser.keys('Enter');
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        () => document.querySelector('[role="menuitemcheckbox"]') !== null,
+      ),
+    { timeout: 15_000, timeoutMsg: 'The theme-mode menu did not open.' },
   );
-  return value as ThemeMode;
 }
 
 async function setThemeMode(mode: ThemeMode) {
   if ((await readThemeMode()) === mode) return;
 
-  const opened = await browser.execute((selector) => {
-    const select = document.querySelector<HTMLElement>(selector);
-    if (!select) return false;
-    select.dispatchEvent(
-      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
-    );
-    return true;
-  }, themeModeSelect);
-  assert.equal(opened, true, 'The theme-mode select was not found.');
-
-  const option = await $(`[role="option"][data-value="${mode}"]`);
-  await option.waitForDisplayed({ timeout: 15_000 });
+  await openThemeModeMenu();
+  const options = await $$('[role="menuitemcheckbox"]');
+  const optionCount = await options.length;
+  assert.equal(
+    optionCount,
+    themeModes.length,
+    'Unexpected theme-mode options.',
+  );
+  const option = options[themeModes.indexOf(mode)];
   await option.waitForClickable({ timeout: 15_000 });
   await option.click();
 
@@ -69,17 +84,21 @@ describe('Chimera theme-mode preference', () => {
     await openUserInterfaceSettings();
 
     const original = await readThemeMode();
+    assert.ok(
+      themeModes.includes(original),
+      `Unexpected theme mode: ${original}`,
+    );
     const changed: ThemeMode = original === 'dark' ? 'light' : 'dark';
 
     try {
       await setThemeMode(changed);
       await browser.refresh();
-      await waitForApp();
+      await openUserInterfaceSettings();
       assert.equal(await readThemeMode(), changed);
     } finally {
       await setThemeMode(original);
       await browser.refresh();
-      await waitForApp();
+      await openUserInterfaceSettings();
       assert.equal(await readThemeMode(), original);
     }
   });

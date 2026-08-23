@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 
 const settingsPath = '/main/settings/nyanpasu';
-const appLogLevelSelect = '#verge-app-log-level';
+const appLogLevelSelect = '[data-slot="log-level-selector"] button';
 const levels = ['trace', 'debug', 'info', 'warn', 'error', 'silent'] as const;
 type AppLogLevel = (typeof levels)[number];
+const levelLabels: Record<AppLogLevel, string> = {
+  trace: 'Trace',
+  debug: 'Debug',
+  info: 'Info',
+  warn: 'Warn',
+  error: 'Error',
+  silent: 'Silent',
+};
 
 async function waitForApp() {
   await browser.waitUntil(
@@ -45,13 +53,16 @@ async function readAppLogLevel(): Promise<AppLogLevel> {
 async function openLogLevelMenu() {
   const select = await $(appLogLevelSelect);
   await select.waitForClickable({ timeout: 15_000 });
-  await select.click();
+  const focused = await browser.execute((element) => {
+    (element as HTMLElement).focus();
+    return document.activeElement === element;
+  }, select);
+  assert.equal(focused, true, 'The app log-level trigger was not focusable.');
+  await browser.keys('Enter');
   await browser.waitUntil(
     async () =>
       browser.execute(
-        () =>
-          document.querySelector('[role="menuitemcheckbox"][data-value]') !==
-          null,
+        () => document.querySelector('[role="menuitemcheckbox"]') !== null,
       ),
     { timeout: 15_000, timeoutMsg: 'The app log-level menu did not open.' },
   );
@@ -59,12 +70,13 @@ async function openLogLevelMenu() {
 
 async function readCheckedLevel(): Promise<AppLogLevel | null> {
   await openLogLevelMenu();
-  return browser.execute(() => {
+  const label = await browser.execute(() => {
     const checked = document.querySelector<HTMLElement>(
-      '[role="menuitemcheckbox"][data-value][data-state="checked"]',
+      '[role="menuitemcheckbox"][data-state="checked"]',
     );
-    return (checked?.dataset.value as AppLogLevel | undefined) ?? null;
+    return checked?.textContent?.trim() ?? null;
   });
+  return levels.find((level) => levelLabels[level] === label) ?? null;
 }
 
 async function closeMenu() {
@@ -75,7 +87,9 @@ async function setAppLogLevel(level: AppLogLevel) {
   if ((await readAppLogLevel()) === level) return;
 
   await openLogLevelMenu();
-  const option = await $(`[role="menuitemcheckbox"][data-value="${level}"]`);
+  const option = await $(
+    `//*[@role="menuitemcheckbox" and normalize-space()="${levelLabels[level]}"]`,
+  );
   await option.waitForClickable({ timeout: 15_000 });
   await option.click();
 

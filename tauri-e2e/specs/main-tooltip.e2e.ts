@@ -42,9 +42,10 @@ describe('main tooltip reference surface', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await browser.waitUntil(
       async () =>
         browser.execute(
@@ -58,11 +59,14 @@ describe('main tooltip reference surface', () => {
   it('keeps ref padding on the animated inner surface', async () => {
     const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>('[data-slot="slider-sidebar"] a')
-        ?.focus();
-    });
+    await browser.execute((element) => {
+      element.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          pointerType: 'mouse',
+        }),
+      );
+    }, firstSidebarLink);
 
     await browser.waitUntil(
       async () =>

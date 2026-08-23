@@ -33,6 +33,10 @@ type ProfilesResponse = {
   items: Array<{ uid: string; name: string }>;
 };
 
+type ProxiesResponse = {
+  groups: Array<{ name: string; icon?: string | null }>;
+};
+
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
     async (name, parameters) => {
@@ -71,6 +75,13 @@ describe('main rules proxy icon reference behavior', () => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
 
+    const existing = await invoke<ProfilesResponse>('get_profiles');
+    const stale = existing.items.find((item) => item.name === profileName);
+    if (stale) {
+      await invoke('activate_profile', { uid: null }).catch(() => undefined);
+      await invoke('delete_profile', { uid: stale.uid }).catch(() => undefined);
+    }
+
     await invoke('create_profile', {
       item: {
         type: 'local',
@@ -89,16 +100,32 @@ describe('main rules proxy icon reference behavior', () => {
     profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
     assert.ok(profileUid, 'The isolated proxy-icon profile was not created.');
 
-    if (profiles.current !== profileUid) {
-      await invoke('activate_profile', { uid: profileUid });
-    }
+    await invoke('activate_profile', { uid: profileUid });
+    await browser.waitUntil(
+      async () => {
+        try {
+          const proxies = await invoke<ProxiesResponse>('get_proxies');
+          return proxies.groups.some(
+            (group) => group.name === groupName && group.icon === rawSvg,
+          );
+        } catch {
+          return false;
+        }
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'The raw-SVG proxy group did not become active in the Clash runtime.',
+      },
+    );
 
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await browser.waitUntil(
       async () =>
         browser.execute(

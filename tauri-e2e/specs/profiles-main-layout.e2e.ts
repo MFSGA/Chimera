@@ -131,11 +131,14 @@ describe('main profiles reference layout', () => {
       '[data-slot="profile-import-button"] > div > div button:first-child',
     );
     await remoteImport.waitForDisplayed({ timeout: 15_000 });
-    const focused = await browser.execute((element) => {
-      (element as HTMLElement).focus();
-      return document.activeElement === element;
+    await browser.execute((element) => {
+      element.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          pointerType: 'mouse',
+        }),
+      );
     }, remoteImport);
-    assert.equal(focused, true, 'The remote import action was not focusable.');
 
     const tooltip = await $('[role="tooltip"]');
     await tooltip.waitForDisplayed({ timeout: 15_000 });

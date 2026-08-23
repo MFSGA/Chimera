@@ -19,23 +19,22 @@ async function openRemoteProfileForm() {
   const importButton = await $('[data-slot="profile-import-button"]');
   await importButton.waitForDisplayed({ timeout: 15_000 });
 
-  const createButton = await importButton.$(
-    'button:not([data-profile-import-type])',
-  );
+  const createButton = await importButton.$('button');
   await createButton.waitForClickable({ timeout: 15_000 });
   await createButton.click();
 
-  await browser.waitUntil(
-    async () => (await importButton.getAttribute('data-expanded')) === 'true',
-    {
-      timeout: 15_000,
-      timeoutMsg: 'The profile import menu did not expand.',
-    },
+  const buttons = await importButton.$$('button');
+  const buttonCount = await buttons.length;
+  assert.equal(
+    buttonCount >= 3,
+    true,
+    'The profile import actions are missing.',
   );
-
-  const remoteImportButton = await importButton.$(
-    '[data-profile-import-type="remote"]',
-  );
+  const remoteImportButton = buttons[1];
+  await remoteImportButton.waitForDisplayed({
+    timeout: 15_000,
+    timeoutMsg: 'The profile import menu did not expand.',
+  });
   await remoteImportButton.waitForClickable({ timeout: 15_000 });
   await remoteImportButton.click();
 

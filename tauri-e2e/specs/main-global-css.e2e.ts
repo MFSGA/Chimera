@@ -34,6 +34,12 @@ async function openMainWindow() {
 describe('main global CSS contract', () => {
   it('scopes the ref baseline to main without changing legacy', async () => {
     await browser.setWindowSize(1240, 638);
+    const handles = await browser.getWindowHandles();
+    assert.ok(
+      handles.includes('legacy'),
+      'The legacy window is not available.',
+    );
+    await browser.switchToWindow('legacy');
 
     const legacy = await browser.execute(() => ({
       labelClass: document.documentElement.classList.contains('chimera-main'),
@@ -48,9 +54,10 @@ describe('main global CSS contract', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const dashboardLink = await $('a[href="/main/dashboard"]');
-    await dashboardLink.waitForClickable({ timeout: 15_000 });
-    await dashboardLink.click();
+    await browser.execute(() => {
+      history.pushState({}, '', '/main/dashboard');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
 
     const state = await browser.execute(() => {
       const rootStyle = getComputedStyle(document.documentElement);

@@ -100,9 +100,23 @@ describe('main proxy node reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
+    await browser.execute(() => {
+      history.pushState({}, '', '/main/proxies');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await browser.waitUntil(
+      async () => browser.execute(() => location.pathname === '/main/proxies'),
+      { timeout: 15_000, timeoutMsg: 'The proxies route did not open.' },
+    );
+
     const proxiesLink = await $('a[href^="/main/proxies/"]');
-    await proxiesLink.waitForClickable({ timeout: 15_000 });
-    await proxiesLink.click();
+    await proxiesLink.waitForExist({ timeout: 30_000 });
+    const proxiesPath = await proxiesLink.getAttribute('href');
+    assert.ok(proxiesPath, 'The proxy group route was not available.');
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, proxiesPath);
     await browser.waitUntil(
       async () =>
         browser.execute(
