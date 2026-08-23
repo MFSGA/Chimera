@@ -1155,6 +1155,7 @@ impl NyanpasuClient {
         let mut lease = self.inner.core.begin().await?;
         lease.rebuild_running_config().await?;
         self.inner.ui_sink.refresh_clash();
+        crate::feat::update_proxies_buff(None);
         Ok(())
     }
 
