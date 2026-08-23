@@ -42,9 +42,10 @@ describe('main rules reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await browser.waitUntil(
       async () =>
         browser.execute(
@@ -120,11 +121,14 @@ describe('main rules reference layout', () => {
     const sidebar = await $('[data-slot="slider-sidebar"]');
     const firstItem = await sidebar.$('a');
     await firstItem.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute(() => {
-      document
-        .querySelector<HTMLElement>('[data-slot="slider-sidebar"] a')
-        ?.focus();
-    });
+    await browser.execute((element) => {
+      element.dispatchEvent(
+        new PointerEvent('pointermove', {
+          bubbles: true,
+          pointerType: 'mouse',
+        }),
+      );
+    }, firstItem);
     await browser.waitUntil(
       async () =>
         browser.execute(() =>

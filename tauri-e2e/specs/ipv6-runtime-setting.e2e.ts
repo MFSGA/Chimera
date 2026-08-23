@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 
 const settingsPath = '/main/settings/clash';
-const ipv6SwitchSelector = '#runtime-config-ipv6';
+const ipv6SwitchSelector =
+  '[data-slot="ipv6-switch-container"] [role="switch"]';
 
 interface ClashRuntimeState {
   ipv6: boolean;
@@ -55,8 +56,11 @@ async function openClashSettings() {
 
 async function readIPv6Switch(): Promise<boolean | null> {
   return browser.execute((selector) => {
-    const input = document.querySelector<HTMLInputElement>(selector);
-    return input?.checked ?? null;
+    const toggle = document.querySelector<HTMLElement>(selector);
+    const state = toggle?.getAttribute('data-state');
+    if (state === 'checked') return true;
+    if (state === 'unchecked') return false;
+    return null;
   }, ipv6SwitchSelector);
 }
 
@@ -71,9 +75,9 @@ async function setIPv6(enabled: boolean) {
     await waitForApp();
   } else {
     const clicked = await browser.execute((selector) => {
-      const input = document.querySelector<HTMLInputElement>(selector);
-      if (!input || input.disabled) return false;
-      input.click();
+      const toggle = document.querySelector<HTMLButtonElement>(selector);
+      if (!toggle || toggle.disabled) return false;
+      toggle.click();
       return true;
     }, ipv6SwitchSelector);
     assert.equal(clicked, true, 'The IPv6 runtime switch was not clickable.');

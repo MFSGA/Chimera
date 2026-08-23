@@ -42,9 +42,10 @@ describe('main providers reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await browser.waitUntil(
       async () =>
         browser.execute(

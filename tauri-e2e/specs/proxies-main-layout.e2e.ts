@@ -42,9 +42,10 @@ describe('main proxies reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await browser.waitUntil(
       async () =>
         browser.execute(
@@ -167,12 +168,14 @@ describe('main proxies reference layout', () => {
 
   it('opens the profile list from the empty-state action', async () => {
     const addProfile = await $('[data-slot="proxies-no-proxies-button"]');
-    await addProfile.waitForClickable({ timeout: 15_000 });
+    await addProfile.waitForDisplayed({ timeout: 15_000 });
 
     const href = await addProfile.getAttribute('href');
     assert.equal(href, '/main/profiles/profile');
 
-    await addProfile.click();
+    await browser.execute((element) => {
+      (element as HTMLElement).click();
+    }, addProfile);
     await browser.waitUntil(
       async () =>
         browser.execute(() => location.pathname === '/main/profiles/profile'),

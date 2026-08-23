@@ -77,6 +77,17 @@ describe('main clash settings reference layout', () => {
 
       return {
         patchDirectCards: directCards(patchGroup),
+        patchDirectChildren: patchGroup?.children.length ?? 0,
+        tunStackDirect: Boolean(
+          patchGroup?.querySelector(
+            ':scope > [data-slot="tun-stack-selector-card"]',
+          ),
+        ),
+        logLevelDirect: Boolean(
+          patchGroup?.querySelector(
+            ':scope > [data-slot="log-level-selector-card"]',
+          ),
+        ),
         portDirectCards: directCards(portGroup),
         fieldDirectCards: directCards(fieldContainer),
         fieldHasSettingsGroup: Boolean(
@@ -109,7 +120,10 @@ describe('main clash settings reference layout', () => {
       };
     });
 
-    assert.equal(state.patchDirectCards, 4, JSON.stringify(state, null, 2));
+    assert.equal(state.patchDirectCards, 2, JSON.stringify(state, null, 2));
+    assert.equal(state.patchDirectChildren, 4, JSON.stringify(state, null, 2));
+    assert.equal(state.tunStackDirect, true, JSON.stringify(state, null, 2));
+    assert.equal(state.logLevelDirect, true, JSON.stringify(state, null, 2));
     assert.equal(state.portDirectCards, 1, JSON.stringify(state, null, 2));
     assert.equal(state.fieldDirectCards, 1, JSON.stringify(state, null, 2));
     assert.equal(

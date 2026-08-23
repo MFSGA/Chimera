@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 
 const settingsPath = '/main/settings/clash';
-const logLevelSelect = '#runtime-config-log-level';
+const logLevelTrigger = '[data-slot="log-level-selector-card"] button';
+const logLevelValue =
+  '[data-slot="log-level-selector-card"] [data-slot="settings-card-content-item-label-description"]';
 const labels: Record<string, string> = {
   debug: 'Debug',
   info: 'Info',
@@ -52,16 +54,16 @@ async function openClashSettings() {
   await browser.url(new URL(settingsPath, currentHref).href);
   await waitForApp();
 
-  const select = await $(logLevelSelect);
-  await select.waitForDisplayed({ timeout: 15_000 });
-  await select.waitForClickable({ timeout: 15_000 });
+  const trigger = await $(logLevelTrigger);
+  await trigger.waitForDisplayed({ timeout: 15_000 });
+  await trigger.waitForClickable({ timeout: 15_000 });
 }
 
 async function readSelectedLabel(): Promise<string | null> {
   return browser.execute((selector) => {
-    const select = document.querySelector<HTMLElement>(selector);
-    return select?.textContent?.trim() ?? null;
-  }, logLevelSelect);
+    const value = document.querySelector<HTMLElement>(selector);
+    return value?.textContent?.trim() ?? null;
+  }, logLevelValue);
 }
 
 async function setLogLevel(level: string) {
@@ -74,17 +76,13 @@ async function setLogLevel(level: string) {
     return;
   }
 
-  const opened = await browser.execute((selector) => {
-    const select = document.querySelector<HTMLElement>(selector);
-    if (!select) return false;
-    select.dispatchEvent(
-      new MouseEvent('mousedown', { bubbles: true, button: 0 }),
-    );
-    return true;
-  }, logLevelSelect);
-  assert.equal(opened, true, 'The log-level select was not found.');
+  const trigger = await $(logLevelTrigger);
+  await browser.execute((element) => element.focus(), trigger);
+  await browser.keys('Enter');
 
-  const option = await $(`[role="option"][data-value="${level}"]`);
+  const option = await $(
+    `//*[@role="menuitemcheckbox" and normalize-space()="${labels[level]}"]`,
+  );
   await option.waitForDisplayed({ timeout: 15_000 });
   await option.waitForClickable({ timeout: 15_000 });
   await option.click();
