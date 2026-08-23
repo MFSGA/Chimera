@@ -7,6 +7,7 @@ export interface LazyImageProps extends React.ImgHTMLAttributes<HTMLImageElement
 export function LazyImage({
   className,
   loadingClassName,
+  onLoad,
   ...others
 }: LazyImageProps) {
   const [loading, setLoading] = useState(true);
@@ -23,7 +24,10 @@ export function LazyImage({
       />
       <img
         {...others}
-        onLoad={() => setLoading(false)}
+        onLoad={(event) => {
+          setLoading(false);
+          onLoad?.(event);
+        }}
         className={cn(className, loading ? 'hidden' : 'inline-block')}
       />
     </>
