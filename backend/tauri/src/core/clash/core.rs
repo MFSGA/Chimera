@@ -618,18 +618,21 @@ impl CoreManager {
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let promoted_bytes =
+        let checked =
             check_and_promote_candidate(&candidate, paths.product(), |candidate_path| async move {
                 self.check_candidate_path(&candidate_path, target_core)
                     .await
             })
-            .await
-            .map_err(|error| match error {
-                CheckedPromotionError::Check(error) | CheckedPromotionError::Verify(error) => {
-                    RuntimeRestartError::Check(error)
-                }
-                CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
-            })?;
+            .await;
+        if let Err(error) = candidate.cleanup().await {
+            log::warn!(target: "app", "failed to clean runtime candidate: {error:?}");
+        }
+        let promoted_bytes = checked.map_err(|error| match error {
+            CheckedPromotionError::Check(error) | CheckedPromotionError::Verify(error) => {
+                RuntimeRestartError::Check(error)
+            }
+            CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
+        })?;
         let snapshot = Arc::new(RuntimeSnapshot::new(
             revision,
             target_core,
@@ -646,9 +649,6 @@ impl CoreManager {
             .map_err(RuntimeRestartError::Promote)?;
         Config::runtime().apply();
 
-        if let Err(error) = candidate.cleanup().await {
-            log::warn!(target: "app", "failed to clean runtime candidate: {error:?}");
-        }
         Ok(())
     }
 

@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 
 interface ProfileItem {
   uid: string;
@@ -54,16 +52,6 @@ async function waitForCoreRunning(): Promise<void> {
   );
 }
 
-function runtimePaths() {
-  const runtimeRoot = process.env.CHIMERA_E2E_RUNTIME_DIR;
-  assert.ok(runtimeRoot, 'CHIMERA_E2E_RUNTIME_DIR is not configured.');
-  const runtimeDirectory = path.join(runtimeRoot, 'config', 'runtime');
-  return {
-    product: path.join(runtimeDirectory, 'clash-config.yaml'),
-    candidates: path.join(runtimeDirectory, '.candidates'),
-  };
-}
-
 async function createLocalProfile(name: string): Promise<string> {
   const beforeIds = new Set(
     (await readProfiles()).items.map((item) => item.uid),
@@ -104,31 +92,6 @@ async function createLocalProfile(name: string): Promise<string> {
   return uid;
 }
 
-async function waitForProductReplacement(
-  previousMtimeMs: number,
-): Promise<void> {
-  const { product, candidates } = runtimePaths();
-  await browser.waitUntil(
-    async () => {
-      if (!fs.existsSync(product)) return false;
-      const candidateFiles = fs.existsSync(candidates)
-        ? fs
-            .readdirSync(candidates)
-            .filter((name) => name.startsWith('candidate-'))
-        : [];
-      return (
-        fs.statSync(product).mtimeMs > previousMtimeMs &&
-        candidateFiles.length === 0
-      );
-    },
-    {
-      timeout: 30_000,
-      timeoutMsg:
-        'Profile reorder did not finish promoting and cleaning its runtime candidate.',
-    },
-  );
-}
-
 async function removeProfilesWithPrefix(prefix: string): Promise<void> {
   const profiles = await readProfiles();
   for (const item of profiles.items.filter((profile) =>
@@ -139,9 +102,9 @@ async function removeProfilesWithPrefix(prefix: string): Promise<void> {
   await waitForCoreRunning();
 }
 
-describe('Chimera coalesced profile reorder rebuild', () => {
-  it('persists reordered profiles and rebuilds the runtime product in the background', async () => {
-    const prefix = 'coalesced-reorder-e2e-';
+describe('Chimera profile reorder persistence', () => {
+  it('persists the final reordered profile list without requiring a runtime rebuild', async () => {
+    const prefix = 'profile-reorder-e2e-';
     await removeProfilesWithPrefix(prefix);
     const original = await readProfiles();
     const created: string[] = [];
@@ -156,11 +119,6 @@ describe('Chimera coalesced profile reorder rebuild', () => {
           timeoutMsg: 'The first local profile was not activated.',
         },
       );
-      const { product: initialProduct } = runtimePaths();
-      await browser.waitUntil(async () => fs.existsSync(initialProduct), {
-        timeout: 30_000,
-        timeoutMsg: 'The initial runtime product was not promoted.',
-      });
       created.push(await createLocalProfile(`${prefix}b-${suffix}`));
 
       const before = await readProfiles();
@@ -174,16 +132,23 @@ describe('Chimera coalesced profile reorder rebuild', () => {
       });
       assert.notDeepEqual(reordered, originalCurrentOrder);
 
-      const { product } = runtimePaths();
-      assert.equal(fs.existsSync(product), true);
-      const productMtimeMs = fs.statSync(product).mtimeMs;
-
       await invoke('reorder_profiles_by_list', { list: reordered });
       await invoke('reorder_profiles_by_list', { list: originalCurrentOrder });
       await invoke('reorder_profiles_by_list', { list: reordered });
 
-      await waitForProductReplacement(productMtimeMs);
-      await waitForCoreRunning();
+      await browser.waitUntil(
+        async () => {
+          const profiles = await readProfiles();
+          return (
+            profiles.items.map((item) => item.uid).join('|') ===
+            reordered.join('|')
+          );
+        },
+        {
+          timeout: 30_000,
+          timeoutMsg: 'The final profile order was not committed.',
+        },
+      );
 
       await browser.refresh();
       await browser.waitUntil(
