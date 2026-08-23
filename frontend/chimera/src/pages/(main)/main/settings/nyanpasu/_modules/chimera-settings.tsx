@@ -1,7 +1,6 @@
 import {
   useSetting,
   type BreakWhenProxyChange as BreakWhenProxyChangeType,
-  type LoggingLevel_Serialize,
   type ProxiesSelectorMode,
 } from '@chimera/interface';
 import { AnimatePresence } from 'motion/react';
@@ -18,40 +17,8 @@ import {
   SettingsGroup,
   SettingsLabel,
 } from '../../_modules/settings-card';
+import LogLevelSelector from './log-level-selector';
 import { SelectorCard, SwitchCard } from './setting-control';
-
-const AppLogLevel = () => {
-  const setting = useSetting('app_log_level');
-  const options: Record<LoggingLevel_Serialize, string> = {
-    trace: 'Trace',
-    debug: 'Debug',
-    info: 'Info',
-    warn: 'Warn',
-    error: 'Error',
-    silent: 'Silent',
-  };
-
-  const handleSelect = async (value: LoggingLevel_Serialize) => {
-    try {
-      await setting.upsert(value);
-    } catch (error) {
-      message(
-        `${m.settings_nyanpasu_app_log_level_label()}\n${formatError(error)}`,
-        { title: m.common_error(), kind: 'error' },
-      );
-    }
-  };
-
-  return (
-    <SelectorCard
-      id="verge-app-log-level"
-      label={m.settings_nyanpasu_app_log_level_label()}
-      current={setting.value || 'info'}
-      options={options}
-      onSelect={(value) => void handleSelect(value)}
-    />
-  );
-};
 
 const TrayProxiesSelector = () => {
   const setting = useSetting('clash_tray_selector');
@@ -199,7 +166,7 @@ export default function ChimeraSettings() {
       <div data-slot="app-settings-container">
         <SettingsLabel>{m.settings_nyanpasu_logs()}</SettingsLabel>
         <SettingsGroup>
-          <AppLogLevel />
+          <LogLevelSelector />
           <MaxLogFiles />
         </SettingsGroup>
       </div>

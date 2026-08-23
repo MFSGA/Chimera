@@ -1,8 +1,5 @@
+import { useSetting, type LoggingLevel_Serialize } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import {
-  ThemeMode,
-  useExperimentalThemeContext,
-} from '@/components/providers/theme-provider';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -10,6 +7,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,
@@ -20,27 +18,35 @@ import {
   SettingsCardContent,
 } from '../../_modules/settings-card';
 
-export default function ThemeModeSelector() {
-  const { themeMode, setThemeMode } = useExperimentalThemeContext();
+export default function LogLevelSelector() {
+  const { value, upsert } = useSetting('app_log_level');
+
+  const handleChange = useLockFn(async (mode: LoggingLevel_Serialize) => {
+    await upsert(mode);
+  });
+
   const messages = {
-    [ThemeMode.LIGHT]: m.settings_user_interface_theme_mode_light(),
-    [ThemeMode.DARK]: m.settings_user_interface_theme_mode_dark(),
-    [ThemeMode.SYSTEM]: m.settings_user_interface_theme_mode_system(),
-  } satisfies Record<ThemeMode, string>;
+    trace: 'Trace',
+    debug: 'Debug',
+    info: 'Info',
+    warn: 'Warn',
+    error: 'Error',
+    silent: 'Silent',
+  } satisfies Record<LoggingLevel_Serialize, string>;
 
   return (
-    <SettingsCard data-slot="theme-mode-selector">
+    <SettingsCard data-slot="log-level-selector">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <SettingsCardContent data-slot="theme-mode-selector-trigger" asChild>
+          <SettingsCardContent data-slot="log-level-selector-trigger" asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
               <ItemContainer>
                 <ItemLabel>
                   <ItemLabelText>
-                    {m.settings_user_interface_theme_mode_label()}
+                    {m.settings_nyanpasu_app_log_level_label()}
                   </ItemLabelText>
                   <ItemLabelDescription>
-                    {themeMode ? messages[themeMode] : null}
+                    {value ? messages[value] : null}
                   </ItemLabelDescription>
                 </ItemLabel>
                 <ArrowForwardIosRounded />
@@ -49,17 +55,12 @@ export default function ThemeModeSelector() {
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent
-          align="end"
-          sideOffset={-16}
-          alignOffset={16}
-          data-slot="theme-mode-selector-menu"
-        >
-          {Object.entries(messages).map(([mode, label]) => (
+        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+          {Object.entries(messages).map(([key, label]) => (
             <DropdownMenuCheckboxItem
-              checked={themeMode === mode}
-              key={mode}
-              onSelect={() => void setThemeMode(mode as ThemeMode)}
+              checked={value === key}
+              key={key}
+              onSelect={() => void handleChange(key as LoggingLevel_Serialize)}
             >
               {label}
             </DropdownMenuCheckboxItem>
