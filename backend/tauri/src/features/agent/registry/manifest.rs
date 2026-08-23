@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use super::{AgentToolError, request, unknown_tool};
 use crate::features::agent::{
-    AgentManifest, AgentNetworkProbeRequest, AgentToolManifest, AgentToolName, AgentToolRisk,
+    AgentExecuteReadOnlyIntentRequest, AgentManifest, AgentNetworkProbeRequest, AgentToolManifest,
+    AgentToolName, AgentToolRisk,
     model::{AGENT_MANIFEST_SCHEMA_VERSION, NETWORK_SNAPSHOT_SCHEMA_VERSION},
 };
 
@@ -36,9 +37,39 @@ const NETWORK_DIAGNOSE_OUTPUT_FIELDS: &[&str] = &[
     "tun",
     "profiles",
     "telemetry",
+    "connectivity",
+    "platform_readiness",
     "findings",
     "probe_failures",
+    "recommendations",
     "privacy",
+];
+const HOST_CONNECTIVITY_OUTPUT_FIELDS: &[&str] = &[
+    "status",
+    "active_interface_kind",
+    "link_up",
+    "ipv4",
+    "ipv6",
+    "dns_configured",
+    "dns_resolves",
+    "captive_portal_suspected",
+    "reasons",
+];
+const PLATFORM_READINESS_OUTPUT_FIELDS: &[&str] = &[
+    "process_privilege",
+    "service_mode_available",
+    "tun_permission",
+    "tun_verification",
+    "system_dns_verification",
+    "reasons",
+];
+const READ_ONLY_INTENT_OUTPUT_FIELDS: &[&str] = &[
+    "status",
+    "snapshot",
+    "connectivity",
+    "choices",
+    "reason",
+    "intent",
 ];
 const NETWORK_PROBE_OUTPUT_FIELDS: &[&str] = &[
     "status",
@@ -67,7 +98,7 @@ const PROXY_STATUS_OUTPUT_FIELDS: &[&str] = &[
 const TUN_STATUS_OUTPUT_FIELDS: &[&str] = &[
     "desired_enabled",
     "generated_runtime_enabled",
-    "observed_active",
+    "observed_enabled",
     "applied_consistency",
 ];
 const PROFILE_SUMMARY_OUTPUT_FIELDS: &[&str] = &[
@@ -88,6 +119,9 @@ const SERVICE_STATUS_OUTPUT_FIELDS: &[&str] = &[
 pub(super) enum AgentToolKind {
     SystemSnapshot,
     NetworkDiagnose,
+    HostConnectivity,
+    PlatformReadiness,
+    IntentExecute,
     NetworkProbe,
     CoreStatus,
     ProxyStatus,
@@ -99,6 +133,7 @@ pub(super) enum AgentToolKind {
 #[derive(Debug, Clone, Copy)]
 pub(super) enum AgentToolInput {
     Empty,
+    ReadOnlyIntent,
     NetworkProbe,
 }
 
@@ -113,7 +148,7 @@ pub(super) struct AgentToolDefinition {
     pub(super) output_fields: &'static [&'static str],
 }
 
-pub(super) const AGENT_TOOLS: [AgentToolDefinition; 8] = [
+pub(super) const AGENT_TOOLS: [AgentToolDefinition; 11] = [
     AgentToolDefinition {
         kind: AgentToolKind::SystemSnapshot,
         name: AgentToolName::SystemSnapshot,
@@ -131,6 +166,33 @@ pub(super) const AGENT_TOOLS: [AgentToolDefinition; 8] = [
         timeout_ms: SNAPSHOT_TOOL_TIMEOUT_MS,
         input: AgentToolInput::Empty,
         output_fields: NETWORK_DIAGNOSE_OUTPUT_FIELDS,
+    },
+    AgentToolDefinition {
+        kind: AgentToolKind::HostConnectivity,
+        name: AgentToolName::HostConnectivity,
+        description: "Collect the privacy-safe host internet connectivity status",
+        output_schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
+        timeout_ms: SNAPSHOT_TOOL_TIMEOUT_MS,
+        input: AgentToolInput::Empty,
+        output_fields: HOST_CONNECTIVITY_OUTPUT_FIELDS,
+    },
+    AgentToolDefinition {
+        kind: AgentToolKind::PlatformReadiness,
+        name: AgentToolName::PlatformReadiness,
+        description: "Collect privacy-safe platform privilege, TUN, and system DNS readiness",
+        output_schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
+        timeout_ms: SNAPSHOT_TOOL_TIMEOUT_MS,
+        input: AgentToolInput::Empty,
+        output_fields: PLATFORM_READINESS_OUTPUT_FIELDS,
+    },
+    AgentToolDefinition {
+        kind: AgentToolKind::IntentExecute,
+        name: AgentToolName::IntentExecute,
+        description: "Execute one closed read-only intent or report that a proposal is required",
+        output_schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
+        timeout_ms: SNAPSHOT_TOOL_TIMEOUT_MS,
+        input: AgentToolInput::ReadOnlyIntent,
+        output_fields: READ_ONLY_INTENT_OUTPUT_FIELDS,
     },
     AgentToolDefinition {
         kind: AgentToolKind::NetworkProbe,
@@ -206,6 +268,10 @@ impl AgentToolDefinition {
     fn validate(self, body: &[u8]) -> Result<(), AgentToolError> {
         match self.input {
             AgentToolInput::Empty => request::parse_empty_request(body),
+            AgentToolInput::ReadOnlyIntent => request::parse_body::<
+                request::RequiredToolEnvelope<AgentExecuteReadOnlyIntentRequest>,
+            >(body)
+            .map(|_| ()),
             AgentToolInput::NetworkProbe => {
                 request::parse_body::<request::RequiredToolEnvelope<AgentNetworkProbeRequest>>(body)
                     .map(|_| ())

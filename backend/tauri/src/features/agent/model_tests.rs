@@ -1,7 +1,7 @@
 use super::{
-    AgentActionRequest, AgentConnectorState, AgentCoreState, AgentNetworkProbeRequest,
-    AgentOsFamily, AgentPrivacyBoundary, AgentProbeCode, AgentRunType, AgentSelectedCore,
-    AgentTelemetrySnapshot,
+    AgentActionRequest, AgentConnectorState, AgentCoreState, AgentExecuteReadOnlyIntentRequest,
+    AgentIntentRequest, AgentNetworkProbeRequest, AgentOsFamily, AgentPrivacyBoundary,
+    AgentProbeCode, AgentRunType, AgentSelectedCore, AgentTelemetrySnapshot,
 };
 use crate::features::agent::AgentCommandError;
 
@@ -110,6 +110,22 @@ fn public_requests_reject_unknown_fields() {
     }));
     assert!(action.is_err(), "action request must reject unknown fields");
 
+    let intent = serde_json::from_value::<AgentIntentRequest>(serde_json::json!({
+        "text": "检查上网状态",
+        "target": "sensitive-canary.example"
+    }));
+    assert!(intent.is_err(), "intent request must reject unknown fields");
+
+    let execute_intent =
+        serde_json::from_value::<AgentExecuteReadOnlyIntentRequest>(serde_json::json!({
+            "text": "检查上网状态",
+            "confirm": true
+        }));
+    assert!(
+        execute_intent.is_err(),
+        "read-only intent execution must reject confirmation bypass fields"
+    );
+
     let valid_probe = serde_json::from_value::<AgentNetworkProbeRequest>(serde_json::json!({
         "url": "https://example.com",
         "expected_status": 204,
@@ -121,6 +137,16 @@ fn public_requests_reject_unknown_fields() {
         "action": "start_core"
     }));
     assert_eq!(valid_action.unwrap(), AgentActionRequest::StartCore);
+
+    let valid_intent = serde_json::from_value::<AgentIntentRequest>(serde_json::json!({
+        "text": "检查上网状态"
+    }));
+    assert_eq!(valid_intent.unwrap().text, "检查上网状态");
+
+    let valid_execute_intent = serde_json::from_value::<AgentExecuteReadOnlyIntentRequest>(
+        serde_json::json!({ "text": "检查上网状态" }),
+    );
+    assert_eq!(valid_execute_intent.unwrap().text, "检查上网状态");
 
     let valid_tun_action = serde_json::from_value::<AgentActionRequest>(serde_json::json!({
         "action": "set_tun_enabled",

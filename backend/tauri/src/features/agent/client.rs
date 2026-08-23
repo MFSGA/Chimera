@@ -9,10 +9,14 @@ use super::{
         AgentHistoryActorArgs, AgentHistoryMessage, AgentProposalActor, AgentProposalActorArgs,
         AgentProposalMessage,
     },
+    autonomy::AgentAutonomyPolicyStore,
     bridge::{AgentBridgeStartResult, AgentBridgeStatus},
     history::{AgentAuditOutcome, AgentHistorySnapshot},
+    intent::execute_read_only_intent,
     model::{
-        AgentActionRequest, AgentActionResult, AgentCommandError, AgentNetworkSnapshot,
+        AgentActionRequest, AgentActionResult, AgentAutonomyPolicyRequest,
+        AgentAutonomyPolicyResult, AgentAutonomyPolicySnapshot, AgentCommandError,
+        AgentExecuteReadOnlyIntentRequest, AgentExecuteReadOnlyIntentResult, AgentNetworkSnapshot,
         AgentProposal,
     },
     ports::{
@@ -284,6 +288,7 @@ pub(crate) struct AgentClient {
     proposals: AgentProposalClient,
     history: AgentHistoryClient,
     bridge: AgentBridgeClient,
+    autonomy: AgentAutonomyPolicyStore,
 }
 
 impl AgentClient {
@@ -336,6 +341,7 @@ impl AgentClient {
             proposals: AgentProposalClient::new(proposals),
             history,
             bridge,
+            autonomy: AgentAutonomyPolicyStore::new(),
         })
     }
 
@@ -343,6 +349,33 @@ impl AgentClient {
         let snapshot = self.runtime.snapshot().await;
         self.history.record_snapshot(snapshot.clone()).await;
         Ok(snapshot)
+    }
+
+    pub(crate) async fn execute_read_only_intent(
+        &self,
+        request: AgentExecuteReadOnlyIntentRequest,
+    ) -> Result<AgentExecuteReadOnlyIntentResult, AgentCommandError> {
+        let result = execute_read_only_intent(request, self.runtime.snapshot()).await;
+        if let AgentExecuteReadOnlyIntentResult::Diagnosed { snapshot } = &result {
+            self.history.record_snapshot((**snapshot).clone()).await;
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn authorize_autonomy(
+        &self,
+        request: AgentAutonomyPolicyRequest,
+    ) -> AgentAutonomyPolicyResult {
+        self.autonomy
+            .authorize(request, chrono::Utc::now().timestamp())
+    }
+
+    pub(crate) fn autonomy_policy(&self) -> AgentAutonomyPolicySnapshot {
+        self.autonomy.snapshot(chrono::Utc::now().timestamp())
+    }
+
+    pub(crate) fn revoke_autonomy(&self) -> AgentAutonomyPolicySnapshot {
+        self.autonomy.revoke(chrono::Utc::now().timestamp())
     }
 
     pub(crate) async fn history(&self) -> Result<AgentHistorySnapshot, AgentCommandError> {

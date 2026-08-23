@@ -1,10 +1,158 @@
 use super::model::{
-    AgentActionRequest, AgentActionRisk, AgentAppliedState, AgentCommandError, AgentConnectorState,
-    AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot, AgentOsFamily,
-    AgentRecommendation, AgentRecommendationUnavailableReason, AgentResult, AgentRoutingMode,
-    AgentRunType, AgentSelectedCore, AgentServiceState, AgentStateChange, AgentStateField,
-    AgentStateValue,
+    AgentActionKind, AgentActionRequest, AgentActionRisk, AgentAppliedState, AgentCommandError,
+    AgentConnectorState, AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot,
+    AgentOsFamily, AgentRecommendation, AgentRecommendationUnavailableReason, AgentResult,
+    AgentRoutingMode, AgentRunType, AgentSelectedCore, AgentServiceState, AgentStateChange,
+    AgentStateField, AgentStateValue,
 };
+
+const SUPPORTED_DESKTOP_PLATFORMS: &[AgentOsFamily] = &[
+    AgentOsFamily::Windows,
+    AgentOsFamily::Macos,
+    AgentOsFamily::Linux,
+    AgentOsFamily::Freebsd,
+    AgentOsFamily::Dragonfly,
+    AgentOsFamily::Openbsd,
+    AgentOsFamily::Netbsd,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentBridgeAccess {
+    Denied,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentRollbackStrategy {
+    RestorePreviousState,
+    RuntimeManaged,
+    NotRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AgentCapabilityHandler {
+    SetRoutingMode,
+    SetTunEnabled,
+    SetSystemProxyEnabled,
+    SetServiceMode,
+    StartCore,
+    RestartCore,
+    ReconnectTelemetry,
+    StartService,
+    StopService,
+    RestartService,
+    RepairSystemProxyEndpoint,
+    DisableStaleSystemProxy,
+}
+
+impl AgentCapabilityHandler {
+    pub(super) fn action_kind(self) -> AgentActionKind {
+        match self {
+            Self::SetRoutingMode => AgentActionKind::SetRoutingMode,
+            Self::SetTunEnabled => AgentActionKind::SetTunEnabled,
+            Self::SetSystemProxyEnabled => AgentActionKind::SetSystemProxyEnabled,
+            Self::SetServiceMode => AgentActionKind::SetServiceMode,
+            Self::StartCore => AgentActionKind::StartCore,
+            Self::RestartCore => AgentActionKind::RestartCore,
+            Self::ReconnectTelemetry => AgentActionKind::ReconnectTelemetry,
+            Self::StartService => AgentActionKind::StartService,
+            Self::StopService => AgentActionKind::StopService,
+            Self::RestartService => AgentActionKind::RestartService,
+            Self::RepairSystemProxyEndpoint => AgentActionKind::RepairSystemProxyEndpoint,
+            Self::DisableStaleSystemProxy => AgentActionKind::DisableStaleSystemProxy,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct AgentCapabilityDefinition {
+    pub(super) kind: AgentActionKind,
+    pub(super) risk: AgentActionRisk,
+    pub(super) requires_confirmation: bool,
+    pub(super) bridge_access: AgentBridgeAccess,
+    pub(super) supported_platforms: &'static [AgentOsFamily],
+    pub(super) planner: AgentCapabilityHandler,
+    pub(super) executor: AgentCapabilityHandler,
+    pub(super) verifier: AgentCapabilityHandler,
+    pub(super) rollback: AgentRollbackStrategy,
+}
+
+impl AgentCapabilityDefinition {
+    fn is_well_formed(self) -> bool {
+        let handlers_match = self.planner.action_kind() == self.kind
+            && self.executor.action_kind() == self.kind
+            && self.verifier.action_kind() == self.kind;
+        let rollback_matches = match self.kind {
+            AgentActionKind::ReconnectTelemetry => {
+                self.rollback == AgentRollbackStrategy::NotRequired
+            }
+            AgentActionKind::StartCore
+            | AgentActionKind::RestartCore
+            | AgentActionKind::StartService
+            | AgentActionKind::StopService
+            | AgentActionKind::RestartService => {
+                self.rollback == AgentRollbackStrategy::RuntimeManaged
+            }
+            _ => self.rollback == AgentRollbackStrategy::RestorePreviousState,
+        };
+
+        handlers_match
+            && rollback_matches
+            && self.requires_confirmation
+            && self.bridge_access == AgentBridgeAccess::Denied
+            && !self.supported_platforms.is_empty()
+    }
+}
+
+macro_rules! capability {
+    ($kind:ident, $risk:ident, $rollback:ident) => {
+        AgentCapabilityDefinition {
+            kind: AgentActionKind::$kind,
+            risk: AgentActionRisk::$risk,
+            requires_confirmation: true,
+            bridge_access: AgentBridgeAccess::Denied,
+            supported_platforms: SUPPORTED_DESKTOP_PLATFORMS,
+            planner: AgentCapabilityHandler::$kind,
+            executor: AgentCapabilityHandler::$kind,
+            verifier: AgentCapabilityHandler::$kind,
+            rollback: AgentRollbackStrategy::$rollback,
+        }
+    };
+}
+
+pub(super) const CAPABILITY_CATALOG: [AgentCapabilityDefinition; 12] = [
+    capability!(SetRoutingMode, TrafficChange, RestorePreviousState),
+    capability!(SetTunEnabled, TrafficChange, RestorePreviousState),
+    capability!(
+        SetSystemProxyEnabled,
+        HostNetworkChange,
+        RestorePreviousState
+    ),
+    capability!(SetServiceMode, ServiceControl, RestorePreviousState),
+    capability!(StartCore, TrafficChange, RuntimeManaged),
+    capability!(RestartCore, TrafficChange, RuntimeManaged),
+    capability!(ReconnectTelemetry, TelemetryRecovery, NotRequired),
+    capability!(StartService, ServiceControl, RuntimeManaged),
+    capability!(StopService, ServiceControl, RuntimeManaged),
+    capability!(RestartService, ServiceControl, RuntimeManaged),
+    capability!(
+        RepairSystemProxyEndpoint,
+        HostNetworkChange,
+        RestorePreviousState
+    ),
+    capability!(
+        DisableStaleSystemProxy,
+        HostNetworkChange,
+        RestorePreviousState
+    ),
+];
+
+pub(super) fn capability_definition(
+    kind: AgentActionKind,
+) -> Option<&'static AgentCapabilityDefinition> {
+    CAPABILITY_CATALOG
+        .iter()
+        .find(|definition| definition.kind == kind)
+}
 
 #[derive(Debug, Clone)]
 pub(super) enum ActionPreconditions {
@@ -15,6 +163,7 @@ pub(super) enum ActionPreconditions {
     SetTunEnabled {
         desired_before: bool,
         generated_before: Option<bool>,
+        observed_before: bool,
         core_state: AgentCoreState,
         core_run_type: AgentRunType,
         core_state_changed_at: i64,
@@ -146,24 +295,54 @@ pub(super) fn plan_action(
         return Err(AgentCommandError::ActionNotAvailable);
     }
 
-    match action {
-        AgentActionRequest::SetRoutingMode { mode } => plan_routing_mode(snapshot, *mode),
-        AgentActionRequest::SetTunEnabled { enabled } => plan_tun_change(snapshot, *enabled),
-        AgentActionRequest::SetSystemProxyEnabled { enabled } => {
-            plan_system_proxy_change(snapshot, *enabled)
-        }
-        AgentActionRequest::SetServiceMode { enabled } => {
-            plan_service_mode_change(snapshot, *enabled)
-        }
-        AgentActionRequest::StartCore => plan_start_core(snapshot),
-        AgentActionRequest::RestartCore => plan_restart_core(snapshot),
-        AgentActionRequest::ReconnectTelemetry => plan_reconnect_telemetry(snapshot),
-        AgentActionRequest::StartService
-        | AgentActionRequest::StopService
-        | AgentActionRequest::RestartService => plan_service_control(snapshot, action),
-        AgentActionRequest::RepairSystemProxyEndpoint => plan_proxy_endpoint_repair(snapshot),
-        AgentActionRequest::DisableStaleSystemProxy => plan_stale_proxy(snapshot),
+    let definition =
+        capability_definition(action.kind()).ok_or(AgentCommandError::ActionNotAvailable)?;
+    if !definition.is_well_formed() || !definition.supported_platforms.contains(&snapshot.os_family)
+    {
+        return Err(AgentCommandError::ActionNotAvailable);
     }
+
+    let mut plan = match (definition.planner, action) {
+        (AgentCapabilityHandler::SetRoutingMode, AgentActionRequest::SetRoutingMode { mode }) => {
+            plan_routing_mode(snapshot, *mode)
+        }
+        (AgentCapabilityHandler::SetTunEnabled, AgentActionRequest::SetTunEnabled { enabled }) => {
+            plan_tun_change(snapshot, *enabled)
+        }
+        (
+            AgentCapabilityHandler::SetSystemProxyEnabled,
+            AgentActionRequest::SetSystemProxyEnabled { enabled },
+        ) => plan_system_proxy_change(snapshot, *enabled),
+        (
+            AgentCapabilityHandler::SetServiceMode,
+            AgentActionRequest::SetServiceMode { enabled },
+        ) => plan_service_mode_change(snapshot, *enabled),
+        (AgentCapabilityHandler::StartCore, AgentActionRequest::StartCore) => {
+            plan_start_core(snapshot)
+        }
+        (AgentCapabilityHandler::RestartCore, AgentActionRequest::RestartCore) => {
+            plan_restart_core(snapshot)
+        }
+        (AgentCapabilityHandler::ReconnectTelemetry, AgentActionRequest::ReconnectTelemetry) => {
+            plan_reconnect_telemetry(snapshot)
+        }
+        (AgentCapabilityHandler::StartService, AgentActionRequest::StartService)
+        | (AgentCapabilityHandler::StopService, AgentActionRequest::StopService)
+        | (AgentCapabilityHandler::RestartService, AgentActionRequest::RestartService) => {
+            plan_service_control(snapshot, action)
+        }
+        (
+            AgentCapabilityHandler::RepairSystemProxyEndpoint,
+            AgentActionRequest::RepairSystemProxyEndpoint,
+        ) => plan_proxy_endpoint_repair(snapshot),
+        (
+            AgentCapabilityHandler::DisableStaleSystemProxy,
+            AgentActionRequest::DisableStaleSystemProxy,
+        ) => plan_stale_proxy(snapshot),
+        _ => Err(AgentCommandError::ActionNotAvailable),
+    }?;
+    plan.risk = definition.risk;
+    Ok(plan)
 }
 
 fn tun_state_value(enabled: bool) -> AgentStateValue {
@@ -199,6 +378,7 @@ pub(super) fn plan_tun_change(
         || snapshot.profiles.active_count == 0
         || !snapshot.profiles.active_references_valid
         || snapshot.tun.generated_runtime_enabled != Some(current)
+        || snapshot.tun.observed_enabled != Some(current)
     {
         return Err(AgentCommandError::ActionNotAvailable);
     }
@@ -214,6 +394,7 @@ pub(super) fn plan_tun_change(
         preconditions: ActionPreconditions::SetTunEnabled {
             desired_before: current,
             generated_before: snapshot.tun.generated_runtime_enabled,
+            observed_before: current,
             core_state: snapshot.core.state,
             core_run_type: snapshot.core.run_type,
             core_state_changed_at: snapshot.core.state_changed_at,
@@ -544,6 +725,7 @@ pub(super) fn validate_preconditions(
         ActionPreconditions::SetTunEnabled {
             desired_before,
             generated_before,
+            observed_before,
             core_state,
             core_run_type,
             core_state_changed_at,
@@ -554,6 +736,7 @@ pub(super) fn validate_preconditions(
         } => {
             current.tun.desired_enabled == *desired_before
                 && current.tun.generated_runtime_enabled == *generated_before
+                && current.tun.observed_enabled == Some(*observed_before)
                 && current.core.state == *core_state
                 && current.core.run_type == *core_run_type
                 && current.core.state_changed_at == *core_state_changed_at
@@ -694,6 +877,7 @@ fn routing_impacts(mode: AgentRoutingMode) -> Vec<AgentImpact> {
 pub(super) fn tun_target_is_applied(snapshot: &AgentNetworkSnapshot, target: bool) -> bool {
     snapshot.tun.desired_enabled == target
         && snapshot.tun.generated_runtime_enabled == Some(target)
+        && snapshot.tun.observed_enabled == Some(target)
         && snapshot.tun.applied_consistency == AgentAppliedState::Consistent
         && snapshot.core.state == AgentCoreState::Running
 }
@@ -703,6 +887,13 @@ pub(super) fn verify_action(
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
 ) -> bool {
+    let Some(definition) = capability_definition(action.kind()) else {
+        return false;
+    };
+    if definition.verifier.action_kind() != action.kind() {
+        return false;
+    }
+
     match (action, preconditions) {
         (
             AgentActionRequest::SetRoutingMode { mode },
@@ -841,5 +1032,61 @@ pub(super) fn verify_action(
                 && !snapshot.system_proxy.desired_enabled
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod capability_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn capability_catalog_defines_every_action_exactly_once() {
+        assert_eq!(CAPABILITY_CATALOG.len(), AgentActionKind::ALL.len());
+
+        for kind in AgentActionKind::ALL {
+            let definitions = CAPABILITY_CATALOG
+                .iter()
+                .filter(|definition| definition.kind == kind)
+                .count();
+            assert_eq!(definitions, 1, "{kind:?} must have exactly one definition");
+        }
+    }
+
+    #[test]
+    fn capability_catalog_is_closed_confirmed_and_bridge_denied() {
+        for definition in CAPABILITY_CATALOG {
+            assert!(definition.is_well_formed(), "{:?}", definition.kind);
+            assert!(definition.requires_confirmation);
+            assert_eq!(definition.bridge_access, AgentBridgeAccess::Denied);
+            assert_eq!(definition.planner.action_kind(), definition.kind);
+            assert_eq!(definition.executor.action_kind(), definition.kind);
+            assert_eq!(definition.verifier.action_kind(), definition.kind);
+            assert!(
+                definition
+                    .supported_platforms
+                    .contains(&AgentOsFamily::Windows)
+            );
+            assert!(
+                definition
+                    .supported_platforms
+                    .contains(&AgentOsFamily::Macos)
+            );
+            assert!(
+                definition
+                    .supported_platforms
+                    .contains(&AgentOsFamily::Linux)
+            );
+            assert!(
+                !definition
+                    .supported_platforms
+                    .contains(&AgentOsFamily::Android)
+            );
+            assert!(!definition.supported_platforms.contains(&AgentOsFamily::Ios));
+            assert!(
+                !definition
+                    .supported_platforms
+                    .contains(&AgentOsFamily::Unknown)
+            );
+        }
     }
 }

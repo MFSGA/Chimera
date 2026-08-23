@@ -422,18 +422,18 @@ impl RoutingMode {
     }
 }
 
-fn routing_mode_patch(mode: RoutingMode) -> ClashConfigOverrides {
-    ClashConfigOverrides {
-        mode: Some(mode.as_core_value().into()),
-        ..ClashConfigOverrides::default()
-    }
+fn routing_mode_patch(mode: RoutingMode) -> Mapping {
+    let mut patch = Mapping::new();
+    patch.insert("mode".into(), mode.as_core_value().into());
+    patch
 }
 
 /// Apply an explicit routing target through the shared runtime transaction path.
 #[cfg(feature = "agent")]
 pub async fn set_routing_mode(mode: RoutingMode) -> Result<()> {
     let client = managed_client()?;
-    patch_running_clash_overrides(&client, routing_mode_patch(mode))
+    let overrides = ClashConfigOverrides::from_mapping(&routing_mode_patch(mode))?;
+    patch_running_clash_overrides(&client, overrides)
         .await
         .into_result()
 }
@@ -482,8 +482,16 @@ fn tun_mode_patch(enabled: bool) -> IVerge {
     }
 }
 
+fn tun_target_requires_apply(current: bool, target: bool) -> bool {
+    current != target
+}
+
 #[cfg(feature = "agent")]
 pub async fn set_tun_enabled(enabled: bool) -> Result<()> {
+    let current = Config::verge().latest().enable_tun_mode.unwrap_or(false);
+    if !tun_target_requires_apply(current, enabled) {
+        return Ok(());
+    }
     patch_verge(tun_mode_patch(enabled)).await
 }
 

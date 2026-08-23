@@ -1,10 +1,12 @@
 import type { AgentNetworkSnapshot } from '@chimera/interface';
 import {
+  AdminPanelSettingsRounded,
   CableRounded,
   DnsRounded,
   FolderRounded,
   LanRounded,
   NetworkCheckRounded,
+  PublicRounded,
   SecurityRounded,
 } from '@mui/icons-material';
 import * as m from '@/paraglide/messages';
@@ -12,9 +14,19 @@ import {
   presentBoolean,
   presentConnectorState,
   presentCoreState,
+  presentHealth,
+  presentHostConnectivityReason,
+  presentHostConnectivityStatus,
+  presentNetworkInterfaceKind,
+  presentPlatformReadinessReason,
+  presentProcessPrivilege,
   presentRate,
   presentRoutingMode,
   presentServiceState,
+  presentSystemDnsVerification,
+  presentTunPermissionReadiness,
+  presentTunVerification,
+  presentYesNo,
 } from '../model/presenter';
 import { AgentStatusCard, type AgentStatusRow } from './status-card';
 
@@ -66,7 +78,7 @@ const tunRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
     value: presentBoolean(snapshot.tun.desired_enabled),
   },
   {
-    label: m.agent_observed(),
+    label: m.agent_generated_config(),
     value:
       snapshot.tun.generated_runtime_enabled === null
         ? m.agent_unknown()
@@ -74,7 +86,10 @@ const tunRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
   },
   {
     label: m.agent_core_state(),
-    value: m.agent_unknown(),
+    value:
+      snapshot.tun.observed_enabled === null
+        ? m.agent_unknown()
+        : presentBoolean(snapshot.tun.observed_enabled),
   },
 ];
 
@@ -88,6 +103,102 @@ const profileRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
       : m.agent_no(),
   },
 ];
+
+const connectivityRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => {
+  const connectivity = snapshot.connectivity;
+  const status = presentHostConnectivityStatus(connectivity.status);
+  const reasons = connectivity.reasons.map(presentHostConnectivityReason);
+
+  return [
+    { label: m.agent_connectivity_status(), value: status.label },
+    { label: m.agent_health_title(), value: presentHealth(status.health) },
+    {
+      label: m.agent_connectivity_interface(),
+      value: presentNetworkInterfaceKind(connectivity.active_interface_kind),
+    },
+    {
+      label: m.agent_connectivity_link(),
+      value: presentYesNo(connectivity.link_up),
+    },
+    {
+      label: `${m.agent_connectivity_ipv4()} · ${m.agent_connectivity_usable_ip()}`,
+      value: presentYesNo(connectivity.ipv4.usable_ip),
+    },
+    {
+      label: `${m.agent_connectivity_ipv4()} · ${m.agent_connectivity_default_route()}`,
+      value: presentYesNo(connectivity.ipv4.default_route),
+    },
+    {
+      label: `${m.agent_connectivity_ipv4()} · ${m.agent_connectivity_internet()}`,
+      value: presentYesNo(connectivity.ipv4.internet_reachable),
+    },
+    {
+      label: `${m.agent_connectivity_ipv6()} · ${m.agent_connectivity_usable_ip()}`,
+      value: presentYesNo(connectivity.ipv6.usable_ip),
+    },
+    {
+      label: `${m.agent_connectivity_ipv6()} · ${m.agent_connectivity_default_route()}`,
+      value: presentYesNo(connectivity.ipv6.default_route),
+    },
+    {
+      label: `${m.agent_connectivity_ipv6()} · ${m.agent_connectivity_internet()}`,
+      value: presentYesNo(connectivity.ipv6.internet_reachable),
+    },
+    {
+      label: m.agent_connectivity_dns_configured(),
+      value: presentYesNo(connectivity.dns_configured),
+    },
+    {
+      label: m.agent_connectivity_dns_resolves(),
+      value: presentYesNo(connectivity.dns_resolves),
+    },
+    {
+      label: m.agent_connectivity_captive_portal(),
+      value: presentYesNo(connectivity.captive_portal_suspected),
+    },
+    {
+      label: m.agent_connectivity_reasons(),
+      value: reasons.length
+        ? reasons.join(' · ')
+        : m.agent_connectivity_reason_none(),
+    },
+  ];
+};
+
+const readinessRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => {
+  const readiness = snapshot.platform_readiness;
+  const reasons = readiness.reasons.map(presentPlatformReadinessReason);
+
+  return [
+    {
+      label: m.agent_readiness_process_privilege(),
+      value: presentProcessPrivilege(readiness.process_privilege).label,
+    },
+    {
+      label: m.agent_readiness_service_mode_available(),
+      value: presentYesNo(readiness.service_mode_available),
+    },
+    {
+      label: m.agent_readiness_tun_permission(),
+      value: presentTunPermissionReadiness(readiness.tun_permission).label,
+    },
+    {
+      label: m.agent_readiness_tun_verification(),
+      value: presentTunVerification(readiness.tun_verification).label,
+    },
+    {
+      label: m.agent_readiness_system_dns(),
+      value: presentSystemDnsVerification(readiness.system_dns_verification)
+        .label,
+    },
+    {
+      label: m.agent_readiness_reasons(),
+      value: reasons.length
+        ? reasons.join(' · ')
+        : m.agent_readiness_reason_none(),
+    },
+  ];
+};
 
 const telemetryRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
   {
@@ -108,7 +219,7 @@ const telemetryRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
   },
 ];
 
-/** Build six status cards from the public, already-redacted snapshot. */
+/** Build privacy-safe status cards from the public, already-redacted snapshot. */
 export function SnapshotSummary({
   snapshot,
 }: {
@@ -140,6 +251,18 @@ export function SnapshotSummary({
         icon={<FolderRounded />}
         title={m.agent_profiles_title()}
         rows={profileRows(snapshot)}
+      />
+      <div id="agent-host-connectivity-card" tabIndex={-1}>
+        <AgentStatusCard
+          icon={<PublicRounded />}
+          title={m.agent_connectivity_title()}
+          rows={connectivityRows(snapshot)}
+        />
+      </div>
+      <AgentStatusCard
+        icon={<AdminPanelSettingsRounded />}
+        title={m.agent_readiness_title()}
+        rows={readinessRows(snapshot)}
       />
       <AgentStatusCard
         icon={<NetworkCheckRounded />}

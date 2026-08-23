@@ -92,7 +92,14 @@ impl Default for ManifestVersionLatest {
 
 impl ManifestVersion {
     fn get_matches(&self, core_type: &ClashCore) -> Option<(String, shared::CoreTypeMeta)> {
-        let arch = shared::get_arch().ok()?;
+        self.get_matches_for_arch(core_type, shared::get_arch().ok()?)
+    }
+
+    fn get_matches_for_arch(
+        &self,
+        core_type: &ClashCore,
+        arch: &str,
+    ) -> Option<(String, shared::CoreTypeMeta)> {
         match core_type {
             ClashCore::ClashPremium => Some((
                 self.arch_template
@@ -126,26 +133,17 @@ impl ManifestVersion {
                     .replace("{}", &self.latest.clash_rs),
                 shared::CoreTypeMeta::ClashRs(self.latest.clash_rs.clone()),
             )),
-            ClashCore::ChimeraClient => Some((
-                self.arch_template
-                    .chimera_client
-                    .get(arch)
-                    .or_else(|| self.arch_template.clash_rs.get(arch))?
-                    .clone()
-                    .replace(
-                        "{}",
-                        if self.latest.chimera_client.is_empty() {
-                            &self.latest.clash_rs
-                        } else {
-                            &self.latest.chimera_client
-                        },
-                    ),
-                shared::CoreTypeMeta::ChimeraClient(if self.latest.chimera_client.is_empty() {
-                    self.latest.clash_rs.clone()
-                } else {
-                    self.latest.chimera_client.clone()
-                }),
-            )),
+            ClashCore::ChimeraClient => {
+                let version = (!self.latest.chimera_client.is_empty())
+                    .then_some(self.latest.chimera_client.as_str())?;
+                Some((
+                    self.arch_template
+                        .chimera_client
+                        .get(arch)?
+                        .replace("{}", version),
+                    shared::CoreTypeMeta::ChimeraClient(version.to_owned()),
+                ))
+            }
             ClashCore::ClashRsAlpha => Some((
                 self.arch_template
                     .clash_rs_alpha
@@ -278,5 +276,58 @@ impl UpdaterManager {
             });
         }
         Some(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ManifestVersion, shared::CoreTypeMeta};
+    use crate::config::chimera::ClashCore;
+
+    fn current_manifest() -> ManifestVersion {
+        serde_json::from_str(include_str!("../../../../../manifest/version.json"))
+            .expect("version manifest should be valid")
+    }
+
+    #[test]
+    fn chimera_client_manifest_targets_the_latest_windows_release() {
+        let manifest = current_manifest();
+        let (artifact, metadata) = manifest
+            .get_matches_for_arch(&ClashCore::ChimeraClient, "windows-x86_64")
+            .expect("Windows Chimera Client artifact");
+
+        assert_eq!(artifact, "clash_chimera-x86_64-pc-windows-msvc.exe");
+        assert!(matches!(
+            metadata,
+            CoreTypeMeta::ChimeraClient(tag) if tag == "v0.24.3"
+        ));
+    }
+
+    #[test]
+    fn chimera_client_manifest_fails_closed_for_unpublished_platforms() {
+        let manifest = current_manifest();
+
+        assert!(
+            manifest
+                .get_matches_for_arch(&ClashCore::ChimeraClient, "darwin-arm64")
+                .is_none()
+        );
+        assert!(
+            manifest
+                .get_matches_for_arch(&ClashCore::ChimeraClient, "darwin-x64")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn chimera_client_does_not_fall_back_to_a_different_repository_release() {
+        let mut manifest = current_manifest();
+        manifest.latest.chimera_client.clear();
+
+        assert!(
+            manifest
+                .get_matches_for_arch(&ClashCore::ChimeraClient, "windows-x86_64")
+                .is_none()
+        );
     }
 }

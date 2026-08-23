@@ -13,8 +13,10 @@ use super::{
 };
 use crate::features::agent::{
     adapters::fs_history::{
-        MAX_HISTORY_FILE_BYTES, prune_corrupt_documents, read_document_from,
-        recover_temporary_document, write_document_to, write_private_history_file,
+        MAX_HISTORY_FILE_BYTES, corrupt_history_file_name_for_test,
+        corrupt_history_sort_key_for_test, prune_corrupt_documents,
+        prune_corrupt_documents_with_limit, read_document_from, recover_temporary_document,
+        write_document_to, write_private_history_file,
     },
     model::{
         AgentActionKind, AgentCoreState, AgentFindingCode, AgentHealth, AgentProbeCode,
@@ -528,7 +530,10 @@ fn summary_derives_health_trend_issue_frequency_and_action_outcomes() {
             health: AgentHealth::Healthy,
             core_state: AgentCoreState::Running,
             service_state: AgentServiceState::Stopped,
-            finding_codes: vec![AgentFindingCode::WeakControllerSecret],
+            finding_codes: vec![
+                AgentFindingCode::WeakControllerSecret,
+                AgentFindingCode::HostIpv4Only,
+            ],
             probe_failure_codes: vec![],
         },
         AgentDiagnosticHistoryEntry {
@@ -541,8 +546,12 @@ fn summary_derives_health_trend_issue_frequency_and_action_outcomes() {
             finding_codes: vec![
                 AgentFindingCode::WeakControllerSecret,
                 AgentFindingCode::ActiveProfileMissing,
+                AgentFindingCode::HostInternetUnreachable,
             ],
-            probe_failure_codes: vec![AgentProbeCode::TelemetryUnavailable],
+            probe_failure_codes: vec![
+                AgentProbeCode::TelemetryUnavailable,
+                AgentProbeCode::HostConnectivityUnavailable,
+            ],
         },
     ]);
     let audits = VecDeque::from([
@@ -591,7 +600,18 @@ fn summary_derives_health_trend_issue_frequency_and_action_outcomes() {
         summary.finding_counts[0].code,
         AgentFindingCode::WeakControllerSecret
     );
-    assert_eq!(summary.probe_failure_counts[0].count, 1);
+    assert!(summary.finding_counts.iter().any(|entry| {
+        entry.code == AgentFindingCode::HostInternetUnreachable && entry.count == 1
+    }));
+    assert!(
+        summary
+            .finding_counts
+            .iter()
+            .any(|entry| { entry.code == AgentFindingCode::HostIpv4Only && entry.count == 1 })
+    );
+    assert!(summary.probe_failure_counts.iter().any(|entry| {
+        entry.code == AgentProbeCode::HostConnectivityUnavailable && entry.count == 1
+    }));
     assert_eq!(summary.action_attempts, 3);
     assert_eq!(summary.verified_actions, 1);
     assert_eq!(summary.attention_actions, 2);
@@ -628,6 +648,50 @@ async fn corrupt_history_is_quarantined_and_recovers_empty() {
     assert!(recovered.audits.is_empty());
 }
 
+#[test]
+fn corrupt_history_names_bind_timestamp_and_nonce() {
+    let first = corrupt_history_file_name_for_test(1234, [0; 16]);
+    let second = corrupt_history_file_name_for_test(1234, [1; 16]);
+
+    assert_eq!(
+        first,
+        "agent-history.corrupt-1234-00000000000000000000000000000000.json"
+    );
+    assert_eq!(
+        second,
+        "agent-history.corrupt-1234-01010101010101010101010101010101.json"
+    );
+    assert_ne!(first, second);
+}
+
+#[test]
+fn corrupt_history_sort_keys_accept_only_legacy_or_nonce_bound_names() {
+    assert_eq!(
+        corrupt_history_sort_key_for_test("agent-history.corrupt-0007.json"),
+        Some((7, 0))
+    );
+    assert_eq!(
+        corrupt_history_sort_key_for_test(
+            "agent-history.corrupt-1234-01010101010101010101010101010101.json"
+        ),
+        Some((1234, 0x01010101010101010101010101010101))
+    );
+    for invalid in [
+        "agent-history.corrupt--1.json",
+        "agent-history.corrupt-not-a-time.json",
+        "agent-history.corrupt-1234-short.json",
+        "agent-history.corrupt-1234-ABCDEFABCDEFABCDEFABCDEFABCDEFAB.json",
+        "agent-history.corrupt-1234-0000000000000000000000000000000g.json",
+        "agent-history.corrupt-1234-00000000000000000000000000000000.extra.json",
+    ] {
+        assert_eq!(
+            corrupt_history_sort_key_for_test(invalid),
+            None,
+            "{invalid}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn corrupt_history_retention_keeps_only_the_newest_files() {
     let directory = tempfile::tempdir().expect("temporary directory");
@@ -662,6 +726,38 @@ async fn corrupt_history_retention_keeps_only_the_newest_files() {
             "agent-history.corrupt-0005.json",
         ]
     );
+}
+
+#[tokio::test]
+async fn corrupt_history_retention_stops_at_the_scan_budget() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let history_path = directory.path().join("agent-history.json");
+    for timestamp in 1..=(MAX_CORRUPT_HISTORY_FILES + 2) {
+        let path = directory
+            .path()
+            .join(format!("agent-history.corrupt-{timestamp:04}.json"));
+        tokio::fs::write(path, b"corrupt")
+            .await
+            .expect("seed quarantined history");
+    }
+
+    prune_corrupt_documents_with_limit(&history_path, MAX_CORRUPT_HISTORY_FILES + 1)
+        .await
+        .expect("prune within bounded scan budget");
+
+    let mut directory_entries = tokio::fs::read_dir(directory.path())
+        .await
+        .expect("read directory");
+    let mut remaining = 0;
+    while directory_entries
+        .next_entry()
+        .await
+        .expect("read entry")
+        .is_some()
+    {
+        remaining += 1;
+    }
+    assert_eq!(remaining, MAX_CORRUPT_HISTORY_FILES + 1);
 }
 
 #[tokio::test]

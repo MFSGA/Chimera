@@ -273,6 +273,18 @@ export const commands = {
     ),
   agentResolveIntent: (request: AgentIntentRequest) =>
     __TAURI_INVOKE<AgentIntentResolution>('agent_resolve_intent', { request }),
+  agentExecuteReadOnlyIntent: (request: AgentExecuteReadOnlyIntentRequest) =>
+    typedError<AgentExecuteReadOnlyIntentResult, AgentCommandError>(
+      __TAURI_INVOKE('agent_execute_read_only_intent', { request }),
+    ),
+  agentAuthorizeAutonomy: (request: AgentAutonomyPolicyRequest) =>
+    __TAURI_INVOKE<AgentAutonomyPolicyResult>('agent_authorize_autonomy', {
+      request,
+    }),
+  agentGetAutonomyPolicy: () =>
+    __TAURI_INVOKE<AgentAutonomyPolicySnapshot>('agent_get_autonomy_policy'),
+  agentRevokeAutonomy: () =>
+    __TAURI_INVOKE<AgentAutonomyPolicySnapshot>('agent_revoke_autonomy'),
   agentGetHistory: () =>
     typedError<AgentHistorySnapshot, AgentCommandError>(
       __TAURI_INVOKE('agent_get_history'),
@@ -388,6 +400,48 @@ export type AgentAuditOutcome =
   | 'bridge_start_failed'
   | 'history_clear_failed';
 
+export type AgentAutonomyPolicyRequest = {
+  schema_version: number;
+  scope: AgentAutonomyScope;
+  allowlist: AgentActionKind[];
+  duration_seconds: number;
+  max_actions: number;
+};
+
+export type AgentAutonomyPolicyResult =
+  | { status: 'authorized'; policy: AgentAutonomyPolicySnapshot }
+  | { status: 'rejected'; reason: AgentAutonomyPolicyStatus };
+
+export type AgentAutonomyPolicySnapshot = {
+  schema_version: number;
+  enabled: boolean;
+  scope: AgentAutonomyScope;
+  allowlist: AgentActionKind[];
+  issued_at: number;
+  expires_at: number;
+  max_actions: number;
+  remaining_actions: number;
+  generation: number;
+  status: AgentAutonomyPolicyStatus;
+};
+
+export type AgentAutonomyPolicyStatus =
+  | 'active'
+  | 'disabled'
+  | 'revoked'
+  | 'expired'
+  | 'schema_version_mismatch'
+  | 'scope_mismatch'
+  | 'empty_allowlist'
+  | 'duration_out_of_range'
+  | 'action_budget_out_of_range'
+  | 'action_not_allowed'
+  | 'action_budget_exhausted'
+  | 'action_in_flight'
+  | 'session_mismatch';
+
+export type AgentAutonomyScope = 'current_desktop_session';
+
 export type AgentBridgeStartResult = {
   running: boolean;
   base_url: string;
@@ -449,6 +503,17 @@ export type AgentDiagnosticHistoryEntry = {
   probe_failure_codes: AgentProbeCode[];
 };
 
+export type AgentExecuteReadOnlyIntentRequest = {
+  text: string;
+};
+
+export type AgentExecuteReadOnlyIntentResult =
+  | { status: 'diagnosed'; snapshot: AgentNetworkSnapshot }
+  | { status: 'host_connectivity'; connectivity: AgentHostConnectivitySnapshot }
+  | { status: 'needs_clarification'; choices: AgentClarificationChoice[] }
+  | { status: 'unsupported'; reason: AgentUnsupportedIntentReason }
+  | { status: 'proposal_required'; intent: AgentIntent };
+
 export type AgentFinding = {
   code: AgentFindingCode;
   severity: AgentFindingSeverity;
@@ -463,7 +528,17 @@ export type AgentFindingCode =
   | 'service_mode_inconsistent'
   | 'clash_connector_disconnected'
   | 'tun_runtime_mismatch'
-  | 'recent_core_errors';
+  | 'recent_core_errors'
+  | 'host_link_disconnected'
+  | 'host_address_unavailable'
+  | 'host_default_route_unavailable'
+  | 'host_dns_unavailable'
+  | 'host_captive_portal_suspected'
+  | 'host_internet_unreachable'
+  | 'host_ipv4_only'
+  | 'host_ipv6_only'
+  | 'tun_permission_required'
+  | 'tun_system_dns_unverified';
 
 export type AgentFindingHistoryCount = {
   code: AgentFindingCode;
@@ -496,6 +571,45 @@ export type AgentHistorySummary = {
   partial_actions: number;
 };
 
+export type AgentHostConnectivityReason =
+  | 'probe_unavailable'
+  | 'no_active_interface'
+  | 'wireless_disconnected'
+  | 'ethernet_disconnected'
+  | 'no_usable_ipv4_address'
+  | 'no_usable_ipv6_address'
+  | 'no_ipv4_default_route'
+  | 'no_ipv6_default_route'
+  | 'dns_not_configured'
+  | 'dns_resolution_failed'
+  | 'ipv4_internet_unreachable'
+  | 'ipv6_internet_unreachable'
+  | 'captive_portal_suspected';
+
+export type AgentHostConnectivitySnapshot = {
+  status: AgentHostConnectivityStatus;
+  active_interface_kind: AgentNetworkInterfaceKind;
+  link_up: boolean | null;
+  ipv4: AgentIpFamilyConnectivity;
+  ipv6: AgentIpFamilyConnectivity;
+  dns_configured: boolean | null;
+  dns_resolves: boolean | null;
+  captive_portal_suspected: boolean | null;
+  reasons: AgentHostConnectivityReason[];
+};
+
+export type AgentHostConnectivityStatus =
+  | 'online_dual_stack'
+  | 'online_ipv4_only'
+  | 'online_ipv6_only'
+  | 'link_disconnected'
+  | 'address_unavailable'
+  | 'default_route_unavailable'
+  | 'dns_unavailable'
+  | 'captive_portal_suspected'
+  | 'internet_unreachable'
+  | 'indeterminate';
+
 export type AgentHostScope = 'loopback' | 'non_loopback' | 'unknown';
 
 export type AgentImpact =
@@ -514,6 +628,7 @@ export type AgentImpact =
 
 export type AgentIntent =
   | { intent: 'diagnose' }
+  | { intent: 'host_connectivity' }
   | { intent: 'set_tun_enabled'; enabled: boolean }
   | { intent: 'set_system_proxy_enabled'; enabled: boolean }
   | { intent: 'set_service_mode'; enabled: boolean }
@@ -534,10 +649,19 @@ export type AgentIntentResolution =
   | { status: 'needs_clarification'; choices: AgentClarificationChoice[] }
   | { status: 'unsupported'; reason: AgentUnsupportedIntentReason };
 
+export type AgentIpFamilyConnectivity = {
+  usable_ip: boolean;
+  default_route: boolean;
+  internet_reachable: boolean | null;
+};
+
 export type AgentManifest = {
   schema_version: number;
   tools: AgentToolManifest[];
 };
+
+export type AgentNetworkInterfaceKind =
+  'wireless' | 'ethernet' | 'multiple' | 'other' | 'none' | 'unknown';
 
 export type AgentNetworkSnapshot = {
   schema_version: number;
@@ -552,6 +676,8 @@ export type AgentNetworkSnapshot = {
   tun: AgentTunSnapshot;
   profiles: AgentProfileSnapshot;
   telemetry: AgentTelemetrySnapshot;
+  connectivity: AgentHostConnectivitySnapshot;
+  platform_readiness: AgentPlatformReadinessSnapshot;
   findings: AgentFinding[];
   probe_failures: AgentProbeFailure[];
   recommendations: AgentRecommendation[];
@@ -570,6 +696,27 @@ export type AgentOsFamily =
   | 'netbsd'
   | 'unknown';
 
+export type AgentPlatformReadinessReason =
+  | 'privilege_probe_unavailable'
+  | 'elevated_process'
+  | 'service_mode_active'
+  | 'service_mode_available'
+  | 'permission_required'
+  | 'tun_state_unavailable'
+  | 'tun_state_inconsistent'
+  | 'system_dns_not_configured'
+  | 'system_dns_resolution_failed'
+  | 'system_dns_unavailable';
+
+export type AgentPlatformReadinessSnapshot = {
+  process_privilege: AgentProcessPrivilegeStatus;
+  service_mode_available: boolean | null;
+  tun_permission: AgentTunPermissionReadiness;
+  tun_verification: AgentTunVerificationStatus;
+  system_dns_verification: AgentSystemDnsVerificationStatus;
+  reasons: AgentPlatformReadinessReason[];
+};
+
 export type AgentPrivacyBoundary = {
   contains_raw_logs: boolean;
   contains_profile_names: boolean;
@@ -581,10 +728,13 @@ export type AgentPrivacyBoundary = {
 export type AgentProbeCode =
   | 'core_status_timeout'
   | 'core_config_unavailable'
+  | 'tun_status_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
   | 'service_status_timeout'
-  | 'telemetry_unavailable';
+  | 'telemetry_unavailable'
+  | 'host_connectivity_unavailable'
+  | 'platform_readiness_unavailable';
 
 export type AgentProbeFailure = {
   code: AgentProbeCode;
@@ -594,6 +744,8 @@ export type AgentProbeFailureHistoryCount = {
   code: AgentProbeCode;
   count: number;
 };
+
+export type AgentProcessPrivilegeStatus = 'elevated' | 'standard' | 'unknown';
 
 export type AgentProfileSnapshot = {
   total_count: number;
@@ -681,6 +833,13 @@ export type AgentStateValue =
   | 'enabled'
   | 'disabled';
 
+export type AgentSystemDnsVerificationStatus =
+  | 'not_required'
+  | 'verified'
+  | 'not_configured'
+  | 'resolution_failed'
+  | 'unavailable';
+
 export type AgentSystemProxySnapshot = {
   desired_enabled: boolean;
   observed_enabled: boolean | null;
@@ -715,6 +874,9 @@ export type AgentToolManifest = {
 export type AgentToolName =
   | 'system.snapshot'
   | 'network.diagnose'
+  | 'host.connectivity'
+  | 'platform.readiness'
+  | 'intent.execute'
   | 'network.probe'
   | 'core.status'
   | 'proxy.status'
@@ -724,12 +886,22 @@ export type AgentToolName =
 
 export type AgentToolRisk = 'read_only';
 
+export type AgentTunPermissionReadiness =
+  | 'not_required'
+  | 'satisfied'
+  | 'service_alternative_available'
+  | 'required'
+  | 'indeterminate';
+
 export type AgentTunSnapshot = {
   desired_enabled: boolean;
   generated_runtime_enabled: boolean | null;
-  observed_active: AgentAppliedState;
+  observed_enabled: boolean | null;
   applied_consistency: AgentAppliedState;
 };
+
+export type AgentTunVerificationStatus =
+  'not_requested' | 'verified' | 'inconsistent' | 'unavailable';
 
 export type AgentUnsupportedIntentReason =
   'empty_input' | 'input_too_long' | 'no_matching_intent';

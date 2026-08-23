@@ -1,22 +1,25 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-    execute_pending, is_fixed_lower_hex, plan_action, plan_proxy_endpoint_repair,
-    plan_reconnect_telemetry, plan_restart_core, plan_routing_mode, plan_service_control,
-    plan_service_mode_change, plan_start_core, plan_system_proxy_change, plan_tun_change,
-    proposal_digest, recommendations, take_owned_proposal, tun_impacts, validate_preconditions,
-    verify_action,
+    ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, contain_execution_panic,
+    enforce_store_limits, execute_pending, is_fixed_lower_hex, plan_action,
+    plan_proxy_endpoint_repair, plan_reconnect_telemetry, plan_restart_core, plan_routing_mode,
+    plan_service_control, plan_service_mode_change, plan_start_core, plan_system_proxy_change,
+    plan_tun_change, proposal_digest, recommendations, take_owned_proposal, tun_impacts,
+    validate_preconditions, verify_action,
 };
 use crate::features::agent::{
     history::AgentAuditOutcome,
+    host_connectivity::unavailable_host_connectivity,
     model::{
         AgentActionRequest, AgentAppliedState, AgentCommandError, AgentConnectorState,
         AgentCoreSnapshot, AgentCoreState, AgentHealth, AgentHostScope, AgentImpact,
-        AgentNetworkSnapshot, AgentOsFamily, AgentPrivacyBoundary, AgentProfileSnapshot,
-        AgentProposal, AgentRoutingMode, AgentRunType, AgentSelectedCore, AgentServiceSnapshot,
-        AgentServiceState, AgentStateField, AgentStateValue, AgentSystemProxySnapshot,
-        AgentTelemetrySnapshot, AgentTunSnapshot,
+        AgentNetworkSnapshot, AgentOsFamily, AgentPlatformReadinessSnapshot, AgentPrivacyBoundary,
+        AgentProcessPrivilegeStatus, AgentProfileSnapshot, AgentProposal, AgentRoutingMode,
+        AgentRunType, AgentSelectedCore, AgentServiceSnapshot, AgentServiceState, AgentStateField,
+        AgentStateValue, AgentSystemDnsVerificationStatus, AgentSystemProxySnapshot,
+        AgentTelemetrySnapshot, AgentTunPermissionReadiness, AgentTunSnapshot,
+        AgentTunVerificationStatus, NETWORK_SNAPSHOT_SCHEMA_VERSION,
     },
     ports::{AgentConfirmationPort, AgentRuntimePort},
 };
@@ -128,6 +131,18 @@ async fn confirmation_is_bounded_by_the_proposal_expiry() {
     .expect("confirmation expiry must remain bounded");
 
     assert!(matches!(result, Err(AgentCommandError::ProposalExpired)));
+}
+
+#[tokio::test]
+async fn proposal_execution_panics_are_projected_to_action_failed() {
+    let result = contain_execution_panic(async {
+        panic!("proposal-execution-panic-canary");
+        #[allow(unreachable_code)]
+        Ok::<(), AgentCommandError>(())
+    })
+    .await;
+
+    assert!(matches!(result, Err(AgentCommandError::ActionFailed)));
 }
 
 #[test]
@@ -491,21 +506,50 @@ fn tun_preconditions_reject_core_service_and_runtime_drift() {
 }
 
 #[test]
-fn tun_verification_requires_the_desired_generated_and_core_state() {
+fn tun_verification_requires_desired_generated_observed_and_core_state() {
     let before = snapshot();
     let plan = plan_tun_change(&before, true).expect("TUN enable should be available");
     let action = AgentActionRequest::SetTunEnabled { enabled: true };
     let mut applied = before;
     applied.tun.desired_enabled = true;
     applied.tun.generated_runtime_enabled = Some(true);
+    applied.tun.observed_enabled = Some(true);
     applied.tun.applied_consistency = AgentAppliedState::Consistent;
 
     assert!(verify_action(&applied, &action, &plan.preconditions));
+    applied.tun.observed_enabled = Some(false);
+    assert!(!verify_action(&applied, &action, &plan.preconditions));
+    applied.tun.observed_enabled = Some(true);
     applied.tun.generated_runtime_enabled = Some(false);
     assert!(!verify_action(&applied, &action, &plan.preconditions));
     applied.tun.generated_runtime_enabled = Some(true);
     applied.core.state = AgentCoreState::Stopped;
     assert!(!verify_action(&applied, &action, &plan.preconditions));
+}
+
+#[test]
+fn tun_disable_requires_the_controller_to_report_tun_disabled() {
+    let mut enabled = snapshot();
+    enabled.tun.desired_enabled = true;
+    enabled.tun.generated_runtime_enabled = Some(true);
+    enabled.tun.observed_enabled = Some(true);
+    enabled.tun.applied_consistency = AgentAppliedState::Consistent;
+    let plan = plan_tun_change(&enabled, false).expect("TUN disable should be available");
+    let action = AgentActionRequest::SetTunEnabled { enabled: false };
+
+    let mut disabled = enabled;
+    disabled.tun.desired_enabled = false;
+    disabled.tun.generated_runtime_enabled = Some(false);
+    disabled.tun.observed_enabled = Some(false);
+    disabled.tun.applied_consistency = AgentAppliedState::Consistent;
+    assert!(verify_action(&disabled, &action, &plan.preconditions));
+
+    disabled.tun.observed_enabled = Some(true);
+    disabled.tun.applied_consistency = AgentAppliedState::Stale;
+    assert!(!verify_action(&disabled, &action, &plan.preconditions));
+    disabled.tun.observed_enabled = None;
+    disabled.tun.applied_consistency = AgentAppliedState::Unknown;
+    assert!(!verify_action(&disabled, &action, &plan.preconditions));
 }
 
 #[test]
@@ -540,8 +584,31 @@ fn system_proxy_plan_requires_consistent_observed_state_and_verifies_endpoint() 
 }
 
 #[test]
+fn system_proxy_disable_requires_the_os_probe_to_report_disabled() {
+    let mut enabled = snapshot();
+    enabled.system_proxy.desired_enabled = true;
+    enabled.system_proxy.observed_enabled = Some(true);
+    enabled.system_proxy.matches_expected_endpoint = Some(true);
+    let plan = plan_system_proxy_change(&enabled, false)
+        .expect("system proxy disable should be available");
+    let action = AgentActionRequest::SetSystemProxyEnabled { enabled: false };
+
+    let mut disabled = enabled;
+    disabled.system_proxy.desired_enabled = false;
+    disabled.system_proxy.observed_enabled = Some(false);
+    disabled.system_proxy.matches_expected_endpoint = None;
+    assert!(verify_action(&disabled, &action, &plan.preconditions));
+
+    disabled.system_proxy.observed_enabled = Some(true);
+    assert!(!verify_action(&disabled, &action, &plan.preconditions));
+    disabled.system_proxy.observed_enabled = None;
+    assert!(!verify_action(&disabled, &action, &plan.preconditions));
+}
+
+#[test]
 fn recommendations_reuse_the_action_planner_and_include_tun() {
-    let snapshot = snapshot();
+    let mut snapshot = snapshot();
+    snapshot.os_family = AgentOsFamily::Windows;
     let recommendations = super::recommendations(&snapshot);
     let tun = recommendations
         .iter()
@@ -559,6 +626,18 @@ fn recommendations_reuse_the_action_planner_and_include_tun() {
             && !recommendation.available
             && recommendation.unavailable_reason.is_some()
     }));
+}
+
+#[test]
+fn unsupported_platform_disables_every_write_recommendation() {
+    let mut snapshot = snapshot();
+    snapshot.os_family = AgentOsFamily::Android;
+
+    assert!(
+        super::recommendations(&snapshot)
+            .iter()
+            .all(|recommendation| !recommendation.available)
+    );
 }
 
 #[test]
@@ -878,7 +957,7 @@ fn pending(owner_label: &str, expires_at: Instant) -> PendingProposal {
 
 fn snapshot() -> AgentNetworkSnapshot {
     AgentNetworkSnapshot {
-        schema_version: 1,
+        schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
         revision: "revision".into(),
         captured_at: 0,
         app_version: "test".into(),
@@ -911,8 +990,8 @@ fn snapshot() -> AgentNetworkSnapshot {
         tun: AgentTunSnapshot {
             desired_enabled: false,
             generated_runtime_enabled: Some(false),
-            observed_active: AgentAppliedState::Unknown,
-            applied_consistency: AgentAppliedState::Unknown,
+            observed_enabled: Some(false),
+            applied_consistency: AgentAppliedState::Consistent,
         },
         profiles: AgentProfileSnapshot {
             total_count: 1,
@@ -929,6 +1008,15 @@ fn snapshot() -> AgentNetworkSnapshot {
             upload_total: Some(0),
             download_total: Some(0),
             recent_error_count: 0,
+        },
+        connectivity: unavailable_host_connectivity(),
+        platform_readiness: AgentPlatformReadinessSnapshot {
+            process_privilege: AgentProcessPrivilegeStatus::Unknown,
+            service_mode_available: Some(false),
+            tun_permission: AgentTunPermissionReadiness::NotRequired,
+            tun_verification: AgentTunVerificationStatus::NotRequested,
+            system_dns_verification: AgentSystemDnsVerificationStatus::NotRequired,
+            reasons: Vec::new(),
         },
         findings: Vec::new(),
         probe_failures: Vec::new(),

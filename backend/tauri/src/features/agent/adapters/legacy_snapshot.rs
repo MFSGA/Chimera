@@ -2,32 +2,51 @@ use std::time::Duration;
 
 use super::super::{
     diagnostics::{
-        derive_findings, derive_health, snapshot_revision, summarize_service,
-        summarize_system_proxy, tun_applied_consistency,
+        append_connectivity_finding, append_platform_readiness_findings, derive_findings,
+        derive_health, snapshot_revision, summarize_service, summarize_system_proxy,
+        tun_applied_consistency,
     },
+    host_connectivity::unavailable_host_connectivity,
     model::{
         AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState,
         AgentNetworkSnapshot, AgentOsFamily, AgentPrivacyBoundary, AgentProbeCode,
-        AgentProbeFailure, AgentTelemetrySnapshot, AgentTunSnapshot,
-        NETWORK_SNAPSHOT_SCHEMA_VERSION,
+        AgentProbeFailure, AgentProcessPrivilegeStatus, AgentTelemetrySnapshot,
+        AgentTunPermissionReadiness, AgentTunSnapshot, NETWORK_SNAPSHOT_SCHEMA_VERSION,
     },
     planning::recommendations,
+    platform_readiness::classify_platform_readiness,
     ports::{
         AgentConfigurationPort, AgentTelemetryPort, CoreLifecyclePort, CoreRoutingProbePort,
-        ServiceControlPort, SystemProxyPort,
+        HostConnectivityPort, PlatformReadinessPort, ServiceControlPort, SystemProxyPort,
     },
 };
 
 const SNAPSHOT_INFRASTRUCTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
+pub(crate) struct LegacySnapshotPorts<'a> {
+    pub(crate) configuration: &'a dyn AgentConfigurationPort,
+    pub(crate) core: &'a dyn CoreLifecyclePort,
+    pub(crate) routing: &'a dyn CoreRoutingProbePort,
+    pub(crate) connectivity: &'a dyn HostConnectivityPort,
+    pub(crate) readiness: &'a dyn PlatformReadinessPort,
+    pub(crate) service: &'a dyn ServiceControlPort,
+    pub(crate) system_proxy: &'a dyn SystemProxyPort,
+    pub(crate) telemetry: &'a dyn AgentTelemetryPort,
+}
+
 pub(crate) async fn collect_network_snapshot(
-    configuration_port: &dyn AgentConfigurationPort,
-    core_lifecycle: &dyn CoreLifecyclePort,
-    routing_probe: &dyn CoreRoutingProbePort,
-    service_control: &dyn ServiceControlPort,
-    system_proxy_port: &dyn SystemProxyPort,
-    telemetry_port: &dyn AgentTelemetryPort,
+    ports: LegacySnapshotPorts<'_>,
 ) -> AgentNetworkSnapshot {
+    let LegacySnapshotPorts {
+        configuration: configuration_port,
+        core: core_lifecycle,
+        routing: routing_probe,
+        connectivity: host_connectivity_port,
+        readiness: platform_readiness_port,
+        service: service_control,
+        system_proxy: system_proxy_port,
+        telemetry: telemetry_port,
+    } = ports;
     let configuration = configuration_port.snapshot();
 
     let core_status =
@@ -35,9 +54,22 @@ pub(crate) async fn collect_network_snapshot(
     let service_ipc_connected = service_control.ipc_connected();
     let service_status =
         tokio::time::timeout(SNAPSHOT_INFRASTRUCTURE_TIMEOUT, service_control.status());
+    let host_connectivity = tokio::time::timeout(
+        SNAPSHOT_INFRASTRUCTURE_TIMEOUT,
+        host_connectivity_port.snapshot(),
+    );
+    let process_privilege = tokio::time::timeout(
+        SNAPSHOT_INFRASTRUCTURE_TIMEOUT,
+        platform_readiness_port.process_privilege(),
+    );
     let system_proxy = system_proxy_port.probe();
-    let (core_status, service_status, system_proxy) =
-        tokio::join!(core_status, service_status, system_proxy);
+    let (core_status, service_status, host_connectivity, process_privilege, system_proxy) = tokio::join!(
+        core_status,
+        service_status,
+        host_connectivity,
+        process_privilege,
+        system_proxy
+    );
 
     let mut failures = Vec::new();
     let (core_state, core_run_type, core_state_changed_at) = match core_status {
@@ -64,15 +96,22 @@ pub(crate) async fn collect_network_snapshot(
         applied_consistency: AgentAppliedState::Unknown,
     };
 
+    let mut observed_tun_enabled = None;
     if core.state == AgentCoreState::Running {
-        match routing_probe.observed_mode().await {
-            Ok(mode) => {
-                core.observed_routing_mode = Some(mode);
-                core.applied_consistency = if core.routing_mode == Some(mode) {
+        match routing_probe.observed_configuration().await {
+            Ok(observed) => {
+                core.observed_routing_mode = Some(observed.routing_mode);
+                core.applied_consistency = if core.routing_mode == Some(observed.routing_mode) {
                     AgentAppliedState::Consistent
                 } else {
                     AgentAppliedState::Stale
                 };
+                observed_tun_enabled = observed.tun_enabled;
+                if observed_tun_enabled.is_none() {
+                    failures.push(AgentProbeFailure {
+                        code: AgentProbeCode::TunStatusUnavailable,
+                    });
+                }
             }
             Err(()) => failures.push(AgentProbeFailure {
                 code: AgentProbeCode::CoreConfigUnavailable,
@@ -95,13 +134,30 @@ pub(crate) async fn collect_network_snapshot(
     let tun = AgentTunSnapshot {
         desired_enabled: configuration.desired_tun,
         generated_runtime_enabled: configuration.generated_tun_enabled,
-        observed_active: AgentAppliedState::Unknown,
+        observed_enabled: observed_tun_enabled,
         applied_consistency: tun_applied_consistency(
             configuration.desired_tun,
             configuration.generated_tun_enabled,
+            observed_tun_enabled,
         ),
     };
     let profiles = configuration.profiles;
+    let connectivity = host_connectivity.unwrap_or_else(|_| unavailable_host_connectivity());
+    if connectivity.status == super::super::model::AgentHostConnectivityStatus::Indeterminate {
+        failures.push(AgentProbeFailure {
+            code: AgentProbeCode::HostConnectivityUnavailable,
+        });
+    }
+    let process_privilege = process_privilege.unwrap_or(AgentProcessPrivilegeStatus::Unknown);
+    let platform_readiness =
+        classify_platform_readiness(process_privilege, &core, &service, &tun, &connectivity);
+    if tun.desired_enabled
+        && platform_readiness.tun_permission == AgentTunPermissionReadiness::Indeterminate
+    {
+        failures.push(AgentProbeFailure {
+            code: AgentProbeCode::PlatformReadinessUnavailable,
+        });
+    }
     let telemetry = telemetry_port.snapshot().unwrap_or_else(|| {
         failures.push(AgentProbeFailure {
             code: AgentProbeCode::TelemetryUnavailable,
@@ -116,7 +172,7 @@ pub(crate) async fn collect_network_snapshot(
             recent_error_count: 0,
         }
     });
-    let findings = derive_findings(
+    let mut findings = derive_findings(
         &core,
         &service,
         &system_proxy,
@@ -125,8 +181,17 @@ pub(crate) async fn collect_network_snapshot(
         &telemetry,
         configuration.secret_is_weak,
     );
+    append_connectivity_finding(&mut findings, connectivity.status);
+    append_platform_readiness_findings(&mut findings, &platform_readiness);
     let health = derive_health(&findings, &failures);
-    let revision = snapshot_revision(&core, &service, &system_proxy, &tun);
+    let revision = snapshot_revision(
+        &core,
+        &service,
+        &system_proxy,
+        &tun,
+        &connectivity,
+        &platform_readiness,
+    );
 
     let mut snapshot = AgentNetworkSnapshot {
         schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
@@ -141,6 +206,8 @@ pub(crate) async fn collect_network_snapshot(
         tun,
         profiles,
         telemetry,
+        connectivity,
+        platform_readiness,
         findings,
         probe_failures: failures,
         recommendations: Vec::new(),

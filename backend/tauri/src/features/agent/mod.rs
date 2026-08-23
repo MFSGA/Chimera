@@ -1,6 +1,7 @@
 mod actions;
 mod actor;
 mod adapters;
+mod autonomy;
 mod bridge;
 mod client;
 pub(crate) mod commands;
@@ -8,9 +9,11 @@ mod core_probe;
 mod diagnostics;
 mod error;
 mod history;
+mod host_connectivity;
 mod intent;
 mod model;
 mod planning;
+mod platform_readiness;
 mod ports;
 mod registry;
 
@@ -18,24 +21,27 @@ pub(crate) use adapters::{
     FsAgentHistoryPersistence, HttpAgentBridge, HttpBridgeHealth, HttpNetworkProbe,
     LegacyAgentConfiguration, LegacyAgentMutation, LegacyAgentRuntime, LegacyCoreLifecycle,
     LegacyCoreRoutingProbe, LegacyServiceControl, LegacySystemProxy, RegistryAgentToolExecutor,
-    TauriAgentConfirmation, TauriAgentTelemetry,
+    TauriAgentConfirmation, TauriAgentTelemetry, platform_host_connectivity, platform_readiness,
 };
 pub(crate) use bridge::{AgentBridgeStartResult, AgentBridgeStatus};
 pub(crate) use client::AgentClient;
 pub(crate) use history::AgentHistorySnapshot;
-pub(crate) use intent::resolve_intent;
+pub(crate) use intent::{execute_read_only_intent, resolve_intent};
 pub(crate) use model::{
-    AgentActionRequest, AgentActionResult, AgentCommandError, AgentIntentRequest,
-    AgentIntentResolution, AgentManifest, AgentNetworkProbeRequest, AgentNetworkSnapshot,
-    AgentProposal, AgentToolManifest, AgentToolName, AgentToolRisk,
+    AgentActionRequest, AgentActionResult, AgentAutonomyPolicyRequest, AgentAutonomyPolicyResult,
+    AgentAutonomyPolicySnapshot, AgentCommandError, AgentExecuteReadOnlyIntentRequest,
+    AgentExecuteReadOnlyIntentResult, AgentIntentRequest, AgentIntentResolution, AgentManifest,
+    AgentNetworkProbeRequest, AgentNetworkSnapshot, AgentProposal, AgentToolManifest,
+    AgentToolName, AgentToolRisk,
 };
 pub(crate) use registry::agent_manifest;
 
 #[cfg(test)]
 mod capability_boundary_tests {
-    const PRODUCTION_SOURCES: [(&str, &str); 34] = [
+    const PRODUCTION_SOURCES: [(&str, &str); 47] = [
         ("actions.rs", include_str!("actions.rs")),
         ("actor.rs", include_str!("actor.rs")),
+        ("autonomy.rs", include_str!("autonomy.rs")),
         ("bridge.rs", include_str!("bridge.rs")),
         ("client.rs", include_str!("client.rs")),
         ("commands.rs", include_str!("commands.rs")),
@@ -43,9 +49,14 @@ mod capability_boundary_tests {
         ("diagnostics.rs", include_str!("diagnostics.rs")),
         ("error.rs", include_str!("error.rs")),
         ("history.rs", include_str!("history.rs")),
+        ("host_connectivity.rs", include_str!("host_connectivity.rs")),
         ("intent.rs", include_str!("intent.rs")),
         ("model.rs", include_str!("model.rs")),
         ("planning.rs", include_str!("planning.rs")),
+        (
+            "platform_readiness.rs",
+            include_str!("platform_readiness.rs"),
+        ),
         ("ports.rs", include_str!("ports.rs")),
         ("registry.rs", include_str!("registry.rs")),
         (
@@ -56,6 +67,7 @@ mod capability_boundary_tests {
         ("registry_output.rs", include_str!("registry/output.rs")),
         ("registry_probe.rs", include_str!("registry/probe.rs")),
         ("registry_request.rs", include_str!("registry/request.rs")),
+        ("adapters_mod.rs", include_str!("adapters/mod.rs")),
         ("fs_history.rs", include_str!("adapters/fs_history.rs")),
         ("http_bridge.rs", include_str!("adapters/http_bridge.rs")),
         (
@@ -107,9 +119,45 @@ mod capability_boundary_tests {
             "tool_executor.rs",
             include_str!("adapters/tool_executor.rs"),
         ),
+        (
+            "linux_host_connectivity.rs",
+            include_str!("adapters/linux_host_connectivity.rs"),
+        ),
+        (
+            "linux_host_connectivity_core.rs",
+            include_str!("adapters/linux_host_connectivity_core.rs"),
+        ),
+        (
+            "linux_platform_readiness.rs",
+            include_str!("adapters/linux_platform_readiness.rs"),
+        ),
+        (
+            "macos_platform_readiness.rs",
+            include_str!("adapters/macos_platform_readiness.rs"),
+        ),
+        (
+            "unix_platform_readiness.rs",
+            include_str!("adapters/unix_platform_readiness.rs"),
+        ),
+        (
+            "unavailable_host_connectivity.rs",
+            include_str!("adapters/unavailable_host_connectivity.rs"),
+        ),
+        (
+            "unavailable_platform_readiness.rs",
+            include_str!("adapters/unavailable_platform_readiness.rs"),
+        ),
+        (
+            "windows_host_connectivity.rs",
+            include_str!("adapters/windows_host_connectivity.rs"),
+        ),
+        (
+            "windows_platform_readiness.rs",
+            include_str!("adapters/windows_platform_readiness.rs"),
+        ),
     ];
 
-    const NON_FILESYSTEM_PRODUCTION_SOURCES: [(&str, &str); 33] = [
+    const NON_FILESYSTEM_PRODUCTION_SOURCES: [(&str, &str); 45] = [
         ("actions.rs", include_str!("actions.rs")),
         ("actor.rs", include_str!("actor.rs")),
         ("bridge.rs", include_str!("bridge.rs")),
@@ -119,9 +167,14 @@ mod capability_boundary_tests {
         ("diagnostics.rs", include_str!("diagnostics.rs")),
         ("error.rs", include_str!("error.rs")),
         ("history.rs", include_str!("history.rs")),
+        ("host_connectivity.rs", include_str!("host_connectivity.rs")),
         ("intent.rs", include_str!("intent.rs")),
         ("model.rs", include_str!("model.rs")),
         ("planning.rs", include_str!("planning.rs")),
+        (
+            "platform_readiness.rs",
+            include_str!("platform_readiness.rs"),
+        ),
         ("ports.rs", include_str!("ports.rs")),
         ("registry.rs", include_str!("registry.rs")),
         (
@@ -132,6 +185,7 @@ mod capability_boundary_tests {
         ("registry_output.rs", include_str!("registry/output.rs")),
         ("registry_probe.rs", include_str!("registry/probe.rs")),
         ("registry_request.rs", include_str!("registry/request.rs")),
+        ("adapters_mod.rs", include_str!("adapters/mod.rs")),
         ("http_bridge.rs", include_str!("adapters/http_bridge.rs")),
         (
             "http_bridge_health.rs",
@@ -181,6 +235,42 @@ mod capability_boundary_tests {
         (
             "tool_executor.rs",
             include_str!("adapters/tool_executor.rs"),
+        ),
+        (
+            "linux_host_connectivity.rs",
+            include_str!("adapters/linux_host_connectivity.rs"),
+        ),
+        (
+            "linux_host_connectivity_core.rs",
+            include_str!("adapters/linux_host_connectivity_core.rs"),
+        ),
+        (
+            "linux_platform_readiness.rs",
+            include_str!("adapters/linux_platform_readiness.rs"),
+        ),
+        (
+            "macos_platform_readiness.rs",
+            include_str!("adapters/macos_platform_readiness.rs"),
+        ),
+        (
+            "unix_platform_readiness.rs",
+            include_str!("adapters/unix_platform_readiness.rs"),
+        ),
+        (
+            "unavailable_host_connectivity.rs",
+            include_str!("adapters/unavailable_host_connectivity.rs"),
+        ),
+        (
+            "unavailable_platform_readiness.rs",
+            include_str!("adapters/unavailable_platform_readiness.rs"),
+        ),
+        (
+            "windows_host_connectivity.rs",
+            include_str!("adapters/windows_host_connectivity.rs"),
+        ),
+        (
+            "windows_platform_readiness.rs",
+            include_str!("adapters/windows_platform_readiness.rs"),
         ),
     ];
 
@@ -307,6 +397,18 @@ mod capability_boundary_tests {
             .expect("proposal actor spawn");
         assert!(bridge_wrapped < proposal_spawn);
         assert!(!actions.contains("Mutex<ProposalStore>"));
+        assert!(actors.contains("execution_gate: Arc<Semaphore>"));
+        assert!(actors.contains("background_tasks: Vec<AbortHandle>"));
+        assert!(actors.contains("let execution_task = tokio::spawn(execution)"));
+        assert!(actors.contains("unwrap_or(Err(AgentCommandError::ActionFailed))"));
+        assert!(actors.contains("let _ = reply.send(result)"));
+        assert!(actors.contains("state.background_tasks.drain(..)"));
+        assert!(!actors.contains(".proposals\n                    .execute("));
+        assert!(client.contains("move |reply| AgentHistoryMessage::RecordAudit"));
+        assert!(actions.contains(".record_audit("));
+        assert!(!actions.contains("enqueue_audit"));
+        assert!(actors.contains("AgentAuditOutcome::Proposed"));
+        assert!(actors.contains("let _ = reply.send(Ok(proposal))"));
         assert!(!history.contains("Mutex<Option<AgentHistoryDocument>>"));
         assert!(!bridge.contains("Mutex<Option<BridgeRuntime>>"));
     }
@@ -377,7 +479,7 @@ mod capability_boundary_tests {
         assert!(!runtime.contains("CoreManager::global()"));
         assert!(!snapshot.contains("CoreManager::global()"));
         assert!(runtime.contains("core: Arc<dyn CoreLifecyclePort>"));
-        assert!(snapshot.contains("core_lifecycle: &dyn CoreLifecyclePort"));
+        assert!(snapshot.contains("core: &'a dyn CoreLifecyclePort"));
         assert!(setup.contains("LegacyCoreLifecycle::new()"));
         assert!(setup.contains("LegacyAgentRuntime::new("));
         assert!(setup.contains("configuration,"));
@@ -399,7 +501,7 @@ mod capability_boundary_tests {
             assert!(!source.contains("service::ipc"));
         }
         assert!(runtime.contains("service: Arc<dyn ServiceControlPort>"));
-        assert!(snapshot.contains("service_control: &dyn ServiceControlPort"));
+        assert!(snapshot.contains("service: &'a dyn ServiceControlPort"));
         assert!(setup.contains("LegacyServiceControl::new()"));
         assert!(setup.contains("LegacyAgentRuntime::new("));
         assert!(setup.contains("configuration,"));
@@ -419,10 +521,112 @@ mod capability_boundary_tests {
         assert!(!snapshot.contains("AppHandle"));
         assert!(!snapshot.contains("ClashConnectionsConnector"));
         assert!(runtime.contains("telemetry: Arc<dyn AgentTelemetryPort>"));
-        assert!(snapshot.contains("telemetry_port: &dyn AgentTelemetryPort"));
+        assert!(snapshot.contains("telemetry: &'a dyn AgentTelemetryPort"));
         assert!(setup.contains("TauriAgentTelemetry::new(app_handle.clone())"));
         assert!(setup.contains("LegacyAgentRuntime::new("));
         assert!(setup.contains("configuration,"));
+    }
+
+    #[test]
+    fn platform_network_observation_is_injected_and_fails_closed_without_native_adapters() {
+        let adapters = include_str!("adapters/mod.rs");
+        let unavailable = include_str!("adapters/unavailable_host_connectivity.rs");
+        let unavailable_readiness = include_str!("adapters/unavailable_platform_readiness.rs");
+        let linux_connectivity = include_str!("adapters/linux_host_connectivity.rs");
+        let linux_connectivity_core = include_str!("adapters/linux_host_connectivity_core.rs");
+        let linux_readiness = include_str!("adapters/linux_platform_readiness.rs");
+        let macos_readiness = include_str!("adapters/macos_platform_readiness.rs");
+        let unix_readiness = include_str!("adapters/unix_platform_readiness.rs");
+        let windows_readiness = include_str!("adapters/windows_platform_readiness.rs");
+        let runtime = include_str!("adapters/legacy_runtime.rs");
+        let snapshot = include_str!("adapters/legacy_snapshot.rs");
+        let setup = include_str!("../../setup.rs");
+        let cargo = include_str!("../../../Cargo.toml");
+        let ci = include_str!("../../../../../.github/workflows/agent-ci.yaml");
+
+        assert!(unavailable.contains("impl HostConnectivityPort for UnavailableHostConnectivity"));
+        assert!(unavailable.contains("unavailable_host_connectivity()"));
+        assert!(unavailable_readiness.contains("impl PlatformReadinessPort"));
+        assert!(unavailable_readiness.contains("AgentProcessPrivilegeStatus::Unknown"));
+        assert!(linux_connectivity.contains("getifaddrs()"));
+        assert!(linux_connectivity.contains("SockProtocol::NetlinkRoute"));
+        assert!(linux_connectivity.contains("LinuxHostConnectivityCore"));
+        assert!(!linux_connectivity.contains("std::fs"));
+        assert!(!linux_connectivity.contains("std::process"));
+        assert!(!linux_connectivity.contains("/proc"));
+        assert!(!linux_connectivity.contains("/sys"));
+        assert!(!linux_connectivity.contains("/etc/resolv.conf"));
+        assert!(linux_connectivity_core.contains("Semaphore::new(1)"));
+        assert!(linux_connectivity_core.contains("RouteDumpParser"));
+        assert!(linux_connectivity_core.contains("MAX_ROUTE_DUMP_BYTES"));
+        assert!(!linux_connectivity_core.contains("std::fs"));
+        assert!(!linux_connectivity_core.contains("std::process"));
+        assert!(!linux_connectivity_core.contains("/proc"));
+        for readiness in [linux_readiness, macos_readiness] {
+            assert!(readiness.contains("Uid::effective().is_root()"));
+            assert!(readiness.contains("UnixPlatformReadinessCore"));
+            assert!(!readiness.contains("spawn_blocking"));
+            assert!(!readiness.contains("Semaphore"));
+            assert!(!readiness.contains("std::fs"));
+            assert!(!readiness.contains("std::process"));
+            assert!(!readiness.contains("/proc"));
+        }
+        assert!(unix_readiness.contains("PRIVILEGE_PROBE_TIMEOUT"));
+        assert!(unix_readiness.contains("tokio::task::spawn_blocking"));
+        assert!(unix_readiness.contains("Semaphore::new(1)"));
+        assert!(unix_readiness.contains("AgentProcessPrivilegeStatus::Unknown"));
+        assert!(!unix_readiness.contains("std::fs"));
+        assert!(!unix_readiness.contains("std::process"));
+        assert!(!unix_readiness.contains("/proc"));
+        assert!(windows_readiness.contains("GetTokenInformation"));
+        assert!(windows_readiness.contains("OpenProcessToken"));
+        assert!(!windows_readiness.contains("std::fs"));
+        assert!(!windows_readiness.contains("std::process"));
+        assert!(adapters.contains("pub(crate) fn platform_host_connectivity()"));
+        assert!(adapters.contains("pub(crate) fn platform_readiness()"));
+        assert!(adapters.contains("#[cfg(windows)]\nmod windows_host_connectivity;"));
+        assert!(adapters.contains("WindowsHostConnectivity::new()"));
+        assert!(adapters.contains("LinuxHostConnectivity::new()"));
+        assert!(adapters.contains("#[cfg(not(any(windows, target_os = \"linux\")))]"));
+        assert!(adapters.contains("UnavailableHostConnectivity::new()"));
+        assert!(adapters.contains("WindowsPlatformReadiness::new()"));
+        assert!(adapters.contains("LinuxPlatformReadiness::new()"));
+        assert!(adapters.contains("MacosPlatformReadiness::new()"));
+        assert!(adapters.contains("mod unix_platform_readiness;"));
+        assert!(adapters.contains("UnavailablePlatformReadiness::new()"));
+        assert!(!setup.contains("cfg(windows)"));
+        assert!(cargo.contains("[target.'cfg(windows)'.dependencies]"));
+        assert!(cargo.contains("Win32_NetworkManagement_IpHelper"));
+        assert!(cargo.contains("Win32_NetworkManagement_Ndis"));
+        assert!(cargo.contains("Win32_Networking_WinSock"));
+        assert!(cargo.contains("Win32_Security"));
+        assert!(cargo.contains("Win32_System_Threading"));
+        assert!(
+            cargo.contains(
+                "nix = { version = \"0.31\", features = [\"net\", \"socket\", \"user\"] }"
+            )
+        );
+        for runner in ["ubuntu-latest", "windows-latest", "macos-latest"] {
+            assert!(ci.contains(runner));
+        }
+        assert!(ci.contains("features::agent::adapters::platform_tests"));
+        assert!(ci.contains("windows_host_connectivity::tests"));
+        assert!(ci.contains("linux_host_connectivity_core::tests"));
+        assert!(ci.contains("linux_host_connectivity::tests"));
+        assert!(ci.contains("windows_platform_readiness::tests"));
+        assert!(ci.contains("unix_platform_readiness::tests"));
+        assert!(ci.contains("linux_platform_readiness::tests"));
+        assert!(ci.contains("macos_platform_readiness::tests"));
+        assert!(runtime.contains("host_connectivity: Arc<dyn HostConnectivityPort>"));
+        assert!(runtime.contains("platform_readiness: Arc<dyn PlatformReadinessPort>"));
+        assert!(snapshot.contains("connectivity: &'a dyn HostConnectivityPort"));
+        assert!(snapshot.contains("readiness: &'a dyn PlatformReadinessPort"));
+        assert!(snapshot.contains("SNAPSHOT_INFRASTRUCTURE_TIMEOUT"));
+        assert!(snapshot.contains("connectivity,"));
+        assert!(setup.contains("platform_host_connectivity()"));
+        assert!(setup.contains("platform_readiness()"));
+        assert!(setup.contains("host_connectivity,"));
+        assert!(setup.contains("platform_readiness,"));
     }
 
     #[test]
@@ -446,11 +650,14 @@ mod capability_boundary_tests {
         assert!(configuration.contains("impl AgentConfigurationPort for LegacyAgentConfiguration"));
         assert!(routing_probe.contains("Config::clash()"));
         assert!(routing_probe.contains("impl CoreRoutingProbePort for LegacyCoreRoutingProbe"));
+        assert!(routing_probe.contains("async fn observed_configuration"));
         assert!(!core_probe.contains("Config::"));
         assert!(runtime.contains("configuration: Arc<dyn AgentConfigurationPort>"));
         assert!(runtime.contains("routing_probe: Arc<dyn CoreRoutingProbePort>"));
-        assert!(snapshot.contains("configuration_port: &dyn AgentConfigurationPort"));
-        assert!(snapshot.contains("routing_probe: &dyn CoreRoutingProbePort"));
+        assert!(snapshot.contains("configuration: &'a dyn AgentConfigurationPort"));
+        assert!(snapshot.contains("routing: &'a dyn CoreRoutingProbePort"));
+        assert!(snapshot.contains("observed_tun_enabled = observed.tun_enabled"));
+        assert!(snapshot.contains("AgentProbeCode::TunStatusUnavailable"));
         assert!(setup.contains("LegacyAgentConfiguration::new()"));
         assert!(setup.contains("LegacyCoreRoutingProbe::new()"));
         assert!(setup.contains("LegacyAgentRuntime::new("));
@@ -465,6 +672,11 @@ mod capability_boundary_tests {
         assert!(adapter.contains(".no_proxy()"));
         assert!(adapter.contains(".redirect(Policy::none())"));
         assert!(adapter.contains("request.bearer_auth(secret)"));
+        assert!(adapter.contains("MAX_CORE_CONFIG_RESPONSE_BYTES: usize = 64 * 1024"));
+        assert!(adapter.contains("response.bytes_stream()"));
+        assert!(adapter.contains("body.len().saturating_add(chunk.len())"));
+        assert!(adapter.contains("tun_enabled: config.tun.and_then(|tun| tun.enable)"));
+        assert!(!adapter.contains(".json::<CoreConfigResponse>()"));
         assert!(core_probe.contains("loopback_controller_url"));
         assert!(!core_probe.contains("reqwest::"));
         assert!(!core_probe.contains("Deserialize"));
@@ -600,7 +812,7 @@ mod capability_boundary_tests {
             assert!(!source.contains("Sysproxy"));
         }
         assert!(runtime.contains("system_proxy: Arc<dyn SystemProxyPort>"));
-        assert!(snapshot.contains("system_proxy_port: &dyn SystemProxyPort"));
+        assert!(snapshot.contains("system_proxy: &'a dyn SystemProxyPort"));
         assert!(snapshot.contains("system_proxy_port.probe()"));
         assert!(diagnostics.contains("Option<SystemProxyConfiguration>"));
         assert!(setup.contains("LegacySystemProxy::new(mutation.clone())"));
@@ -755,6 +967,9 @@ mod capability_boundary_tests {
         assert!(client.contains("bridge: Box<dyn AgentBridgePort>"));
         assert!(setup.contains("HttpBridgeHealth::new()"));
         assert!(setup.contains("HttpAgentBridge::new(tool_executor, bridge_health)"));
+        assert!(server.contains("execution_tasks.abort_all().await"));
+        assert!(server.contains("closed: bool"));
+        assert!(server.contains("state.handles.retain(|handle| !handle.is_finished())"));
     }
 
     #[test]
@@ -762,8 +977,78 @@ mod capability_boundary_tests {
         let bridge = production_only(include_str!("adapters/http_bridge.rs"));
         assert!(bridge.contains("validate_tool_request(&tool_name, &body)"));
         assert!(bridge.contains("tool_timeout(&tool_name)"));
-        assert!(bridge.contains("executor.execute(tool_name.clone(), body)"));
+        assert!(bridge.contains("executor.execute(tool_name, body)"));
+        assert!(bridge.contains("let _permit = permit;"));
+        assert!(bridge.contains("tokio::spawn(async move"));
         assert!(!bridge.contains("collect_network_snapshot"));
         assert!(!bridge.contains("execute_network_probe"));
+    }
+
+    #[test]
+    fn read_only_intent_tool_cannot_reach_proposals_confirmations_or_mutations() {
+        let execution = production_only(include_str!("registry/execution.rs"));
+        let manifest = production_only(include_str!("registry/manifest.rs"));
+        let tool_executor = production_only(include_str!("adapters/tool_executor.rs"));
+
+        assert!(execution.contains("AgentToolKind::IntentExecute"));
+        assert!(execution.contains("execute_read_only_intent"));
+        assert!(manifest.contains("name: AgentToolName::IntentExecute"));
+        assert!(manifest.contains("input: AgentToolInput::ReadOnlyIntent"));
+        assert!(!execution.contains("propose_action"));
+        assert!(!execution.contains("execute_action"));
+        assert!(!execution.contains("AgentConfirmationPort"));
+        assert!(!execution.contains("AgentMutationPort"));
+        assert!(!tool_executor.contains("AgentProposal"));
+        assert!(!tool_executor.contains("AgentConfirmationPort"));
+    }
+
+    #[test]
+    fn bridge_cannot_authorize_revoke_or_execute_autonomy() {
+        let manifest = production_only(include_str!("registry/manifest.rs"));
+        let execution = production_only(include_str!("registry/execution.rs"));
+        let bridge = production_only(include_str!("adapters/http_bridge.rs"));
+
+        for source in [manifest, execution, bridge] {
+            assert!(!source.contains("agent_authorize_autonomy"));
+            assert!(!source.contains("agent_revoke_autonomy"));
+            assert!(!source.contains("AgentAutonomyPolicyStore"));
+            assert!(!source.contains("AgentAutonomyPolicyRequest"));
+        }
+    }
+
+    #[test]
+    fn autonomy_policy_cannot_bypass_proposals_or_local_confirmation() {
+        let actor = production_only(include_str!("actor.rs"));
+        let actions = production_only(include_str!("actions.rs"));
+        let client = production_only(include_str!("client.rs"));
+
+        assert!(!actor.contains("AgentAutonomyPolicyStore"));
+        assert!(!actor.contains("authorize_autonomy"));
+        assert!(!actions.contains("AgentAutonomyPolicyStore"));
+        assert!(!actions.contains("authorize_autonomy"));
+
+        let confirm = actions
+            .find("confirmation.confirm(owner_label, proposal)")
+            .expect("proposal execution must invoke the local confirmation port");
+        let mutation = actions
+            .find("execute_action(runtime, &current, &proposal.action")
+            .expect("proposal execution must reach runtime mutation only after confirmation");
+        assert!(confirm < mutation);
+
+        assert!(client.contains(".execute(owner_label, proposal_id, digest)"));
+        assert!(!client.contains("autonomy.try_acquire"));
+    }
+
+    #[test]
+    fn platform_readiness_tool_projects_only_the_registered_snapshot_field() {
+        let execution = production_only(include_str!("registry/execution.rs"));
+        let manifest = production_only(include_str!("registry/manifest.rs"));
+
+        assert!(execution.contains("AgentToolKind::PlatformReadiness"));
+        assert!(execution.contains("runtime.snapshot().await.platform_readiness"));
+        assert!(manifest.contains("name: AgentToolName::PlatformReadiness"));
+        assert!(manifest.contains("input: AgentToolInput::Empty"));
+        assert!(manifest.contains("output_fields: PLATFORM_READINESS_OUTPUT_FIELDS"));
+        assert!(!manifest.contains("platform.readiness.arguments"));
     }
 }

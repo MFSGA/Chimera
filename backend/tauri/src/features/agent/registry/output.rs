@@ -44,6 +44,10 @@ fn validate_public_output_shape(value: &Value) -> Result<(), AgentToolError> {
                     if value != &Value::Bool(false) {
                         return Err(privacy_contract_error());
                     }
+                } else if name == "observed_host_scope" {
+                    if !is_closed_host_scope(value) {
+                        return Err(privacy_contract_error());
+                    }
                 } else if is_sensitive_output_key(name) {
                     return Err(privacy_contract_error());
                 }
@@ -66,8 +70,18 @@ fn is_privacy_assertion_key(name: &str) -> bool {
     )
 }
 
+fn is_closed_host_scope(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("loopback" | "non_loopback" | "unknown")
+    )
+}
+
 fn is_sensitive_output_key(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
+    if name == "observed_host_scope" {
+        return false;
+    }
     [
         "token", "secret", "url", "host", "address", "target", "log", "bypass",
     ]

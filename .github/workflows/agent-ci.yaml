@@ -8,6 +8,7 @@ on:
       - 'backend/tauri/Cargo.toml'
       - 'backend/tauri/src/client.rs'
       - 'backend/tauri/src/core/clash/core.rs'
+      - 'backend/tauri/src/core/updater/mod.rs'
       - 'backend/tauri/src/feat.rs'
       - 'backend/tauri/src/features/agent/**'
       - 'backend/tauri/src/lib.rs'
@@ -17,6 +18,7 @@ on:
       - 'frontend/interface/src/ipc/bindings.ts'
       - 'frontend/chimera/src/features/agent/**'
       - 'frontend/chimera/messages/*.json'
+      - 'manifest/version.json'
       - 'AGENT.md'
   push:
     branches:
@@ -30,6 +32,7 @@ on:
       - 'backend/tauri/Cargo.toml'
       - 'backend/tauri/src/client.rs'
       - 'backend/tauri/src/core/clash/core.rs'
+      - 'backend/tauri/src/core/updater/mod.rs'
       - 'backend/tauri/src/feat.rs'
       - 'backend/tauri/src/features/agent/**'
       - 'backend/tauri/src/lib.rs'
@@ -39,6 +42,7 @@ on:
       - 'frontend/interface/src/ipc/bindings.ts'
       - 'frontend/chimera/src/features/agent/**'
       - 'frontend/chimera/messages/*.json'
+      - 'manifest/version.json'
       - 'AGENT.md'
 
 permissions:
@@ -102,7 +106,52 @@ jobs:
       - name: Run platform Bridge lifecycle tests
         run: >-
           cargo test --locked --manifest-path backend/Cargo.toml -p chimera
-          features::agent::bridge::tests --lib
+          features::agent::adapters::http_bridge::tests --lib
+
+      - name: Run host connectivity platform selection tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::platform_tests --lib
+
+      - name: Run shared Unix platform readiness tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::unix_platform_readiness::tests --lib
+
+      - name: Run shared Linux host connectivity tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::linux_host_connectivity_core::tests --lib
+
+      - name: Run Windows host connectivity failure-injection tests
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::windows_host_connectivity::tests --lib
+
+      - name: Run Linux host connectivity native tests
+        if: runner.os == 'Linux'
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::linux_host_connectivity::tests --lib
+
+      - name: Run Windows platform readiness failure-injection tests
+        if: runner.os == 'Windows'
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::windows_platform_readiness::tests --lib
+
+      - name: Run Linux platform readiness failure-injection tests
+        if: runner.os == 'Linux'
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::linux_platform_readiness::tests --lib
+
+      - name: Run macOS platform readiness failure-injection tests
+        if: runner.os == 'macOS'
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::adapters::macos_platform_readiness::tests --lib
 
   verify:
     name: Agent feature, protocol, and UI
@@ -173,10 +222,20 @@ jobs:
           --no-default-features --features default-meta
           specta_export::tests::agent_bindings_are_absent_without_feature -- --exact
 
+      - name: Run Agent registry contract tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          features::agent::registry::tests --lib
+
       - name: Run Agent tests
         run: >-
           cargo test --locked --manifest-path backend/Cargo.toml -p chimera
           features::agent --lib
+
+      - name: Run updater manifest safety tests
+        run: >-
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera
+          core::updater::tests --lib
 
       - name: Verify generated TypeScript bindings
         run: >-
@@ -202,6 +261,14 @@ jobs:
         run: pnpm --filter chimera-ui build
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
+
+      - name: Run Agent model frontend tests
+        run: >-
+          pnpm exec tsx --tsconfig frontend/chimera/tsconfig.json --test
+          frontend/chimera/src/features/agent/model/presenter.test.ts
+          frontend/chimera/src/features/agent/model/intent-routing.test.ts
+          frontend/chimera/src/features/agent/model/host-connectivity-navigation.test.ts
+          frontend/chimera/src/features/agent/model/autonomy-status.test.ts
 
       - name: Check Agent frontend formatting
         run: >-

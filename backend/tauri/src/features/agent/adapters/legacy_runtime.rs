@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use super::super::{
     diagnostics::host_scope,
@@ -8,11 +8,11 @@ use super::super::{
     },
     ports::{
         AgentConfigurationPort, AgentMutationPort, AgentRuntimePort, AgentTelemetryPort,
-        CoreLifecyclePort, CoreRoutingProbePort, ServiceControlPort, SystemProxyConfiguration,
-        SystemProxyPort,
+        CoreLifecyclePort, CoreRoutingProbePort, HostConnectivityPort, PlatformReadinessPort,
+        ServiceControlPort, SystemProxyConfiguration, SystemProxyPort,
     },
 };
-use super::legacy_snapshot::collect_network_snapshot;
+use super::legacy_snapshot::{LegacySnapshotPorts, collect_network_snapshot};
 
 const CORE_ACTION_TIMEOUT: Duration = Duration::from_secs(3);
 const CORE_RESTART_TIMEOUT: Duration = Duration::from_secs(30);
@@ -20,12 +20,16 @@ const TUN_ACTION_TIMEOUT: Duration = Duration::from_secs(60);
 const SERVICE_MODE_ACTION_TIMEOUT: Duration = Duration::from_secs(60);
 const TELEMETRY_ACTION_TIMEOUT: Duration = Duration::from_secs(15);
 const SERVICE_ACTION_TIMEOUT: Duration = Duration::from_secs(60);
+const STATE_STABILIZE_TIMEOUT: Duration = Duration::from_secs(5);
+const STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct LegacyAgentRuntime {
     configuration: Arc<dyn AgentConfigurationPort>,
     core: Arc<dyn CoreLifecyclePort>,
     mutation: Arc<dyn AgentMutationPort>,
     routing_probe: Arc<dyn CoreRoutingProbePort>,
+    host_connectivity: Arc<dyn HostConnectivityPort>,
+    platform_readiness: Arc<dyn PlatformReadinessPort>,
     service: Arc<dyn ServiceControlPort>,
     system_proxy: Arc<dyn SystemProxyPort>,
     telemetry: Arc<dyn AgentTelemetryPort>,
@@ -37,6 +41,8 @@ impl LegacyAgentRuntime {
         core: Arc<dyn CoreLifecyclePort>,
         mutation: Arc<dyn AgentMutationPort>,
         routing_probe: Arc<dyn CoreRoutingProbePort>,
+        host_connectivity: Arc<dyn HostConnectivityPort>,
+        platform_readiness: Arc<dyn PlatformReadinessPort>,
         service: Arc<dyn ServiceControlPort>,
         system_proxy: Arc<dyn SystemProxyPort>,
         telemetry: Arc<dyn AgentTelemetryPort>,
@@ -46,6 +52,8 @@ impl LegacyAgentRuntime {
             core,
             mutation,
             routing_probe,
+            host_connectivity,
+            platform_readiness,
             service,
             system_proxy,
             telemetry,
@@ -56,14 +64,16 @@ impl LegacyAgentRuntime {
 #[async_trait::async_trait]
 impl AgentRuntimePort for LegacyAgentRuntime {
     async fn snapshot(&self) -> AgentNetworkSnapshot {
-        collect_network_snapshot(
-            self.configuration.as_ref(),
-            self.core.as_ref(),
-            self.routing_probe.as_ref(),
-            self.service.as_ref(),
-            self.system_proxy.as_ref(),
-            self.telemetry.as_ref(),
-        )
+        collect_network_snapshot(LegacySnapshotPorts {
+            configuration: self.configuration.as_ref(),
+            core: self.core.as_ref(),
+            routing: self.routing_probe.as_ref(),
+            connectivity: self.host_connectivity.as_ref(),
+            readiness: self.platform_readiness.as_ref(),
+            service: self.service.as_ref(),
+            system_proxy: self.system_proxy.as_ref(),
+            telemetry: self.telemetry.as_ref(),
+        })
         .await
     }
 
@@ -78,7 +88,14 @@ impl AgentRuntimePort for LegacyAgentRuntime {
             };
         }
 
-        if tun_target_is_applied(&self.snapshot().await, target) {
+        if wait_for_observation(
+            STATE_STABILIZE_TIMEOUT,
+            STATE_POLL_INTERVAL,
+            || self.snapshot(),
+            |snapshot| tun_target_is_applied(snapshot, target),
+        )
+        .await
+        {
             return Ok(());
         }
         if self.rollback_tun(before).await {
@@ -97,7 +114,14 @@ impl AgentRuntimePort for LegacyAgentRuntime {
                 Err(AgentCommandError::PartialApply)
             };
         }
-        if system_proxy_target_is_applied(&self.snapshot().await, target) {
+        if wait_for_observation(
+            STATE_STABILIZE_TIMEOUT,
+            STATE_POLL_INTERVAL,
+            || self.snapshot(),
+            |snapshot| system_proxy_target_is_applied(snapshot, target),
+        )
+        .await
+        {
             return Ok(());
         }
         if self.rollback_system_proxy_enabled(before).await {
@@ -131,28 +155,19 @@ impl AgentRuntimePort for LegacyAgentRuntime {
     }
 
     async fn ensure_core_running(&self) -> AgentResult<()> {
-        tokio::time::timeout(CORE_RESTART_TIMEOUT, self.core.ensure_running())
-            .await
-            .map_err(|_| AgentCommandError::PartialApply)?
-            .map_err(|_| AgentCommandError::PartialApply)
+        execute_uncertain_action(CORE_RESTART_TIMEOUT, self.core.ensure_running()).await
     }
 
     async fn restart_core(&self) -> AgentResult<()> {
-        tokio::time::timeout(CORE_RESTART_TIMEOUT, self.core.restart())
-            .await
-            .map_err(|_| AgentCommandError::PartialApply)?
-            .map_err(|_| AgentCommandError::PartialApply)
+        execute_uncertain_action(CORE_RESTART_TIMEOUT, self.core.restart()).await
     }
 
     async fn reconnect_telemetry(&self) -> AgentResult<()> {
-        tokio::time::timeout(TELEMETRY_ACTION_TIMEOUT, self.telemetry.reconnect())
-            .await
-            .map_err(|_| AgentCommandError::PartialApply)?
-            .map_err(|_| AgentCommandError::PartialApply)
+        execute_uncertain_action(TELEMETRY_ACTION_TIMEOUT, self.telemetry.reconnect()).await
     }
 
     async fn control_service(&self, action: &AgentActionRequest) -> AgentResult<()> {
-        tokio::time::timeout(SERVICE_ACTION_TIMEOUT, async {
+        execute_uncertain_action(SERVICE_ACTION_TIMEOUT, async {
             match action {
                 AgentActionRequest::StartService => self.service.start().await,
                 AgentActionRequest::StopService => self.service.stop().await,
@@ -161,8 +176,6 @@ impl AgentRuntimePort for LegacyAgentRuntime {
             }
         })
         .await
-        .map_err(|_| AgentCommandError::PartialApply)?
-        .map_err(|_| AgentCommandError::PartialApply)
     }
 
     async fn set_routing_mode(
@@ -284,12 +297,24 @@ impl LegacyAgentRuntime {
         if !matches!(restored, Ok(Ok(()))) {
             return false;
         }
-        tun_target_is_applied(&self.snapshot().await, target)
+        wait_for_observation(
+            STATE_STABILIZE_TIMEOUT,
+            STATE_POLL_INTERVAL,
+            || self.snapshot(),
+            |snapshot| tun_target_is_applied(snapshot, target),
+        )
+        .await
     }
 
     async fn rollback_system_proxy_enabled(&self, target: bool) -> bool {
         self.system_proxy.apply_desired(target).await.is_ok()
-            && system_proxy_target_is_applied(&self.snapshot().await, target)
+            && wait_for_observation(
+                STATE_STABILIZE_TIMEOUT,
+                STATE_POLL_INTERVAL,
+                || self.snapshot(),
+                |snapshot| system_proxy_target_is_applied(snapshot, target),
+            )
+            .await
     }
 
     async fn rollback_service_mode(&self, target: bool) -> bool {
@@ -324,9 +349,52 @@ impl LegacyAgentRuntime {
     }
 }
 
+async fn wait_for_observation<T, F, Fut, P>(
+    timeout: Duration,
+    poll_interval: Duration,
+    mut observe: F,
+    predicate: P,
+) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = T>,
+    P: Fn(&T) -> bool,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let observation = match tokio::time::timeout(remaining, observe()).await {
+            Ok(observation) => observation,
+            Err(_) => return false,
+        };
+        if predicate(&observation) {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        tokio::time::sleep(poll_interval.min(remaining)).await;
+    }
+}
+
+async fn execute_uncertain_action<F>(action_timeout: Duration, action: F) -> AgentResult<()>
+where
+    F: Future<Output = anyhow::Result<()>>,
+{
+    tokio::time::timeout(action_timeout, action)
+        .await
+        .map_err(|_| AgentCommandError::PartialApply)?
+        .map_err(|_| AgentCommandError::PartialApply)
+}
+
 fn tun_target_is_applied(snapshot: &AgentNetworkSnapshot, target: bool) -> bool {
     snapshot.tun.desired_enabled == target
         && snapshot.tun.generated_runtime_enabled == Some(target)
+        && snapshot.tun.observed_enabled == Some(target)
         && snapshot.tun.applied_consistency == AgentAppliedState::Consistent
         && snapshot.core.state == AgentCoreState::Running
 }
@@ -363,4 +431,92 @@ fn is_expected_enabled_proxy(proxy: &SystemProxyConfiguration, expected_port: u1
     proxy.enabled
         && proxy.port == expected_port
         && host_scope(&proxy.host) == AgentHostScope::Loopback
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    use super::{execute_uncertain_action, wait_for_observation};
+    use crate::features::agent::AgentCommandError;
+
+    #[tokio::test]
+    async fn observation_polling_waits_for_a_delayed_verified_state() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+
+        assert!(
+            wait_for_observation(
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+                move || {
+                    let attempt = observed.fetch_add(1, Ordering::SeqCst);
+                    async move { attempt >= 2 }
+                },
+                |enabled| *enabled,
+            )
+            .await
+        );
+        assert!(calls.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[tokio::test]
+    async fn observation_polling_fails_closed_after_its_deadline() {
+        assert!(
+            !wait_for_observation(
+                Duration::from_millis(5),
+                Duration::from_millis(1),
+                || async { false },
+                |enabled| *enabled,
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn observation_polling_bounds_a_stalled_observation() {
+        assert!(
+            !tokio::time::timeout(
+                Duration::from_secs(1),
+                wait_for_observation(
+                    Duration::from_millis(5),
+                    Duration::from_millis(1),
+                    std::future::pending::<bool>,
+                    |enabled| *enabled,
+                ),
+            )
+            .await
+            .expect("stalled observation must respect the inner deadline")
+        );
+    }
+
+    #[tokio::test]
+    async fn uncertain_actions_map_failure_and_timeout_to_partial_apply() {
+        assert!(
+            execute_uncertain_action(Duration::from_secs(1), async { Ok(()) })
+                .await
+                .is_ok()
+        );
+        assert!(matches!(
+            execute_uncertain_action(Duration::from_secs(1), async {
+                Err(anyhow::anyhow!("action failed after dispatch"))
+            })
+            .await,
+            Err(AgentCommandError::PartialApply)
+        ));
+        assert!(matches!(
+            execute_uncertain_action(
+                Duration::from_millis(1),
+                std::future::pending::<anyhow::Result<()>>(),
+            )
+            .await,
+            Err(AgentCommandError::PartialApply)
+        ));
+    }
 }

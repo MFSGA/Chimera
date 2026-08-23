@@ -10,35 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import * as m from '@/paraglide/messages';
-
-const intentAction = (intent: AgentIntent): AgentActionRequest | null => {
-  switch (intent.intent) {
-    case 'diagnose':
-      return null;
-    case 'set_tun_enabled':
-      return { action: 'set_tun_enabled', enabled: intent.enabled };
-    case 'set_system_proxy_enabled':
-      return { action: 'set_system_proxy_enabled', enabled: intent.enabled };
-    case 'set_service_mode':
-      return { action: 'set_service_mode', enabled: intent.enabled };
-    case 'set_routing_mode':
-      return { action: 'set_routing_mode', mode: intent.mode };
-    case 'start_core':
-      return { action: 'start_core' };
-    case 'restart_core':
-      return { action: 'restart_core' };
-    case 'reconnect_telemetry':
-      return { action: 'reconnect_telemetry' };
-    case 'control_service':
-      if (intent.operation === 'start') return { action: 'start_service' };
-      if (intent.operation === 'stop') return { action: 'stop_service' };
-      return { action: 'restart_service' };
-    case 'repair_system_proxy_endpoint':
-      return { action: 'repair_system_proxy_endpoint' };
-    case 'disable_stale_system_proxy':
-      return { action: 'disable_stale_system_proxy' };
-  }
-};
+import { routeAgentIntent } from '../model/intent-routing';
 
 const clarificationLabel = (choice: AgentClarificationChoice) => {
   switch (choice.code) {
@@ -70,6 +42,7 @@ export function IntentCard({
   disabled,
   onResolve,
   onDiagnose,
+  onHostConnectivity,
   onPropose,
 }: {
   resolution: AgentIntentResolution | null;
@@ -77,14 +50,26 @@ export function IntentCard({
   disabled: boolean;
   onResolve: (text: string) => void;
   onDiagnose: () => void;
+  onHostConnectivity: () => void;
   onPropose: (action: AgentActionRequest) => void;
 }) {
   const [text, setText] = useState('');
+  const resolvedExecution =
+    resolution?.status === 'resolved'
+      ? routeAgentIntent(resolution.intent)
+      : null;
 
   const executeIntent = (intent: AgentIntent) => {
-    const action = intentAction(intent);
-    if (action) onPropose(action);
-    else onDiagnose();
+    const execution = routeAgentIntent(intent);
+    if (execution.kind === 'host_connectivity') {
+      onHostConnectivity();
+      return;
+    }
+    if (execution.kind === 'proposal') {
+      onPropose(execution.action);
+      return;
+    }
+    onDiagnose();
   };
 
   const submit = (event: FormEvent) => {
@@ -118,16 +103,24 @@ export function IntentCard({
           </Button>
         </form>
 
-        {resolution?.status === 'resolved' && (
+        {resolution?.status === 'resolved' && resolvedExecution && (
           <div className="bg-surface-variant/30 rounded-2xl p-3 text-sm">
-            <p>{m.agent_intent_resolved()}</p>
-            <Button
-              className="mt-2"
-              disabled={disabled}
-              onClick={() => executeIntent(resolution.intent)}
-            >
-              {m.agent_intent_continue()}
-            </Button>
+            <p>
+              {resolvedExecution.kind === 'host_connectivity'
+                ? m.agent_intent_host_connectivity_resolved()
+                : resolvedExecution.kind === 'diagnose'
+                  ? m.agent_intent_diagnose_executed()
+                  : m.agent_intent_resolved()}
+            </p>
+            {resolvedExecution.kind === 'proposal' && (
+              <Button
+                className="mt-2"
+                disabled={disabled}
+                onClick={() => executeIntent(resolution.intent)}
+              >
+                {m.agent_intent_continue()}
+              </Button>
+            )}
           </div>
         )}
 

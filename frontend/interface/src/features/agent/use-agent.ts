@@ -2,10 +2,13 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   commands,
   type AgentActionRequest,
+  type AgentAutonomyPolicyRequest,
+  type AgentAutonomyPolicySnapshot,
   type AgentNetworkSnapshot,
 } from '../../ipc/bindings';
 import { unwrapResult } from '../../utils';
 import {
+  AGENT_AUTONOMY_POLICY_QUERY_KEY,
   AGENT_HISTORY_QUERY_KEY,
   AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
 } from './query-keys';
@@ -33,6 +36,15 @@ export const useAgent = () => {
     refetchOnWindowFocus: false,
   });
 
+  const autonomy = useQuery({
+    queryKey: AGENT_AUTONOMY_POLICY_QUERY_KEY,
+    queryFn: async () => commands.agentGetAutonomyPolicy(),
+    retry: false,
+    refetchInterval: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
   const history = useQuery({
     queryKey: AGENT_HISTORY_QUERY_KEY,
     queryFn: async () => unwrapResult(await commands.agentGetHistory()),
@@ -44,6 +56,56 @@ export const useAgent = () => {
 
   const resolveIntent = useMutation({
     mutationFn: async (text: string) => commands.agentResolveIntent({ text }),
+  });
+
+  const executeReadOnlyIntent = useMutation({
+    mutationFn: async (text: string) =>
+      unwrapResult(await commands.agentExecuteReadOnlyIntent({ text })),
+    onSuccess: (result) => {
+      if (!result) return;
+      if (result.status === 'diagnosed') {
+        queryClient.setQueryData<AgentNetworkSnapshot>(
+          AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
+          result.snapshot,
+        );
+        void queryClient.invalidateQueries({
+          queryKey: AGENT_HISTORY_QUERY_KEY,
+        });
+        return;
+      }
+      if (result.status === 'host_connectivity') {
+        queryClient.setQueryData<AgentNetworkSnapshot>(
+          AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
+          (current) =>
+            current
+              ? { ...current, connectivity: result.connectivity }
+              : current,
+        );
+      }
+    },
+  });
+
+  const authorizeAutonomy = useMutation({
+    mutationFn: async (request: AgentAutonomyPolicyRequest) =>
+      commands.agentAuthorizeAutonomy(request),
+    onSuccess: (result) => {
+      if (result.status === 'authorized') {
+        queryClient.setQueryData<AgentAutonomyPolicySnapshot>(
+          AGENT_AUTONOMY_POLICY_QUERY_KEY,
+          result.policy,
+        );
+      }
+    },
+  });
+
+  const revokeAutonomy = useMutation({
+    mutationFn: async () => commands.agentRevokeAutonomy(),
+    onSuccess: (policy) => {
+      queryClient.setQueryData<AgentAutonomyPolicySnapshot>(
+        AGENT_AUTONOMY_POLICY_QUERY_KEY,
+        policy,
+      );
+    },
   });
 
   const propose = useMutation({
@@ -86,7 +148,11 @@ export const useAgent = () => {
   return {
     snapshot,
     history,
+    autonomy,
+    authorizeAutonomy,
+    revokeAutonomy,
     resolveIntent,
+    executeReadOnlyIntent,
     propose,
     execute,
     cancel,

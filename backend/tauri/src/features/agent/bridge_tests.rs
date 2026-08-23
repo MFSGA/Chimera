@@ -24,10 +24,11 @@ use tokio::{
 
 use super::{
     AgentBridgeStartResult, AgentToolError, BRIDGE_BIND_ADDRESS, BRIDGE_SHUTDOWN_TIMEOUT,
-    BridgeEndpoint, BridgeRuntime, HttpState, MAX_CONCURRENT_TOOL_CALLS, MAX_REQUEST_BODY_BYTES,
-    MAX_TOOL_CALLS_PER_WINDOW, RATE_LIMIT_WINDOW, RateLimitState, ToolExecutionFuture,
-    ToolExecutor, bridge_is_healthy, build_router, health, is_authorized, manifest, new_request_id,
-    reconcile_runtime, shutdown_runtime,
+    BridgeEndpoint, BridgeRuntime, ExecutionTaskRegistry, HttpState, MAX_CONCURRENT_TOOL_CALLS,
+    MAX_REQUEST_BODY_BYTES, MAX_TOOL_CALLS_PER_WINDOW, RATE_LIMIT_WINDOW, RateLimitState,
+    ToolExecutionFuture, ToolExecutionOutcome, ToolExecutor, bridge_is_healthy, build_router,
+    execute_tool, health, is_authorized, manifest, new_request_id, reconcile_runtime,
+    shutdown_runtime,
 };
 use crate::features::agent::HttpBridgeHealth;
 
@@ -67,6 +68,14 @@ impl ToolExecutor for GatedExecutor {
                 .expect("execution release semaphore");
             Ok(serde_json::json!({ "completed": true }))
         })
+    }
+}
+
+struct PanicExecutor;
+
+impl ToolExecutor for PanicExecutor {
+    fn execute(&self, _tool_name: String, _body: axum::body::Bytes) -> ToolExecutionFuture {
+        Box::pin(async { panic!("panic-canary-never-reflect") })
     }
 }
 
@@ -132,6 +141,7 @@ async fn start_test_bridge_with_limits(
         executor,
         token: Arc::from("expected"),
         execution: execution.clone(),
+        execution_tasks: ExecutionTaskRegistry::default(),
         rate_limit: Arc::new(tokio::sync::Mutex::new(rate_limit)),
     });
     let (shutdown, shutdown_rx) = oneshot::channel();
@@ -292,6 +302,7 @@ async fn shutdown_aborts_a_task_that_ignores_the_signal() {
         endpoint: BridgeEndpoint::new("127.0.0.1:1".parse().unwrap()).unwrap(),
         shutdown,
         task,
+        execution_tasks: ExecutionTaskRegistry::default(),
     };
 
     timeout(
@@ -507,6 +518,131 @@ async fn concurrency_limit_rejects_excess_requests_before_execution() {
 }
 
 #[tokio::test]
+async fn timed_out_execution_retains_the_permit_until_the_executor_finishes() {
+    let release = Arc::new(Semaphore::new(0));
+    let executor = Arc::new(GatedExecutor {
+        calls: AtomicUsize::new(0),
+        release: release.clone(),
+    });
+    let execution = Arc::new(Semaphore::new(1));
+    let permit = execution
+        .clone()
+        .try_acquire_owned()
+        .expect("acquire bridge execution permit");
+
+    let outcome = execute_tool(
+        executor.clone(),
+        "core.status".into(),
+        axum::body::Bytes::from_static(b"{}"),
+        permit,
+        ExecutionTaskRegistry::default(),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    assert!(matches!(outcome, ToolExecutionOutcome::TimedOut));
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execution.available_permits(), 0);
+
+    release.add_permits(1);
+    timeout(Duration::from_secs(1), async {
+        while execution.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed-out execution must eventually release its permit");
+}
+
+#[tokio::test]
+async fn closing_execution_registry_aborts_detached_tasks_and_releases_permits() {
+    let (started_tx, started_rx) = oneshot::channel();
+    let (cancelled_tx, cancelled_rx) = oneshot::channel();
+    let executor: Arc<dyn ToolExecutor> = Arc::new(PendingExecutor {
+        calls: AtomicUsize::new(0),
+        started: Mutex::new(Some(started_tx)),
+        cancelled: Mutex::new(Some(cancelled_tx)),
+    });
+    let execution = Arc::new(Semaphore::new(1));
+    let permit = execution
+        .clone()
+        .try_acquire_owned()
+        .expect("acquire bridge execution permit");
+    let execution_tasks = ExecutionTaskRegistry::default();
+
+    let outcome = execute_tool(
+        executor,
+        "core.status".into(),
+        axum::body::Bytes::from_static(b"{}"),
+        permit,
+        execution_tasks.clone(),
+        Duration::from_millis(10),
+    )
+    .await;
+
+    assert!(matches!(outcome, ToolExecutionOutcome::TimedOut));
+    started_rx.await.expect("execution must start");
+    assert_eq!(execution.available_permits(), 0);
+
+    execution_tasks.abort_all().await;
+    timeout(Duration::from_secs(1), cancelled_rx)
+        .await
+        .expect("registry close must cancel detached execution")
+        .expect("execution cancellation signal");
+    timeout(Duration::from_secs(1), async {
+        while execution.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("registry close must release the execution permit");
+}
+
+#[tokio::test]
+async fn closed_execution_registry_rejects_new_tasks() {
+    let registry = ExecutionTaskRegistry::default();
+    registry.abort_all().await;
+    let task = tokio::spawn(std::future::pending::<()>());
+    let abort_handle = task.abort_handle();
+
+    assert!(!registry.register(abort_handle).await);
+    assert!(
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("rejected task must be aborted")
+            .expect_err("rejected task must not complete normally")
+            .is_cancelled()
+    );
+}
+
+#[tokio::test]
+async fn executor_panics_are_projected_to_static_errors_and_release_the_permit() {
+    let (base_url, shutdown, task, execution) =
+        start_test_bridge_with_executor(Some(Arc::new(PanicExecutor)), 1).await;
+    let response = test_http_client()
+        .post(format!("{base_url}/agent/tools/core.status"))
+        .bearer_auth("expected")
+        .body("{}")
+        .send()
+        .await
+        .expect("send panicking tool request");
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    let body = response.text().await.expect("read execution failure body");
+    assert!(body.contains("\"code\":\"execution_failed\""));
+    assert!(!body.contains("panic-canary-never-reflect"));
+    timeout(Duration::from_secs(1), async {
+        while execution.available_permits() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("panicking execution must release its permit");
+
+    stop_test_bridge(shutdown, task).await;
+}
+
+#[tokio::test]
 async fn rate_limit_ignores_unauthorized_traffic_and_blocks_before_execution() {
     let executor = Arc::new(ImmediateExecutor {
         calls: AtomicUsize::new(0),
@@ -629,6 +765,7 @@ async fn stale_runtime_is_cleared_when_health_endpoint_is_unreachable() {
         endpoint: BridgeEndpoint::new(address).unwrap(),
         shutdown,
         task,
+        execution_tasks: ExecutionTaskRegistry::default(),
     });
 
     let health = HttpBridgeHealth::new();
@@ -725,6 +862,9 @@ async fn public_endpoints_serve_and_release_their_port() {
         [
             "system.snapshot",
             "network.diagnose",
+            "host.connectivity",
+            "platform.readiness",
+            "intent.execute",
             "network.probe",
             "core.status",
             "proxy.status",
