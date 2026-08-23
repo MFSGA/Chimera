@@ -1,137 +1,368 @@
-import { cn } from '@chimera/ui';
-import {
-  ArrowRightRounded,
-  CheckRounded,
-  RadioButtonCheckedRounded,
-} from '@mui/icons-material';
+import { cn } from '@chimera/utils';
+import { useControllableState } from '@radix-ui/react-use-controllable-state';
+import ArrowRight from '~icons/material-symbols/arrow-right-rounded';
+import Check from '~icons/material-symbols/check-rounded';
+import RadioChecked from '~icons/material-symbols/radio-button-checked';
+import Radio from '~icons/material-symbols/radio-button-unchecked';
+import { AnimatePresence, motion } from 'motion/react';
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
-import type { ComponentProps } from 'react';
+import { ComponentProps, createContext, useContext } from 'react';
 
-const itemClassName = cn(
-  'relative flex h-10 cursor-pointer items-center gap-2 rounded-lg px-3 text-sm outline-hidden',
-  'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-  'focus:bg-surface-variant dark:focus:bg-surface-variant',
-);
-
-const contentClassName = cn(
-  'bg-inverse-on-surface dark:bg-surface text-on-surface z-50 min-w-48 overflow-hidden rounded-xl border p-1 shadow-lg',
-  'border-outline-variant/40 dark:border-outline-variant/20',
-  'data-[state=open]:animate-in data-[state=closed]:animate-out',
-  'data-[state=open]:fade-in-0 data-[state=closed]:fade-out-0',
-  'data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95',
-);
-
-export const DropdownMenu = DropdownMenuPrimitive.Root;
-export const DropdownMenuTrigger = DropdownMenuPrimitive.Trigger;
-export const DropdownMenuSub = DropdownMenuPrimitive.Sub;
-export const DropdownMenuRadioGroup = DropdownMenuPrimitive.RadioGroup;
-
-export function DropdownMenuContent({
+const MotionContent = ({
+  children,
   className,
-  sideOffset = 6,
+  style,
+  ...props
+}: ComponentProps<typeof motion.div>) => {
+  return (
+    <motion.div
+      className={cn(
+        'relative z-50 w-full overflow-auto rounded',
+        'dark:text-on-surface',
+        'bg-inverse-on-surface dark:bg-surface',
+        'shadow-background shadow-sm',
+        'border-outline-variant/50 dark:border-outline-variant/15 border',
+        className,
+      )}
+      style={{
+        ...style,
+        maxHeight: 'var(--radix-popper-available-height)',
+        transformOrigin:
+          'var(--radix-dropdown-menu-content-transform-origin, ' +
+          'var(--radix-dropdown-menu-sub-content-transform-origin, ' +
+          'var(--radix-popper-transform-origin, top)))',
+      }}
+      initial={{ opacity: 0, scaleY: 0.9 }}
+      animate={{ opacity: 1, scaleY: 1 }}
+      exit={{ opacity: 0, scaleY: 0.9 }}
+      transition={{ type: 'spring', bounce: 0, duration: 0.35 }}
+      data-slot="main-dropdown-menu-motion-content"
+      {...props}
+    >
+      {children}
+    </motion.div>
+  );
+};
+
+type WidthType = 'auto' | 'full';
+type AlignType = 'start' | 'center' | 'end';
+
+const DropdownMenuContext = createContext<{
+  open: boolean;
+  width: WidthType;
+  align: AlignType;
+} | null>(null);
+
+const useDropdownMenuContext = () => {
+  const context = useContext(DropdownMenuContext);
+
+  if (context === null) {
+    throw new Error(
+      'DropdownMenu compound components cannot be rendered outside the DropdownMenu component',
+    );
+  }
+
+  return context;
+};
+
+export const DropdownMenu = ({
+  width = 'auto',
   align = 'center',
+  open: inputOpen,
+  defaultOpen,
+  onOpenChange,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.Content>) {
-  return (
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.Content
-        className={cn(contentClassName, className)}
-        sideOffset={sideOffset}
-        align={align}
-        {...props}
-      />
-    </DropdownMenuPrimitive.Portal>
-  );
-}
+}: ComponentProps<typeof DropdownMenuPrimitive.Root> & {
+  width?: WidthType;
+  align?: AlignType;
+}) => {
+  const [open, setOpen] = useControllableState({
+    prop: inputOpen,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
 
-export function DropdownMenuSubContent({
-  className,
-  sideOffset = 6,
-  ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
   return (
-    <DropdownMenuPrimitive.Portal>
-      <DropdownMenuPrimitive.SubContent
-        className={cn(contentClassName, className)}
-        sideOffset={sideOffset}
+    <DropdownMenuContext.Provider value={{ open, width, align }}>
+      <DropdownMenuPrimitive.Root
         {...props}
+        open={open}
+        onOpenChange={setOpen}
       />
-    </DropdownMenuPrimitive.Portal>
+    </DropdownMenuContext.Provider>
   );
-}
+};
 
-export function DropdownMenuItem({
+export function DropdownMenuTrigger({
   className,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.Item>) {
+}: ComponentProps<typeof DropdownMenuPrimitive.Trigger>) {
   return (
-    <DropdownMenuPrimitive.Item
-      className={cn(itemClassName, className)}
+    <DropdownMenuPrimitive.Trigger
+      className={cn('data-[state=open]:bg-inverse-on-surface', className)}
       {...props}
     />
   );
 }
 
-export function DropdownMenuCheckboxItem({
-  className,
-  children,
-  ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) {
-  return (
-    <DropdownMenuPrimitive.CheckboxItem
-      className={cn(itemClassName, 'pl-9', className)}
-      {...props}
-    >
-      <DropdownMenuPrimitive.ItemIndicator className="absolute left-3 flex items-center">
-        <CheckRounded fontSize="small" />
-      </DropdownMenuPrimitive.ItemIndicator>
-      {children}
-    </DropdownMenuPrimitive.CheckboxItem>
-  );
-}
+export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
+export const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 
-export function DropdownMenuRadioItem({
-  className,
+const DropdownMenuSubContext = createContext<{ open: boolean } | null>(null);
+
+const useDropdownMenuSubContext = () => {
+  const context = useContext(DropdownMenuSubContext);
+
+  if (context === null) {
+    throw new Error(
+      'DropdownMenuSub compound components cannot be rendered outside the DropdownMenuSub component',
+    );
+  }
+
+  return context;
+};
+
+export const DropdownMenuSub = ({
+  open: inputOpen,
+  defaultOpen,
+  onOpenChange,
   children,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) {
+}: ComponentProps<typeof DropdownMenuPrimitive.Sub>) => {
+  const [open, setOpen] = useControllableState({
+    prop: inputOpen,
+    defaultProp: defaultOpen ?? false,
+    onChange: onOpenChange,
+  });
+
   return (
-    <DropdownMenuPrimitive.RadioItem
-      className={cn(itemClassName, 'pr-9', className)}
-      {...props}
-    >
-      {children}
-      <DropdownMenuPrimitive.ItemIndicator className="absolute right-3 flex items-center">
-        <RadioButtonCheckedRounded fontSize="small" />
-      </DropdownMenuPrimitive.ItemIndicator>
-    </DropdownMenuPrimitive.RadioItem>
+    <DropdownMenuSubContext.Provider value={{ open }}>
+      <DropdownMenuPrimitive.Sub {...props} open={open} onOpenChange={setOpen}>
+        {children}
+      </DropdownMenuPrimitive.Sub>
+    </DropdownMenuSubContext.Provider>
   );
-}
+};
 
 export function DropdownMenuSubTrigger({
-  className,
   children,
+  className,
   ...props
 }: ComponentProps<typeof DropdownMenuPrimitive.SubTrigger>) {
   return (
     <DropdownMenuPrimitive.SubTrigger
-      className={cn(itemClassName, 'justify-between', className)}
+      className={cn(
+        'flex h-12 cursor-default items-center justify-between gap-2 p-4 pr-2 outline-hidden',
+        'cursor-pointer',
+        'hover:bg-surface-variant',
+        'dark:hover:bg-surface-variant',
+        'data-[state=open]:bg-surface-variant/30',
+        'dark:data-[state=open]:bg-surface-variant/30',
+        className,
+      )}
       {...props}
     >
       {children}
-      <ArrowRightRounded fontSize="small" />
+      <ArrowRight className="text-outline-variant dark:text-outline size-6" />
     </DropdownMenuPrimitive.SubTrigger>
   );
 }
 
-export function DropdownMenuSeparator({
+export function DropdownMenuSubContent({
+  children,
   className,
   ...props
-}: ComponentProps<typeof DropdownMenuPrimitive.Separator>) {
+}: ComponentProps<typeof DropdownMenuPrimitive.SubContent>) {
+  const { open } = useDropdownMenuSubContext();
+
   return (
-    <DropdownMenuPrimitive.Separator
-      className={cn('bg-outline-variant/30 my-1 h-px', className)}
+    <AnimatePresence initial={false}>
+      {open && (
+        <DropdownMenuPortal forceMount>
+          <DropdownMenuPrimitive.SubContent {...props} asChild>
+            <MotionContent className={className}>{children}</MotionContent>
+          </DropdownMenuPrimitive.SubContent>
+        </DropdownMenuPortal>
+      )}
+    </AnimatePresence>
+  );
+}
+
+const DropdownMenuRadioGroupContext = createContext<{ value: string | null }>({
+  value: null,
+});
+
+const useDropdownMenuRadioGroupContext = () => {
+  const context = useContext(DropdownMenuRadioGroupContext);
+
+  if (context === undefined) {
+    throw new Error(
+      'DropdownMenuRadioGroup compound components cannot be rendered outside the DropdownMenuRadioGroup component',
+    );
+  }
+
+  return context;
+};
+
+export const DropdownMenuRadioGroup = ({
+  value: inputValue,
+  defaultValue,
+  onValueChange,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.RadioGroup>) => {
+  const [value, setValue] = useControllableState({
+    prop: inputValue,
+    defaultProp: String(defaultValue),
+    onChange: onValueChange,
+  });
+
+  return (
+    <DropdownMenuRadioGroupContext.Provider value={{ value }}>
+      <DropdownMenuPrimitive.RadioGroup
+        {...props}
+        value={value}
+        onValueChange={setValue}
+      />
+    </DropdownMenuRadioGroupContext.Provider>
+  );
+};
+
+export const DropdownMenuContent = ({
+  children,
+  className,
+  align: alignProp,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Content>) => {
+  const { open, width, align } = useDropdownMenuContext();
+
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <DropdownMenuPrimitive.Portal forceMount>
+          <DropdownMenuPrimitive.Content
+            align={alignProp ?? align}
+            {...props}
+            asChild
+          >
+            <MotionContent
+              className={className}
+              style={{
+                width:
+                  width === 'full'
+                    ? 'var(--radix-popper-anchor-width)'
+                    : undefined,
+              }}
+            >
+              {children}
+            </MotionContent>
+          </DropdownMenuPrimitive.Content>
+        </DropdownMenuPrimitive.Portal>
+      )}
+    </AnimatePresence>
+  );
+};
+
+export const DropdownMenuItem = ({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Item>) => {
+  return (
+    <DropdownMenuPrimitive.Item
+      className={cn(
+        'flex h-12 cursor-default items-center justify-between gap-2 p-4 outline-hidden',
+        'cursor-pointer',
+        'hover:bg-surface-variant',
+        'dark:hover:bg-surface-variant',
+        className,
+      )}
       {...props}
     />
   );
-}
+};
+
+export const DropdownMenuCheckboxItem = ({
+  children,
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.CheckboxItem>) => {
+  return (
+    <DropdownMenuPrimitive.CheckboxItem
+      className={cn(
+        'relative flex h-12 items-center justify-between gap-2 p-4 outline-hidden',
+        'cursor-pointer pl-12',
+        'hover:bg-surface-variant',
+        'dark:hover:bg-surface-variant',
+        'data-[state=checked]:bg-primary-container dark:data-[state=checked]:bg-on-primary',
+        className,
+      )}
+      {...props}
+    >
+      <DropdownMenuPrimitive.ItemIndicator className="absolute top-1/2 left-4 -translate-y-1/2">
+        <Check className="text-primary" />
+      </DropdownMenuPrimitive.ItemIndicator>
+      {children}
+    </DropdownMenuPrimitive.CheckboxItem>
+  );
+};
+
+export const DropdownMenuRadioItem = ({
+  value,
+  children,
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) => {
+  const context = useDropdownMenuRadioGroupContext();
+  const selected = context.value === value;
+
+  return (
+    <DropdownMenuPrimitive.RadioItem
+      className={cn(
+        'flex h-12 cursor-default items-center justify-between gap-2 p-4 outline-hidden',
+        'cursor-pointer',
+        'hover:bg-surface-variant',
+        'dark:hover:bg-surface-variant',
+        'data-[state=checked]:bg-primary-container dark:data-[state=checked]:bg-on-primary',
+        className,
+      )}
+      value={value}
+      {...props}
+    >
+      <DropdownMenuPrimitive.ItemIndicator>
+        <RadioChecked className="text-primary" />
+      </DropdownMenuPrimitive.ItemIndicator>
+      {!selected && (
+        <span>
+          <Radio className="text-outline-variant dark:text-outline" />
+        </span>
+      )}
+      <div className="flex-1">{children}</div>
+    </DropdownMenuPrimitive.RadioItem>
+  );
+};
+
+export const DropdownMenuLabel = ({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Label>) => {
+  return (
+    <DropdownMenuPrimitive.Label
+      className={cn(
+        'flex h-12 cursor-default items-center justify-between gap-2 p-4 outline-hidden',
+        className,
+      )}
+      {...props}
+    />
+  );
+};
+
+export const DropdownMenuSeparator = ({
+  className,
+  ...props
+}: ComponentProps<typeof DropdownMenuPrimitive.Separator>) => {
+  return (
+    <DropdownMenuPrimitive.Separator
+      className={cn('bg-outline-variant/50 h-px', className)}
+      {...props}
+    />
+  );
+};

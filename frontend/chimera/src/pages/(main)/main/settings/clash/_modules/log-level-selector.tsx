@@ -1,8 +1,6 @@
+import { useClashConfig } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import {
-  ThemeMode,
-  useExperimentalThemeContext,
-} from '@/components/providers/theme-provider';
+import { useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -20,46 +18,60 @@ import {
   SettingsCardContent,
 } from '../../_modules/settings-card';
 
-export default function ThemeModeSelector() {
-  const { themeMode, setThemeMode } = useExperimentalThemeContext();
-  const messages = {
-    [ThemeMode.LIGHT]: m.settings_user_interface_theme_mode_light(),
-    [ThemeMode.DARK]: m.settings_user_interface_theme_mode_dark(),
-    [ThemeMode.SYSTEM]: m.settings_user_interface_theme_mode_system(),
-  } satisfies Record<ThemeMode, string>;
+const LOG_LEVEL_OPTIONS = {
+  debug: 'Debug',
+  info: 'Info',
+  warning: 'Warn',
+  error: 'Error',
+  silent: 'Silent',
+} as const;
+
+export default function LogLevelSelector() {
+  const { query, upsert } = useClashConfig();
+
+  const value = useMemo(
+    () => query.data?.['log-level'] as keyof typeof LOG_LEVEL_OPTIONS,
+    [query.data],
+  );
+
+  const handleLogLevelChange = useCallback(
+    async (value: string) => {
+      await upsert.mutateAsync({
+        'log-level': value,
+      });
+    },
+    [upsert],
+  );
 
   return (
-    <SettingsCard data-slot="theme-mode-selector">
+    <SettingsCard data-slot="log-level-selector-card">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <SettingsCardContent data-slot="theme-mode-selector-trigger" asChild>
+          <SettingsCardContent data-slot="log-level-selector-trigger" asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
               <ItemContainer>
                 <ItemLabel>
                   <ItemLabelText>
-                    {m.settings_user_interface_theme_mode_label()}
+                    {m.settings_clash_settings_log_level_label()}
                   </ItemLabelText>
+
                   <ItemLabelDescription>
-                    {themeMode ? messages[themeMode] : null}
+                    {value ? LOG_LEVEL_OPTIONS[value] : null}
                   </ItemLabelDescription>
                 </ItemLabel>
+
                 <ArrowForwardIosRounded />
               </ItemContainer>
             </Button>
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent
-          align="end"
-          sideOffset={-16}
-          alignOffset={16}
-          data-slot="theme-mode-selector-menu"
-        >
-          {Object.entries(messages).map(([mode, label]) => (
+        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+          {Object.entries(LOG_LEVEL_OPTIONS).map(([key, label]) => (
             <DropdownMenuCheckboxItem
-              checked={themeMode === mode}
-              key={mode}
-              onSelect={() => void setThemeMode(mode as ThemeMode)}
+              checked={value === key}
+              key={key}
+              onSelect={() => void handleLogLevelChange(key)}
             >
               {label}
             </DropdownMenuCheckboxItem>

@@ -7,15 +7,13 @@ import {
   SettingsLabel,
 } from '../_modules/settings-card';
 import { SettingsTitle } from '../_modules/settings-title';
-import {
-  AllowLanSwitch,
-  IPv6Switch,
-  LogLevelSelector,
-  TunStackSelector,
-} from './_modules/base-settings';
+import { AllowLanSwitch } from './_modules/base-settings';
 import CoreManager from './_modules/core-manager';
 import { FieldFilterCard, FieldFilterSwitch } from './_modules/field-filter';
+import IPv6Switch from './_modules/ipv6-switch';
+import LogLevelSelector from './_modules/log-level-selector';
 import { MixedPortConfig, RandomPortSwitch } from './_modules/port-settings';
+import TunStackSelector from './_modules/tun-stack-selector';
 
 export const Route = createFileRoute('/(main)/main/settings/clash')({
   component: RouteComponent,
