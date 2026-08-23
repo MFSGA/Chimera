@@ -12,6 +12,15 @@ export const commands = {
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
     typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
+  getRuntimeTransformDiagnostics: () =>
+    typedError<
+      {
+        revision: number;
+        output: PostProcessingOutput;
+        failure: RuntimeTransformFailureDiagnostics | null;
+      } | null,
+      string
+    >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,
@@ -24,44 +33,54 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<null, string>(__TAURI_INVOKE('import_profile', { url, option })),
+    typedError<MutationOutcome<string>, string>(
+      __TAURI_INVOKE('import_profile', { url, option }),
+    ),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
   reorderProfile: (activeId: string, overId: string) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('reorder_profile', { activeId, overId }),
     ),
   reorderProfilesByList: (list: string[]) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('reorder_profiles_by_list', { list }),
     ),
   activateProfile: (uid: string | null) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
     ),
   setProfileValidFields: (fields: string[]) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
+    ),
+  setProfileTransformChain: (uid: string, transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_profile_transform_chain', { uid, transforms }),
+    ),
+  setGlobalTransformChain: (transforms: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_global_transform_chain', { transforms }),
     ),
   patchProfileMetadata: (
     uid: string,
     patch: ProfileMetadataPatch_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('patch_profile_metadata', { uid, patch }),
     ),
   patchRemoteProfileOptions: (
     uid: string,
     patch: RemoteProfileOptionsPatch_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('patch_remote_profile_options', { uid, patch }),
     ),
   replaceProfileDefinition: (
     uid: string,
     definition: ProfileDefinition_Deserialize,
   ) =>
-    typedError<RebuildOutcome, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('replace_profile_definition', { uid, definition }),
     ),
   updateProfile: (
@@ -75,15 +94,21 @@ export const commands = {
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<null, string>(__TAURI_INVOKE('update_profile', { uid, option })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('update_profile', { uid, option }),
+    ),
   patchProfile: (uid: string, profile: ProfileBuilderRequest_Deserialize) =>
-    typedError<null, string>(__TAURI_INVOKE('patch_profile', { uid, profile })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('patch_profile', { uid, profile }),
+    ),
   deleteProfile: (uid: string) =>
-    typedError<null, string>(__TAURI_INVOKE('delete_profile', { uid })),
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('delete_profile', { uid }),
+    ),
   readProfileFile: (uid: string) =>
     typedError<string, string>(__TAURI_INVOKE('read_profile_file', { uid })),
   saveProfileFile: (uid: string, fileData: string) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('save_profile_file', { uid, fileData }),
     ),
   /**  create a new profile */
@@ -91,7 +116,7 @@ export const commands = {
     item: ProfileBuilderRequest_Deserialize,
     fileData: string | null,
   ) =>
-    typedError<null, string>(
+    typedError<MutationOutcome<string>, string>(
       __TAURI_INVOKE('create_profile', { item, fileData }),
     ),
   createEditorWindow: (windowType: EditorWindowType, uid: string | null) =>
@@ -152,6 +177,10 @@ export const commands = {
     typedError<string | null, string>(__TAURI_INVOKE('get_custom_app_dir')),
   setCustomAppDir: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('set_custom_app_dir', { path })),
+  clashApiGetConfigs: () =>
+    typedError<ClashRuntimeConfig, string>(
+      __TAURI_INVOKE('clash_api_get_configs'),
+    ),
   clashApiGetProxyDelay: (name: string, url: string | null) =>
     typedError<DelayRes, string>(
       __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
@@ -726,6 +755,7 @@ export type AgentPrivacyBoundary = {
 };
 
 export type AgentProbeCode =
+  | 'core_status_unavailable'
   | 'core_status_timeout'
   | 'core_config_unavailable'
   | 'tun_status_unavailable'
@@ -977,6 +1007,22 @@ export type ClashInfo = {
   secret: string | null;
 };
 
+/**  Runtime state returned by the running core's `GET /configs` endpoint. */
+export type ClashRuntimeConfig = {
+  port: number | null;
+  mode: string | null;
+  ipv6: boolean | null;
+  'socket-port': number | null;
+  'allow-lan': boolean | null;
+  'log-level': string | null;
+  'mixed-port': number | null;
+  'redir-port': number | null;
+  'socks-port': number | null;
+  'tproxy-port': number | null;
+  'external-controller': string | null;
+  secret: string | null;
+};
+
 export type ClashStrategy = {
   external_controller_port_strategy: ExternalControllerPortStrategy;
 };
@@ -1058,6 +1104,25 @@ export type CoreInfos = {
 export type CoreState = 'Running' | { Stopped: string | null };
 
 export type CoreType = { clash: ClashCoreType } | 'singbox';
+
+export type Degradation = {
+  phase: DegradationPhase;
+  code: string;
+  message: string;
+  retryable: boolean;
+};
+
+export type DegradationPhase =
+  | 'legacy_mirror'
+  | 'profile_materialization'
+  | 'runtime_build'
+  | 'runtime_check'
+  | 'runtime_promote'
+  | 'runtime_publish'
+  | 'runtime_apply'
+  | 'core_rollback'
+  | 'system_effect'
+  | 'ui_effect';
 
 export type DelayRes = {
   delay: number;
@@ -1344,6 +1409,8 @@ export type LocalProfile_Serialize = {
   chain: string[];
 } & ProfileShared;
 
+export type LogSpan = 'log' | 'info' | 'warn' | 'error';
+
 export type LoggingLevel = LoggingLevel_Serialize | LoggingLevel_Deserialize;
 
 export type LoggingLevel_Deserialize =
@@ -1369,6 +1436,17 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
+export type MergeProfile = ProfileShared;
+
+/**
+ *  Public mutation wire aligned with REF: desired state is committed first;
+ *  post-commit side-effect failures degrade instead of turning the mutation
+ *  into an error that would imply the commit was rolled back.
+ */
+export type MutationOutcome<T> =
+  | { status: 'applied'; value: T }
+  | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
+
 export type PatchClashCoreConfig =
   PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
 
@@ -1384,9 +1462,11 @@ export type PatchClashCoreConfig_Serialize = {
   'external-controller'?: string | null;
 };
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig =
   PatchRuntimeConfig_Serialize | PatchRuntimeConfig_Deserialize;
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Deserialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;
@@ -1394,6 +1474,7 @@ export type PatchRuntimeConfig_Deserialize = {
   mode?: string | null;
 };
 
+/**  Typed IPC payload for modifying persistent runtime overrides. */
 export type PatchRuntimeConfig_Serialize = {
   'allow-lan'?: boolean | null;
   ipv6?: boolean | null;
@@ -1401,16 +1482,38 @@ export type PatchRuntimeConfig_Serialize = {
   mode?: string | null;
 };
 
+/**  后处理输出 */
+export type PostProcessingOutput = {
+  /**  Per-source transform chain output, keyed by source profile UID and transform UID. */
+  scopes: { [key in string]: { [key in string]: [LogSpan, string][] } };
+  /**  Global transform chain output, keyed by transform UID. */
+  global: { [key in string]: [LogSpan, string][] };
+};
+
 export type ProfileBuilderRequest =
   ProfileBuilderRequest_Serialize | ProfileBuilderRequest_Deserialize;
 
 export type ProfileBuilderRequest_Deserialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize);
+  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type?: ScriptType;
+    };
 
 export type ProfileBuilderRequest_Serialize =
   | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize);
+  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
+  | { type: 'merge'; name: string | null; desc: string | null }
+  | {
+      type: 'script';
+      name: string | null;
+      desc: string | null;
+      script_type: ScriptType;
+    };
 
 export type ProfileDefinition =
   ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
@@ -1440,7 +1543,9 @@ export type ProfileMetadataPatch_Serialize = {
 
 export type ProfileResponse =
   | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize);
+  | ({ type: 'local' } & LocalProfile_Serialize)
+  | ({ type: 'merge' } & MergeProfile)
+  | ({ type: 'script' } & ScriptProfile);
 
 export type ProfileShared = {
   /**  Profile ID */
@@ -1586,9 +1691,6 @@ export type ProxyItem_Serialize = {
   icon?: string | null;
 };
 
-export type RebuildOutcome =
-  { status: 'ok' } | { status: 'degraded'; error: string };
-
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 
 /** Builder for [`RemoteProfile`](struct.RemoteProfile.html). */
@@ -1687,6 +1789,26 @@ export type RuntimeInfos = {
   nyanpasu_config_dir: string;
   nyanpasu_data_dir: string;
 };
+
+export type RuntimeTransformDiagnostics = {
+  revision: number;
+  output: PostProcessingOutput;
+  failure: RuntimeTransformFailureDiagnostics | null;
+};
+
+export type RuntimeTransformFailureDiagnostics = {
+  attempt_revision: number;
+  transform_uid: string;
+  scope_uid: string | null;
+  script_type: ScriptType | null;
+  message: string;
+};
+
+export type ScriptProfile = {
+  script_type?: ScriptType;
+} & ProfileShared;
+
+export type ScriptType = 'javascript' | 'lua';
 
 export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 
