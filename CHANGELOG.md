@@ -1,3 +1,55 @@
+## [0.22.0] - 2026-08-23 15:03:29
+
+### ✅ Testing
+
+- **e2e:** Add profile and storage contract coverage by @MFSGA
+
+- **e2e:** Add isolated Tauri WebDriver harness by @MFSGA
+
+- **e2e:** Cover storage event recovery by @MFSGA
+
+- **e2e:** Cover app mutation helpers by @MFSGA
+
+- **e2e:** Cover global transform diagnostics by @MFSGA
+
+- **e2e:** Cover transform diagnostics across runtimes by @MFSGA
+
+- **e2e:** Update selectors and navigation flows by @MFSGA
+
+### ✨ Features
+
+- **enhance:** Expose runtime transform diagnostics by @MFSGA
+
+- **profile-ui:** Show transform failures in profile editor by @MFSGA
+
+- **profile-ui:** Diagnose merge transform failures by @MFSGA
+
+- **profile-ui:** Surface transform runtime failures by @MFSGA
+
+- **profile-ui:** Clarify transform diagnostic states by @MFSGA
+
+- **profile-ui:** Show applied transform diagnostics by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **core:** Clean runtime candidates before promotion by @MFSGA
+
+- **enhance:** Bound transform runtime logs by @MFSGA
+
+- **interface:** Invalidate clash data after profile mutations by @MFSGA
+
+- **profile-ui:** Refresh transform diagnostics on rebuild failure by @MFSGA
+
+- **profile-ui:** Refresh transform diagnostics on runtime updates by @MFSGA
+
+### 🔨 Refactor
+
+- **ui:** Rebuild dropdown menu and settings selectors by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.21.4...v0.22.0
+
 ## [0.21.4] - 2026-08-21 20:06:45
 
 ### ✅ Testing
