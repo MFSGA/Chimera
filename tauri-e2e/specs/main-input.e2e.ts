@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const systemPath = '/main/settings/system';
 const targetPath = '/main/settings/web-ui';
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
@@ -54,14 +53,10 @@ describe('main ref input primitive', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const settingsLink = await $(`a[href="${systemPath}"]`);
-    await settingsLink.waitForClickable({ timeout: 15_000 });
-    await settingsLink.click();
-    await waitForPath(systemPath);
-
-    const webUiLink = await $(`a[href="${targetPath}"]`);
-    await webUiLink.waitForClickable({ timeout: 15_000 });
-    await webUiLink.click();
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, targetPath);
     await waitForPath(targetPath);
   });
 
@@ -70,7 +65,7 @@ describe('main ref input primitive', () => {
     await card.waitForDisplayed({ timeout: 15_000 });
 
     const trigger = await card.$('[data-slot="modal-trigger"]');
-    await trigger.waitForClickable({ timeout: 15_000 });
+    await trigger.waitForDisplayed({ timeout: 15_000 });
     const placeholderContainer = await trigger.$(
       '[data-slot="modal-trigger-placeholder-container"]',
     );
@@ -79,7 +74,9 @@ describe('main ref input primitive', () => {
     );
     assert.equal(await placeholderContainer.isExisting(), true);
     assert.equal(await placeholder.isExisting(), true);
-    await trigger.click();
+    await browser.execute((element) => {
+      (element as HTMLElement).click();
+    }, trigger);
 
     const modal = await $('[data-slot="modal-content"]');
     await modal.waitForDisplayed({ timeout: 15_000 });

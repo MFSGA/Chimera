@@ -58,6 +58,19 @@ describe('main settings reference layout', () => {
   it('keeps the ref sidebar and full-height flex content chain', async () => {
     const content = await $('[data-slot="settings-content"]');
     await content.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const content = document.querySelector(
+            '[data-slot="settings-content"]',
+          );
+          return content?.children.length === 1;
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The settings route transition did not settle.',
+      },
+    );
 
     const state = await browser.execute(() => {
       const container = document.querySelector<HTMLElement>(
