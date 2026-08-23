@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { ProfileResponse } from '../frontend/interface/src/ipc/bindings.ts';
-import { remoteProfileDefinitionOf } from '../frontend/interface/src/ipc/profile-definition.ts';
+import type { ProfileResponse } from '../frontend/interface/src/ipc/bindings.js';
+import { remoteProfileDefinitionOf } from '../frontend/interface/src/ipc/profile-definition.js';
 
 const baseShared = {
   uid: 'profile-id',

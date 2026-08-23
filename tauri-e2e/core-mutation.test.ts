@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   restartCoreSidecar,
   type RestartSidecarCommand,
-} from '../frontend/interface/src/ipc/core-mutation.ts';
+} from '../frontend/interface/src/ipc/core-mutation.js';
 
 test('successful core restart resolves normally', async () => {
   let calls = 0;

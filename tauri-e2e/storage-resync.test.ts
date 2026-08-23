@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   createStorageResyncCoordinator,
   reconcileStorageSnapshot,
-} from '../frontend/chimera/src/services/storage-resync.ts';
+} from '../frontend/chimera/src/services/storage-resync.js';
 
 test('storage snapshot refreshes subscribed keys and clears missing values', () => {
   const observed: Array<[string, unknown | null]> = [];
@@ -42,7 +42,8 @@ test('storage resync coalesces repeated signals into one queued refresh', async 
       });
     },
     (snapshot) => applied.push(snapshot),
-    assert.fail,
+    (error) =>
+      assert.fail(error instanceof Error ? error : String(error)),
   );
 
   const first = coordinator.resync();

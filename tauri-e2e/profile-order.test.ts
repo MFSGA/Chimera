@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   mergeFilteredProfileOrder,
   profileOrderChanged,
-} from '../frontend/chimera/src/pages/(main)/main/profiles/$type/_modules/profile-order.ts';
+} from '../frontend/chimera/src/pages/(main)/main/profiles/$type/_modules/profile-order.js';
 
 test('profile order change detection handles unchanged and reordered lists', () => {
   assert.equal(profileOrderChanged(['a', 'b'], ['a', 'b']), false);

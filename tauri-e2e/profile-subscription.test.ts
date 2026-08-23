@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { getProfileSubscriptionUsage } from '../frontend/interface/src/utils/profile-subscription.ts';
+import { getProfileSubscriptionUsage } from '../frontend/interface/src/utils/profile-subscription.js';
 
 test('profile subscription usage calculates a bounded percentage', () => {
   assert.deepEqual(getProfileSubscriptionUsage(25, 25, 100), {

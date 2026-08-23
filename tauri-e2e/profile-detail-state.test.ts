@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveProfileDetailState } from '../frontend/chimera/src/pages/(main)/main/profiles/$type/detail/_modules/profile-detail-state.ts';
+import { resolveProfileDetailState } from '../frontend/chimera/src/pages/(main)/main/profiles/$type/detail/_modules/profile-detail-state.js';
 
 const profiles = [
   { uid: 'profile-a', name: 'Alpha' },

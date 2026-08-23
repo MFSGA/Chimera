@@ -3,7 +3,7 @@ import test from 'node:test';
 import {
   runProfileAction,
   runProfileOrderAction,
-} from '../frontend/chimera/src/pages/(main)/main/profiles/$type/_modules/profile-action.ts';
+} from '../frontend/chimera/src/pages/(main)/main/profiles/$type/_modules/profile-action.js';
 
 test('successful profile action returns its value without reporting an error', async () => {
   let executions = 0;
