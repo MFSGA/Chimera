@@ -9,6 +9,7 @@ use crate::{
         HttpNetworkProbe, LegacyAgentConfiguration, LegacyAgentMutation, LegacyAgentRuntime,
         LegacyCoreLifecycle, LegacyCoreRoutingProbe, LegacyServiceControl, LegacySystemProxy,
         RegistryAgentToolExecutor, TauriAgentConfirmation, TauriAgentTelemetry,
+        platform_host_connectivity, platform_readiness,
     },
 };
 
@@ -18,6 +19,8 @@ pub(crate) fn setup(app: &tauri::App) -> anyhow::Result<()> {
     let core = Arc::new(LegacyCoreLifecycle::new());
     let mutation = Arc::new(LegacyAgentMutation::new());
     let routing_probe = Arc::new(LegacyCoreRoutingProbe::new());
+    let host_connectivity = platform_host_connectivity();
+    let platform_readiness = platform_readiness();
     let service = Arc::new(LegacyServiceControl::new());
     let system_proxy = Arc::new(LegacySystemProxy::new(mutation.clone()));
     let telemetry = Arc::new(TauriAgentTelemetry::new(app_handle.clone()));
@@ -26,6 +29,8 @@ pub(crate) fn setup(app: &tauri::App) -> anyhow::Result<()> {
         core,
         mutation,
         routing_probe,
+        host_connectivity,
+        platform_readiness,
         service,
         system_proxy,
         telemetry,

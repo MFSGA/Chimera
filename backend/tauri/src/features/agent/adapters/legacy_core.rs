@@ -34,9 +34,7 @@ impl CoreLifecyclePort for LegacyCoreLifecycle {
     }
 
     async fn restart(&self) -> anyhow::Result<()> {
-        CoreManager::global()
-            .restart_core_with_generated_config()
-            .await
+        CoreManager::global().run_core().await
     }
 }
 

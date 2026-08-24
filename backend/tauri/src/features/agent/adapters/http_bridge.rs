@@ -6,7 +6,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    body::to_bytes,
+    body::{Bytes, to_bytes},
     extract::{DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header::AUTHORIZATION},
     response::{IntoResponse, Response},
@@ -17,8 +17,8 @@ use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
-    sync::{Mutex, Semaphore, oneshot},
-    task::JoinHandle,
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore, oneshot},
+    task::{AbortHandle, JoinHandle},
     time::timeout,
 };
 
@@ -70,6 +70,7 @@ struct HttpState {
     executor: Option<Arc<dyn ToolExecutor>>,
     token: Arc<str>,
     execution: Arc<Semaphore>,
+    execution_tasks: ExecutionTaskRegistry,
     rate_limit: Arc<Mutex<RateLimitState>>,
 }
 
@@ -123,6 +124,79 @@ struct BridgeRuntime {
     endpoint: BridgeEndpoint,
     shutdown: oneshot::Sender<()>,
     task: JoinHandle<()>,
+    execution_tasks: ExecutionTaskRegistry,
+}
+
+#[derive(Clone, Default)]
+struct ExecutionTaskRegistry {
+    state: Arc<Mutex<ExecutionTaskRegistryState>>,
+}
+
+#[derive(Default)]
+struct ExecutionTaskRegistryState {
+    closed: bool,
+    handles: Vec<AbortHandle>,
+}
+
+impl ExecutionTaskRegistry {
+    async fn register(&self, handle: AbortHandle) -> bool {
+        let mut state = self.state.lock().await;
+        state.handles.retain(|handle| !handle.is_finished());
+        if state.closed {
+            handle.abort();
+            return false;
+        }
+        state.handles.push(handle);
+        true
+    }
+
+    async fn abort_all(&self) {
+        let handles = {
+            let mut state = self.state.lock().await;
+            state.closed = true;
+            state.handles.retain(|handle| !handle.is_finished());
+            state.handles.drain(..).collect::<Vec<_>>()
+        };
+        for handle in handles {
+            handle.abort();
+        }
+    }
+}
+
+struct AbortOnDropTask<T> {
+    handle: Option<JoinHandle<T>>,
+}
+
+impl<T> AbortOnDropTask<T> {
+    fn new(handle: JoinHandle<T>) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    async fn join(&mut self) -> Option<Result<T, tokio::task::JoinError>> {
+        let result = self.handle.as_mut()?.await;
+        self.handle.take();
+        Some(result)
+    }
+
+    fn detach(&mut self) {
+        self.handle.take();
+    }
+}
+
+impl<T> Drop for AbortOnDropTask<T> {
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+enum ToolExecutionOutcome {
+    Completed(Result<Value, AgentToolError>),
+    JoinFailed,
+    TimedOut,
 }
 
 pub(crate) struct HttpAgentBridge {
@@ -163,10 +237,12 @@ impl AgentBridgePort for HttpAgentBridge {
         let endpoint = BridgeEndpoint::new(address)?;
         let base_url = endpoint.base_url();
         let token = hex::encode(rand::random::<[u8; 32]>());
+        let execution_tasks = ExecutionTaskRegistry::default();
         let router = build_router(HttpState {
             executor: Some(self.executor.clone()),
             token: Arc::from(token.as_str()),
             execution: Arc::new(Semaphore::new(MAX_CONCURRENT_TOOL_CALLS)),
+            execution_tasks: execution_tasks.clone(),
             rate_limit: Arc::new(Mutex::new(RateLimitState::new())),
         });
         let (shutdown, shutdown_rx) = oneshot::channel();
@@ -185,6 +261,7 @@ impl AgentBridgePort for HttpAgentBridge {
             endpoint,
             shutdown,
             task,
+            execution_tasks,
         });
 
         tracing::info!(target: "agent_bridge", "agent bridge started");
@@ -200,7 +277,7 @@ impl AgentBridgePort for HttpAgentBridge {
     }
 
     async fn stop(&mut self) -> AgentBridgeStatus {
-        remove_finished_runtime(&mut self.runtime);
+        remove_finished_runtime(&mut self.runtime).await;
         let Some(runtime) = self.runtime.take() else {
             return stopped_status();
         };
@@ -213,8 +290,12 @@ impl AgentBridgePort for HttpAgentBridge {
 
 async fn shutdown_runtime(runtime: BridgeRuntime) {
     let BridgeRuntime {
-        shutdown, mut task, ..
+        shutdown,
+        mut task,
+        execution_tasks,
+        ..
     } = runtime;
+    execution_tasks.abort_all().await;
     let _ = shutdown.send(());
     match timeout(BRIDGE_SHUTDOWN_TIMEOUT, &mut task).await {
         Ok(Ok(())) => {}
@@ -238,7 +319,9 @@ async fn reconcile_runtime(
         .is_some_and(|current| current.task.is_finished())
     {
         tracing::warn!(target: "agent_bridge", "clearing finished agent bridge runtime");
-        runtime.take();
+        if let Some(finished) = runtime.take() {
+            finished.execution_tasks.abort_all().await;
+        }
         return;
     }
 
@@ -251,19 +334,22 @@ async fn reconcile_runtime(
 
     tracing::warn!(target: "agent_bridge", "clearing unresponsive agent bridge runtime");
     if let Some(stale) = runtime.take() {
+        stale.execution_tasks.abort_all().await;
         let _ = stale.shutdown.send(());
         stale.task.abort();
         let _ = stale.task.await;
     }
 }
 
-fn remove_finished_runtime(runtime: &mut Option<BridgeRuntime>) {
+async fn remove_finished_runtime(runtime: &mut Option<BridgeRuntime>) {
     if runtime
         .as_ref()
         .is_some_and(|current| current.task.is_finished())
     {
         tracing::warn!(target: "agent_bridge", "clearing finished agent bridge runtime");
-        runtime.take();
+        if let Some(finished) = runtime.take() {
+            finished.execution_tasks.abort_all().await;
+        }
     }
 }
 
@@ -347,7 +433,7 @@ async fn call_tool(
         return registry_error_response(request_id, error);
     }
 
-    let _permit = match state.execution.clone().try_acquire_owned() {
+    let permit = match state.execution.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
             return error_response(
@@ -367,16 +453,60 @@ async fn call_tool(
             "agent bridge application state is unavailable",
         );
     };
-    let result = timeout(tool_timeout, executor.execute(tool_name.clone(), body)).await;
-    match result {
-        Ok(Ok(output)) => success_response(request_id, tool_name, output),
-        Ok(Err(error)) => registry_error_response(request_id, error),
-        Err(_) => error_response(
+    match execute_tool(
+        executor,
+        tool_name.clone(),
+        body,
+        permit,
+        state.execution_tasks.clone(),
+        tool_timeout,
+    )
+    .await
+    {
+        ToolExecutionOutcome::Completed(Ok(output)) => {
+            success_response(request_id, tool_name, output)
+        }
+        ToolExecutionOutcome::Completed(Err(error)) => registry_error_response(request_id, error),
+        ToolExecutionOutcome::JoinFailed => error_response(
+            StatusCode::BAD_GATEWAY,
+            request_id,
+            "execution_failed",
+            "agent tool execution failed",
+        ),
+        ToolExecutionOutcome::TimedOut => error_response(
             StatusCode::GATEWAY_TIMEOUT,
             request_id,
             "tool_timeout",
             "agent tool execution timed out",
         ),
+    }
+}
+
+async fn execute_tool(
+    executor: Arc<dyn ToolExecutor>,
+    tool_name: String,
+    body: Bytes,
+    permit: OwnedSemaphorePermit,
+    execution_tasks: ExecutionTaskRegistry,
+    tool_timeout: Duration,
+) -> ToolExecutionOutcome {
+    let handle = tokio::spawn(async move {
+        let _permit = permit;
+        executor.execute(tool_name, body).await
+    });
+    let abort_handle = handle.abort_handle();
+    let mut task = AbortOnDropTask::new(handle);
+    if !execution_tasks.register(abort_handle).await {
+        return ToolExecutionOutcome::JoinFailed;
+    }
+
+    match timeout(tool_timeout, task.join()).await {
+        Ok(Some(Ok(result))) => ToolExecutionOutcome::Completed(result),
+        Ok(Some(Err(_))) | Ok(None) => ToolExecutionOutcome::JoinFailed,
+        Err(_) => {
+            task.detach();
+            ToolExecutionOutcome::TimedOut
+        }
     }
 }
 

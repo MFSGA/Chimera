@@ -3,9 +3,10 @@ use tauri::{State, WebviewWindow};
 use crate::client::NyanpasuClient;
 
 use super::{
-    AgentActionRequest, AgentActionResult, AgentBridgeStartResult, AgentBridgeStatus,
-    AgentCommandError, AgentHistorySnapshot, AgentIntentRequest, AgentIntentResolution,
-    AgentManifest, AgentNetworkSnapshot, AgentProposal,
+    AgentActionRequest, AgentActionResult, AgentAutonomyPolicyRequest, AgentAutonomyPolicyResult,
+    AgentAutonomyPolicySnapshot, AgentBridgeStartResult, AgentBridgeStatus, AgentCommandError,
+    AgentExecuteReadOnlyIntentRequest, AgentExecuteReadOnlyIntentResult, AgentHistorySnapshot,
+    AgentIntentRequest, AgentIntentResolution, AgentManifest, AgentNetworkSnapshot, AgentProposal,
 };
 
 #[tauri::command]
@@ -29,6 +30,40 @@ pub(crate) fn agent_resolve_intent(
     request: AgentIntentRequest,
 ) -> AgentIntentResolution {
     client.agent_resolve_intent(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_execute_read_only_intent(
+    client: State<'_, NyanpasuClient>,
+    request: AgentExecuteReadOnlyIntentRequest,
+) -> Result<AgentExecuteReadOnlyIntentResult, AgentCommandError> {
+    client.agent_execute_read_only_intent(request).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn agent_authorize_autonomy(
+    client: State<'_, NyanpasuClient>,
+    request: AgentAutonomyPolicyRequest,
+) -> AgentAutonomyPolicyResult {
+    client.agent_authorize_autonomy(request)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn agent_get_autonomy_policy(
+    client: State<'_, NyanpasuClient>,
+) -> AgentAutonomyPolicySnapshot {
+    client.agent_autonomy_policy()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn agent_revoke_autonomy(
+    client: State<'_, NyanpasuClient>,
+) -> AgentAutonomyPolicySnapshot {
+    client.agent_revoke_autonomy()
 }
 
 #[tauri::command]

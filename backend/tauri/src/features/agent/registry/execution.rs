@@ -7,7 +7,7 @@ use super::{
     request::{RequiredToolEnvelope, parse_body, parse_empty_request},
 };
 use crate::features::agent::{
-    AgentNetworkProbeRequest,
+    AgentExecuteReadOnlyIntentRequest, AgentNetworkProbeRequest, execute_read_only_intent,
     model::AgentSystemSnapshot,
     ports::{AgentRuntimePort, NetworkProbePort},
 };
@@ -44,6 +44,31 @@ pub(crate) async fn execute_tool(
             serialize_tool_result(
                 runtime.snapshot().await,
                 "failed to serialize diagnostic result",
+                definition.output_fields,
+            )
+        }
+        AgentToolKind::HostConnectivity => {
+            parse_empty_request(body)?;
+            serialize_tool_result(
+                runtime.snapshot().await.connectivity,
+                "failed to serialize host connectivity",
+                definition.output_fields,
+            )
+        }
+        AgentToolKind::PlatformReadiness => {
+            parse_empty_request(body)?;
+            serialize_tool_result(
+                runtime.snapshot().await.platform_readiness,
+                "failed to serialize platform readiness",
+                definition.output_fields,
+            )
+        }
+        AgentToolKind::IntentExecute => {
+            let request: RequiredToolEnvelope<AgentExecuteReadOnlyIntentRequest> =
+                parse_body(body)?;
+            serialize_tool_result(
+                execute_read_only_intent(request.arguments, runtime.snapshot()).await,
+                "failed to serialize read-only intent result",
                 definition.output_fields,
             )
         }

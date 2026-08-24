@@ -15,6 +15,7 @@ use super::super::{
 const HISTORY_FILE: &str = "agent-history.json";
 pub(crate) const MAX_HISTORY_FILE_BYTES: u64 = 1024 * 1024;
 const HISTORY_BLOCKING_IO_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_HISTORY_DIRECTORY_SCAN_ENTRIES: usize = 4096;
 
 #[derive(Clone)]
 struct HistoryBlockingIo {
@@ -136,14 +137,55 @@ async fn quarantine_corrupt_document(
     blocking_io: &HistoryBlockingIo,
 ) -> anyhow::Result<()> {
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let quarantined = path.with_file_name(format!("agent-history.corrupt-{timestamp}.json"));
+    let quarantined = path.with_file_name(corrupt_history_file_name(timestamp, rand::random()));
     move_history_file(path, &quarantined, blocking_io).await?;
     prune_corrupt_documents_with_io(path, blocking_io).await
+}
+
+fn corrupt_history_file_name(timestamp: i64, nonce: [u8; 16]) -> String {
+    format!(
+        "agent-history.corrupt-{timestamp}-{}.json",
+        hex::encode(nonce)
+    )
+}
+
+fn corrupt_history_sort_key(name: &str) -> Option<(i64, u128)> {
+    let stem = name
+        .strip_prefix("agent-history.corrupt-")?
+        .strip_suffix(".json")?;
+    let (timestamp, nonce) = match stem.split_once('-') {
+        Some((timestamp, nonce)) => {
+            if nonce.len() != 32
+                || !nonce
+                    .bytes()
+                    .all(|value| value.is_ascii_digit() || matches!(value, b'a'..=b'f'))
+            {
+                return None;
+            }
+            (timestamp, u128::from_str_radix(nonce, 16).ok()?)
+        }
+        None => (stem, 0),
+    };
+    let timestamp = timestamp.parse::<i64>().ok()?;
+    (timestamp >= 0).then_some((timestamp, nonce))
 }
 
 async fn prune_corrupt_documents_with_io(
     history_path: &Path,
     blocking_io: &HistoryBlockingIo,
+) -> anyhow::Result<()> {
+    prune_corrupt_documents_with_io_limit(
+        history_path,
+        blocking_io,
+        MAX_HISTORY_DIRECTORY_SCAN_ENTRIES,
+    )
+    .await
+}
+
+async fn prune_corrupt_documents_with_io_limit(
+    history_path: &Path,
+    blocking_io: &HistoryBlockingIo,
+    max_entries: usize,
 ) -> anyhow::Result<()> {
     let parent = history_path
         .parent()
@@ -151,20 +193,29 @@ async fn prune_corrupt_documents_with_io(
     let mut directory = tokio::fs::read_dir(parent).await?;
     let mut retained = Vec::with_capacity(MAX_CORRUPT_HISTORY_FILES + 1);
     let mut removed = false;
+    let mut scanned_entries = 0;
+    let mut reached_budget = false;
     while let Some(entry) = directory.next_entry().await? {
+        if scanned_entries >= max_entries {
+            reached_budget = true;
+            break;
+        }
+        scanned_entries += 1;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with("agent-history.corrupt-")
-            && name.ends_with(".json")
+        if let Some(sort_key) = corrupt_history_sort_key(&name)
             && entry.file_type().await?.is_file()
         {
-            retained.push((name, entry.path()));
-            retained.sort_by(|left, right| left.0.cmp(&right.0));
+            retained.push((sort_key, entry.path()));
+            retained.sort_by_key(|entry| entry.0);
             if retained.len() > MAX_CORRUPT_HISTORY_FILES {
                 let (_, path) = retained.remove(0);
                 tokio::fs::remove_file(path).await?;
                 removed = true;
             }
         }
+    }
+    if reached_budget {
+        tracing::warn!(target: "agent_history", "history corrupt retention scan reached entry budget");
     }
     if removed {
         sync_parent_directory(history_path, blocking_io).await?;
@@ -488,6 +539,25 @@ pub(crate) async fn recover_temporary_document(path: &Path) -> anyhow::Result<()
 #[cfg(test)]
 pub(crate) async fn prune_corrupt_documents(history_path: &Path) -> anyhow::Result<()> {
     prune_corrupt_documents_with_io(history_path, &HistoryBlockingIo::new()).await
+}
+
+#[cfg(test)]
+pub(crate) async fn prune_corrupt_documents_with_limit(
+    history_path: &Path,
+    max_entries: usize,
+) -> anyhow::Result<()> {
+    prune_corrupt_documents_with_io_limit(history_path, &HistoryBlockingIo::new(), max_entries)
+        .await
+}
+
+#[cfg(test)]
+pub(crate) fn corrupt_history_file_name_for_test(timestamp: i64, nonce: [u8; 16]) -> String {
+    corrupt_history_file_name(timestamp, nonce)
+}
+
+#[cfg(test)]
+pub(crate) fn corrupt_history_sort_key_for_test(name: &str) -> Option<(i64, u128)> {
+    corrupt_history_sort_key(name)
 }
 
 #[cfg(test)]

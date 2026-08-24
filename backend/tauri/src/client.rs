@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use crate::features::agent::{
-    AgentActionRequest, AgentActionResult, AgentBridgeStartResult, AgentBridgeStatus, AgentClient,
-    AgentCommandError, AgentHistorySnapshot, AgentIntentRequest, AgentIntentResolution,
-    AgentManifest, AgentNetworkSnapshot, AgentProposal, agent_manifest, resolve_intent,
+    AgentActionRequest, AgentActionResult, AgentAutonomyPolicyRequest, AgentAutonomyPolicyResult,
+    AgentAutonomyPolicySnapshot, AgentBridgeStartResult, AgentBridgeStatus, AgentClient,
+    AgentCommandError, AgentExecuteReadOnlyIntentRequest, AgentExecuteReadOnlyIntentResult,
+    AgentHistorySnapshot, AgentIntentRequest, AgentIntentResolution, AgentManifest,
+    AgentNetworkSnapshot, AgentProposal, agent_manifest, resolve_intent,
 };
 
 struct NyanpasuClientInner {
@@ -37,6 +39,28 @@ impl NyanpasuClient {
         &self,
     ) -> Result<AgentNetworkSnapshot, AgentCommandError> {
         self.inner.agent.network_snapshot().await
+    }
+
+    pub(crate) async fn agent_execute_read_only_intent(
+        &self,
+        request: AgentExecuteReadOnlyIntentRequest,
+    ) -> Result<AgentExecuteReadOnlyIntentResult, AgentCommandError> {
+        self.inner.agent.execute_read_only_intent(request).await
+    }
+
+    pub(crate) fn agent_authorize_autonomy(
+        &self,
+        request: AgentAutonomyPolicyRequest,
+    ) -> AgentAutonomyPolicyResult {
+        self.inner.agent.authorize_autonomy(request)
+    }
+
+    pub(crate) fn agent_autonomy_policy(&self) -> AgentAutonomyPolicySnapshot {
+        self.inner.agent.autonomy_policy()
+    }
+
+    pub(crate) fn agent_revoke_autonomy(&self) -> AgentAutonomyPolicySnapshot {
+        self.inner.agent.revoke_autonomy()
     }
 
     pub(crate) async fn agent_history(&self) -> Result<AgentHistorySnapshot, AgentCommandError> {
