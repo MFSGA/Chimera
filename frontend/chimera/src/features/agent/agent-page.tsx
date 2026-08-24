@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { ActionPanel } from './components/action-panel';
+import { AutonomyCard } from './components/autonomy-card';
 import { BridgeCard } from './components/bridge-card';
 import { FindingList, ProbeFailureList } from './components/finding-list';
 import { HistoryCard } from './components/history-card';
@@ -25,6 +26,8 @@ import { IntentCard } from './components/intent-card';
 import { IssueGuidanceCard } from './components/issue-guidance-card';
 import { ProposalDialog } from './components/proposal-dialog';
 import { SnapshotSummary } from './components/snapshot-summary';
+import { inspectHostConnectivityCard } from './model/host-connectivity-navigation';
+import { resolveExecutedReadOnlyIntent } from './model/intent-routing';
 import { presentAgentError, presentHealth } from './model/presenter';
 import {
   isPrivacySafeSnapshot,
@@ -56,7 +59,15 @@ export function AgentPage() {
 
   const resolveIntent = async (text: string) => {
     try {
-      setIntentResolution(await agent.resolveIntent.mutateAsync(text));
+      const result = await agent.executeReadOnlyIntent.mutateAsync(text);
+      if (!result) {
+        Notice.error(m.agent_error_title());
+        return;
+      }
+      setIntentResolution(resolveExecutedReadOnlyIntent(result));
+      if (result.status === 'host_connectivity') {
+        await inspectHostConnectivity();
+      }
     } catch (error) {
       Notice.error(presentAgentError(error));
     }
@@ -90,6 +101,13 @@ export function AgentPage() {
     await agent.history.refetch();
   };
 
+  const inspectHostConnectivity = () =>
+    inspectHostConnectivityCard({
+      refresh: () => agent.snapshot.refetch(),
+      schedule: requestAnimationFrame,
+      findCard: () => document.getElementById('agent-host-connectivity-card'),
+    });
+
   const copyContext = async () => {
     if (!privacySafeSnapshot) {
       Notice.error(m.agent_context_privacy_blocked());
@@ -98,6 +116,31 @@ export function AgentPage() {
     try {
       await writeText(privacySafeSnapshot);
       Notice.success(m.agent_context_copied());
+    } catch (error) {
+      Notice.error(presentAgentError(error));
+    }
+  };
+
+  const authorizeAutonomy = async () => {
+    try {
+      const result = await agent.authorizeAutonomy.mutateAsync({
+        schema_version: 1,
+        scope: 'current_desktop_session',
+        allowlist: ['reconnect_telemetry'],
+        duration_seconds: 10 * 60,
+        max_actions: 3,
+      });
+      if (result.status === 'rejected') {
+        Notice.error(m.agent_error_title());
+      }
+    } catch (error) {
+      Notice.error(presentAgentError(error));
+    }
+  };
+
+  const revokeAutonomy = async () => {
+    try {
+      await agent.revokeAutonomy.mutateAsync();
     } catch (error) {
       Notice.error(presentAgentError(error));
     }
@@ -142,13 +185,25 @@ export function AgentPage() {
         </header>
 
         <PrivacyCard />
+        <AutonomyCard
+          policy={agent.autonomy.data}
+          authorizing={agent.authorizeAutonomy.isPending}
+          revoking={agent.revokeAutonomy.isPending}
+          onAuthorize={() => void authorizeAutonomy()}
+          onRevoke={() => void revokeAutonomy()}
+        />
         <BridgeCard />
         <IntentCard
           resolution={intentResolution}
-          resolving={agent.resolveIntent.isPending}
-          disabled={agent.propose.isPending || agent.snapshot.isFetching}
+          resolving={agent.executeReadOnlyIntent.isPending}
+          disabled={
+            agent.propose.isPending ||
+            agent.executeReadOnlyIntent.isPending ||
+            agent.snapshot.isFetching
+          }
           onResolve={(text) => void resolveIntent(text)}
           onDiagnose={() => void refreshDiagnostics()}
+          onHostConnectivity={() => void inspectHostConnectivity()}
           onPropose={(action) => void propose(action)}
         />
 
