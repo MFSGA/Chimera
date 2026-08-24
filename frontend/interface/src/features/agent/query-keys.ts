@@ -3,6 +3,10 @@ export const AGENT_NETWORK_SNAPSHOT_QUERY_KEY = [
   'network-snapshot',
 ] as const;
 export const AGENT_HISTORY_QUERY_KEY = ['agent', 'history'] as const;
+export const AGENT_AUTONOMY_POLICY_QUERY_KEY = [
+  'agent',
+  'autonomy-policy',
+] as const;
 export const AGENT_BRIDGE_STATUS_QUERY_KEY = [
   'agent',
   'bridge-status',
