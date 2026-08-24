@@ -8,9 +8,10 @@ use super::{
     bridge::{AgentBridgeStartResult, AgentBridgeStatus},
     history::AgentHistoryDocument,
     model::{
-        AgentActionRequest, AgentCommandError, AgentCoreState, AgentNetworkProbeRequest,
-        AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProfileSnapshot, AgentProposal,
-        AgentResult, AgentRoutingMode, AgentRunType, AgentSelectedCore, AgentServiceState,
+        AgentActionRequest, AgentCommandError, AgentCoreState, AgentHostConnectivitySnapshot,
+        AgentNetworkProbeRequest, AgentNetworkProbeResult, AgentNetworkSnapshot,
+        AgentProcessPrivilegeStatus, AgentProfileSnapshot, AgentProposal, AgentResult,
+        AgentRoutingMode, AgentRunType, AgentSelectedCore, AgentServiceState,
         AgentTelemetrySnapshot,
     },
 };
@@ -34,8 +35,24 @@ pub(crate) trait AgentConfigurationPort: Send + Sync + 'static {
 }
 
 #[async_trait::async_trait]
+pub(crate) trait HostConnectivityPort: Send + Sync + 'static {
+    async fn snapshot(&self) -> AgentHostConnectivitySnapshot;
+}
+
+#[async_trait::async_trait]
+pub(crate) trait PlatformReadinessPort: Send + Sync + 'static {
+    async fn process_privilege(&self) -> AgentProcessPrivilegeStatus;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CoreRuntimeObservation {
+    pub(crate) routing_mode: AgentRoutingMode,
+    pub(crate) tun_enabled: Option<bool>,
+}
+
+#[async_trait::async_trait]
 pub(crate) trait CoreRoutingProbePort: Send + Sync + 'static {
-    async fn observed_mode(&self) -> Result<AgentRoutingMode, ()>;
+    async fn observed_configuration(&self) -> Result<CoreRuntimeObservation, ()>;
 }
 
 #[derive(Debug, Clone, Copy)]
