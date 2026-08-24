@@ -4,18 +4,27 @@ use sha2::{Digest, Sha256};
 
 use super::model::{
     AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
-    AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostScope, AgentProbeCode,
+    AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostConnectivitySnapshot,
+    AgentHostConnectivityStatus, AgentHostScope, AgentPlatformReadinessSnapshot, AgentProbeCode,
     AgentProbeFailure, AgentProfileSnapshot, AgentServiceSnapshot, AgentServiceState,
-    AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
-    NETWORK_SNAPSHOT_SCHEMA_VERSION,
+    AgentSystemDnsVerificationStatus, AgentSystemProxySnapshot, AgentTelemetrySnapshot,
+    AgentTunPermissionReadiness, AgentTunSnapshot, NETWORK_SNAPSHOT_SCHEMA_VERSION,
 };
 use super::ports::{ServiceLifecycleStatus, SystemProxyConfiguration};
 
-pub(super) fn tun_applied_consistency(desired: bool, generated: Option<bool>) -> AgentAppliedState {
-    match generated {
-        Some(enabled) if enabled == desired => AgentAppliedState::Consistent,
-        Some(_) => AgentAppliedState::Stale,
-        None => AgentAppliedState::Unknown,
+pub(super) fn tun_applied_consistency(
+    desired: bool,
+    generated: Option<bool>,
+    observed: Option<bool>,
+) -> AgentAppliedState {
+    if generated.is_some_and(|enabled| enabled != desired)
+        || observed.is_some_and(|enabled| enabled != desired)
+    {
+        AgentAppliedState::Stale
+    } else if generated == Some(desired) && observed == Some(desired) {
+        AgentAppliedState::Consistent
+    } else {
+        AgentAppliedState::Unknown
     }
 }
 
@@ -177,6 +186,71 @@ pub(super) fn derive_findings(
     findings
 }
 
+pub(super) fn append_connectivity_finding(
+    findings: &mut Vec<AgentFinding>,
+    status: AgentHostConnectivityStatus,
+) {
+    let finding = match status {
+        AgentHostConnectivityStatus::LinkDisconnected => Some((
+            AgentFindingCode::HostLinkDisconnected,
+            AgentFindingSeverity::Critical,
+        )),
+        AgentHostConnectivityStatus::AddressUnavailable => Some((
+            AgentFindingCode::HostAddressUnavailable,
+            AgentFindingSeverity::Critical,
+        )),
+        AgentHostConnectivityStatus::DefaultRouteUnavailable => Some((
+            AgentFindingCode::HostDefaultRouteUnavailable,
+            AgentFindingSeverity::Critical,
+        )),
+        AgentHostConnectivityStatus::DnsUnavailable => Some((
+            AgentFindingCode::HostDnsUnavailable,
+            AgentFindingSeverity::Critical,
+        )),
+        AgentHostConnectivityStatus::CaptivePortalSuspected => Some((
+            AgentFindingCode::HostCaptivePortalSuspected,
+            AgentFindingSeverity::Warning,
+        )),
+        AgentHostConnectivityStatus::InternetUnreachable => Some((
+            AgentFindingCode::HostInternetUnreachable,
+            AgentFindingSeverity::Critical,
+        )),
+        AgentHostConnectivityStatus::OnlineIpv4Only => {
+            Some((AgentFindingCode::HostIpv4Only, AgentFindingSeverity::Info))
+        }
+        AgentHostConnectivityStatus::OnlineIpv6Only => {
+            Some((AgentFindingCode::HostIpv6Only, AgentFindingSeverity::Info))
+        }
+        AgentHostConnectivityStatus::OnlineDualStack
+        | AgentHostConnectivityStatus::Indeterminate => None,
+    };
+    if let Some((code, severity)) = finding {
+        findings.push(AgentFinding { code, severity });
+    }
+}
+
+pub(super) fn append_platform_readiness_findings(
+    findings: &mut Vec<AgentFinding>,
+    readiness: &AgentPlatformReadinessSnapshot,
+) {
+    push_finding(
+        findings,
+        readiness.tun_permission == AgentTunPermissionReadiness::Required,
+        AgentFindingCode::TunPermissionRequired,
+        AgentFindingSeverity::Warning,
+    );
+    push_finding(
+        findings,
+        matches!(
+            readiness.system_dns_verification,
+            AgentSystemDnsVerificationStatus::NotConfigured
+                | AgentSystemDnsVerificationStatus::ResolutionFailed
+        ),
+        AgentFindingCode::TunSystemDnsUnverified,
+        AgentFindingSeverity::Warning,
+    );
+}
+
 fn push_finding(
     findings: &mut Vec<AgentFinding>,
     condition: bool,
@@ -214,9 +288,11 @@ pub(super) fn snapshot_revision(
     service: &AgentServiceSnapshot,
     proxy: &AgentSystemProxySnapshot,
     tun: &AgentTunSnapshot,
+    connectivity: &AgentHostConnectivitySnapshot,
+    readiness: &AgentPlatformReadinessSnapshot,
 ) -> String {
     let material = format!(
-        "{}:{:?}:{:?}:{}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{}:{:?}",
+        "{}:{:?}:{:?}:{}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
         NETWORK_SNAPSHOT_SCHEMA_VERSION,
         core.state,
         core.run_type,
@@ -229,18 +305,37 @@ pub(super) fn snapshot_revision(
         proxy.observed_port,
         tun.desired_enabled,
         tun.generated_runtime_enabled,
+        connectivity.status,
+        connectivity.active_interface_kind,
+        connectivity.link_up,
+        connectivity.ipv4.usable_ip,
+        connectivity.ipv6.usable_ip,
+        connectivity.dns_resolves,
+        connectivity.captive_portal_suspected,
+        readiness.process_privilege,
+        readiness.tun_permission,
+        readiness.tun_verification,
+        readiness.system_dns_verification,
     );
     hex::encode(Sha256::digest(material.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_findings, host_scope, summarize_system_proxy, tun_applied_consistency};
+    use super::{
+        append_connectivity_finding, append_platform_readiness_findings, derive_findings,
+        derive_health, host_scope, snapshot_revision, summarize_system_proxy,
+        tun_applied_consistency,
+    };
     use crate::features::agent::model::{
         AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState,
-        AgentFindingCode, AgentHostScope, AgentProbeCode, AgentProfileSnapshot, AgentRoutingMode,
+        AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostConnectivitySnapshot,
+        AgentHostConnectivityStatus, AgentHostScope, AgentIpFamilyConnectivity,
+        AgentNetworkInterfaceKind, AgentPlatformReadinessSnapshot, AgentProbeCode,
+        AgentProbeFailure, AgentProcessPrivilegeStatus, AgentProfileSnapshot, AgentRoutingMode,
         AgentRunType, AgentSelectedCore, AgentServiceSnapshot, AgentServiceState,
-        AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
+        AgentSystemDnsVerificationStatus, AgentSystemProxySnapshot, AgentTelemetrySnapshot,
+        AgentTunPermissionReadiness, AgentTunSnapshot, AgentTunVerificationStatus,
     };
     use crate::features::agent::ports::SystemProxyConfiguration;
 
@@ -253,25 +348,25 @@ mod tests {
     }
 
     #[test]
-    fn tun_consistency_is_derived_from_desired_and_generated_state() {
+    fn tun_consistency_requires_desired_generated_and_observed_state() {
         assert_eq!(
-            tun_applied_consistency(true, Some(true)),
+            tun_applied_consistency(true, Some(true), Some(true)),
             AgentAppliedState::Consistent
         );
         assert_eq!(
-            tun_applied_consistency(false, Some(false)),
+            tun_applied_consistency(false, Some(false), Some(false)),
             AgentAppliedState::Consistent
         );
         assert_eq!(
-            tun_applied_consistency(true, Some(false)),
+            tun_applied_consistency(true, Some(false), Some(true)),
             AgentAppliedState::Stale
         );
         assert_eq!(
-            tun_applied_consistency(false, Some(true)),
+            tun_applied_consistency(false, Some(false), Some(true)),
             AgentAppliedState::Stale
         );
         assert_eq!(
-            tun_applied_consistency(true, None),
+            tun_applied_consistency(true, Some(true), None),
             AgentAppliedState::Unknown
         );
     }
@@ -305,7 +400,7 @@ mod tests {
         let tun = AgentTunSnapshot {
             desired_enabled: false,
             generated_runtime_enabled: Some(false),
-            observed_active: AgentAppliedState::Unknown,
+            observed_enabled: Some(false),
             applied_consistency: AgentAppliedState::Consistent,
         };
         let profiles = AgentProfileSnapshot {
@@ -331,6 +426,311 @@ mod tests {
                 .iter()
                 .any(|finding| { finding.code == AgentFindingCode::SystemProxyWithoutRunningCore })
         );
+    }
+
+    #[test]
+    fn connectivity_statuses_map_to_stable_findings_and_health() {
+        let cases = [
+            (
+                AgentHostConnectivityStatus::LinkDisconnected,
+                Some((
+                    AgentFindingCode::HostLinkDisconnected,
+                    AgentFindingSeverity::Critical,
+                )),
+                AgentHealth::Critical,
+            ),
+            (
+                AgentHostConnectivityStatus::AddressUnavailable,
+                Some((
+                    AgentFindingCode::HostAddressUnavailable,
+                    AgentFindingSeverity::Critical,
+                )),
+                AgentHealth::Critical,
+            ),
+            (
+                AgentHostConnectivityStatus::DefaultRouteUnavailable,
+                Some((
+                    AgentFindingCode::HostDefaultRouteUnavailable,
+                    AgentFindingSeverity::Critical,
+                )),
+                AgentHealth::Critical,
+            ),
+            (
+                AgentHostConnectivityStatus::DnsUnavailable,
+                Some((
+                    AgentFindingCode::HostDnsUnavailable,
+                    AgentFindingSeverity::Critical,
+                )),
+                AgentHealth::Critical,
+            ),
+            (
+                AgentHostConnectivityStatus::CaptivePortalSuspected,
+                Some((
+                    AgentFindingCode::HostCaptivePortalSuspected,
+                    AgentFindingSeverity::Warning,
+                )),
+                AgentHealth::Warning,
+            ),
+            (
+                AgentHostConnectivityStatus::InternetUnreachable,
+                Some((
+                    AgentFindingCode::HostInternetUnreachable,
+                    AgentFindingSeverity::Critical,
+                )),
+                AgentHealth::Critical,
+            ),
+            (
+                AgentHostConnectivityStatus::OnlineIpv4Only,
+                Some((AgentFindingCode::HostIpv4Only, AgentFindingSeverity::Info)),
+                AgentHealth::Healthy,
+            ),
+            (
+                AgentHostConnectivityStatus::OnlineIpv6Only,
+                Some((AgentFindingCode::HostIpv6Only, AgentFindingSeverity::Info)),
+                AgentHealth::Healthy,
+            ),
+            (
+                AgentHostConnectivityStatus::OnlineDualStack,
+                None,
+                AgentHealth::Healthy,
+            ),
+            (
+                AgentHostConnectivityStatus::Indeterminate,
+                None,
+                AgentHealth::Degraded,
+            ),
+        ];
+
+        for (status, expected, expected_health) in cases {
+            let mut findings = Vec::new();
+            append_connectivity_finding(&mut findings, status);
+            match expected {
+                Some((code, severity)) => {
+                    assert_eq!(findings.len(), 1, "status {status:?}");
+                    assert_eq!(findings[0].code, code, "status {status:?}");
+                    assert_eq!(findings[0].severity, severity, "status {status:?}");
+                }
+                None => assert!(findings.is_empty(), "status {status:?}"),
+            }
+            let failures = if status == AgentHostConnectivityStatus::Indeterminate {
+                vec![AgentProbeFailure {
+                    code: AgentProbeCode::HostConnectivityUnavailable,
+                }]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(derive_health(&findings, &failures), expected_health);
+        }
+    }
+
+    #[test]
+    fn connectivity_changes_are_bound_into_snapshot_revision() {
+        let core = AgentCoreSnapshot {
+            state: AgentCoreState::Running,
+            run_type: AgentRunType::Normal,
+            selected_core: AgentSelectedCore::Mihomo,
+            state_changed_at: 1,
+            runtime_config_present: true,
+            routing_mode: Some(AgentRoutingMode::Rule),
+            observed_routing_mode: Some(AgentRoutingMode::Rule),
+            applied_consistency: AgentAppliedState::Consistent,
+        };
+        let service = AgentServiceSnapshot {
+            desired_enabled: false,
+            state: AgentServiceState::Stopped,
+            ipc_connected: false,
+            runtime_compatible: None,
+        };
+        let proxy = AgentSystemProxySnapshot {
+            desired_enabled: false,
+            observed_enabled: Some(false),
+            observed_host_scope: AgentHostScope::Loopback,
+            observed_port: Some(7890),
+            expected_mixed_port: 7890,
+            matches_expected_endpoint: Some(true),
+        };
+        let tun = AgentTunSnapshot {
+            desired_enabled: false,
+            generated_runtime_enabled: Some(false),
+            observed_enabled: Some(false),
+            applied_consistency: AgentAppliedState::Consistent,
+        };
+        let online = connectivity(AgentHostConnectivityStatus::OnlineDualStack);
+        let offline = connectivity(AgentHostConnectivityStatus::InternetUnreachable);
+        let readiness = readiness(
+            AgentTunPermissionReadiness::NotRequired,
+            AgentSystemDnsVerificationStatus::NotRequired,
+        );
+
+        assert_ne!(
+            snapshot_revision(&core, &service, &proxy, &tun, &online, &readiness),
+            snapshot_revision(&core, &service, &proxy, &tun, &offline, &readiness)
+        );
+    }
+
+    #[test]
+    fn readiness_findings_and_health_are_relevant_only_to_requested_tun() {
+        let cases = [
+            (
+                readiness(
+                    AgentTunPermissionReadiness::NotRequired,
+                    AgentSystemDnsVerificationStatus::NotRequired,
+                ),
+                None,
+                AgentHealth::Healthy,
+            ),
+            (
+                readiness(
+                    AgentTunPermissionReadiness::Required,
+                    AgentSystemDnsVerificationStatus::Verified,
+                ),
+                Some(AgentFindingCode::TunPermissionRequired),
+                AgentHealth::Warning,
+            ),
+            (
+                readiness(
+                    AgentTunPermissionReadiness::Satisfied,
+                    AgentSystemDnsVerificationStatus::ResolutionFailed,
+                ),
+                Some(AgentFindingCode::TunSystemDnsUnverified),
+                AgentHealth::Warning,
+            ),
+        ];
+
+        for (readiness, expected_code, expected_health) in cases {
+            let mut findings = Vec::new();
+            append_platform_readiness_findings(&mut findings, &readiness);
+            assert_eq!(findings.first().map(|finding| finding.code), expected_code);
+            assert_eq!(derive_health(&findings, &[]), expected_health);
+        }
+
+        let degraded = readiness(
+            AgentTunPermissionReadiness::Indeterminate,
+            AgentSystemDnsVerificationStatus::Unavailable,
+        );
+        let mut findings = Vec::new();
+        append_platform_readiness_findings(&mut findings, &degraded);
+        assert_eq!(
+            derive_health(
+                &findings,
+                &[AgentProbeFailure {
+                    code: AgentProbeCode::PlatformReadinessUnavailable,
+                }],
+            ),
+            AgentHealth::Degraded
+        );
+    }
+
+    #[test]
+    fn readiness_changes_are_bound_into_snapshot_revision() {
+        let core = AgentCoreSnapshot {
+            state: AgentCoreState::Running,
+            run_type: AgentRunType::Normal,
+            selected_core: AgentSelectedCore::Mihomo,
+            state_changed_at: 1,
+            runtime_config_present: true,
+            routing_mode: Some(AgentRoutingMode::Rule),
+            observed_routing_mode: Some(AgentRoutingMode::Rule),
+            applied_consistency: AgentAppliedState::Consistent,
+        };
+        let service = AgentServiceSnapshot {
+            desired_enabled: false,
+            state: AgentServiceState::NotInstalled,
+            ipc_connected: false,
+            runtime_compatible: None,
+        };
+        let proxy = AgentSystemProxySnapshot {
+            desired_enabled: false,
+            observed_enabled: Some(false),
+            observed_host_scope: AgentHostScope::Loopback,
+            observed_port: Some(7890),
+            expected_mixed_port: 7890,
+            matches_expected_endpoint: Some(true),
+        };
+        let tun = AgentTunSnapshot {
+            desired_enabled: true,
+            generated_runtime_enabled: Some(true),
+            observed_enabled: Some(true),
+            applied_consistency: AgentAppliedState::Consistent,
+        };
+        let connectivity = connectivity(AgentHostConnectivityStatus::OnlineDualStack);
+        let ready = readiness(
+            AgentTunPermissionReadiness::Satisfied,
+            AgentSystemDnsVerificationStatus::Verified,
+        );
+        let required = readiness(
+            AgentTunPermissionReadiness::Required,
+            AgentSystemDnsVerificationStatus::Verified,
+        );
+
+        assert_ne!(
+            snapshot_revision(&core, &service, &proxy, &tun, &connectivity, &ready),
+            snapshot_revision(&core, &service, &proxy, &tun, &connectivity, &required,)
+        );
+    }
+
+    #[test]
+    fn connectivity_codes_serialize_to_stable_privacy_safe_values() {
+        let finding = AgentFindingCode::HostCaptivePortalSuspected;
+        let readiness_finding = AgentFindingCode::TunPermissionRequired;
+        let probe = AgentProbeCode::HostConnectivityUnavailable;
+        let readiness_probe = AgentProbeCode::PlatformReadinessUnavailable;
+        assert_eq!(
+            serde_json::to_string(&finding).unwrap(),
+            "\"host_captive_portal_suspected\""
+        );
+        assert_eq!(
+            serde_json::to_string(&readiness_finding).unwrap(),
+            "\"tun_permission_required\""
+        );
+        assert_eq!(
+            serde_json::to_string(&probe).unwrap(),
+            "\"host_connectivity_unavailable\""
+        );
+        assert_eq!(
+            serde_json::to_string(&readiness_probe).unwrap(),
+            "\"platform_readiness_unavailable\""
+        );
+    }
+
+    fn readiness(
+        tun_permission: AgentTunPermissionReadiness,
+        system_dns_verification: AgentSystemDnsVerificationStatus,
+    ) -> AgentPlatformReadinessSnapshot {
+        AgentPlatformReadinessSnapshot {
+            process_privilege: AgentProcessPrivilegeStatus::Standard,
+            service_mode_available: Some(false),
+            tun_permission,
+            tun_verification: if tun_permission == AgentTunPermissionReadiness::NotRequired {
+                AgentTunVerificationStatus::NotRequested
+            } else {
+                AgentTunVerificationStatus::Unavailable
+            },
+            system_dns_verification,
+            reasons: Vec::new(),
+        }
+    }
+
+    fn connectivity(status: AgentHostConnectivityStatus) -> AgentHostConnectivitySnapshot {
+        AgentHostConnectivitySnapshot {
+            status,
+            active_interface_kind: AgentNetworkInterfaceKind::Unknown,
+            link_up: None,
+            ipv4: AgentIpFamilyConnectivity {
+                usable_ip: false,
+                default_route: false,
+                internet_reachable: None,
+            },
+            ipv6: AgentIpFamilyConnectivity {
+                usable_ip: false,
+                default_route: false,
+                internet_reachable: None,
+            },
+            dns_configured: None,
+            dns_resolves: None,
+            captive_portal_suspected: None,
+            reasons: Vec::new(),
+        }
     }
 
     #[test]

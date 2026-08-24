@@ -1,8 +1,13 @@
 use std::{
     collections::HashMap,
+    future::Future,
+    panic::AssertUnwindSafe,
+    pin::Pin,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
+use futures_util::FutureExt;
 use sha2::Digest;
 use subtle::ConstantTimeEq;
 
@@ -13,7 +18,10 @@ use super::{
         AgentActionRequest, AgentActionResult, AgentCommandError, AgentConnectorState,
         AgentCoreState, AgentNetworkSnapshot, AgentProposal, AgentResult,
     },
-    planning::{ActionPreconditions, plan_action, validate_preconditions, verify_action},
+    planning::{
+        ActionPreconditions, capability_definition, plan_action, validate_preconditions,
+        verify_action,
+    },
     ports::{AgentConfirmationPort, AgentRuntimePort},
 };
 
@@ -49,6 +57,9 @@ pub(super) struct ProposalStore {
     last_proposed_at: HashMap<String, Instant>,
 }
 
+pub(crate) type AgentProposalExecutionFuture =
+    Pin<Box<dyn Future<Output = AgentResult<AgentActionResult>> + Send + 'static>>;
+
 pub(crate) struct AgentProposalState {
     proposals: ProposalStore,
     history: AgentHistoryClient,
@@ -71,6 +82,8 @@ impl AgentProposalState {
         self.reserve_proposal_slot(owner_label)?;
         let snapshot = runtime.snapshot().await;
         let plan = plan_action(&snapshot, &action)?;
+        let capability =
+            capability_definition(action.kind()).ok_or(AgentCommandError::ActionNotAvailable)?;
         let created_at = chrono::Utc::now().timestamp_millis();
         let expires_at = created_at + PROPOSAL_TTL.as_millis() as i64;
         let id = hex::encode(rand::random::<[u8; 16]>());
@@ -85,7 +98,7 @@ impl AgentProposalState {
             snapshot_revision: snapshot.revision,
             created_at,
             expires_at,
-            requires_confirmation: true,
+            requires_confirmation: capability.requires_confirmation,
         };
         self.insert_proposal(
             id,
@@ -97,49 +110,63 @@ impl AgentProposalState {
             },
         )?;
         audit_proposal(&proposal, AgentAuditOutcome::Proposed);
-        self.history
-            .record_audit(
-                &proposal.id,
-                &proposal.action,
-                &proposal.snapshot_revision,
-                AgentAuditOutcome::Proposed,
-            )
-            .await;
         Ok(proposal)
     }
 
-    pub(crate) async fn execute(
+    pub(crate) fn history_client(&self) -> AgentHistoryClient {
+        self.history.clone()
+    }
+
+    pub(crate) fn begin_execute(
         &mut self,
-        runtime: &dyn AgentRuntimePort,
-        confirmation: &dyn AgentConfirmationPort,
-        owner_label: &str,
-        proposal_id: &str,
-        digest: &str,
-    ) -> AgentResult<AgentActionResult> {
-        if !is_fixed_lower_hex(proposal_id, PROPOSAL_ID_LENGTH) {
+        runtime: Arc<dyn AgentRuntimePort>,
+        confirmation: Arc<dyn AgentConfirmationPort>,
+        execution_gate: Arc<tokio::sync::Semaphore>,
+        owner_label: String,
+        proposal_id: String,
+        digest: String,
+    ) -> AgentResult<AgentProposalExecutionFuture> {
+        if !is_fixed_lower_hex(&proposal_id, PROPOSAL_ID_LENGTH) {
             return Err(AgentCommandError::ProposalNotFound);
         }
-        if !is_fixed_lower_hex(digest, PROPOSAL_DIGEST_LENGTH) {
+        if !is_fixed_lower_hex(&digest, PROPOSAL_DIGEST_LENGTH) {
             return Err(AgentCommandError::ProposalDigestMismatch);
         }
 
-        let pending = self.take_proposal(owner_label, proposal_id, digest)?;
-        let result =
-            execute_pending(runtime, confirmation, owner_label, pending.clone(), digest).await;
-        let outcome = result
-            .as_ref()
-            .map(|_| AgentAuditOutcome::Verified)
-            .unwrap_or_else(|error| error.audit_outcome());
-        audit_proposal(&pending.proposal, outcome);
-        self.history
-            .record_audit(
-                &pending.proposal.id,
-                &pending.proposal.action,
-                &pending.proposal.snapshot_revision,
-                outcome,
-            )
+        let pending = self.take_proposal(&owner_label, &proposal_id, &digest)?;
+        let history = self.history.clone();
+        Ok(Box::pin(async move {
+            let result = contain_execution_panic(async {
+                match execution_gate.acquire_owned().await {
+                    Ok(_permit) => {
+                        execute_pending(
+                            runtime.as_ref(),
+                            confirmation.as_ref(),
+                            &owner_label,
+                            pending.clone(),
+                            &digest,
+                        )
+                        .await
+                    }
+                    Err(_) => Err(AgentCommandError::ActionFailed),
+                }
+            })
             .await;
-        result
+            let outcome = result
+                .as_ref()
+                .map(|_| AgentAuditOutcome::Verified)
+                .unwrap_or_else(|error| error.audit_outcome());
+            audit_proposal(&pending.proposal, outcome);
+            history
+                .record_audit(
+                    &pending.proposal.id,
+                    &pending.proposal.action,
+                    &pending.proposal.snapshot_revision,
+                    outcome,
+                )
+                .await;
+            result
+        }))
     }
 
     pub(crate) fn cancel(&mut self, owner_label: &str, proposal_id: &str) -> bool {
@@ -211,6 +238,16 @@ impl AgentCommandError {
             Self::HistoryClearFailed => AgentAuditOutcome::HistoryClearFailed,
         }
     }
+}
+
+async fn contain_execution_panic<T, F>(execution: F) -> AgentResult<T>
+where
+    F: Future<Output = AgentResult<T>>,
+{
+    AssertUnwindSafe(execution)
+        .catch_unwind()
+        .await
+        .unwrap_or(Err(AgentCommandError::ActionFailed))
 }
 
 async fn execute_pending(
@@ -311,6 +348,12 @@ async fn execute_action(
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
 ) -> AgentResult<()> {
+    let definition =
+        capability_definition(action.kind()).ok_or(AgentCommandError::NetworkStateChanged)?;
+    if definition.executor.action_kind() != action.kind() {
+        return Err(AgentCommandError::NetworkStateChanged);
+    }
+
     match (action, preconditions) {
         (
             AgentActionRequest::SetRoutingMode { mode },

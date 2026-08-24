@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
+use tokio::{sync::Semaphore, task::AbortHandle};
 
 use super::{
     actions::AgentProposalState,
@@ -45,6 +46,8 @@ pub(crate) struct AgentProposalActorState {
     proposals: AgentProposalState,
     runtime: Arc<dyn AgentRuntimePort>,
     confirmation: Arc<dyn AgentConfirmationPort>,
+    execution_gate: Arc<Semaphore>,
+    background_tasks: Vec<AbortHandle>,
 }
 
 pub(crate) struct AgentProposalActor;
@@ -63,6 +66,8 @@ impl Actor for AgentProposalActor {
             proposals: AgentProposalState::new(args.history),
             runtime: args.runtime,
             confirmation: args.confirmation,
+            execution_gate: Arc::new(Semaphore::new(1)),
+            background_tasks: Vec::new(),
         })
     }
 
@@ -77,31 +82,53 @@ impl Actor for AgentProposalActor {
                 owner_label,
                 action,
                 reply,
-            } => {
-                let result = state
-                    .proposals
-                    .propose(state.runtime.as_ref(), &owner_label, action)
-                    .await;
-                let _ = reply.send(result);
-            }
+            } => match state
+                .proposals
+                .propose(state.runtime.as_ref(), &owner_label, action)
+                .await
+            {
+                Ok(proposal) => {
+                    state.background_tasks.retain(|task| !task.is_finished());
+                    let history = state.proposals.history_client();
+                    let response_task = tokio::spawn(async move {
+                        let proposal = record_proposed_audit(history, proposal).await;
+                        let _ = reply.send(Ok(proposal));
+                    });
+                    state.background_tasks.push(response_task.abort_handle());
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            },
             AgentProposalMessage::Execute {
                 owner_label,
                 proposal_id,
                 digest,
                 reply,
-            } => {
-                let result = state
-                    .proposals
-                    .execute(
-                        state.runtime.as_ref(),
-                        state.confirmation.as_ref(),
-                        &owner_label,
-                        &proposal_id,
-                        &digest,
-                    )
-                    .await;
-                let _ = reply.send(result);
-            }
+            } => match state.proposals.begin_execute(
+                state.runtime.clone(),
+                state.confirmation.clone(),
+                state.execution_gate.clone(),
+                owner_label,
+                proposal_id,
+                digest,
+            ) {
+                Ok(execution) => {
+                    state.background_tasks.retain(|task| !task.is_finished());
+                    let execution_task = tokio::spawn(execution);
+                    state.background_tasks.push(execution_task.abort_handle());
+                    let response_task = tokio::spawn(async move {
+                        let result = execution_task
+                            .await
+                            .unwrap_or(Err(AgentCommandError::ActionFailed));
+                        let _ = reply.send(result);
+                    });
+                    state.background_tasks.push(response_task.abort_handle());
+                }
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                }
+            },
             AgentProposalMessage::Cancel {
                 owner_label,
                 proposal_id,
@@ -112,6 +139,32 @@ impl Actor for AgentProposalActor {
         }
         Ok(())
     }
+
+    async fn post_stop(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        for task in state.background_tasks.drain(..) {
+            task.abort();
+        }
+        Ok(())
+    }
+}
+
+pub(crate) async fn record_proposed_audit(
+    history: AgentHistoryClient,
+    proposal: AgentProposal,
+) -> AgentProposal {
+    history
+        .record_audit(
+            &proposal.id,
+            &proposal.action,
+            &proposal.snapshot_revision,
+            AgentAuditOutcome::Proposed,
+        )
+        .await;
+    proposal
 }
 
 pub(crate) enum AgentHistoryMessage {

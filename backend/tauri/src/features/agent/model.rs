@@ -4,7 +4,7 @@ use specta::Type;
 pub(crate) use super::error::{AgentCommandError, AgentResult};
 
 pub(crate) const AGENT_MANIFEST_SCHEMA_VERSION: u16 = 1;
-pub(crate) const NETWORK_SNAPSHOT_SCHEMA_VERSION: u16 = 1;
+pub(crate) const NETWORK_SNAPSHOT_SCHEMA_VERSION: u16 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
@@ -18,6 +18,12 @@ pub enum AgentToolName {
     SystemSnapshot,
     #[serde(rename = "network.diagnose")]
     NetworkDiagnose,
+    #[serde(rename = "host.connectivity")]
+    HostConnectivity,
+    #[serde(rename = "platform.readiness")]
+    PlatformReadiness,
+    #[serde(rename = "intent.execute")]
+    IntentExecute,
     #[serde(rename = "network.probe")]
     NetworkProbe,
     #[serde(rename = "core.status")]
@@ -37,6 +43,9 @@ impl AgentToolName {
         match self {
             Self::SystemSnapshot => "system.snapshot",
             Self::NetworkDiagnose => "network.diagnose",
+            Self::HostConnectivity => "host.connectivity",
+            Self::PlatformReadiness => "platform.readiness",
+            Self::IntentExecute => "intent.execute",
             Self::NetworkProbe => "network.probe",
             Self::CoreStatus => "core.status",
             Self::ProxyStatus => "proxy.status",
@@ -255,7 +264,7 @@ pub struct AgentSystemProxySnapshot {
 pub struct AgentTunSnapshot {
     pub desired_enabled: bool,
     pub generated_runtime_enabled: Option<bool>,
-    pub observed_active: AgentAppliedState,
+    pub observed_enabled: Option<bool>,
     pub applied_consistency: AgentAppliedState,
 }
 
@@ -279,16 +288,145 @@ pub struct AgentTelemetrySnapshot {
     pub recent_error_count: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentNetworkInterfaceKind {
+    Wireless,
+    Ethernet,
+    Multiple,
+    Other,
+    None,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHostConnectivityStatus {
+    OnlineDualStack,
+    OnlineIpv4Only,
+    OnlineIpv6Only,
+    LinkDisconnected,
+    AddressUnavailable,
+    DefaultRouteUnavailable,
+    DnsUnavailable,
+    CaptivePortalSuspected,
+    InternetUnreachable,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHostConnectivityReason {
+    ProbeUnavailable,
+    NoActiveInterface,
+    WirelessDisconnected,
+    EthernetDisconnected,
+    NoUsableIpv4Address,
+    NoUsableIpv6Address,
+    NoIpv4DefaultRoute,
+    NoIpv6DefaultRoute,
+    DnsNotConfigured,
+    DnsResolutionFailed,
+    Ipv4InternetUnreachable,
+    Ipv6InternetUnreachable,
+    CaptivePortalSuspected,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentIpFamilyConnectivity {
+    pub usable_ip: bool,
+    pub default_route: bool,
+    pub internet_reachable: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentHostConnectivitySnapshot {
+    pub status: AgentHostConnectivityStatus,
+    pub active_interface_kind: AgentNetworkInterfaceKind,
+    pub link_up: Option<bool>,
+    pub ipv4: AgentIpFamilyConnectivity,
+    pub ipv6: AgentIpFamilyConnectivity,
+    pub dns_configured: Option<bool>,
+    pub dns_resolves: Option<bool>,
+    pub captive_portal_suspected: Option<bool>,
+    pub reasons: Vec<AgentHostConnectivityReason>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProcessPrivilegeStatus {
+    Elevated,
+    Standard,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTunPermissionReadiness {
+    NotRequired,
+    Satisfied,
+    ServiceAlternativeAvailable,
+    Required,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTunVerificationStatus {
+    NotRequested,
+    Verified,
+    Inconsistent,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSystemDnsVerificationStatus {
+    NotRequired,
+    Verified,
+    NotConfigured,
+    ResolutionFailed,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlatformReadinessReason {
+    PrivilegeProbeUnavailable,
+    ElevatedProcess,
+    ServiceModeActive,
+    ServiceModeAvailable,
+    PermissionRequired,
+    TunStateUnavailable,
+    TunStateInconsistent,
+    SystemDnsNotConfigured,
+    SystemDnsResolutionFailed,
+    SystemDnsUnavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentPlatformReadinessSnapshot {
+    pub process_privilege: AgentProcessPrivilegeStatus,
+    pub service_mode_available: Option<bool>,
+    pub tun_permission: AgentTunPermissionReadiness,
+    pub tun_verification: AgentTunVerificationStatus,
+    pub system_dns_verification: AgentSystemDnsVerificationStatus,
+    pub reasons: Vec<AgentPlatformReadinessReason>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentProbeCode {
     CoreStatusUnavailable,
     CoreStatusTimeout,
     CoreConfigUnavailable,
+    TunStatusUnavailable,
     SystemProxyUnavailable,
     ServiceStatusUnavailable,
     ServiceStatusTimeout,
     TelemetryUnavailable,
+    HostConnectivityUnavailable,
+    PlatformReadinessUnavailable,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -316,6 +454,16 @@ pub enum AgentFindingCode {
     ClashConnectorDisconnected,
     TunRuntimeMismatch,
     RecentCoreErrors,
+    HostLinkDisconnected,
+    HostAddressUnavailable,
+    HostDefaultRouteUnavailable,
+    HostDnsUnavailable,
+    HostCaptivePortalSuspected,
+    HostInternetUnreachable,
+    HostIpv4Only,
+    HostIpv6Only,
+    TunPermissionRequired,
+    TunSystemDnsUnverified,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -359,13 +507,15 @@ pub struct AgentNetworkSnapshot {
     pub tun: AgentTunSnapshot,
     pub profiles: AgentProfileSnapshot,
     pub telemetry: AgentTelemetrySnapshot,
+    pub connectivity: AgentHostConnectivitySnapshot,
+    pub platform_readiness: AgentPlatformReadinessSnapshot,
     pub findings: Vec<AgentFinding>,
     pub probe_failures: Vec<AgentProbeFailure>,
     pub recommendations: Vec<AgentRecommendation>,
     pub privacy: AgentPrivacyBoundary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentActionKind {
     SetRoutingMode,
@@ -380,6 +530,79 @@ pub enum AgentActionKind {
     RestartService,
     RepairSystemProxyEndpoint,
     DisableStaleSystemProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAutonomyScope {
+    CurrentDesktopSession,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAutonomyPolicyStatus {
+    Active,
+    Disabled,
+    Revoked,
+    Expired,
+    SchemaVersionMismatch,
+    ScopeMismatch,
+    EmptyAllowlist,
+    DurationOutOfRange,
+    ActionBudgetOutOfRange,
+    ActionNotAllowed,
+    ActionBudgetExhausted,
+    ActionInFlight,
+    SessionMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
+#[serde(deny_unknown_fields)]
+pub struct AgentAutonomyPolicyRequest {
+    pub schema_version: u16,
+    pub scope: AgentAutonomyScope,
+    pub allowlist: Vec<AgentActionKind>,
+    pub duration_seconds: u32,
+    pub max_actions: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+pub struct AgentAutonomyPolicySnapshot {
+    pub schema_version: u16,
+    pub enabled: bool,
+    pub scope: AgentAutonomyScope,
+    pub allowlist: Vec<AgentActionKind>,
+    pub issued_at: i64,
+    pub expires_at: i64,
+    pub max_actions: u16,
+    pub remaining_actions: u16,
+    pub generation: u64,
+    pub status: AgentAutonomyPolicyStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AgentAutonomyPolicyResult {
+    Authorized { policy: AgentAutonomyPolicySnapshot },
+    Rejected { reason: AgentAutonomyPolicyStatus },
+}
+
+impl AgentActionKind {
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 12] = [
+        Self::SetRoutingMode,
+        Self::SetTunEnabled,
+        Self::SetSystemProxyEnabled,
+        Self::SetServiceMode,
+        Self::StartCore,
+        Self::RestartCore,
+        Self::ReconnectTelemetry,
+        Self::StartService,
+        Self::StopService,
+        Self::RestartService,
+        Self::RepairSystemProxyEndpoint,
+        Self::DisableStaleSystemProxy,
+    ];
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
@@ -469,6 +692,12 @@ pub struct AgentIntentRequest {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
+#[serde(deny_unknown_fields)]
+pub struct AgentExecuteReadOnlyIntentRequest {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentServiceOperation {
@@ -481,6 +710,7 @@ pub enum AgentServiceOperation {
 #[serde(tag = "intent", rename_all = "snake_case")]
 pub enum AgentIntent {
     Diagnose,
+    HostConnectivity,
     SetTunEnabled { enabled: bool },
     SetSystemProxyEnabled { enabled: bool },
     SetServiceMode { enabled: bool },
@@ -526,6 +756,26 @@ pub enum AgentIntentResolution {
     },
     Unsupported {
         reason: AgentUnsupportedIntentReason,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AgentExecuteReadOnlyIntentResult {
+    Diagnosed {
+        snapshot: Box<AgentNetworkSnapshot>,
+    },
+    HostConnectivity {
+        connectivity: AgentHostConnectivitySnapshot,
+    },
+    NeedsClarification {
+        choices: Vec<AgentClarificationChoice>,
+    },
+    Unsupported {
+        reason: AgentUnsupportedIntentReason,
+    },
+    ProposalRequired {
+        intent: AgentIntent,
     },
 }
 
