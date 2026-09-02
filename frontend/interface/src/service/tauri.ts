@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { type EnvInfo } from '../ipc/bindings';
+import { type EnvInfo, type ServiceStatusInfo } from '../ipc/bindings';
 import { InspectUpdater } from './types';
 
 export interface IPSBResponse {
@@ -17,14 +17,8 @@ export interface IPSBResponse {
   country_code: string;
 }
 
-export type SystemServiceStatus = 'running' | 'stopped' | 'not_installed';
-
-export type SystemServiceStatusInfo = {
-  name: string;
-  version: string;
-  status: SystemServiceStatus;
-  server: unknown | null;
-};
+export type SystemServiceStatus = ServiceStatusInfo['status'];
+export type SystemServiceStatusInfo = ServiceStatusInfo;
 
 export const isAppImage = async () => {
   return await invoke<boolean>('is_appimage');
@@ -68,10 +62,11 @@ export const statusService = async (): Promise<SystemServiceStatusInfo> => {
   } catch (e) {
     console.error(e);
     return {
-      name: 'nyanpasu-service',
+      name: 'chimera-service',
       version: '',
       status: 'not_installed',
       server: null,
+      compat: { kind: 'unknown' },
     };
   }
 };
