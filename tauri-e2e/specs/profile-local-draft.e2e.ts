@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 
 const profilesPath = '/main/profiles/profile';
 
+type ProfilesResponse = {
+  items: Array<{ uid: string }>;
+};
+
+async function readProfileIds(): Promise<string[]> {
+  return browser.execute(async () => {
+    const internals = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: <T>(command: string) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const profiles = await internals.invoke<ProfilesResponse>('get_profiles');
+    return profiles.items.map((item) => item.uid).sort();
+  });
+}
+
 async function openLocalProfileForm() {
   const currentUrl = new URL(await browser.getUrl());
   currentUrl.pathname = profilesPath;
@@ -22,15 +40,15 @@ async function openLocalProfileForm() {
   return nameInput;
 }
 
-async function expectNoProfileCards() {
-  assert.equal((await $$('[data-slot="profile-card"]')).length, 0);
+async function expectProfileIds(expected: string[]) {
+  assert.deepEqual(await readProfileIds(), expected);
 }
 
 describe('Chimera local profile draft', () => {
   it('cancels a local profile draft without persisting it', async () => {
     const draftName = `local-draft-${Date.now()}`;
     const nameInput = await openLocalProfileForm();
-    await expectNoProfileCards();
+    const initialProfileIds = await readProfileIds();
     await nameInput.setValue(draftName);
 
     const descriptionInput = await $('textarea[name="desc"]');
@@ -45,7 +63,7 @@ describe('Chimera local profile draft', () => {
       timeoutMsg: 'The local profile dialog did not close.',
     });
     assert.equal((await $('body').getText()).includes(draftName), false);
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
 
     await browser.refresh();
     await browser.waitUntil(
@@ -60,11 +78,12 @@ describe('Chimera local profile draft', () => {
           'The cancelled local profile draft was persisted after reload.',
       },
     );
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
   });
 
   it('keeps a local profile with an empty name invalid and unpersisted', async () => {
     const nameInput = await openLocalProfileForm();
+    const initialProfileIds = await readProfileIds();
     await nameInput.setValue('');
 
     const okButton = await $('button=OK');
@@ -79,7 +98,7 @@ describe('Chimera local profile draft', () => {
       },
     );
     assert.equal(await nameInput.isDisplayed(), true);
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
 
     const closeButton = await $('button=Close');
     await closeButton.click();
@@ -91,6 +110,6 @@ describe('Chimera local profile draft', () => {
         ),
       { timeout: 15_000, timeoutMsg: 'The profiles page did not reload.' },
     );
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
   });
 });

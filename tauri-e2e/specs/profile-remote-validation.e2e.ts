@@ -2,6 +2,24 @@ import assert from 'node:assert/strict';
 
 const profilesPath = '/main/profiles/profile';
 
+type ProfilesResponse = {
+  items: Array<{ uid: string }>;
+};
+
+async function readProfileIds(): Promise<string[]> {
+  return browser.execute(async () => {
+    const internals = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: <T>(command: string) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const profiles = await internals.invoke<ProfilesResponse>('get_profiles');
+    return profiles.items.map((item) => item.uid).sort();
+  });
+}
+
 async function openRemoteProfileForm() {
   const currentUrl = new URL(await browser.getUrl());
   currentUrl.pathname = profilesPath;
@@ -43,13 +61,14 @@ async function openRemoteProfileForm() {
   return urlInput;
 }
 
-async function expectNoProfileCards() {
-  assert.equal((await $$('[data-slot="profile-card"]')).length, 0);
+async function expectProfileIds(expected: string[]) {
+  assert.deepEqual(await readProfileIds(), expected);
 }
 
 describe('Chimera remote profile validation', () => {
   it('keeps a remote profile with an empty URL invalid and unpersisted', async () => {
     const urlInput = await openRemoteProfileForm();
+    const initialProfileIds = await readProfileIds();
     await urlInput.setValue('');
 
     const okButton = await $('button=OK');
@@ -64,7 +83,7 @@ describe('Chimera remote profile validation', () => {
       },
     );
     assert.equal(await urlInput.isDisplayed(), true);
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
 
     const closeButton = await $('button=Close');
     await closeButton.click();
@@ -76,6 +95,6 @@ describe('Chimera remote profile validation', () => {
         ),
       { timeout: 15_000, timeoutMsg: 'The profiles page did not reload.' },
     );
-    await expectNoProfileCards();
+    await expectProfileIds(initialProfileIds);
   });
 });
