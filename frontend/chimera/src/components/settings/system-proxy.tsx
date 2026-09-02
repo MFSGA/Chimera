@@ -3,7 +3,10 @@ import NetworkPing from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import { Button, type ButtonProps } from '@/components/ui/button';
 import { CircularProgress } from '@/components/ui/progress';
-import { useSystemProxy, useTunMode } from '@/hooks/use-proxy-settings';
+import {
+  useSystemProxyAction,
+  useTunModeAction,
+} from '@/features/system-proxy/use-proxy-settings';
 import * as m from '@/paraglide/messages';
 
 const ProxyButton = ({
@@ -42,7 +45,7 @@ const ProxyButton = ({
 export const SystemProxyButton = (
   props: Omit<ButtonProps, 'children' | 'loading'>,
 ) => {
-  const { execute, isPending, isActive } = useSystemProxy();
+  const { execute, isPending, isActive } = useSystemProxyAction();
 
   return (
     <ProxyButton
@@ -60,7 +63,7 @@ export const SystemProxyButton = (
 export const TunModeButton = (
   props: Omit<ButtonProps, 'children' | 'loading'>,
 ) => {
-  const { execute, isPending, isActive } = useTunMode();
+  const { execute, isPending, isActive } = useTunModeAction();
 
   return (
     <ProxyButton
