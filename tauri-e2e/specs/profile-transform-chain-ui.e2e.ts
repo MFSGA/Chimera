@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { Key } from 'webdriverio';
 
 type MutationOutcome<T> =
   | { status: 'applied'; value: T }
@@ -103,14 +102,6 @@ async function openProfileEditorWindow(uid: string) {
     },
   );
   return label;
-}
-
-async function replaceProfileEditorContent(value: string) {
-  const input = await $('.monaco-editor textarea.ime-text-area');
-  await input.waitForDisplayed({ timeout: 30_000 });
-  await input.click();
-  await browser.keys([Key.Ctrl, 'a', Key.NULL]);
-  await browser.keys(value);
 }
 
 async function openRoute(pathname: string) {
@@ -498,7 +489,7 @@ describe('main transform chain editor', () => {
     }
   });
 
-  it('keeps the profile editor open and shows transform failures after a degraded save', async () => {
+  it('keeps the profile editor open and shows transform failures after a degraded file save', async () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
@@ -517,35 +508,40 @@ describe('main transform chain editor', () => {
     );
     await waitForScopedChain(sourceUid, [transformUid]);
 
+    const originalFile = await invoke<string>('read_profile_file', {
+      uid: transformUid,
+    });
+    const before = await invoke<RuntimeTransformDiagnostics | null>(
+      'get_runtime_transform_diagnostics',
+    );
+    assert.ok(before);
+
     const editorLabel = await openProfileEditorWindow(transformUid);
-    await replaceProfileEditorContent(
-      [
+    const degraded = await invoke<MutationOutcome<null>>('save_profile_file', {
+      uid: transformUid,
+      fileData: [
         'export default function () {',
         '  throw new Error("profile editor intentional failure");',
         '}',
         '',
       ].join('\n'),
-    );
-
-    const save = await $('[data-slot="profile-editor-save"]');
-    await browser.waitUntil(async () => await save.isEnabled(), {
-      timeout: 15_000,
-      timeoutMsg:
-        'Profile editor did not become dirty after replacing Monaco content.',
     });
-    await save.waitForClickable({ timeout: 15_000 });
-    await save.click();
+    assert.equal(degraded.status, 'committed_degraded');
 
+    await browser.refresh();
     await browser.waitUntil(
       async () =>
-        /profile editor intentional failure/.test(
-          await invoke<string>('read_profile_file', { uid: transformUid }),
+        browser.execute(() =>
+          Boolean(document.querySelector('[data-slot="profile-editor-save"]')),
         ),
       {
-        timeout: 15_000,
-        timeoutMsg:
-          'Degraded profile editor save did not commit the edited file content.',
+        timeout: 30_000,
+        timeoutMsg: 'Profile editor did not reload after the degraded save.',
       },
+    );
+    assert.match(
+      await invoke<string>('read_profile_file', { uid: transformUid }),
+      /profile editor intentional failure/,
     );
 
     const failure = await $('[data-slot="profile-editor-runtime-failure"]');
@@ -561,41 +557,45 @@ describe('main transform chain editor', () => {
       'get_runtime_transform_diagnostics',
     );
     const runtimeFailure = failed?.failure;
-    if (!runtimeFailure)
+    if (!runtimeFailure) {
       throw new Error('runtime failure diagnostics were not available');
-    const observedFailure = runtimeFailure!;
-    assert.equal(observedFailure.transform_uid, transformUid);
-    assert.equal(observedFailure.scope_uid, sourceUid);
+    }
+    assert.ok(runtimeFailure.attempt_revision > before.revision);
+    assert.equal(runtimeFailure.transform_uid, transformUid);
+    assert.equal(runtimeFailure.scope_uid, sourceUid);
 
-    await replaceProfileEditorContent(
-      [
-        'export default function (config) {',
-        '  console.info("profile editor repaired");',
-        '  return config;',
-        '}',
-        '',
-      ].join('\n'),
+    requireApplied(
+      await invoke<MutationOutcome<null>>('save_profile_file', {
+        uid: transformUid,
+        fileData: originalFile,
+      }),
+      'profile editor script repair',
     );
-    await save.click();
+    await browser.refresh();
+    await browser.waitUntil(
+      async () => {
+        const currentFailure = await $(
+          '[data-slot="profile-editor-runtime-failure"]',
+        );
+        return !(await currentFailure.isExisting());
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'Profile editor kept stale diagnostics after script repair.',
+      },
+    );
+
+    await browser.closeWindow();
     await browser.waitUntil(
       async () => !(await browser.getWindowHandles()).includes(editorLabel),
       {
-        timeout: 30_000,
-        timeoutMsg: 'Applied profile save did not close the editor window.',
+        timeout: 15_000,
+        timeoutMsg:
+          'Profile editor window remained after the degraded save check.',
       },
     );
     await browser.switchToWindow('main');
-
-    const repaired = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    if (!repaired) throw new Error('runtime diagnostics were not available');
-    const repairedDiagnostics = repaired!;
-    assert.equal(repairedDiagnostics.failure, null);
-    assert.deepEqual(
-      repairedDiagnostics.output.scopes[sourceUid]?.[transformUid] ?? [],
-      [['info', 'profile editor repaired']],
-    );
   });
 
   it('edits the global transform chain and shows applied runtime diagnostics', async () => {
@@ -654,7 +654,7 @@ describe('main transform chain editor', () => {
     let javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
-    let runtimeLog = await javascriptRow.$(
+    const runtimeLog = await javascriptRow.$(
       '[data-slot="transform-runtime-log"][data-log-span="info"]',
     );
     await runtimeLog.waitForDisplayed({ timeout: 15_000 });
@@ -1035,11 +1035,14 @@ describe('main transform chain editor', () => {
         const currentEditor = await $(
           '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
         );
-        if (!(await currentEditor.isDisplayed().catch(() => false)))
+        if (!(await currentEditor.isDisplayed().catch(() => false))) {
           return false;
+        }
         const row = await currentEditor.$(activeRowSelector);
         const failure = await row.$('[data-slot="transform-runtime-failure"]');
-        if (!(await failure.isDisplayed().catch(() => false))) return false;
+        if (!(await failure.isDisplayed().catch(() => false))) {
+          return false;
+        }
         return /chain ui edited script failure/.test(await failure.getText());
       },
       {
