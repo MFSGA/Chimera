@@ -9,6 +9,14 @@ const frontendRoots = [
 const generatedBindings = path.normalize(
   path.join(workspaceRoot, 'frontend/interface/src/ipc/bindings.ts'),
 );
+const legacyUiRoots = [
+  path.normalize(
+    path.join(workspaceRoot, 'frontend/chimera/src/pages/(legacy)'),
+  ),
+  path.normalize(
+    path.join(workspaceRoot, 'frontend/chimera/src/components/setting'),
+  ),
+];
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx']);
 const violations: string[] = [];
@@ -47,6 +55,19 @@ const visit = async (entryPath: string): Promise<void> => {
   if (/\b__?TAURI_INVOKE\s*\(/.test(source)) {
     violations.push(
       `${relativePath}: raw Tauri invoke is reserved for generated IPC bindings`,
+    );
+  }
+
+  const normalizedEntryPath = path.normalize(entryPath);
+  const isLegacyUi = legacyUiRoots.some(
+    (legacyRoot) =>
+      normalizedEntryPath === legacyRoot ||
+      normalizedEntryPath.startsWith(`${legacyRoot}${path.sep}`),
+  );
+
+  if (isLegacyUi && /\bcommands\s*\./.test(source)) {
+    violations.push(
+      `${relativePath}: legacy UI must adapt through shared features/hooks instead of calling generated commands directly`,
     );
   }
 };
