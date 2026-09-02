@@ -37,7 +37,6 @@
       "sidecar/clash-rs",
       "sidecar/chimera-client",
       "sidecar/clash-rs-alpha",
-      "sidecar/nyanpasu-service",
       "sidecar/chimera-service"
     ]
   },

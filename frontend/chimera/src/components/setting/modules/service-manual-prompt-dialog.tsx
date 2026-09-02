@@ -65,7 +65,7 @@ export default function ServerManualPromptDialog({
     if (operation === 'install' && serviceInstallPrompt) {
       return `cd "${coreDir}"\n${serviceInstallPrompt}`;
     } else if (operation) {
-      return `cd "${coreDir}"\n${OS !== 'windows' ? 'sudo ' : ''}./nyanpasu-service ${operation}`;
+      return `cd "${coreDir}"\n${OS !== 'windows' ? 'sudo ' : ''}./chimera-service ${operation}`;
     }
     return '';
   }, [operation, serviceInstallPrompt, coreDir]);
