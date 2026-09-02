@@ -18,17 +18,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import TextMarquee from '@/components/ui/text-marquee';
 import { getCoreStatusBadgeMessage } from '@/features/dashboard/core-service-status';
+import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import WidgetItem from './widget-item';
-
-enum ProxyStatus {
-  SYSTEM = 'system',
-  TUN = 'tun',
-  OCCUPIED = 'occupied',
-  DISABLED = 'disabled',
-}
 
 /** Resolve and render the current proxy mode badge. */
 const ProxyTitleRow = () => {
@@ -39,29 +33,23 @@ const ProxyTitleRow = () => {
     query: { data: clashConfigs },
   } = useClashConfig();
 
-  const status = useMemo<ProxyStatus>(() => {
-    if (enableTunMode) {
-      return ProxyStatus.TUN;
-    }
-
-    if (enableSystemProxy && systemProxyStatus?.enable) {
-      const port = Number(systemProxyStatus.server.split(':')[1]);
-
-      if (port === clashConfigs?.['mixed-port']) {
-        return ProxyStatus.SYSTEM;
-      }
-
-      return ProxyStatus.OCCUPIED;
-    }
-
-    return ProxyStatus.DISABLED;
-  }, [enableSystemProxy, enableTunMode, systemProxyStatus, clashConfigs]);
+  const status = useMemo(
+    () =>
+      getProxyStatus({
+        enableSystemProxy,
+        enableTunMode,
+        systemProxyEnabled: systemProxyStatus?.enable,
+        systemProxyServer: systemProxyStatus?.server,
+        mixedPort: clashConfigs?.['mixed-port'],
+      }),
+    [enableSystemProxy, enableTunMode, systemProxyStatus, clashConfigs],
+  );
 
   const messages = {
-    [ProxyStatus.SYSTEM]: m.dashboard_widget_proxy_status_success_system(),
-    [ProxyStatus.TUN]: m.dashboard_widget_proxy_status_success_tun(),
-    [ProxyStatus.OCCUPIED]: m.dashboard_widget_proxy_status_occupied(),
-    [ProxyStatus.DISABLED]: m.dashboard_widget_proxy_status_disabled(),
+    system: m.dashboard_widget_proxy_status_success_system(),
+    tun: m.dashboard_widget_proxy_status_success_tun(),
+    occupied: m.dashboard_widget_proxy_status_occupied(),
+    disabled: m.dashboard_widget_proxy_status_disabled(),
   };
 
   return (
@@ -74,14 +62,11 @@ const ProxyTitleRow = () => {
         variant="raised"
         className={cn(
           'flex h-6 min-w-0 items-center px-0',
-          status === ProxyStatus.DISABLED &&
+          status === 'disabled' &&
             'bg-secondary-container hover:bg-on-secondary',
-          status === ProxyStatus.OCCUPIED &&
-            'bg-error-container hover:bg-on-error',
-          status === ProxyStatus.SYSTEM &&
-            'bg-primary-container hover:bg-on-primary',
-          status === ProxyStatus.TUN &&
-            'bg-tertiary-container hover:bg-on-tertiary',
+          status === 'occupied' && 'bg-error-container hover:bg-on-error',
+          status === 'system' && 'bg-primary-container hover:bg-on-primary',
+          status === 'tun' && 'bg-tertiary-container hover:bg-on-tertiary',
         )}
         asChild
       >
