@@ -1,11 +1,7 @@
-import { restartSidecar, useSystemService } from '@chimera/interface';
 import { LoadingButton } from '@chimera/ui';
 import { Button, ListItem, ListItemText } from '@mui/material';
-import { useMemoizedFn } from 'ahooks';
-import { useTransition } from 'react';
+import { useSystemServiceActions } from '@/features/system-service/use-system-service-actions';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 import { useServerManualPromptDialog } from './service-manual-prompt-dialog';
 
 const getInstallButtonLabel = (
@@ -36,77 +32,17 @@ const getControlButtonLabel = (
 };
 
 export const ServiceStatusControl = () => {
-  const { query, upsert } = useSystemService();
-  const status = query.data?.status;
+  const promptDialog = useServerManualPromptDialog();
+  const {
+    status,
+    installPending,
+    controlPending,
+    isBusy,
+    handleInstall,
+    handleControl,
+  } = useSystemServiceActions(promptDialog.show);
   // todo use enum
   const isDisabled = status === 'not_installed';
-  const promptDialog = useServerManualPromptDialog();
-
-  const [installOrUninstallPending, startInstallOrUninstall] = useTransition();
-  const [serviceControlPending, startServiceControl] = useTransition();
-  const isPending = installOrUninstallPending || serviceControlPending;
-
-  const handleInstallClick = useMemoizedFn(() => {
-    startInstallOrUninstall(async () => {
-      try {
-        switch (status) {
-          case 'running':
-          case 'stopped':
-            await upsert.mutateAsync('uninstall');
-            break;
-          case 'not_installed':
-            await upsert.mutateAsync('install');
-            break;
-          default:
-            return;
-        }
-        await restartSidecar();
-      } catch (error) {
-        const errorMessage = `${
-          status === 'not_installed'
-            ? m.settings_system_proxy_system_service_ctrl_failed_install()
-            : m.settings_system_proxy_system_service_ctrl_failed_uninstall()
-        }: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: m.common_error() });
-
-        if (status === 'not_installed') {
-          promptDialog.show('install');
-        } else if (status) {
-          promptDialog.show('uninstall');
-        }
-      }
-    });
-  });
-
-  const handleControlClick = useMemoizedFn(() => {
-    startServiceControl(async () => {
-      try {
-        switch (status) {
-          case 'running':
-            await upsert.mutateAsync('stop');
-            break;
-          case 'stopped':
-            await upsert.mutateAsync('start');
-            break;
-          default:
-            return;
-        }
-        await restartSidecar();
-      } catch (error) {
-        const errorMessage =
-          status === 'running'
-            ? `Stop failed: ${formatError(error)}`
-            : `Start failed: ${formatError(error)}`;
-        message(errorMessage, { kind: 'error', title: m.common_error() });
-
-        if (status === 'running') {
-          promptDialog.show('stop');
-        } else if (status) {
-          promptDialog.show('start');
-        }
-      }
-    });
-  });
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
@@ -120,9 +56,9 @@ export const ServiceStatusControl = () => {
         {!isDisabled && (
           <LoadingButton
             variant="contained"
-            onClick={handleControlClick}
-            loading={serviceControlPending}
-            disabled={isPending}
+            onClick={handleControl}
+            loading={controlPending}
+            disabled={isBusy}
           >
             {getControlButtonLabel(status)}
           </LoadingButton>
@@ -130,9 +66,9 @@ export const ServiceStatusControl = () => {
 
         <LoadingButton
           variant="contained"
-          onClick={handleInstallClick}
-          loading={installOrUninstallPending}
-          disabled={isPending}
+          onClick={handleInstall}
+          loading={installPending}
+          disabled={isBusy}
         >
           {getInstallButtonLabel(status)}
         </LoadingButton>

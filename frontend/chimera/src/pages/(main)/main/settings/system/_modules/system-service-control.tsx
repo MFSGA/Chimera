@@ -1,8 +1,4 @@
-import {
-  restartSidecar,
-  useCoreStatus,
-  useSystemService,
-} from '@chimera/interface';
+import { useCoreStatus } from '@chimera/interface';
 import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
 import {
@@ -23,9 +19,8 @@ import {
   ModalTitle,
   ModalTrigger,
 } from '@/components/ui/modal';
+import { useSystemServiceActions } from '@/features/system-service/use-system-service-actions';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 import {
   SettingsCard,
   SettingsCardContent,
@@ -93,50 +88,19 @@ const getCurrentCoreStatus = (status: unknown) => {
 };
 
 export default function SystemServiceControl() {
-  const { query, upsert } = useSystemService();
   const coreStatusQuery = useCoreStatus();
   const promptDialog = useServerManualPromptDialog();
-  const [installPending, startInstall] = useTransition();
-  const [controlPending, startControl] = useTransition();
+  const {
+    query,
+    isInstalled,
+    installPending,
+    controlPending,
+    isBusy: serviceBusy,
+    handleInstall,
+    handleControl,
+  } = useSystemServiceActions(promptDialog.show);
   const [refreshPending, startRefresh] = useTransition();
-  const isInstalled =
-    query.data?.status === 'running' || query.data?.status === 'stopped';
-  const isBusy = installPending || controlPending || refreshPending;
-
-  const handleInstall = () => {
-    startInstall(async () => {
-      const installing = query.data?.status === 'not_installed';
-      try {
-        await upsert.mutateAsync(installing ? 'install' : 'uninstall');
-        await restartSidecar();
-      } catch (error) {
-        const title = installing
-          ? m.settings_system_proxy_system_service_ctrl_failed_install()
-          : m.settings_system_proxy_system_service_ctrl_failed_uninstall();
-        message(`${title}: ${formatError(error)}`, {
-          kind: 'error',
-          title: m.common_error(),
-        });
-        promptDialog.show(installing ? 'install' : 'uninstall');
-      }
-    });
-  };
-
-  const handleControl = () => {
-    startControl(async () => {
-      const operation = query.data?.status === 'running' ? 'stop' : 'start';
-      try {
-        await upsert.mutateAsync(operation);
-        await restartSidecar();
-      } catch (error) {
-        message(`${operation} failed: ${formatError(error)}`, {
-          kind: 'error',
-          title: m.common_error(),
-        });
-        promptDialog.show(operation);
-      }
-    });
-  };
+  const isBusy = serviceBusy || refreshPending;
 
   const serviceServer = query.data?.server;
   const runtimeInfos = serviceServer?.runtime_infos;
