@@ -1,6 +1,5 @@
-import { commands, useSetting } from '@chimera/interface';
+import { commands } from '@chimera/interface';
 import { Link } from '@tanstack/react-router';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { PropsWithChildren } from 'react';
 import {
   DropdownMenu,
@@ -12,12 +11,9 @@ import {
   openBugReport,
   openProjectRepository,
 } from '@/features/support/actions';
+import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
-
-const currentWindow = getCurrentWebviewWindow();
 
 const GitHubItem = () => {
   const handleClick = useLockFn(openProjectRepository);
@@ -52,30 +48,12 @@ const CollectLogItem = () => {
 };
 
 const LegacyUiItem = () => {
-  const windowType = useSetting('window_type');
-
-  const handleClick = useLockFn(async () => {
-    try {
-      await windowType.upsert('legacy');
-      const result = await commands.createLegacyWindow();
-
-      if (result.status !== 'ok') {
-        throw new Error(result.error);
-      }
-
-      await currentWindow.close();
-    } catch (error) {
-      await message(`Failed to open legacy UI: ${formatError(error)}`, {
-        kind: 'error',
-        title: m.common_error(),
-      });
-    }
-  });
+  const { switchToLegacy, isPending } = useUiSwitch();
 
   return (
     <DropdownMenuItem
-      disabled={windowType.isPending}
-      onClick={() => void handleClick()}
+      disabled={isPending}
+      onClick={() => void switchToLegacy()}
     >
       Switch to Legacy UI
     </DropdownMenuItem>
