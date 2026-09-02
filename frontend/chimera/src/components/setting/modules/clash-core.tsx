@@ -1,9 +1,9 @@
 import {
   ClashCore,
   ClashCoresDetail,
-  InspectUpdater,
   inspectUpdater,
   useClashCores,
+  type UpdaterSummary,
 } from '@chimera/interface';
 import { alpha, cleanDeepClickEvent, cn } from '@chimera/ui';
 import FiberManualRecord from '@mui/icons-material/FiberManualRecord';
@@ -42,7 +42,7 @@ export const getImage = (core: ClashCore) => {
   }
 };
 
-const calcProgress = (data?: InspectUpdater) => {
+const calcProgress = (data?: UpdaterSummary) => {
   return (
     (Number(data?.downloader?.downloaded) / Number(data?.downloader?.total)) *
     100
@@ -53,7 +53,7 @@ const CardProgress = ({
   data,
   show,
 }: {
-  data?: InspectUpdater;
+  data?: UpdaterSummary;
   show?: boolean;
 }) => {
   const parsedState = () => {
@@ -143,7 +143,7 @@ export const ClashCoreItem = ({
 
   const [downloadState, setDownloadState] = useState(false);
 
-  const [updater, setUpdater] = useState<InspectUpdater>();
+  const [updater, setUpdater] = useState<UpdaterSummary>();
 
   const handleUpdateCore = async () => {
     try {
