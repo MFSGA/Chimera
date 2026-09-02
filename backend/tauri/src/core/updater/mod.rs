@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(artifact, "clash_chimera-x86_64-pc-windows-msvc.exe");
         assert!(matches!(
             metadata,
-            CoreTypeMeta::ChimeraClient(tag) if tag == "v0.24.3"
+            CoreTypeMeta::ChimeraClient(tag) if tag == manifest.latest.chimera_client
         ));
     }
 
