@@ -1,7 +1,6 @@
-import { commands, useClashProxies, useSetting } from '@chimera/interface';
+import { useClashProxies } from '@chimera/interface';
 import { cn } from '@chimera/utils';
 import { Link, useMatchRoute } from '@tanstack/react-router';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import Apps from '~icons/material-symbols/apps';
 import DashboardRounded from '~icons/material-symbols/dashboard-rounded';
 import DesignServicesRounded from '~icons/material-symbols/design-services-rounded';
@@ -22,12 +21,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useLockFn } from '@/hooks/use-lock-fn';
+import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
-
-const currentWindow = getCurrentWebviewWindow();
 
 function NavbarButton({
   to,
@@ -250,31 +245,12 @@ export const MobileNavbar = () => {
 };
 
 export function LegacyNavbarButton() {
-  const windowType = useSetting('window_type');
-
-  const switchToLegacy = useLockFn(async () => {
-    try {
-      await windowType.upsert('legacy');
-
-      const result = await commands.createLegacyWindow();
-
-      if (result.status !== 'ok') {
-        throw new Error(result.error);
-      }
-
-      await currentWindow.close();
-    } catch (error) {
-      await message(`Failed to open legacy UI: ${formatError(error)}`, {
-        kind: 'error',
-        title: m.common_error(),
-      });
-    }
-  });
+  const { switchToLegacy, isPending } = useUiSwitch();
 
   return (
     <Button
       className="ml-auto flex h-9 items-center gap-2 px-4 [&_svg]:size-5"
-      loading={windowType.isPending}
+      loading={isPending}
       onClick={() => void switchToLegacy()}
     >
       <ExitToAppRounded />
