@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { type EnvInfo, type ServiceStatusInfo } from '../ipc/bindings';
+import { type EnvInfo } from '../ipc/bindings';
 import { InspectUpdater } from './types';
 
 export interface IPSBResponse {
@@ -16,9 +16,6 @@ export interface IPSBResponse {
   continent_code: string;
   country_code: string;
 }
-
-export type SystemServiceStatus = ServiceStatusInfo['status'];
-export type SystemServiceStatusInfo = ServiceStatusInfo;
 
 export const isAppImage = async () => {
   return await invoke<boolean>('is_appimage');
@@ -54,49 +51,6 @@ export const setStorageItem = async (key: string, value: string) => {
 
 export const removeStorageItem = async (key: string) => {
   return await invoke<void>('remove_storage_item', { key });
-};
-
-export const statusService = async (): Promise<SystemServiceStatusInfo> => {
-  try {
-    return await invoke<SystemServiceStatusInfo>('status_service');
-  } catch (e) {
-    console.error(e);
-    return {
-      name: 'chimera-service',
-      version: '',
-      status: 'not_installed',
-      server: null,
-      compat: { kind: 'unknown' },
-    };
-  }
-};
-
-export const installService = async () => {
-  return await invoke<void>('install_service');
-};
-
-export const uninstallService = async () => {
-  return await invoke<void>('uninstall_service');
-};
-
-export const startService = async () => {
-  return await invoke<void>('start_service');
-};
-
-export const stopService = async () => {
-  return await invoke<void>('stop_service');
-};
-
-export const restartService = async () => {
-  return await invoke<void>('restart_service');
-};
-
-export const getServiceInstallPrompt = async () => {
-  return await invoke<string>('get_service_install_prompt');
-};
-
-export const getCoreDir = async () => {
-  return await invoke<string>('get_core_dir');
 };
 
 export const restartSidecar = async () => {
