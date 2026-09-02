@@ -8,8 +8,12 @@ import {
   Typography,
 } from '@mui/material';
 import { useMemoizedFn } from 'ahooks';
-import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
+import {
+  getAppCoreStatusLabel,
+  getServiceCoreTypeLabel,
+  getSystemServiceStatusLabel,
+} from '@/features/system-service/system-service-display';
 import { useSystemServiceActions } from '@/features/system-service/use-system-service-actions';
 import { useSystemServiceMode } from '@/features/system-service/use-system-service-mode';
 import * as m from '@/paraglide/messages';
@@ -75,41 +79,9 @@ export const SettingSystemService = () => {
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
 
-  const getInstallStatusLabel = (status: string): string => {
-    switch (status) {
-      case 'not_installed':
-        return m.dashboard_widget_core_service_not_installed();
-      case 'running':
-        return m.dashboard_widget_core_status_running();
-      case 'stopped':
-        return m.dashboard_widget_core_status_stopped();
-      default:
-        return m.common_unknown();
-    }
-  };
-
-  const currentCoreStatus = (() => {
-    const status = coreStatusQuery.data?.status;
-    if (!status) return m.common_unknown();
-    if (
-      isObject(status) &&
-      Object.prototype.hasOwnProperty.call(status, 'Stopped')
-    ) {
-      const { Stopped } = status;
-      return !!Stopped && Stopped.trim()
-        ? m.dashboard_widget_core_stopped_with_message({ message: Stopped })
-        : m.dashboard_widget_core_status_stopped();
-    }
-    return m.dashboard_widget_core_status_running();
-  })();
-
+  const currentCoreStatus = getAppCoreStatusLabel(coreStatusQuery.data?.status);
   const currentRunType = coreStatusQuery.data?.type ?? m.common_unknown();
-
-  const serviceCoreType = (() => {
-    const type = serviceCoreInfos?.type;
-    if (!type) return m.common_unknown();
-    return typeof type === 'string' ? type : type.clash;
-  })();
+  const serviceCoreType = getServiceCoreTypeLabel(serviceCoreInfos?.type);
 
   const currentCoreChangedAt = coreStatusQuery.data?.startAt;
   const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
@@ -138,7 +110,7 @@ export const SettingSystemService = () => {
             primary={
               m.common_current_status() +
               ': ' +
-              getInstallStatusLabel(query.data?.status ?? m.common_unknown())
+              getSystemServiceStatusLabel(query.data?.status)
             }
           />
           <div className="flex gap-2">

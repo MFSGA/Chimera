@@ -1,5 +1,4 @@
 import { useCoreStatus } from '@chimera/interface';
-import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
 import {
   ServerManualPromptDialogWrapper,
@@ -19,6 +18,11 @@ import {
   ModalTitle,
   ModalTrigger,
 } from '@/components/ui/modal';
+import {
+  getAppCoreStatusLabel,
+  getServiceCoreTypeLabel,
+  getSystemServiceStatusLabel,
+} from '@/features/system-service/system-service-display';
 import { useSystemServiceActions } from '@/features/system-service/use-system-service-actions';
 import * as m from '@/paraglide/messages';
 import {
@@ -63,30 +67,6 @@ const DetailsButton = ({ details }: { details: Detail[] }) => (
   </Modal>
 );
 
-const getServiceStatusLabel = (status?: string) => {
-  switch (status) {
-    case 'not_installed':
-      return m.dashboard_widget_core_service_not_installed();
-    case 'running':
-      return m.dashboard_widget_core_status_running();
-    case 'stopped':
-      return m.dashboard_widget_core_status_stopped();
-    default:
-      return m.common_unknown();
-  }
-};
-
-const getCurrentCoreStatus = (status: unknown) => {
-  if (!status) return m.common_unknown();
-  if (isObject(status) && 'Stopped' in status) {
-    const stopped = String(status.Stopped ?? '');
-    return stopped.trim()
-      ? m.dashboard_widget_core_stopped_with_message({ message: stopped })
-      : m.dashboard_widget_core_status_stopped();
-  }
-  return m.dashboard_widget_core_status_running();
-};
-
 export default function SystemServiceControl() {
   const coreStatusQuery = useCoreStatus();
   const promptDialog = useServerManualPromptDialog();
@@ -105,18 +85,14 @@ export default function SystemServiceControl() {
   const serviceServer = query.data?.server;
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
-  const serviceCoreType = serviceCoreInfos?.type
-    ? typeof serviceCoreInfos.type === 'string'
-      ? serviceCoreInfos.type
-      : serviceCoreInfos.type.clash
-    : m.common_unknown();
+  const serviceCoreType = getServiceCoreTypeLabel(serviceCoreInfos?.type);
   const details: Detail[] = [
     [m.settings_service_name_label(), query.data?.name],
     [m.settings_service_version_label(), query.data?.version],
     [m.settings_server_version_label(), serviceServer?.version],
     [
       m.settings_app_core_status_label(),
-      getCurrentCoreStatus(coreStatusQuery.data?.status),
+      getAppCoreStatusLabel(coreStatusQuery.data?.status),
     ],
     [m.settings_run_type_label(), coreStatusQuery.data?.type],
     [m.settings_core_type_label(), serviceCoreType],
@@ -145,7 +121,7 @@ export default function SystemServiceControl() {
           />
           <DetailRow
             label={m.common_current_status()}
-            value={getServiceStatusLabel(query.data?.status)}
+            value={getSystemServiceStatusLabel(query.data?.status)}
           />
         </SettingsCardContent>
         <SettingsCardFooter className="flex-wrap-reverse gap-2">
