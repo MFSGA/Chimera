@@ -75,15 +75,13 @@ pub async fn init_service() {
     if let Ok(status) = control::status().await
         && matches!(status.status, chimera_ipc::types::ServiceStatus::Running)
     {
-        if is_service_runtime_compatible(&status) {
-            ipc::spawn_health_check();
-            while !ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        } else {
-            tracing::warn!(
-                "service is running but version or runtime ownership is incompatible; ignore service mode for this instance"
-            );
+        // Monitor any running daemon, even when it is currently incompatible or
+        // owned by another runtime. The health loop remains fail-closed, but it
+        // can observe a later service update/reinstall and reconnect without an
+        // app restart.
+        ipc::spawn_health_check();
+        while !ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
 }
