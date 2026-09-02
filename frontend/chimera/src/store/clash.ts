@@ -1,5 +1,5 @@
-import type { VergeConfig } from '@chimera/interface';
+import type { IVerge_Serialize } from '@chimera/interface';
 import { atom } from 'jotai';
 
 export const coreTypeAtom =
-  atom<NonNullable<VergeConfig['clash_core']>>('mihomo');
+  atom<NonNullable<IVerge_Serialize['clash_core']>>('mihomo');
