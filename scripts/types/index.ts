@@ -2,6 +2,7 @@ import { ArchMapping } from 'utils/manifest';
 
 export interface BinInfo {
   name: string;
+  version?: string;
   targetFile: string;
   exeFile: string;
   tmpFile: string;
