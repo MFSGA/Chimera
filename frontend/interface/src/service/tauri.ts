@@ -1,79 +1,67 @@
-import { invoke } from '@tauri-apps/api/core';
-import { type EnvInfo } from '../ipc/bindings';
-import { InspectUpdater } from './types';
+import {
+  commands,
+  type EnvInfo,
+  type IpsbResponse,
+  type UpdaterSummary,
+} from '../ipc/bindings';
+import { unwrapResult } from '../utils';
 
-export interface IPSBResponse {
-  organization: string;
-  longitude: number;
-  timezone: string;
-  isp: string;
-  offset: number;
-  asn: number;
-  asn_organization: string;
-  country: string;
-  ip: string;
-  latitude: number;
-  continent_code: string;
-  country_code: string;
-}
+export type IPSBResponse = IpsbResponse;
 
 export const isAppImage = async () => {
-  return await invoke<boolean>('is_appimage');
+  return unwrapResult(await commands.isAppimage());
 };
 
 export const openThat = async (path: string) => {
-  return await invoke<void>('open_that', { path });
+  unwrapResult(await commands.openThat(path));
 };
 
-export const collectEnvs = async () => {
-  return await invoke<EnvInfo>('collect_envs');
+export const collectEnvs = async (): Promise<EnvInfo> => {
+  return unwrapResult(await commands.collectEnvs());
 };
 
 export const cleanupProcesses = async () => {
-  return await invoke<void>('cleanup_processes');
+  unwrapResult(await commands.cleanupProcesses());
 };
 
 export const getServerPort = async () => {
-  return await invoke<number>('get_server_port');
+  return unwrapResult(await commands.getServerPort());
 };
 
-export const inspectUpdater = async (updaterId: number) => {
-  return await invoke<InspectUpdater>('inspect_updater', { updaterId });
+export const inspectUpdater = async (
+  updaterId: number,
+): Promise<UpdaterSummary> => {
+  return unwrapResult(await commands.inspectUpdater(updaterId));
 };
 
 export const getStorageItem = async (key: string) => {
-  return await invoke<string | null>('get_storage_item', { key });
+  return unwrapResult(await commands.getStorageItem(key));
 };
 
 export const setStorageItem = async (key: string, value: string) => {
-  return await invoke<void>('set_storage_item', { key, value });
+  unwrapResult(await commands.setStorageItem(key, value));
 };
 
 export const removeStorageItem = async (key: string) => {
-  return await invoke<void>('remove_storage_item', { key });
+  unwrapResult(await commands.removeStorageItem(key));
 };
 
 export const restartSidecar = async () => {
-  return await invoke<void>('restart_sidecar');
+  unwrapResult(await commands.restartSidecar());
 };
 
 export const isPortable = async () => {
-  return await invoke<boolean>('is_portable');
+  return unwrapResult(await commands.isPortable());
 };
 
 export const getCoreStatus = async () => {
-  return await invoke<
-    ['Running' | { Stopped: string | null }, number, 'normal' | 'service']
-  >('get_core_status');
+  return unwrapResult(await commands.getCoreStatus());
 };
 
 export const urlDelayTest = async (url: string, expectedStatus: number) => {
-  return await invoke<number | null>('url_delay_test', {
-    url,
-    expectedStatus,
-  });
+  return unwrapResult(await commands.urlDelayTest(url, expectedStatus));
 };
 
-export const getIpsbASN = async () => {
-  return await invoke<IPSBResponse>('get_ipsb_asn');
+export const getIpsbASN = async (): Promise<IpsbResponse> => {
+  return unwrapResult(await commands.getIpsbAsn());
 };
