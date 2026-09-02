@@ -8,6 +8,7 @@ use crate::{
     utils::dirs::{app_config_dir, app_data_dir, app_install_dir},
 };
 
+pub mod compat;
 /// 1
 pub mod control;
 /// 2
@@ -27,6 +28,10 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
 }
 
 pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
+    if !compat::ServiceCompat::classify(status).allows_service_backend() {
+        return false;
+    }
+
     let expected_config_dir = match app_config_dir() {
         Ok(path) => normalize_path(&path),
         Err(err) => {
@@ -78,7 +83,7 @@ pub async fn init_service() {
             }
         } else {
             tracing::warn!(
-                "service is running but bound to a different app runtime; ignore service mode for this instance"
+                "service is running but version or runtime ownership is incompatible; ignore service mode for this instance"
             );
         }
     }
