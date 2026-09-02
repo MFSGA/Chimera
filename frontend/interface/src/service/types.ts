@@ -1,7 +1,3 @@
-import type { UpdaterSummary } from '../ipc/bindings';
-
-export type InspectUpdater = UpdaterSummary;
-
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace Connection {
   export interface Item {
