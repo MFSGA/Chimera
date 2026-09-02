@@ -14,8 +14,6 @@ pub mod control;
 /// 2
 pub mod ipc;
 
-/// todo: service changed to a new service
-/// const SERVICE_NAME: &str = "nyanpasu-service";
 const SERVICE_NAME: &str = "chimera-service";
 
 pub static SERVICE_PATH: Lazy<PathBuf> = Lazy::new(|| {
