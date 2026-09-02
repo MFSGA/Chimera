@@ -1,12 +1,14 @@
-import { commands, openThat } from '@chimera/interface';
 import { BasePage } from '@chimera/ui';
 import { Feedback, GitHub } from '@mui/icons-material';
 import { IconButton } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { lazy, Suspense } from 'react';
+import {
+  openBugReport,
+  openProjectRepository,
+} from '@/features/support/actions';
 import * as m from '@/paraglide/messages';
-import { formatEnvInfos } from '@/utils';
 
 const SettingPageComponent = lazy(
   () => import('@/components/setting/setting-page'),
@@ -18,9 +20,7 @@ export const Route = createFileRoute('/(legacy)/settings')({
 
 function SettingPage() {
   const GithubIcon = () => {
-    const toGithubRepo = useLockFn(() => {
-      return openThat('https://github.com/MFSGA/Chimera');
-    });
+    const toGithubRepo = useLockFn(openProjectRepository);
 
     return (
       <IconButton color="inherit" title="@MFSGA/Chimera" onClick={toGithubRepo}>
@@ -30,25 +30,7 @@ function SettingPage() {
   };
 
   const FeedbackIcon = () => {
-    const toFeedback = useLockFn(async () => {
-      const envs = await commands.collectEnvs();
-
-      if (envs.status !== 'ok') {
-        return;
-      }
-
-      const formattedEnv = encodeURIComponent(
-        formatEnvInfos(envs.data)
-          .split('\n')
-          .map((v) => `> ${v}`)
-          .join('\n'),
-      );
-
-      return openThat(
-        'https://github.com/MFSGA/Chimera/issues/new?assignees=&labels=T%3A+Bug%2CS%3A+Untriaged&projects=&template=bug_report.yaml&env_infos=' +
-          formattedEnv,
-      );
-    });
+    const toFeedback = useLockFn(openBugReport);
 
     return (
       <IconButton color="inherit" title={'Feedback'} onClick={toFeedback}>
