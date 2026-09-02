@@ -449,22 +449,34 @@ mod capability_boundary_tests {
             .find("pub async fn ensure_core_running(&self) -> Result<()> {")
             .expect("idempotent core start method");
         let end = core[start..]
-            .find("\n    async fn run_core_inner")
+            .find("\n    fn selected_core")
             .map(|offset| start + offset)
             .expect("end of idempotent core start method");
         let method = &core[start..end];
 
-        let lock = method
-            .find("self.run_lock.lock().await")
-            .expect("core lifecycle lock");
+        let lease = method
+            .find("self.begin_lifecycle().await")
+            .expect("core lifecycle lease");
         let state_check = method
             .find("instance.state().await")
             .expect("core state check");
-        let start_inner = method
-            .find("self.run_core_inner().await")
+        let rebuild = method
+            .find("lease.rebuild_running_config().await")
             .expect("core start implementation");
-        assert!(lock < state_check && state_check < start_inner);
+        assert!(lease < state_check && state_check < rebuild);
         assert!(!method.contains("self.run_core().await"));
+
+        let lifecycle_start = core
+            .find("pub(crate) async fn begin_lifecycle(&self)")
+            .expect("lifecycle acquisition method");
+        let lifecycle_end = core[lifecycle_start..]
+            .find("\n    pub(crate) fn runtime_transform_output")
+            .map(|offset| lifecycle_start + offset)
+            .expect("end of lifecycle acquisition method");
+        assert!(
+            core[lifecycle_start..lifecycle_end].contains("self.run_lock.lock().await"),
+            "lifecycle lease must own the shared core lifecycle lock"
+        );
     }
 
     #[test]
@@ -751,11 +763,11 @@ mod capability_boundary_tests {
             .find("pub(crate) async fn restore_service_mode(enabled: bool)")
             .expect("forced service-mode restore entry point");
         let restore_end = feat[restore_start..]
-            .find("async fn apply_service_mode")
+            .find("\nfn system_proxy_patch")
             .map(|offset| restore_start + offset)
-            .expect("service-mode apply helper");
+            .expect("end of forced service-mode restore entry point");
         let restore = &feat[restore_start..restore_end];
-        assert!(restore.contains("apply_service_mode(enabled).await"));
+        assert!(restore.contains("patch_verge(service_mode_patch(enabled)).await"));
         assert!(!restore.contains("current == enabled"));
 
         let rollback_start = runtime
