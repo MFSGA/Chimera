@@ -12,6 +12,8 @@ use crate::{
     log_err,
 };
 
+use super::compat::ServiceCompat;
+
 #[derive(PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[atomic_enum]
@@ -41,7 +43,7 @@ pub(super) fn set_ipc_state(state: IpcState) {
 
 fn dispatch_disconnected() {
     if IPC_STATE
-        .compare_exchange_weak(
+        .compare_exchange(
             IpcState::Connected,
             IpcState::Disconnected,
             Ordering::SeqCst,
@@ -55,7 +57,7 @@ fn dispatch_disconnected() {
 
 fn dispatch_connected() {
     if IPC_STATE
-        .compare_exchange_weak(
+        .compare_exchange(
             IpcState::Disconnected,
             IpcState::Connected,
             Ordering::SeqCst,
@@ -122,47 +124,126 @@ pub(super) fn spawn_health_check() {
     std::thread::spawn(|| {
         HEALTH_CHECK_RUNNING.store(true, Ordering::Release);
         block_on(async {
+            let mut warned_ineligible = false;
             loop {
                 if KILL_FLAG.load(Ordering::Acquire) {
                     set_ipc_state(IpcState::Disconnected);
                     HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
                     break;
                 }
-                health_check().await;
+                warned_ineligible = health_check(warned_ineligible).await;
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         })
     });
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum WarnLevel {
+    Warn,
+    Debug,
+    Silent,
+}
+
+fn next_ineligible_warning_state(warned: bool, ineligible_but_running: bool) -> (WarnLevel, bool) {
+    match (ineligible_but_running, warned) {
+        (true, false) => (WarnLevel::Warn, true),
+        (true, true) => (WarnLevel::Debug, true),
+        (false, _) => (WarnLevel::Silent, false),
+    }
+}
+
+fn target_ipc_state(
+    info: &chimera_ipc::types::StatusInfo<'_>,
+    runtime_owned: bool,
+) -> (IpcState, ServiceCompat) {
+    let compat = ServiceCompat::classify(info);
+    let state = match info.status {
+        ServiceStatus::Running if compat.allows_service_backend() && runtime_owned => {
+            IpcState::Connected
+        }
+        _ => IpcState::Disconnected,
+    };
+    (state, compat)
+}
+
 #[instrument]
-async fn health_check() {
+async fn health_check(warned: bool) -> bool {
     match super::control::status().await {
-        Ok(info) => match info.status {
-            ServiceStatus::Running if super::is_service_runtime_compatible(&info) => {
-                dispatch_connected();
+        Ok(info) => {
+            let runtime_owned = super::is_service_runtime_owned(&info);
+            let (state, compat) = target_ipc_state(&info, runtime_owned);
+            let ineligible_but_running =
+                info.status == ServiceStatus::Running && (state == IpcState::Disconnected);
+            let (level, next_warned) =
+                next_ineligible_warning_state(warned, ineligible_but_running);
+
+            match level {
+                WarnLevel::Warn => tracing::warn!(
+                    ?compat,
+                    runtime_owned,
+                    "service daemon is ineligible; core will continue on local backend"
+                ),
+                WarnLevel::Debug => tracing::debug!(
+                    ?compat,
+                    runtime_owned,
+                    "service daemon remains ineligible; core will continue on local backend"
+                ),
+                WarnLevel::Silent => {}
             }
-            ServiceStatus::Running => {
-                tracing::debug!(
-                    "service is running but version or runtime ownership is incompatible; keep service mode disconnected"
-                );
-                dispatch_disconnected();
+
+            match state {
+                IpcState::Connected => dispatch_connected(),
+                IpcState::Disconnected => dispatch_disconnected(),
             }
-            ServiceStatus::Stopped | ServiceStatus::NotInstalled => {
-                dispatch_disconnected();
-            }
-        },
+            next_warned
+        }
         Err(e) => {
             tracing::error!("IPC health check failed: {}", e);
             dispatch_disconnected();
+            let (_, next_warned) = next_ineligible_warning_state(warned, false);
+            next_warned
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{IpcState, should_rebuild_for_ipc_transition};
-    use crate::core::RunType;
+    use std::{borrow::Cow, path::PathBuf};
+
+    use chimera_ipc::{
+        api::status::{CoreInfos, CoreState, RuntimeInfos, StatusResBody},
+        types::{ServiceStatus, StatusInfo},
+    };
+
+    use super::{
+        IpcState, WarnLevel, next_ineligible_warning_state, should_rebuild_for_ipc_transition,
+        target_ipc_state,
+    };
+    use crate::core::{RunType, service::compat::ServiceCompat};
+
+    fn running_status(server_version: &str) -> StatusInfo<'static> {
+        StatusInfo {
+            name: Cow::Borrowed("chimera-service"),
+            version: Cow::Borrowed("1.9.0"),
+            status: ServiceStatus::Running,
+            server: Some(StatusResBody {
+                version: Cow::Owned(server_version.to_owned()),
+                core_infos: CoreInfos {
+                    r#type: None,
+                    state: CoreState::Stopped(None),
+                    state_changed_at: 0,
+                    config_path: None,
+                },
+                runtime_infos: RuntimeInfos {
+                    service_data_dir: Cow::Owned(PathBuf::new()),
+                    service_config_dir: Cow::Owned(PathBuf::new()),
+                    nyanpasu_config_dir: Cow::Owned(PathBuf::new()),
+                    nyanpasu_data_dir: Cow::Owned(PathBuf::new()),
+                },
+            }),
+        }
+    }
 
     #[test]
     fn service_ipc_transition_rebuilds_only_when_runtime_owner_changes() {
@@ -186,5 +267,50 @@ mod tests {
             IpcState::Connected,
             RunType::Elevated
         ));
+    }
+
+    #[test]
+    fn compatible_owned_daemon_reaches_service_backend() {
+        let info = running_status("1.9.0");
+        let (state, compat) = target_ipc_state(&info, true);
+        assert_eq!(state, IpcState::Connected);
+        assert_eq!(
+            compat,
+            ServiceCompat::Compatible {
+                server_version: "1.9.0".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn incompatible_daemon_never_reaches_service_backend() {
+        let info = running_status("2.0.0");
+        let (state, compat) = target_ipc_state(&info, true);
+        assert_eq!(state, IpcState::Disconnected);
+        assert!(matches!(compat, ServiceCompat::Incompatible { .. }));
+    }
+
+    #[test]
+    fn foreign_runtime_never_reaches_service_backend() {
+        let info = running_status("1.9.0");
+        let (state, compat) = target_ipc_state(&info, false);
+        assert_eq!(state, IpcState::Disconnected);
+        assert!(compat.allows_service_backend());
+    }
+
+    #[test]
+    fn ineligible_warning_is_latched() {
+        assert_eq!(
+            next_ineligible_warning_state(false, true),
+            (WarnLevel::Warn, true)
+        );
+        assert_eq!(
+            next_ineligible_warning_state(true, true),
+            (WarnLevel::Debug, true)
+        );
+        assert_eq!(
+            next_ineligible_warning_state(true, false),
+            (WarnLevel::Silent, false)
+        );
     }
 }
