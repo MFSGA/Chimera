@@ -6,6 +6,7 @@ import { useLockFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
 import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
+import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 import { formatError } from '@/utils';
@@ -16,33 +17,45 @@ const TitleComp = () => {
     query: { data: clashConfigs },
   } = useClashConfig();
   const systemProxy = useSystemProxy();
+  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
+  const { value: enableTunMode } = useSetting('enable_tun_mode');
   const mixedPort = clashConfigs?.['mixed-port'];
-  const systemProxyEnabled = systemProxy.data?.enable;
-  const systemProxyServer = systemProxy.data?.server;
 
   const status = useMemo<{
     label: string;
     color: ChipProps['color'];
   }>(() => {
-    if (systemProxyEnabled) {
-      const port = Number(systemProxyServer?.split(':')[1]);
-      if (port === mixedPort) {
+    const proxyStatus = getProxyStatus({
+      enableSystemProxy,
+      enableTunMode,
+      systemProxyEnabled: systemProxy.data?.enable,
+      systemProxyServer: systemProxy.data?.server,
+      mixedPort,
+    });
+
+    switch (proxyStatus) {
+      case 'system':
         return {
-          label: m.common_successful(),
+          label: m.dashboard_widget_proxy_status_success_system(),
           color: 'success',
         };
-      }
-      return {
-        label: m.dashboard_widget_proxy_status_occupied(),
-        color: 'warning',
-      };
+      case 'tun':
+        return {
+          label: m.dashboard_widget_proxy_status_success_tun(),
+          color: 'success',
+        };
+      case 'occupied':
+        return {
+          label: m.dashboard_widget_proxy_status_occupied(),
+          color: 'warning',
+        };
+      default:
+        return {
+          label: m.dashboard_widget_proxy_status_disabled(),
+          color: 'error',
+        };
     }
-
-    return {
-      label: m.dashboard_widget_proxy_status_disabled(),
-      color: 'error',
-    };
-  }, [mixedPort, systemProxyEnabled, systemProxyServer]);
+  }, [enableSystemProxy, enableTunMode, mixedPort, systemProxy.data]);
 
   return (
     <div className="flex items-center gap-2 px-1">
