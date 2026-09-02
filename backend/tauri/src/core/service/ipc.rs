@@ -144,7 +144,7 @@ async fn health_check() {
             }
             ServiceStatus::Running => {
                 tracing::debug!(
-                    "service is running but runtime dirs do not match current app instance; keep service mode disconnected"
+                    "service is running but version or runtime ownership is incompatible; keep service mode disconnected"
                 );
                 dispatch_disconnected();
             }
