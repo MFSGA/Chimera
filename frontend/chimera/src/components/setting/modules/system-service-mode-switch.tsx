@@ -1,37 +1,19 @@
-import { useSetting, useSystemService } from '@chimera/interface';
 import { SwitchItem } from '@chimera/ui';
 import { ListItem, Typography } from '@mui/material';
-import { useLockFn } from 'ahooks';
+import { useSystemServiceMode } from '@/features/system-service/use-system-service-mode';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 
 export const ServiceModeSwitch = () => {
-  const { query } = useSystemService();
-  const serviceMode = useSetting('enable_service_mode');
-  const isDisabled = query.data?.status === 'not_installed';
-
-  const handleServiceMode = useLockFn(async () => {
-    try {
-      await serviceMode.upsert(!serviceMode.value);
-    } catch (error) {
-      message(
-        `Activation Service Mode failed! \n Error: ${formatError(error)}`,
-        {
-          title: m.common_error(),
-          kind: 'error',
-        },
-      );
-    }
-  });
+  const serviceMode = useSystemServiceMode();
+  const isDisabled = serviceMode.isNotInstalled;
 
   return (
     <>
       <SwitchItem
         label={m.settings_system_proxy_service_mode_label()}
         disabled={isDisabled}
-        checked={Boolean(serviceMode.value)}
-        onChange={handleServiceMode}
+        checked={serviceMode.value}
+        onChange={serviceMode.toggle}
       />
 
       {isDisabled && (
