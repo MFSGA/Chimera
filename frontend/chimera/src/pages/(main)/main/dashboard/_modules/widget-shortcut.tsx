@@ -17,6 +17,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import TextMarquee from '@/components/ui/text-marquee';
+import { getCoreStatusBadgeMessage } from '@/features/dashboard/core-service-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
@@ -120,47 +121,15 @@ const CoreStatusBadge = () => {
   } = useSystemService();
   const coreStatusQuery = useCoreStatus();
 
-  const message = useMemo<string>(() => {
-    const coreState = coreStatusQuery.data?.status as CoreState | undefined;
-
-    if (coreState === 'Running') {
-      if (serviceStatus?.server?.core_infos?.state === 'Running') {
-        return m.dashboard_widget_core_status_running_by_service();
-      }
-
-      return m.dashboard_widget_core_status_running_by_child_process();
-    }
-
-    const stoppedInfo =
-      coreState && typeof coreState === 'object' && 'Stopped' in coreState
-        ? coreState.Stopped
-        : null;
-
-    const serviceMessage =
-      serviceStatus?.status === 'running'
-        ? m.dashboard_widget_core_service_running()
-        : serviceStatus?.status === 'stopped'
-          ? m.dashboard_widget_core_service_stopped()
-          : m.dashboard_widget_core_service_not_installed();
-
-    let stoppedMessage = m.dashboard_widget_core_stopped_unknown();
-
-    if (serviceStatus?.status === 'running') {
-      stoppedMessage = stoppedInfo
-        ? m.dashboard_widget_core_stopped_by_service_with_message({
-            message: stoppedInfo,
-          })
-        : m.dashboard_widget_core_stopped_by_service_unknown();
-    }
-
-    if (stoppedInfo) {
-      stoppedMessage = m.dashboard_widget_core_stopped_with_message({
-        message: stoppedInfo,
-      });
-    }
-
-    return `${stoppedMessage} ${serviceMessage}`;
-  }, [serviceStatus, coreStatusQuery.data]);
+  const message = useMemo<string>(
+    () =>
+      getCoreStatusBadgeMessage({
+        coreState: coreStatusQuery.data?.status,
+        serviceStatus: serviceStatus?.status,
+        serviceCoreState: serviceStatus?.server?.core_infos?.state,
+      }),
+    [serviceStatus, coreStatusQuery.data],
+  );
 
   return (
     <div
