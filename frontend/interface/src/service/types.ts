@@ -1,3 +1,5 @@
+import type { UpdaterSummary } from '../ipc/bindings';
+
 export interface VergeConfig {
   app_log_level?: 'trace' | 'debug' | 'info' | 'warn' | 'error' | string;
   language?: string;
@@ -49,37 +51,7 @@ export interface VergeConfig {
   always_on_top?: boolean;
 }
 
-export interface InspectUpdater {
-  id: number;
-  state:
-    | 'idle'
-    | 'downloading'
-    | 'decompressing'
-    | 'replacing'
-    | 'restarting'
-    | 'done'
-    | { failed: string };
-  downloader: {
-    state:
-      | 'idle'
-      | 'downloading'
-      | 'waiting_for_merge'
-      | 'merging'
-      | { failed: string }
-      | 'finished';
-    downloaded: number;
-    total: number;
-    speed: number;
-    chunks: Array<{
-      state: 'idle' | 'downloading' | 'finished';
-      start: number;
-      end: number;
-      downloaded: number;
-      speed: number;
-    }>;
-    now: number;
-  };
-}
+export type InspectUpdater = UpdaterSummary;
 
 // eslint-disable-next-line @typescript-eslint/no-namespace
 export namespace Connection {
