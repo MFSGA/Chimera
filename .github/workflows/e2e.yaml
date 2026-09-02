@@ -64,6 +64,8 @@ jobs:
       CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Install Rust
         shell: pwsh
@@ -104,6 +106,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
 
       - name: Validate E2E harness
         run: pnpm --filter @chimera/tauri-e2e test:unit
