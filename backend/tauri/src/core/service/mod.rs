@@ -27,11 +27,7 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
-    if !compat::ServiceCompat::classify(status).allows_service_backend() {
-        return false;
-    }
-
+pub fn is_service_runtime_owned(status: &StatusInfo<'_>) -> bool {
     let expected_config_dir = match app_config_dir() {
         Ok(path) => normalize_path(&path),
         Err(err) => {
@@ -59,6 +55,11 @@ pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
     let service_data_dir = normalize_path(server.runtime_infos.nyanpasu_data_dir.as_ref());
 
     expected_config_dir == service_config_dir && expected_data_dir == service_data_dir
+}
+
+pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
+    compat::ServiceCompat::classify(status).allows_service_backend()
+        && is_service_runtime_owned(status)
 }
 
 pub async fn init_service() {
