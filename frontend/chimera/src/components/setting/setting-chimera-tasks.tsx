@@ -21,7 +21,7 @@ const MaxLogFiles = () => {
 
   return (
     <>
-      <BaseItem title={m.settings_nyanpasu_max_log_files_label()}>
+      <BaseItem title={m.settings_chimera_max_log_files_label()}>
         <TextField
           size="small"
           type="number"

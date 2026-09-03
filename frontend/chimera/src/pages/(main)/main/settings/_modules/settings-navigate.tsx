@@ -128,7 +128,7 @@ const ExternalControllButton = () => (
   />
 );
 
-const NyanpasuButton = () => (
+const ChimeraButton = () => (
   <NavigateButton
     icon={
       <div className="relative size-8">
@@ -143,9 +143,9 @@ const NyanpasuButton = () => (
         </div>
       </div>
     }
-    label={m.settings_label_nyanpasu()}
-    description={m.settings_label_nyanpasu_description()}
-    to="/main/settings/nyanpasu"
+    label={m.settings_label_chimera()}
+    description={m.settings_label_chimera_description()}
+    to="/main/settings/chimera"
   />
 );
 
@@ -174,7 +174,7 @@ export default function SettingsNavigate() {
       <UserInterfaceButton />
       <ClashButton />
       <ExternalControllButton />
-      <NyanpasuButton />
+      <ChimeraButton />
       <DebugButton />
       <AboutButton />
     </div>
