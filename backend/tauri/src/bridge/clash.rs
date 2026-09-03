@@ -96,24 +96,6 @@ pub(crate) fn apply_clash_config_to_legacy_verge(
     Ok(())
 }
 
-pub(crate) fn apply_clash_config_to_legacy_guard(
-    projected: &mut IClashTemp,
-    snap: &ClashConfig,
-) -> anyhow::Result<()> {
-    let mut mapping: Mapping = super::yaml_convert(&snap.overrides)?;
-    mapping.insert("mixed-port".into(), snap.mixed_port.start_port.into());
-    mapping.insert(
-        "external-controller".into(),
-        format!(
-            "{}:{}",
-            snap.external_controller.host, snap.external_controller.port.start_port
-        )
-        .into(),
-    );
-    projected.patch_config(mapping);
-    Ok(())
-}
-
 fn break_connection_from_legacy(legacy: &IVerge) -> BreakConnectionStrategy {
     BreakConnectionStrategy {
         on_proxy_change: legacy
