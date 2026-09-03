@@ -14,6 +14,7 @@ use crate::{
 
 mod ipc;
 
+mod bridge;
 mod client;
 mod config;
 /// 5
