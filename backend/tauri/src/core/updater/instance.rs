@@ -1,10 +1,8 @@
 use super::shared::{self, CoreTypeMeta};
 use crate::{
+    client::{ChimeraClient, runtime::RuntimePaths},
     config::{chimera::ClashCore, core::Config},
-    core::{
-        clash::{client::NyanpasuClient, runtime_product::RuntimePaths},
-        download::{DownloadSession, DownloadStatus},
-    },
+    core::download::{DownloadSession, DownloadStatus},
 };
 use anyhow::anyhow;
 use runas::Command as RunasCommand;
@@ -35,7 +33,7 @@ pub(super) struct Updater {
     artifact: String,
     inner: parking_lot::RwLock<UpdaterInner>,
     downloader: Arc<DownloadSession>,
-    runtime_client: NyanpasuClient,
+    runtime_client: ChimeraClient,
 }
 
 struct UpdaterInner {
@@ -51,7 +49,7 @@ pub struct UpdaterSummary {
 
 pub(super) struct UpdaterBuilder {
     client: Option<reqwest::Client>,
-    runtime_client: Option<NyanpasuClient>,
+    runtime_client: Option<ChimeraClient>,
     core_type: Option<ClashCore>,
     mirror: Option<String>,
     artifact: Option<String>,
@@ -75,7 +73,7 @@ impl UpdaterBuilder {
         self
     }
 
-    pub fn set_runtime_client(mut self, runtime_client: NyanpasuClient) -> Self {
+    pub fn set_runtime_client(mut self, runtime_client: ChimeraClient) -> Self {
         self.runtime_client = Some(runtime_client);
         self
     }
