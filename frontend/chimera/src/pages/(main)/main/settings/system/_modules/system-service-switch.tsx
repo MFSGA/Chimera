@@ -1,11 +1,14 @@
+import { useSetting, useSystemService } from '@chimera/interface';
 import { Switch } from '@/components/ui/switch';
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { useSystemServiceMode } from '@/features/system-service/use-system-service-mode';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
 import {
   ItemContainer,
   ItemLabel,
@@ -14,7 +17,25 @@ import {
 } from '../../_modules/settings-card';
 
 export default function SystemServiceSwitch() {
-  const serviceMode = useSystemServiceMode();
+  const serviceMode = useSetting('enable_service_mode');
+
+  const { query } = useSystemService();
+
+  const disabled = query.data?.status === 'not_installed';
+
+  const handleServiceMode = useLockFn(async () => {
+    try {
+      await serviceMode.upsert(!serviceMode.value);
+    } catch (error) {
+      message(
+        `Activation Service Mode failed!\n Error: ${formatError(error)}`,
+        {
+          title: 'Error',
+          kind: 'error',
+        },
+      );
+    }
+  });
 
   return (
     <ItemContainer data-slot="system-service-switch-container">
@@ -22,23 +43,25 @@ export default function SystemServiceSwitch() {
         <ItemLabelText>
           {m.settings_system_proxy_service_mode_label()}
         </ItemLabelText>
+
         <ItemLabelDescription>
           {m.settings_system_proxy_service_mode_description()}
         </ItemLabelDescription>
       </ItemLabel>
+
       <Tooltip>
         <TooltipTrigger asChild>
           <div data-slot="system-service-switch-trigger-wrapper">
             <Switch
-              disabled={!serviceMode.isInstalled}
-              checked={serviceMode.value}
+              checked={Boolean(serviceMode.value)}
+              onCheckedChange={handleServiceMode}
               loading={serviceMode.isPending}
-              onCheckedChange={serviceMode.toggle}
+              disabled={disabled}
             />
           </div>
         </TooltipTrigger>
 
-        {!serviceMode.isInstalled && (
+        {disabled && (
           <TooltipContent>
             <span>
               {m.settings_system_proxy_service_mode_disabled_tooltip()}
