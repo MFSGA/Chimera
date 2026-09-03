@@ -31,6 +31,7 @@ mod setup;
 #[cfg(windows)]
 mod shutdown_hook;
 mod specta_export;
+mod state;
 /// 4
 mod utils;
 /// 9
