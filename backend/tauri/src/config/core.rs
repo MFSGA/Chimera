@@ -45,7 +45,11 @@ impl Config {
 
     /// Generate the runtime mapping and transform output once from the same enhancement pass.
     pub async fn generate_runtime_input() -> Result<(Mapping, PostProcessingOutput)> {
-        let (config, _exists_keys, postprocessing_output) = enhance::enhance().await?;
+        let clash = crate::bridge::clash::clash_config_from_legacy(
+            &Self::verge().latest(),
+            &Self::clash().latest().0,
+        )?;
+        let (config, _exists_keys, postprocessing_output) = enhance::enhance(&clash).await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),

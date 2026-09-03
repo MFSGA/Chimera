@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use chimera_config::clash::config::ClashConfig;
 use futures_util::future::join_all;
 use indexmap::IndexMap;
 use serde_yaml::Mapping;
@@ -30,21 +31,9 @@ pub(crate) use chain::TransformFailureError;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
-pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
+pub async fn enhance(clash: &ClashConfig) -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     // config.yaml 的配置
     let clash_config = { Config::clash().latest().0.clone() };
-
-    let (_clash_core, enable_tun, _enable_builtin, enable_filter) = {
-        let verge = Config::verge();
-        let verge = verge.latest();
-        (
-            verge.clash_core,
-            verge.enable_tun_mode.unwrap_or(false),
-            // todo: will changed to true in the future
-            verge.enable_builtin_enhanced.unwrap_or(false),
-            verge.enable_clash_fields.unwrap_or(true),
-        )
-    };
 
     let (profiles, profile_chain, global_chain, valid) = {
         let profiles = Config::profiles();
@@ -117,7 +106,7 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
 
     // 记录当前配置包含的键
     let exists_keys = use_keys(&config);
-    config = use_whitelist_fields_filter(config, &valid, enable_filter);
+    config = use_whitelist_fields_filter(config, &valid, clash.enable_clash_fields);
 
     // 合并默认的config
     clash_config
@@ -128,7 +117,7 @@ pub async fn enhance() -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
             config.insert(key.to_owned(), value.clone());
         });
 
-    config = tun::use_tun(config, enable_tun);
+    config = tun::use_tun(config, clash);
 
     Ok((config, exists_keys, postprocessing_output))
 }
