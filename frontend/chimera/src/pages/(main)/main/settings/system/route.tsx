@@ -17,6 +17,7 @@ import {
 import { SettingsTitle } from '../_modules/settings-title';
 import AutoLaunchSwitch from './_modules/auto-launch-switch';
 import CurrentSystemProxy from './_modules/current-system-proxy';
+import DnsCacheButton from './_modules/dns-cache-button';
 import ProxyBypassConfig from './_modules/proxy-bypass-config';
 import ProxyGuardConfig from './_modules/proxy-guard-config';
 import ProxyGuardSwitch from './_modules/proxy-guard-switch';
@@ -148,11 +149,13 @@ const SystemTools = () => {
   return (
     <div data-slot="system-tools-container">
       <SettingsLabel>
-        {m.settings_system_proxy_windows_tools_label()}
+        {m.settings_system_proxy_system_tools_label()}
       </SettingsLabel>
 
       <SettingsGroup>
-        <UwpToolsButton />
+        <DnsCacheButton />
+
+        {OS === 'windows' && <UwpToolsButton />}
       </SettingsGroup>
     </div>
   );
@@ -176,7 +179,7 @@ function RouteComponent() {
 
         <SystemLaunch />
 
-        {OS === 'windows' && <SystemTools />}
+        {(OS === 'windows' || OS === 'macos') && <SystemTools />}
       </div>
     </>
   );
