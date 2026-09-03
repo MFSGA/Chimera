@@ -1,9 +1,7 @@
+use chimera_config::clash::config::{ClashConfig, tun_stack::TunStack};
 use serde_yaml::{Mapping, Value};
 
-use crate::config::{
-    chimera::{ClashCore, TunStack},
-    core::Config,
-};
+use crate::config::{chimera::ClashCore, core::Config};
 
 macro_rules! revise {
     ($map: expr, $key: expr, $val: expr) => {
@@ -22,7 +20,8 @@ macro_rules! append {
 }
 
 #[tracing_attributes::instrument(skip(config))]
-pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
+pub fn use_tun(mut config: Mapping, clash: &ClashConfig) -> Mapping {
+    let enable = clash.enable_tun_mode;
     let tun_key = Value::from("tun");
     let tun_val = config.get(&tun_key);
     tracing::debug!("tun_val: {:?}", tun_val);
@@ -54,13 +53,7 @@ pub fn use_tun(mut config: Mapping, enable: bool) -> Mapping {
             // mainly used for linux
             append!(tun_val, "so-mark", 7777);
         } else {
-            let mut tun_stack = {
-                *Config::verge()
-                    .latest()
-                    .tun_stack
-                    .as_ref()
-                    .unwrap_or(&TunStack::default())
-            };
+            let mut tun_stack = clash.tun_stack;
             if core == ClashCore::ClashPremium && tun_stack == TunStack::Mixed {
                 tun_stack = TunStack::Gvisor;
             }
