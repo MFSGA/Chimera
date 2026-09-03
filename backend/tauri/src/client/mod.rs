@@ -3,6 +3,7 @@
 //! This follows REF's client ownership direction while preserving Chimera's
 //! staged migration from legacy globals and Chimera-specific core support.
 
+mod application;
 mod core_bridge;
 mod event_sink;
 pub(crate) mod ports;
@@ -21,6 +22,7 @@ use crate::core::clash::transaction::RuntimePatchCoordinator;
 pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
+    application::ApplicationClient,
     core_bridge::{CoreLifecyclePort, LegacyCoreBridge},
     event_sink::{LegacyUiEventSink, UiEventSink},
     profiles::{
@@ -30,7 +32,7 @@ use self::{
     system_dns::{OsSystemDnsCache, SystemDnsCache},
 };
 
-use crate::config::{chimera::IVerge, profile::item_type::ProfileUid};
+use crate::config::profile::item_type::ProfileUid;
 
 #[derive(Clone)]
 pub(crate) struct ChimeraClient {
@@ -38,6 +40,7 @@ pub(crate) struct ChimeraClient {
 }
 
 struct ChimeraClientInner {
+    application: ApplicationClient,
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
@@ -46,7 +49,6 @@ struct ChimeraClientInner {
     ui_sink: Arc<dyn UiEventSink>,
     runtime_patch: RuntimePatchCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
-    verge_patch: tokio::sync::Mutex<()>,
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
 }
 
@@ -71,6 +73,7 @@ impl ChimeraClient {
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
         let inner = ChimeraClientInner {
+            application: ApplicationClient::legacy(),
             core,
             profiles,
             profile_files,
@@ -79,17 +82,11 @@ impl ChimeraClient {
             ui_sink,
             runtime_patch: RuntimePatchCoordinator::default(),
             profile_commit: tokio::sync::Mutex::new(()),
-            verge_patch: tokio::sync::Mutex::new(()),
             pending_refreshes: StdMutex::new(HashSet::new()),
         };
         Self {
             inner: Arc::new(inner),
         }
-    }
-
-    pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
-        let _patch = self.inner.verge_patch.lock().await;
-        crate::feat::patch_verge_uncoordinated(self, patch).await
     }
 }
 
