@@ -28,18 +28,13 @@ use specta::Type;
 use tracing::instrument;
 
 use crate::{
-    config::{chimera::ClashCore, core::Config},
-    core::{
-        clash::{
-            api,
-            runtime_product::{
-                CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
-                RuntimeSnapshot, RuntimeTransactionSnapshot, RuntimeTransformFailure,
-                capture_runtime_transaction, check_and_promote_candidate, restore_failed_apply,
-            },
-        },
-        logger::Logger,
+    client::runtime::{
+        CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate, RuntimeSnapshot,
+        RuntimeTransactionSnapshot, RuntimeTransformFailure, capture_runtime_transaction,
+        check_and_promote_candidate, restore_failed_apply,
     },
+    config::{chimera::ClashCore, core::Config},
+    core::{clash::api, logger::Logger},
     enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
     utils::dirs,

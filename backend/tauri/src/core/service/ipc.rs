@@ -8,7 +8,8 @@ use tauri::Manager;
 use tracing::instrument;
 
 use crate::{
-    core::{RunType, clash::client::NyanpasuClient, handle::Handle},
+    client::ChimeraClient,
+    core::{RunType, handle::Handle},
     log_err,
 };
 
@@ -97,8 +98,8 @@ fn on_ipc_state_changed(state: IpcState) {
                 tracing::warn!("app handle is unavailable during service IPC transition");
                 return;
             };
-            let Some(client) = app_handle.try_state::<NyanpasuClient>() else {
-                tracing::warn!("NyanpasuClient is unavailable during service IPC transition");
+            let Some(client) = app_handle.try_state::<ChimeraClient>() else {
+                tracing::warn!("ChimeraClient is unavailable during service IPC transition");
                 return;
             };
             let status = match client.core_status().await {
