@@ -7,7 +7,7 @@ use tauri::{AppHandle, Manager};
 use crate::{
     client::ChimeraClient,
     config::{
-        chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
+        chimera::IVerge, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
     core::{clash::transaction::TransactionOutcome, handle},
@@ -98,29 +98,54 @@ pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
 }
 
 pub fn toggle_system_proxy() {
-    let enabled = Config::verge()
-        .latest()
-        .enable_system_proxy
-        .unwrap_or(false);
+    let client = match managed_client() {
+        Ok(client) => client,
+        Err(err) => {
+            log::error!(target: "app", "failed to resolve client for system proxy toggle: {err:?}");
+            return;
+        }
+    };
+    let enabled = match client.get_app_config() {
+        Ok(config) => config.enable_system_proxy,
+        Err(err) => {
+            log::error!(target: "app", "failed to read typed app config for system proxy toggle: {err:?}");
+            return;
+        }
+    };
+
     tauri::async_runtime::spawn(async move {
         let patch = IVerge {
             enable_system_proxy: Some(!enabled),
             ..IVerge::default()
         };
-        if let Err(err) = patch_verge(patch).await {
+        if let Err(err) = client.patch_verge(patch).await {
             log::error!(target: "app", "failed to toggle system proxy: {err:?}");
         }
     });
 }
 
 pub fn toggle_tun_mode() {
-    let enabled = Config::verge().latest().enable_tun_mode.unwrap_or(false);
+    let client = match managed_client() {
+        Ok(client) => client,
+        Err(err) => {
+            log::error!(target: "app", "failed to resolve client for tun toggle: {err:?}");
+            return;
+        }
+    };
+    let enabled = match client.get_clash_config() {
+        Ok(config) => config.enable_tun_mode,
+        Err(err) => {
+            log::error!(target: "app", "failed to read typed clash config for tun toggle: {err:?}");
+            return;
+        }
+    };
+
     tauri::async_runtime::spawn(async move {
         let patch = IVerge {
             enable_tun_mode: Some(!enabled),
             ..IVerge::default()
         };
-        if let Err(err) = patch_verge(patch).await {
+        if let Err(err) = client.patch_verge(patch).await {
             log::error!(target: "app", "failed to toggle tun mode: {err:?}");
         }
     });
