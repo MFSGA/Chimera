@@ -15,9 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
 
-use crate::{
-    client::ChimeraClient, config::chimera::ExternalControllerPortStrategy, utils::resolve,
-};
+use crate::{client::ChimeraClient, utils::resolve};
 
 const ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -165,30 +163,6 @@ pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
             path.display()
         ))?
         .to_owned())
-}
-
-pub fn get_clash_external_port(
-    strategy: &ExternalControllerPortStrategy,
-    port: u16,
-) -> anyhow::Result<u16> {
-    match strategy {
-        ExternalControllerPortStrategy::Fixed => {
-            if !port_scanner::local_port_available(port) {
-                bail!("Port {} is not available", port);
-            }
-        }
-        ExternalControllerPortStrategy::Random | ExternalControllerPortStrategy::AllowFallback => {
-            if ExternalControllerPortStrategy::AllowFallback == *strategy
-                && port_scanner::local_port_available(port)
-            {
-                return Ok(port);
-            }
-            let new_port = port_scanner::request_open_port()
-                .ok_or_else(|| anyhow!("Can't find an open port"))?;
-            return Ok(new_port);
-        }
-    }
-    Ok(port)
 }
 
 #[instrument(skip(app_handle))]

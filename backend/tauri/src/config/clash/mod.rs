@@ -9,11 +9,9 @@ use serde_yaml::{Mapping, Value};
 use tracing::{instrument, warn};
 
 use crate::{
+    client::ports::get_clash_external_port,
     config::core::Config,
-    utils::{
-        dirs,
-        help::{self, get_clash_external_port},
-    },
+    utils::{dirs, help},
 };
 
 #[derive(Default, Debug, Clone)]
