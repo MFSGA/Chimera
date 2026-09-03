@@ -1,28 +1,32 @@
-import {
-  createContext,
-  useContext,
-  useState,
-  type PropsWithChildren,
-} from 'react';
+import { createContext, use, useState, type PropsWithChildren } from 'react';
+
+const isDev = import.meta.env.DEV;
 
 const DebugContext = createContext<{
-  advancedTools: boolean;
-  setAdvancedTools: (value: boolean) => void;
+  advanceTools: boolean;
+  setAdvanceTools: (value: boolean) => void;
 } | null>(null);
 
 export const useDebugContext = () => {
-  const context = useContext(DebugContext);
+  const context = use(DebugContext);
+
   if (!context) {
-    throw new Error('useDebugContext must be used within DebugProvider');
+    throw new Error('useDebugContext must be used within a DebugProvider');
   }
+
   return context;
 };
 
 export default function DebugProvider({ children }: PropsWithChildren) {
-  const [advancedTools, setAdvancedTools] = useState(import.meta.env.DEV);
+  const [advanceTools, setAdvanceTools] = useState(isDev);
 
   return (
-    <DebugContext.Provider value={{ advancedTools, setAdvancedTools }}>
+    <DebugContext.Provider
+      value={{
+        advanceTools,
+        setAdvanceTools,
+      }}
+    >
       {children}
     </DebugContext.Provider>
   );
