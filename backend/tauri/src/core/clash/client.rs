@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
+    system_dns::{OsSystemDnsCache, SystemDnsCache},
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
 const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
@@ -630,6 +631,7 @@ struct NyanpasuClientInner {
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
     profile_writes: Arc<dyn ProfilesWritePort>,
+    system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
     runtime_patch: RuntimePatchCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
@@ -659,6 +661,7 @@ impl NyanpasuClient {
             Arc::new(LegacyProfilesReadPort),
             Arc::new(LegacyProfileFsPort),
             Arc::new(LegacyProfilesWritePort),
+            Arc::new(OsSystemDnsCache),
             Arc::new(LegacyUiEventSink),
         )
     }
@@ -668,6 +671,7 @@ impl NyanpasuClient {
         profiles: Arc<dyn ProfilesReadPort>,
         profile_files: Arc<dyn ProfileFsPort>,
         profile_writes: Arc<dyn ProfilesWritePort>,
+        system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
         let inner = NyanpasuClientInner {
@@ -675,6 +679,7 @@ impl NyanpasuClient {
             profiles,
             profile_files,
             profile_writes,
+            system_dns,
             ui_sink,
             runtime_patch: RuntimePatchCoordinator::default(),
             profile_commit: tokio::sync::Mutex::new(()),
@@ -719,6 +724,14 @@ impl NyanpasuClient {
 
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
         self.inner.profiles.snapshot()
+    }
+
+    pub(crate) async fn flush_system_dns_cache(&self) -> anyhow::Result<()> {
+        let system_dns = self.inner.system_dns.clone();
+        tokio::task::spawn_blocking(move || system_dns.flush())
+            .await
+            .context("system DNS cache flush task failed")??;
+        Ok(())
     }
 
     pub(crate) fn reserve_managed_profile_identity(
@@ -1229,10 +1242,13 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::config::profile::item::{
-        local::LocalProfile,
-        remote::{RemoteProfileOptions, SubscriptionInfo},
-        shared::ProfileShared,
+    use crate::{
+        config::profile::item::{
+            local::LocalProfile,
+            remote::{RemoteProfileOptions, SubscriptionInfo},
+            shared::ProfileShared,
+        },
+        core::clash::system_dns::NoopSystemDnsCache,
     };
 
     struct RecordingCore {
@@ -1519,6 +1535,7 @@ mod tests {
             Arc::new(StaticProfilesRead { profiles }),
             Arc::new(NoopProfileFs),
             Arc::new(NoopProfilesWrite::default()),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1588,6 +1605,7 @@ mod tests {
                 refresh_commits: Some(refresh_commits.clone()),
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1652,6 +1670,7 @@ mod tests {
                 fail_refresh: true,
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1705,6 +1724,7 @@ mod tests {
                 patch_commits: Some(patch_commits.clone()),
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),

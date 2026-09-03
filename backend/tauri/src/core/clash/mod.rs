@@ -14,6 +14,7 @@ pub mod proxies;
 #[allow(dead_code)]
 pub(crate) mod rebuild;
 pub(crate) mod runtime_product;
+pub(crate) mod system_dns;
 pub(crate) mod transaction;
 pub mod ws;
 
