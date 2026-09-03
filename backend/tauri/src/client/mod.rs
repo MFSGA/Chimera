@@ -4,6 +4,7 @@
 //! staged migration from legacy globals and Chimera-specific core support.
 
 mod application;
+mod clash_config;
 mod core_bridge;
 mod event_sink;
 pub(crate) mod ports;
@@ -17,12 +18,11 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use crate::core::clash::transaction::RuntimePatchCoordinator;
-
 pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
+    clash_config::ClashConfigClient,
     core_bridge::{CoreLifecyclePort, LegacyCoreBridge},
     event_sink::{LegacyUiEventSink, UiEventSink},
     profiles::{
@@ -41,13 +41,13 @@ pub(crate) struct ChimeraClient {
 
 struct ChimeraClientInner {
     application: ApplicationClient,
+    clash_config: ClashConfigClient,
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
     profile_writes: Arc<dyn ProfilesWritePort>,
     system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
-    runtime_patch: RuntimePatchCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
 }
@@ -74,13 +74,13 @@ impl ChimeraClient {
     ) -> Self {
         let inner = ChimeraClientInner {
             application: ApplicationClient::legacy(),
+            clash_config: ClashConfigClient::legacy(),
             core,
             profiles,
             profile_files,
             profile_writes,
             system_dns,
             ui_sink,
-            runtime_patch: RuntimePatchCoordinator::default(),
             profile_commit: tokio::sync::Mutex::new(()),
             pending_refreshes: StdMutex::new(HashSet::new()),
         };

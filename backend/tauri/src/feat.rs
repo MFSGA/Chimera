@@ -1,148 +1,18 @@
 use std::borrow::Borrow;
 
-use anyhow::{Result, bail};
-use chimera_ipc::api::status::CoreState;
+use anyhow::Result;
 use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
-use tracing::debug;
 
 use crate::{
-    client::{ChimeraClient, ports::get_clash_external_port},
+    client::ChimeraClient,
     config::{
         chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
-    core::{clash::transaction::TransactionOutcome, handle, sysopt},
+    core::{clash::transaction::TransactionOutcome, handle},
     log_err,
 };
-
-struct ClashPatchPlan {
-    mixed_port: Option<u16>,
-    mixed_port_changed: bool,
-    external_controller: Option<String>,
-    external_controller_changed: bool,
-    mode_changed: bool,
-    requires_restart: bool,
-}
-
-fn get_non_null_patch_value<'a>(patch: &'a Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
-    patch.get(key).filter(|value| !value.is_null())
-}
-
-// Build a normalized view of the clash patch before validation and side effects.
-fn plan_clash_patch(patch: &Mapping) -> Result<ClashPatchPlan> {
-    let mixed_port = get_non_null_patch_value(patch, "mixed-port").and_then(|value| value.as_u64());
-    let mixed_port = mixed_port
-        .map(|port| u16::try_from(port).map_err(|_| anyhow::anyhow!("invalid mixed-port")))
-        .transpose()?;
-    let mixed_port_changed = mixed_port
-        .map(|port| {
-            port != Config::verge()
-                .latest()
-                .verge_mixed_port
-                .unwrap_or(Config::clash().data().get_mixed_port())
-        })
-        .unwrap_or(false);
-
-    let external_controller = get_non_null_patch_value(patch, "external-controller")
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| anyhow::anyhow!("external-controller must be a string"))
-        })
-        .transpose()?;
-    let external_controller_changed = external_controller
-        .as_ref()
-        .map(|controller| controller != &Config::clash().data().get_client_info().server)
-        .unwrap_or(false);
-
-    Ok(ClashPatchPlan {
-        mixed_port,
-        mixed_port_changed,
-        external_controller,
-        external_controller_changed,
-        mode_changed: get_non_null_patch_value(patch, "mode").is_some(),
-        requires_restart: get_non_null_patch_value(patch, "mixed-port").is_some()
-            || get_non_null_patch_value(patch, "secret").is_some()
-            || get_non_null_patch_value(patch, "external-controller").is_some(),
-    })
-}
-
-fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
-    let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
-
-    if plan.mixed_port_changed
-        && !enable_random_port
-        && let Some(port) = plan.mixed_port
-        && !port_scanner::local_port_available(port)
-    {
-        bail!("port already in use");
-    }
-
-    Ok(())
-}
-
-async fn validate_external_controller_change(
-    client: &ChimeraClient,
-    plan: &ClashPatchPlan,
-) -> Result<()> {
-    if !plan.external_controller_changed {
-        return Ok(());
-    }
-
-    let external_controller = plan
-        .external_controller
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("missing external-controller"))?;
-    let (_, port) = external_controller
-        .split_once(':')
-        .ok_or_else(|| anyhow::anyhow!("external-controller must be host:port"))?;
-    let port = port.parse::<u16>()?;
-    let strategy = Config::verge()
-        .latest()
-        .get_external_controller_port_strategy();
-    let core_state = client.core_status().await?;
-
-    if matches!(&core_state.state, CoreState::Running)
-        && get_clash_external_port(&strategy, port).is_err()
-    {
-        bail!("can not select fixed: current port is not available.");
-    }
-
-    Ok(())
-}
-
-async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPlan) -> Result<()> {
-    if !plan.requires_restart {
-        return Ok(());
-    }
-
-    client.rebuild_running_config().await?;
-    Ok(())
-}
-
-fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
-    if plan.mixed_port.is_some() {
-        log_err!(sysopt::Sysopt::global().init_sysproxy());
-    }
-
-    if plan.mode_changed {
-        crate::feat::update_proxies_buff(None);
-        debug!("systray mode changed, update proxies buff");
-        log_err!(handle::Handle::update_systray_part());
-    }
-}
-
-/// Persists a typed set of runtime overrides without conflating it with a
-/// running-core snapshot.
-pub async fn patch_clash_overrides(
-    client: &ChimeraClient,
-    overrides: ClashConfigOverrides,
-) -> Result<()> {
-    let patch = overrides.to_mapping();
-    patch_clash_with_overrides(client, patch, overrides).await
-}
 
 /// Applies typed overrides to the running core and desired state through the
 /// shared transaction coordinator used by IPC and non-window entry points.
@@ -156,47 +26,7 @@ pub async fn patch_running_clash_overrides(
 /// Applies a general Clash mapping while extracting only supported persistent
 /// runtime overrides for the generated config.
 pub async fn patch_clash(client: &ChimeraClient, patch: Mapping) -> Result<()> {
-    let overrides = ClashConfigOverrides::from_mapping(&patch)?;
-    patch_clash_with_overrides(client, patch, overrides).await
-}
-
-async fn patch_clash_with_overrides(
-    client: &ChimeraClient,
-    patch: Mapping,
-    overrides: ClashConfigOverrides,
-) -> Result<()> {
-    Config::clash().draft().patch_config(patch.clone());
-    let result = async {
-        let plan = plan_clash_patch(&patch)?;
-        validate_mixed_port_change(&plan)?;
-        validate_external_controller_change(client, &plan).await?;
-        apply_clash_runtime_change(client, &plan).await?;
-        run_clash_patch_side_effects(&plan);
-        Config::runtime().draft().patch_config(&overrides);
-        Ok(plan)
-    }
-    .await;
-
-    match result {
-        Ok(plan) => {
-            Config::clash().apply();
-            Config::runtime().apply();
-            Config::clash().data().save_config()?;
-            if plan.mode_changed {
-                log_err!(
-                    crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change()
-                        .await,
-                    "failed to interrupt connections after mode change"
-                );
-            }
-            Ok(())
-        }
-        Err(err) => {
-            Config::clash().discard();
-            Config::runtime().discard();
-            Err(err)
-        }
-    }
+    client.patch_clash(patch).await
 }
 
 fn managed_client() -> Result<ChimeraClient> {
