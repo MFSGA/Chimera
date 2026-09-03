@@ -206,7 +206,8 @@ pub fn resolve_setup(app: &mut App) {
     log_err!(init::init_resources());
     log_err!(init::init_service());
 
-    crate::client::ports::resolve_random_mixed_port();
+    let client = app.state::<crate::client::ChimeraClient>();
+    log_err!(crate::client::ports::resolve_random_mixed_port(&client));
 
     // 启动核心
     log::trace!("init config");
