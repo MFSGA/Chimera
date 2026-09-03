@@ -46,6 +46,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -101,6 +103,9 @@ jobs:
         shell: bash
         run: |
           pnpm i
+
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
 
       - name: Download Sidecars aarch64
         if: ${{ inputs.aarch64 == true }}

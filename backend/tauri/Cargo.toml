@@ -143,10 +143,7 @@ nyanpasu-ipc = { git = "https://github.com/libnyanpasu/nyanpasu-service.git", fe
   "specta",
 ] } # IPC bridge between the UI process and service process
 
-chimera-ipc = {git = "https://github.com/MFSGA/Chimera_Service", features = [
-  "client",
-  "specta",
-] } # IPC bridge between the UI process and service process
+chimera-ipc = { workspace = true } # IPC bridge between the UI process and service process
 
 #chimera_utils = { path = "../../../Chimera_Utils/chimera_utils/", features = [
 #  "specta",
