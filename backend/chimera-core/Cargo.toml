@@ -1,0 +1,27 @@
+[package]
+name = "chimera-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow = "1"
+bon = "3"
+arc-swap = "1"
+async-trait = "0.1"
+dashmap = "6"
+indexmap = { version = "2.2.3", features = ["serde"] }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+nyanpasu-utils.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+atomicwrites = "0.4.4"
+camino = { version = "1.1.9", features = ["serde1"] }
+fs-err.workspace = true
+serde_yaml_ng.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tempfile = "3"

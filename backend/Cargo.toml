@@ -1,5 +1,5 @@
 [workspace]
-members = ["chimera-config","chimera-macro","tauri"]
+members = ["chimera-config","chimera-core","chimera-macro","tauri"]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
 # the app workspace so its `workspace = true` dependencies resolve against the
 # runtime repository, while selected crates are consumed through path deps.
@@ -43,3 +43,6 @@ reqwest = { version = "0.13", default-features = false, features = [
 tokio = { version = "1", features = ["full"] }
 
 tracing = "0.1"
+fs-err = { version = "3.1.2", features = ["tokio"] }
+serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
+nyanpasu-utils = { git = "https://github.com/libnyanpasu/nyanpasu-utils.git", features = ["specta"] }
