@@ -45,7 +45,7 @@ impl ClashConfigClient {
         Self::default()
     }
 
-    fn get(&self) -> Result<ClashConfig> {
+    pub(crate) fn get(&self) -> Result<ClashConfig> {
         let legacy_verge = Config::verge().data().clone();
         let legacy_clash = Config::clash().data().clone();
         clash_config_from_legacy(&legacy_verge, &legacy_clash.0)
@@ -169,6 +169,10 @@ impl ClashConfigClient {
 }
 
 impl ChimeraClient {
+    pub(crate) fn get_clash_config(&self) -> Result<ClashConfig> {
+        self.inner.clash_config.get()
+    }
+
     pub(crate) fn clash_info(&self) -> ClashInfo {
         self.inner.clash_config.get_info()
     }
