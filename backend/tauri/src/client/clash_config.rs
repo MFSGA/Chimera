@@ -6,10 +6,15 @@
 //! reads, validation, mutation, and running-core coordination here.
 
 use anyhow::{Result, bail};
+use chimera_config::clash::config::{
+    ClashConfig,
+    clash_strategy::{PortStrategy, PortStrategyKind},
+};
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
 
 use crate::{
+    bridge::clash::clash_config_from_legacy,
     config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
         clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
@@ -18,7 +23,7 @@ use crate::{
     log_err,
 };
 
-use super::{ChimeraClient, ports::get_clash_external_port};
+use super::ChimeraClient;
 
 #[derive(Default)]
 pub(crate) struct ClashConfigClient {
@@ -37,6 +42,12 @@ struct ClashPatchPlan {
 impl ClashConfigClient {
     pub(crate) fn legacy() -> Self {
         Self::default()
+    }
+
+    fn get(&self) -> Result<ClashConfig> {
+        let legacy_verge = Config::verge().data().clone();
+        let legacy_clash = Config::clash().data().clone();
+        clash_config_from_legacy(&legacy_verge, &legacy_clash.0)
     }
 
     pub(crate) fn get_info(&self) -> ClashInfo {
@@ -86,11 +97,12 @@ impl ClashConfigClient {
         patch: Mapping,
         overrides: ClashConfigOverrides,
     ) -> Result<()> {
+        let current = self.get()?;
         Config::clash().draft().patch_config(patch.clone());
         let result = async {
-            let plan = plan_clash_patch(&patch)?;
-            validate_mixed_port_change(&plan)?;
-            validate_external_controller_change(owner, &plan).await?;
+            let plan = plan_clash_patch(&patch, &current)?;
+            validate_mixed_port_change(&plan, &current)?;
+            validate_external_controller_change(owner, &plan, &current).await?;
             apply_clash_runtime_change(owner, &plan).await?;
             run_clash_patch_side_effects(&plan);
             Config::runtime().draft().patch_config(&overrides);
@@ -155,18 +167,13 @@ fn get_non_null_patch_value<'a>(patch: &'a Mapping, key: &str) -> Option<&'a ser
     patch.get(key).filter(|value| !value.is_null())
 }
 
-fn plan_clash_patch(patch: &Mapping) -> Result<ClashPatchPlan> {
+fn plan_clash_patch(patch: &Mapping, current: &ClashConfig) -> Result<ClashPatchPlan> {
     let mixed_port = get_non_null_patch_value(patch, "mixed-port").and_then(|value| value.as_u64());
     let mixed_port = mixed_port
         .map(|port| u16::try_from(port).map_err(|_| anyhow::anyhow!("invalid mixed-port")))
         .transpose()?;
     let mixed_port_changed = mixed_port
-        .map(|port| {
-            port != Config::verge()
-                .latest()
-                .verge_mixed_port
-                .unwrap_or(Config::clash().data().get_mixed_port())
-        })
+        .map(|port| port != current.mixed_port.start_port)
         .unwrap_or(false);
 
     let external_controller = get_non_null_patch_value(patch, "external-controller")
@@ -194,11 +201,9 @@ fn plan_clash_patch(patch: &Mapping) -> Result<ClashPatchPlan> {
     })
 }
 
-fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
-    let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
-
+fn validate_mixed_port_change(plan: &ClashPatchPlan, current: &ClashConfig) -> Result<()> {
     if plan.mixed_port_changed
-        && !enable_random_port
+        && current.mixed_port.kind != PortStrategyKind::Random
         && let Some(port) = plan.mixed_port
         && !port_scanner::local_port_available(port)
     {
@@ -211,6 +216,7 @@ fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
 async fn validate_external_controller_change(
     client: &ChimeraClient,
     plan: &ClashPatchPlan,
+    current: &ClashConfig,
 ) -> Result<()> {
     if !plan.external_controller_changed {
         return Ok(());
@@ -224,14 +230,13 @@ async fn validate_external_controller_change(
         .split_once(':')
         .ok_or_else(|| anyhow::anyhow!("external-controller must be host:port"))?;
     let port = port.parse::<u16>()?;
-    let strategy = Config::verge()
-        .latest()
-        .get_external_controller_port_strategy();
+    let strategy = PortStrategy {
+        kind: current.external_controller.port.kind.clone(),
+        start_port: port,
+    };
     let core_state = client.core_status().await?;
 
-    if matches!(&core_state.state, CoreState::Running)
-        && get_clash_external_port(&strategy, port).is_err()
-    {
+    if matches!(&core_state.state, CoreState::Running) && strategy.pick_and_try_port().is_err() {
         bail!("can not select fixed: current port is not available.");
     }
 
