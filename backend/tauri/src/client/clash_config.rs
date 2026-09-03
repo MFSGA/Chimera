@@ -15,7 +15,7 @@ use serde_yaml::Mapping;
 
 use crate::{
     bridge::clash::clash_config_from_legacy,
-    config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
+    config::{chimera::IVerge, clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
         clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
         handle, sysopt,
@@ -52,6 +52,36 @@ impl ClashConfigClient {
 
     pub(crate) fn get_info(&self) -> ClashInfo {
         Config::clash().latest().get_client_info()
+    }
+
+    pub(super) async fn apply_legacy_verge_runtime_change(
+        &self,
+        owner: &ChimeraClient,
+        patch: &IVerge,
+    ) -> Result<()> {
+        if patch.enable_tun_mode.is_none() {
+            return Ok(());
+        }
+
+        log::debug!(target: "app", "toggle tun mode");
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            use crate::utils::dirs::check_core_permission;
+            let current_core = Config::verge().data().clash_core.unwrap_or_default();
+            let current_core: chimera_utils::core::CoreType = (&current_core).into();
+            let service_state = crate::core::service::ipc::get_ipc_state();
+            if !service_state.is_connected()
+                && check_core_permission(&current_core)
+                    .inspect_err(|e| {
+                        log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
+                    })
+                    .is_ok_and(|v| !v)
+            {
+                log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
+            };
+        }
+
+        update_core_config(owner).await
     }
 
     async fn patch(&self, owner: &ChimeraClient, patch: Mapping) -> Result<()> {
@@ -249,6 +279,19 @@ async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPla
     }
 
     client.rebuild_running_config().await
+}
+
+async fn update_core_config(client: &ChimeraClient) -> Result<()> {
+    match client.rebuild_running_config().await {
+        Ok(_) => {
+            handle::Handle::notice_message(&handle::Message::SetConfig(Ok(())));
+            Ok(())
+        }
+        Err(err) => {
+            handle::Handle::notice_message(&handle::Message::SetConfig(Err(format!("{err:?}"))));
+            Err(err)
+        }
+    }
 }
 
 fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
