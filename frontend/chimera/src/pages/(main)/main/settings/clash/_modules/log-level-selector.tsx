@@ -1,6 +1,4 @@
-import { useClashConfig } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -8,6 +6,10 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  useClashBaseSettings,
+  type ClashLogLevel,
+} from '@/features/clash-settings/use-clash-base-settings';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,
@@ -18,30 +20,8 @@ import {
   SettingsCardContent,
 } from '../../_modules/settings-card';
 
-const LOG_LEVEL_OPTIONS = {
-  debug: 'Debug',
-  info: 'Info',
-  warning: 'Warn',
-  error: 'Error',
-  silent: 'Silent',
-} as const;
-
 export default function LogLevelSelector() {
-  const { query, upsert } = useClashConfig();
-
-  const value = useMemo(
-    () => query.data?.['log-level'] as keyof typeof LOG_LEVEL_OPTIONS,
-    [query.data],
-  );
-
-  const handleLogLevelChange = useCallback(
-    async (value: string) => {
-      await upsert.mutateAsync({
-        'log-level': value,
-      });
-    },
-    [upsert],
-  );
+  const { logLevel, logLevelOptions, setLogLevel } = useClashBaseSettings();
 
   return (
     <SettingsCard data-slot="log-level-selector-card">
@@ -56,7 +36,7 @@ export default function LogLevelSelector() {
                   </ItemLabelText>
 
                   <ItemLabelDescription>
-                    {value ? LOG_LEVEL_OPTIONS[value] : null}
+                    {logLevelOptions[logLevel]}
                   </ItemLabelDescription>
                 </ItemLabel>
 
@@ -67,11 +47,11 @@ export default function LogLevelSelector() {
         </DropdownMenuTrigger>
 
         <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
-          {Object.entries(LOG_LEVEL_OPTIONS).map(([key, label]) => (
+          {Object.entries(logLevelOptions).map(([key, label]) => (
             <DropdownMenuCheckboxItem
-              checked={value === key}
+              checked={logLevel === key}
               key={key}
-              onSelect={() => void handleLogLevelChange(key)}
+              onSelect={() => void setLogLevel(key as ClashLogLevel)}
             >
               {label}
             </DropdownMenuCheckboxItem>
