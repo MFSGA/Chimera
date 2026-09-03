@@ -8,7 +8,7 @@ import {
   SettingsLabel,
 } from '../_modules/settings-card';
 import { SettingsTitle } from '../_modules/settings-title';
-import AdvancedToolsSwitch from './_modules/advanced-tools-switch';
+import AdvanceToolsSwitch from './_modules/advance-tools-switch';
 import BlockTaskViewer from './_modules/block-task-viewer';
 import { useDebugContext } from './_modules/debug-provider';
 import KVStorage from './_modules/kv-storage';
@@ -23,13 +23,14 @@ const PathUtilsSettings = () => {
   return (
     <div data-slot="debug-settings-container">
       <SettingsLabel>{m.settings_label_debug()}</SettingsLabel>
+
       <PathUtilsCard />
     </div>
   );
 };
 
 const AdvanceToolsSettings = () => {
-  const { advancedTools } = useDebugContext();
+  const { advanceTools } = useDebugContext();
 
   return (
     <div data-slot="debug-settings-container">
@@ -38,15 +39,17 @@ const AdvanceToolsSettings = () => {
       <SettingsGroup>
         <SettingsCard>
           <SettingsCardContent>
-            <AdvancedToolsSwitch />
+            <AdvanceToolsSwitch />
           </SettingsCardContent>
         </SettingsCard>
 
         <AnimatePresence initial={false}>
-          {advancedTools && (
+          {advanceTools && (
             <>
               <WindowDebug />
+
               <BlockTaskViewer />
+
               <KVStorage />
             </>
           )}
@@ -63,6 +66,7 @@ function RouteComponent() {
 
       <div className="space-y-4 px-4 pb-4">
         <PathUtilsSettings />
+
         <AdvanceToolsSettings />
       </div>
     </>
