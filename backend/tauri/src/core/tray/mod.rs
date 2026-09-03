@@ -8,6 +8,7 @@ use tauri::{
 };
 
 use crate::{
+    client::ChimeraClient,
     config::core::Config,
     feat, ipc,
     utils::{help, resolve},
@@ -101,11 +102,11 @@ impl Tray {
             .and_then(|v| v.as_str())
             .unwrap_or("rule")
             .to_string();
-        let system_proxy = Config::verge()
-            .latest()
-            .enable_system_proxy
-            .unwrap_or(false);
-        let tun_mode = Config::verge().latest().enable_tun_mode.unwrap_or(false);
+        let client = app_handle
+            .try_state::<ChimeraClient>()
+            .ok_or_else(|| anyhow::anyhow!("chimera client is not managed"))?;
+        let system_proxy = client.get_app_config()?.enable_system_proxy;
+        let tun_mode = client.get_clash_config()?.enable_tun_mode;
 
         let state = match app_handle.try_state::<TrayState<R>>() {
             Some(state) => state,
