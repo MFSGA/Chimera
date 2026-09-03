@@ -21,12 +21,9 @@ const legacyUiRoots = [
   ),
 ];
 const sharedClashBaseUiFiles = new Set(
-  [
-    'frontend/chimera/src/components/setting/setting-clash-base.tsx',
-    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/base-settings.tsx',
-    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/ipv6-switch.tsx',
-    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/log-level-selector.tsx',
-  ].map((entry) => path.normalize(path.join(workspaceRoot, entry))),
+  ['frontend/chimera/src/components/setting/setting-clash-base.tsx'].map(
+    (entry) => path.normalize(path.join(workspaceRoot, entry)),
+  ),
 );
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx']);

@@ -11,18 +11,18 @@ import {
   ItemLabelText,
 } from '../../_modules/settings-card';
 
-export default function IPv6Switch() {
+export default function AllowLanSwitch() {
   const { query, upsert } = useClashConfig();
 
-  const value = useMemo(() => query.data?.ipv6, [query.data]);
+  const value = useMemo(() => query.data?.['allow-lan'], [query.data]);
 
-  const handleIPv6 = useLockFn(async (input: boolean) => {
+  const handleAllowLan = useLockFn(async (input: boolean) => {
     try {
       await upsert.mutateAsync({
-        ipv6: input,
+        'allow-lan': input,
       });
     } catch (error) {
-      message(`Activation IPv6 failed!\n Error: ${formatError(error)}`, {
+      message(`Activation Allow LAN failed!\n Error: ${formatError(error)}`, {
         title: 'Error',
         kind: 'error',
       });
@@ -30,14 +30,16 @@ export default function IPv6Switch() {
   });
 
   return (
-    <ItemContainer data-slot="ipv6-switch-container">
+    <ItemContainer data-slot="allow-lan-switch-container">
       <ItemLabel>
-        <ItemLabelText>{m.settings_clash_settings_ipv6_label()}</ItemLabelText>
+        <ItemLabelText>
+          {m.settings_clash_settings_allow_lan_label()}
+        </ItemLabelText>
       </ItemLabel>
 
       <Switch
         checked={Boolean(value)}
-        onCheckedChange={handleIPv6}
+        onCheckedChange={handleAllowLan}
         loading={upsert.isPending}
       />
     </ItemContainer>
