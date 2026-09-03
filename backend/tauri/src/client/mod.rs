@@ -1,8 +1,10 @@
-//! Transitional instance-owned facade for the runtime/rebuild path.
+//! Instance-owned application facade for runtime, profile, and core operations.
 //!
-//! This mirrors REF's `NyanpasuClient` ownership direction without pretending the
-//! rest of Chimera has already completed the actor/DI migration. Legacy globals
-//! are contained behind ports here so IPC callers can migrate incrementally.
+//! This follows REF's client ownership direction while preserving Chimera's
+//! staged migration from legacy globals and Chimera-specific core support.
+
+pub mod rebuild;
+pub mod runtime;
 
 use std::{
     collections::HashSet,
@@ -16,7 +18,7 @@ use atomicwrites::{AtomicFile, OverwriteBehavior};
 use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 
-use super::{
+use crate::core::clash::{
     core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
     transaction::{RuntimePatchCoordinator, TransactionOutcome},
 };
@@ -604,8 +606,8 @@ impl UiEventSink for LegacyUiEventSink {
 }
 
 #[derive(Clone)]
-pub(crate) struct NyanpasuClient {
-    inner: Arc<NyanpasuClientInner>,
+pub(crate) struct ChimeraClient {
+    inner: Arc<ChimeraClientInner>,
 }
 
 pub(crate) struct CoreUpdateLease {
@@ -625,7 +627,7 @@ impl CoreUpdateLease {
     }
 }
 
-struct NyanpasuClientInner {
+struct ChimeraClientInner {
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
@@ -638,7 +640,7 @@ struct NyanpasuClientInner {
 }
 
 struct PendingProfileRefresh {
-    inner: Arc<NyanpasuClientInner>,
+    inner: Arc<ChimeraClientInner>,
     uid: ProfileUid,
 }
 
@@ -652,7 +654,7 @@ impl Drop for PendingProfileRefresh {
     }
 }
 
-impl NyanpasuClient {
+impl ChimeraClient {
     pub(crate) fn legacy() -> Self {
         Self::with_parts(
             Arc::new(LegacyCoreLifecyclePort),
@@ -670,7 +672,7 @@ impl NyanpasuClient {
         profile_writes: Arc<dyn ProfilesWritePort>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
-        let inner = NyanpasuClientInner {
+        let inner = ChimeraClientInner {
             core,
             profiles,
             profile_files,
@@ -1191,8 +1193,8 @@ impl NyanpasuClient {
             .runtime_patch
             .apply(
                 mapping,
-                super::api::get_configs,
-                |patch| async move { super::api::patch_configs(&patch).await },
+                crate::core::clash::api::get_configs,
+                |patch| async move { crate::core::clash::api::patch_configs(&patch).await },
                 move |_patch| {
                     let overrides = persist_overrides.clone();
                     let client = client.clone();
@@ -1509,9 +1511,9 @@ mod tests {
     fn recording_client_with_profiles(
         profiles: Profiles,
         fail_rebuild: bool,
-    ) -> (NyanpasuClient, Arc<Mutex<Vec<&'static str>>>) {
+    ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let client = NyanpasuClient::with_parts(
+        let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 fail_rebuild,
@@ -1526,7 +1528,7 @@ mod tests {
         (client, events)
     }
 
-    fn recording_client(fail_rebuild: bool) -> (NyanpasuClient, Arc<Mutex<Vec<&'static str>>>) {
+    fn recording_client(fail_rebuild: bool) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         recording_client_with_profiles(Profiles::default(), fail_rebuild)
     }
 
@@ -1547,16 +1549,16 @@ mod tests {
     #[test]
     fn refresh_fingerprint_tracks_definition_but_not_display_metadata() {
         let profile = test_remote_profile();
-        let fingerprint = NyanpasuClient::remote_profile_fingerprint(&profile).unwrap();
+        let fingerprint = ChimeraClient::remote_profile_fingerprint(&profile).unwrap();
         let mut renamed = profile.clone();
         renamed.shared.name = "Renamed".into();
-        assert!(NyanpasuClient::ensure_refresh_is_current(&fingerprint, &renamed).is_ok());
+        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &renamed).is_ok());
         let mut changed_url = profile.clone();
         changed_url.url = url::Url::parse("https://example.com/changed.yaml").unwrap();
-        assert!(NyanpasuClient::ensure_refresh_is_current(&fingerprint, &changed_url).is_err());
+        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &changed_url).is_err());
         let mut refreshed = profile;
         refreshed.shared.updated += 1;
-        assert!(NyanpasuClient::ensure_refresh_is_current(&fingerprint, &refreshed).is_err());
+        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &refreshed).is_err());
     }
 
     #[tokio::test]
@@ -1572,7 +1574,7 @@ mod tests {
         let writes = Arc::new(Mutex::new(Vec::new()));
         let refresh_commits = Arc::new(Mutex::new(0));
         let previous_file = "mode: rule\n".to_string();
-        let client = NyanpasuClient::with_parts(
+        let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 fail_rebuild: false,
@@ -1607,7 +1609,7 @@ mod tests {
                 expire: 40,
             },
         );
-        let fingerprint = NyanpasuClient::remote_profile_fingerprint(&remote).unwrap();
+        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
 
         let error = client
             .commit_refreshed_profile(uid, fingerprint, previous_file, prepared)
@@ -1636,7 +1638,7 @@ mod tests {
         let reads = Arc::new(Mutex::new(Vec::new()));
         let writes = Arc::new(Mutex::new(Vec::new()));
         let previous_file = "mode: rule\n".to_string();
-        let client = NyanpasuClient::with_parts(
+        let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 fail_rebuild: false,
@@ -1672,7 +1674,7 @@ mod tests {
                 expire: 40,
             },
         );
-        let fingerprint = NyanpasuClient::remote_profile_fingerprint(&remote).unwrap();
+        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
 
         let error = client
             .commit_refreshed_profile(uid, fingerprint, previous_file.clone(), prepared)
@@ -1692,7 +1694,7 @@ mod tests {
     async fn profile_patch_uses_injected_write_port_before_runtime_rebuild() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let patch_commits = Arc::new(Mutex::new(0));
-        let client = NyanpasuClient::with_parts(
+        let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 fail_rebuild: false,
