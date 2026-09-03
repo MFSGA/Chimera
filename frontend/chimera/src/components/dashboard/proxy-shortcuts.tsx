@@ -2,10 +2,14 @@ import { useClashConfig, useSetting, useSystemProxy } from '@chimera/interface';
 import { NetworkPing, SettingsEthernet } from '@mui/icons-material';
 import { Chip, Paper, type ChipProps } from '@mui/material';
 import Grid from '@mui/material/Grid';
-import { useLockFn } from 'ahooks';
 import { useAtomValue } from 'jotai';
 import { useMemo } from 'react';
 import { PaperSwitchButton } from '@/components/setting/modules/system-proxy';
+import { getProxyStatus } from '@/features/dashboard/proxy-status';
+import {
+  useSystemProxyAction,
+  useTunModeAction,
+} from '@/features/system-proxy/use-proxy-settings';
 import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 import { formatError } from '@/utils';
@@ -16,33 +20,45 @@ const TitleComp = () => {
     query: { data: clashConfigs },
   } = useClashConfig();
   const systemProxy = useSystemProxy();
+  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
+  const { value: enableTunMode } = useSetting('enable_tun_mode');
   const mixedPort = clashConfigs?.['mixed-port'];
-  const systemProxyEnabled = systemProxy.data?.enable;
-  const systemProxyServer = systemProxy.data?.server;
 
   const status = useMemo<{
     label: string;
     color: ChipProps['color'];
   }>(() => {
-    if (systemProxyEnabled) {
-      const port = Number(systemProxyServer?.split(':')[1]);
-      if (port === mixedPort) {
+    const proxyStatus = getProxyStatus({
+      enableSystemProxy,
+      enableTunMode,
+      systemProxyEnabled: systemProxy.data?.enable,
+      systemProxyServer: systemProxy.data?.server,
+      mixedPort,
+    });
+
+    switch (proxyStatus) {
+      case 'system':
         return {
-          label: m.common_successful(),
+          label: m.dashboard_widget_proxy_status_success_system(),
           color: 'success',
         };
-      }
-      return {
-        label: m.dashboard_widget_proxy_status_occupied(),
-        color: 'warning',
-      };
+      case 'tun':
+        return {
+          label: m.dashboard_widget_proxy_status_success_tun(),
+          color: 'success',
+        };
+      case 'occupied':
+        return {
+          label: m.dashboard_widget_proxy_status_occupied(),
+          color: 'warning',
+        };
+      default:
+        return {
+          label: m.dashboard_widget_proxy_status_disabled(),
+          color: 'error',
+        };
     }
-
-    return {
-      label: m.dashboard_widget_proxy_status_disabled(),
-      color: 'error',
-    };
-  }, [mixedPort, systemProxyEnabled, systemProxyServer]);
+  }, [enableSystemProxy, enableTunMode, mixedPort, systemProxy.data]);
 
   return (
     <div className="flex items-center gap-2 px-1">
@@ -65,12 +81,12 @@ const TitleComp = () => {
 export const ProxyShortcuts = () => {
   const isDrawer = useAtomValue(atomIsDrawer);
 
-  const systemProxy = useSetting('enable_system_proxy');
-  const tunMode = useSetting('enable_tun_mode');
+  const systemProxy = useSystemProxyAction();
+  const tunMode = useTunModeAction();
 
-  const handleSystemProxy = useLockFn(async () => {
+  const handleSystemProxy = async () => {
     try {
-      await systemProxy.upsert(!systemProxy.value);
+      await systemProxy.execute();
     } catch (error) {
       await message(
         `Activation System Proxy failed! \n Error: ${formatError(error)}`,
@@ -80,11 +96,11 @@ export const ProxyShortcuts = () => {
         },
       );
     }
-  });
+  };
 
-  const handleTunMode = useLockFn(async () => {
+  const handleTunMode = async () => {
     try {
-      await tunMode.upsert(!tunMode.value);
+      await tunMode.execute();
     } catch (error) {
       await message(
         `Activation TUN Mode failed! \n Error: ${formatError(error)}`,
@@ -94,7 +110,7 @@ export const ProxyShortcuts = () => {
         },
       );
     }
-  });
+  };
 
   return (
     <Grid
@@ -111,8 +127,9 @@ export const ProxyShortcuts = () => {
         <div className="flex gap-3">
           <div className="!w-full">
             <PaperSwitchButton
-              checked={systemProxy.value || false}
+              checked={systemProxy.isActive}
               onClick={handleSystemProxy}
+              disabled={systemProxy.isPending}
             >
               <div className="flex flex-col gap-2">
                 <NetworkPing />
@@ -124,8 +141,9 @@ export const ProxyShortcuts = () => {
 
           <div className="!w-full">
             <PaperSwitchButton
-              checked={tunMode.value || false}
+              checked={tunMode.isActive}
               onClick={handleTunMode}
+              disabled={tunMode.isPending}
             >
               <div className="flex flex-col gap-2">
                 <SettingsEthernet />

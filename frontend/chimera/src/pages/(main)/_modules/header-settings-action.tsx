@@ -18,7 +18,10 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { CircularProgress } from '@/components/ui/progress';
-import { useSystemProxy, useTunMode } from '@/hooks/use-proxy-settings';
+import {
+  useSystemProxyAction,
+  useTunModeAction,
+} from '@/features/system-proxy/use-proxy-settings';
 import * as m from '@/paraglide/messages';
 import { locales, type Locale } from '@/paraglide/runtime';
 
@@ -76,8 +79,8 @@ const ThemeModeSelector = () => {
 };
 
 const ProxySettings = () => {
-  const systemProxy = useSystemProxy();
-  const tunMode = useTunMode();
+  const systemProxy = useSystemProxyAction();
+  const tunMode = useTunModeAction();
   const proxyMode = useProxyMode();
   const labels = {
     global: m.settings_system_proxy_global_mode_label(),

@@ -5,8 +5,12 @@ import Grid from '@mui/material/Grid';
 import type { SxProps, Theme } from '@mui/material/styles';
 import dayjs from 'dayjs';
 import { useAtomValue } from 'jotai';
-import { isObject } from 'lodash-es';
 import { useMemo } from 'react';
+import {
+  getRunningCoreMessage,
+  getServiceStatusMessage,
+  getStoppedCoreReason,
+} from '@/features/dashboard/core-service-status';
 import * as m from '@/paraglide/messages';
 import { atomIsDrawer } from '@/store';
 
@@ -25,58 +29,11 @@ export const ServiceShortcuts = () => {
   const coreStatusQuery = useCoreStatus();
 
   const status: Status = useMemo(() => {
-    switch (serviceStatus?.status) {
-      case 'running': {
-        return {
-          label: m.dashboard_widget_core_service_running(),
-          sx: ((theme) => ({
-            backgroundColor: alpha(theme.vars.palette.success.light, 0.3),
-            ...theme.applyStyles('dark', {
-              backgroundColor: alpha(theme.vars.palette.success.dark, 0.3),
-            }),
-          })) as SxProps<Theme>,
-        };
-      }
+    const label = getServiceStatusMessage(serviceStatus?.status);
 
-      case 'stopped': {
-        return {
-          label: m.dashboard_widget_core_service_stopped(),
-          sx: ((theme) => ({
-            backgroundColor: alpha(theme.vars.palette.error.light, 0.3),
-            ...theme.applyStyles('dark', {
-              backgroundColor: alpha(theme.vars.palette.error.dark, 0.3),
-            }),
-          })) as SxProps<Theme>,
-        };
-      }
-
-      case 'not_installed':
-      default: {
-        return {
-          label: m.dashboard_widget_core_service_not_installed(),
-          sx: ((theme) => ({
-            backgroundColor: theme.vars.palette.grey[100],
-            ...theme.applyStyles('dark', {
-              backgroundColor: theme.vars.palette.background.paper,
-            }),
-          })) as SxProps<Theme>,
-        };
-      }
-    }
-  }, [serviceStatus]);
-
-  const coreStatus: Status = useMemo(() => {
-    const status = coreStatusQuery.data?.status ?? { Stopped: null };
-    if (
-      isObject(status) &&
-      Object.prototype.hasOwnProperty.call(status, 'Stopped')
-    ) {
-      const { Stopped } = status;
+    if (serviceStatus?.status === 'running') {
       return {
-        label:
-          !!Stopped && Stopped.trim()
-            ? m.dashboard_widget_core_stopped_with_message({ message: Stopped })
-            : m.dashboard_widget_core_status_stopped(),
+        label,
         sx: ((theme) => ({
           backgroundColor: alpha(theme.vars.palette.success.light, 0.3),
           ...theme.applyStyles('dark', {
@@ -85,11 +42,42 @@ export const ServiceShortcuts = () => {
         })) as SxProps<Theme>,
       };
     }
+
+    if (serviceStatus?.status === 'stopped') {
+      return {
+        label,
+        sx: ((theme) => ({
+          backgroundColor: alpha(theme.vars.palette.error.light, 0.3),
+          ...theme.applyStyles('dark', {
+            backgroundColor: alpha(theme.vars.palette.error.dark, 0.3),
+          }),
+        })) as SxProps<Theme>,
+      };
+    }
+
     return {
-      label:
-        coreStatusQuery.data?.type === 'normal'
-          ? m.dashboard_widget_core_status_running_by_child_process()
-          : m.dashboard_widget_core_status_running_by_service(),
+      label,
+      sx: ((theme) => ({
+        backgroundColor: theme.vars.palette.grey[100],
+        ...theme.applyStyles('dark', {
+          backgroundColor: theme.vars.palette.background.paper,
+        }),
+      })) as SxProps<Theme>,
+    };
+  }, [serviceStatus?.status]);
+
+  const coreStatus: Status = useMemo(() => {
+    const stoppedReason = getStoppedCoreReason(coreStatusQuery.data?.status);
+    const isStopped = coreStatusQuery.data?.status !== 'Running';
+
+    return {
+      label: isStopped
+        ? stoppedReason?.trim()
+          ? m.dashboard_widget_core_stopped_with_message({
+              message: stoppedReason,
+            })
+          : m.dashboard_widget_core_status_stopped()
+        : getRunningCoreMessage({ coreType: coreStatusQuery.data?.type }),
       sx: ((theme) => ({
         backgroundColor: alpha(theme.vars.palette.success.light, 0.3),
         ...theme.applyStyles('dark', {

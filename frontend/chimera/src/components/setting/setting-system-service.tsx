@@ -1,9 +1,4 @@
-import {
-  restartSidecar,
-  useCoreStatus,
-  useSetting,
-  useSystemService,
-} from '@chimera/interface';
+import { useCoreStatus } from '@chimera/interface';
 import { BaseCard, SwitchItem } from '@chimera/ui';
 import {
   Button,
@@ -13,19 +8,33 @@ import {
   Typography,
 } from '@mui/material';
 import { useMemoizedFn } from 'ahooks';
-import { isObject } from 'lodash-es';
 import { useTransition } from 'react';
+import {
+  getAppCoreStatusLabel,
+  getServiceCoreTypeLabel,
+  getSystemServiceStatusLabel,
+} from '@/features/system-service/system-service-display';
+import { useSystemServiceActions } from '@/features/system-service/use-system-service-actions';
+import { useSystemServiceMode } from '@/features/system-service/use-system-service-mode';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 import {
   ServerManualPromptDialogWrapper,
   useServerManualPromptDialog,
 } from './modules/service-manual-prompt-dialog';
 
 export const SettingSystemService = () => {
-  const { query, upsert } = useSystemService();
   const coreStatusQuery = useCoreStatus();
+  const promptDialog = useServerManualPromptDialog();
+  const {
+    query,
+    isInstalled: isServiceInstalled,
+    installPending: installOrUninstallPending,
+    controlPending: serviceControlPending,
+    isBusy: serviceActionPending,
+    handleInstall: handleInstallClick,
+    handleControl: handleControlClick,
+  } = useSystemServiceActions(promptDialog.show);
+  const serviceMode = useSystemServiceMode();
 
   const getInstallButtonString = () => {
     switch (query.data?.status) {
@@ -57,94 +66,7 @@ export const SettingSystemService = () => {
     }
   };
 
-  const isDisabled = query.data?.status === 'not_installed';
-
-  const promptDialog = useServerManualPromptDialog();
-
-  const [installOrUninstallPending, startInstallOrUninstall] = useTransition();
-  const handleInstallClick = useMemoizedFn(() => {
-    startInstallOrUninstall(async () => {
-      try {
-        switch (query.data?.status) {
-          case 'running':
-          case 'stopped':
-            await upsert.mutateAsync('uninstall');
-            break;
-
-          case 'not_installed':
-            await upsert.mutateAsync('install');
-            break;
-
-          default:
-            break;
-        }
-        await restartSidecar();
-      } catch (e) {
-        const errorMessage = `${
-          query.data?.status === 'not_installed'
-            ? m.settings_system_proxy_system_service_ctrl_failed_install()
-            : m.settings_system_proxy_system_service_ctrl_failed_uninstall()
-        }: ${formatError(e)}`;
-
-        message(errorMessage, {
-          kind: 'error',
-          title: m.common_error(),
-        });
-        // If the installation fails, prompt the user to manually install the service
-        promptDialog.show(
-          query.data?.status === 'not_installed' ? 'install' : 'uninstall',
-        );
-      }
-    });
-  });
-
-  const [serviceControlPending, startServiceControl] = useTransition();
-  const handleControlClick = useMemoizedFn(() => {
-    startServiceControl(async () => {
-      try {
-        switch (query.data?.status) {
-          case 'running':
-            await upsert.mutateAsync('stop');
-            break;
-
-          case 'stopped':
-            await upsert.mutateAsync('start');
-            break;
-
-          default:
-            break;
-        }
-        await restartSidecar();
-      } catch (e) {
-        const errorMessage =
-          query.data?.status === 'running'
-            ? `Stop failed: ${formatError(e)}`
-            : `Start failed: ${formatError(e)}`;
-
-        message(errorMessage, {
-          kind: 'error',
-          title: m.common_error(),
-        });
-        // If start failed show a prompt to user to start the service manually
-        promptDialog.show(query.data?.status === 'running' ? 'stop' : 'start');
-      }
-    });
-  });
-
-  const [serviceRestartPending, startServiceRestart] = useTransition();
-  const handleRestartClick = useMemoizedFn(() => {
-    startServiceRestart(async () => {
-      try {
-        await upsert.mutateAsync('restart');
-        await restartSidecar();
-      } catch (e) {
-        message(`Restart failed: ${formatError(e)}`, {
-          kind: 'error',
-          title: m.common_error(),
-        });
-      }
-    });
-  });
+  const isDisabled = serviceMode.isNotInstalled;
 
   const [refreshPending, startRefresh] = useTransition();
   const handleRefreshClick = useMemoizedFn(() => {
@@ -153,47 +75,13 @@ export const SettingSystemService = () => {
     });
   });
 
-  const serviceMode = useSetting('enable_service_mode');
   const serviceServer = query.data?.server;
-  const isServiceInstalled = query.data?.status !== 'not_installed';
   const runtimeInfos = serviceServer?.runtime_infos;
   const serviceCoreInfos = serviceServer?.core_infos;
 
-  const getInstallStatusLabel = (status: string): string => {
-    switch (status) {
-      case 'not_installed':
-        return m.dashboard_widget_core_service_not_installed();
-      case 'running':
-        return m.dashboard_widget_core_status_running();
-      case 'stopped':
-        return m.dashboard_widget_core_status_stopped();
-      default:
-        return m.common_unknown();
-    }
-  };
-
-  const currentCoreStatus = (() => {
-    const status = coreStatusQuery.data?.status;
-    if (!status) return m.common_unknown();
-    if (
-      isObject(status) &&
-      Object.prototype.hasOwnProperty.call(status, 'Stopped')
-    ) {
-      const { Stopped } = status;
-      return !!Stopped && Stopped.trim()
-        ? m.dashboard_widget_core_stopped_with_message({ message: Stopped })
-        : m.dashboard_widget_core_status_stopped();
-    }
-    return m.dashboard_widget_core_status_running();
-  })();
-
+  const currentCoreStatus = getAppCoreStatusLabel(coreStatusQuery.data?.status);
   const currentRunType = coreStatusQuery.data?.type ?? m.common_unknown();
-
-  const serviceCoreType = (() => {
-    const type = serviceCoreInfos?.type;
-    if (!type) return m.common_unknown();
-    return typeof type === 'string' ? type : type.clash;
-  })();
+  const serviceCoreType = getServiceCoreTypeLabel(serviceCoreInfos?.type);
 
   const currentCoreChangedAt = coreStatusQuery.data?.startAt;
   const serviceCoreChangedAt = serviceCoreInfos?.state_changed_at;
@@ -205,8 +93,8 @@ export const SettingSystemService = () => {
         <SwitchItem
           label={m.settings_system_proxy_service_mode_label()}
           disabled={isDisabled}
-          checked={serviceMode.value || false}
-          onChange={() => serviceMode.upsert(!serviceMode.value)}
+          checked={serviceMode.value}
+          onChange={serviceMode.toggle}
         />
 
         {isDisabled && (
@@ -222,7 +110,7 @@ export const SettingSystemService = () => {
             primary={
               m.common_current_status() +
               ': ' +
-              getInstallStatusLabel(query.data?.status ?? m.common_unknown())
+              getSystemServiceStatusLabel(query.data?.status)
             }
           />
           <div className="flex gap-2">
@@ -231,43 +119,17 @@ export const SettingSystemService = () => {
                 variant="contained"
                 onClick={handleControlClick}
                 loading={serviceControlPending}
-                disabled={
-                  installOrUninstallPending ||
-                  serviceControlPending ||
-                  serviceRestartPending ||
-                  refreshPending
-                }
+                disabled={serviceActionPending || refreshPending}
               >
                 {getControlButtonString()}
               </Button>
             )}
 
-            {/* {isServiceInstalled && (
-                <Button
-                  variant="contained"
-                  onClick={handleRestartClick}
-                  loading={serviceRestartPending}
-                  disabled={
-                    installOrUninstallPending ||
-                    serviceControlPending ||
-                    serviceRestartPending ||
-                    refreshPending
-                  }
-                >
-                  Restart
-                </Button>
-              )} */}
-
             <Button
               variant="contained"
               onClick={handleInstallClick}
               loading={installOrUninstallPending}
-              disabled={
-                installOrUninstallPending ||
-                serviceControlPending ||
-                serviceRestartPending ||
-                refreshPending
-              }
+              disabled={serviceActionPending || refreshPending}
             >
               {getInstallButtonString()}
             </Button>
@@ -276,12 +138,7 @@ export const SettingSystemService = () => {
               variant="contained"
               onClick={handleRefreshClick}
               loading={refreshPending}
-              disabled={
-                installOrUninstallPending ||
-                serviceControlPending ||
-                serviceRestartPending ||
-                refreshPending
-              }
+              disabled={serviceActionPending || refreshPending}
             >
               {m.common_refresh()}
             </Button>
