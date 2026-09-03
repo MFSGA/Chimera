@@ -2,7 +2,13 @@ use chimera_config::application::{
     ChimeraAppConfig, ClashCore as AppClashCore, I18nLanguage, ThemeMode,
 };
 
-use crate::config::chimera::{ClashCore, IVerge};
+use crate::{
+    config::{
+        chimera::{ClashCore, IVerge},
+        core::Config,
+    },
+    state::mirror::{PreparedLegacyMirror, VergeLegacyBridge as VergeLegacyBridgeTrait},
+};
 
 pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<ChimeraAppConfig> {
     let mut next = ChimeraAppConfig::default();
@@ -68,6 +74,85 @@ pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<Chimera
     }
 
     Ok(next)
+}
+
+pub(crate) fn apply_app_config_to_legacy_verge(
+    draft: &mut IVerge,
+    snap: &ChimeraAppConfig,
+) -> anyhow::Result<()> {
+    draft.app_log_level = Some(super::yaml_convert(&snap.app_log_level)?);
+    draft.language = Some(super::yaml_convert(snap.language)?);
+    draft.theme_mode = Some(super::yaml_convert(snap.theme_mode)?);
+    draft.lighten_animation_effects = Some(snap.lighten_animation_effects);
+    draft.enable_service_mode = Some(snap.enable_service_mode);
+    draft.enable_auto_launch = Some(snap.enable_auto_launch);
+    draft.enable_silent_start = Some(snap.enable_silent_start);
+    draft.enable_system_proxy = Some(snap.enable_system_proxy);
+    draft.enable_proxy_guard = Some(snap.enable_proxy_guard);
+    draft.system_proxy_bypass = if snap.system_proxy_bypass.is_empty() {
+        None
+    } else {
+        Some(snap.system_proxy_bypass.clone())
+    };
+    draft.proxy_guard_interval = Some(snap.proxy_guard_interval);
+    draft.theme_color = Some(super::yaml_convert(&snap.theme_color)?);
+    draft.clash_core = Some(super::yaml_convert(snap.core)?);
+    draft.enable_builtin_enhanced = Some(snap.enable_builtin_enhanced);
+    draft.max_log_files = Some(snap.max_log_files);
+    draft.enable_auto_check_update = Some(snap.enable_auto_check_update);
+    draft.clash_tray_selector = Some(super::yaml_convert(snap.tray_selector_mode)?);
+    draft.always_on_top = Some(snap.always_on_top);
+    draft.window_type = Some(super::yaml_convert(snap.window_type)?);
+    Ok(())
+}
+
+fn apply_prepared_app_projection(target: &mut IVerge, projected: &IVerge) {
+    target.app_log_level = projected.app_log_level.clone();
+    target.language = projected.language.clone();
+    target.theme_mode = projected.theme_mode.clone();
+    target.lighten_animation_effects = projected.lighten_animation_effects;
+    target.enable_service_mode = projected.enable_service_mode;
+    target.enable_auto_launch = projected.enable_auto_launch;
+    target.enable_silent_start = projected.enable_silent_start;
+    target.enable_system_proxy = projected.enable_system_proxy;
+    target.enable_proxy_guard = projected.enable_proxy_guard;
+    target.system_proxy_bypass = projected.system_proxy_bypass.clone();
+    target.proxy_guard_interval = projected.proxy_guard_interval;
+    target.theme_color = projected.theme_color.clone();
+    target.clash_core = projected.clash_core;
+    target.enable_builtin_enhanced = projected.enable_builtin_enhanced;
+    target.max_log_files = projected.max_log_files;
+    target.enable_auto_check_update = projected.enable_auto_check_update;
+    target.clash_tray_selector = projected.clash_tray_selector;
+    target.always_on_top = projected.always_on_top;
+    target.window_type = projected.window_type;
+}
+
+pub(crate) struct LegacyVergeBridge;
+
+struct PreparedVergeMirror {
+    projected: IVerge,
+}
+
+impl PreparedLegacyMirror for PreparedVergeMirror {
+    fn apply(self: Box<Self>) {
+        let mut next = Config::verge().latest().clone();
+        apply_prepared_app_projection(&mut next, &self.projected);
+        *Config::verge().draft() = next;
+        Config::verge().apply();
+    }
+}
+
+impl VergeLegacyBridgeTrait for LegacyVergeBridge {
+    fn prepare(&self, snap: &ChimeraAppConfig) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+        let mut projected = Config::verge().latest().clone();
+        apply_app_config_to_legacy_verge(&mut projected, snap)?;
+        Ok(Box::new(PreparedVergeMirror { projected }))
+    }
+
+    fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig> {
+        application_from_legacy(&Config::verge().latest())
+    }
 }
 
 pub(crate) fn legacy_core_from_typed(core: AppClashCore) -> ClashCore {
