@@ -26,16 +26,17 @@ const CtrlButton = ({ className, ...props }: ButtonProps) => (
 );
 
 const AlwaysOnTopButton = () => {
-  const { value: alwaysOnTop, upsert } = useSetting('always_on_top');
+  const { value: alwaysOnTop, upsert: upsertAlwaysOnTop } =
+    useSetting('always_on_top');
 
-  const handleToggle = useCallback(async () => {
-    await upsert(!alwaysOnTop);
+  const handleToggleAlwaysOnTop = useCallback(async () => {
+    await upsertAlwaysOnTop(!alwaysOnTop);
     await appWindow.setAlwaysOnTop(!alwaysOnTop);
-  }, [alwaysOnTop, upsert]);
+  }, [alwaysOnTop, upsertAlwaysOnTop]);
 
   return (
     <CtrlButton
-      onClick={handleToggle}
+      onClick={handleToggleAlwaysOnTop}
       data-slot="window-control-always-on-top-button"
     >
       <AnimatePresence mode="wait">
@@ -59,7 +60,9 @@ const AlwaysOnTopButton = () => {
 };
 
 const MinimizeButton = () => {
-  const handleMinimize = useCallback(() => appWindow.minimize(), []);
+  const handleMinimize = useCallback(async () => {
+    await appWindow.minimize();
+  }, []);
 
   return (
     <CtrlButton
