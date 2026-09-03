@@ -4,5 +4,6 @@
 import { getSystem } from '@chimera/ui';
 
 export const OS = getSystem();
+export const isMacOS = OS === 'macos';
 
 export const IS_NIGHTLY = window.__IS_NIGHTLY__ === true;

@@ -1,10 +1,8 @@
-import { cn, getSystem } from '@chimera/ui';
+import { cn } from '@chimera/ui';
 import type { ComponentProps } from 'react';
 import useWindowMaximized from '@/hooks/use-window-maximized';
 import WindowControl from './window-control';
 import WindowHeader from './window-header';
-
-const isMacOS = getSystem() === 'macos';
 
 export function DefaultHeader({
   className,
@@ -57,5 +55,3 @@ export function MacOSHeaderLeft({
     />
   );
 }
-
-export { isMacOS };
