@@ -14,6 +14,7 @@ use crate::{
 
 mod ipc;
 
+mod client;
 mod config;
 /// 5
 mod consts;
@@ -24,6 +25,7 @@ mod enhance;
 /// 6
 mod feat;
 mod features;
+mod setup;
 /// 8
 #[cfg(windows)]
 mod shutdown_hook;
@@ -152,6 +154,7 @@ pub fn run() -> std::io::Result<()> {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            setup::setup(app)?;
             core::clash::setup(app)?;
 
             #[cfg(feature = "agent")]

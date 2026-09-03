@@ -7,16 +7,12 @@ use tauri::{AppHandle, Manager};
 use tracing::debug;
 
 use crate::{
+    client::ChimeraClient,
     config::{
         chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
-    core::{
-        clash::{client::NyanpasuClient, transaction::TransactionOutcome},
-        handle,
-        service::ipc::get_ipc_state,
-        sysopt,
-    },
+    core::{clash::transaction::TransactionOutcome, handle, service::ipc::get_ipc_state, sysopt},
     log_err,
     utils::{self, help::get_clash_external_port},
 };
@@ -90,7 +86,7 @@ fn validate_mixed_port_change(plan: &ClashPatchPlan) -> Result<()> {
 }
 
 async fn validate_external_controller_change(
-    client: &NyanpasuClient,
+    client: &ChimeraClient,
     plan: &ClashPatchPlan,
 ) -> Result<()> {
     if !plan.external_controller_changed {
@@ -119,7 +115,7 @@ async fn validate_external_controller_change(
     Ok(())
 }
 
-async fn apply_clash_runtime_change(client: &NyanpasuClient, plan: &ClashPatchPlan) -> Result<()> {
+async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPlan) -> Result<()> {
     if !plan.requires_restart {
         return Ok(());
     }
@@ -174,7 +170,7 @@ fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
     })
 }
 
-async fn apply_verge_runtime_change(client: &NyanpasuClient, plan: &VergePatchPlan) -> Result<()> {
+async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPlan) -> Result<()> {
     let ipc_state = get_ipc_state();
 
     if let Some(service_mode) = plan.service_mode
@@ -234,7 +230,7 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
 /// Persists a typed set of runtime overrides without conflating it with a
 /// running-core snapshot.
 pub async fn patch_clash_overrides(
-    client: &NyanpasuClient,
+    client: &ChimeraClient,
     overrides: ClashConfigOverrides,
 ) -> Result<()> {
     let patch = overrides.to_mapping();
@@ -244,7 +240,7 @@ pub async fn patch_clash_overrides(
 /// Applies typed overrides to the running core and desired state through the
 /// shared transaction coordinator used by IPC and non-window entry points.
 pub async fn patch_running_clash_overrides(
-    client: &NyanpasuClient,
+    client: &ChimeraClient,
     overrides: ClashConfigOverrides,
 ) -> TransactionOutcome {
     client.patch_running_clash_overrides(overrides).await
@@ -252,13 +248,13 @@ pub async fn patch_running_clash_overrides(
 
 /// Applies a general Clash mapping while extracting only supported persistent
 /// runtime overrides for the generated config.
-pub async fn patch_clash(client: &NyanpasuClient, patch: Mapping) -> Result<()> {
+pub async fn patch_clash(client: &ChimeraClient, patch: Mapping) -> Result<()> {
     let overrides = ClashConfigOverrides::from_mapping(&patch)?;
     patch_clash_with_overrides(client, patch, overrides).await
 }
 
 async fn patch_clash_with_overrides(
-    client: &NyanpasuClient,
+    client: &ChimeraClient,
     patch: Mapping,
     overrides: ClashConfigOverrides,
 ) -> Result<()> {
@@ -296,11 +292,11 @@ async fn patch_clash_with_overrides(
     }
 }
 
-fn managed_client() -> Result<NyanpasuClient> {
+fn managed_client() -> Result<ChimeraClient> {
     let app_handle = handle::Handle::app_handle()
         .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
     app_handle
-        .try_state::<NyanpasuClient>()
+        .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone())
         .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))
 }
@@ -311,10 +307,7 @@ pub async fn patch_verge(patch: IVerge) -> Result<()> {
     managed_client()?.patch_verge(patch).await
 }
 
-pub(crate) async fn patch_verge_uncoordinated(
-    client: &NyanpasuClient,
-    patch: IVerge,
-) -> Result<()> {
+pub(crate) async fn patch_verge_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
     Config::verge().draft().patch_config(patch.clone());
     let result = async {
         let plan = plan_verge_patch(&patch)?;
@@ -339,7 +332,7 @@ pub(crate) async fn patch_verge_uncoordinated(
 }
 
 /// 更新配置
-async fn update_core_config(client: &NyanpasuClient) -> Result<()> {
+async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     match client.rebuild_running_config().await {
         Ok(_) => {
             handle::Handle::notice_message(&Message::SetConfig(Ok(())));
@@ -357,7 +350,7 @@ async fn update_core_config(client: &NyanpasuClient) -> Result<()> {
 pub async fn update_profile<T: Borrow<String>>(
     uid: T,
     opts: Option<RemoteProfileOptionsBuilder>,
-) -> Result<crate::core::clash::client::MutationOutcome<()>> {
+) -> Result<crate::client::MutationOutcome<()>> {
     managed_client()?
         .refresh_profile(uid.borrow().clone(), opts)
         .await
@@ -387,7 +380,7 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
 pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
     let app_handle = app_handle.clone();
     tauri::async_runtime::spawn(async move {
-        let Some(client) = app_handle.try_state::<NyanpasuClient>() else {
+        let Some(client) = app_handle.try_state::<ChimeraClient>() else {
             log::error!(target: "app", "nyanpasu client is not managed");
             return;
         };
