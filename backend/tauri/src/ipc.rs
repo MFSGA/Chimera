@@ -635,10 +635,30 @@ fn web_key(key: &str) -> String {
 pub mod service {
     use super::{NyanpasuClient, Result, State};
     use crate::core::service;
+
+    /// Additive status projection that preserves the service wire fields while
+    /// exposing the app-side compatibility decision to frontend consumers.
+    #[derive(serde::Serialize, specta::Type)]
+    pub struct ServiceStatusInfo<'a> {
+        pub name: std::borrow::Cow<'a, str>,
+        pub version: std::borrow::Cow<'a, str>,
+        pub status: chimera_ipc::types::ServiceStatus,
+        pub server: Option<chimera_ipc::api::status::StatusResBody<'a>>,
+        pub compat: crate::core::service::compat::ServiceCompat,
+    }
+
     #[tauri::command]
     #[specta::specta]
-    pub async fn status_service<'a>() -> Result<chimera_ipc::types::StatusInfo<'a>> {
-        Ok(service::control::status().await?)
+    pub async fn status_service<'a>() -> Result<ServiceStatusInfo<'a>> {
+        let info = service::control::status().await?;
+        let compat = crate::core::service::compat::ServiceCompat::classify(&info);
+        Ok(ServiceStatusInfo {
+            name: info.name,
+            version: info.version,
+            status: info.status,
+            server: info.server,
+            compat,
+        })
     }
     #[tauri::command]
     #[specta::specta]
