@@ -1,3 +1,69 @@
+## [0.22.1] - 2026-09-03 03:37:04
+
+### ✅ Testing
+
+- **e2e:** Stabilize hermetic profile coverage by @MFSGA in [#345](https://github.com/MFSGA/Chimera/pull/345)
+
+### ✨ Features
+
+- **service:** Expose daemon compatibility status by @MFSGA
+
+- **service:** Gate incompatible daemon versions by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **service:** Keep probing ineligible daemons by @MFSGA
+
+### 🔨 Refactor
+
+- **interface:** Use generated updater contract by @MFSGA
+
+- **interface:** Remove duplicate settings contract by @MFSGA
+
+- **interface:** Route tauri calls through generated ipc by @MFSGA
+
+- **legacy:** Use shared system service state by @MFSGA
+
+- **legacy:** Adapt updater to main provider by @MFSGA
+
+- **service:** Align runtime module structure by @MFSGA
+
+- **service:** Remove duplicate frontend ipc wrappers by @MFSGA
+
+- **service:** Remove legacy nyanpasu daemon path by @MFSGA
+
+- **service:** Unify frontend service contracts by @MFSGA
+
+- **service:** Harden health eligibility transitions by @MFSGA
+
+- **service:** Pin runtime through submodule by @MFSGA
+
+- **ui:** Share clash base settings actions by @MFSGA
+
+- **ui:** Share tun stack actions by @MFSGA
+
+- **ui:** Share proxy toggle actions by @MFSGA
+
+- **ui:** Share dashboard proxy status by @MFSGA
+
+- **ui:** Share system service display model by @MFSGA
+
+- **ui:** Share system service mode state by @MFSGA
+
+- **ui:** Share core service status model by @MFSGA
+
+- **ui:** Share system service actions by @MFSGA
+
+- **ui:** Share window close lifecycle by @MFSGA
+
+- **ui:** Unify interface switching by @MFSGA
+
+- **ui:** Share support actions across interfaces by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.22.0...v0.22.1
+
 ## [0.22.0] - 2026-08-23 15:03:29
 
 ### ✅ Testing
