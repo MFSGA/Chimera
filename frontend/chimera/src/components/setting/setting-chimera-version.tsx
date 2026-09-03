@@ -3,10 +3,9 @@ import { alpha, BaseCard, SwitchItem } from '@chimera/ui';
 import { Box, Button, List, ListItem, Paper, Typography } from '@mui/material';
 import { useLockFn } from 'ahooks';
 import { useSetAtom } from 'jotai';
-import { useState } from 'react';
 import { version } from '@root/package.json';
 // import LogoSvg from '@/assets/image/logo.svg?react';
-import { checkUpdate, useUpdaterPlatformSupported } from '@/hooks/use-updater';
+import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
 import * as m from '@/paraglide/messages';
 import { UpdaterInstanceAtom } from '@/store/updater';
 import { formatError } from '@/utils';
@@ -25,15 +24,11 @@ const AutoCheckUpdate = () => {
 };
 
 export const SettingNyanpasuVersion = () => {
-  const [loading, setLoading] = useState(false);
-
   const setUpdaterInstance = useSetAtom(UpdaterInstanceAtom);
-  const isPlatformSupported = useUpdaterPlatformSupported();
+  const { checkNewVersion, isChecking, isSupported } = useChimeraUpdate();
   const onCheckUpdate = useLockFn(async () => {
     try {
-      setLoading(true);
-
-      const update = await checkUpdate();
+      const update = await checkNewVersion();
 
       if (!update) {
         message(m.settings_label_about_update_no_update(), {
@@ -51,8 +46,6 @@ export const SettingNyanpasuVersion = () => {
           kind: 'error',
         },
       );
-    } finally {
-      setLoading(false);
     }
   });
 
@@ -92,7 +85,7 @@ export const SettingNyanpasuVersion = () => {
           </Paper>
         </ListItem>
 
-        {isPlatformSupported && (
+        {isSupported && (
           <>
             <div className="mt-1 mb-1">
               <AutoCheckUpdate />
@@ -102,7 +95,7 @@ export const SettingNyanpasuVersion = () => {
               <Button
                 variant="contained"
                 size="large"
-                loading={loading}
+                loading={isChecking}
                 onClick={onCheckUpdate}
                 sx={{ width: '100%' }}
               >

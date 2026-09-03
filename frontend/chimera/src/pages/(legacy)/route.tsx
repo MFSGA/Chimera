@@ -10,8 +10,9 @@ import NoticeProvider from '@/components/layout/notice-provider';
 import PageTransition from '@/components/layout/page-transition';
 import SchemeProvider from '@/components/layout/scheme-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
+import ChimeraUpdateProvider from '@/components/providers/chimera-update-provider';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
-import { UpdaterProvider } from '@/hooks/use-updater';
+import { LegacyUpdaterAdapter } from '@/features/updater/legacy-updater-adapter';
 import { FileRouteTypes } from '@/routeTree.gen';
 import { atomIsDrawer, memorizedRoutePathAtom } from '@/store';
 
@@ -47,21 +48,23 @@ function Layout() {
 
   return (
     <QueryLoaderProvider>
-      <StyledEngineProvider injectFirst>
-        <ThemeModeProvider>
-          <CssBaseline />
-          <NoticeProvider />
-          <SchemeProvider />
-          <UpdaterDialog />
-          <UpdaterProvider />
+      <ChimeraUpdateProvider>
+        <StyledEngineProvider injectFirst>
+          <ThemeModeProvider>
+            <CssBaseline />
+            <NoticeProvider />
+            <SchemeProvider />
+            <UpdaterDialog />
+            <LegacyUpdaterAdapter />
 
-          <AppContainer isDrawer={isDrawer}>
-            <PageTransition
-              className={cn('absolute inset-4 top-10', !isDrawer && 'left-0')}
-            />
-          </AppContainer>
-        </ThemeModeProvider>
-      </StyledEngineProvider>
+            <AppContainer isDrawer={isDrawer}>
+              <PageTransition
+                className={cn('absolute inset-4 top-10', !isDrawer && 'left-0')}
+              />
+            </AppContainer>
+          </ThemeModeProvider>
+        </StyledEngineProvider>
+      </ChimeraUpdateProvider>
     </QueryLoaderProvider>
   );
 }
