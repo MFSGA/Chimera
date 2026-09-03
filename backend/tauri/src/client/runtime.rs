@@ -23,9 +23,7 @@ use crate::{
     config::{
         chimera::ClashCore,
         profile::item_type::{ProfileUid, ScriptType},
-        runtime::ClashConfigOverrides,
     },
-    core::clash::transaction::TransactionOutcome,
     enhance::PostProcessingOutput,
     utils::dirs,
 };
@@ -979,28 +977,6 @@ mod tests {
 }
 
 impl ChimeraClient {
-    pub(crate) async fn patch_running_clash_overrides(
-        &self,
-        overrides: ClashConfigOverrides,
-    ) -> TransactionOutcome {
-        let mapping = overrides.to_mapping();
-        let persist_overrides = overrides.clone();
-        let client = self.clone();
-        self.inner
-            .runtime_patch
-            .apply(
-                mapping,
-                crate::core::clash::api::get_configs,
-                |patch| async move { crate::core::clash::api::patch_configs(&patch).await },
-                move |_patch| {
-                    let overrides = persist_overrides.clone();
-                    let client = client.clone();
-                    async move { crate::feat::patch_clash_overrides(&client, overrides).await }
-                },
-            )
-            .await
-    }
-
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
         let result = async {
             let mut lease = self.inner.core.begin().await?;
