@@ -43,9 +43,9 @@ import { Route as mainMainProxiesNameRouteImport } from './pages/(main)/main/pro
 import { Route as mainMainRulesIndexRouteImport } from './pages/(main)/main/rules/index'
 import { Route as mainMainSettingsIndexRouteImport } from './pages/(main)/main/settings/index'
 import { Route as mainMainSettingsAboutRouteRouteImport } from './pages/(main)/main/settings/about/route'
+import { Route as mainMainSettingsChimeraRouteRouteImport } from './pages/(main)/main/settings/chimera/route'
 import { Route as mainMainSettingsClashRouteRouteImport } from './pages/(main)/main/settings/clash/route'
 import { Route as mainMainSettingsDebugRouteRouteImport } from './pages/(main)/main/settings/debug/route'
-import { Route as mainMainSettingsNyanpasuRouteRouteImport } from './pages/(main)/main/settings/nyanpasu/route'
 import { Route as mainMainSettingsSystemRouteRouteImport } from './pages/(main)/main/settings/system/route'
 import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
 import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
@@ -228,6 +228,12 @@ const mainMainSettingsAboutRouteRoute =
     path: '/about',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
+const mainMainSettingsChimeraRouteRoute =
+  mainMainSettingsChimeraRouteRouteImport.update({
+    id: '/chimera',
+    path: '/chimera',
+    getParentRoute: () => mainMainSettingsRouteRoute,
+  } as any)
 const mainMainSettingsClashRouteRoute =
   mainMainSettingsClashRouteRouteImport.update({
     id: '/clash',
@@ -238,12 +244,6 @@ const mainMainSettingsDebugRouteRoute =
   mainMainSettingsDebugRouteRouteImport.update({
     id: '/debug',
     path: '/debug',
-    getParentRoute: () => mainMainSettingsRouteRoute,
-  } as any)
-const mainMainSettingsNyanpasuRouteRoute =
-  mainMainSettingsNyanpasuRouteRouteImport.update({
-    id: '/nyanpasu',
-    path: '/nyanpasu',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
 const mainMainSettingsSystemRouteRoute =
@@ -318,9 +318,9 @@ export interface FileRoutesByFullPath {
   '/main/': typeof mainMainIndexRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
+  '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
   '/main/settings/clash': typeof mainMainSettingsClashRouteRoute
   '/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
-  '/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
@@ -355,8 +355,8 @@ export interface FileRoutesByTo {
   '/main': typeof mainMainIndexRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
+  '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
   '/main/settings/clash': typeof mainMainSettingsClashRouteRoute
-  '/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
@@ -402,9 +402,9 @@ export interface FileRoutesById {
   '/(main)/main/': typeof mainMainIndexRoute
   '/(main)/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/(main)/main/settings/about': typeof mainMainSettingsAboutRouteRoute
+  '/(main)/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
   '/(main)/main/settings/clash': typeof mainMainSettingsClashRouteRoute
   '/(main)/main/settings/debug': typeof mainMainSettingsDebugRouteRouteWithChildren
-  '/(main)/main/settings/nyanpasu': typeof mainMainSettingsNyanpasuRouteRoute
   '/(main)/main/settings/system': typeof mainMainSettingsSystemRouteRoute
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/(main)/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
@@ -449,9 +449,9 @@ export interface FileRouteTypes {
     | '/main/'
     | '/main/profiles/inspect'
     | '/main/settings/about'
+    | '/main/settings/chimera'
     | '/main/settings/clash'
     | '/main/settings/debug'
-    | '/main/settings/nyanpasu'
     | '/main/settings/system'
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
@@ -486,8 +486,8 @@ export interface FileRouteTypes {
     | '/main'
     | '/main/profiles/inspect'
     | '/main/settings/about'
+    | '/main/settings/chimera'
     | '/main/settings/clash'
-    | '/main/settings/nyanpasu'
     | '/main/settings/system'
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
@@ -532,9 +532,9 @@ export interface FileRouteTypes {
     | '/(main)/main/'
     | '/(main)/main/profiles/inspect'
     | '/(main)/main/settings/about'
+    | '/(main)/main/settings/chimera'
     | '/(main)/main/settings/clash'
     | '/(main)/main/settings/debug'
-    | '/(main)/main/settings/nyanpasu'
     | '/(main)/main/settings/system'
     | '/(main)/main/settings/user-interface'
     | '/(main)/main/settings/web-ui'
@@ -801,6 +801,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainSettingsAboutRouteRouteImport
       parentRoute: typeof mainMainSettingsRouteRoute
     }
+    '/(main)/main/settings/chimera': {
+      id: '/(main)/main/settings/chimera'
+      path: '/chimera'
+      fullPath: '/main/settings/chimera'
+      preLoaderRoute: typeof mainMainSettingsChimeraRouteRouteImport
+      parentRoute: typeof mainMainSettingsRouteRoute
+    }
     '/(main)/main/settings/clash': {
       id: '/(main)/main/settings/clash'
       path: '/clash'
@@ -813,13 +820,6 @@ declare module '@tanstack/react-router' {
       path: '/debug'
       fullPath: '/main/settings/debug'
       preLoaderRoute: typeof mainMainSettingsDebugRouteRouteImport
-      parentRoute: typeof mainMainSettingsRouteRoute
-    }
-    '/(main)/main/settings/nyanpasu': {
-      id: '/(main)/main/settings/nyanpasu'
-      path: '/nyanpasu'
-      fullPath: '/main/settings/nyanpasu'
-      preLoaderRoute: typeof mainMainSettingsNyanpasuRouteRouteImport
       parentRoute: typeof mainMainSettingsRouteRoute
     }
     '/(main)/main/settings/system': {
@@ -1025,9 +1025,9 @@ const mainMainSettingsDebugRouteRouteWithChildren =
 
 interface mainMainSettingsRouteRouteChildren {
   mainMainSettingsAboutRouteRoute: typeof mainMainSettingsAboutRouteRoute
+  mainMainSettingsChimeraRouteRoute: typeof mainMainSettingsChimeraRouteRoute
   mainMainSettingsClashRouteRoute: typeof mainMainSettingsClashRouteRoute
   mainMainSettingsDebugRouteRoute: typeof mainMainSettingsDebugRouteRouteWithChildren
-  mainMainSettingsNyanpasuRouteRoute: typeof mainMainSettingsNyanpasuRouteRoute
   mainMainSettingsSystemRouteRoute: typeof mainMainSettingsSystemRouteRoute
   mainMainSettingsUserInterfaceRouteRoute: typeof mainMainSettingsUserInterfaceRouteRoute
   mainMainSettingsWebUiRouteRoute: typeof mainMainSettingsWebUiRouteRoute
@@ -1036,9 +1036,9 @@ interface mainMainSettingsRouteRouteChildren {
 
 const mainMainSettingsRouteRouteChildren: mainMainSettingsRouteRouteChildren = {
   mainMainSettingsAboutRouteRoute: mainMainSettingsAboutRouteRoute,
+  mainMainSettingsChimeraRouteRoute: mainMainSettingsChimeraRouteRoute,
   mainMainSettingsClashRouteRoute: mainMainSettingsClashRouteRoute,
   mainMainSettingsDebugRouteRoute: mainMainSettingsDebugRouteRouteWithChildren,
-  mainMainSettingsNyanpasuRouteRoute: mainMainSettingsNyanpasuRouteRoute,
   mainMainSettingsSystemRouteRoute: mainMainSettingsSystemRouteRoute,
   mainMainSettingsUserInterfaceRouteRoute:
     mainMainSettingsUserInterfaceRouteRoute,

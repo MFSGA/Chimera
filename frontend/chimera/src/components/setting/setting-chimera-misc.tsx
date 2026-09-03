@@ -25,7 +25,7 @@ const AppLogLevel = () => {
 
   return (
     <MenuItem
-      label={m.settings_nyanpasu_app_log_level_label()}
+      label={m.settings_chimera_app_log_level_label()}
       options={options}
       selected={value || 'info'}
       onSelected={(value) => upsert(value as LoggingLevel_Serialize)}
@@ -59,7 +59,7 @@ const BreakWhenProxyChange = () => {
 
   return (
     <SwitchItem
-      label={m.settings_nyanpasu_enhance_break_when_proxy_change_label()}
+      label={m.settings_chimera_enhance_break_when_proxy_change_label()}
       checked={checked}
       onChange={handleChange}
     />
@@ -71,7 +71,7 @@ const BreakWhenProfileChange = () => {
 
   return (
     <SwitchItem
-      label={m.settings_nyanpasu_enhance_break_when_profile_change_label()}
+      label={m.settings_chimera_enhance_break_when_profile_change_label()}
       checked={Boolean(breakWhenProfileChange.value)}
       onChange={() =>
         breakWhenProfileChange.upsert(!breakWhenProfileChange.value)
@@ -85,7 +85,7 @@ const BreakWhenModeChange = () => {
 
   return (
     <SwitchItem
-      label={m.settings_nyanpasu_enhance_break_when_mode_change_label()}
+      label={m.settings_chimera_enhance_break_when_mode_change_label()}
       checked={Boolean(breakWhenModeChange.value)}
       onChange={() => breakWhenModeChange.upsert(!breakWhenModeChange.value)}
     />
@@ -96,14 +96,14 @@ const TrayProxiesSelector = () => {
   const { value, upsert } = useSetting('clash_tray_selector');
 
   const trayProxiesSelectorMode = {
-    normal: m.settings_nyanpasu_tray_type_normal(),
-    hidden: m.settings_nyanpasu_tray_type_hidden(),
-    submenu: m.settings_nyanpasu_tray_type_submenu(),
+    normal: m.settings_chimera_tray_type_normal(),
+    hidden: m.settings_chimera_tray_type_hidden(),
+    submenu: m.settings_chimera_tray_type_submenu(),
   };
 
   return (
     <MenuItem
-      label={m.settings_nyanpasu_proxies_selector_label()}
+      label={m.settings_chimera_proxies_selector_label()}
       options={trayProxiesSelectorMode}
       selected={value || 'normal'}
       onSelected={(value) => upsert(value as ProxiesSelectorMode)}
@@ -116,7 +116,7 @@ const EnableBuiltinEnhanced = () => {
 
   return (
     <SwitchItem
-      label={m.settings_nyanpasu_enhance_enable_builtin_enhanced_label()}
+      label={m.settings_chimera_enhance_enable_builtin_enhanced_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />
@@ -128,8 +128,8 @@ const LightenAnimationEffects = () => {
 
   return (
     <SwitchItem
-      id="nyanpasu-lighten-animation-effects"
-      label={m.settings_nyanpasu_lighten_animations_label()}
+      id="chimera-lighten-animation-effects"
+      label={m.settings_chimera_lighten_animations_label()}
       checked={Boolean(value)}
       onChange={() => upsert(!value)}
     />
@@ -138,7 +138,7 @@ const LightenAnimationEffects = () => {
 
 export const SettingChimeraMisc = () => {
   return (
-    <BaseCard label={m.settings_label_nyanpasu()}>
+    <BaseCard label={m.settings_label_chimera()}>
       <List disablePadding>
         <AppLogLevel />
 
