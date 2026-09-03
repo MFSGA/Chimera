@@ -48,6 +48,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Install Rust nightly
         run: |
@@ -114,6 +116,9 @@ jobs:
 
       - name: Install Node.js dependencies
         run: pnpm i
+
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
 
       - name: Prepare sidecars and resources
         shell: bash

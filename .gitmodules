@@ -1,3 +1,6 @@
 [submodule "ref"]
 	path = ref
 	url = https://github.com/libnyanpasu/clash-nyanpasu
+[submodule "backend/chimera-runtime"]
+	path = backend/chimera-runtime
+	url = https://github.com/MFSGA/Chimera_Service.git

@@ -1,5 +1,9 @@
 [workspace]
 members = ["chimera-macro","tauri"]
+# `chimera-runtime` is a submodule with its own workspace root. Keep it out of
+# the app workspace so its `workspace = true` dependencies resolve against the
+# runtime repository, while selected crates are consumed through path deps.
+exclude = ["chimera-runtime"]
 resolver = "2"
 
 [workspace.package]
@@ -15,6 +19,15 @@ lto = true
 opt-level = "s"
 
 [workspace.dependencies]
+# --- chimera runtime ---
+# The gitlink under `backend/chimera-runtime` is the pin. The IPC client is read
+# from that exact runtime revision, while scripts derive the service sidecar
+# release from `chimera_service/Cargo.toml` in the same submodule.
+chimera-ipc = { path = "chimera-runtime/chimera_ipc", features = [
+  "client",
+  "specta",
+] }
+
 thiserror = "2"
 
 reqwest = { version = "0.13", default-features = false, features = [

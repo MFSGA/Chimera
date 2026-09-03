@@ -1,49 +1,29 @@
-import { fetch, type RequestInit } from 'undici';
+import path from 'node:path';
+import fs from 'fs-extra';
 import { BinInfo } from '../types';
-import { getProxyAgent } from './';
-import { SIDECAR_HOST } from './consts';
-import { consola } from './logger';
+import { cwd } from './env';
 
 const CHIMERA_SERVICE_REPO = 'MFSGA/Chimera_Service';
 const CHIMERA_SERVICE_NAME = 'chimera-service';
-// Keep the sidecar aligned with chimera-ipc 1.8.0 in backend/Cargo.lock.
-const CHIMERA_SERVICE_VERSION = 'v1.8.0';
+const CHIMERA_SERVICE_MANIFEST = path.join(
+  cwd,
+  'backend/chimera-runtime/chimera_service/Cargo.toml',
+);
 
-export const getChimeraServiceLatestVersion = async () => {
-  try {
-    const opts = {} as Partial<RequestInit>;
+// Keep the sidecar release aligned with the IPC source selected by the
+// `backend/chimera-runtime` gitlink. Chimera Service releases are tagged
+// `v<chimera-service crate version>`.
+export const getChimeraServiceVersion = async (): Promise<string> => {
+  const manifest = await fs.readFile(CHIMERA_SERVICE_MANIFEST, 'utf8');
+  const match = manifest.match(/^\[package\][^[]*?^version\s*=\s*"([^"]+)"/ms);
 
-    const httpProxy = getProxyAgent();
-    if (httpProxy) {
-      opts.dispatcher = httpProxy;
-    }
-
-    const url = new URL('https://github.com');
-    url.pathname = `/${CHIMERA_SERVICE_REPO}/releases/latest`;
-    const response = await fetch(url, {
-      method: 'GET',
-      redirect: 'manual',
-      ...opts,
-    });
-
-    const location = response.headers.get('location');
-    if (!location) {
-      throw new Error('Cannot find location from the response header');
-    }
-
-    const tag = location.split('/').pop();
-    if (!tag) {
-      throw new Error('Cannot find tag from the location');
-    }
-
-    consola.info(`Chimera Service latest release version: ${tag}`);
-
-    return tag.trim();
-  } catch (error) {
-    console.error('Error fetching latest release version:', error);
-
-    process.exit(1);
+  if (!match) {
+    throw new Error(
+      `failed to parse chimera-service version from ${CHIMERA_SERVICE_MANIFEST}`,
+    );
   }
+
+  return `v${match[1]}`;
 };
 
 export const getChimeraServiceInfo = async ({
@@ -51,9 +31,9 @@ export const getChimeraServiceInfo = async ({
 }: {
   sidecarHost: string;
 }): Promise<BinInfo> => {
-  const isWin = SIDECAR_HOST?.includes('windows');
+  const isWin = sidecarHost.includes('windows');
   const urlExt = isWin ? 'zip' : 'tar.gz';
-  const version = CHIMERA_SERVICE_VERSION;
+  const version = await getChimeraServiceVersion();
   const downloadURL = `https://github.com/${CHIMERA_SERVICE_REPO}/releases/download/${version}/${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
   const exeFile = `${CHIMERA_SERVICE_NAME}${isWin ? '.exe' : ''}`;
   const tmpFile = `${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
@@ -61,6 +41,7 @@ export const getChimeraServiceInfo = async ({
 
   return {
     name: CHIMERA_SERVICE_NAME,
+    version,
     targetFile,
     exeFile,
     tmpFile,
