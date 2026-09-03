@@ -7,15 +7,16 @@
 
 use anyhow::{Result, bail};
 use chimera_config::clash::config::{
-    ClashConfig,
+    ClashConfig, ClashConfigPatch,
     clash_strategy::{PortStrategy, PortStrategyKind},
 };
 use chimera_ipc::api::status::CoreState;
 use serde_yaml::Mapping;
+use struct_patch::Patch;
 
 use crate::{
-    bridge::clash::clash_config_from_legacy,
-    config::{chimera::IVerge, clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
+    bridge::clash::{apply_clash_patch_to_legacy_verge, clash_config_from_legacy},
+    config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
         clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
         handle, sysopt,
@@ -54,11 +55,15 @@ impl ClashConfigClient {
         Config::clash().latest().get_client_info()
     }
 
-    pub(super) async fn apply_legacy_verge_runtime_change(
+    pub(super) async fn apply_legacy_patch_to_draft(
         &self,
         owner: &ChimeraClient,
-        patch: &IVerge,
+        patch: &ClashConfigPatch,
     ) -> Result<()> {
+        let mut next = self.get()?;
+        next.apply(patch.clone());
+        apply_clash_patch_to_legacy_verge(&mut Config::verge().draft(), patch, &next)?;
+
         if patch.enable_tun_mode.is_none() {
             return Ok(());
         }
