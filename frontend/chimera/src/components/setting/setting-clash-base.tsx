@@ -1,13 +1,8 @@
-import {
-  openUWPTool,
-  useClashConfig,
-  useRuntimeProfile,
-  useSetting,
-  type TunStack as TunStackType,
-} from '@chimera/interface';
+import { openUWPTool, useClashConfig } from '@chimera/interface';
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { Button, List, ListItem, ListItemText } from '@mui/material';
 import { useMemo } from 'react';
+import { useTunStackModel } from '@/features/tun-stack/use-tun-stack';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import { useCoreType } from '@/hooks/use-store';
 import * as m from '@/paraglide/messages';
@@ -71,61 +66,22 @@ const IPv6 = () => {
 const TunStack = () => {
   const [coreType] = useCoreType();
 
-  const { value, upsert: upsertTunStack } = useSetting('tun_stack');
-
-  const { value: enableTun, upsert: upsertTun } = useSetting('enable_tun_mode');
-
-  const runtimeProfile = useRuntimeProfile();
-
-  const tunStackOptions = useMemo(() => {
-    const options: {
-      [key: string]: string;
-    } = {
-      system: 'System',
-      gvisor: 'gVisor',
-      mixed: 'Mixed',
-    };
-
-    // clash not support mixed
-    if (coreType === 'clash') {
-      delete options.mixed;
-    }
-    return options;
-  }, [coreType]);
-
-  const selected = useMemo(() => {
-    const stack = value || 'gvisor';
-    return stack in tunStackOptions ? stack : 'gvisor';
-  }, [tunStackOptions, value]);
+  const {
+    execute: changeTunStack,
+    options: tunStackOptions,
+    selected,
+    isPending,
+  } = useTunStackModel(coreType);
 
   return (
     <MenuItem
       label={m.settings_clash_settings_tun_stack_label()}
       options={tunStackOptions}
       selected={selected}
-      onSelected={async (value) => {
-        try {
-          await upsertTunStack(value as TunStackType);
-
-          if (enableTun) {
-            // just to reload clash config
-            await upsertTun(true);
-          }
-
-          // need manual mutate to refetch runtime profile
-          await runtimeProfile.refetch();
-        } catch (error) {
-          message(
-            m.settings_clash_tun_stack_change_failed() +
-              ' \n ' +
-              formatError(error),
-            {
-              title: m.common_error(),
-              kind: 'error',
-            },
-          );
-        }
-      }}
+      disabled={isPending}
+      onSelected={(value) =>
+        changeTunStack(value as keyof typeof tunStackOptions)
+      }
     />
   );
 };

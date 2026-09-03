@@ -1,10 +1,5 @@
-import {
-  useRuntimeProfile,
-  useSetting,
-  type TunStack,
-} from '@chimera/interface';
+import { useSetting, type TunStack } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useCallback, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -12,9 +7,8 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { useTunStackModel } from '@/features/tun-stack/use-tun-stack';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 import {
   ItemContainer,
   ItemLabel,
@@ -26,47 +20,13 @@ import {
 
 export default function TunStackSelector() {
   const coreType = useSetting('clash_core');
-  const tunStack = useSetting('tun_stack');
-  const enableTunMode = useSetting('enable_tun_mode');
-  const runtimeProfile = useRuntimeProfile();
-
-  const tunStackOptions = useMemo(() => {
-    const options: Record<string, string> = {
-      system: 'System',
-      gvisor: 'gVisor',
-      mixed: 'Mixed',
-    };
-
-    if (coreType.value === 'clash') {
-      delete options.mixed;
-    }
-    return options;
-  }, [coreType.value]);
-
-  const currentTunStack = useMemo(() => {
-    const stack = tunStack.value || 'gvisor';
-    return stack in tunStackOptions ? stack : 'gvisor';
-  }, [tunStackOptions, tunStack.value]);
-
-  const handleTunStackChange = useCallback(
-    async (value: string) => {
-      try {
-        await tunStack.upsert(value as TunStack);
-
-        if (enableTunMode.value) {
-          await enableTunMode.upsert(true);
-        }
-
-        await runtimeProfile.refetch();
-      } catch (error) {
-        message(
-          `${m.settings_clash_tun_stack_change_failed()}\n${formatError(error)}`,
-          { title: m.common_error(), kind: 'error' },
-        );
-      }
-    },
-    [tunStack, enableTunMode, runtimeProfile],
-  );
+  const {
+    execute: changeTunStack,
+    isPending,
+    options: tunStackOptions,
+    selected: currentTunStack,
+    value: tunStack,
+  } = useTunStackModel(coreType.value);
 
   return (
     <SettingsCard data-slot="tun-stack-selector-card">
@@ -92,9 +52,10 @@ export default function TunStackSelector() {
         <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
           {Object.entries(tunStackOptions).map(([key, label]) => (
             <DropdownMenuCheckboxItem
-              checked={tunStack.value === key}
+              checked={tunStack === key}
+              disabled={isPending}
               key={key}
-              onSelect={() => void handleTunStackChange(key)}
+              onSelect={() => void changeTunStack(key as TunStack)}
             >
               {label}
             </DropdownMenuCheckboxItem>
