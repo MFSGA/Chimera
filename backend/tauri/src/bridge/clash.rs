@@ -72,27 +72,41 @@ fn external_controller_from_legacy_clash(legacy_clash: &Mapping) -> Option<Socke
     IClashTemp::guard_server_ctrl(legacy_clash).parse().ok()
 }
 
-pub(crate) fn apply_clash_config_to_legacy_verge(
+pub(crate) fn apply_clash_patch_to_legacy_verge(
     draft: &mut IVerge,
+    patch: &chimera_config::clash::config::ClashConfigPatch,
     snap: &ClashConfig,
 ) -> anyhow::Result<()> {
-    draft.enable_tun_mode = Some(snap.enable_tun_mode);
-    draft.web_ui_list = Some(snap.web_ui_list.clone());
-    draft.enable_clash_fields = Some(snap.enable_clash_fields);
-    draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
-    draft.verge_mixed_port = Some(snap.mixed_port.start_port);
-    draft.tun_stack = Some(super::yaml_convert(snap.tun_stack)?);
-    draft.clash_strategy = Some(ClashStrategy {
-        external_controller_port_strategy: super::yaml_convert(
-            &snap.external_controller.port.kind,
-        )?,
-    });
-
-    let (proxy_change, profile_change, mode_change) =
-        break_connection_to_legacy(&snap.break_connection);
-    draft.break_when_proxy_change = Some(proxy_change);
-    draft.break_when_profile_change = Some(profile_change);
-    draft.break_when_mode_change = Some(mode_change);
+    if patch.enable_tun_mode.is_some() {
+        draft.enable_tun_mode = Some(snap.enable_tun_mode);
+    }
+    if patch.web_ui_list.is_some() {
+        draft.web_ui_list = Some(snap.web_ui_list.clone());
+    }
+    if patch.enable_clash_fields.is_some() {
+        draft.enable_clash_fields = Some(snap.enable_clash_fields);
+    }
+    if patch.mixed_port.is_some() {
+        draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
+        draft.verge_mixed_port = Some(snap.mixed_port.start_port);
+    }
+    if patch.tun_stack.is_some() {
+        draft.tun_stack = Some(super::yaml_convert(snap.tun_stack)?);
+    }
+    if patch.external_controller.is_some() {
+        draft.clash_strategy = Some(ClashStrategy {
+            external_controller_port_strategy: super::yaml_convert(
+                &snap.external_controller.port.kind,
+            )?,
+        });
+    }
+    if patch.break_connection.is_some() {
+        let (proxy_change, profile_change, mode_change) =
+            break_connection_to_legacy(&snap.break_connection);
+        draft.break_when_proxy_change = Some(proxy_change);
+        draft.break_when_profile_change = Some(profile_change);
+        draft.break_when_mode_change = Some(mode_change);
+    }
     Ok(())
 }
 
@@ -131,6 +145,7 @@ fn break_connection_to_legacy(
 mod tests {
     use super::*;
     use crate::config::chimera::{ExternalControllerPortStrategy, TunStack};
+    use struct_patch::Patch;
 
     #[test]
     fn legacy_projection_preserves_chimera_defaults() {
@@ -169,8 +184,17 @@ mod tests {
         let typed = clash_config_from_legacy(&legacy, &IClashTemp::template().0)
             .expect("legacy config should project");
 
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(typed.enable_tun_mode);
+        patch.web_ui_list = Some(typed.web_ui_list.clone());
+        patch.enable_clash_fields = Some(typed.enable_clash_fields);
+        patch.mixed_port = Some(typed.mixed_port.clone());
+        patch.tun_stack = Some(typed.tun_stack);
+        patch.external_controller = Some(typed.external_controller.clone());
+        patch.break_connection = Some(typed.break_connection.clone());
+
         let mut projected = IVerge::default();
-        apply_clash_config_to_legacy_verge(&mut projected, &typed)
+        apply_clash_patch_to_legacy_verge(&mut projected, &patch, &typed)
             .expect("typed config should project back");
 
         assert_eq!(projected.enable_tun_mode, legacy.enable_tun_mode);
@@ -201,5 +225,29 @@ mod tests {
             projected.break_when_mode_change,
             legacy.break_when_mode_change
         );
+    }
+
+    #[test]
+    fn sparse_projection_only_updates_touched_legacy_fields() {
+        let mut typed = clash_config_from_legacy(&IVerge::default(), &IClashTemp::template().0)
+            .expect("legacy config should project");
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+        typed.apply(patch.clone());
+
+        let mut projected = IVerge {
+            theme_mode: Some("dark".into()),
+            ..IVerge::default()
+        };
+        apply_clash_patch_to_legacy_verge(&mut projected, &patch, &typed)
+            .expect("sparse projection should succeed");
+
+        assert_eq!(projected.enable_tun_mode, Some(true));
+        assert_eq!(projected.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(projected.web_ui_list, None);
+        assert_eq!(projected.enable_clash_fields, None);
+        assert_eq!(projected.verge_mixed_port, None);
+        assert!(projected.clash_strategy.is_none());
+        assert_eq!(projected.break_when_mode_change, None);
     }
 }
