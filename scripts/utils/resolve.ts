@@ -13,7 +13,6 @@ import {
   getClashMetaInfo,
   getClashRustAlphaInfo,
   getClashRustInfo,
-  getNyanpasuServiceInfo,
 } from './resource';
 
 /**
@@ -84,10 +83,6 @@ export class Resolve {
 
   public async chimeraService() {
     return await this.sidecar(getChimeraServiceInfo(this.infoOption));
-  }
-
-  public async service() {
-    return await this.sidecar(getNyanpasuServiceInfo(this.infoOption));
   }
 
   public mmdb() {
