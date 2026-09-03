@@ -5,12 +5,70 @@ use chimera_config::clash::config::{
     },
 };
 use serde_yaml::{Mapping, Value};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
-use crate::config::{
-    chimera::{BreakWhenProxyChange, ClashStrategy, IVerge},
-    clash::IClashTemp,
+use crate::{
+    config::{
+        chimera::{BreakWhenProxyChange, ClashStrategy, IVerge},
+        clash::IClashTemp,
+        core::Config,
+    },
+    state::mirror::{ClashLegacyBridge, PreparedLegacyMirror},
 };
+
+pub(crate) struct LegacyClashBridge {
+    legacy_lock: Arc<parking_lot::Mutex<()>>,
+}
+
+impl Default for LegacyClashBridge {
+    fn default() -> Self {
+        Self {
+            legacy_lock: Arc::new(parking_lot::Mutex::new(())),
+        }
+    }
+}
+
+struct PreparedClashMirror {
+    legacy_lock: Arc<parking_lot::Mutex<()>>,
+    clash_projected: IClashTemp,
+    verge_projected: IVerge,
+}
+
+impl PreparedLegacyMirror for PreparedClashMirror {
+    fn apply(self: Box<Self>) {
+        let _guard = self.legacy_lock.lock();
+        *Config::clash().data() = self.clash_projected;
+        let verge_store = Config::verge();
+        let mut verge = verge_store.data();
+        apply_prepared_clash_verge_projection(&mut verge, &self.verge_projected);
+    }
+}
+
+impl LegacyClashBridge {
+    fn prepare_mirror(&self, snap: &ClashConfig) -> anyhow::Result<PreparedClashMirror> {
+        let _guard = self.legacy_lock.lock();
+        let mut clash_projected = Config::clash().data().clone();
+        let mut verge_projected = IVerge::default();
+        prepare_clash_overrides(&mut clash_projected, snap)?;
+        apply_clash_config_to_legacy_verge(&mut verge_projected, snap)?;
+        Ok(PreparedClashMirror {
+            legacy_lock: Arc::clone(&self.legacy_lock),
+            clash_projected,
+            verge_projected,
+        })
+    }
+}
+
+impl ClashLegacyBridge for LegacyClashBridge {
+    fn prepare(&self, snap: &ClashConfig) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+        Ok(Box::new(self.prepare_mirror(snap)?))
+    }
+
+    fn snapshot_legacy(&self) -> anyhow::Result<ClashConfig> {
+        let _guard = self.legacy_lock.lock();
+        clash_config_from_legacy(&Config::verge().data(), &Config::clash().data().0)
+    }
+}
 
 pub(crate) fn clash_config_from_legacy(
     legacy_verge: &IVerge,
@@ -72,6 +130,58 @@ fn external_controller_from_legacy_clash(legacy_clash: &Mapping) -> Option<Socke
     IClashTemp::guard_server_ctrl(legacy_clash).parse().ok()
 }
 
+fn prepare_clash_overrides(projected: &mut IClashTemp, snap: &ClashConfig) -> anyhow::Result<()> {
+    let mut mapping: Mapping = super::yaml_convert(&snap.overrides)?;
+    mapping.insert("mixed-port".into(), snap.mixed_port.start_port.into());
+    mapping.insert(
+        "external-controller".into(),
+        format!(
+            "{}:{}",
+            snap.external_controller.host, snap.external_controller.port.start_port
+        )
+        .into(),
+    );
+    projected.patch_config(mapping);
+    Ok(())
+}
+
+fn apply_prepared_clash_verge_projection(target: &mut IVerge, projected: &IVerge) {
+    target.enable_tun_mode = projected.enable_tun_mode;
+    target.web_ui_list = projected.web_ui_list.clone();
+    target.enable_clash_fields = projected.enable_clash_fields;
+    target.enable_random_port = projected.enable_random_port;
+    target.verge_mixed_port = projected.verge_mixed_port;
+    target.tun_stack = projected.tun_stack;
+    target.clash_strategy = projected.clash_strategy.clone();
+    target.break_when_proxy_change = projected.break_when_proxy_change;
+    target.break_when_profile_change = projected.break_when_profile_change;
+    target.break_when_mode_change = projected.break_when_mode_change;
+}
+
+pub(crate) fn apply_clash_config_to_legacy_verge(
+    draft: &mut IVerge,
+    snap: &ClashConfig,
+) -> anyhow::Result<()> {
+    draft.enable_tun_mode = Some(snap.enable_tun_mode);
+    draft.web_ui_list = Some(snap.web_ui_list.clone());
+    draft.enable_clash_fields = Some(snap.enable_clash_fields);
+    draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
+    draft.verge_mixed_port = Some(snap.mixed_port.start_port);
+    draft.tun_stack = Some(super::yaml_convert(snap.tun_stack)?);
+    draft.clash_strategy = Some(ClashStrategy {
+        external_controller_port_strategy: super::yaml_convert(
+            &snap.external_controller.port.kind,
+        )?,
+    });
+    let (proxy_change, profile_change, mode_change) =
+        break_connection_to_legacy(&snap.break_connection);
+    draft.break_when_proxy_change = Some(proxy_change);
+    draft.break_when_profile_change = Some(profile_change);
+    draft.break_when_mode_change = Some(mode_change);
+    Ok(())
+}
+
+#[cfg(test)]
 pub(crate) fn apply_clash_patch_to_legacy_verge(
     draft: &mut IVerge,
     patch: &chimera_config::clash::config::ClashConfigPatch,

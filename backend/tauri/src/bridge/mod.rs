@@ -8,7 +8,7 @@ use struct_patch::Patch;
 use crate::config::{chimera::IVerge, clash::IClashTemp};
 
 pub(crate) struct LegacyVergePatchPlan {
-    pub application: IVerge,
+    pub application: Option<IVerge>,
     pub clash_config: Option<ClashConfigPatch>,
 }
 
@@ -22,12 +22,12 @@ pub(crate) fn split_legacy_verge_patch(
     let next_clash = clash::clash_config_from_legacy(&projected, &legacy_clash.0)?;
 
     Ok(LegacyVergePatchPlan {
-        application: application_patch_from_legacy_patch(patch),
+        application: application_patch_from_legacy_patch(patch)?,
         clash_config: clash_patch_from_legacy_patch(patch, next_clash),
     })
 }
 
-fn application_patch_from_legacy_patch(patch: &IVerge) -> IVerge {
+fn application_patch_from_legacy_patch(patch: &IVerge) -> anyhow::Result<Option<IVerge>> {
     let mut application = patch.clone();
 
     application.enable_tun_mode = None;
@@ -41,7 +41,10 @@ fn application_patch_from_legacy_patch(patch: &IVerge) -> IVerge {
     application.break_when_profile_change = None;
     application.break_when_mode_change = None;
 
-    application
+    let touched = serde_yaml::to_value(&application)?
+        .as_mapping()
+        .is_some_and(|mapping| mapping.values().any(|value| !value.is_null()));
+    Ok(touched.then_some(application))
 }
 
 fn clash_patch_from_legacy_patch(patch: &IVerge, next: ClashConfig) -> Option<ClashConfigPatch> {
@@ -111,11 +114,12 @@ mod tests {
         let plan = split_legacy_verge_patch(&base, &patch, &IClashTemp::template())
             .expect("legacy patch should split");
 
-        assert_eq!(plan.application.theme_mode.as_deref(), Some("dark"));
-        assert_eq!(plan.application.enable_tun_mode, None);
-        assert_eq!(plan.application.enable_random_port, None);
-        assert_eq!(plan.application.verge_mixed_port, None);
-        assert_eq!(plan.application.break_when_mode_change, None);
+        let application = plan.application.expect("application patch should exist");
+        assert_eq!(application.theme_mode.as_deref(), Some("dark"));
+        assert_eq!(application.enable_tun_mode, None);
+        assert_eq!(application.enable_random_port, None);
+        assert_eq!(application.verge_mixed_port, None);
+        assert_eq!(application.break_when_mode_change, None);
 
         let clash = plan.clash_config.expect("clash patch should exist");
         assert_eq!(clash.enable_tun_mode, Some(true));
@@ -148,7 +152,8 @@ mod tests {
             .expect("application patch should split");
 
         assert!(plan.clash_config.is_none());
-        assert_eq!(plan.application.theme_mode.as_deref(), Some("light"));
-        assert_eq!(plan.application.enable_auto_launch, Some(true));
+        let application = plan.application.expect("application patch should exist");
+        assert_eq!(application.theme_mode.as_deref(), Some("light"));
+        assert_eq!(application.enable_auto_launch, Some(true));
     }
 }
