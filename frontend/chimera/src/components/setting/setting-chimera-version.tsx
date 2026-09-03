@@ -23,7 +23,7 @@ const AutoCheckUpdate = () => {
   );
 };
 
-export const SettingNyanpasuVersion = () => {
+export const SettingChimeraVersion = () => {
   const setUpdaterInstance = useSetAtom(UpdaterInstanceAtom);
   const { checkNewVersion, isChecking, isSupported } = useChimeraUpdate();
   const onCheckUpdate = useLockFn(async () => {
@@ -109,4 +109,4 @@ export const SettingNyanpasuVersion = () => {
   );
 };
 
-export default SettingNyanpasuVersion;
+export default SettingChimeraVersion;

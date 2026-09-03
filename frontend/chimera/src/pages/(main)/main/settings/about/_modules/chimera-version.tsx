@@ -86,10 +86,6 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
     setOpen(open);
   };
 
-  // const newVersionReleasesPageUrl = IS_NIGHTLY
-  //   ? `https://github.com/libnyanpasu/clash-nyanpasu/releases/tag/pre-release`
-  //   : `https://github.com/libnyanpasu/clash-nyanpasu/releases/tag/v${newVersion?.version}`
-
   const handleUpdate = useLockFn(async () => {
     if (!newVersion) {
       return;
