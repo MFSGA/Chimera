@@ -1,11 +1,10 @@
-import { getSystem } from '@chimera/ui';
 import { useSuspenseQuery } from '@tanstack/react-query';
 import { TauriEvent } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useCallback, useEffect } from 'react';
+import { isMacOS } from '@/consts';
 
 const appWindow = getCurrentWebviewWindow();
-const isMacOS = getSystem() === 'macos';
 const IS_MAXIMIZED_QUERY_KEY = 'isMaximized';
 
 export default function useWindowMaximized() {

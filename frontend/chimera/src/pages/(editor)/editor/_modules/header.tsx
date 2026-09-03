@@ -1,11 +1,11 @@
 import type { ComponentProps } from 'react';
 import {
   DefaultHeader,
-  isMacOS,
   MacOSHeader,
 } from '@/components/window/system-titlebar';
 import WindowControl from '@/components/window/window-control';
 import WindowTitle from '@/components/window/window-title';
+import { isMacOS } from '@/consts';
 
 const DEFAULT_TITLE = 'Clash Chimera - Editor';
 
