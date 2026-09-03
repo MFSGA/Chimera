@@ -1,3 +1,55 @@
+## [0.22.3] - 2026-09-03 10:26:37
+
+### ✨ Features
+
+- **config:** Add typed clash config crate by @MFSGA
+
+- **system:** Share DNS cache flush action by @MFSGA
+
+### 🔨 Refactor
+
+- **backend:** Pass typed clash snapshot through runtime rebuild by @MFSGA in [#348](https://github.com/MFSGA/Chimera/pull/348)
+
+- **backend:** Build runtime from typed clash config by @MFSGA
+
+- **backend:** Read port strategy from typed clash config by @MFSGA
+
+- **backend:** Split legacy verge patch by config domain by @MFSGA
+
+- **backend:** Move tun runtime handling to clash client by @MFSGA
+
+- **backend:** Bridge typed clash config to legacy state by @MFSGA
+
+- **backend:** Add clash config client boundary by @MFSGA
+
+- **backend:** Move verge mutation into application client by @MFSGA
+
+- **backend:** Add application client boundary by @MFSGA
+
+- **backend:** Split client orchestration by ref domains by @MFSGA
+
+- **backend:** Align port resolution boundary with ref by @MFSGA
+
+- **backend:** Align profile client boundary with ref by @MFSGA
+
+- **backend:** Split client boundaries like ref by @MFSGA
+
+- **backend:** Align client module boundary with ref by @MFSGA
+
+- **ui:** Align window controls with ref by @MFSGA
+
+- **ui:** Rename internal nyanpasu symbols by @MFSGA
+
+- **ui:** Align main shell with ref by @MFSGA
+
+- **ui:** Align settings module tree with ref by @MFSGA
+
+- **ui:** Align chimera settings with ref by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.22.2...v0.22.3
+
 ## [0.22.2] - 2026-09-03 05:09:55
 
 ---
