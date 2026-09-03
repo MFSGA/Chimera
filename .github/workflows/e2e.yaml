@@ -64,6 +64,8 @@ jobs:
       CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
 
       - name: Install Rust
         shell: pwsh
