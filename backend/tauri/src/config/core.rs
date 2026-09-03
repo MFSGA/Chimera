@@ -1,6 +1,7 @@
 use serde_yaml::Mapping;
 
 use anyhow::Result;
+use chimera_config::clash::config::ClashConfig;
 use nyanpasu_utils::runtime::block_on;
 use once_cell::sync::OnceCell;
 
@@ -43,19 +44,26 @@ impl Config {
         Self::global().verge_config.clone()
     }
 
-    /// Generate the runtime mapping and transform output once from the same enhancement pass.
-    pub async fn generate_runtime_input() -> Result<(Mapping, PostProcessingOutput)> {
-        let clash = crate::bridge::clash::clash_config_from_legacy(
-            &Self::verge().latest(),
-            &Self::clash().latest().0,
-        )?;
-        let (config, _exists_keys, postprocessing_output) = enhance::enhance(&clash).await?;
+    /// Generate the runtime mapping and transform output from one typed Clash snapshot.
+    pub async fn generate_runtime_input_with(
+        clash: &ClashConfig,
+    ) -> Result<(Mapping, PostProcessingOutput)> {
+        let (config, _exists_keys, postprocessing_output) = enhance::enhance(clash).await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
         };
 
         Ok((config, postprocessing_output))
+    }
+
+    /// Legacy compatibility entry point for callers that do not own typed config snapshots yet.
+    pub async fn generate_runtime_input() -> Result<(Mapping, PostProcessingOutput)> {
+        let clash = crate::bridge::clash::clash_config_from_legacy(
+            &Self::verge().latest(),
+            &Self::clash().latest().0,
+        )?;
+        Self::generate_runtime_input_with(&clash).await
     }
 
     /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.
