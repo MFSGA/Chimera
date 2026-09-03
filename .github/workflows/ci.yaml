@@ -27,6 +27,19 @@ jobs:
     runs-on: ${{ matrix.targets.os }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Normalize service runtime line endings
+        if: startsWith(matrix.targets.os, 'windows-')
+        shell: bash
+        run: |
+          if [ -d backend/chimera-runtime ]; then
+            git -C backend/chimera-runtime config core.autocrlf false
+            git -C backend/chimera-runtime config core.eol lf
+            git -C backend/chimera-runtime checkout-index -a -f
+          fi
+
       - name: Rust
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
@@ -87,6 +100,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
+
       - name: Prepare fronend
         run: pnpm -r build # Build frontend
         env:
@@ -120,6 +136,8 @@ jobs:
     needs: lint
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: true
       - name: Tauri dependencies
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: >-
@@ -169,6 +187,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
+
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
 
       # todo: prepare the js script file
       - name: Prepare sidecar and resources
