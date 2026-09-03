@@ -43,17 +43,6 @@ const PathButton = ({
   );
 };
 
-const runCommand = async (
-  command: () => Promise<
-    { status: 'ok'; data: unknown } | { status: 'error'; error: string }
-  >,
-) => {
-  const result = await command();
-  if (result.status === 'error') {
-    throw new Error(result.error);
-  }
-};
-
 export const SettingChimeraPath = () => {
   const handleMigrateConfigDir = async () => {
     const selected = await openDialog({
@@ -66,30 +55,30 @@ export const SettingChimeraPath = () => {
       return;
     }
 
-    await runCommand(() => setCustomAppDir(selected));
+    await setCustomAppDir(selected);
   };
 
   const buttonItems = [
     { label: m.settings_migrate_config_dir(), onClick: handleMigrateConfigDir },
     {
       label: m.settings_debug_utils_open_config_directory(),
-      onClick: () => runCommand(openAppConfigDir),
+      onClick: openAppConfigDir,
     },
     {
       label: m.settings_debug_utils_open_data_directory(),
-      onClick: () => runCommand(openAppDataDir),
+      onClick: openAppDataDir,
     },
     {
       label: m.settings_debug_utils_open_core_directory(),
-      onClick: () => runCommand(openCoreDir),
+      onClick: openCoreDir,
     },
     {
       label: m.settings_debug_utils_open_log_directory(),
-      onClick: () => runCommand(openLogsDir),
+      onClick: openLogsDir,
     },
     {
       label: m.header_help_action_collect_logs(),
-      onClick: () => runCommand(collectLogs),
+      onClick: collectLogs,
     },
   ];
 

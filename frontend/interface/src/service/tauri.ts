@@ -24,6 +24,38 @@ export const cleanupProcesses = async () => {
   unwrapResult(await commands.cleanupProcesses());
 };
 
+export const openUWPTool = async () => {
+  unwrapResult(await commands.invokeUwpTool());
+};
+
+export const collectLogs = async () => {
+  unwrapResult(await commands.collectLogs());
+};
+
+export const openAppConfigDir = async () => {
+  unwrapResult(await commands.openAppConfigDir());
+};
+
+export const openAppDataDir = async () => {
+  unwrapResult(await commands.openAppDataDir());
+};
+
+export const openCoreDir = async () => {
+  unwrapResult(await commands.openCoreDir());
+};
+
+export const openLogsDir = async () => {
+  unwrapResult(await commands.openLogsDir());
+};
+
+export const getCustomAppDir = async () => {
+  return unwrapResult(await commands.getCustomAppDir());
+};
+
+export const setCustomAppDir = async (path: string) => {
+  unwrapResult(await commands.setCustomAppDir(path));
+};
+
 export const getServerPort = async () => {
   return unwrapResult(await commands.getServerPort());
 };

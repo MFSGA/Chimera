@@ -1,4 +1,4 @@
-import { commands } from '@chimera/interface';
+import { openUWPTool } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
@@ -14,7 +14,7 @@ import {
 
 export default function UwpToolsButton() {
   const handleOpenUwpTools = useLockFn(async () => {
-    await commands.invokeUwpTool();
+    await openUWPTool();
   });
 
   return (

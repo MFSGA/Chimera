@@ -1,5 +1,3 @@
-import { commands } from './bindings';
-
 export * from './system-dns';
 export * from './use-profile';
 export * from './use-runtime-transform-diagnostics';
@@ -39,13 +37,3 @@ export * from './use-platform';
 export * from './use-server-port';
 export * from './use-core-dir';
 export * from './use-service-prompt';
-
-// manually added
-export const openUWPTool = commands.invokeUwpTool;
-export const openAppConfigDir = commands.openAppConfigDir;
-export const openAppDataDir = commands.openAppDataDir;
-export const openCoreDir = commands.openCoreDir;
-export const openLogsDir = commands.openLogsDir;
-export const collectLogs = commands.collectLogs;
-export const getCustomAppDir = commands.getCustomAppDir;
-export const setCustomAppDir = commands.setCustomAppDir;

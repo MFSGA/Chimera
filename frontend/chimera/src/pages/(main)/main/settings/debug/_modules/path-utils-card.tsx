@@ -14,15 +14,6 @@ import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
-const runCommand = async (
-  command: () => Promise<
-    { status: 'ok'; data: unknown } | { status: 'error'; error: string }
-  >,
-) => {
-  const result = await command();
-  if (result.status === 'error') throw new Error(result.error);
-};
-
 const PathButton = ({
   children,
   action,
@@ -61,30 +52,30 @@ export default function PathUtilsCard() {
       title: m.settings_migrate_config_dir(),
     });
     if (!selected || Array.isArray(selected)) return;
-    await runCommand(() => setCustomAppDir(selected));
+    await setCustomAppDir(selected);
   };
 
   const items = [
     {
       label: m.settings_debug_utils_open_config_directory(),
-      action: () => runCommand(openAppConfigDir),
+      action: openAppConfigDir,
     },
     {
       label: m.settings_debug_utils_open_data_directory(),
-      action: () => runCommand(openAppDataDir),
+      action: openAppDataDir,
     },
     {
       label: m.settings_debug_utils_open_core_directory(),
-      action: () => runCommand(openCoreDir),
+      action: openCoreDir,
     },
     {
       label: m.settings_debug_utils_open_log_directory(),
-      action: () => runCommand(openLogsDir),
+      action: openLogsDir,
     },
     { label: m.settings_migrate_config_dir(), action: handleMigrateConfigDir },
     {
       label: m.header_help_action_collect_logs(),
-      action: () => runCommand(collectLogs),
+      action: collectLogs,
     },
   ];
 
