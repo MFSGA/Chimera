@@ -136,6 +136,7 @@ mod tests {
         async fn rebuild_running_config(
             &mut self,
             _clash: chimera_config::clash::config::ClashConfig,
+            _target_core: ClashCore,
         ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("rebuild");
             if self.fail_rebuild {
