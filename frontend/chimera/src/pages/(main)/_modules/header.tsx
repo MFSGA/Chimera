@@ -1,11 +1,11 @@
 import type { ComponentProps } from 'react';
 import {
   DefaultHeader,
-  isMacOS,
   MacOSHeader,
   MacOSHeaderLeft,
 } from '@/components/window/system-titlebar';
 import WindowTitle from '@/components/window/window-title';
+import { isMacOS } from '@/consts';
 import { saveCurrentWindowState } from '@/features/window/actions';
 import HeaderMenu from './header-menu';
 
