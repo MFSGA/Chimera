@@ -532,8 +532,8 @@ pub async fn replace_profile_definition(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_clash_info() -> Result<ClashInfo> {
-    Ok(Config::clash().latest().get_client_info())
+pub fn get_clash_info(client: State<'_, ChimeraClient>) -> Result<ClashInfo> {
+    Ok(client.clash_info())
 }
 
 #[derive(Default, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
