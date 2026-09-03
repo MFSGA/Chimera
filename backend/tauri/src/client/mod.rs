@@ -5,6 +5,7 @@
 
 mod core_bridge;
 mod event_sink;
+pub(crate) mod ports;
 mod profiles;
 pub mod rebuild;
 pub mod runtime;
