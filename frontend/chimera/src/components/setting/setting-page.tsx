@@ -7,7 +7,7 @@ import SettingChimeraMisc from './setting-chimera-misc';
 import SettingChimeraPath from './setting-chimera-path';
 import SettingChimeraTasks from './setting-chimera-tasks';
 import SettingChimerauUI from './setting-chimera-ui';
-import SettingNyanpasuVersion from './setting-chimera-version';
+import SettingChimeraVersion from './setting-chimera-version';
 import { SettingClashBase } from './setting-clash-base';
 import SettingClashCore from './setting-clash-core';
 import SettingClashExternal from './setting-clash-external';
@@ -55,7 +55,7 @@ export const SettingPage = () => {
       <SettingChimeraMisc />
       <SettingChimeraPath />
       {/* 2 */}
-      <SettingNyanpasuVersion />
+      <SettingChimeraVersion />
     </Masonry>
   );
 };

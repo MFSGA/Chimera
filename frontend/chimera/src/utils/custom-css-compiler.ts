@@ -1,5 +1,5 @@
 /**
- * Custom CSS compiler for Clash Nyanpasu.
+ * Custom CSS compiler for Clash Chimera.
  *
  * Compiles user CSS shorthand into standard CSS:
  *   - `slot-name { }` -> `[data-slot="slot-name"] { }`
