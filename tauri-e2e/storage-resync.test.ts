@@ -42,8 +42,7 @@ test('storage resync coalesces repeated signals into one queued refresh', async 
       });
     },
     (snapshot) => applied.push(snapshot),
-    (error) =>
-      assert.fail(error instanceof Error ? error : String(error)),
+    (error) => assert.fail(error instanceof Error ? error : String(error)),
   );
 
   const first = coordinator.resync();

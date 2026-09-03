@@ -54,17 +54,13 @@ test('storage listeners unregister exactly once when registration resolves after
   assert.deepEqual(valueChanges, []);
   assert.equal(resyncCalls, 0);
 
-  registrations
-    .get('storage_resync_required')
-    ?.resolve(() => {
-      unlistenCalls.push('resync');
-    });
+  registrations.get('storage_resync_required')?.resolve(() => {
+    unlistenCalls.push('resync');
+  });
   await Promise.resolve();
-  registrations
-    .get('storage_value_changed')
-    ?.resolve(() => {
-      unlistenCalls.push('value');
-    });
+  registrations.get('storage_value_changed')?.resolve(() => {
+    unlistenCalls.push('value');
+  });
   await Promise.resolve();
 
   assert.deepEqual(unlistenCalls, ['resync', 'value']);
@@ -242,11 +238,9 @@ test('storage listener keeps the successful registration when its peer fails', a
     registrationMaxRetries: 0,
   });
 
-  registrations
-    .get('storage_value_changed')
-    ?.resolve(() => {
-      valueUnlistenCalls++;
-    });
+  registrations.get('storage_value_changed')?.resolve(() => {
+    valueUnlistenCalls++;
+  });
   registrations
     .get('storage_resync_required')
     ?.reject(new Error('resync registration unavailable'));

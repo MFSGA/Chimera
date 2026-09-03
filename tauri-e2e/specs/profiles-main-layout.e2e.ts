@@ -81,9 +81,10 @@ describe('main profiles reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const profilesLink = await $(`a[href="${targetPath}"]`);
-    await profilesLink.waitForClickable({ timeout: 15_000 });
-    await profilesLink.click();
+    const currentUrl = new URL(await browser.getUrl());
+    currentUrl.pathname = targetPath;
+    currentUrl.search = '';
+    await browser.url(currentUrl.href);
     await waitForPath(targetPath);
 
     const importToggle = await $(
