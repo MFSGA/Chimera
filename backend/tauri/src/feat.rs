@@ -7,14 +7,13 @@ use tauri::{AppHandle, Manager};
 use tracing::debug;
 
 use crate::{
-    client::ChimeraClient,
+    client::{ChimeraClient, ports::get_clash_external_port},
     config::{
         chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
     core::{clash::transaction::TransactionOutcome, handle, service::ipc::get_ipc_state, sysopt},
-    log_err,
-    utils::{self, help::get_clash_external_port},
+    log_err, utils,
 };
 use handle::Message;
 
