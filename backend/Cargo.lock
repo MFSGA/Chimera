@@ -1054,6 +1054,7 @@ dependencies = [
  "smol-cancellation-token",
  "specta",
  "specta-typescript",
+ "struct-patch",
  "strum",
  "sysinfo 0.39.6",
  "sysproxy",

@@ -10,6 +10,7 @@ use anyhow::{Result, bail};
 
 use super::ChimeraClient;
 use crate::{
+    bridge::split_legacy_verge_patch,
     config::{chimera::IVerge, core::Config},
     core::{handle, sysopt},
     utils,
@@ -56,7 +57,10 @@ struct VergePatchPlan {
     refresh_systray: bool,
 }
 
-fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
+fn plan_verge_patch(
+    patch: &IVerge,
+    clash_patch: Option<&chimera_config::clash::config::ClashConfigPatch>,
+) -> Result<VergePatchPlan> {
     if let Some(ref theme_color) = patch.theme_color
         && !theme_color.is_empty()
         && !crate::config::chimera::is_hex_color(theme_color)
@@ -72,7 +76,8 @@ fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
         enable_proxy_guard: patch.enable_proxy_guard == Some(true),
         log_level_changed: patch.app_log_level.is_some(),
         log_max_files_changed: patch.max_log_files.is_some(),
-        refresh_systray: patch.enable_system_proxy.is_some() || patch.enable_tun_mode.is_some(),
+        refresh_systray: patch.enable_system_proxy.is_some()
+            || clash_patch.is_some_and(|patch| patch.enable_tun_mode.is_some()),
     })
 }
 
@@ -116,16 +121,27 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
 }
 
 async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
-    Config::verge().draft().patch_config(patch.clone());
+    let base = Config::verge().latest().clone();
+    let legacy_clash = Config::clash().latest().clone();
+    let split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
+
+    Config::verge()
+        .draft()
+        .patch_config(split.application.clone());
+
     let result = async {
-        let plan = plan_verge_patch(&patch)?;
+        let plan = plan_verge_patch(&split.application, split.clash_config.as_ref())?;
         apply_verge_runtime_change(client, &plan).await?;
-        client
-            .inner
-            .clash_config
-            .apply_legacy_verge_runtime_change(client, &patch)
-            .await?;
-        run_verge_patch_side_effects(&plan, &patch)?;
+
+        if let Some(clash_patch) = split.clash_config.as_ref() {
+            client
+                .inner
+                .clash_config
+                .apply_legacy_patch_to_draft(client, clash_patch)
+                .await?;
+        }
+
+        run_verge_patch_side_effects(&plan, &split.application)?;
         Ok(())
     }
     .await;
