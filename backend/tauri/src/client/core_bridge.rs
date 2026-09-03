@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 
+use super::ChimeraClient;
+
 use crate::{
     config::{
         chimera::ClashCore,
@@ -123,5 +125,50 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn on_profile_change(&self) {
         let _ = ConnectionInterruptionService::on_profile_change().await;
+    }
+}
+
+pub(crate) struct CoreUpdateLease {
+    lease: Box<dyn CoreLifecycleLease>,
+}
+
+impl CoreUpdateLease {
+    pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
+        self.lease.stop().await
+    }
+
+    pub(crate) async fn run_core_from(
+        &mut self,
+        config_path: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        self.lease.run_core_from(config_path).await
+    }
+}
+
+impl ChimeraClient {
+    pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        self.inner.core.status().await
+    }
+
+    pub(crate) fn runtime_transform_diagnostics(
+        &self,
+    ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
+        self.inner.core.runtime_transform_diagnostics()
+    }
+
+    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.change_core(clash_core).await
+    }
+
+    pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
+        let mut lease = self.inner.core.begin().await?;
+        lease.stop().await
+    }
+
+    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
+        Ok(CoreUpdateLease {
+            lease: self.inner.core.begin().await?,
+        })
     }
 }
