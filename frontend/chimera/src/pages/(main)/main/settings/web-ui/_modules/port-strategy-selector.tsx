@@ -22,16 +22,26 @@ import {
 
 export default function PortStrategySelector() {
   const { value, upsert } = useSetting('clash_strategy');
-  const labels = {
+
+  const messages = {
     allow_fallback: m.settings_clash_settings_allow_fallback_label(),
     fixed: m.settings_clash_settings_fixed_label(),
     random: m.settings_clash_settings_random_label(),
-  } satisfies Record<ExternalControllerPortStrategy, string>;
+  } as Record<ExternalControllerPortStrategy, string>;
+
   const current = value?.external_controller_port_strategy || 'allow_fallback';
+
+  const handlePortStrategyChange = async (
+    value: ExternalControllerPortStrategy,
+  ) => {
+    await upsert({
+      external_controller_port_strategy: value,
+    });
+  };
 
   return (
     <SettingsCard data-slot="port-strategy-selector-card">
-      <DropdownMenu>
+      <DropdownMenu align="end">
         <DropdownMenuTrigger asChild>
           <SettingsCardContent
             data-slot="port-strategy-selector-trigger"
@@ -43,24 +53,27 @@ export default function PortStrategySelector() {
                   <ItemLabelText>
                     {m.settings_clash_settings_port_strategy_label()}
                   </ItemLabelText>
-                  <ItemLabelDescription>{labels[current]}</ItemLabelDescription>
+
+                  <ItemLabelDescription>
+                    {messages[current]}
+                  </ItemLabelDescription>
                 </ItemLabel>
+
                 <ArrowForwardIosRounded />
               </ItemContainer>
             </Button>
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
-          {Object.entries(labels).map(([strategy, label]) => (
+        <DropdownMenuContent sideOffset={-16} alignOffset={16}>
+          {Object.entries(messages).map(([key, label]) => (
             <DropdownMenuCheckboxItem
-              checked={current === strategy}
-              key={strategy}
+              checked={current === key}
+              key={key}
               onSelect={() =>
-                void upsert({
-                  external_controller_port_strategy:
-                    strategy as ExternalControllerPortStrategy,
-                })
+                void handlePortStrategyChange(
+                  key as ExternalControllerPortStrategy,
+                )
               }
             >
               {label}
