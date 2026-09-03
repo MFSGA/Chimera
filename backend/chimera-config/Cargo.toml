@@ -1,0 +1,24 @@
+[package]
+name = "chimera-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["default-meta"]
+default-meta = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+specta = { version = "^2.0.0-rc.25", features = ["derive", "serde_json"] }
+struct-patch = "0.13"
+serde_with = "=3.20.0"
+strum = { version = "0.28", features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+port_scanner = "0.1.5"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
