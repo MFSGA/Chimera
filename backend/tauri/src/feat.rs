@@ -12,10 +12,9 @@ use crate::{
         chimera::IVerge, core::Config, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
     },
-    core::{clash::transaction::TransactionOutcome, handle, service::ipc::get_ipc_state, sysopt},
-    log_err, utils,
+    core::{clash::transaction::TransactionOutcome, handle, sysopt},
+    log_err,
 };
-use handle::Message;
 
 struct ClashPatchPlan {
     mixed_port: Option<u16>,
@@ -135,97 +134,6 @@ fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
     }
 }
 
-struct VergePatchPlan {
-    service_mode: Option<bool>,
-    tun_mode: Option<bool>,
-    auto_launch_changed: bool,
-    system_proxy_changed: bool,
-    proxy_bypass_changed: bool,
-    enable_proxy_guard: bool,
-    log_level_changed: bool,
-    log_max_files_changed: bool,
-    refresh_systray: bool,
-}
-
-// Build a normalized view of the verge patch before runtime changes and side effects.
-fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
-    if let Some(ref theme_color) = patch.theme_color
-        && !theme_color.is_empty()
-        && !crate::config::chimera::is_hex_color(theme_color)
-    {
-        bail!("Invalid theme color: {}", theme_color);
-    }
-
-    Ok(VergePatchPlan {
-        service_mode: patch.enable_service_mode,
-        tun_mode: patch.enable_tun_mode,
-        auto_launch_changed: patch.enable_auto_launch.is_some(),
-        system_proxy_changed: patch.enable_system_proxy.is_some(),
-        proxy_bypass_changed: patch.system_proxy_bypass.is_some(),
-        enable_proxy_guard: patch.enable_proxy_guard == Some(true),
-        log_level_changed: patch.app_log_level.is_some(),
-        log_max_files_changed: patch.max_log_files.is_some(),
-        refresh_systray: patch.enable_system_proxy.is_some() || patch.enable_tun_mode.is_some(),
-    })
-}
-
-async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPlan) -> Result<()> {
-    let ipc_state = get_ipc_state();
-
-    if let Some(service_mode) = plan.service_mode
-        && ipc_state.is_connected()
-    {
-        log::debug!(target: "app", "change service mode to {}", service_mode);
-        client.rebuild_running_config().await?;
-    }
-
-    if plan.tun_mode.is_some() {
-        log::debug!(target: "app", "toggle tun mode");
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            use crate::utils::dirs::check_core_permission;
-            let current_core = Config::verge().data().clash_core.unwrap_or_default();
-            let current_core: chimera_utils::core::CoreType = (&current_core).into();
-            let service_state = crate::core::service::ipc::get_ipc_state();
-            if !service_state.is_connected() && check_core_permission(&current_core).inspect_err(|e| {
-                log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
-            }).is_ok_and(|v| !v) {
-                log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
-            };
-        }
-        update_core_config(client).await?;
-    }
-
-    Ok(())
-}
-
-fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result<()> {
-    if plan.auto_launch_changed {
-        sysopt::Sysopt::global().update_launch()?;
-    }
-
-    if plan.system_proxy_changed || plan.proxy_bypass_changed {
-        sysopt::Sysopt::global().update_sysproxy()?;
-        sysopt::Sysopt::global().guard_proxy();
-    }
-
-    if plan.enable_proxy_guard {
-        sysopt::Sysopt::global().guard_proxy();
-    }
-
-    if plan.log_level_changed || plan.log_max_files_changed {
-        utils::init::refresh_logger((patch.app_log_level.clone(), patch.max_log_files))?;
-    }
-
-    if plan.refresh_systray {
-        handle::Handle::update_systray_part()?;
-    }
-
-    debug!("todo: handle other fields");
-
-    Ok(())
-}
-
 /// Persists a typed set of runtime overrides without conflating it with a
 /// running-core snapshot.
 pub async fn patch_clash_overrides(
@@ -304,44 +212,6 @@ fn managed_client() -> Result<ChimeraClient> {
 /// 一般都是一个个的修改
 pub async fn patch_verge(patch: IVerge) -> Result<()> {
     managed_client()?.patch_verge(patch).await
-}
-
-pub(crate) async fn patch_verge_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
-    Config::verge().draft().patch_config(patch.clone());
-    let result = async {
-        let plan = plan_verge_patch(&patch)?;
-        apply_verge_runtime_change(client, &plan).await?;
-        run_verge_patch_side_effects(&plan, &patch)?;
-        Ok(())
-    }
-    .await;
-
-    match result {
-        Ok(()) => {
-            Config::verge().apply();
-            Config::verge().data().save_file()?;
-            handle::Handle::refresh_verge();
-            Ok(())
-        }
-        Err(err) => {
-            Config::verge().discard();
-            Err(err)
-        }
-    }
-}
-
-/// 更新配置
-async fn update_core_config(client: &ChimeraClient) -> Result<()> {
-    match client.rebuild_running_config().await {
-        Ok(_) => {
-            handle::Handle::notice_message(&Message::SetConfig(Ok(())));
-            Ok(())
-        }
-        Err(err) => {
-            handle::Handle::notice_message(&Message::SetConfig(Err(format!("{err:?}"))));
-            Err(err)
-        }
-    }
 }
 
 /// 更新某个profile
