@@ -2,6 +2,10 @@
 import { type EnvInfo } from '@chimera/interface';
 import { includes, isArray, isObject, isString, some } from 'lodash-es';
 
+export async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function formatError(err: unknown): string {
   return `Error: ${err instanceof Error ? err.message : String(err)}`;
 }

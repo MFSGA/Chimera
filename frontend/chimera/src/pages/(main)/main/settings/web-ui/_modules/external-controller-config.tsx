@@ -21,7 +21,7 @@ import {
   ModalTrigger,
 } from '@/components/ui/modal';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
+import { formatError, sleep } from '@/utils';
 import { message } from '@/utils/notification';
 import {
   ItemContainer,
@@ -34,29 +34,35 @@ import {
 
 export default function ExternalControllerConfig() {
   const [open, setOpen] = useState(false);
+
   const { data, refetch } = useClashInfo();
+
   const { upsert } = useClashCoreConfig();
+
   const runtimeProfile = useRuntimeProfile();
-  const savedValue = data?.server || '';
-  const [draft, setDraft] = useState(savedValue);
 
-  useEffect(() => setDraft(savedValue), [savedValue]);
+  const [externalController, setExternalController] = useState(
+    data?.server || '',
+  );
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    if (!nextOpen) setDraft(savedValue);
-    setOpen(nextOpen);
-  };
+  useEffect(() => {
+    setExternalController(data?.server || '');
+  }, [data?.server]);
 
-  const handleApply = async () => {
+  const handleSubmit = async () => {
     try {
-      await upsert.mutateAsync({ 'external-controller': draft });
+      await upsert.mutateAsync({
+        'external-controller': externalController,
+      });
       await refetch();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+
+      await sleep(300);
       await runtimeProfile.refetch();
+
       setOpen(false);
     } catch (error) {
       message(formatError(error), {
-        title: m.common_error(),
+        title: 'Error',
         kind: 'error',
       });
     }
@@ -64,7 +70,7 @@ export default function ExternalControllerConfig() {
 
   return (
     <SettingsCard data-slot="external-controller-config-card">
-      <Modal open={open} onOpenChange={handleOpenChange}>
+      <Modal open={open} onOpenChange={setOpen}>
         <SettingsCardContent asChild>
           <ModalTrigger asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
@@ -73,8 +79,10 @@ export default function ExternalControllerConfig() {
                   <ItemLabelText>
                     {m.settings_clash_settings_external_controll_label()}
                   </ItemLabelText>
-                  <ItemLabelDescription>{savedValue}</ItemLabelDescription>
+
+                  <ItemLabelDescription>{data?.server}</ItemLabelDescription>
                 </ItemLabel>
+
                 <ArrowForwardIosRounded />
               </ItemContainer>
             </Button>
@@ -88,22 +96,25 @@ export default function ExternalControllerConfig() {
                 {m.settings_clash_settings_external_controll_label_edit()}
               </ModalTitle>
             </CardHeader>
+
             <CardContent>
               <Input
                 variant="outlined"
                 label={m.settings_clash_settings_external_controll_label()}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
+                value={externalController}
+                onChange={(event) => setExternalController(event.target.value)}
               />
             </CardContent>
+
             <CardFooter className="gap-2">
               <Button
                 variant="flat"
+                onClick={() => void handleSubmit()}
                 loading={upsert.isPending}
-                onClick={() => void handleApply()}
               >
                 {m.common_apply()}
               </Button>
+
               <ModalClose>{m.common_close()}</ModalClose>
             </CardFooter>
           </Card>
