@@ -5,6 +5,8 @@
 //! this transitional client keeps those storage semantics while centralizing
 //! reads, validation, mutation, and running-core coordination here.
 
+use std::sync::Arc;
+
 use anyhow::{Result, bail};
 use chimera_config::clash::config::{
     ClashConfig, ClashConfigPatch,
@@ -24,11 +26,14 @@ use crate::{
     log_err,
 };
 
-use super::ChimeraClient;
+use super::{
+    ChimeraClient,
+    core_bridge::{LegacyRunningConfigBridge, RunningConfigPort},
+};
 
-#[derive(Default)]
 pub(crate) struct ClashConfigClient {
     runtime_patch: RuntimePatchCoordinator,
+    running_config: Arc<dyn RunningConfigPort>,
 }
 
 struct ClashPatchPlan {
@@ -40,9 +45,22 @@ struct ClashPatchPlan {
     requires_restart: bool,
 }
 
+impl Default for ClashConfigClient {
+    fn default() -> Self {
+        Self::with_running_config(Arc::new(LegacyRunningConfigBridge))
+    }
+}
+
 impl ClashConfigClient {
     pub(crate) fn legacy() -> Self {
         Self::default()
+    }
+
+    fn with_running_config(running_config: Arc<dyn RunningConfigPort>) -> Self {
+        Self {
+            runtime_patch: RuntimePatchCoordinator::default(),
+            running_config,
+        }
     }
 
     pub(crate) fn get(&self) -> Result<ClashConfig> {
@@ -112,11 +130,20 @@ impl ClashConfigClient {
         let persist_overrides = overrides.clone();
         let client = owner.clone();
 
+        let read_port = self.running_config.clone();
+        let patch_port = self.running_config.clone();
+
         self.runtime_patch
             .apply(
                 mapping,
-                crate::core::clash::api::get_configs,
-                |patch| async move { crate::core::clash::api::patch_configs(&patch).await },
+                move || {
+                    let port = read_port.clone();
+                    async move { port.read().await }
+                },
+                move |patch| {
+                    let port = patch_port.clone();
+                    async move { port.patch(&patch).await }
+                },
                 move |_patch| {
                     let overrides = persist_overrides.clone();
                     let client = client.clone();
