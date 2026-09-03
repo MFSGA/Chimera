@@ -45,7 +45,7 @@ export default function LogLevelSelector() {
 
   return (
     <SettingsCard data-slot="log-level-selector-card">
-      <DropdownMenu>
+      <DropdownMenu align="end">
         <DropdownMenuTrigger asChild>
           <SettingsCardContent data-slot="log-level-selector-trigger" asChild>
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
@@ -66,7 +66,7 @@ export default function LogLevelSelector() {
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+        <DropdownMenuContent sideOffset={-16} alignOffset={16}>
           {Object.entries(LOG_LEVEL_OPTIONS).map(([key, label]) => (
             <DropdownMenuCheckboxItem
               checked={value === key}
