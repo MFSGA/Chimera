@@ -42,6 +42,7 @@ struct ClashPatchPlan {
     external_controller: Option<String>,
     external_controller_changed: bool,
     mode_changed: bool,
+    break_on_mode_change: bool,
     requires_restart: bool,
 }
 
@@ -179,8 +180,10 @@ impl ClashConfigClient {
                 Config::clash().data().save_config()?;
                 if plan.mode_changed {
                     log_err!(
-                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change()
-                            .await,
+                        crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                            plan.break_on_mode_change,
+                        )
+                        .await,
                         "failed to interrupt connections after mode change"
                     );
                 }
@@ -261,6 +264,7 @@ fn plan_clash_patch(patch: &Mapping, current: &ClashConfig) -> Result<ClashPatch
         external_controller,
         external_controller_changed,
         mode_changed: get_non_null_patch_value(patch, "mode").is_some(),
+        break_on_mode_change: current.break_connection.on_mode_change,
         requires_restart: get_non_null_patch_value(patch, "mixed-port").is_some()
             || get_non_null_patch_value(patch, "secret").is_some()
             || get_non_null_patch_value(patch, "external-controller").is_some(),

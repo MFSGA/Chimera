@@ -866,8 +866,9 @@ impl ChimeraClient {
     }
 
     async fn rebuild_profile_runtime(&self) -> anyhow::Result<()> {
+        let break_when = self.get_clash_config()?.break_connection.on_profile_change;
         self.rebuild_running_config().await?;
-        self.inner.core.on_profile_change().await;
+        self.inner.core.on_profile_change(break_when).await;
         Ok(())
     }
 }
