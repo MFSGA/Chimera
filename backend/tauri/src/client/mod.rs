@@ -179,7 +179,7 @@ mod tests {
             })
         }
 
-        async fn on_profile_change(&self) {
+        async fn on_profile_change(&self, _break_when: bool) {
             self.events.lock().unwrap().push("profile-change");
         }
     }
