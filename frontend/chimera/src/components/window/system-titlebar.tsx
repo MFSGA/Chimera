@@ -15,6 +15,7 @@ export function DefaultHeader({
   return (
     <WindowHeader
       className={cn('items-center justify-between px-3', className)}
+      data-slot="app-header"
       {...props}
     >
       <div className="flex items-center gap-2" data-tauri-drag-region>
@@ -45,7 +46,7 @@ export function MacOSHeaderLeft({
   return (
     <div
       className={cn(
-        'absolute hidden items-center md:flex',
+        'absolute left-22 hidden items-center md:flex',
         isMaximized ? 'left-2' : 'left-22',
         className,
       )}
