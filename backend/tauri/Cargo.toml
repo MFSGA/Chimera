@@ -54,6 +54,7 @@ anyhow = "1.0"
 thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
+chimera-core = { path = "../chimera-core" }
 chimera-config = { path = "../chimera-config" }
 struct-patch = "0.13"
 
