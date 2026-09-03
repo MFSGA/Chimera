@@ -91,7 +91,7 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         Ok(None)
     }
 
-    async fn on_profile_change(&self);
+    async fn on_profile_change(&self, break_when: bool);
 }
 
 pub(crate) struct LegacyCoreBridge;
@@ -162,8 +162,8 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             }))
     }
 
-    async fn on_profile_change(&self) {
-        let _ = ConnectionInterruptionService::on_profile_change().await;
+    async fn on_profile_change(&self, break_when: bool) {
+        let _ = ConnectionInterruptionService::on_profile_change(break_when).await;
     }
 }
 
