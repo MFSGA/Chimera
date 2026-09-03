@@ -20,6 +20,14 @@ const legacyUiRoots = [
     path.join(workspaceRoot, 'frontend/chimera/src/components/setting'),
   ),
 ];
+const sharedClashBaseUiFiles = new Set(
+  [
+    'frontend/chimera/src/components/setting/setting-clash-base.tsx',
+    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/base-settings.tsx',
+    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/ipv6-switch.tsx',
+    'frontend/chimera/src/pages/(main)/main/settings/clash/_modules/log-level-selector.tsx',
+  ].map((entry) => path.normalize(path.join(workspaceRoot, entry))),
+);
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx']);
 const violations: string[] = [];
@@ -71,6 +79,15 @@ const visit = async (entryPath: string): Promise<void> => {
   if (isLegacyUi && /\bcommands\s*\./.test(source)) {
     violations.push(
       `${relativePath}: legacy UI must adapt through shared features/hooks instead of calling generated commands directly`,
+    );
+  }
+
+  if (
+    sharedClashBaseUiFiles.has(normalizedEntryPath) &&
+    /\buseClashConfig\b/.test(source)
+  ) {
+    violations.push(
+      `${relativePath}: Clash base UI must use the shared clash-settings feature instead of useClashConfig directly`,
     );
   }
 };
