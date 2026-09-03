@@ -53,17 +53,20 @@ struct ChimeraClientInner {
 }
 
 impl ChimeraClient {
-    pub(crate) fn legacy() -> Self {
-        Self::with_parts(
+    pub(crate) fn legacy() -> anyhow::Result<Self> {
+        let application = ApplicationClient::legacy()?;
+        Ok(Self::with_parts_and_application(
+            application,
             Arc::new(LegacyCoreBridge),
             Arc::new(LegacyProfilesReadPort),
             Arc::new(LegacyProfileFsPort),
             Arc::new(LegacyProfilesWritePort),
             Arc::new(OsSystemDnsCache),
             Arc::new(LegacyUiEventSink),
-        )
+        ))
     }
 
+    #[cfg(test)]
     fn with_parts(
         core: Arc<dyn CoreLifecyclePort>,
         profiles: Arc<dyn ProfilesReadPort>,
@@ -72,8 +75,30 @@ impl ChimeraClient {
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
+        let application =
+            ApplicationClient::legacy().expect("test application client should initialize");
+        Self::with_parts_and_application(
+            application,
+            core,
+            profiles,
+            profile_files,
+            profile_writes,
+            system_dns,
+            ui_sink,
+        )
+    }
+
+    fn with_parts_and_application(
+        application: ApplicationClient,
+        core: Arc<dyn CoreLifecyclePort>,
+        profiles: Arc<dyn ProfilesReadPort>,
+        profile_files: Arc<dyn ProfileFsPort>,
+        profile_writes: Arc<dyn ProfilesWritePort>,
+        system_dns: Arc<dyn SystemDnsCache>,
+        ui_sink: Arc<dyn UiEventSink>,
+    ) -> Self {
         let inner = ChimeraClientInner {
-            application: ApplicationClient::legacy(),
+            application,
             clash_config: ClashConfigClient::legacy(),
             core,
             profiles,
