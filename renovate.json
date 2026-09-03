@@ -2,12 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "default:automergeMinor",
-    "default:prHourlyLimitNone",
-    "default:preserveSemverRanges",
-    "default:rebaseStalePrs",
+    ":configMigration",
+    "security:minimumReleaseAgeNpm",
+    ":maintainLockFilesWeekly",
+    ":automergeMinor",
+    ":preserveSemverRanges",
+    ":rebaseStalePrs",
     "group:monorepos"
   ],
+  "dependencyDashboard": false,
+  "ignorePaths": ["ref/**", "backend/chimera-runtime/**"],
+  "platformAutomerge": false,
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2,
   "packageRules": [
     {
       "matchManagers": ["npm"],
@@ -15,8 +22,7 @@
     },
     {
       "matchManagers": ["cargo"],
-      "rangeStrategy": "update-lockfile",
-      "platformAutomerge": false
+      "rangeStrategy": "update-lockfile"
     },
     {
       "groupName": "Oxc packages",
@@ -61,6 +67,5 @@
       "groupName": "Testing packages",
       "matchPackageNames": ["/vitest/", "/cypress/", "/wdio/"]
     }
-  ],
-  "prConcurrentLimit": 30
+  ]
 }

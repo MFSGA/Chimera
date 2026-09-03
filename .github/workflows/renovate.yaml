@@ -2,7 +2,7 @@ name: Renovate
 
 on:
   schedule:
-    - cron: '30 3 * * *' # 03:30 UTC, adjust if a different window is desired
+    - cron: '17 */6 * * *' # Every 6 hours; spread dependency CI load across the day.
   workflow_dispatch:
   push:
     branches:
@@ -11,6 +11,7 @@ on:
       - dev
     paths:
       - renovate.json
+      - .github/workflows/renovate.yaml
 
 permissions:
   contents: write
@@ -41,10 +42,12 @@ jobs:
           gh api rate_limit >/dev/null
 
       - name: Self-hosted Renovate
-        uses: renovatebot/github-action@v46.1.20
+        uses: renovatebot/github-action@v46.2.5
         with:
           configurationFile: renovate.json
           token: ${{ secrets.RENOVATE_TOKEN }}
         env:
           LOG_LEVEL: info
+          RENOVATE_CLONE_SUBMODULES: 'true'
+          RENOVATE_GIT_AUTHOR: 'MFSGA Renovate <193414067+MFSGA@users.noreply.github.com>'
           RENOVATE_REPOSITORIES: ${{ github.repository }}
