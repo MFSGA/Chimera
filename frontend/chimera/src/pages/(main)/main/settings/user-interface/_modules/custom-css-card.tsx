@@ -1,4 +1,4 @@
-import { commands } from '@chimera/interface';
+import { createEditorWindow } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { Button } from '@/components/ui/button';
 import useCustomCss from '@/hooks/use-custom-css';
@@ -19,7 +19,7 @@ export default function CustomCssCard() {
   const isLarge = charCount > 100_000;
 
   const handleOpen = useLockFn(async () => {
-    await commands.createEditorWindow('css-editor', null);
+    await createEditorWindow('css-editor', null);
   });
 
   return (

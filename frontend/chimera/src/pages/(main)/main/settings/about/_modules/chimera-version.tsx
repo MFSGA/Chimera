@@ -1,4 +1,4 @@
-import { commands, useSetting } from '@chimera/interface';
+import { cleanupProcesses, openThat, useSetting } from '@chimera/interface';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { PropsWithChildren, useEffect, useState } from 'react';
 import Markdown from 'react-markdown';
@@ -110,7 +110,7 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
         }
       });
 
-      await commands.cleanupProcesses();
+      await cleanupProcesses();
       // cleanup and stop core
       await newVersion.install();
       // On macOS and Linux you will need to restart the app manually.
@@ -167,7 +167,7 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
                             e.stopPropagation();
 
                             if (typeof node?.properties.href === 'string') {
-                              commands.openThat(node.properties.href);
+                              void openThat(node.properties.href);
                             }
                           }}
                         >
@@ -210,7 +210,7 @@ export default function ChimeraVersion() {
   } = useChimeraUpdate();
 
   const handleUpdateToGithubReleases = useLockFn(
-    async () => await commands.openThat(GITHUB_RELEASES_URL),
+    async () => await openThat(GITHUB_RELEASES_URL),
   );
 
   const handleCheckNewVersion = useLockFn(async () => {

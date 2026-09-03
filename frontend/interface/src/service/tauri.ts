@@ -1,7 +1,9 @@
 import {
   commands,
+  type EditorWindowType,
   type EnvInfo,
   type IpsbResponse,
+  type StorageEntry,
   type UpdaterSummary,
 } from '../ipc/bindings';
 import { unwrapResult } from '../utils';
@@ -76,6 +78,21 @@ export const setStorageItem = async (key: string, value: string) => {
 
 export const removeStorageItem = async (key: string) => {
   unwrapResult(await commands.removeStorageItem(key));
+};
+
+export const getAllStorageItems = async (): Promise<StorageEntry[]> => {
+  return unwrapResult(await commands.getAllStorageItems());
+};
+
+export const clearStorage = async () => {
+  unwrapResult(await commands.clearStorage());
+};
+
+export const createEditorWindow = async (
+  windowType: EditorWindowType,
+  uid: string | null,
+) => {
+  unwrapResult(await commands.createEditorWindow(windowType, uid));
 };
 
 export const restartSidecar = async () => {

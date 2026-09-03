@@ -1,4 +1,8 @@
-import { commands, unwrapResult } from '@chimera/interface';
+import {
+  clearStorage,
+  getAllStorageItems,
+  removeStorageItem,
+} from '@chimera/interface';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import {
@@ -36,16 +40,16 @@ const formatValue = (value: string) => {
 export default function KVStorage() {
   const query = useQuery({
     queryKey: ['debug-kv-storage'],
-    queryFn: async () => unwrapResult(await commands.getAllStorageItems()),
+    queryFn: getAllStorageItems,
   });
 
   const handleRemove = async (key: string) => {
-    unwrapResult(await commands.removeStorageItem(key));
+    await removeStorageItem(key);
     await query.refetch();
   };
 
   const handleClear = async () => {
-    unwrapResult(await commands.clearStorage());
+    await clearStorage();
     await query.refetch();
   };
 
