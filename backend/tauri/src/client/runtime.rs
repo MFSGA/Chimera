@@ -13,6 +13,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use sha2::{Digest, Sha256};
 
@@ -24,6 +25,80 @@ use crate::{
     enhance::PostProcessingOutput,
     utils::dirs,
 };
+
+/// Public mutation wire aligned with REF: desired state is committed first;
+/// post-commit side-effect failures degrade instead of turning the mutation
+/// into an error that would imply the commit was rolled back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum MutationOutcome<T> {
+    Applied {
+        value: T,
+    },
+    CommittedDegraded {
+        value: T,
+        degradations: Vec<Degradation>,
+    },
+}
+
+impl<T> MutationOutcome<T> {
+    pub fn from_parts(value: T, degradations: Vec<Degradation>) -> Self {
+        if degradations.is_empty() {
+            Self::Applied { value }
+        } else {
+            Self::CommittedDegraded {
+                value,
+                degradations,
+            }
+        }
+    }
+
+    pub fn degradations(&self) -> &[Degradation] {
+        match self {
+            Self::Applied { .. } => &[],
+            Self::CommittedDegraded { degradations, .. } => degradations,
+        }
+    }
+
+    fn into_parts(self) -> (T, Vec<Degradation>) {
+        match self {
+            Self::Applied { value } => (value, Vec::new()),
+            Self::CommittedDegraded {
+                value,
+                degradations,
+            } => (value, degradations),
+        }
+    }
+
+    pub(super) fn extend_degradations(self, extra: Vec<Degradation>) -> Self {
+        let (value, mut degradations) = self.into_parts();
+        degradations.extend(extra);
+        Self::from_parts(value, degradations)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct Degradation {
+    pub phase: DegradationPhase,
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum DegradationPhase {
+    LegacyMirror,
+    ProfileMaterialization,
+    RuntimeBuild,
+    RuntimeCheck,
+    RuntimePromote,
+    RuntimePublish,
+    RuntimeApply,
+    CoreRollback,
+    SystemEffect,
+    UiEffect,
+}
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";
