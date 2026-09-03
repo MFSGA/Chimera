@@ -7,38 +7,34 @@
 use std::net::TcpListener;
 
 use anyhow::{Result, anyhow, bail};
+use chimera_config::clash::config::clash_strategy::PortStrategyKind;
 
-use crate::config::{
-    chimera::{ExternalControllerPortStrategy, IVerge},
-    core::Config,
+use crate::{
+    client::ChimeraClient,
+    config::{
+        chimera::{ExternalControllerPortStrategy, IVerge},
+        core::Config,
+    },
 };
 
-fn find_unused_port() -> Result<u16> {
+fn find_unused_port(fallback_port: u16) -> Result<u16> {
     match TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => Ok(listener.local_addr()?.port()),
         Err(_) => {
-            let port = Config::verge()
-                .latest()
-                .verge_mixed_port
-                .unwrap_or(Config::clash().data().get_mixed_port());
-            log::warn!(target: "app", "use default mixed port: {port}");
-            Ok(port)
+            log::warn!(target: "app", "use default mixed port: {fallback_port}");
+            Ok(fallback_port)
         }
     }
 }
 
-pub(crate) fn resolve_random_mixed_port() {
-    let enable_random_port = Config::verge().latest().enable_random_port.unwrap_or(false);
-
-    if !enable_random_port {
-        return;
+pub(crate) fn resolve_random_mixed_port(client: &ChimeraClient) -> Result<()> {
+    let clash = client.get_clash_config()?;
+    if clash.mixed_port.kind != PortStrategyKind::Random {
+        return Ok(());
     }
 
-    let fallback_port = Config::verge()
-        .latest()
-        .verge_mixed_port
-        .unwrap_or(Config::clash().data().get_mixed_port());
-    let port = find_unused_port().unwrap_or(fallback_port);
+    let fallback_port = clash.mixed_port.start_port;
+    let port = find_unused_port(fallback_port).unwrap_or(fallback_port);
 
     Config::verge().data().patch_config(IVerge {
         verge_mixed_port: Some(port),
@@ -51,6 +47,7 @@ pub(crate) fn resolve_random_mixed_port() {
     Config::clash().data().patch_config(mapping);
     let _ = Config::clash().latest().prepare_external_controller_port();
     let _ = Config::clash().data().save_config();
+    Ok(())
 }
 
 pub(crate) fn get_clash_external_port(
