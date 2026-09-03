@@ -7,10 +7,11 @@
 //! application boundary.
 
 use anyhow::{Result, bail};
+use chimera_config::application::ChimeraAppConfig;
 
 use super::ChimeraClient;
 use crate::{
-    bridge::split_legacy_verge_patch,
+    bridge::{split_legacy_verge_patch, verge::application_from_legacy},
     config::{chimera::IVerge, core::Config},
     core::{handle, sysopt},
     utils,
@@ -30,6 +31,10 @@ impl ApplicationClient {
         Config::verge().latest().clone()
     }
 
+    pub(crate) fn get_typed(&self) -> anyhow::Result<ChimeraAppConfig> {
+        application_from_legacy(&Config::verge().latest())
+    }
+
     async fn patch(&self, owner: &ChimeraClient, patch: IVerge) -> anyhow::Result<()> {
         let _guard = self.patch_gate.lock().await;
         patch_legacy_uncoordinated(owner, patch).await
@@ -37,6 +42,10 @@ impl ApplicationClient {
 }
 
 impl ChimeraClient {
+    pub(crate) fn get_app_config(&self) -> anyhow::Result<ChimeraAppConfig> {
+        self.inner.application.get_typed()
+    }
+
     pub(crate) fn application_config(&self) -> IVerge {
         self.inner.application.get()
     }
