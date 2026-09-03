@@ -14,7 +14,7 @@ export default function useWindowMaximized() {
       isMacOS ? appWindow.isFullscreen() : appWindow.isMaximized(),
   });
 
-  const toggleMaximize = useCallback(async () => {
+  const handleToggleMaximize = useCallback(async () => {
     await appWindow.toggleMaximize();
     await query.refetch();
   }, [query]);
@@ -42,7 +42,7 @@ export default function useWindowMaximized() {
 
   return {
     isMaximized: query.data,
-    toggleMaximize,
+    toggleMaximize: handleToggleMaximize,
     ...query,
   };
 }
