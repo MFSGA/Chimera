@@ -17,6 +17,7 @@ import SettingClashWeb from './setting-clash-web';
 import SettingSystemBehavior from './setting-system-behavior';
 import SettingSystemProxy from './setting-system-proxy';
 import SettingSystemService from './setting-system-service';
+import SettingSystemTools from './setting-system-tools';
 
 export const SettingPage = () => {
   const isAppImage = useIsAppImage();
@@ -51,6 +52,7 @@ export const SettingPage = () => {
       <SettingSystemBehavior />
       {/* 5 */}
       {!isAppImage.data && <SettingSystemService />}
+      <SettingSystemTools />
       <SettingChimeraTasks />
       <SettingChimeraMisc />
       <SettingChimeraPath />

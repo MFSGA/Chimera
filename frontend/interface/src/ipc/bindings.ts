@@ -21,6 +21,8 @@ export const commands = {
       } | null,
       string
     >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
+  flushSystemDnsCache: () =>
+    typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
   /**  later: check in the frontend */
   importProfile: (
     url: string,

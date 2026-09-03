@@ -8,6 +8,7 @@ mod event_sink;
 mod profiles;
 pub mod rebuild;
 pub mod runtime;
+mod system_dns;
 
 use std::{
     collections::HashSet,
@@ -28,6 +29,7 @@ use self::{
         LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
         ProfilesReadPort, ProfilesWritePort,
     },
+    system_dns::{OsSystemDnsCache, SystemDnsCache},
 };
 
 use crate::config::{
@@ -76,6 +78,7 @@ struct ChimeraClientInner {
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
     profile_writes: Arc<dyn ProfilesWritePort>,
+    system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
     runtime_patch: RuntimePatchCoordinator,
     profile_commit: tokio::sync::Mutex<()>,
@@ -105,6 +108,7 @@ impl ChimeraClient {
             Arc::new(LegacyProfilesReadPort),
             Arc::new(LegacyProfileFsPort),
             Arc::new(LegacyProfilesWritePort),
+            Arc::new(OsSystemDnsCache),
             Arc::new(LegacyUiEventSink),
         )
     }
@@ -114,6 +118,7 @@ impl ChimeraClient {
         profiles: Arc<dyn ProfilesReadPort>,
         profile_files: Arc<dyn ProfileFsPort>,
         profile_writes: Arc<dyn ProfilesWritePort>,
+        system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
         let inner = ChimeraClientInner {
@@ -121,6 +126,7 @@ impl ChimeraClient {
             profiles,
             profile_files,
             profile_writes,
+            system_dns,
             ui_sink,
             runtime_patch: RuntimePatchCoordinator::default(),
             profile_commit: tokio::sync::Mutex::new(()),
@@ -165,6 +171,14 @@ impl ChimeraClient {
 
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
         self.inner.profiles.snapshot()
+    }
+
+    pub(crate) async fn flush_system_dns_cache(&self) -> anyhow::Result<()> {
+        let system_dns = self.inner.system_dns.clone();
+        tokio::task::spawn_blocking(move || system_dns.flush())
+            .await
+            .context("system DNS cache flush task failed")??;
+        Ok(())
     }
 
     pub(crate) fn reserve_managed_profile_identity(
@@ -678,6 +692,7 @@ mod tests {
     use chimera_ipc::api::status::CoreState;
 
     use super::*;
+    use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
         config::profile::item::{
             local::LocalProfile,
@@ -916,6 +931,21 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct RecordingSystemDns {
+        flushes: Arc<Mutex<usize>>,
+        fail: bool,
+    }
+
+    impl SystemDnsCache for RecordingSystemDns {
+        fn flush(&self) -> anyhow::Result<()> {
+            *self.flushes.lock().unwrap() += 1;
+            if self.fail {
+                anyhow::bail!("injected DNS cache flush failure");
+            }
+            Ok(())
+        }
+    }
+
     impl UiEventSink for RecordingUi {
         fn refresh_clash(&self) {
             self.events.lock().unwrap().push("refresh-ui");
@@ -971,6 +1001,7 @@ mod tests {
             Arc::new(StaticProfilesRead { profiles }),
             Arc::new(NoopProfileFs),
             Arc::new(NoopProfilesWrite::default()),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1040,6 +1071,7 @@ mod tests {
                 refresh_commits: Some(refresh_commits.clone()),
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1104,6 +1136,7 @@ mod tests {
                 fail_refresh: true,
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1157,6 +1190,7 @@ mod tests {
                 patch_commits: Some(patch_commits.clone()),
                 ..NoopProfilesWrite::default()
             }),
+            Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
@@ -1178,6 +1212,59 @@ mod tests {
                 "refresh-ui",
                 "profile-change"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_system_dns_cache_forwards_to_injected_adapter() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let flushes = Arc::new(Mutex::new(0));
+        let client = ChimeraClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
+            }),
+            Arc::new(NoopProfileFs),
+            Arc::new(NoopProfilesWrite::default()),
+            Arc::new(RecordingSystemDns {
+                flushes: flushes.clone(),
+                fail: false,
+            }),
+            Arc::new(RecordingUi { events }),
+        );
+
+        client.flush_system_dns_cache().await.unwrap();
+        assert_eq!(*flushes.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn flush_system_dns_cache_propagates_adapter_failure() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = ChimeraClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
+            }),
+            Arc::new(NoopProfileFs),
+            Arc::new(NoopProfilesWrite::default()),
+            Arc::new(RecordingSystemDns {
+                flushes: Arc::new(Mutex::new(0)),
+                fail: true,
+            }),
+            Arc::new(RecordingUi { events }),
+        );
+
+        let error = client.flush_system_dns_cache().await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected DNS cache flush failure")
         );
     }
 

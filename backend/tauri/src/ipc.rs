@@ -297,6 +297,13 @@ pub fn get_runtime_transform_diagnostics(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn flush_system_dns_cache(client: State<'_, ChimeraClient>) -> Result {
+    client.flush_system_dns_cache().await?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
     let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
     let server = format!("{}:{}", current.host, current.port);
