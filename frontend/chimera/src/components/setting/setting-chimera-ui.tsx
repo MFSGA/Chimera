@@ -1,4 +1,3 @@
-import { useSetting } from '@chimera/interface';
 import { BaseCard, Expand, MenuItem, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, ListItem, ListItemText } from '@mui/material';
@@ -7,12 +6,16 @@ import { MuiColorInput } from 'mui-color-input';
 import { useEffect, useState } from 'react';
 import { isHexColor } from 'validator';
 import { useLanguage } from '@/components/providers/language-provider';
+import {
+  DEFAULT_COLOR,
+  ThemeMode,
+  useExperimentalThemeContext,
+} from '@/components/providers/theme-provider';
 import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import * as m from '@/paraglide/messages';
 import type { Locale } from '@/paraglide/runtime';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import { languageOptions } from '@/utils/language';
-import { DEFAULT_COLOR } from '../layout/use-custom-theme';
 
 const commonSx = {
   width: 128,
@@ -39,7 +42,7 @@ const ThemeSwitch = () => {
     system: m.settings_user_interface_theme_mode_system(),
   };
 
-  const themeMode = useSetting('theme_mode');
+  const { themeMode, setThemeMode } = useExperimentalThemeContext();
 
   return (
     <MenuItem
@@ -47,20 +50,19 @@ const ThemeSwitch = () => {
       label={m.settings_user_interface_theme_mode_label()}
       selectSx={commonSx}
       options={themeOptions}
-      selected={themeMode.value || 'system'}
-      onSelected={(value) => themeMode.upsert(value as string)}
+      selected={themeMode || ThemeMode.SYSTEM}
+      onSelected={(value) => void setThemeMode(value as ThemeMode)}
     />
   );
 };
 
 const ThemeColor = () => {
-  const theme = useSetting('theme_color');
-
-  const [value, setValue] = useState(theme.value ?? DEFAULT_COLOR);
+  const { themeColor, setThemeColor } = useExperimentalThemeContext();
+  const [value, setValue] = useState(themeColor);
 
   useEffect(() => {
-    setValue(theme.value ?? DEFAULT_COLOR);
-  }, [theme.value]);
+    setValue(themeColor);
+  }, [themeColor]);
 
   return (
     <>
@@ -75,24 +77,24 @@ const ThemeColor = () => {
           format="hex"
           onBlur={() => {
             if (!isHexColor(value ?? DEFAULT_COLOR)) {
-              setValue(theme.value ?? DEFAULT_COLOR);
+              setValue(themeColor);
             }
           }}
           onChange={(color: string) => setValue(color)}
         />
       </ListItem>
 
-      <Expand open={(theme.value || DEFAULT_COLOR) !== value}>
+      <Expand open={themeColor !== value}>
         <div className="flex justify-end">
           <Button
             variant="contained"
             startIcon={<Done />}
             onClick={() => {
               if (isHexColor(value)) {
-                theme.upsert(value);
+                void setThemeColor(value);
               } else {
                 // 如果输入的不是有效的十六进制颜色，则恢复为之前的值
-                setValue(theme.value ?? DEFAULT_COLOR);
+                setValue(themeColor);
               }
             }}
           >
