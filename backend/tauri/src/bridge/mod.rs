@@ -1,4 +1,5 @@
 pub mod clash;
+pub mod verge;
 
 use chimera_config::clash::config::{ClashConfig, ClashConfigPatch};
 use serde::{Serialize, de::DeserializeOwned};
