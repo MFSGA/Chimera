@@ -1,7 +1,7 @@
 use super::shared::{self, CoreTypeMeta};
 use crate::{
     client::{ChimeraClient, runtime::RuntimePaths},
-    config::{chimera::ClashCore, core::Config},
+    config::chimera::ClashCore,
     core::download::{DownloadSession, DownloadStatus},
 };
 use anyhow::anyhow;
@@ -209,7 +209,9 @@ impl Updater {
     async fn replace_core(&self) -> anyhow::Result<()> {
         self.dispatch_state(UpdaterState::Replacing);
         let mut lifecycle = self.runtime_client.begin_core_update().await?;
-        let current_core = Config::verge().latest().clash_core.unwrap_or_default();
+        let current_core = crate::bridge::verge::legacy_core_from_typed(
+            self.runtime_client.get_app_config()?.core,
+        );
         tracing::debug!("current core: {}", current_core);
         let runtime_paths = if current_core == self.core_type {
             let runtime_paths = RuntimePaths::from_app_config_dir()?;
