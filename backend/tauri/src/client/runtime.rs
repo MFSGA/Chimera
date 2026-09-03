@@ -980,7 +980,8 @@ impl ChimeraClient {
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
         let result = async {
             let mut lease = self.inner.core.begin().await?;
-            lease.rebuild_running_config().await
+            let clash = self.get_clash_config()?;
+            lease.rebuild_running_config(clash).await
         }
         .await;
         if let Err(error) = result {
