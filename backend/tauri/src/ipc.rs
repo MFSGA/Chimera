@@ -404,8 +404,8 @@ pub async fn create_editor_window(
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_verge_config() -> Result<IVerge> {
-    Ok(Config::verge().data().clone())
+pub fn get_verge_config(client: State<'_, ChimeraClient>) -> Result<IVerge> {
+    Ok(client.application_config())
 }
 
 #[tauri::command]
