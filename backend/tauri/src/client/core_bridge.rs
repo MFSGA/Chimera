@@ -44,7 +44,11 @@ pub struct RuntimeTransformDiagnostics {
 
 #[async_trait]
 pub(crate) trait CoreLifecycleLease: Send {
-    async fn rebuild_running_config(&mut self, clash: ClashConfig) -> anyhow::Result<()>;
+    async fn rebuild_running_config(
+        &mut self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()>;
     async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()>;
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
@@ -70,8 +74,14 @@ struct LegacyCoreLifecycleLease {
 
 #[async_trait]
 impl CoreLifecycleLease for LegacyCoreLifecycleLease {
-    async fn rebuild_running_config(&mut self, clash: ClashConfig) -> anyhow::Result<()> {
-        self.lease.rebuild_running_config_with(clash).await
+    async fn rebuild_running_config(
+        &mut self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.lease
+            .rebuild_running_config_with(clash, target_core)
+            .await
     }
 
     async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()> {

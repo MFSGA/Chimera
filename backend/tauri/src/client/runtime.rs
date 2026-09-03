@@ -981,7 +981,9 @@ impl ChimeraClient {
         let result = async {
             let mut lease = self.inner.core.begin().await?;
             let clash = self.get_clash_config()?;
-            lease.rebuild_running_config(clash).await
+            let app = self.get_app_config()?;
+            let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+            lease.rebuild_running_config(clash, target_core).await
         }
         .await;
         if let Err(error) = result {
