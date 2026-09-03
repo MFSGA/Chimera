@@ -1,4 +1,4 @@
-import { useSetting, type LoggingLevel_Serialize } from '@chimera/interface';
+import { useSetting, type ProxiesSelectorMode } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,49 +18,51 @@ import {
   SettingsCardContent,
 } from '../../_modules/settings-card';
 
-export default function LogLevelSelector() {
-  const { value, upsert } = useSetting('app_log_level');
+export default function TrayProxiesSelector() {
+  const { value, upsert } = useSetting('clash_tray_selector');
 
-  const handleChange = useLockFn(async (mode: LoggingLevel_Serialize) => {
+  const handleChange = useLockFn(async (mode: ProxiesSelectorMode) => {
     await upsert(mode);
   });
 
   const messages = {
-    trace: 'Trace',
-    debug: 'Debug',
-    info: 'Info',
-    warn: 'Warn',
-    error: 'Error',
-    silent: 'Silent',
-  } satisfies Record<LoggingLevel_Serialize, string>;
+    normal: m.settings_chimera_tray_type_normal(),
+    hidden: m.settings_chimera_tray_type_hidden(),
+    submenu: m.settings_chimera_tray_type_submenu(),
+  } satisfies Record<ProxiesSelectorMode, string>;
 
   return (
-    <SettingsCard data-slot="log-level-selector">
-      <DropdownMenu>
+    <SettingsCard data-slot="tray-proxies-selector">
+      <DropdownMenu align="end">
         <DropdownMenuTrigger asChild>
-          <SettingsCardContent data-slot="log-level-selector-trigger" asChild>
+          <SettingsCardContent
+            data-slot="tray-proxies-selector-trigger"
+            asChild
+          >
             <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
               <ItemContainer>
                 <ItemLabel>
                   <ItemLabelText>
-                    {m.settings_nyanpasu_app_log_level_label()}
+                    {m.settings_chimera_tray_type()}
                   </ItemLabelText>
+
                   <ItemLabelDescription>
                     {value ? messages[value] : null}
                   </ItemLabelDescription>
                 </ItemLabel>
+
                 <ArrowForwardIosRounded />
               </ItemContainer>
             </Button>
           </SettingsCardContent>
         </DropdownMenuTrigger>
 
-        <DropdownMenuContent align="end" sideOffset={-16} alignOffset={16}>
+        <DropdownMenuContent sideOffset={-16} alignOffset={16}>
           {Object.entries(messages).map(([key, label]) => (
             <DropdownMenuCheckboxItem
               checked={value === key}
               key={key}
-              onSelect={() => void handleChange(key as LoggingLevel_Serialize)}
+              onSelect={() => void handleChange(key as ProxiesSelectorMode)}
             >
               {label}
             </DropdownMenuCheckboxItem>
