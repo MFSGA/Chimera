@@ -431,9 +431,13 @@ impl CoreLifecycleLease<'_> {
             .await
     }
 
-    pub(crate) async fn rebuild_running_config_with(&self, clash: ClashConfig) -> Result<()> {
+    pub(crate) async fn rebuild_running_config_with(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+    ) -> Result<()> {
         self.manager
-            .rebuild_and_run_locked_with(CoreManager::selected_core(), &clash)
+            .rebuild_and_run_locked_with(target_core, &clash)
             .await
     }
 
