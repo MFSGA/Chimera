@@ -810,12 +810,19 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn select_proxy(group: String, name: String) -> Result<()> {
+pub async fn select_proxy(
+    group: String,
+    name: String,
+    client: State<'_, ChimeraClient>,
+) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+    let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
     ProxiesGuard::global().select_proxy(&group, &name).await?;
     handle::Handle::mutate_proxies();
-    let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change()
-        .await;
+    let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
+        break_when,
+    )
+    .await;
     Ok(())
 }
 
