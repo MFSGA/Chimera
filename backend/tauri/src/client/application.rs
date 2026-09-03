@@ -8,14 +8,12 @@
 
 use anyhow::{Result, bail};
 
+use super::ChimeraClient;
 use crate::{
     config::{chimera::IVerge, core::Config},
     core::{handle, sysopt},
     utils,
 };
-use handle::Message;
-
-use super::ChimeraClient;
 
 #[derive(Default)]
 pub(crate) struct ApplicationClient {
@@ -49,7 +47,6 @@ impl ChimeraClient {
 
 struct VergePatchPlan {
     service_mode: Option<bool>,
-    tun_mode: Option<bool>,
     auto_launch_changed: bool,
     system_proxy_changed: bool,
     proxy_bypass_changed: bool,
@@ -69,7 +66,6 @@ fn plan_verge_patch(patch: &IVerge) -> Result<VergePatchPlan> {
 
     Ok(VergePatchPlan {
         service_mode: patch.enable_service_mode,
-        tun_mode: patch.enable_tun_mode,
         auto_launch_changed: patch.enable_auto_launch.is_some(),
         system_proxy_changed: patch.enable_system_proxy.is_some(),
         proxy_bypass_changed: patch.system_proxy_bypass.is_some(),
@@ -88,27 +84,6 @@ async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPla
     {
         log::debug!(target: "app", "change service mode to {}", service_mode);
         client.rebuild_running_config().await?;
-    }
-
-    if plan.tun_mode.is_some() {
-        log::debug!(target: "app", "toggle tun mode");
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            use crate::utils::dirs::check_core_permission;
-            let current_core = Config::verge().data().clash_core.unwrap_or_default();
-            let current_core: chimera_utils::core::CoreType = (&current_core).into();
-            let service_state = crate::core::service::ipc::get_ipc_state();
-            if !service_state.is_connected()
-                && check_core_permission(&current_core)
-                    .inspect_err(|e| {
-                        log::error!(target: "app", "clash core is not granted the necessary permissions, grant it: {e:?}");
-                    })
-                    .is_ok_and(|v| !v)
-            {
-                log::debug!(target: "app", "clash core permission is missing, tun toggle will restart core and may still fail");
-            };
-        }
-        update_core_config(client).await?;
     }
 
     Ok(())
@@ -145,6 +120,11 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     let result = async {
         let plan = plan_verge_patch(&patch)?;
         apply_verge_runtime_change(client, &plan).await?;
+        client
+            .inner
+            .clash_config
+            .apply_legacy_verge_runtime_change(client, &patch)
+            .await?;
         run_verge_patch_side_effects(&plan, &patch)?;
         Ok(())
     }
@@ -159,19 +139,6 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         }
         Err(err) => {
             Config::verge().discard();
-            Err(err)
-        }
-    }
-}
-
-async fn update_core_config(client: &ChimeraClient) -> Result<()> {
-    match client.rebuild_running_config().await {
-        Ok(_) => {
-            handle::Handle::notice_message(&Message::SetConfig(Ok(())));
-            Ok(())
-        }
-        Err(err) => {
-            handle::Handle::notice_message(&Message::SetConfig(Err(format!("{err:?}"))));
             Err(err)
         }
     }
