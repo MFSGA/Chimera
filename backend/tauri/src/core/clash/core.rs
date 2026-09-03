@@ -54,14 +54,29 @@ pub enum RunType {
 }
 
 impl RunType {
-    fn from_service_mode(enable_service: bool) -> Self {
-        if enable_service && crate::core::service::ipc::get_ipc_state().is_connected() {
-            tracing::info!("run core as service");
+    /// Classify the core launch mode from explicit inputs.
+    ///
+    /// Typed client paths should use this instead of `Default`, which remains
+    /// only for legacy callers that still read the combined verge state.
+    pub(crate) fn classify(
+        enable_service: bool,
+        ipc_state: crate::core::service::ipc::IpcState,
+    ) -> Self {
+        if enable_service && ipc_state.is_connected() {
             Self::Service
         } else {
-            tracing::info!("run core as child process");
             Self::Normal
         }
+    }
+
+    fn from_service_mode(enable_service: bool) -> Self {
+        let run_type = Self::classify(enable_service, crate::core::service::ipc::get_ipc_state());
+        if run_type == Self::Service {
+            tracing::info!("run core as service");
+        } else {
+            tracing::info!("run core as child process");
+        }
+        run_type
     }
 }
 
@@ -435,9 +450,10 @@ impl CoreLifecycleLease<'_> {
         &self,
         clash: ClashConfig,
         target_core: ClashCore,
+        run_type: RunType,
     ) -> Result<()> {
         self.manager
-            .rebuild_and_run_locked_with(target_core, &clash)
+            .rebuild_and_run_locked_with(target_core, &clash, run_type)
             .await
     }
 
@@ -616,6 +632,7 @@ impl CoreManager {
         paths: &RuntimePaths,
         target_core: ClashCore,
         clash: &ClashConfig,
+        run_type: RunType,
     ) -> std::result::Result<(), RuntimeRestartError> {
         Config::clash().reload();
         log::debug!(target: "app", "reloaded clash config from file");
@@ -675,7 +692,7 @@ impl CoreManager {
         ));
         self.runtime_lifecycle.publish_promoted(snapshot.clone());
 
-        self.run_core_from_product_inner(paths.product(), target_core, RunType::default())
+        self.run_core_from_product_inner(paths.product(), target_core, run_type)
             .await
             .map_err(RuntimeRestartError::Start)?;
         self.runtime_lifecycle
@@ -721,13 +738,15 @@ impl CoreManager {
             &Config::verge().latest(),
             &Config::clash().latest().0,
         )?;
-        self.rebuild_and_run_locked_with(target_core, &clash).await
+        self.rebuild_and_run_locked_with(target_core, &clash, RunType::default())
+            .await
     }
 
     async fn rebuild_and_run_locked_with(
         &self,
         target_core: ClashCore,
         clash: &ClashConfig,
+        run_type: RunType,
     ) -> Result<()> {
         let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
         if let Err(error) = paths
@@ -748,7 +767,7 @@ impl CoreManager {
         let previous_clash = Config::clash().data().clone();
 
         match self
-            .promote_and_start_locked(&paths, target_core, clash)
+            .promote_and_start_locked(&paths, target_core, clash, run_type)
             .await
         {
             Ok(()) => Ok(()),
@@ -882,7 +901,28 @@ pub fn find_binary_path(
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeRestartError;
+    use super::{RunType, RuntimeRestartError};
+    use crate::core::service::ipc::IpcState;
+
+    #[test]
+    fn run_type_classification_uses_only_explicit_inputs() {
+        assert_eq!(
+            RunType::classify(false, IpcState::Disconnected),
+            RunType::Normal
+        );
+        assert_eq!(
+            RunType::classify(false, IpcState::Connected),
+            RunType::Normal
+        );
+        assert_eq!(
+            RunType::classify(true, IpcState::Disconnected),
+            RunType::Normal
+        );
+        assert_eq!(
+            RunType::classify(true, IpcState::Connected),
+            RunType::Service
+        );
+    }
 
     #[test]
     fn recovery_only_runs_after_product_or_core_may_have_changed() {
