@@ -5,7 +5,7 @@ import {
   useSetting,
   type ClashCore_Serialize,
   type ClashCoresDetail,
-  type InspectUpdater,
+  type UpdaterSummary,
 } from '@chimera/interface';
 import { cn } from '@chimera/utils';
 import ArrowRightAltRounded from '~icons/material-symbols/arrow-right-alt-rounded';
@@ -41,7 +41,7 @@ function useCoreUpdateTask(
   item?: ClashCoresDetail | null,
 ) {
   const { query, updateCore } = useClashCores();
-  const [updater, setUpdater] = useState<InspectUpdater>();
+  const [updater, setUpdater] = useState<UpdaterSummary>();
 
   const task = useBlockTask(`core-manager-update-${core}`, async () => {
     try {

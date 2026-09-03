@@ -26,6 +26,7 @@
     "prepare": "husky",
     "check": "tsx scripts/check.ts",
     "check:service-runtime": "tsx scripts/check-service-runtime.ts",
+    "lint:frontend-boundaries": "tsx scripts/check-frontend-boundaries.ts",
     "publish": "tsx scripts/publish.ts",
     "dev:diff": "run-p -r web:devtools tauri:diff",
     "tauri:diff": "tauri dev -f verge-dev deadlock-detection -c ./backend/tauri/tauri.conf.json",
