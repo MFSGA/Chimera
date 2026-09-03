@@ -6,10 +6,10 @@ use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
 use crate::{
+    client::ChimeraClient,
     config::{core::Config, profile::item::Profile},
     core::{
         clash::{
-            client::NyanpasuClient,
             core::RunType,
             ws::{ClashConnectionsConnector, ClashConnectionsConnectorState},
         },
@@ -53,7 +53,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .map(|secret| secret.trim().is_empty() || secret == "chimera")
         .unwrap_or(true);
 
-    let client = app.state::<NyanpasuClient>();
+    let client = app.state::<ChimeraClient>();
     let core_status = client.core_status();
     let service_status = tokio::time::timeout(Duration::from_secs(2), service::control::status());
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);

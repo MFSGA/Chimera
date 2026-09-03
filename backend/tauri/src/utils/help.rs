@@ -16,8 +16,7 @@ use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
 
 use crate::{
-    config::chimera::ExternalControllerPortStrategy, core::clash::client::NyanpasuClient,
-    utils::resolve,
+    client::ChimeraClient, config::chimera::ExternalControllerPortStrategy, utils::resolve,
 };
 
 const ALPHABET: [char; 62] = [
@@ -202,13 +201,13 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
         .try_state::<crate::core::clash::ws::ClashConnectionsConnector>()
         .map(|state| state.inner().clone());
     let client = app_handle
-        .try_state::<NyanpasuClient>()
+        .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone());
     log_err!(nyanpasu_utils::runtime::block_on(async {
         if let Some(connector) = connector {
             connector.stop().await;
         }
-        let client = client.ok_or_else(|| anyhow!("NyanpasuClient is not managed"))?;
+        let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
         client.stop_core().await
     }));
     #[cfg(windows)]

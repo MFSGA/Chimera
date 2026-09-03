@@ -10,8 +10,9 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::Mutex;
 
 use crate::{
+    client::ChimeraClient,
     config::{chimera::IVerge, runtime::ClashConfigOverrides},
-    core::clash::{client::NyanpasuClient, transaction::TransactionOutcome},
+    core::clash::transaction::TransactionOutcome,
     feat,
 };
 
@@ -424,7 +425,7 @@ async fn apply_routing_mode_transaction(
     mode: AgentRoutingMode,
 ) -> AgentResult<TransactionOutcome> {
     let client = app
-        .try_state::<NyanpasuClient>()
+        .try_state::<ChimeraClient>()
         .ok_or(AgentCommandError::ActionFailed)?;
     let overrides = ClashConfigOverrides {
         mode: Some(mode.as_core_value().into()),

@@ -4,8 +4,8 @@ use std::{
 };
 
 use crate::{
+    client::ChimeraClient,
     config::chimera::ClashCore,
-    core::clash::client::NyanpasuClient,
     utils::candy::{ReqwestSpeedTestExt, parse_gh_url},
 };
 use anyhow::{Result, anyhow};
@@ -231,7 +231,7 @@ impl UpdaterManager {
 
     pub async fn update_core(
         &mut self,
-        runtime_client: &NyanpasuClient,
+        runtime_client: &ChimeraClient,
         core_type: &ClashCore,
     ) -> Result<usize> {
         if self.manifest_version.manifest_version == 0 {

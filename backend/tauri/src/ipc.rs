@@ -9,6 +9,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
+    client::{ChimeraClient, MutationOutcome, RuntimeTransformDiagnostics},
     config::{
         chimera::{self, IVerge},
         clash::ClashInfo,
@@ -31,11 +32,7 @@ use crate::{
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
-        clash::{
-            self,
-            client::{MutationOutcome, NyanpasuClient, RuntimeTransformDiagnostics},
-            core::RunType,
-        },
+        clash::{self, core::RunType},
         handle,
         storage::{Storage, StorageOperationError, WebStorage},
         updater::{self, ManifestVersionLatest},
@@ -286,14 +283,14 @@ impl specta::Type for IpcError {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_profiles(client: State<'_, NyanpasuClient>) -> Result<ProfilesResponse> {
+pub async fn get_profiles(client: State<'_, ChimeraClient>) -> Result<ProfilesResponse> {
     Ok(client.get_profiles().await?.into())
 }
 
 #[tauri::command]
 #[specta::specta]
 pub fn get_runtime_transform_diagnostics(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
 ) -> Result<Option<RuntimeTransformDiagnostics>> {
     Ok(client.runtime_transform_diagnostics()?)
 }
@@ -330,7 +327,7 @@ pub fn is_portable() -> Result<bool> {
 #[tauri::command]
 #[specta::specta]
 pub async fn import_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     url: String,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<ProfileUid>> {
@@ -356,7 +353,7 @@ pub async fn import_profile(
 #[specta::specta]
 pub async fn view_profile(
     app_handle: tauri::AppHandle,
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: String,
 ) -> Result {
     let path = client.get_profile_materialized_path(uid).await?;
@@ -414,7 +411,7 @@ pub async fn patch_verge_config(payload: IVerge) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     active_id: ProfileUid,
     over_id: ProfileUid,
 ) -> Result<MutationOutcome<()>> {
@@ -424,7 +421,7 @@ pub async fn reorder_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn reorder_profiles_by_list(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     list: Vec<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.reorder_profiles_by_list(list).await?)
@@ -433,7 +430,7 @@ pub async fn reorder_profiles_by_list(
 #[tauri::command]
 #[specta::specta]
 pub async fn activate_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: Option<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.activate_profile(uid).await?)
@@ -442,7 +439,7 @@ pub async fn activate_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn set_profile_valid_fields(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     fields: Vec<String>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.set_profile_valid_fields(fields).await?)
@@ -451,7 +448,7 @@ pub async fn set_profile_valid_fields(
 #[tauri::command]
 #[specta::specta]
 pub async fn set_profile_transform_chain(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
     transforms: Vec<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
@@ -461,7 +458,7 @@ pub async fn set_profile_transform_chain(
 #[tauri::command]
 #[specta::specta]
 pub async fn set_global_transform_chain(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     transforms: Vec<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.set_global_transform_chain(transforms).await?)
@@ -470,7 +467,7 @@ pub async fn set_global_transform_chain(
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_profile_metadata(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
     patch: ProfileMetadataPatch,
 ) -> Result<MutationOutcome<()>> {
@@ -482,7 +479,7 @@ pub async fn patch_profile_metadata(
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_remote_profile_options(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
     patch: RemoteProfileOptionsPatch,
 ) -> Result<MutationOutcome<()>> {
@@ -500,7 +497,7 @@ pub async fn patch_remote_profile_options(
 #[tauri::command]
 #[specta::specta]
 pub async fn replace_profile_definition(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
     definition: ProfileDefinition,
 ) -> Result<MutationOutcome<()>> {
@@ -633,7 +630,7 @@ fn web_key(key: &str) -> String {
 }
 
 pub mod service {
-    use super::{NyanpasuClient, Result, State};
+    use super::{ChimeraClient, Result, State};
     use crate::core::service;
 
     /// Additive status projection that preserves the service wire fields while
@@ -674,7 +671,7 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn start_service(client: State<'_, NyanpasuClient>) -> Result {
+    pub async fn start_service(client: State<'_, ChimeraClient>) -> Result {
         let result = service::control::start_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
@@ -688,7 +685,7 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn stop_service(client: State<'_, NyanpasuClient>) -> Result {
+    pub async fn stop_service(client: State<'_, ChimeraClient>) -> Result {
         let result = service::control::stop_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
@@ -702,7 +699,7 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn restart_service(client: State<'_, NyanpasuClient>) -> Result {
+    pub async fn restart_service(client: State<'_, ChimeraClient>) -> Result {
         let result = service::control::restart_service().await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
@@ -735,7 +732,7 @@ pub async fn get_service_install_prompt() -> Result<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_config(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     payload: PatchRuntimeConfig,
 ) -> Result {
     tracing::debug!(
@@ -772,7 +769,7 @@ pub async fn patch_clash_config(
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_clash_core_config(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     payload: PatchClashCoreConfig,
 ) -> Result {
     tracing::debug!("patch clash core config: {payload:?}");
@@ -835,7 +832,7 @@ pub fn get_core_dir() -> Result<String> {
 #[tauri::command]
 #[specta::specta]
 pub async fn get_core_status(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
 ) -> Result<(CoreState, i64, RunType)> {
     let status = client.core_status().await?;
     Ok((status.state, status.state_changed_at, status.run_type))
@@ -946,7 +943,7 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
 #[tauri::command]
 #[specta::specta]
 pub async fn update_core(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     core_type: chimera::ClashCore,
 ) -> Result<usize> {
     let event_id = updater::UpdaterManager::global()
@@ -960,7 +957,7 @@ pub async fn update_core(
 #[tauri::command]
 #[specta::specta]
 pub async fn change_clash_core(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     clash_core: Option<chimera::ClashCore>,
 ) -> Result {
     log::debug!("change_clash_core: {clash_core:?}");
@@ -972,7 +969,7 @@ pub async fn change_clash_core(
 /// restart the sidecar
 #[tauri::command]
 #[specta::specta]
-pub async fn restart_sidecar(client: State<'_, NyanpasuClient>) -> Result {
+pub async fn restart_sidecar(client: State<'_, ChimeraClient>) -> Result {
     client.rebuild_running_config().await?;
     Ok(())
 }
@@ -1008,7 +1005,7 @@ pub async fn update_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn patch_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: String,
     profile: ProfileBuilderRequest,
 ) -> Result<MutationOutcome<()>> {
@@ -1020,7 +1017,7 @@ pub async fn patch_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn delete_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: String,
 ) -> Result<MutationOutcome<()>> {
     Ok(client.delete_profile(uid).await?)
@@ -1029,7 +1026,7 @@ pub async fn delete_profile(
 #[tauri::command]
 #[specta::specta]
 pub async fn read_profile_file(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
 ) -> Result<String> {
     Ok(client.read_profile_file(uid).await?)
@@ -1038,7 +1035,7 @@ pub async fn read_profile_file(
 #[tauri::command]
 #[specta::specta]
 pub async fn save_profile_file(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     uid: ProfileUid,
     file_data: String,
 ) -> Result<MutationOutcome<()>> {
@@ -1049,7 +1046,7 @@ pub async fn save_profile_file(
 #[tauri::command]
 #[specta::specta]
 pub async fn create_profile(
-    client: State<'_, NyanpasuClient>,
+    client: State<'_, ChimeraClient>,
     item: ProfileBuilderRequest,
     file_data: Option<String>,
 ) -> Result<MutationOutcome<ProfileUid>> {
