@@ -54,6 +54,7 @@ anyhow = "1.0"
 thiserror = { workspace = true }
 # 
 chimera-macro = { path = "../chimera-macro" }
+chimera-config = { path = "../chimera-config" }
 
 nanoid = "0.5.0"
 

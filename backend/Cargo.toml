@@ -1,5 +1,5 @@
 [workspace]
-members = ["chimera-macro","tauri"]
+members = ["chimera-config","chimera-macro","tauri"]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
 # the app workspace so its `workspace = true` dependencies resolve against the
 # runtime repository, while selected crates are consumed through path deps.
