@@ -5,12 +5,12 @@ import ChimeraUpdateProvider from '@/components/providers/chimera-update-provide
 import ContextMenuProvider from '@/components/providers/context-menu-provider';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import useIsMobile from '@/hooks/use-is-moblie';
-import Header from './_modules/-header';
+import Header from './_modules/header';
 import {
   DefaultNavbar,
   LegacyNavbarButton,
   MobileNavbar,
-} from './_modules/-navbar';
+} from './_modules/navbar';
 
 export const Route = createFileRoute('/(main)')({
   component: RouteComponent,
