@@ -1,6 +1,9 @@
 import { useSetting } from '@chimera/interface';
 import { Switch } from '@/components/ui/switch';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
 import {
   ItemContainer,
   ItemLabel,
@@ -10,6 +13,17 @@ import {
 export default function AutoLaunchSwitch() {
   const autoLaunch = useSetting('enable_auto_launch');
 
+  const handleAutoLaunch = useLockFn(async () => {
+    try {
+      await autoLaunch.upsert(!autoLaunch.value);
+    } catch (error) {
+      message(`Activation Auto Launch failed!\n Error: ${formatError(error)}`, {
+        title: 'Error',
+        kind: 'error',
+      });
+    }
+  });
+
   return (
     <ItemContainer data-slot="auto-launch-switch-container">
       <ItemLabel>
@@ -17,10 +31,11 @@ export default function AutoLaunchSwitch() {
           {m.settings_system_proxy_auto_launch_label()}
         </ItemLabelText>
       </ItemLabel>
+
       <Switch
         checked={Boolean(autoLaunch.value)}
+        onCheckedChange={handleAutoLaunch}
         loading={autoLaunch.isPending}
-        onCheckedChange={(checked) => void autoLaunch.upsert(checked)}
       />
     </ItemContainer>
   );
