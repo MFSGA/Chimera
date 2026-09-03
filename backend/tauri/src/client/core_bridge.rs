@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
 use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
+use serde_yaml::Mapping;
 
 use super::ChimeraClient;
 
@@ -13,11 +14,38 @@ use crate::{
         profile::item_type::{ProfileUid, ScriptType},
     },
     core::{
-        clash::core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
+        clash::{
+            api::ClashRuntimeConfig,
+            core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
+        },
         connection_interruption::ConnectionInterruptionService,
     },
     enhance::PostProcessingOutput,
 };
+
+/// Narrow boundary around the running core's `/configs` API.
+///
+/// REF already isolates runtime PATCH traffic behind a client-owned port. Chimera
+/// also needs read-back for its verified/rollback transaction, so the boundary
+/// carries both operations and can later host per-core compatibility adapters.
+#[async_trait]
+pub(crate) trait RunningConfigPort: Send + Sync {
+    async fn read(&self) -> anyhow::Result<ClashRuntimeConfig>;
+    async fn patch(&self, patch: &Mapping) -> anyhow::Result<()>;
+}
+
+pub(crate) struct LegacyRunningConfigBridge;
+
+#[async_trait]
+impl RunningConfigPort for LegacyRunningConfigBridge {
+    async fn read(&self) -> anyhow::Result<ClashRuntimeConfig> {
+        crate::core::clash::api::get_configs().await
+    }
+
+    async fn patch(&self, patch: &Mapping) -> anyhow::Result<()> {
+        crate::core::clash::api::patch_configs(patch).await
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct CoreStatusSnapshot {
