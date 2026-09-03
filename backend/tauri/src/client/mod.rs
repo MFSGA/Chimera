@@ -39,6 +39,11 @@ pub(crate) struct ChimeraClient {
     inner: Arc<ChimeraClientInner>,
 }
 
+struct TypedConfigClients {
+    application: ApplicationClient,
+    clash_config: ClashConfigClient,
+}
+
 struct ChimeraClientInner {
     application: ApplicationClient,
     clash_config: ClashConfigClient,
@@ -54,9 +59,12 @@ struct ChimeraClientInner {
 
 impl ChimeraClient {
     pub(crate) fn legacy() -> anyhow::Result<Self> {
-        let application = ApplicationClient::legacy()?;
-        Ok(Self::with_parts_and_application(
-            application,
+        let typed = TypedConfigClients {
+            application: ApplicationClient::legacy()?,
+            clash_config: ClashConfigClient::legacy()?,
+        };
+        Ok(Self::with_parts_and_typed_config(
+            typed,
             Arc::new(LegacyCoreBridge),
             Arc::new(LegacyProfilesReadPort),
             Arc::new(LegacyProfileFsPort),
@@ -75,10 +83,14 @@ impl ChimeraClient {
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
-        let application =
-            ApplicationClient::legacy().expect("test application client should initialize");
-        Self::with_parts_and_application(
-            application,
+        let typed = TypedConfigClients {
+            application: ApplicationClient::legacy()
+                .expect("test application client should initialize"),
+            clash_config: ClashConfigClient::legacy()
+                .expect("test clash config client should initialize"),
+        };
+        Self::with_parts_and_typed_config(
+            typed,
             core,
             profiles,
             profile_files,
@@ -88,8 +100,8 @@ impl ChimeraClient {
         )
     }
 
-    fn with_parts_and_application(
-        application: ApplicationClient,
+    fn with_parts_and_typed_config(
+        typed: TypedConfigClients,
         core: Arc<dyn CoreLifecyclePort>,
         profiles: Arc<dyn ProfilesReadPort>,
         profile_files: Arc<dyn ProfileFsPort>,
@@ -98,8 +110,8 @@ impl ChimeraClient {
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
         let inner = ChimeraClientInner {
-            application,
-            clash_config: ClashConfigClient::legacy(),
+            application: typed.application,
+            clash_config: typed.clash_config,
             core,
             profiles,
             profile_files,

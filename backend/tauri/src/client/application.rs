@@ -8,10 +8,12 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use camino::Utf8PathBuf;
-use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
+use chimera_config::{
+    application::{ChimeraAppConfig, ChimeraAppConfigPatch},
+    clash::config::ClashConfig,
+};
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
-#[cfg(test)]
 use struct_patch::Patch;
 
 use super::ChimeraClient;
@@ -20,10 +22,11 @@ use crate::{
     config::{chimera::IVerge, core::Config},
     core::{handle, sysopt},
     state::{
+        ConditionalReplaceResult,
         application::{
             ApplicationActor, ApplicationActorArgs, ApplicationActorMessage, ApplicationSnapshot,
         },
-        mirror::VergeLegacyBridge,
+        mirror::{PreparedTypedReplace, VergeLegacyBridge},
     },
     utils,
 };
@@ -172,22 +175,64 @@ impl ApplicationClient {
         }
     }
 
-    async fn replace(&self, next: ChimeraAppConfig) -> anyhow::Result<ApplicationSnapshot> {
+    async fn prepare_replace(
+        &self,
+        state: ChimeraAppConfig,
+    ) -> anyhow::Result<PreparedTypedReplace<ChimeraAppConfig>> {
         match self.inner.as_ref() {
-            ApplicationClientInner::Actor { .. } => {
-                self.call(
-                    |reply| ApplicationActorMessage::Replace { state: next, reply },
-                    None,
-                )
-                .await
+            ApplicationClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| ApplicationActorMessage::PrepareReplace { state, reply },
+                        None,
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::SenderError => anyhow::bail!("application actor reply dropped"),
+                    CallResult::Timeout => anyhow::bail!("application actor call timed out"),
+                }
+            }
+            #[cfg(test)]
+            ApplicationClientInner::Static { .. } => Ok(PreparedTypedReplace::new(
+                state,
+                Box::new(crate::state::mirror::NoopPreparedLegacyMirror),
+            )),
+        }
+    }
+
+    async fn replace_prepared_if_version(
+        &self,
+        expected_version: u64,
+        prepared: PreparedTypedReplace<ChimeraAppConfig>,
+    ) -> anyhow::Result<ConditionalReplaceResult<ApplicationSnapshot>> {
+        match self.inner.as_ref() {
+            ApplicationClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| ApplicationActorMessage::ReplacePreparedIfVersion {
+                            expected_version,
+                            prepared,
+                            reply,
+                        },
+                        None,
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::SenderError => anyhow::bail!("application actor reply dropped"),
+                    CallResult::Timeout => anyhow::bail!("application actor call timed out"),
+                }
             }
             #[cfg(test)]
             ApplicationClientInner::Static { state } => {
+                let (next, mirror) = prepared.into_parts();
                 *state.write() = next.clone();
-                Ok(ApplicationSnapshot {
+                mirror.apply();
+                Ok(ConditionalReplaceResult::Replaced(ApplicationSnapshot {
                     state: next,
-                    version: 0,
-                })
+                    version: expected_version + 1,
+                }))
             }
         }
     }
@@ -253,6 +298,30 @@ impl ChimeraClient {
         handle::Handle::refresh_verge();
         Ok(())
     }
+}
+
+enum PreparedLegacyDomain {
+    Application {
+        expected_version: u64,
+        forward: PreparedTypedReplace<ChimeraAppConfig>,
+        rollback: PreparedTypedReplace<ChimeraAppConfig>,
+    },
+    Clash {
+        expected_version: u64,
+        forward: PreparedTypedReplace<ClashConfig>,
+        rollback: PreparedTypedReplace<ClashConfig>,
+    },
+}
+
+enum CommittedLegacyDomain {
+    Application {
+        committed_version: u64,
+        rollback: PreparedTypedReplace<ChimeraAppConfig>,
+    },
+    Clash {
+        committed_version: u64,
+        rollback: PreparedTypedReplace<ClashConfig>,
+    },
 }
 
 struct VergePatchPlan {
@@ -329,51 +398,205 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
     Ok(())
 }
 
+async fn rollback_legacy_domains(
+    client: &ChimeraClient,
+    mut committed: Vec<CommittedLegacyDomain>,
+    primary: anyhow::Error,
+) -> anyhow::Error {
+    let mut failures = Vec::new();
+
+    while let Some(domain) = committed.pop() {
+        match domain {
+            CommittedLegacyDomain::Application {
+                committed_version,
+                rollback,
+            } => match client
+                .inner
+                .application
+                .replace_prepared_if_version(committed_version, rollback)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(_)) => {}
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
+                    format!(
+                        "application rollback conflict: expected {committed_version}, actual {actual_version}"
+                    ),
+                ),
+                Err(error) => failures.push(format!("application rollback failed: {error:#}")),
+            },
+            CommittedLegacyDomain::Clash {
+                committed_version,
+                rollback,
+            } => match client
+                .inner
+                .clash_config
+                .replace_prepared_if_version(committed_version, rollback)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(_)) => {}
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
+                    format!(
+                        "clash rollback conflict: expected {committed_version}, actual {actual_version}"
+                    ),
+                ),
+                Err(error) => failures.push(format!("clash rollback failed: {error:#}")),
+            },
+        }
+    }
+
+    if let Err(error) = Config::verge().data().save_file() {
+        failures.push(format!(
+            "legacy verge rollback persistence failed: {error:#}"
+        ));
+    }
+    if let Err(error) = Config::clash().data().save_config() {
+        failures.push(format!(
+            "legacy clash rollback persistence failed: {error:#}"
+        ));
+    }
+    handle::Handle::refresh_verge();
+
+    if failures.is_empty() {
+        primary
+    } else {
+        anyhow::anyhow!(
+            "{primary:#}; compensation failures: {}",
+            failures.join("; ")
+        )
+    }
+}
+
 async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
     let base = Config::verge().latest().clone();
     let legacy_clash = Config::clash().latest().clone();
     let split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
-    let mut desired_application = base.clone();
-    desired_application.patch_config(split.application.clone());
-    let desired_application = application_from_legacy(&desired_application)?;
+    let application_patch = split.application.clone().unwrap_or_default();
+    let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
 
-    Config::verge()
-        .draft()
-        .patch_config(split.application.clone());
+    let application_pair = if let Some(app_patch) = split.application.as_ref() {
+        let snapshot = client.inner.application.get().await?;
+        let mut projected = base.clone();
+        projected.patch_config(app_patch.clone());
+        let next = application_from_legacy(&projected)?;
+        Some((snapshot, next))
+    } else {
+        None
+    };
 
-    let result = async {
-        let plan = plan_verge_patch(&split.application, split.clash_config.as_ref())?;
+    let clash_pair = if let Some(clash_patch) = split.clash_config.as_ref() {
+        let snapshot = client.inner.clash_config.get_snapshot().await?;
+        let mut next = snapshot.state.clone();
+        next.apply(clash_patch.clone());
+        Some((snapshot, next))
+    } else {
+        None
+    };
+
+    let mut prepared = Vec::new();
+    if let Some((snapshot, next)) = application_pair {
+        prepared.push(PreparedLegacyDomain::Application {
+            expected_version: snapshot.version,
+            forward: client.inner.application.prepare_replace(next).await?,
+            rollback: client
+                .inner
+                .application
+                .prepare_replace(snapshot.state.clone())
+                .await?,
+        });
+    }
+    if let Some((snapshot, next)) = clash_pair {
+        prepared.push(PreparedLegacyDomain::Clash {
+            expected_version: snapshot.version,
+            forward: client.inner.clash_config.prepare_replace(next).await?,
+            rollback: client
+                .inner
+                .clash_config
+                .prepare_replace(snapshot.state.clone())
+                .await?,
+        });
+    }
+
+    let mut committed = Vec::new();
+    for domain in prepared {
+        let commit_error = match domain {
+            PreparedLegacyDomain::Application {
+                expected_version,
+                forward,
+                rollback,
+            } => match client
+                .inner
+                .application
+                .replace_prepared_if_version(expected_version, forward)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
+                    committed.push(CommittedLegacyDomain::Application {
+                        committed_version: snapshot.version,
+                        rollback,
+                    });
+                    continue;
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
+                    "application config version conflict: expected {expected_version}, actual {actual_version}"
+                ),
+                Err(error) => error.context("failed to commit application typed config"),
+            },
+            PreparedLegacyDomain::Clash {
+                expected_version,
+                forward,
+                rollback,
+            } => match client
+                .inner
+                .clash_config
+                .replace_prepared_if_version(expected_version, forward)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
+                    committed.push(CommittedLegacyDomain::Clash {
+                        committed_version: snapshot.version,
+                        rollback,
+                    });
+                    continue;
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
+                    "clash config version conflict: expected {expected_version}, actual {actual_version}"
+                ),
+                Err(error) => error.context("failed to commit clash typed config"),
+            },
+        };
+
+        return Err(rollback_legacy_domains(client, committed, commit_error).await);
+    }
+
+    let finalize = async {
         apply_verge_runtime_change(client, &plan).await?;
-
         if let Some(clash_patch) = split.clash_config.as_ref() {
             client
                 .inner
                 .clash_config
-                .apply_legacy_patch_to_draft(client, clash_patch)
+                .apply_legacy_patch_runtime(client, clash_patch)
                 .await?;
         }
-
-        run_verge_patch_side_effects(&plan, &split.application)?;
-        client
-            .inner
-            .application
-            .replace(desired_application)
-            .await?;
-        Ok(())
+        run_verge_patch_side_effects(&plan, &application_patch)?;
+        Config::verge().data().save_file()?;
+        if split.clash_config.is_some() {
+            Config::clash().data().save_config()?;
+        }
+        handle::Handle::refresh_verge();
+        Ok::<_, anyhow::Error>(())
     }
     .await;
 
-    match result {
-        Ok(()) => {
-            Config::verge().data().save_file()?;
-            handle::Handle::refresh_verge();
-            Ok(())
-        }
-        Err(err) => {
-            Config::verge().discard();
-            Err(err)
-        }
+    if let Err(error) = finalize {
+        return Err(rollback_legacy_domains(
+            client,
+            committed,
+            error.context("failed to finalize legacy verge patch"),
+        )
+        .await);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
