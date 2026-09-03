@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
 import { commands } from './bindings';
+import { executeServiceMutation } from './service-mutation';
 
 export type ServiceType =
   'install' | 'uninstall' | 'start' | 'stop' | 'restart';
@@ -22,27 +23,7 @@ export const useSystemService = () => {
 
   const upsert = useMutation({
     mutationFn: async (type: ServiceType) => {
-      switch (type) {
-        case 'install':
-          await commands.installService();
-          break;
-
-        case 'uninstall':
-          await commands.uninstallService();
-          break;
-
-        case 'start':
-          await commands.startService();
-          break;
-
-        case 'stop':
-          await commands.stopService();
-          break;
-
-        case 'restart':
-          await commands.restartService();
-          break;
-      }
+      await executeServiceMutation(commands, type);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['system-service'] });
