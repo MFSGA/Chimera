@@ -23,7 +23,10 @@ import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded'
 import { useEffect, useState } from 'react';
 import { Button, type ButtonProps } from '@/components/ui/button';
 import { CircularProgress } from '@/components/ui/progress';
-import { useSystemProxy, useTunMode } from '@/hooks/use-proxy-settings';
+import {
+  useSystemProxyAction,
+  useTunModeAction,
+} from '@/features/system-proxy/use-proxy-settings';
 import * as m from '@/paraglide/messages';
 
 const DEFAULT_BYPASS =
@@ -70,7 +73,7 @@ const ProxyButton = ({
 };
 
 const TunModeButton = (props: Omit<ButtonProps, 'children' | 'loading'>) => {
-  const { execute, isPending, isActive } = useTunMode();
+  const { execute, isPending, isActive } = useTunModeAction();
 
   return (
     <ProxyButton
@@ -88,7 +91,7 @@ const TunModeButton = (props: Omit<ButtonProps, 'children' | 'loading'>) => {
 const SystemProxyButton = (
   props: Omit<ButtonProps, 'children' | 'loading'>,
 ) => {
-  const { execute, isPending, isActive } = useSystemProxy();
+  const { execute, isPending, isActive } = useSystemProxyAction();
 
   return (
     <ProxyButton

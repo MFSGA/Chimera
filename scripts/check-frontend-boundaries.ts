@@ -14,6 +14,9 @@ const legacyUiRoots = [
     path.join(workspaceRoot, 'frontend/chimera/src/pages/(legacy)'),
   ),
   path.normalize(
+    path.join(workspaceRoot, 'frontend/chimera/src/components/dashboard'),
+  ),
+  path.normalize(
     path.join(workspaceRoot, 'frontend/chimera/src/components/setting'),
   ),
 ];
