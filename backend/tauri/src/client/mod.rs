@@ -3,6 +3,8 @@
 //! This follows REF's client ownership direction while preserving Chimera's
 //! staged migration from legacy globals and Chimera-specific core support.
 
+mod core_bridge;
+mod event_sink;
 pub mod rebuild;
 pub mod runtime;
 
@@ -15,160 +17,36 @@ use std::{
 use anyhow::Context;
 use async_trait::async_trait;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
-use chimera_ipc::api::status::CoreState;
-use serde::{Deserialize, Serialize};
 
-use crate::core::clash::{
-    core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
-    transaction::{RuntimePatchCoordinator, TransactionOutcome},
-};
+use crate::core::clash::transaction::{RuntimePatchCoordinator, TransactionOutcome};
 const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
 
-use crate::{
-    config::{
-        chimera::{ClashCore, IVerge},
-        core::Config,
-        profile::{
-            builder::ProfileBuilder,
-            item::{
-                Profile, ProfileKindGetter, ProfileMetaGetter,
-                remote::{
-                    PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
-                    RemoteProfileOptionsBuilder, SubscriptionInfo,
-                },
-                shared::{PreparedProfileFile, ProfileSharedBuilder},
-                utils::generate_uid,
-            },
-            item_type::{ProfileItemType, ProfileUid, ScriptType},
-            profiles::Profiles,
-        },
-        runtime::ClashConfigOverrides,
-    },
-    core::{connection_interruption::ConnectionInterruptionService, handle::Handle},
-    enhance::PostProcessingOutput,
+pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
+pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
+use self::{
+    core_bridge::{CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, LegacyCoreBridge},
+    event_sink::{LegacyUiEventSink, UiEventSink},
 };
 
-/// Public mutation wire aligned with REF: desired state is committed first;
-/// post-commit side-effect failures degrade instead of turning the mutation
-/// into an error that would imply the commit was rolled back.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum MutationOutcome<T> {
-    Applied {
-        value: T,
+use crate::config::{
+    chimera::{ClashCore, IVerge},
+    core::Config,
+    profile::{
+        builder::ProfileBuilder,
+        item::{
+            Profile, ProfileKindGetter, ProfileMetaGetter,
+            remote::{
+                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
+                RemoteProfileOptionsBuilder, SubscriptionInfo,
+            },
+            shared::{PreparedProfileFile, ProfileSharedBuilder},
+            utils::generate_uid,
+        },
+        item_type::{ProfileItemType, ProfileUid},
+        profiles::Profiles,
     },
-    CommittedDegraded {
-        value: T,
-        degradations: Vec<Degradation>,
-    },
-}
-
-impl<T> MutationOutcome<T> {
-    pub fn from_parts(value: T, degradations: Vec<Degradation>) -> Self {
-        if degradations.is_empty() {
-            Self::Applied { value }
-        } else {
-            Self::CommittedDegraded {
-                value,
-                degradations,
-            }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn degradations(&self) -> &[Degradation] {
-        match self {
-            Self::Applied { .. } => &[],
-            Self::CommittedDegraded { degradations, .. } => degradations,
-        }
-    }
-
-    fn into_parts(self) -> (T, Vec<Degradation>) {
-        match self {
-            Self::Applied { value } => (value, Vec::new()),
-            Self::CommittedDegraded {
-                value,
-                degradations,
-            } => (value, degradations),
-        }
-    }
-
-    fn extend_degradations(self, extra: Vec<Degradation>) -> Self {
-        let (value, mut degradations) = self.into_parts();
-        degradations.extend(extra);
-        Self::from_parts(value, degradations)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-pub struct Degradation {
-    pub phase: DegradationPhase,
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub enum DegradationPhase {
-    LegacyMirror,
-    ProfileMaterialization,
-    RuntimeBuild,
-    RuntimeCheck,
-    RuntimePromote,
-    RuntimePublish,
-    RuntimeApply,
-    CoreRollback,
-    SystemEffect,
-    UiEffect,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CoreStatusSnapshot {
-    pub(crate) state: CoreState,
-    pub(crate) state_changed_at: i64,
-    pub(crate) run_type: RunType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-pub struct RuntimeTransformFailureDiagnostics {
-    pub attempt_revision: u64,
-    pub transform_uid: ProfileUid,
-    pub scope_uid: Option<ProfileUid>,
-    pub script_type: Option<ScriptType>,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
-pub struct RuntimeTransformDiagnostics {
-    pub revision: u64,
-    pub output: PostProcessingOutput,
-    pub failure: Option<RuntimeTransformFailureDiagnostics>,
-}
-
-#[async_trait]
-pub(crate) trait CoreLifecycleLease: Send {
-    async fn rebuild_running_config(&mut self) -> anyhow::Result<()>;
-    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()>;
-    async fn stop(&mut self) -> anyhow::Result<()>;
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
-}
-
-#[async_trait]
-pub(crate) trait CoreLifecyclePort: Send + Sync {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
-    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
-    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        Ok(None)
-    }
-    async fn on_profile_change(&self);
-}
-
-pub(crate) trait UiEventSink: Send + Sync {
-    fn refresh_clash(&self);
-    fn refresh_runtime_transform_diagnostics(&self);
-    fn refresh_profiles(&self);
-}
+    runtime::ClashConfigOverrides,
+};
 
 pub(crate) trait ProfilesReadPort: Send + Sync {
     fn snapshot(&self) -> anyhow::Result<Profiles>;
@@ -522,89 +400,6 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
     }
 }
 
-struct LegacyCoreLifecyclePort;
-
-struct LegacyCoreLifecycleLease {
-    lease: CoreManagerLifecycleLease<'static>,
-}
-
-#[async_trait]
-impl CoreLifecycleLease for LegacyCoreLifecycleLease {
-    async fn rebuild_running_config(&mut self) -> anyhow::Result<()> {
-        self.lease.rebuild_running_config().await
-    }
-
-    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()> {
-        self.lease.run_core_from(config_path).await
-    }
-
-    async fn stop(&mut self) -> anyhow::Result<()> {
-        self.lease.stop_core().await
-    }
-
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()> {
-        self.lease.change_core(clash_core).await
-    }
-}
-
-#[async_trait]
-impl CoreLifecyclePort for LegacyCoreLifecyclePort {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
-        Ok(Box::new(LegacyCoreLifecycleLease {
-            lease: CoreManager::global().begin_lifecycle().await,
-        }))
-    }
-
-    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        let (state, state_changed_at, run_type) = CoreManager::global().status().await;
-        Ok(CoreStatusSnapshot {
-            state: state.into_owned(),
-            state_changed_at,
-            run_type,
-        })
-    }
-
-    fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        let core = CoreManager::global();
-        let failure =
-            core.runtime_transform_failure()
-                .map(|failure| RuntimeTransformFailureDiagnostics {
-                    attempt_revision: failure.attempt_revision.get(),
-                    transform_uid: failure.transform_uid,
-                    scope_uid: failure.scope_uid,
-                    script_type: failure.script_type,
-                    message: failure.message,
-                });
-        Ok(core
-            .runtime_transform_output()
-            .map(|(revision, output)| RuntimeTransformDiagnostics {
-                revision,
-                output,
-                failure,
-            }))
-    }
-
-    async fn on_profile_change(&self) {
-        let _ = ConnectionInterruptionService::on_profile_change().await;
-    }
-}
-
-struct LegacyUiEventSink;
-
-impl UiEventSink for LegacyUiEventSink {
-    fn refresh_clash(&self) {
-        Handle::refresh_clash();
-    }
-
-    fn refresh_runtime_transform_diagnostics(&self) {
-        Handle::refresh_runtime_transform_diagnostics();
-    }
-
-    fn refresh_profiles(&self) {
-        Handle::refresh_profiles();
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct ChimeraClient {
     inner: Arc<ChimeraClientInner>,
@@ -657,7 +452,7 @@ impl Drop for PendingProfileRefresh {
 impl ChimeraClient {
     pub(crate) fn legacy() -> Self {
         Self::with_parts(
-            Arc::new(LegacyCoreLifecyclePort),
+            Arc::new(LegacyCoreBridge),
             Arc::new(LegacyProfilesReadPort),
             Arc::new(LegacyProfileFsPort),
             Arc::new(LegacyProfilesWritePort),
@@ -1230,11 +1025,16 @@ impl ChimeraClient {
 mod tests {
     use std::sync::Mutex;
 
+    use chimera_ipc::api::status::CoreState;
+
     use super::*;
-    use crate::config::profile::item::{
-        local::LocalProfile,
-        remote::{RemoteProfileOptions, SubscriptionInfo},
-        shared::ProfileShared,
+    use crate::{
+        config::profile::item::{
+            local::LocalProfile,
+            remote::{RemoteProfileOptions, SubscriptionInfo},
+            shared::ProfileShared,
+        },
+        core::RunType,
     };
 
     struct RecordingCore {
