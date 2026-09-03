@@ -73,7 +73,7 @@ export default function UpdaterDialog({
   });
 
   const releasesPageUrl = IS_NIGHTLY
-    ? `https://github.com/libnyanpasu/clash-chimera/releases/tag/pre-release`
+    ? `https://github.com/MFSGA/Chimera/releases/tag/pre-release`
     : `https://github.com/MFSGA/Chimera/releases/tag/v${update.version}`;
 
   return (

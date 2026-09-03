@@ -14,7 +14,7 @@ import { emit } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useMount } from 'ahooks';
 import { lazy, useEffect } from 'react';
-import { useNyanpasuStorageSubscribers } from '@/hooks/use-store';
+import { useChimeraStorageSubscribers } from '@/hooks/use-store';
 import 'dayjs/locale/ru';
 import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/zh-tw';
@@ -165,7 +165,7 @@ function MutationDegradationNotifier() {
 }
 
 export default function App() {
-  useNyanpasuStorageSubscribers();
+  useChimeraStorageSubscribers();
 
   useMount(() => {
     Promise.all([
