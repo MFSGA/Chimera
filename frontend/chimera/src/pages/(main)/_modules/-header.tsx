@@ -1,6 +1,3 @@
-import { commands } from '@chimera/interface';
-import { getSystem } from '@chimera/ui';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { ComponentProps } from 'react';
 import {
   DefaultHeader,
@@ -9,25 +6,10 @@ import {
   MacOSHeaderLeft,
 } from '@/components/window/system-titlebar';
 import WindowTitle from '@/components/window/window-title';
+import { saveCurrentWindowState } from '@/features/window/actions';
 import HeaderMenu from './header-menu';
 
 const APP_NAME = 'Clash Chimera';
-const OS = getSystem();
-const appWindow = getCurrentWebviewWindow();
-
-const saveWindowStateBeforeClose = async () => {
-  if (OS !== 'windows') {
-    return true;
-  }
-
-  const result = await commands.saveWindowSizeState(appWindow.label);
-  if (result.status === 'error') {
-    console.error(result.error);
-  }
-
-  return true;
-};
-
 const Title = () => (
   <WindowTitle>
     <div
@@ -51,7 +33,7 @@ export default function Header({ className, ...props }: ComponentProps<'div'>) {
   ) : (
     <DefaultHeader
       className={className}
-      beforeClose={saveWindowStateBeforeClose}
+      beforeClose={saveCurrentWindowState}
       {...props}
     >
       <Title />
