@@ -17,8 +17,14 @@ serde_with = "=3.20.0"
 strum = { version = "0.28", features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 port_scanner = "0.1.5"
 uuid = { version = "1", features = ["serde", "v4"] }
+enumflags2 = "0.7"
+language-tags = { version = "0.3.2", features = ["serde"] }
+sys-locale = "0.3"
+csscolorparser = { version = "0.8.3", features = ["serde"] }
+chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", features = ["specta"] }
 
 [dev-dependencies]
 serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
