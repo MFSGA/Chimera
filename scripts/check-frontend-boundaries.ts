@@ -25,6 +25,11 @@ const sharedClashBaseUiFiles = new Set(
     (entry) => path.normalize(path.join(workspaceRoot, entry)),
   ),
 );
+const sharedThemeUiFiles = new Set(
+  ['frontend/chimera/src/components/setting/setting-chimera-ui.tsx'].map(
+    (entry) => path.normalize(path.join(workspaceRoot, entry)),
+  ),
+);
 
 const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx']);
 const violations: string[] = [];
@@ -85,6 +90,15 @@ const visit = async (entryPath: string): Promise<void> => {
   ) {
     violations.push(
       `${relativePath}: Clash base UI must use the shared clash-settings feature instead of useClashConfig directly`,
+    );
+  }
+
+  if (
+    sharedThemeUiFiles.has(normalizedEntryPath) &&
+    /\buseSetting\b/.test(source)
+  ) {
+    violations.push(
+      `${relativePath}: legacy theme settings must use the shared theme provider instead of useSetting directly`,
     );
   }
 };
