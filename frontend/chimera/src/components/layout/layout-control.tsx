@@ -1,4 +1,4 @@
-import { commands, useSetting } from '@chimera/interface';
+import { useSetting } from '@chimera/interface';
 import { alpha, cn, getSystem } from '@chimera/ui';
 import {
   CloseRounded,
@@ -11,9 +11,8 @@ import {
 import { Button, ButtonProps } from '@mui/material';
 import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { platform as getPlatform } from '@tauri-apps/plugin-os';
 import { useMemoizedFn } from 'ahooks';
-import { useRef } from 'react';
+import { closeCurrentWindow } from '@/features/window/actions';
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -38,7 +37,6 @@ export const LayoutControl = ({ className }: { className?: string }) => {
     queryFn: () => appWindow.isMaximized(),
   });
   const queryClient = useQueryClient();
-  const platform = useRef(getPlatform());
 
   const toggleAlwaysOnTop = useMemoizedFn(async () => {
     await upsert(!alwaysOnTop);
@@ -81,17 +79,7 @@ export const LayoutControl = ({ className }: { className?: string }) => {
         )}
       </CtrlButton>
 
-      <CtrlButton
-        onClick={() => {
-          if (platform.current === 'windows') {
-            commands.saveWindowSizeState(appWindow.label).finally(() => {
-              appWindow.close();
-            });
-          } else {
-            appWindow.close();
-          }
-        }}
-      >
+      <CtrlButton onClick={closeCurrentWindow}>
         <CloseRounded fontSize="small" />
       </CtrlButton>
     </div>

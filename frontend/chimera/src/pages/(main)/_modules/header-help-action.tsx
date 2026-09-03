@@ -1,6 +1,5 @@
-import { commands, openThat, useSetting } from '@chimera/interface';
+import { commands } from '@chimera/interface';
 import { Link } from '@tanstack/react-router';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type { PropsWithChildren } from 'react';
 import {
   DropdownMenu,
@@ -8,17 +7,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  openBugReport,
+  openProjectRepository,
+} from '@/features/support/actions';
+import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { formatEnvInfos, formatError } from '@/utils';
-import { message } from '@/utils/notification';
-
-const currentWindow = getCurrentWebviewWindow();
 
 const GitHubItem = () => {
-  const handleClick = useLockFn(async () => {
-    await openThat('https://github.com/MFSGA/Chimera');
-  });
+  const handleClick = useLockFn(openProjectRepository);
 
   return (
     <DropdownMenuItem onClick={handleClick}>
@@ -28,25 +26,7 @@ const GitHubItem = () => {
 };
 
 const IssuesItem = () => {
-  const handleClick = useLockFn(async () => {
-    const envs = await commands.collectEnvs();
-
-    if (envs.status !== 'ok') {
-      return;
-    }
-
-    const formattedEnv = encodeURIComponent(
-      formatEnvInfos(envs.data)
-        .split('\n')
-        .map((value) => `> ${value}`)
-        .join('\n'),
-    );
-
-    await openThat(
-      'https://github.com/MFSGA/Chimera/issues/new?assignees=&labels=T%3A+Bug%2CS%3A+Untriaged&projects=&template=bug_report.yaml&env_infos=' +
-        formattedEnv,
-    );
-  });
+  const handleClick = useLockFn(openBugReport);
 
   return (
     <DropdownMenuItem onClick={handleClick}>
@@ -68,30 +48,12 @@ const CollectLogItem = () => {
 };
 
 const LegacyUiItem = () => {
-  const windowType = useSetting('window_type');
-
-  const handleClick = useLockFn(async () => {
-    try {
-      await windowType.upsert('legacy');
-      const result = await commands.createLegacyWindow();
-
-      if (result.status !== 'ok') {
-        throw new Error(result.error);
-      }
-
-      await currentWindow.close();
-    } catch (error) {
-      await message(`Failed to open legacy UI: ${formatError(error)}`, {
-        kind: 'error',
-        title: m.common_error(),
-      });
-    }
-  });
+  const { switchToLegacy, isPending } = useUiSwitch();
 
   return (
     <DropdownMenuItem
-      disabled={windowType.isPending}
-      onClick={() => void handleClick()}
+      disabled={isPending}
+      onClick={() => void switchToLegacy()}
     >
       Switch to Legacy UI
     </DropdownMenuItem>
