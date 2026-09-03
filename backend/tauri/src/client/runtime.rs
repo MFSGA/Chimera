@@ -983,7 +983,13 @@ impl ChimeraClient {
             let clash = self.get_clash_config()?;
             let app = self.get_app_config()?;
             let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
-            lease.rebuild_running_config(clash, target_core).await
+            let run_type = crate::core::RunType::classify(
+                app.enable_service_mode,
+                crate::core::service::ipc::get_ipc_state(),
+            );
+            lease
+                .rebuild_running_config(clash, target_core, run_type)
+                .await
         }
         .await;
         if let Err(error) = result {
