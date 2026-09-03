@@ -278,7 +278,7 @@ export const commands = {
    */
   clearStorage: () => typedError<null, string>(__TAURI_INVOKE('clear_storage')),
   statusService: () =>
-    typedError<StatusInfo, string>(__TAURI_INVOKE('status_service')),
+    typedError<ServiceStatusInfo, string>(__TAURI_INVOKE('status_service')),
   installService: () =>
     typedError<null, string>(__TAURI_INVOKE('install_service')),
   uninstallService: () =>
@@ -1364,13 +1364,24 @@ export type ScriptProfile = {
 
 export type ScriptType = 'javascript' | 'lua';
 
+export type ServiceCompat =
+  | { kind: 'unknown' }
+  | { kind: 'compatible'; server_version: string }
+  | { kind: 'incompatible'; server_version: string; required_major: number }
+  | { kind: 'unparsable'; server_version: string };
+
 export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 
-export type StatusInfo = {
+/**
+ *  Additive status projection that preserves the service wire fields while
+ *  exposing the app-side compatibility decision to frontend consumers.
+ */
+export type ServiceStatusInfo = {
   name: string;
   version: string;
   status: ServiceStatus;
   server: StatusResBody | null;
+  compat: ServiceCompat;
 };
 
 export type StatusResBody = {

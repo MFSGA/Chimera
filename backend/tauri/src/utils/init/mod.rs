@@ -126,9 +126,16 @@ pub fn init_service() -> Result<()> {
                     tracing::info!(
                         "service mode is enabled and service is running, do a update check"
                     );
-                    if let Some(info) = status.server {
-                        let server_ver = semver::Version::parse(info.version.as_ref()).unwrap();
-                        let app_ver = semver::Version::parse(status.version.as_ref()).unwrap();
+                    if let Some(info) = status.server
+                        && let (Some(server_ver), Some(app_ver)) = (
+                            crate::core::service::compat::parse_service_version(
+                                info.version.as_ref(),
+                            ),
+                            crate::core::service::compat::parse_service_version(
+                                status.version.as_ref(),
+                            ),
+                        )
+                    {
                         if app_ver > server_ver {
                             tracing::info!(
                                 "client service ver is newer than exist one, do service update"
@@ -137,6 +144,10 @@ pub fn init_service() -> Result<()> {
                                 log::error!(target: "app", "failed to update service: {e:?}");
                             }
                         }
+                    } else {
+                        tracing::warn!(
+                            "service version not comparable; skipping the auto-update check"
+                        );
                     }
                 }
                 Err(e) => {
