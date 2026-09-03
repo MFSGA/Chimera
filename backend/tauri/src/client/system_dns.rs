@@ -1,5 +1,6 @@
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 use anyhow::Context as _;
+
+use super::ChimeraClient;
 
 pub(crate) trait SystemDnsCache: Send + Sync + 'static {
     fn flush(&self) -> anyhow::Result<()>;
@@ -91,5 +92,15 @@ mod macos_tests {
     fn macos_flush_covers_both_resolver_caches() {
         assert!(MACOS_SCRIPT.contains("dscacheutil -flushcache"));
         assert!(MACOS_SCRIPT.contains("killall -HUP mDNSResponder"));
+    }
+}
+
+impl ChimeraClient {
+    pub(crate) async fn flush_system_dns_cache(&self) -> anyhow::Result<()> {
+        let system_dns = self.inner.system_dns.clone();
+        tokio::task::spawn_blocking(move || system_dns.flush())
+            .await
+            .context("system DNS cache flush task failed")??;
+        Ok(())
     }
 }

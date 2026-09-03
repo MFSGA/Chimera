@@ -16,15 +16,12 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-use anyhow::Context;
-
-use crate::core::clash::transaction::{RuntimePatchCoordinator, TransactionOutcome};
-const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
+use crate::core::clash::transaction::RuntimePatchCoordinator;
 
 pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
-    core_bridge::{CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, LegacyCoreBridge},
+    core_bridge::{CoreLifecyclePort, LegacyCoreBridge},
     event_sink::{LegacyUiEventSink, UiEventSink},
     profiles::{
         LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
@@ -33,45 +30,11 @@ use self::{
     system_dns::{OsSystemDnsCache, SystemDnsCache},
 };
 
-use crate::config::{
-    chimera::{ClashCore, IVerge},
-    profile::{
-        builder::ProfileBuilder,
-        item::{
-            Profile, ProfileKindGetter, ProfileMetaGetter,
-            remote::{
-                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
-                RemoteProfileOptionsBuilder, SubscriptionInfo,
-            },
-            shared::{PreparedProfileFile, ProfileSharedBuilder},
-            utils::generate_uid,
-        },
-        item_type::{ProfileItemType, ProfileUid},
-        profiles::Profiles,
-    },
-    runtime::ClashConfigOverrides,
-};
+use crate::config::{chimera::IVerge, profile::item_type::ProfileUid};
 
 #[derive(Clone)]
 pub(crate) struct ChimeraClient {
     inner: Arc<ChimeraClientInner>,
-}
-
-pub(crate) struct CoreUpdateLease {
-    lease: Box<dyn CoreLifecycleLease>,
-}
-
-impl CoreUpdateLease {
-    pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
-        self.lease.stop().await
-    }
-
-    pub(crate) async fn run_core_from(
-        &mut self,
-        config_path: &std::path::Path,
-    ) -> anyhow::Result<()> {
-        self.lease.run_core_from(config_path).await
-    }
 }
 
 struct ChimeraClientInner {
@@ -85,21 +48,6 @@ struct ChimeraClientInner {
     profile_commit: tokio::sync::Mutex<()>,
     verge_patch: tokio::sync::Mutex<()>,
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
-}
-
-struct PendingProfileRefresh {
-    inner: Arc<ChimeraClientInner>,
-    uid: ProfileUid,
-}
-
-impl Drop for PendingProfileRefresh {
-    fn drop(&mut self) {
-        self.inner
-            .pending_refreshes
-            .lock()
-            .expect("pending profile refresh lock")
-            .remove(&self.uid);
-    }
 }
 
 impl ChimeraClient {
@@ -139,549 +87,9 @@ impl ChimeraClient {
         }
     }
 
-    pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        self.inner.core.status().await
-    }
-
-    pub(crate) fn runtime_transform_diagnostics(
-        &self,
-    ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        self.inner.core.runtime_transform_diagnostics()
-    }
-
-    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
-        let mut lease = self.inner.core.begin().await?;
-        lease.change_core(clash_core).await
-    }
-
-    pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
-        let mut lease = self.inner.core.begin().await?;
-        lease.stop().await
-    }
-
-    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
-        Ok(CoreUpdateLease {
-            lease: self.inner.core.begin().await?,
-        })
-    }
-
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
         let _patch = self.inner.verge_patch.lock().await;
         crate::feat::patch_verge_uncoordinated(self, patch).await
-    }
-
-    pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
-        self.inner.profiles.snapshot()
-    }
-
-    pub(crate) async fn flush_system_dns_cache(&self) -> anyhow::Result<()> {
-        let system_dns = self.inner.system_dns.clone();
-        tokio::task::spawn_blocking(move || system_dns.flush())
-            .await
-            .context("system DNS cache flush task failed")??;
-        Ok(())
-    }
-
-    pub(crate) fn reserve_managed_profile_identity(
-        &self,
-        kind: &ProfileItemType,
-    ) -> anyhow::Result<(ProfileUid, PreparedProfileFile)> {
-        let profiles = self.inner.profiles.snapshot()?;
-        for uid in std::iter::repeat_with(|| generate_uid(kind)).take(PROFILE_IDENTITY_ATTEMPTS) {
-            let file = ProfileSharedBuilder::default_file_name(kind, &uid);
-            let collides_with_state = profiles
-                .items
-                .iter()
-                .any(|profile| profile.uid() == uid || profile.file() == file);
-            if collides_with_state {
-                continue;
-            }
-            if let Some(prepared) = PreparedProfileFile::reserve(&file)? {
-                return Ok((uid, prepared));
-            }
-        }
-        anyhow::bail!("failed to reserve a unique managed profile identity")
-    }
-
-    fn begin_profile_refresh(&self, uid: &ProfileUid) -> anyhow::Result<PendingProfileRefresh> {
-        let mut pending = self
-            .inner
-            .pending_refreshes
-            .lock()
-            .expect("pending profile refresh lock");
-        anyhow::ensure!(
-            pending.insert(uid.clone()),
-            "profile refresh already in progress"
-        );
-        drop(pending);
-        Ok(PendingProfileRefresh {
-            inner: self.inner.clone(),
-            uid: uid.clone(),
-        })
-    }
-
-    fn remote_profile_state_snapshot(&self, uid: &ProfileUid) -> anyhow::Result<RemoteProfile> {
-        let profiles = self.inner.profiles.snapshot()?;
-        let item = profiles.get_item(uid)?;
-        item.as_remote()
-            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
-            .cloned()
-    }
-
-    async fn remote_profile_snapshot(
-        &self,
-        uid: &ProfileUid,
-    ) -> anyhow::Result<(RemoteProfile, String)> {
-        let remote = self.remote_profile_state_snapshot(uid)?;
-        let previous_file = self.inner.profile_files.read(&remote.shared.file).await?;
-        Ok((remote, previous_file))
-    }
-
-    fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
-        serde_yaml::to_string(&(
-            &profile.url,
-            &profile.option,
-            &profile.shared.file,
-            profile.shared.updated,
-            &profile.chain,
-            &profile.extra,
-        ))
-        .context("failed to fingerprint remote profile definition")
-    }
-
-    fn ensure_refresh_is_current(
-        expected_fingerprint: &str,
-        current: &RemoteProfile,
-    ) -> anyhow::Result<()> {
-        let current_fingerprint = Self::remote_profile_fingerprint(current)?;
-        anyhow::ensure!(
-            current_fingerprint == expected_fingerprint,
-            "profile changed while refresh was in progress"
-        );
-        Ok(())
-    }
-
-    pub(crate) async fn get_profile_materialized_path(
-        &self,
-        uid: ProfileUid,
-    ) -> anyhow::Result<std::path::PathBuf> {
-        let profiles = self.inner.profiles.snapshot()?;
-        let item = profiles.get_item(&uid)?;
-        self.inner.profile_files.resolve_path(item.file()).await
-    }
-
-    pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
-        let profiles = self.inner.profiles.snapshot()?;
-        let item = profiles.get_item(&uid)?;
-        let raw = self.inner.profile_files.read(item.file()).await?;
-        if matches!(item.kind(), ProfileItemType::Script(_)) {
-            return Ok(raw);
-        }
-        let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
-        serde_yaml::to_string(&data).context("failed to convert yaml to string")
-    }
-
-    pub(crate) async fn commit_new_profile(
-        &self,
-        profile: Profile,
-        mut prepared_file: PreparedProfileFile,
-        materialized_content: Option<String>,
-    ) -> anyhow::Result<MutationOutcome<ProfileUid>> {
-        if let Some(content) = materialized_content {
-            self.inner
-                .profile_files
-                .write_atomic(profile.file(), &content)
-                .await?;
-            prepared_file.mark_materialized();
-        }
-
-        let (uid, activate) = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let result = self.inner.profile_writes.add(profile).await?;
-            self.inner.ui_sink.refresh_profiles();
-            result
-        };
-        let mut outcome = MutationOutcome::from_parts(uid, Vec::new());
-        if activate {
-            let runtime = self.after_profile_runtime_commit("profile creation").await;
-            outcome = outcome.extend_degradations(runtime.degradations().to_vec());
-        }
-        prepared_file.commit();
-        Ok(outcome)
-    }
-
-    pub(crate) async fn patch_profile(
-        &self,
-        uid: ProfileUid,
-        profile: ProfileBuilder,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        {
-            let _commit = self.inner.profile_commit.lock().await;
-            self.inner
-                .profile_writes
-                .patch_profile(&uid, profile)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-        }
-        Ok(self.after_profile_runtime_commit("profile patch").await)
-    }
-
-    pub(crate) async fn patch_profile_metadata(
-        &self,
-        uid: ProfileUid,
-        name: Option<String>,
-        desc: Option<Option<String>>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        self.inner
-            .profile_writes
-            .patch_metadata(&uid, name, desc)
-            .await?;
-        self.inner.ui_sink.refresh_profiles();
-        Ok(MutationOutcome::from_parts((), Vec::new()))
-    }
-
-    pub(crate) async fn patch_remote_profile_options(
-        &self,
-        uid: ProfileUid,
-        user_agent: Option<Option<String>>,
-        with_proxy: Option<bool>,
-        self_proxy: Option<bool>,
-        update_interval_minutes: Option<u64>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        self.inner
-            .profile_writes
-            .patch_remote_options(
-                &uid,
-                user_agent,
-                with_proxy,
-                self_proxy,
-                update_interval_minutes,
-            )
-            .await?;
-        self.inner.ui_sink.refresh_profiles();
-        Ok(MutationOutcome::from_parts((), Vec::new()))
-    }
-
-    async fn commit_refreshed_profile(
-        &self,
-        uid: ProfileUid,
-        expected_fingerprint: String,
-        previous_file: String,
-        prepared: PreparedSubscriptionUpdate,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        let current = self.remote_profile_state_snapshot(&uid)?;
-        Self::ensure_refresh_is_current(&expected_fingerprint, &current)?;
-        let mut updated = current.clone();
-        let content = updated.apply_prepared_subscription_update(prepared)?;
-        let file = current.shared.file.clone();
-        self.inner
-            .profile_files
-            .write_atomic(&file, &content)
-            .await?;
-        let affects_current = match self
-            .inner
-            .profile_writes
-            .commit_refreshed(&uid, updated)
-            .await
-        {
-            Ok(affects_current) => affects_current,
-            Err(error) => {
-                if let Err(restore_error) = self
-                    .inner
-                    .profile_files
-                    .write_atomic(&file, &previous_file)
-                    .await
-                {
-                    return Err(error.context(format!(
-                        "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
-                    )));
-                }
-                return Err(error);
-            }
-        };
-        self.inner.ui_sink.refresh_profiles();
-        drop(_commit);
-        if affects_current {
-            Ok(self
-                .after_profile_runtime_commit("remote profile refresh")
-                .await)
-        } else {
-            Ok(MutationOutcome::from_parts((), Vec::new()))
-        }
-    }
-
-    pub(crate) async fn refresh_profile(
-        &self,
-        uid: ProfileUid,
-        options: Option<RemoteProfileOptionsBuilder>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _pending = self.begin_profile_refresh(&uid)?;
-        if let Some(options) = options {
-            let _commit = self.inner.profile_commit.lock().await;
-            self.inner
-                .profile_writes
-                .apply_remote_options(&uid, options)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-        }
-        let (initial, previous_file) = self.remote_profile_snapshot(&uid).await?;
-        let expected_fingerprint = Self::remote_profile_fingerprint(&initial)?;
-        let prepared = initial.prepare_subscription_update(None).await?;
-        self.commit_refreshed_profile(uid, expected_fingerprint, previous_file, prepared)
-            .await
-    }
-
-    pub(crate) async fn replace_remote_profile_definition(
-        &self,
-        uid: ProfileUid,
-        file: String,
-        updated_at: Option<usize>,
-        url: url::Url,
-        option: Option<RemoteProfileOptions>,
-        subscription: Option<SubscriptionInfo>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let affects_current = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let affects_current = self
-                .inner
-                .profile_writes
-                .replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-            affects_current
-        };
-        if affects_current {
-            Ok(self
-                .after_profile_runtime_commit("profile definition replacement")
-                .await)
-        } else {
-            Ok(MutationOutcome::from_parts((), Vec::new()))
-        }
-    }
-
-    pub(crate) async fn delete_profile(
-        &self,
-        uid: ProfileUid,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let (file, affects_current) = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let result = self.inner.profile_writes.delete(&uid).await?;
-            self.inner.ui_sink.refresh_profiles();
-            result
-        };
-        let mut degradations = Vec::new();
-        if let Err(error) = self.inner.profile_files.remove(&file).await {
-            degradations.push(Degradation {
-                phase: DegradationPhase::ProfileMaterialization,
-                code: "cleanup_deferred".into(),
-                message: error.to_string(),
-                retryable: true,
-            });
-        }
-        if affects_current {
-            degradations.extend(
-                self.after_profile_runtime_commit("profile deletion")
-                    .await
-                    .degradations()
-                    .iter()
-                    .cloned(),
-            );
-        }
-        Ok(MutationOutcome::from_parts((), degradations))
-    }
-
-    pub(crate) async fn reorder_profile(
-        &self,
-        active_id: ProfileUid,
-        over_id: ProfileUid,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        self.inner
-            .profile_writes
-            .reorder(&active_id, &over_id)
-            .await?;
-        self.inner.ui_sink.refresh_profiles();
-        Ok(MutationOutcome::from_parts((), Vec::new()))
-    }
-
-    pub(crate) async fn reorder_profiles_by_list(
-        &self,
-        list: Vec<ProfileUid>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        self.inner.profile_writes.reorder_by_list(&list).await?;
-        self.inner.ui_sink.refresh_profiles();
-        Ok(MutationOutcome::from_parts((), Vec::new()))
-    }
-
-    async fn after_profile_runtime_commit(&self, operation: &str) -> MutationOutcome<()> {
-        match self.rebuild_profile_runtime().await {
-            Ok(()) => MutationOutcome::from_parts((), Vec::new()),
-            Err(error) => {
-                log::warn!(target: "app", "post-commit rebuild failed after {operation}; state stays committed: {error:?}");
-                MutationOutcome::from_parts(
-                    (),
-                    vec![Degradation {
-                        phase: DegradationPhase::RuntimeBuild,
-                        code: "runtime_rebuild_failed".into(),
-                        message: error.to_string(),
-                        retryable: true,
-                    }],
-                )
-            }
-        }
-    }
-
-    pub(crate) async fn activate_profile(
-        &self,
-        uid: Option<ProfileUid>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        {
-            let _commit = self.inner.profile_commit.lock().await;
-            self.inner.profile_writes.set_current(uid.as_ref()).await?;
-            self.inner.ui_sink.refresh_profiles();
-        }
-        Ok(self
-            .after_profile_runtime_commit("profile activation")
-            .await)
-    }
-
-    pub(crate) async fn set_profile_valid_fields(
-        &self,
-        fields: Vec<String>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        {
-            let _commit = self.inner.profile_commit.lock().await;
-            self.inner.profile_writes.set_valid_fields(&fields).await?;
-            self.inner.ui_sink.refresh_profiles();
-        }
-        Ok(self
-            .after_profile_runtime_commit("profile valid fields update")
-            .await)
-    }
-
-    pub(crate) async fn set_profile_transform_chain(
-        &self,
-        uid: ProfileUid,
-        transforms: Vec<ProfileUid>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let affects_current = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let affects_current = self
-                .inner
-                .profile_writes
-                .set_profile_transform_chain(&uid, &transforms)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-            affects_current
-        };
-        if affects_current {
-            Ok(self
-                .after_profile_runtime_commit("profile transform chain update")
-                .await)
-        } else {
-            Ok(MutationOutcome::from_parts((), Vec::new()))
-        }
-    }
-
-    pub(crate) async fn set_global_transform_chain(
-        &self,
-        transforms: Vec<ProfileUid>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let changed = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let changed = self
-                .inner
-                .profile_writes
-                .set_global_transform_chain(&transforms)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-            changed
-        };
-        if changed {
-            Ok(self
-                .after_profile_runtime_commit("global transform chain update")
-                .await)
-        } else {
-            Ok(MutationOutcome::from_parts((), Vec::new()))
-        }
-    }
-
-    pub(crate) async fn save_profile_file(
-        &self,
-        uid: ProfileUid,
-        file_data: String,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let affects_current = {
-            let _commit = self.inner.profile_commit.lock().await;
-            let profiles = self.inner.profiles.snapshot()?;
-            let item = profiles.get_item(&uid)?;
-            let kind = item.kind();
-            anyhow::ensure!(
-                !matches!(kind, ProfileItemType::Remote),
-                "remote profiles are updater-owned"
-            );
-            if !matches!(kind, ProfileItemType::Script(_)) {
-                serde_yaml::from_str::<serde_yaml::Mapping>(&file_data)
-                    .context("failed to parse profile YAML")?;
-            }
-            self.inner
-                .profile_files
-                .write_atomic(item.file(), &file_data)
-                .await?;
-            profiles.is_runtime_relevant(&uid)
-        };
-        if affects_current {
-            Ok(self.after_profile_runtime_commit("profile file save").await)
-        } else {
-            Ok(MutationOutcome::from_parts((), Vec::new()))
-        }
-    }
-
-    pub(crate) async fn patch_running_clash_overrides(
-        &self,
-        overrides: ClashConfigOverrides,
-    ) -> TransactionOutcome {
-        let mapping = overrides.to_mapping();
-        let persist_overrides = overrides.clone();
-        let client = self.clone();
-        self.inner
-            .runtime_patch
-            .apply(
-                mapping,
-                crate::core::clash::api::get_configs,
-                |patch| async move { crate::core::clash::api::patch_configs(&patch).await },
-                move |_patch| {
-                    let overrides = persist_overrides.clone();
-                    let client = client.clone();
-                    async move { crate::feat::patch_clash_overrides(&client, overrides).await }
-                },
-            )
-            .await
-    }
-
-    pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        let result = async {
-            let mut lease = self.inner.core.begin().await?;
-            lease.rebuild_running_config().await
-        }
-        .await;
-        if let Err(error) = result {
-            self.inner.ui_sink.refresh_runtime_transform_diagnostics();
-            return Err(error);
-        }
-        self.inner.ui_sink.refresh_clash();
-        crate::feat::update_proxies_buff(None);
-        Ok(())
-    }
-
-    async fn rebuild_profile_runtime(&self) -> anyhow::Result<()> {
-        self.rebuild_running_config().await?;
-        self.inner.core.on_profile_change().await;
-        Ok(())
     }
 }
 
@@ -692,13 +100,26 @@ mod tests {
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
 
+    use super::core_bridge::{CoreLifecycleLease, CoreStatusSnapshot};
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
-        config::profile::item::{
-            local::LocalProfile,
-            remote::{RemoteProfileOptions, SubscriptionInfo},
-            shared::ProfileShared,
+        config::{
+            chimera::ClashCore,
+            profile::{
+                builder::ProfileBuilder,
+                item::{
+                    Profile, ProfileMetaGetter,
+                    local::LocalProfile,
+                    remote::{
+                        PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
+                        RemoteProfileOptionsBuilder, SubscriptionInfo,
+                    },
+                    shared::ProfileShared,
+                },
+                item_type::ProfileUid,
+                profiles::Profiles,
+            },
         },
         core::RunType,
     };
