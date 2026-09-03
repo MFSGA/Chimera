@@ -1,69 +1,42 @@
-import {
-  openUWPTool,
-  useClashConfig,
-  useRuntimeProfile,
-  useSetting,
-  type TunStack as TunStackType,
-} from '@chimera/interface';
+import { openUWPTool } from '@chimera/interface';
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { Button, List, ListItem, ListItemText } from '@mui/material';
-import { useMemo } from 'react';
-import { useLockFn } from '@/hooks/use-lock-fn';
+import {
+  useClashBaseSettings,
+  type ClashLogLevel,
+} from '@/features/clash-settings/use-clash-base-settings';
+import { useTunStackModel } from '@/features/tun-stack/use-tun-stack';
 import { useCoreType } from '@/hooks/use-store';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
 import getSystem from '@/utils/get-system';
 import { message } from '@/utils/notification';
 
 const isWIN = getSystem() === 'windows';
 
 const AllowLan = () => {
-  const { query, upsert } = useClashConfig();
-
-  const value = useMemo(() => query.data?.['allow-lan'], [query.data]);
-
-  const handleAllowLan = useLockFn(async (input: boolean) => {
-    try {
-      await upsert.mutateAsync({ 'allow-lan': input });
-    } catch (error) {
-      message(formatError(error), {
-        title: m.common_error(),
-        kind: 'error',
-      });
-    }
-  });
+  const { allowLan, isPending, setAllowLan } = useClashBaseSettings();
 
   return (
     <SwitchItem
       label={m.settings_clash_settings_allow_lan_label()}
-      checked={Boolean(value)}
+      checked={allowLan}
+      disabled={isPending}
       id="runtime-config-allow-lan"
-      onChange={(_event, checked) => handleAllowLan(checked)}
+      onChange={(_event, checked) => setAllowLan(checked)}
     />
   );
 };
 
 const IPv6 = () => {
-  const { query, upsert } = useClashConfig();
-
-  const value = useMemo(() => query.data?.['ipv6'], [query.data]);
-  const handleIPv6 = useLockFn(async (input: boolean) => {
-    try {
-      await upsert.mutateAsync({ ipv6: input });
-    } catch (error) {
-      message(formatError(error), {
-        title: m.common_error(),
-        kind: 'error',
-      });
-    }
-  });
+  const { ipv6, isPending, setIPv6 } = useClashBaseSettings();
 
   return (
     <SwitchItem
       label={m.settings_clash_settings_ipv6_label()}
-      checked={Boolean(value)}
+      checked={ipv6}
+      disabled={isPending}
       id="runtime-config-ipv6"
-      onChange={(_event, checked) => handleIPv6(checked)}
+      onChange={(_event, checked) => setIPv6(checked)}
     />
   );
 };
@@ -71,95 +44,38 @@ const IPv6 = () => {
 const TunStack = () => {
   const [coreType] = useCoreType();
 
-  const { value, upsert: upsertTunStack } = useSetting('tun_stack');
-
-  const { value: enableTun, upsert: upsertTun } = useSetting('enable_tun_mode');
-
-  const runtimeProfile = useRuntimeProfile();
-
-  const tunStackOptions = useMemo(() => {
-    const options: {
-      [key: string]: string;
-    } = {
-      system: 'System',
-      gvisor: 'gVisor',
-      mixed: 'Mixed',
-    };
-
-    // clash not support mixed
-    if (coreType === 'clash') {
-      delete options.mixed;
-    }
-    return options;
-  }, [coreType]);
-
-  const selected = useMemo(() => {
-    const stack = value || 'gvisor';
-    return stack in tunStackOptions ? stack : 'gvisor';
-  }, [tunStackOptions, value]);
+  const {
+    execute: changeTunStack,
+    options: tunStackOptions,
+    selected,
+    isPending,
+  } = useTunStackModel(coreType);
 
   return (
     <MenuItem
       label={m.settings_clash_settings_tun_stack_label()}
       options={tunStackOptions}
       selected={selected}
-      onSelected={async (value) => {
-        try {
-          await upsertTunStack(value as TunStackType);
-
-          if (enableTun) {
-            // just to reload clash config
-            await upsertTun(true);
-          }
-
-          // need manual mutate to refetch runtime profile
-          await runtimeProfile.refetch();
-        } catch (error) {
-          message(
-            m.settings_clash_tun_stack_change_failed() +
-              ' \n ' +
-              formatError(error),
-            {
-              title: m.common_error(),
-              kind: 'error',
-            },
-          );
-        }
-      }}
+      disabled={isPending}
+      onSelected={(value) =>
+        changeTunStack(value as keyof typeof tunStackOptions)
+      }
     />
   );
 };
 
 const LogLevel = () => {
-  const { query, upsert } = useClashConfig();
-
-  const options = {
-    debug: 'Debug',
-    info: 'Info',
-    warning: 'Warn',
-    error: 'Error',
-    silent: 'Silent',
-  };
-
-  const value = useMemo(() => query.data?.['log-level'], [query.data]);
-  const handleLogLevel = useLockFn(async (input: string) => {
-    try {
-      await upsert.mutateAsync({ 'log-level': input });
-    } catch (error) {
-      message(formatError(error), {
-        title: m.common_error(),
-        kind: 'error',
-      });
-    }
-  });
+  const { isPending, logLevel, logLevelOptions, setLogLevel } =
+    useClashBaseSettings();
 
   return (
     <MenuItem
       id="runtime-config-log-level"
       label={m.settings_clash_settings_log_level_label()}
-      options={options}
-      selected={value ?? 'debug'}
-      onSelected={(value) => handleLogLevel(value as string)}
+      options={logLevelOptions}
+      selected={logLevel}
+      disabled={isPending}
+      onSelected={(value) => setLogLevel(value as ClashLogLevel)}
     />
   );
 };
