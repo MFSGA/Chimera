@@ -17,7 +17,7 @@ export function useCoreType() {
   return [coreType, setter] as const;
 }
 
-export function useNyanpasuStorageSubscribers() {
+export function useChimeraStorageSubscribers() {
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     listen<[string, string | null]>('storage_value_changed', (event) => {
