@@ -1,5 +1,6 @@
-use crate::{config::core::Config, core::clash::api};
+use crate::core::clash::api;
 use anyhow::Result;
+use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -14,32 +15,24 @@ pub struct ConnectionInterruptionService;
 
 impl ConnectionInterruptionService {
     /// Interrupt connections when proxy changes
-    pub async fn on_proxy_change() -> Result<()> {
-        let config = Config::verge().data().clone();
-        let break_when = config.break_when_proxy_change.unwrap_or_default();
-
+    pub async fn on_proxy_change(break_when: ProxyChangeBreakMode) -> Result<()> {
         match break_when {
-            crate::config::chimera::BreakWhenProxyChange::None => {
+            ProxyChangeBreakMode::Off => {
                 // Do nothing
                 Ok(())
             }
-            crate::config::chimera::BreakWhenProxyChange::Chain => {
+            ProxyChangeBreakMode::ProxyGroup => {
                 // TODO: Implement chain-based connection interruption
                 // This would require tracking which connections use which proxy chains
                 // For now, we'll fall back to closing all connections
                 api::delete_connections(None).await
             }
-            crate::config::chimera::BreakWhenProxyChange::All => {
-                api::delete_connections(None).await
-            }
+            ProxyChangeBreakMode::All => api::delete_connections(None).await,
         }
     }
 
     /// Interrupt connections when profile changes
-    pub async fn on_profile_change() -> Result<()> {
-        let config = Config::verge().data().clone();
-        let break_when = config.break_when_profile_change.unwrap_or_default();
-
+    pub async fn on_profile_change(break_when: bool) -> Result<()> {
         if break_when {
             api::delete_connections(None).await
         } else {
@@ -49,10 +42,7 @@ impl ConnectionInterruptionService {
     }
 
     /// Interrupt connections when mode changes
-    pub async fn on_mode_change() -> Result<()> {
-        let config = Config::verge().data().clone();
-        let break_when = config.break_when_mode_change.unwrap_or_default();
-
+    pub async fn on_mode_change(break_when: bool) -> Result<()> {
         if break_when {
             api::delete_connections(None).await
         } else {
