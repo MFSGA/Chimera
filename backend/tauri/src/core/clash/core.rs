@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
+use chimera_config::clash::config::ClashConfig;
 use chimera_ipc::{
     api::{core::start::CoreStartReq, status::CoreState},
     utils::get_current_ts,
@@ -430,6 +431,12 @@ impl CoreLifecycleLease<'_> {
             .await
     }
 
+    pub(crate) async fn rebuild_running_config_with(&self, clash: ClashConfig) -> Result<()> {
+        self.manager
+            .rebuild_and_run_locked_with(CoreManager::selected_core(), &clash)
+            .await
+    }
+
     pub(crate) async fn run_core_from(&self, config_path: &Path) -> Result<()> {
         self.manager
             .run_core_from_product_inner(
@@ -604,6 +611,7 @@ impl CoreManager {
         &self,
         paths: &RuntimePaths,
         target_core: ClashCore,
+        clash: &ClashConfig,
     ) -> std::result::Result<(), RuntimeRestartError> {
         Config::clash().reload();
         log::debug!(target: "app", "reloaded clash config from file");
@@ -616,7 +624,7 @@ impl CoreManager {
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
-        let (config, transform_output) = match Config::generate_runtime_input().await {
+        let (config, transform_output) = match Config::generate_runtime_input_with(clash).await {
             Ok(output) => output,
             Err(error) => {
                 if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
@@ -705,6 +713,18 @@ impl CoreManager {
     }
 
     async fn rebuild_and_run_locked(&self, target_core: ClashCore) -> Result<()> {
+        let clash = crate::bridge::clash::clash_config_from_legacy(
+            &Config::verge().latest(),
+            &Config::clash().latest().0,
+        )?;
+        self.rebuild_and_run_locked_with(target_core, &clash).await
+    }
+
+    async fn rebuild_and_run_locked_with(
+        &self,
+        target_core: ClashCore,
+        clash: &ClashConfig,
+    ) -> Result<()> {
         let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
         if let Err(error) = paths
             .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
@@ -723,7 +743,10 @@ impl CoreManager {
             .unwrap_or_else(Self::committed_core);
         let previous_clash = Config::clash().data().clone();
 
-        match self.promote_and_start_locked(&paths, target_core).await {
+        match self
+            .promote_and_start_locked(&paths, target_core, clash)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(primary) => {
                 Config::runtime().discard();

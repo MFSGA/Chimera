@@ -133,7 +133,10 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecycleLease for RecordingLease {
-        async fn rebuild_running_config(&mut self) -> anyhow::Result<()> {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: chimera_config::clash::config::ClashConfig,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("rebuild");
             if self.fail_rebuild {
                 anyhow::bail!("injected rebuild failure");
