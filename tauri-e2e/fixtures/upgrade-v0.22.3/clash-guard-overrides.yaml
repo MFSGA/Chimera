@@ -1,0 +1,8 @@
+# v0.22.3-compatible legacy Clash overrides
+mixed-port: 7890
+log-level: warning
+allow-lan: true
+mode: global
+external-controller: 127.0.0.1:9872
+secret: chimera
+ipv6: true
