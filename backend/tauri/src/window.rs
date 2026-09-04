@@ -176,7 +176,7 @@ fn should_center_window(window: &WebviewWindow, state: Option<&WindowState>) -> 
         .any(|(px, py)| px >= x && px < right && py >= y && py < bottom))
 }
 
-fn capture_window_state(window: &WebviewWindow) -> Result<Option<WindowState>> {
+pub(crate) fn capture_window_state(window: &WebviewWindow) -> Result<Option<WindowState>> {
     if window.current_monitor()?.is_none() {
         return Ok(None);
     }
@@ -214,7 +214,6 @@ pub trait AppWindow {
     }
 
     fn get_window_state(&self) -> Option<WindowState>;
-    fn set_window_state(&self, state: Option<WindowState>);
 
     fn create(&self, app_handle: &AppHandle) -> Result<()> {
         if focus_existing_window(app_handle, self.label()) {
@@ -277,20 +276,6 @@ pub trait AppWindow {
 
         if should_center_window(&window, window_state.as_ref()).unwrap_or(true) {
             crate::trace_err!(window.center(), "set win center");
-        }
-
-        Ok(())
-    }
-
-    fn save_state(&self, app_handle: &AppHandle, save_to_file: bool) -> Result<()> {
-        let window = app_handle
-            .get_webview_window(self.label())
-            .ok_or_else(|| anyhow!("failed to get window"))?;
-
-        self.set_window_state(capture_window_state(&window)?);
-
-        if save_to_file {
-            Config::verge().data().save_file()?;
         }
 
         Ok(())
