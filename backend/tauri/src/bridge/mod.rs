@@ -3,6 +3,7 @@ pub mod verge;
 pub mod window;
 
 use chimera_config::{
+    application::ChimeraAppConfig,
     clash::config::{ClashConfig, ClashConfigPatch},
     state::{PersistentState, PersistentStatePatch},
 };
@@ -10,6 +11,17 @@ use serde::{Serialize, de::DeserializeOwned};
 use struct_patch::Patch;
 
 use crate::config::{chimera::IVerge, clash::IClashTemp};
+
+pub(crate) fn typed_config_from_legacy_parts(
+    legacy: &IVerge,
+    legacy_clash: &serde_yaml::Mapping,
+) -> anyhow::Result<(ChimeraAppConfig, PersistentState, ClashConfig)> {
+    Ok((
+        verge::application_from_legacy(legacy)?,
+        window::persistent_state_from_legacy(legacy)?,
+        clash::clash_config_from_legacy(legacy, legacy_clash)?,
+    ))
+}
 
 pub(crate) struct LegacyVergePatchPlan {
     pub application: Option<IVerge>,
