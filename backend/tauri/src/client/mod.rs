@@ -19,12 +19,6 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-pub(crate) use self::{
-    core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
-    event_sink::LegacyUiEventSink,
-    profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
-    system_dns::OsSystemDnsCache,
-};
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
@@ -34,6 +28,12 @@ use self::{
     profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
     system_dns::SystemDnsCache,
+};
+pub(crate) use self::{
+    core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
+    event_sink::LegacyUiEventSink,
+    profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
+    system_dns::OsSystemDnsCache,
 };
 
 use crate::{
