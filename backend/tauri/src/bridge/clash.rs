@@ -22,9 +22,13 @@ pub(crate) struct LegacyClashBridge {
 
 impl Default for LegacyClashBridge {
     fn default() -> Self {
-        Self {
-            legacy_lock: Arc::new(parking_lot::Mutex::new(())),
-        }
+        Self::new(Arc::new(parking_lot::Mutex::new(())))
+    }
+}
+
+impl LegacyClashBridge {
+    pub(crate) fn new(legacy_lock: Arc<parking_lot::Mutex<()>>) -> Self {
+        Self { legacy_lock }
     }
 }
 
@@ -256,6 +260,13 @@ mod tests {
     use super::*;
     use crate::config::chimera::{ExternalControllerPortStrategy, TunStack};
     use struct_patch::Patch;
+
+    #[test]
+    fn bridge_uses_injected_legacy_lock() {
+        let lock = Arc::new(parking_lot::Mutex::new(()));
+        let bridge = LegacyClashBridge::new(lock.clone());
+        assert!(Arc::ptr_eq(&bridge.legacy_lock, &lock));
+    }
 
     #[test]
     fn legacy_projection_preserves_chimera_defaults() {

@@ -20,9 +20,6 @@ use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde_yaml::{Mapping, Value};
 use struct_patch::Patch;
 
-#[cfg(not(test))]
-use crate::bridge::clash::LegacyClashBridge;
-
 use crate::{
     config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
@@ -39,10 +36,9 @@ use crate::{
     },
 };
 
-use super::{
-    ChimeraClient,
-    core_bridge::{LegacyRunningConfigBridge, RunningConfigPort},
-};
+#[cfg(test)]
+use super::core_bridge::LegacyRunningConfigBridge;
+use super::{ChimeraClient, core_bridge::RunningConfigPort};
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -74,37 +70,17 @@ struct ClashPatchPlan {
 }
 
 impl ClashConfigClient {
+    #[cfg(test)]
     pub(crate) fn legacy() -> anyhow::Result<Self> {
-        #[cfg(test)]
-        {
-            Ok(Self::with_state_and_running_config(
-                ClashConfigStateBackend::Static {
-                    state: parking_lot::RwLock::new(ClashConfig::default()),
-                },
-                Arc::new(LegacyRunningConfigBridge),
-            ))
-        }
-
-        #[cfg(not(test))]
-        {
-            let config_path = Utf8PathBuf::from_path_buf(
-                crate::utils::dirs::app_config_dir()?.join("clash-config.yaml"),
-            )
-            .map_err(|path| {
-                anyhow::anyhow!("clash config path is not UTF-8: {}", path.display())
-            })?;
-            let bridge: Arc<dyn ClashLegacyBridge> = Arc::new(LegacyClashBridge::default());
-            let seed = bridge.snapshot_legacy()?;
-            tauri::async_runtime::block_on(Self::new(
-                config_path,
-                seed,
-                bridge,
-                Arc::new(LegacyRunningConfigBridge),
-            ))
-        }
+        Ok(Self::with_state_and_running_config(
+            ClashConfigStateBackend::Static {
+                state: parking_lot::RwLock::new(ClashConfig::default()),
+            },
+            Arc::new(LegacyRunningConfigBridge),
+        ))
     }
 
-    async fn new(
+    pub(super) async fn new(
         config_path: Utf8PathBuf,
         seed: ClashConfig,
         bridge: Arc<dyn ClashLegacyBridge>,
@@ -129,26 +105,18 @@ impl ClashConfigClient {
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ClashConfigActor,
-            ClashConfigActorArgs {
-                manager,
-                bridge: bridge.clone(),
-            },
+            ClashConfigActorArgs { manager, bridge },
         )
         .await
         .context("failed to spawn clash config actor")?;
 
-        let client = Self::with_state_and_running_config(
+        Ok(Self::with_state_and_running_config(
             ClashConfigStateBackend::Actor {
                 actor_ref,
                 snapshot,
             },
             running_config,
-        );
-        bridge
-            .prepare(&client.get_typed())
-            .context("failed to prepare loaded clash legacy mirror")?
-            .apply();
-        Ok(client)
+        ))
     }
 
     fn with_state_and_running_config(
@@ -711,7 +679,7 @@ mod tests {
         .unwrap();
 
         assert!(client.get_typed().enable_tun_mode);
-        assert_eq!(*mirrored_tun.lock().unwrap(), Some(true));
+        assert_eq!(*mirrored_tun.lock().unwrap(), None);
     }
 
     #[test]

@@ -21,9 +21,13 @@ pub(crate) struct LegacyWindowBridge {
 
 impl Default for LegacyWindowBridge {
     fn default() -> Self {
-        Self {
-            legacy_lock: Arc::new(parking_lot::Mutex::new(())),
-        }
+        Self::new(Arc::new(parking_lot::Mutex::new(())))
+    }
+}
+
+impl LegacyWindowBridge {
+    pub(crate) fn new(legacy_lock: Arc<parking_lot::Mutex<()>>) -> Self {
+        Self { legacy_lock }
     }
 }
 
@@ -86,6 +90,13 @@ pub(crate) fn apply_session_state_to_legacy_verge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_uses_injected_legacy_lock() {
+        let lock = Arc::new(parking_lot::Mutex::new(()));
+        let bridge = LegacyWindowBridge::new(lock.clone());
+        assert!(Arc::ptr_eq(&bridge.legacy_lock, &lock));
+    }
 
     #[test]
     fn legacy_window_state_roundtrips_through_typed_session_state() {

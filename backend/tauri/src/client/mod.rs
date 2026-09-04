@@ -5,6 +5,7 @@
 
 mod application;
 mod clash_config;
+mod config_saga;
 mod core_bridge;
 mod error;
 mod event_sink;
@@ -24,23 +25,46 @@ pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
     clash_config::ClashConfigClient,
-    core_bridge::{CoreLifecyclePort, LegacyCoreBridge},
-    event_sink::{LegacyUiEventSink, UiEventSink},
-    profiles::{
-        LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
-        ProfilesReadPort, ProfilesWritePort,
-    },
+    core_bridge::CoreLifecyclePort,
+    event_sink::UiEventSink,
+    profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
-    system_dns::{OsSystemDnsCache, SystemDnsCache},
+    system_dns::SystemDnsCache,
 };
 pub(crate) use self::{
-    core_bridge::RuntimeTransformDiagnostics,
+    core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
     error::{
         ClientError, CompensationFailure, LegacyVergeDomain, PartialCommit, Result as ClientResult,
     },
+    event_sink::LegacyUiEventSink,
+    profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
+    system_dns::OsSystemDnsCache,
+};
+use anyhow::Context as _;
+
+use crate::{
+    config::profile::item_type::ProfileUid,
+    state::mirror::{
+        ClashLegacyBridge, VergeLegacyBridge as VergeLegacyBridgeTrait, WindowLegacyBridge,
+    },
 };
 
-use crate::config::profile::item_type::ProfileUid;
+#[derive(Clone)]
+pub(crate) struct LegacyBridgeSet {
+    pub(crate) verge: Arc<dyn VergeLegacyBridgeTrait>,
+    pub(crate) window: Arc<dyn WindowLegacyBridge>,
+    pub(crate) clash: Arc<dyn ClashLegacyBridge>,
+}
+
+pub(crate) struct ClientSetupArgs {
+    pub(crate) bridges: LegacyBridgeSet,
+    pub(crate) core: Arc<dyn CoreLifecyclePort>,
+    pub(crate) profiles: Arc<dyn ProfilesReadPort>,
+    pub(crate) profile_files: Arc<dyn ProfileFsPort>,
+    pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
+    pub(crate) system_dns: Arc<dyn SystemDnsCache>,
+    pub(crate) ui_sink: Arc<dyn UiEventSink>,
+}
 
 #[derive(Clone)]
 pub(crate) struct ChimeraClient {
@@ -51,6 +75,89 @@ struct TypedConfigClients {
     application: ApplicationClient,
     session_state: SessionStateClient,
     clash_config: ClashConfigClient,
+}
+
+async fn new_typed_config_clients(bridges: LegacyBridgeSet) -> anyhow::Result<TypedConfigClients> {
+    let config_dir = crate::utils::dirs::app_config_dir()?;
+    let application_path = camino::Utf8PathBuf::from_path_buf(config_dir.join("application.yaml"))
+        .map_err(|path| {
+            anyhow::anyhow!("application config path is not UTF-8: {}", path.display())
+        })?;
+    let session_path = camino::Utf8PathBuf::from_path_buf(config_dir.join("session-state.yaml"))
+        .map_err(|path| anyhow::anyhow!("session state path is not UTF-8: {}", path.display()))?;
+    let clash_path = camino::Utf8PathBuf::from_path_buf(config_dir.join("clash-config.yaml"))
+        .map_err(|path| anyhow::anyhow!("clash config path is not UTF-8: {}", path.display()))?;
+
+    let application = ApplicationClient::new(
+        application_path,
+        bridges.verge.snapshot_legacy()?,
+        bridges.verge.clone(),
+    )
+    .await?;
+    let session_state = SessionStateClient::new(
+        session_path,
+        bridges.window.snapshot_legacy()?,
+        bridges.window.clone(),
+    )
+    .await?;
+    let clash_config = ClashConfigClient::new(
+        clash_path,
+        bridges.clash.snapshot_legacy()?,
+        bridges.clash.clone(),
+        Arc::new(core_bridge::LegacyRunningConfigBridge),
+    )
+    .await?;
+
+    let typed = TypedConfigClients {
+        application,
+        session_state,
+        clash_config,
+    };
+    sync_legacy_mirrors(&typed, &bridges).await?;
+    Ok(typed)
+}
+
+async fn sync_legacy_mirrors(
+    typed: &TypedConfigClients,
+    bridges: &LegacyBridgeSet,
+) -> anyhow::Result<()> {
+    let application = typed
+        .application
+        .get()
+        .await
+        .context("failed to read loaded application config")?
+        .state;
+    bridges
+        .verge
+        .prepare(&application)
+        .context("failed to prepare loaded application config legacy mirror")?
+        .apply();
+
+    let session_state = typed
+        .session_state
+        .get()
+        .await
+        .context("failed to read loaded session state")?
+        .state;
+    bridges
+        .window
+        .prepare(&session_state)
+        .context("failed to prepare loaded session state legacy mirror")?
+        .apply();
+
+    let clash_config = typed
+        .clash_config
+        .get_snapshot()
+        .await
+        .context("failed to read loaded clash config")?
+        .state;
+    bridges
+        .clash
+        .prepare(&clash_config)
+        .context("failed to prepare loaded clash config legacy mirror")?
+        .apply();
+
+    Ok(())
 }
 
 struct ChimeraClientInner {
@@ -68,20 +175,25 @@ struct ChimeraClientInner {
 }
 
 impl ChimeraClient {
-    pub(crate) fn legacy() -> anyhow::Result<Self> {
-        let typed = TypedConfigClients {
-            application: ApplicationClient::legacy()?,
-            session_state: SessionStateClient::legacy()?,
-            clash_config: ClashConfigClient::legacy()?,
-        };
+    pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
+        let ClientSetupArgs {
+            bridges,
+            core,
+            profiles,
+            profile_files,
+            profile_writes,
+            system_dns,
+            ui_sink,
+        } = args;
+        let typed = tauri::async_runtime::block_on(new_typed_config_clients(bridges))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
-            Arc::new(LegacyCoreBridge),
-            Arc::new(LegacyProfilesReadPort),
-            Arc::new(LegacyProfileFsPort),
-            Arc::new(LegacyProfilesWritePort),
-            Arc::new(OsSystemDnsCache),
-            Arc::new(LegacyUiEventSink),
+            core,
+            profiles,
+            profile_files,
+            profile_writes,
+            system_dns,
+            ui_sink,
         ))
     }
 
@@ -431,6 +543,196 @@ mod tests {
         fn refresh_profiles(&self) {
             self.events.lock().unwrap().push("refresh-profiles");
         }
+    }
+
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct TypedMirrorCapture {
+        application_auto_check: Option<bool>,
+        session_window_width: Option<u32>,
+        clash_tun: Option<bool>,
+    }
+
+    enum PreparedTypedMirror {
+        Application {
+            capture: Arc<Mutex<TypedMirrorCapture>>,
+            value: bool,
+        },
+        Session {
+            capture: Arc<Mutex<TypedMirrorCapture>>,
+            value: Option<u32>,
+        },
+        Clash {
+            capture: Arc<Mutex<TypedMirrorCapture>>,
+            value: bool,
+        },
+    }
+
+    impl crate::state::mirror::PreparedLegacyMirror for PreparedTypedMirror {
+        fn apply(self: Box<Self>) {
+            match *self {
+                PreparedTypedMirror::Application { capture, value } => {
+                    capture.lock().unwrap().application_auto_check = Some(value);
+                }
+                PreparedTypedMirror::Session { capture, value } => {
+                    capture.lock().unwrap().session_window_width = value;
+                }
+                PreparedTypedMirror::Clash { capture, value } => {
+                    capture.lock().unwrap().clash_tun = Some(value);
+                }
+            }
+        }
+    }
+
+    struct RecordingVergeBridge {
+        capture: Arc<Mutex<TypedMirrorCapture>>,
+    }
+
+    impl VergeLegacyBridgeTrait for RecordingVergeBridge {
+        fn prepare(
+            &self,
+            snap: &chimera_config::application::ChimeraAppConfig,
+        ) -> anyhow::Result<Box<dyn crate::state::mirror::PreparedLegacyMirror>> {
+            Ok(Box::new(PreparedTypedMirror::Application {
+                capture: self.capture.clone(),
+                value: snap.enable_auto_check_update,
+            }))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::application::ChimeraAppConfig> {
+            Ok(chimera_config::application::ChimeraAppConfig::default())
+        }
+    }
+
+    struct RecordingWindowBridge {
+        capture: Arc<Mutex<TypedMirrorCapture>>,
+    }
+
+    impl WindowLegacyBridge for RecordingWindowBridge {
+        fn prepare(
+            &self,
+            snap: &chimera_config::state::PersistentState,
+        ) -> anyhow::Result<Box<dyn crate::state::mirror::PreparedLegacyMirror>> {
+            let main = chimera_config::state::window::WindowLabel("main".into());
+            Ok(Box::new(PreparedTypedMirror::Session {
+                capture: self.capture.clone(),
+                value: snap.window_state.get(&main).map(|state| state.width),
+            }))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::state::PersistentState> {
+            Ok(chimera_config::state::PersistentState::default())
+        }
+    }
+
+    struct RecordingClashBridge {
+        capture: Arc<Mutex<TypedMirrorCapture>>,
+    }
+
+    impl ClashLegacyBridge for RecordingClashBridge {
+        fn prepare(
+            &self,
+            snap: &chimera_config::clash::config::ClashConfig,
+        ) -> anyhow::Result<Box<dyn crate::state::mirror::PreparedLegacyMirror>> {
+            Ok(Box::new(PreparedTypedMirror::Clash {
+                capture: self.capture.clone(),
+                value: snap.enable_tun_mode,
+            }))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::clash::config::ClashConfig> {
+            Ok(chimera_config::clash::config::ClashConfig::default())
+        }
+    }
+
+    #[tokio::test]
+    async fn typed_setup_mirrors_loaded_state_through_composition_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let application_path = dir.path().join("application.yaml");
+        let session_path = dir.path().join("session-state.yaml");
+        let clash_path = dir.path().join("clash-config.yaml");
+
+        let application = chimera_config::application::ChimeraAppConfig {
+            enable_auto_check_update: false,
+            ..chimera_config::application::ChimeraAppConfig::default()
+        };
+        std::fs::write(
+            &application_path,
+            serde_yaml::to_string(&application).unwrap(),
+        )
+        .unwrap();
+
+        let session = chimera_config::state::PersistentState {
+            window_state: std::collections::BTreeMap::from([(
+                chimera_config::state::window::WindowLabel("main".into()),
+                chimera_config::state::window::WindowState {
+                    width: 1234,
+                    height: 720,
+                    x: 10,
+                    y: 20,
+                    maximized: false,
+                    fullscreen: false,
+                },
+            )]),
+        };
+        std::fs::write(&session_path, serde_yaml::to_string(&session).unwrap()).unwrap();
+
+        let clash = chimera_config::clash::config::ClashConfig {
+            enable_tun_mode: true,
+            ..chimera_config::clash::config::ClashConfig::default()
+        };
+        std::fs::write(&clash_path, serde_yaml::to_string(&clash).unwrap()).unwrap();
+
+        let capture = Arc::new(Mutex::new(TypedMirrorCapture::default()));
+        let bridges = LegacyBridgeSet {
+            verge: Arc::new(RecordingVergeBridge {
+                capture: capture.clone(),
+            }),
+            window: Arc::new(RecordingWindowBridge {
+                capture: capture.clone(),
+            }),
+            clash: Arc::new(RecordingClashBridge {
+                capture: capture.clone(),
+            }),
+        };
+
+        let application = ApplicationClient::new(
+            camino::Utf8PathBuf::from_path_buf(application_path).unwrap(),
+            bridges.verge.snapshot_legacy().unwrap(),
+            bridges.verge.clone(),
+        )
+        .await
+        .unwrap();
+        let session_state = SessionStateClient::new(
+            camino::Utf8PathBuf::from_path_buf(session_path).unwrap(),
+            bridges.window.snapshot_legacy().unwrap(),
+            bridges.window.clone(),
+        )
+        .await
+        .unwrap();
+        let clash_config = ClashConfigClient::new(
+            camino::Utf8PathBuf::from_path_buf(clash_path).unwrap(),
+            bridges.clash.snapshot_legacy().unwrap(),
+            bridges.clash.clone(),
+            Arc::new(core_bridge::LegacyRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let typed = TypedConfigClients {
+            application,
+            session_state,
+            clash_config,
+        };
+
+        assert_eq!(*capture.lock().unwrap(), TypedMirrorCapture::default());
+        sync_legacy_mirrors(&typed, &bridges).await.unwrap();
+        assert_eq!(
+            *capture.lock().unwrap(),
+            TypedMirrorCapture {
+                application_auto_check: Some(false),
+                session_window_width: Some(1234),
+                clash_tun: Some(true),
+            }
+        );
     }
 
     fn test_local_profile(uid: &str) -> Profile {
