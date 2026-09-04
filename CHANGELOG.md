@@ -1,3 +1,13 @@
+## [0.22.6] - 2026-09-04 09:18:03
+
+### 🐛 Bug Fixes
+
+- **config:** Migrate legacy clash config before typed startup by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.22.5...v0.22.6
+
 ## [0.22.5] - 2026-09-04 07:26:51
 
 ### ✅ Testing
