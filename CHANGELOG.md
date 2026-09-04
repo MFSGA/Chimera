@@ -1,3 +1,23 @@
+## [0.22.5] - 2026-09-04 07:26:51
+
+### ✅ Testing
+
+- **e2e:** Cover Windows legacy upgrade path by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **updater:** Fail closed before Windows install by @MFSGA
+
+### 🔨 Refactor
+
+- **backend:** Centralize legacy config composition by @MFSGA
+
+- **backend:** Structure typed config saga errors by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.22.4...v0.22.5
+
 ## [0.22.4] - 2026-09-04 03:06:06
 
 ### ✅ Testing
