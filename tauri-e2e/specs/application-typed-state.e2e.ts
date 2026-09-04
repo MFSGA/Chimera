@@ -16,13 +16,19 @@ async function waitForApp() {
   );
 }
 
-async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+async function invoke<T>(
+  command: string,
+  args?: Record<string, unknown>,
+): Promise<T> {
   return browser.execute(
     async (name, payload) => {
       const tauri = (
         window as typeof window & {
           __TAURI_INTERNALS__: {
-            invoke: (command: string, args?: Record<string, unknown>) => Promise<T>;
+            invoke: (
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<T>;
           };
         }
       ).__TAURI_INTERNALS__;
@@ -46,7 +52,10 @@ async function patchAutoUpdate(value: boolean): Promise<void> {
 
 function applicationConfigPath(): string {
   const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
-  assert.ok(runtime, 'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.');
+  assert.ok(
+    runtime,
+    'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.',
+  );
   return path.join(runtime, 'config', 'application.yaml');
 }
 
@@ -76,10 +85,14 @@ describe('typed application state ownership', () => {
     try {
       await patchAutoUpdate(changed);
 
-      await browser.waitUntil(async () => (await readAutoUpdate()) === changed, {
-        timeout: 15_000,
-        timeoutMsg: 'Legacy get_verge_config did not observe the typed application patch.',
-      });
+      await browser.waitUntil(
+        async () => (await readAutoUpdate()) === changed,
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'Legacy get_verge_config did not observe the typed application patch.',
+        },
+      );
       await waitForTypedPersistence(changed);
 
       await browser.refresh();
@@ -89,10 +102,14 @@ describe('typed application state ownership', () => {
       assert.equal(persistedAutoUpdate(applicationConfigPath()), changed);
     } finally {
       await patchAutoUpdate(original);
-      await browser.waitUntil(async () => (await readAutoUpdate()) === original, {
-        timeout: 15_000,
-        timeoutMsg: 'Application setting did not restore through the typed state owner.',
-      });
+      await browser.waitUntil(
+        async () => (await readAutoUpdate()) === original,
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'Application setting did not restore through the typed state owner.',
+        },
+      );
       await waitForTypedPersistence(original);
     }
   });
