@@ -161,8 +161,8 @@ mod tests {
     #[test]
     fn prerelease_target_reaches_same_release_migration() {
         assert!(introduced_in_reached(
-            &Version::parse("0.22.4").unwrap(),
-            &Version::parse("0.22.4-rc.1").unwrap()
+            &Version::parse("0.23.0").unwrap(),
+            &Version::parse("0.23.0-rc.1").unwrap()
         ));
     }
 
@@ -176,7 +176,7 @@ mod tests {
 
         let paths = PathResolver::with_base_dirs(config.clone(), data);
         let mut runner =
-            Runner::with_target_and_paths(Version::parse("0.22.4").unwrap(), paths.clone(), false)
+            Runner::with_target_and_paths(Version::parse("0.23.0").unwrap(), paths.clone(), false)
                 .unwrap();
         runner.run_pending().unwrap();
 
@@ -187,7 +187,7 @@ mod tests {
 
         let before = std::fs::read(config.join("clash-config.yaml")).unwrap();
         let mut rerun =
-            Runner::with_target_and_paths(Version::parse("0.22.4").unwrap(), paths, false).unwrap();
+            Runner::with_target_and_paths(Version::parse("0.23.0").unwrap(), paths, false).unwrap();
         rerun.run_pending().unwrap();
         assert_eq!(
             std::fs::read(config.join("clash-config.yaml")).unwrap(),
