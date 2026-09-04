@@ -17,9 +17,12 @@ use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use struct_patch::Patch;
 
-use super::ChimeraClient;
+use super::{
+    ChimeraClient, ClientError, CompensationFailure, LegacyVergeDomain, PartialCommit,
+    error::Result as ClientResult,
+};
 use crate::{
-    bridge::{split_legacy_verge_patch, verge::application_from_legacy},
+    bridge::typed_patches_from_legacy_patch,
     config::{chimera::IVerge, core::Config},
     core::{handle, sysopt},
     state::{
@@ -238,8 +241,8 @@ impl ApplicationClient {
         }
     }
 
-    async fn patch_legacy(&self, owner: &ChimeraClient, patch: IVerge) -> anyhow::Result<()> {
-        patch_legacy_uncoordinated(owner, patch).await
+    async fn patch_legacy(&self, owner: &ChimeraClient, patch: IVerge) -> ClientResult<()> {
+        apply_legacy_verge_patch_saga(owner, patch).await
     }
 
     async fn call<F>(
@@ -285,7 +288,7 @@ impl ChimeraClient {
         self.inner.application.get_legacy()
     }
 
-    pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
+    pub(crate) async fn patch_verge(&self, patch: IVerge) -> ClientResult<()> {
         self.inner.application.patch_legacy(self, patch).await
     }
 
@@ -301,7 +304,7 @@ impl ChimeraClient {
     }
 }
 
-enum PreparedLegacyDomain {
+enum PreparedConfigDomain {
     Application {
         expected_version: u64,
         forward: PreparedTypedReplace<ChimeraAppConfig>,
@@ -319,7 +322,7 @@ enum PreparedLegacyDomain {
     },
 }
 
-enum CommittedLegacyDomain {
+enum CommittedConfigDomain {
     Application {
         committed_version: u64,
         rollback: PreparedTypedReplace<ChimeraAppConfig>,
@@ -408,16 +411,25 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
     Ok(())
 }
 
-async fn rollback_legacy_domains(
+async fn compensate_legacy_verge_saga(
     client: &ChimeraClient,
-    mut committed: Vec<CommittedLegacyDomain>,
-    primary: anyhow::Error,
-) -> anyhow::Error {
-    let mut failures = Vec::new();
+    mut committed: Vec<CommittedConfigDomain>,
+    primary: ClientError,
+    mut failed_compensations: Vec<CompensationFailure>,
+) -> ClientResult<()> {
+    let committed_domains = committed
+        .iter()
+        .map(|domain| match domain {
+            CommittedConfigDomain::Application { .. } => LegacyVergeDomain::Application,
+            CommittedConfigDomain::Session { .. } => LegacyVergeDomain::Session,
+            CommittedConfigDomain::Clash { .. } => LegacyVergeDomain::Clash,
+        })
+        .collect::<Vec<_>>();
+    let mut compensated_domains = Vec::new();
 
     while let Some(domain) = committed.pop() {
         match domain {
-            CommittedLegacyDomain::Application {
+            CommittedConfigDomain::Application {
                 committed_version,
                 rollback,
             } => match client
@@ -426,15 +438,22 @@ async fn rollback_legacy_domains(
                 .replace_prepared_if_version(committed_version, rollback)
                 .await
             {
-                Ok(ConditionalReplaceResult::Replaced(_)) => {}
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
-                    format!(
-                        "application rollback conflict: expected {committed_version}, actual {actual_version}"
-                    ),
-                ),
-                Err(error) => failures.push(format!("application rollback failed: {error:#}")),
+                Ok(ConditionalReplaceResult::Replaced(_)) => {
+                    compensated_domains.push(LegacyVergeDomain::Application);
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    failed_compensations.push(CompensationFailure::Conflict {
+                        domain: LegacyVergeDomain::Application,
+                        expected_version: committed_version,
+                        actual_version,
+                    });
+                }
+                Err(error) => failed_compensations.push(CompensationFailure::Error {
+                    domain: LegacyVergeDomain::Application,
+                    message: format!("{error:#}"),
+                }),
             },
-            CommittedLegacyDomain::Session {
+            CommittedConfigDomain::Session {
                 committed_version,
                 rollback,
             } => match client
@@ -443,15 +462,22 @@ async fn rollback_legacy_domains(
                 .replace_prepared_if_version(committed_version, rollback)
                 .await
             {
-                Ok(ConditionalReplaceResult::Replaced(_)) => {}
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
-                    format!(
-                        "session rollback conflict: expected {committed_version}, actual {actual_version}"
-                    ),
-                ),
-                Err(error) => failures.push(format!("session rollback failed: {error:#}")),
+                Ok(ConditionalReplaceResult::Replaced(_)) => {
+                    compensated_domains.push(LegacyVergeDomain::Session);
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    failed_compensations.push(CompensationFailure::Conflict {
+                        domain: LegacyVergeDomain::Session,
+                        expected_version: committed_version,
+                        actual_version,
+                    });
+                }
+                Err(error) => failed_compensations.push(CompensationFailure::Error {
+                    domain: LegacyVergeDomain::Session,
+                    message: format!("{error:#}"),
+                }),
             },
-            CommittedLegacyDomain::Clash {
+            CommittedConfigDomain::Clash {
                 committed_version,
                 rollback,
             } => match client
@@ -460,51 +486,70 @@ async fn rollback_legacy_domains(
                 .replace_prepared_if_version(committed_version, rollback)
                 .await
             {
-                Ok(ConditionalReplaceResult::Replaced(_)) => {}
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
-                    format!(
-                        "clash rollback conflict: expected {committed_version}, actual {actual_version}"
-                    ),
-                ),
-                Err(error) => failures.push(format!("clash rollback failed: {error:#}")),
+                Ok(ConditionalReplaceResult::Replaced(_)) => {
+                    compensated_domains.push(LegacyVergeDomain::Clash);
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    failed_compensations.push(CompensationFailure::Conflict {
+                        domain: LegacyVergeDomain::Clash,
+                        expected_version: committed_version,
+                        actual_version,
+                    });
+                }
+                Err(error) => failed_compensations.push(CompensationFailure::Error {
+                    domain: LegacyVergeDomain::Clash,
+                    message: format!("{error:#}"),
+                }),
             },
         }
     }
 
+    let mut legacy_uncertainties = Vec::new();
     if let Err(error) = Config::verge().data().save_file() {
-        failures.push(format!(
+        legacy_uncertainties.push(format!(
             "legacy verge rollback persistence failed: {error:#}"
         ));
     }
     if let Err(error) = Config::clash().data().save_config() {
-        failures.push(format!(
+        legacy_uncertainties.push(format!(
             "legacy clash rollback persistence failed: {error:#}"
         ));
     }
     handle::Handle::refresh_verge();
+    handle::Handle::refresh_clash();
 
-    if failures.is_empty() {
-        primary
-    } else {
-        anyhow::anyhow!(
-            "{primary:#}; compensation failures: {}",
-            failures.join("; ")
-        )
+    if failed_compensations.is_empty() && legacy_uncertainties.is_empty() {
+        return Err(primary);
     }
+
+    let mut partial = PartialCommit::new(
+        &primary,
+        committed_domains,
+        compensated_domains,
+        failed_compensations,
+    );
+    for message in legacy_uncertainties {
+        partial = partial.with_legacy_state_uncertain(message);
+    }
+    log::error!("legacy verge saga requires reconciliation: {partial:?}");
+    Err(partial.into())
 }
 
-async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
+// TODO(actor-migration): this legacy `IVerge` compatibility saga still lives beside
+// `ApplicationClient` while Chimera's typed clients are composed through legacy setup.
+// Move it onto the main `ChimeraClient` facade when the shared bridge set/composition
+// root is aligned with REF; remove this compatibility entry once callers patch typed
+// Application/Session/Clash domains directly.
+async fn apply_legacy_verge_patch_saga(client: &ChimeraClient, patch: IVerge) -> ClientResult<()> {
     let base = Config::verge().latest().clone();
     let legacy_clash = Config::clash().latest().clone();
-    let mut split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
-    let application_patch = split.application.clone().unwrap_or_default();
-    let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
+    let mut split = typed_patches_from_legacy_patch(base, &patch, &legacy_clash)?;
+    let plan = plan_verge_patch(&patch, split.clash_config.as_ref())?;
 
-    let application_pair = if let Some(app_patch) = split.application.as_ref() {
+    let application_pair = if let Some(application_patch) = split.application.take() {
         let snapshot = client.inner.application.get().await?;
-        let mut projected = base.clone();
-        projected.patch_config(app_patch.clone());
-        let next = application_from_legacy(&projected)?;
+        let mut next = snapshot.state.clone();
+        next.apply(application_patch);
         Some((snapshot, next))
     } else {
         None
@@ -530,7 +575,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
 
     let mut prepared = Vec::new();
     if let Some((snapshot, next)) = application_pair {
-        prepared.push(PreparedLegacyDomain::Application {
+        prepared.push(PreparedConfigDomain::Application {
             expected_version: snapshot.version,
             forward: client.inner.application.prepare_replace(next).await?,
             rollback: client
@@ -541,7 +586,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         });
     }
     if let Some((snapshot, next)) = session_pair {
-        prepared.push(PreparedLegacyDomain::Session {
+        prepared.push(PreparedConfigDomain::Session {
             expected_version: snapshot.version,
             forward: client.inner.session_state.prepare_replace(next).await?,
             rollback: client
@@ -552,7 +597,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         });
     }
     if let Some((snapshot, next)) = clash_pair {
-        prepared.push(PreparedLegacyDomain::Clash {
+        prepared.push(PreparedConfigDomain::Clash {
             expected_version: snapshot.version,
             forward: client.inner.clash_config.prepare_replace(next).await?,
             rollback: client
@@ -566,7 +611,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     let mut committed = Vec::new();
     for domain in prepared {
         let commit_error = match domain {
-            PreparedLegacyDomain::Application {
+            PreparedConfigDomain::Application {
                 expected_version,
                 forward,
                 rollback,
@@ -577,18 +622,22 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .await
             {
                 Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
-                    committed.push(CommittedLegacyDomain::Application {
+                    committed.push(CommittedConfigDomain::Application {
                         committed_version: snapshot.version,
                         rollback,
                     });
                     continue;
                 }
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
-                    "application config version conflict: expected {expected_version}, actual {actual_version}"
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    ClientError::Custom(format!(
+                        "application config version conflict: expected {expected_version}, actual {actual_version}"
+                    ))
+                }
+                Err(error) => ClientError::Anyhow(
+                    error.context("failed to commit application config in legacy verge saga"),
                 ),
-                Err(error) => error.context("failed to commit application typed config"),
             },
-            PreparedLegacyDomain::Session {
+            PreparedConfigDomain::Session {
                 expected_version,
                 forward,
                 rollback,
@@ -599,18 +648,22 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .await
             {
                 Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
-                    committed.push(CommittedLegacyDomain::Session {
+                    committed.push(CommittedConfigDomain::Session {
                         committed_version: snapshot.version,
                         rollback,
                     });
                     continue;
                 }
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
-                    "session config version conflict: expected {expected_version}, actual {actual_version}"
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    ClientError::Custom(format!(
+                        "session config version conflict: expected {expected_version}, actual {actual_version}"
+                    ))
+                }
+                Err(error) => ClientError::Anyhow(
+                    error.context("failed to commit session state in legacy verge saga"),
                 ),
-                Err(error) => error.context("failed to commit session typed state"),
             },
-            PreparedLegacyDomain::Clash {
+            PreparedConfigDomain::Clash {
                 expected_version,
                 forward,
                 rollback,
@@ -621,20 +674,24 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .await
             {
                 Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
-                    committed.push(CommittedLegacyDomain::Clash {
+                    committed.push(CommittedConfigDomain::Clash {
                         committed_version: snapshot.version,
                         rollback,
                     });
                     continue;
                 }
-                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
-                    "clash config version conflict: expected {expected_version}, actual {actual_version}"
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    ClientError::Custom(format!(
+                        "clash config version conflict: expected {expected_version}, actual {actual_version}"
+                    ))
+                }
+                Err(error) => ClientError::Anyhow(
+                    error.context("failed to commit clash config in legacy verge saga"),
                 ),
-                Err(error) => error.context("failed to commit clash typed config"),
             },
         };
 
-        return Err(rollback_legacy_domains(client, committed, commit_error).await);
+        return compensate_legacy_verge_saga(client, committed, commit_error, Vec::new()).await;
     }
 
     let finalize = async {
@@ -646,7 +703,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .apply_legacy_patch_runtime(client, clash_patch)
                 .await?;
         }
-        run_verge_patch_side_effects(&plan, &application_patch)?;
+        run_verge_patch_side_effects(&plan, &patch)?;
         Config::verge().data().save_file()?;
         if split.clash_config.is_some() {
             Config::clash().data().save_config()?;
@@ -657,12 +714,16 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     .await;
 
     if let Err(error) = finalize {
-        return Err(rollback_legacy_domains(
+        let legacy_uncertainty = CompensationFailure::LegacyStateUncertain {
+            message: format!("{error:#}"),
+        };
+        return compensate_legacy_verge_saga(
             client,
             committed,
-            error.context("failed to finalize legacy verge patch"),
+            ClientError::Anyhow(error.context("failed to finalize legacy verge patch")),
+            vec![legacy_uncertainty],
         )
-        .await);
+        .await;
     }
 
     Ok(())

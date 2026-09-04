@@ -3,56 +3,82 @@ pub mod verge;
 pub mod window;
 
 use chimera_config::{
+    application::{ChimeraAppConfig, ChimeraAppConfigPatch},
     clash::config::{ClashConfig, ClashConfigPatch},
     state::{PersistentState, PersistentStatePatch},
 };
 use serde::{Serialize, de::DeserializeOwned};
 use struct_patch::Patch;
 
-use crate::config::{chimera::IVerge, clash::IClashTemp};
+use crate::{
+    config::{chimera::IVerge, clash::IClashTemp},
+    state::TypedConfigPatchPlan,
+};
 
-pub(crate) struct LegacyVergePatchPlan {
-    pub application: Option<IVerge>,
-    pub session_state: Option<PersistentStatePatch>,
-    pub clash_config: Option<ClashConfigPatch>,
-}
-
-pub(crate) fn split_legacy_verge_patch(
-    base: &IVerge,
+pub(crate) fn typed_patches_from_legacy_patch(
+    mut base: IVerge,
     patch: &IVerge,
     legacy_clash: &IClashTemp,
-) -> anyhow::Result<LegacyVergePatchPlan> {
-    let mut projected = base.clone();
-    projected.patch_config(patch.clone());
-    let next_session = window::persistent_state_from_legacy(&projected)?;
-    let next_clash = clash::clash_config_from_legacy(&projected, &legacy_clash.0)?;
+) -> anyhow::Result<TypedConfigPatchPlan> {
+    base.patch_config(patch.clone());
+    let next_application = verge::application_from_legacy(&base)?;
+    let next_session = window::persistent_state_from_legacy(&base)?;
+    let next_clash = clash::clash_config_from_legacy(&base, &legacy_clash.0)?;
 
-    Ok(LegacyVergePatchPlan {
-        application: application_patch_from_legacy_patch(patch)?,
+    Ok(TypedConfigPatchPlan {
+        application: application_patch_from_legacy_patch(patch, next_application),
         session_state: session_patch_from_legacy_patch(patch, next_session),
         clash_config: clash_patch_from_legacy_patch(patch, next_clash),
     })
 }
 
-fn application_patch_from_legacy_patch(patch: &IVerge) -> anyhow::Result<Option<IVerge>> {
-    let mut application = patch.clone();
+fn application_patch_from_legacy_patch(
+    patch: &IVerge,
+    next: ChimeraAppConfig,
+) -> Option<ChimeraAppConfigPatch> {
+    let mut application = ChimeraAppConfig::new_empty_patch();
+    let mut touched = false;
 
-    application.enable_tun_mode = None;
-    application.web_ui_list = None;
-    application.enable_clash_fields = None;
-    application.enable_random_port = None;
-    application.verge_mixed_port = None;
-    application.tun_stack = None;
-    application.clash_strategy = None;
-    application.break_when_proxy_change = None;
-    application.break_when_profile_change = None;
-    application.break_when_mode_change = None;
-    application.window_size_state = None;
+    macro_rules! set_if_some {
+        ($legacy:ident, $target:ident) => {
+            if patch.$legacy.is_some() {
+                application.$target = Some(next.$target);
+                touched = true;
+            }
+        };
+    }
 
-    let touched = serde_yaml::to_value(&application)?
-        .as_mapping()
-        .is_some_and(|mapping| mapping.values().any(|value| !value.is_null()));
-    Ok(touched.then_some(application))
+    set_if_some!(app_log_level, app_log_level);
+    set_if_some!(language, language);
+    set_if_some!(theme_mode, theme_mode);
+    set_if_some!(lighten_animation_effects, lighten_animation_effects);
+    set_if_some!(enable_service_mode, enable_service_mode);
+    set_if_some!(enable_auto_launch, enable_auto_launch);
+    set_if_some!(enable_silent_start, enable_silent_start);
+    set_if_some!(enable_system_proxy, enable_system_proxy);
+    set_if_some!(enable_proxy_guard, enable_proxy_guard);
+    set_if_some!(system_proxy_bypass, system_proxy_bypass);
+    set_if_some!(proxy_guard_interval, proxy_guard_interval);
+    set_if_some!(theme_color, theme_color);
+    set_if_some!(enable_builtin_enhanced, enable_builtin_enhanced);
+    set_if_some!(max_log_files, max_log_files);
+    set_if_some!(enable_auto_check_update, enable_auto_check_update);
+    set_if_some!(always_on_top, always_on_top);
+
+    if patch.clash_core.is_some() {
+        application.core = Some(next.core);
+        touched = true;
+    }
+    if patch.clash_tray_selector.is_some() {
+        application.tray_selector_mode = Some(next.tray_selector_mode);
+        touched = true;
+    }
+    if patch.window_type.is_some() {
+        application.window_type = Some(next.window_type);
+        touched = true;
+    }
+
+    touched.then_some(application)
 }
 
 fn session_patch_from_legacy_patch(
@@ -129,15 +155,14 @@ mod tests {
             ..IVerge::default()
         };
 
-        let plan = split_legacy_verge_patch(&base, &patch, &IClashTemp::template())
+        let plan = typed_patches_from_legacy_patch(base, &patch, &IClashTemp::template())
             .expect("legacy patch should split");
 
         let application = plan.application.expect("application patch should exist");
-        assert_eq!(application.theme_mode.as_deref(), Some("dark"));
-        assert_eq!(application.enable_tun_mode, None);
-        assert_eq!(application.enable_random_port, None);
-        assert_eq!(application.verge_mixed_port, None);
-        assert_eq!(application.break_when_mode_change, None);
+        assert_eq!(
+            application.theme_mode,
+            Some(chimera_config::application::ThemeMode::Dark)
+        );
 
         let clash = plan.clash_config.expect("clash patch should exist");
         assert_eq!(clash.enable_tun_mode, Some(true));
@@ -172,8 +197,9 @@ mod tests {
             ..IVerge::default()
         };
 
-        let plan = split_legacy_verge_patch(&IVerge::template(), &patch, &IClashTemp::template())
-            .expect("session patch should split");
+        let plan =
+            typed_patches_from_legacy_patch(IVerge::template(), &patch, &IClashTemp::template())
+                .expect("session patch should split");
 
         assert!(plan.application.is_none());
         assert!(plan.clash_config.is_none());
@@ -194,12 +220,16 @@ mod tests {
             ..IVerge::default()
         };
 
-        let plan = split_legacy_verge_patch(&IVerge::template(), &patch, &IClashTemp::template())
-            .expect("application patch should split");
+        let plan =
+            typed_patches_from_legacy_patch(IVerge::template(), &patch, &IClashTemp::template())
+                .expect("application patch should split");
 
         assert!(plan.clash_config.is_none());
         let application = plan.application.expect("application patch should exist");
-        assert_eq!(application.theme_mode.as_deref(), Some("light"));
+        assert_eq!(
+            application.theme_mode,
+            Some(chimera_config::application::ThemeMode::Light)
+        );
         assert_eq!(application.enable_auto_launch, Some(true));
     }
 }

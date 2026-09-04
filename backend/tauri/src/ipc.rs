@@ -9,7 +9,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    client::{ChimeraClient, MutationOutcome, RuntimeTransformDiagnostics},
+    client::{ChimeraClient, ClientError, MutationOutcome, RuntimeTransformDiagnostics},
     config::{
         chimera::{self, IVerge},
         clash::ClashInfo,
@@ -260,9 +260,25 @@ pub enum IpcError {
     #[error(transparent)]
     SerdeYaml(#[from] serde_yaml::Error),
     #[error(transparent)]
+    SerdeJson(#[from] serde_json::Error),
+    #[error(transparent)]
     Storage(#[from] StorageOperationError),
     #[error("{0}")]
     Custom(String),
+}
+
+impl From<ClientError> for IpcError {
+    fn from(error: ClientError) -> Self {
+        match error {
+            ClientError::Io(error) => Self::Io(error),
+            ClientError::SerdeYaml(error) => Self::SerdeYaml(error),
+            ClientError::SerdeJson(error) => Self::SerdeJson(error),
+            ClientError::Storage(error) => Self::Storage(error),
+            ClientError::Anyhow(error) => Self::Anyhow(error),
+            ClientError::PartialCommit(error) => Self::Custom(error.to_string()),
+            ClientError::Custom(error) => Self::Custom(error),
+        }
+    }
 }
 
 impl serde::Serialize for IpcError {

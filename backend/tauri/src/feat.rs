@@ -5,7 +5,7 @@ use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    client::ChimeraClient,
+    client::{ChimeraClient, ClientResult},
     config::{
         chimera::IVerge, profile::item::remote::RemoteProfileOptionsBuilder,
         runtime::ClashConfigOverrides,
@@ -40,7 +40,7 @@ fn managed_client() -> Result<ChimeraClient> {
 
 /// 修改verge的配置
 /// 一般都是一个个的修改
-pub async fn patch_verge(patch: IVerge) -> Result<()> {
+pub async fn patch_verge(patch: IVerge) -> ClientResult<()> {
     managed_client()?.patch_verge(patch).await
 }
 

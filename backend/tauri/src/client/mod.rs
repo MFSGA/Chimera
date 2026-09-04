@@ -6,6 +6,7 @@
 mod application;
 mod clash_config;
 mod core_bridge;
+mod error;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
@@ -19,7 +20,6 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
@@ -32,6 +32,12 @@ use self::{
     },
     session_state::SessionStateClient,
     system_dns::{OsSystemDnsCache, SystemDnsCache},
+};
+pub(crate) use self::{
+    core_bridge::RuntimeTransformDiagnostics,
+    error::{
+        ClientError, CompensationFailure, LegacyVergeDomain, PartialCommit, Result as ClientResult,
+    },
 };
 
 use crate::config::profile::item_type::ProfileUid;

@@ -39,6 +39,10 @@ async function invoke<T>(
   );
 }
 
+async function readVergeConfig(): Promise<Record<string, unknown>> {
+  return invoke<Record<string, unknown>>('get_verge_config');
+}
+
 async function readAutoUpdate(): Promise<boolean> {
   const config = await invoke<VergeConfig>('get_verge_config');
   return config.enable_auto_check_update ?? true;
@@ -112,5 +116,29 @@ describe('typed application state ownership', () => {
       );
       await waitForTypedPersistence(original);
     }
+  });
+
+  it('rejects an invalid legacy patch without changing typed or mirrored state', async () => {
+    await waitForApp();
+
+    const file = applicationConfigPath();
+    const beforeLegacy = await readVergeConfig();
+    const beforeTyped = fs.existsSync(file)
+      ? fs.readFileSync(file, 'utf8')
+      : null;
+
+    await assert.rejects(
+      () =>
+        invoke<null>('patch_verge_config', {
+          payload: { theme_color: 'not-a-valid-color' },
+        }),
+      /Invalid theme color/,
+    );
+
+    assert.deepEqual(await readVergeConfig(), beforeLegacy);
+    assert.equal(
+      fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null,
+      beforeTyped,
+    );
   });
 });
