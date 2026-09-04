@@ -37,32 +37,16 @@ enum SessionStateClientInner {
 }
 
 impl SessionStateClient {
+    #[cfg(test)]
     pub(crate) fn legacy() -> anyhow::Result<Self> {
-        #[cfg(test)]
-        {
-            Ok(Self {
-                inner: Arc::new(SessionStateClientInner::Static {
-                    state: parking_lot::RwLock::new(PersistentState::default()),
-                }),
-            })
-        }
-
-        #[cfg(not(test))]
-        {
-            let config_path = Utf8PathBuf::from_path_buf(
-                crate::utils::dirs::app_config_dir()?.join("session-state.yaml"),
-            )
-            .map_err(|path| {
-                anyhow::anyhow!("session state path is not UTF-8: {}", path.display())
-            })?;
-            let bridge: Arc<dyn WindowLegacyBridge> =
-                Arc::new(crate::bridge::window::LegacyWindowBridge::default());
-            let seed = bridge.snapshot_legacy()?;
-            tauri::async_runtime::block_on(Self::new(config_path, seed, bridge))
-        }
+        Ok(Self {
+            inner: Arc::new(SessionStateClientInner::Static {
+                state: parking_lot::RwLock::new(PersistentState::default()),
+            }),
+        })
     }
 
-    async fn new(
+    pub(super) async fn new(
         config_path: Utf8PathBuf,
         seed: PersistentState,
         bridge: Arc<dyn WindowLegacyBridge>,

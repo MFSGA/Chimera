@@ -22,9 +22,13 @@ pub(crate) struct LegacyClashBridge {
 
 impl Default for LegacyClashBridge {
     fn default() -> Self {
-        Self {
-            legacy_lock: Arc::new(parking_lot::Mutex::new(())),
-        }
+        Self::new(Arc::new(parking_lot::Mutex::new(())))
+    }
+}
+
+impl LegacyClashBridge {
+    pub(crate) fn new(legacy_lock: Arc<parking_lot::Mutex<()>>) -> Self {
+        Self { legacy_lock }
     }
 }
 
