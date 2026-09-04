@@ -252,7 +252,8 @@ async function runSeedPhase(): Promise<void> {
   assert.equal(runtimeBefore.mode.toLowerCase(), 'global');
 
   assert.equal(fs.existsSync(application), false);
-  assert.equal(fs.existsSync(clash), false);
+  assert.equal(fs.existsSync(clash), true);
+  assert.equal(persistedBoolean(clash, 'ipv6'), true);
   assert.equal(fs.existsSync(session), false);
 
   await invoke<null>('patch_verge_config', {

@@ -157,6 +157,7 @@ pub fn run() -> std::io::Result<()> {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
+            core::migration::typed_config::repair_shared_clash_config_path()?;
             setup::setup(app)?;
             core::clash::setup(app)?;
 
