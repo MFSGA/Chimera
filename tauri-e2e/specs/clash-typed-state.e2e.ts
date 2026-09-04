@@ -81,7 +81,10 @@ async function patchIPv6(value: boolean): Promise<void> {
 
 function clashConfigPath(): string {
   const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
-  assert.ok(runtime, 'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.');
+  assert.ok(
+    runtime,
+    'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.',
+  );
   return path.join(runtime, 'config', 'clash-config.yaml');
 }
 

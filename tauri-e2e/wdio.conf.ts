@@ -45,6 +45,39 @@ const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR
 fs.mkdirSync(configDirectoryOverride, { recursive: true });
 fs.mkdirSync(dataDirectoryOverride, { recursive: true });
 
+const configFixtureDirectory = process.env.CHIMERA_E2E_CONFIG_FIXTURE
+  ? path.resolve(process.env.CHIMERA_E2E_CONFIG_FIXTURE)
+  : null;
+const configFixtureMarker = path.join(
+  runtimeDirectory,
+  '.config-fixture-seeded',
+);
+
+if (configFixtureDirectory && !fs.existsSync(configFixtureMarker)) {
+  const fixture = fs.statSync(configFixtureDirectory);
+  if (!fixture.isDirectory()) {
+    throw new Error(
+      `CHIMERA_E2E_CONFIG_FIXTURE is not a directory: ${configFixtureDirectory}`,
+    );
+  }
+
+  const existing = fs.readdirSync(configDirectoryOverride);
+  if (existing.length > 0) {
+    throw new Error(
+      `Refusing to seed a non-empty E2E config directory: ${configDirectoryOverride}`,
+    );
+  }
+
+  for (const entry of fs.readdirSync(configFixtureDirectory)) {
+    fs.cpSync(
+      path.join(configFixtureDirectory, entry),
+      path.join(configDirectoryOverride, entry),
+      { recursive: true },
+    );
+  }
+  fs.writeFileSync(configFixtureMarker, configFixtureDirectory);
+}
+
 type TauriBrowser = WebdriverIO.Browser & {
   tauri?: {
     restoreAllMocks: () => Promise<void>;

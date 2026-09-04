@@ -6,6 +6,7 @@
   "scripts": {
     "test": "pnpm run test:smoke",
     "test:unit": "node --test ./process-cleanup.test.ts ./runtime-path.test.ts ./spec-suites.test.ts",
+    "test:upgrade:v0.22.3": "node ./upgrade-v0223-v0230.ts",
     "test:desktop": "pnpm run test:smoke",
     "test:smoke": "wdio run ./wdio.conf.ts --suite smoke",
     "test:critical": "wdio run ./wdio.conf.ts --suite critical",

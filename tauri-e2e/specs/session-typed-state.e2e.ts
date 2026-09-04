@@ -51,7 +51,10 @@ async function invoke<T>(
 
 function sessionStatePath(): string {
   const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
-  assert.ok(runtime, 'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.');
+  assert.ok(
+    runtime,
+    'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.',
+  );
   return path.join(runtime, 'config', 'session-state.yaml');
 }
 
@@ -69,9 +72,8 @@ function persistedMainWindowState(file: string): WindowState | null {
     if (!line.trim()) continue;
     const indent = line.match(/^\s*/)?.[0].length ?? 0;
     if (indent <= mainIndent) break;
-    const match = /^\s+(width|height|x|y|maximized|fullscreen):\s*(.+)\s*$/.exec(
-      line,
-    );
+    const match =
+      /^\s+(width|height|x|y|maximized|fullscreen):\s*(.+)\s*$/.exec(line);
     if (match) values.set(match[1], match[2]);
   }
 
@@ -115,15 +117,15 @@ async function waitForMirroredState(): Promise<WindowState> {
       const legacy = await invoke<VergeConfig>('get_verge_config');
       return Boolean(
         persisted &&
-          legacy.window_size_state &&
-          persisted.width > 0 &&
-          persisted.height > 0 &&
-          persisted.width === legacy.window_size_state.width &&
-          persisted.height === legacy.window_size_state.height &&
-          persisted.x === legacy.window_size_state.x &&
-          persisted.y === legacy.window_size_state.y &&
-          persisted.maximized === legacy.window_size_state.maximized &&
-          persisted.fullscreen === legacy.window_size_state.fullscreen,
+        legacy.window_size_state &&
+        persisted.width > 0 &&
+        persisted.height > 0 &&
+        persisted.width === legacy.window_size_state.width &&
+        persisted.height === legacy.window_size_state.height &&
+        persisted.x === legacy.window_size_state.x &&
+        persisted.y === legacy.window_size_state.y &&
+        persisted.maximized === legacy.window_size_state.maximized &&
+        persisted.fullscreen === legacy.window_size_state.fullscreen,
       );
     },
     {
@@ -154,7 +156,9 @@ describe('typed session/window state ownership', () => {
 
       assert.ok(persisted.width > 0);
       assert.ok(persisted.height > 0);
-      assert.ok(fs.readFileSync(sessionStatePath(), 'utf8').includes('window_state:'));
+      assert.ok(
+        fs.readFileSync(sessionStatePath(), 'utf8').includes('window_state:'),
+      );
 
       await browser.refresh();
       await waitForApp();

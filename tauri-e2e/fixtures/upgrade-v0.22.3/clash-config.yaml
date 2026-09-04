@@ -1,0 +1,10 @@
+# v0.22.3 legacy runtime Clash config that collides with the typed owner filename
+mixed-port: 7890
+log-level: info
+allow-lan: false
+mode: rule
+external-controller: 127.0.0.1:9872
+secret: chimera
+ipv6: false
+dns:
+  enable: true
