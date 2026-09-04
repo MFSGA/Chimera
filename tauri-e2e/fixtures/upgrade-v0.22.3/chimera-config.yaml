@@ -1,0 +1,36 @@
+# v0.22.3-compatible legacy application configuration
+max_log_files: 11
+app_log_level: debug
+theme_color: '#2457a7'
+enable_tun_mode: false
+enable_system_proxy: false
+enable_auto_launch: true
+enable_silent_start: false
+enable_service_mode: false
+always_on_top: true
+window_size_state:
+  width: 820
+  height: 620
+  x: 20
+  y: 20
+  maximized: false
+  fullscreen: false
+lighten_animation_effects: true
+enable_builtin_enhanced: false
+clash_core: mihomo
+enable_clash_fields: true
+system_proxy_bypass: localhost;127.*;10.*
+web_ui_list: []
+verge_mixed_port: 7890
+enable_random_port: false
+enable_proxy_guard: false
+proxy_guard_interval: 17
+enable_auto_check_update: false
+break_when_proxy_change: chain
+break_when_profile_change: true
+break_when_mode_change: false
+theme_mode: dark
+language: en-US
+tun_stack: mixed
+clash_tray_selector: submenu
+window_type: legacy
