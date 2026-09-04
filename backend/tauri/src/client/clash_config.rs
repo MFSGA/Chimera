@@ -20,9 +20,6 @@ use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde_yaml::{Mapping, Value};
 use struct_patch::Patch;
 
-#[cfg(not(test))]
-use crate::bridge::clash::LegacyClashBridge;
-
 use crate::{
     config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
@@ -39,10 +36,10 @@ use crate::{
     },
 };
 
-use super::{
-    ChimeraClient,
-    core_bridge::{LegacyRunningConfigBridge, RunningConfigPort},
-};
+use super::{ChimeraClient, core_bridge::RunningConfigPort};
+
+#[cfg(test)]
+use super::core_bridge::LegacyRunningConfigBridge;
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
