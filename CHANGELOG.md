@@ -1,3 +1,1176 @@
+## [0.22.4] - 2026-09-04 03:06:06
+
+### ✅ Testing
+
+- **config:** Cover typed runtime overrides by @MFSGA
+
+- **config:** Assert runtime patch outcomes by @MFSGA
+
+- **config:** Cover runtime patch compensation by @MFSGA
+
+- **e2e:** Cover typed session state persistence by @MFSGA
+
+- **e2e:** Stabilize hermetic profile coverage by @MFSGA
+
+- **e2e:** Add profile and storage contract coverage by @MFSGA
+
+- **e2e:** Add isolated Tauri WebDriver harness by @MFSGA
+
+- **e2e:** Cover storage event recovery by @MFSGA
+
+- **e2e:** Cover app mutation helpers by @MFSGA
+
+- **e2e:** Cover global transform diagnostics by @MFSGA
+
+- **e2e:** Cover transform diagnostics across runtimes by @MFSGA
+
+- **e2e:** Update selectors and navigation flows by @MFSGA
+
+- **e2e:** Cover javascript transform runtime by @MFSGA
+
+- **e2e:** Cover lua transform runtime by @MFSGA
+
+- **e2e:** Prune isolated runtime artifacts by @MFSGA
+
+- **e2e:** Cover cleanup and runtime isolation by @MFSGA
+
+- **e2e:** Cover remaining main ui alignment by @MFSGA
+
+- **e2e:** Cover main profile import action by @MFSGA
+
+- **e2e:** Isolate auto launch settings by @MFSGA
+
+- **e2e:** Cover runtime and UI setting persistence by @MFSGA
+
+- **e2e:** Cover profile draft validation by @MFSGA
+
+- **e2e:** Cover auto-update preference persistence by @MFSGA
+
+- **e2e:** Cover storage event resynchronization by @MFSGA
+
+- **e2e:** Cover Allow LAN persistence by @MFSGA
+
+- **e2e:** Add minimal Tauri desktop smoke test runner by @MFSGA
+
+- **main:** Reproduce debug path grid mismatch by @MFSGA
+
+- **main:** Reproduce dropdown menu open failure by @MFSGA
+
+- **main:** Lock about ref css contract by @MFSGA
+
+- **main:** Lock connections ref css contract by @MFSGA
+
+- **main:** Stabilize logs layout state by @MFSGA
+
+- **main:** Reproduce proxies empty-state route by @MFSGA
+
+- **main:** Cover rules proxy icon rendering by @MFSGA
+
+- **profile:** Reproduce premature profile persistence during creation by @MFSGA
+
+- **profile:** Reproduce materialized file loss before transaction commit by @MFSGA
+
+- **proxies:** Reproduce legacy localization bug by @MFSGA
+
+- **ui:** Expose stable controls for settings e2e by @MFSGA
+
+### ✨ Features
+
+- **AppHandle:** Handle the RunEvent by @MFSGA
+
+- **ConnectionDetailDialog:** Add the detail dialog by @MFSGA
+
+- **CoreState:** Add a new component ServiceShortcuts by @MFSGA
+
+- **HealthPanel:** Support in DashBoard by @MFSGA
+
+- **LanguageProvider:** Use inlang as new i18n method by @MFSGA
+
+- **LogPage:** Optimize relay selector operation about loglevel by @MFSGA
+
+- **LogPage:** Keep align with ref legacy LogPage by @MFSGA
+
+- **LogPage:** Optimize the log item by @MFSGA
+
+- **LogPage:** Optimize the log item by @MFSGA
+
+- **LogPage:** Support logpage by @MFSGA
+
+- **PageTransition:** Fix the x-scroll bug by @MFSGA
+
+- **ProxyItem:** Support more option in proxies page by @MFSGA
+
+- **ProxyPage:** Complete the select_proxy command 7 by @MFSGA
+
+- **ProxyPage:** Complete the NodeList component for frontend 6 by @MFSGA
+
+- **ProxyPage:** Complete the GroupList component for frontend 5 by @MFSGA
+
+- **ProxyPage:** Complete the SidePage component for frontend 4 by @MFSGA
+
+- **ProxyPage:** Complete the get_proxies command 3 by @MFSGA
+
+- **ProxyPage:** Add get_proxies select_proxy commands and useClashProxies 2 by @MFSGA
+
+- **ProxyPage:** Add the patch_clash_config command and relative interface in the frontend 1 by @MFSGA
+
+- **ProxyShortcuts:** Support ProxyShortcuts display by @MFSGA
+
+- **Setting:** Add a new GithubIcon by @MFSGA
+
+- **Sysopt:** Reset sysopt successfully by @MFSGA
+
+- **agent:** Add network diagnostics backend by @MFSGA
+
+- **app:** Migrate the MutationProvider by @MFSGA
+
+- **backend:** Mount ref clash websocket connector by @MFSGA
+
+- **backend:** Add ref clash websocket actor by @MFSGA
+
+- **backend:** Add ref clash websocket shared state by @MFSGA
+
+- **backend:** Add ref clash websocket models by @MFSGA
+
+- **change_clash_core:** Support the change_clash_core cmd 3 by @MFSGA
+
+- **change_clash_core:** Support the change_clash_core cmd 1 by @MFSGA
+
+- **check:** Prepare the resources by @MFSGA
+
+- **check:** Add a new core type by @MFSGA
+
+- **check_update:** Can open the update dialog repeatly and support release notes 7 by @MFSGA
+
+- **check_update:** Update the style for UpdaterDialog 6 by @MFSGA
+
+- **check_update:** Complete the frontend 5 by @MFSGA
+
+- **check_update:** Complete the backend command 2 by @MFSGA
+
+- **check_update:** Prepare for the command 1 by @MFSGA
+
+- **chimera:** Add ref ui button infrastructure by @MFSGA
+
+- **ci:** To support alpha workflow by @MFSGA
+
+- **clash_api:** For better type safe by @MFSGA
+
+- **cleanup_processes:** Complete the frontend component 7 by @MFSGA
+
+- **cleanup_processes:** Complete the command 6 by @MFSGA
+
+- **collect_envs:** Support feedback icon by @MFSGA
+
+- **collect_envs:** Support collect_envs by @MFSGA
+
+- **config:** Add typed application config domain by @MFSGA
+
+- **config:** Add typed clash config crate by @MFSGA
+
+- **config:** Expose runtime patch outcomes by @MFSGA
+
+- **config:** Coordinate runtime patch compensation by @MFSGA
+
+- **config:** Align Allow LAN state with core IPC by @MFSGA
+
+- **config:** Patch config by @MFSGA
+
+- **connections:** Add the ClashWSProvider as the data provider 3 by @MFSGA
+
+- **connections:** Complete the front main page view 2 by @MFSGA
+
+- **connections:** Add the backend storage support 1 by @MFSGA
+
+- **css:** Add CustomCssProvider by @MFSGA
+
+- **css:** Support CssBaseline by @MFSGA
+
+- **dashboard:** Add legacy data panel by @MFSGA
+
+- **deeplink:** Support the frontend for profile by @MFSGA
+
+- **deeplink:** Support the backend by @MFSGA
+
+- **dir:** Add the command support in backend by @MFSGA
+
+- **dir:** Add the useful dir path for display by @MFSGA
+
+- **docs:** Optimize the readme by @MFSGA
+
+- **download:** Use new download mod by @MFSGA
+
+- **e2e:** Add isolated embedded WebDriver build support by @MFSGA
+
+- **enhance:** Expose runtime transform diagnostics by @MFSGA
+
+- **enhance:** Execute javascript transform profiles by @MFSGA
+
+- **enhance:** Add javascript sandbox runner by @MFSGA
+
+- **enhance:** Execute lua transform profiles by @MFSGA
+
+- **field:** Prepare for clash field by @MFSGA
+
+- **frontend:** Align dashboard sparkline cards with ref by @MFSGA
+
+- **frontend:** Align dashboard drag overlay with ref by @MFSGA
+
+- **frontend:** Align dashboard context menu with ref by @MFSGA
+
+- **frontend:** Mount ref context menu provider by @MFSGA
+
+- **frontend:** Add ref context menu provider by @MFSGA
+
+- **frontend:** Add ref context menu primitives by @MFSGA
+
+- **frontend:** Align about version flow with ref by @MFSGA
+
+- **frontend:** Add ref animated logo behavior by @MFSGA
+
+- **frontend:** Show ref update action in header by @MFSGA
+
+- **frontend:** Add ref update action to about route by @MFSGA
+
+- **frontend:** Mount chimera update provider by @MFSGA
+
+- **frontend:** Add chimera update provider by @MFSGA
+
+- **frontend:** Align navbar target routes and labels by @MFSGA
+
+- **frontend:** Open first proxy group from navbar by @MFSGA
+
+- **frontend:** Align responsive navbar with ref by @MFSGA
+
+- **get_verge_config:** Completed the backend cmd 1 by @MFSGA
+
+- **header:** Add settings actions menu by @MFSGA
+
+- **i18n:** Update entry points to use inlang/paraglide by @MFSGA
+
+- **i18n:** Validate the change changeLanguage function by @MFSGA
+
+- **i18n:** Prepare to change lanuage 2 by @MFSGA
+
+- **interface:** Expose network agent APIs by @MFSGA
+
+- **interface:** Align connection deletion with ref by @MFSGA
+
+- **interface:** Expose ref clash websocket commands by @MFSGA
+
+- **interface:** Add provider IPC hooks and HTTP API methods by @MFSGA
+
+- **interface:** Expose window state ipc bindings by @MFSGA
+
+- **ipc:** Expose outcome-aware profile mutations by @MFSGA
+
+- **is_appimage:** Add the command for check_update 3 by @MFSGA
+
+- **layout:** Refactor root component by @MFSGA
+
+- **layout:** Use the latest layout by @MFSGA
+
+- **lintstaged:** Optimize lintstage by @MFSGA
+
+- **main:** Wire new main UI routes by @MFSGA
+
+- **main:** Add settings navigation layout by @MFSGA
+
+- **main:** Add profiles proxies and rules pages by @MFSGA
+
+- **main:** Add connections and logs pages by @MFSGA
+
+- **main:** Add dashboard widget grid by @MFSGA
+
+- **mutation:** Add the comp in interface by @MFSGA
+
+- **navbar:** Support navigate to legacy ui by @MFSGA
+
+- **nightly:** Use deno script by @MFSGA
+
+- **notice:** Prepare to support deeplink by @MFSGA
+
+- **open_that:** Add the command for check_update 4 by @MFSGA
+
+- **outlet:** Keep align with ref by @MFSGA
+
+- **oxlint:** Use oxlint instead of eslint by @MFSGA
+
+- **patch_verge_config:** Optimize enhance and patch_profiles_config for changing profile 26 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> update_core_config completed 25 by @MFSGA
+
+- **patch_verge_config:** Optimize the workflow 24 by @MFSGA
+
+- **patch_verge_config:** Backend patch_verge -> update_core_config completed 23 by @MFSGA
+
+- **patch_verge_config:** Frontend ProfileItem -> handleSelect completed 22 by @MFSGA
+
+- **patch_verge_config:** Add frontend ProfileItem components 21 by @MFSGA
+
+- **patch_verge_config:** Set the permission for notification.ts 19 by @MFSGA
+
+- **patch_verge_config:** Import_profile -> patch_profiles_config 18 by @MFSGA
+
+- **patch_verge_config:** Optimize user_agent in RemoteProfileOptions ipc::patch_profiles_config 17 by @MFSGA
+
+- **patch_verge_config:** Optimize patch_verge and enable system_proxy feature completed 16 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> run_core and patch_verge completed 15 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> run_core completed 14 by @MFSGA
+
+- **patch_verge_config:** Config::generate completed 13 by @MFSGA
+
+- **patch_verge_config:** Enhance enhance merge_profiles merge_profiles completed 12 by @MFSGA
+
+- **patch_verge_config:** Enhance -> process_chain completed 11 by @MFSGA
+
+- **patch_verge_config:** Enhance -> convert_uids_to_scripts completed 10 by @MFSGA
+
+- **patch_verge_config:** Enhance -> convert_uids_to_scripts completed 9 by @MFSGA
+
+- **patch_verge_config:** Enhance -> current_mappings completed 8 by @MFSGA
+
+- **patch_verge_config:** Optimize enhance 7 by @MFSGA
+
+- **patch_verge_config:** Generate -> enhance add IClashTemp to be used for the core 6 by @MFSGA
+
+- **patch_verge_config:** Prepare to support enhance 5 by @MFSGA
+
+- **patch_verge_config:** Support enable_service_mode 4 by @MFSGA
+
+- **patch_verge_config:** Use CoreManager and RunType to provide same abstract interface 3 by @MFSGA
+
+- **patch_verge_config:** Patch_verge -> get_ipc_state finished 2 by @MFSGA
+
+- **patch_verge_config:** Completed the VergePatch macro 1 by @MFSGA
+
+- **prepare-nightly:** Add the script and used in the workflow by @MFSGA
+
+- **profile:** Migrate transform chain foundation by @MFSGA
+
+- **profile:** Support merge and script profiles by @MFSGA
+
+- **profile:** Support local profile by @MFSGA
+
+- **profile:** Keep align with ref and mainly use clipboard plugin by @MFSGA
+
+- **profile:** Keeo align with the remote by @MFSGA
+
+- **profile:** Optimize for quick-iimport by @MFSGA
+
+- **profile:** Support update patch create delete profile by @MFSGA
+
+- **profile:** Add the basic chain support: just the ui by @MFSGA
+
+- **profile:** Add new profile button by @MFSGA
+
+- **profile-ui:** Show transform failures in profile editor by @MFSGA
+
+- **profile-ui:** Diagnose merge transform failures by @MFSGA
+
+- **profile-ui:** Surface transform runtime failures by @MFSGA
+
+- **profile-ui:** Clarify transform diagnostic states by @MFSGA
+
+- **profile-ui:** Show applied transform diagnostics by @MFSGA
+
+- **profile-ui:** Manage transform profiles by @MFSGA
+
+- **profiles:** Complete profile editor window by @MFSGA
+
+- **profiles:** Add profile detail and editor pages by @MFSGA
+
+- **profiles:** Add profile editing IPC by @MFSGA
+
+- **profiles:** Build profile list management page by @MFSGA
+
+- **profiles:** Add profile management IPC by @MFSGA
+
+- **profiles:** Add the runtime diff viewer 24 by @MFSGA
+
+- **profiles:** Add the runtime icon 23 by @MFSGA
+
+- **profiles:** Complete the main features of ProfileDialog for view the configuration 22 by @MFSGA
+
+- **profiles:** Add the cmd read_profile_file save_profile_file 21 by @MFSGA
+
+- **profiles:** Add the cmd update_profile 20 by @MFSGA
+
+- **providers:** Add main providers page with sidebar navigation by @MFSGA
+
+- **providers:** Add proxy and rule provider detail pages by @MFSGA
+
+- **providers:** Add internal module helpers by @MFSGA
+
+- **providers:** Add the Sidebar in Layout by @MFSGA
+
+- **providers:** Prepare for rule providers by @MFSGA
+
+- **providers:** Add the route and show basic text by @MFSGA
+
+- **proxies:** Keep align with legacy by @MFSGA
+
+- **proxies:** Support lighten_animation_effects field by @MFSGA
+
+- **proxies:** Optimize the display by @MFSGA
+
+- **prxoies_page:** Optimize the view for the page by @MFSGA
+
+- **replace_core:** For the later update in ubuntu by @MFSGA
+
+- **resolve_core_version:** Support the resolve_core_version cmd 2 by @MFSGA
+
+- **resolve_setup:** Init_config launch core 1 by @MFSGA
+
+- **restart:** Solve service and eroored config bug by @MFSGA
+
+- **restart:** Support tun and profile change by @MFSGA
+
+- **root:** Add BlockTaskProvider component by @MFSGA
+
+- **rule:** Optimize rule item by @MFSGA
+
+- **rule:** Support rule page by @MFSGA
+
+- **runtime:** Integrate ref runtime lifecycle by @MFSGA
+
+- **script:** Set for macos by @MFSGA
+
+- **service:** Enforce daemon compatibility and health eligibility by @MFSGA
+
+- **service:** Support service mode for linux user by @MFSGA
+
+- **service:** Add more info for display by @MFSGA
+
+- **service:** Replace ipc by @MFSGA
+
+- **service:** Prepare for service by @MFSGA
+
+- **service:** Keep with the original impl by @MFSGA
+
+- **service:** Support commands and codes support by @MFSGA
+
+- **service:** Optimize ServerManualPromptDialog by @MFSGA
+
+- **service:** Add the ServerManualPromptDialogWrapper and ServiceStatusControl by @MFSGA
+
+- **service:** Add the service frontend view by @MFSGA
+
+- **service:** Support a new binary file for service by @MFSGA
+
+- **service:** Prepare the bin file by @MFSGA
+
+- **setting:** Support base by @MFSGA
+
+- **settings:** Support ProxiesSelectorMode in tray menu by @MFSGA
+
+- **settings:** Reorganize legacy setting cards by @MFSGA
+
+- **settings:** Align system proxy card by @MFSGA
+
+- **settings:** Split clash core config patch flow by @MFSGA
+
+- **settings:** Add SettingSystemBehavior component by @MFSGA
+
+- **settings:** Add the external and port by @MFSGA
+
+- **settings:** Support to change to legacy ui by @MFSGA
+
+- **settings:** Optimize the BasePage component 5 by @MFSGA
+
+- **settings:** Completed the SystemProxyButton 4 by @MFSGA
+
+- **specta:** Support TypeScript binding by @MFSGA
+
+- **storage:** Align frontend kv event contract by @MFSGA
+
+- **storage:** Complete command clear_storage and support event StorageValueChangedEvent by @MFSGA
+
+- **storage:** Complete command get_all_storage_items by @MFSGA
+
+- **system:** Share DNS cache flush action by @MFSGA
+
+- **system:** Optimize system behavior by @MFSGA
+
+- **tauri:** Add managed legacy window lifecycle by @MFSGA
+
+- **theme:** Add ExperimentalThemeProvider by @MFSGA
+
+- **theme:** Add the ThemeModeProvider for frontend 1 by @MFSGA
+
+- **tray:** Refactor the menu logic by @MFSGA
+
+- **tray:** Optimize the exit process by @MFSGA
+
+- **tray:** Support i18n by @MFSGA
+
+- **tray:** Support basic tray operation by @MFSGA
+
+- **tun:** Optimize for dns by @MFSGA
+
+- **tun:** Adapter for chimera_client tun conf by @MFSGA
+
+- **tun:** Optimize the process for tun settings by @MFSGA
+
+- **tun:** Add tun support by @MFSGA
+
+- **ui:** Surface degraded profile mutations by @MFSGA
+
+- **ui:** Add network assistant workspace by @MFSGA
+
+- **ui:** Add animated tabs component by @MFSGA
+
+- **ui:** Add profile form controls by @MFSGA
+
+- **ui:** Add Card and LinearProgress UI components by @MFSGA
+
+- **ui:** For simple main window ui by @MFSGA
+
+- **ui:** Support create main window command but not work well by @MFSGA
+
+- **ui:** Prepare for new main ui by @MFSGA
+
+- **ui:** Tighten connections and shell interactions by @MFSGA
+
+- **ui:** Add sparkline theme bridge by @MFSGA
+
+- **ui:** Support breakpoint by @MFSGA
+
+- **update:** Support update by @MFSGA
+
+- **updater:** Add deno compilerOptions and use semver by @MFSGA
+
+- **utils:** Add a new utils crate by @MFSGA
+
+- **web_ui_list:** Add web_ui_list display by @MFSGA
+
+- **window:** Support right size fow window by @MFSGA
+
+- **workflow:** Fix for nsis by @MFSGA
+
+- **workflow:** Support macos release by @MFSGA
+
+- **workflow:** Support auto release by @MFSGA
+
+- Use menu by @MFSGA
+
+- Use header by @MFSGA
+
+- Add the correct route by @MFSGA
+
+- Optimize animation effect by @MFSGA
+
+- Update the react version and router version and vite config by @MFSGA
+
+- Support bug report by @MFSGA
+
+- Upgrade mui to 9.x by @MFSGA
+
+- Upgrade vite to 8.x by @MFSGA
+
+- Support collect_logs and set_custom_app_dir get_custom_app_dir by @MFSGA
+
+- Support for random port by @MFSGA
+
+- Support auto-launch by @MFSGA
+
+- Support full operation of LayoutControl by @MFSGA
+
+- Optimize the deps in install by @MFSGA
+
+- Add ref project by @MFSGA
+
+- Beautify the style for grouplist by @MFSGA
+
+- Prepare for clash-rs core by @MFSGA
+
+- Support language in Iverge and user interface by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ClashWSProvider:** Optimize the provider by @MFSGA
+
+- **Connection:** Recover FloatingButton by @MFSGA
+
+- **Connection:** Recover mountTable logic by @MFSGA
+
+- **Sysopt:** Sysopt initialized correctly by @MFSGA
+
+- **bindings:** Update fmt for bindings by @MFSGA
+
+- **build:** Update the pnpm process by @MFSGA
+
+- **check:** Changed the clash-rs-alpha name by @MFSGA
+
+- **chimera:** Type proxy mode switch values by @MFSGA
+
+- **ci:** Stabilize tauri e2e smoke coverage by @MFSGA
+
+- **ci:** Used the incorrect repository name by @MFSGA
+
+- **ci:** Skip fixed webview updater when not built by @MFSGA
+
+- **ci:** For workflow by @MFSGA
+
+- **ci:** Stabilize generated frontend lint by @MFSGA
+
+- **ci:** Ignore generated paraglide output by @MFSGA
+
+- **clash:** Align runtime patch transaction boundaries by @MFSGA
+
+- **clash:** Honor partial core config patches by @MFSGA
+
+- **clash-web:** Fix the import issue by @MFSGA
+
+- **config:** For IClashTemp patch_config save_config optimized to guaranted non Null by @MFSGA
+
+- **config-check:** Solve the permission issue in linux by @MFSGA
+
+- **connection:** Optimize the unmount process by @MFSGA
+
+- **core:** Clean runtime candidates before promotion by @MFSGA
+
+- **daily:** Support the version by @MFSGA
+
+- **deps:** Update the typescript deps by @MFSGA
+
+- **deps:** Update rust crate nanoid to 0.5.0 by @renovate-bot
+
+- **deps:** Update tauri packages by @renovate-bot
+
+- **deps:** Update dependency react-use to v17.6.1 by @renovate-bot
+
+- **deps:** Update tanstack-query monorepo to v5.101.0 by @renovate-bot
+
+- **deps:** Update radix-ui-primitives monorepo by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-dialog to v2.6.0 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-opener to v2.5.3 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.7 by @renovate-bot
+
+- **deps:** Update dependency i18next to v25.8.0 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.16 by @renovate-bot
+
+- **deps:** Update dependency react-i18next to v16 by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.16.1 by @renovate-bot
+
+- **deps:** Update dependency i18next to v25.7.3 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.6 by @renovate-bot
+
+- **deps:** Update react monorepo to v19.2.3 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.12 by @renovate-bot
+
+- **deps:** Update react monorepo by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.15.2 by @renovate-bot
+
+- **deps:** Update react monorepo by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.7 by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.15.1 by @renovate-bot
+
+- **deps:** Update dependency ofetch to v1.5.1 by @renovate-bot
+
+- **deps:** Update tailwindcss monorepo to v4.1.16 by @renovate-bot
+
+- **deps:** Update dependency i18next to v25.6.0 by @renovate-bot
+
+- **deps:** Update dependency dayjs to v1.11.19 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-process to v2.3.1 by @renovate-bot
+
+- **deps:** Update dependency ahooks to v3.9.6 by @renovate-bot
+
+- **deps:** Update material-ui monorepo to v7.3.4 by @renovate-bot
+
+- **deps:** Update dependency react-i18next to v15.7.4 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-opener to v2.5.2 by @renovate-bot
+
+- **deps:** Update dependency @tauri-apps/plugin-dialog to v2.4.2 by @renovate-bot
+
+- **deps:** Update dependency @tanstack/react-query to v5.90.5 by @renovate-bot
+
+- **deps:** Update dependency jotai to v2.15.0 by @renovate-bot
+
+- **deps:** Update dependency ofetch to v1.5.0 by @renovate-bot
+
+- **deps:** Update react monorepo by @renovate-bot
+
+- **deps:** Pin dependencies by @renovate-bot
+
+- **dev:** Restore dev:diff startup by @MFSGA
+
+- **display:** Fix some word issue by @MFSGA
+
+- **e2e:** Use stable sidebar navigation selector by @MFSGA
+
+- **e2e:** Stabilize main dropdown contract by @MFSGA
+
+- **emoji:** Add the css file to show more emoji by @MFSGA
+
+- **enhance:** Bound transform runtime logs by @MFSGA
+
+- **frontend:** Resolve hook dependency warnings by @MFSGA
+
+- **frontend:** Align dashboard save action with ref by @MFSGA
+
+- **frontend:** Align dashboard grid spacing with ref by @MFSGA
+
+- **frontend:** Normalize remote profile options by @MFSGA
+
+- **frontend:** Adapt UI to generated interface types by @MFSGA
+
+- **frontend:** Adapt monaco-editor imports for v0.55.1 by @MFSGA
+
+- **i18n:** Validate the new plan inlang by @MFSGA
+
+- **i18n:** Use the t for i18n by @MFSGA
+
+- **i18n:** Use the t for i18n by @MFSGA
+
+- **import:** Solve the updated field bug when import remote file by @MFSGA
+
+- **interface:** Invalidate clash data after profile mutations by @MFSGA
+
+- **interface:** Normalize flattened profile Specta bindings by @MFSGA
+
+- **interface:** Align proxy mode guard with ref by @MFSGA
+
+- **lint:** Delete a rule for deno by @MFSGA
+
+- **main:** Restore legacy ui switch action by @MFSGA
+
+- **main:** Restore legacy navbar export by @MFSGA
+
+- **main:** Align debug path grid with ref by @MFSGA
+
+- **main:** Open profiles from proxies empty state by @MFSGA
+
+- **main:** Restore legacy ui switch button by @MFSGA
+
+- **main:** Support for exiting from a window by @MFSGA
+
+- **maximum:** Solve the constant maximum depth issue by @MFSGA
+
+- **notice:** Add a basic permission for notification by @MFSGA
+
+- **patch_verge_config:** Fix macos compiler error because of feat 14 by @MFSGA
+
+- **prettier:** Fix the dep problem in prettier by @MFSGA
+
+- **profile:** Commit subscription metadata after file replacement by @MFSGA
+
+- **profile:** Commit profile creation atomically and reconcile stale reservations by @MFSGA
+
+- **profile:** Preserve materialized files until profile transactions commit by @MFSGA
+
+- **profile:** Contain managed profile files by @MFSGA
+
+- **profile-ui:** Refresh transform diagnostics on rebuild failure by @MFSGA
+
+- **profile-ui:** Refresh transform diagnostics on runtime updates by @MFSGA
+
+- **profiles:** Save profile files atomically by @MFSGA
+
+- **proxies:** Localize legacy proxy controls by @MFSGA
+
+- **release:** For workflow by @MFSGA
+
+- **release:** Set for auto release by @MFSGA
+
+- **render:** Recover by @MFSGA
+
+- **renovate:** Update the renovate settings and workflow by @MFSGA
+
+- **renovate:** Indicate the specific version by @MFSGA
+
+- **renovate:** Fix the renovate settings by @MFSGA
+
+- **resource:** For pnpm check script by @MFSGA
+
+- **resources:** For first time load resources by @MFSGA
+
+- **route:** Help unmount the stale route by @MFSGA
+
+- **scripts:** Pin service sidecars to IPC versions by @MFSGA
+
+- **scss:** For better css settings by @MFSGA
+
+- **service:** For macos by @MFSGA
+
+- **settings:** Report app log level failures and verify persistence by @MFSGA
+
+- **settings:** Improve system proxy and service mode feedback by @MFSGA
+
+- **shiki:** For better call shiki by @MFSGA
+
+- **start:** Get the correct config when start gui in service mode by @MFSGA
+
+- **style:** Fix the style error by @MFSGA
+
+- **theme:** Solve the theme issue by @MFSGA
+
+- **theme:** Fix the heme.vars.palette error 2 by @MFSGA
+
+- **transition:** For react render maximum depth issue by @MFSGA
+
+- **tun:** For linux tun mode by @MFSGA
+
+- **tun:** Allow for setting custom fake-ip-range by @MFSGA
+
+- **tun:** Do mot support gateway in tun mod by @MFSGA
+
+- **type:** Solve type problem by @MFSGA
+
+- **ui:** Show settings scrollbar with shadow by @MFSGA
+
+- **windows:** Register system shutdown cleanup hook by @MFSGA
+
+- **windows:** Embed common controls manifest in test artifacts by @MFSGA
+
+- **workflow:** Update the version by @MFSGA
+
+- Add retry handling for downloads by @MFSGA
+
+- For overflow by @MFSGA
+
+- Revert the update by @MFSGA
+
+- Update the utils version by @MFSGA
+
+- Update the use-profile hook by @MFSGA
+
+- Update the translation by @MFSGA
+
+- Test for publish by @MFSGA
+
+- For deno by @MFSGA
+
+- Add the clash field support by @MFSGA
+
+- Optimize for type by @MFSGA
+
+- Stabilize legacy route transitions by @MFSGA
+
+- Upgrade pnpm to 11 for build by @MFSGA
+
+- For workflow build in macos by @MFSGA
+
+- Correct the translation by @MFSGA
+
+- Correct the translate by @MFSGA
+
+- Help greener to use by @MFSGA
+
+- For linux compile by @MFSGA
+
+- For correct url api interface by @MFSGA
+
+- For correct config by @MFSGA
+
+- Set the right order for release by @MFSGA
+
+- For ubuntu by @MFSGA
+
+- Workflow by @MFSGA
+
+- Support macos by @MFSGA
+
+- Solve the update error by @MFSGA
+
+- Solve the comiple error by @MFSGA
+
+- Add the linux platform support by @MFSGA
+
+- Add the vite-tsconfig-paths to fix vite alias error by @MFSGA
+
+- Fix the lint and build workflow by @MFSGA
+
+- Add the member in IVerge for patch_verge_config by @MFSGA
+
+### 💅 Styling
+
+- Fix prettier formatting by @MFSGA
+
+### 📚 Documentation
+
+- **ipc:** Source generated binding comments by @MFSGA
+
+- Add project agent guidance by @MFSGA
+
+### 🔨 Refactor
+
+- **agent:** Read core status through NyanpasuClient by @MFSGA
+
+- **agent:** Remove unreachable unknown core states by @MFSGA
+
+- **backend:** Route window state through typed session owner by @MFSGA
+
+- **backend:** Add typed session state domain by @MFSGA
+
+- **backend:** Move clash config to typed state by @MFSGA
+
+- **backend:** Move application config to typed state by @MFSGA
+
+- **backend:** Add ref state core by @MFSGA
+
+- **backend:** Render tray from typed config by @MFSGA
+
+- **backend:** Read tray toggles from typed config by @MFSGA
+
+- **backend:** Read updater core from typed config by @MFSGA
+
+- **backend:** Pass explicit core run type by @MFSGA
+
+- **backend:** Read connection policy from typed config by @MFSGA
+
+- **backend:** Isolate running config api by @MFSGA
+
+- **backend:** Read runtime core from typed app config by @MFSGA
+
+- **backend:** Pass typed clash snapshot through runtime rebuild by @MFSGA
+
+- **backend:** Build runtime from typed clash config by @MFSGA
+
+- **backend:** Read port strategy from typed clash config by @MFSGA
+
+- **backend:** Split legacy verge patch by config domain by @MFSGA
+
+- **backend:** Move tun runtime handling to clash client by @MFSGA
+
+- **backend:** Bridge typed clash config to legacy state by @MFSGA
+
+- **backend:** Add clash config client boundary by @MFSGA
+
+- **backend:** Move verge mutation into application client by @MFSGA
+
+- **backend:** Add application client boundary by @MFSGA
+
+- **backend:** Split client orchestration by ref domains by @MFSGA
+
+- **backend:** Align port resolution boundary with ref by @MFSGA
+
+- **backend:** Align profile client boundary with ref by @MFSGA
+
+- **backend:** Split client boundaries like ref by @MFSGA
+
+- **backend:** Align client module boundary with ref by @MFSGA
+
+- **bindings:** Scope normalization helpers to export builds by @MFSGA
+
+- **config:** Separate runtime state from overrides by @MFSGA
+
+- **connections:** Align connections page by @MFSGA
+
+- **core:** Synchronize runtime resource lifecycle by @MFSGA
+
+- **enhance:** Define script runner contract by @MFSGA
+
+- **frontend:** Align dashboard utils imports with ref by @MFSGA
+
+- **frontend:** Align update provider with ref flow by @MFSGA
+
+- **frontend:** Align appimage hook with ref interface by @MFSGA
+
+- **frontend:** Align header action modules with ref by @MFSGA
+
+- **frontend:** Map ref utils to chimera utils by @MFSGA
+
+- **i18n:** Migrate baseDialog in @chimera/ui from react-i18next to hardcoded strings by @MFSGA
+
+- **i18n:** Migrate page files from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate remaining components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate setting components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate logs components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate profiles components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate dashboard components from react-i18next to inlang/paraglide by @MFSGA
+
+- **i18n:** Migrate connections components from react-i18next to inlang/paraglide by @MFSGA
+
+- **interface:** Consolidate generated frontend contracts by @MFSGA
+
+- **interface:** Migrate shared queries to React Query by @MFSGA
+
+- **interface:** Use ref clash websocket context by @MFSGA
+
+- **interface:** Align clash connections hook with ref by @MFSGA
+
+- **ipc:** Route core restarts through NyanpasuClient by @MFSGA
+
+- **legacy:** Share theme settings provider by @MFSGA
+
+- **legacy:** Adapt shell to shared application interface by @MFSGA
+
+- **main:** Align dropdown and header actions by @MFSGA
+
+- **main:** Align proxy node cards with ref by @MFSGA
+
+- **main:** Align rules tooltip with ref by @MFSGA
+
+- **main:** Align modal primitive with ref by @MFSGA
+
+- **main:** Align tooltip surface with ref by @MFSGA
+
+- **main:** Align input primitive with ref by @MFSGA
+
+- **main:** Align cached proxy icons with ref by @MFSGA
+
+- **main:** Finish providers visual alignment by @MFSGA
+
+- **main:** Align debug settings with ref by @MFSGA
+
+- **main:** Align settings navigation with ref by @MFSGA
+
+- **main:** Align settings content layout with ref by @MFSGA
+
+- **main:** Align global css baseline with ref by @MFSGA
+
+- **main:** Align logs with ref by @MFSGA
+
+- **main:** Align rules with ref by @MFSGA
+
+- **main:** Align dashboard shortcuts with ref by @MFSGA
+
+- **main:** Align proxies with ref by @MFSGA
+
+- **main:** Align providers with ref by @MFSGA
+
+- **profile:** Remove obsolete metadata setter facade by @MFSGA
+
+- **profile:** Move profile state persistence off async workers by @MFSGA
+
+- **profile:** Resolve managed profile paths off async workers by @MFSGA
+
+- **profile:** Move profile filesystem work off async workers by @MFSGA
+
+- **profile:** Route profile patching through write port by @MFSGA
+
+- **profile:** Commit creation materialization through client by @MFSGA
+
+- **profile:** Route remote refresh IO through client port by @MFSGA
+
+- **profile:** Introduce serialized profile commit machinery by @MFSGA
+
+- **profile:** Read profile state through NyanpasuClient by @MFSGA
+
+- **profile:** Route profile reordering through NyanpasuClient by @MFSGA
+
+- **profile:** Centralize profile mutations in NyanpasuClient by @MFSGA
+
+- **profile:** Move profile file IO behind NyanpasuClient by @MFSGA
+
+- **profiles:** Align profile navigation with ref by @MFSGA
+
+- **profiles:** Finish profile alignment by @MFSGA
+
+- **profiles:** Align profile import flow by @MFSGA
+
+- **profiles:** Expose typed profile IPC by @MFSGA
+
+- **runtime:** Remove obsolete core lifecycle facades by @MFSGA
+
+- **runtime:** Route config lifecycle through NyanpasuClient by @MFSGA
+
+- **runtime:** Separate rebuild from profile side effects by @MFSGA
+
+- **runtime:** Stop core through NyanpasuClient on shutdown by @MFSGA
+
+- **runtime:** Drop dormant rebuild coordinator ownership by @MFSGA
+
+- **runtime:** Route core changes through the lifecycle lease by @MFSGA
+
+- **runtime:** Guard core lifecycle mutations with an exclusive lease by @MFSGA
+
+- **runtime:** Read core status through NyanpasuClient by @MFSGA
+
+- **runtime:** Serialize runtime patches inside NyanpasuClient by @MFSGA
+
+- **runtime:** Introduce NyanpasuClient as the lifecycle boundary by @MFSGA
+
+- **service:** Unify runtime and frontend service contracts by @MFSGA
+
+- **service:** Pin runtime and verify integration by @MFSGA
+
+- **service:** Route IPC transitions through NyanpasuClient by @MFSGA
+
+- **settings:** Align settings navigation follow-up by @MFSGA
+
+- **settings:** Finish nyanpasu user interface and web ui by @MFSGA
+
+- **settings:** Add system tools by @MFSGA
+
+- **settings:** Finish clash alignment by @MFSGA
+
+- **settings:** Align web ui settings by @MFSGA
+
+- **settings:** Align user interface settings by @MFSGA
+
+- **settings:** Align nyanpasu settings by @MFSGA
+
+- **settings:** Align system settings by @MFSGA
+
+- **settings:** Align debug settings by @MFSGA
+
+- **settings:** Align clash settings by @MFSGA
+
+- **settings:** Align settings navigation by @MFSGA
+
+- **settings:** Add settings primitives by @MFSGA
+
+- **ui:** Align window controls with ref by @MFSGA
+
+- **ui:** Rename internal nyanpasu symbols by @MFSGA
+
+- **ui:** Align main shell with ref by @MFSGA
+
+- **ui:** Align settings module tree with ref by @MFSGA
+
+- **ui:** Align chimera settings with ref by @MFSGA
+
+- **ui:** Align web ui settings structure with ref by @MFSGA
+
+- **ui:** Align system settings structure with ref by @MFSGA
+
+- **ui:** Align clash settings structure with ref by @MFSGA
+
+- **ui:** Unify service and proxy behavior across interfaces by @MFSGA
+
+- **ui:** Rebuild dropdown menu and settings selectors by @MFSGA
+
+- **ui:** Standardize dropdown primitives across navigation and settings by @MFSGA
+
+- **ui:** Add highlight text and tooltip primitives by @MFSGA
+
+- **ui:** Align card and sidebar primitives by @MFSGA
+
+- **updater:** Inject core lifecycle through NyanpasuClient by @MFSGA
+
+- **verge:** Split patch planning and side effects by @MFSGA
+
+---
+
+## New Contributors
+
+- @github-actions[bot] made their first contribution
+- @renovate-bot made their first contribution
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.22.3...v0.22.4
+
 ## [0.22.3] - 2026-09-03 10:26:37
 
 ### ✨ Features
