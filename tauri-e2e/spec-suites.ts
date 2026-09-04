@@ -22,6 +22,7 @@ export const baseE2eSuites = {
   settings: [
     './specs/application-typed-state.e2e.ts',
     './specs/clash-typed-state.e2e.ts',
+    './specs/session-typed-state.e2e.ts',
     './specs/app-log-level-setting.e2e.ts',
     './specs/auto-update-setting.e2e.ts',
     './specs/clash-settings-main.e2e.ts',
