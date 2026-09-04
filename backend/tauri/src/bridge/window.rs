@@ -21,9 +21,13 @@ pub(crate) struct LegacyWindowBridge {
 
 impl Default for LegacyWindowBridge {
     fn default() -> Self {
-        Self {
-            legacy_lock: Arc::new(parking_lot::Mutex::new(())),
-        }
+        Self::new(Arc::new(parking_lot::Mutex::new(())))
+    }
+}
+
+impl LegacyWindowBridge {
+    pub(crate) fn new(legacy_lock: Arc<parking_lot::Mutex<()>>) -> Self {
+        Self { legacy_lock }
     }
 }
 

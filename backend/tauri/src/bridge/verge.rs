@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use chimera_config::application::{
     ChimeraAppConfig, ClashCore as AppClashCore, I18nLanguage, ThemeMode,
 };
@@ -128,14 +130,30 @@ fn apply_prepared_app_projection(target: &mut IVerge, projected: &IVerge) {
     target.window_type = projected.window_type;
 }
 
-pub(crate) struct LegacyVergeBridge;
+pub(crate) struct LegacyVergeBridge {
+    legacy_lock: Arc<parking_lot::Mutex<()>>,
+}
+
+impl Default for LegacyVergeBridge {
+    fn default() -> Self {
+        Self::new(Arc::new(parking_lot::Mutex::new(())))
+    }
+}
+
+impl LegacyVergeBridge {
+    pub(crate) fn new(legacy_lock: Arc<parking_lot::Mutex<()>>) -> Self {
+        Self { legacy_lock }
+    }
+}
 
 struct PreparedVergeMirror {
+    legacy_lock: Arc<parking_lot::Mutex<()>>,
     projected: IVerge,
 }
 
 impl PreparedLegacyMirror for PreparedVergeMirror {
     fn apply(self: Box<Self>) {
+        let _guard = self.legacy_lock.lock();
         let mut next = Config::verge().latest().clone();
         apply_prepared_app_projection(&mut next, &self.projected);
         *Config::verge().draft() = next;
@@ -145,12 +163,17 @@ impl PreparedLegacyMirror for PreparedVergeMirror {
 
 impl VergeLegacyBridgeTrait for LegacyVergeBridge {
     fn prepare(&self, snap: &ChimeraAppConfig) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+        let _guard = self.legacy_lock.lock();
         let mut projected = Config::verge().latest().clone();
         apply_app_config_to_legacy_verge(&mut projected, snap)?;
-        Ok(Box::new(PreparedVergeMirror { projected }))
+        Ok(Box::new(PreparedVergeMirror {
+            legacy_lock: Arc::clone(&self.legacy_lock),
+            projected,
+        }))
     }
 
     fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig> {
+        let _guard = self.legacy_lock.lock();
         application_from_legacy(&Config::verge().latest())
     }
 }
