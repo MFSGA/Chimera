@@ -1143,12 +1143,36 @@ pub fn remove_storage_item(app_handle: AppHandle, key: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub fn save_window_size_state(app_handle: AppHandle, label: String) -> Result {
-    match label.as_str() {
-        crate::consts::LEGACY_WINDOW_LABEL => resolve::save_legacy_window_state(&app_handle, true)?,
-        crate::consts::MAIN_WINDOW_LABEL => resolve::save_main_window_state(&app_handle, true)?,
-        _ => return Err(IpcError::Custom(format!("unknown window label: {label}"))),
+pub async fn save_window_size_state(
+    client: State<'_, ChimeraClient>,
+    app_handle: AppHandle,
+    label: String,
+) -> Result {
+    if !matches!(
+        label.as_str(),
+        crate::consts::LEGACY_WINDOW_LABEL | crate::consts::MAIN_WINDOW_LABEL
+    ) {
+        return Err(IpcError::Custom(format!("unknown window label: {label}")));
     }
+
+    let window = app_handle
+        .get_webview_window(&label)
+        .ok_or_else(|| IpcError::Custom(format!("window not found: {label}")))?;
+    if window.is_minimized().map_err(anyhow::Error::from)? {
+        return Ok(());
+    }
+
+    let state = crate::window::capture_window_state(&window)?.map(|state| {
+        chimera_config::state::window::WindowState {
+            width: state.width,
+            height: state.height,
+            x: state.x,
+            y: state.y,
+            maximized: state.maximized,
+            fullscreen: state.fullscreen,
+        }
+    });
+    client.save_main_window_state(state).await?;
     Ok(())
 }
 

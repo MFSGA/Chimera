@@ -11,6 +11,7 @@ use camino::Utf8PathBuf;
 use chimera_config::{
     application::{ChimeraAppConfig, ChimeraAppConfigPatch},
     clash::config::ClashConfig,
+    state::PersistentState,
 };
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
@@ -306,6 +307,11 @@ enum PreparedLegacyDomain {
         forward: PreparedTypedReplace<ChimeraAppConfig>,
         rollback: PreparedTypedReplace<ChimeraAppConfig>,
     },
+    Session {
+        expected_version: u64,
+        forward: PreparedTypedReplace<PersistentState>,
+        rollback: PreparedTypedReplace<PersistentState>,
+    },
     Clash {
         expected_version: u64,
         forward: PreparedTypedReplace<ClashConfig>,
@@ -317,6 +323,10 @@ enum CommittedLegacyDomain {
     Application {
         committed_version: u64,
         rollback: PreparedTypedReplace<ChimeraAppConfig>,
+    },
+    Session {
+        committed_version: u64,
+        rollback: PreparedTypedReplace<PersistentState>,
     },
     Clash {
         committed_version: u64,
@@ -424,6 +434,23 @@ async fn rollback_legacy_domains(
                 ),
                 Err(error) => failures.push(format!("application rollback failed: {error:#}")),
             },
+            CommittedLegacyDomain::Session {
+                committed_version,
+                rollback,
+            } => match client
+                .inner
+                .session_state
+                .replace_prepared_if_version(committed_version, rollback)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(_)) => {}
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => failures.push(
+                    format!(
+                        "session rollback conflict: expected {committed_version}, actual {actual_version}"
+                    ),
+                ),
+                Err(error) => failures.push(format!("session rollback failed: {error:#}")),
+            },
             CommittedLegacyDomain::Clash {
                 committed_version,
                 rollback,
@@ -469,7 +496,7 @@ async fn rollback_legacy_domains(
 async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
     let base = Config::verge().latest().clone();
     let legacy_clash = Config::clash().latest().clone();
-    let split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
+    let mut split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
     let application_patch = split.application.clone().unwrap_or_default();
     let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
 
@@ -478,6 +505,15 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         let mut projected = base.clone();
         projected.patch_config(app_patch.clone());
         let next = application_from_legacy(&projected)?;
+        Some((snapshot, next))
+    } else {
+        None
+    };
+
+    let session_pair = if let Some(session_patch) = split.session_state.take() {
+        let snapshot = client.inner.session_state.get().await?;
+        let mut next = snapshot.state.clone();
+        next.apply(session_patch);
         Some((snapshot, next))
     } else {
         None
@@ -500,6 +536,17 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
             rollback: client
                 .inner
                 .application
+                .prepare_replace(snapshot.state.clone())
+                .await?,
+        });
+    }
+    if let Some((snapshot, next)) = session_pair {
+        prepared.push(PreparedLegacyDomain::Session {
+            expected_version: snapshot.version,
+            forward: client.inner.session_state.prepare_replace(next).await?,
+            rollback: client
+                .inner
+                .session_state
                 .prepare_replace(snapshot.state.clone())
                 .await?,
         });
@@ -540,6 +587,28 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                     "application config version conflict: expected {expected_version}, actual {actual_version}"
                 ),
                 Err(error) => error.context("failed to commit application typed config"),
+            },
+            PreparedLegacyDomain::Session {
+                expected_version,
+                forward,
+                rollback,
+            } => match client
+                .inner
+                .session_state
+                .replace_prepared_if_version(expected_version, forward)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(snapshot)) => {
+                    committed.push(CommittedLegacyDomain::Session {
+                        committed_version: snapshot.version,
+                        rollback,
+                    });
+                    continue;
+                }
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => anyhow::anyhow!(
+                    "session config version conflict: expected {expected_version}, actual {actual_version}"
+                ),
+                Err(error) => error.context("failed to commit session typed state"),
             },
             PreparedLegacyDomain::Clash {
                 expected_version,

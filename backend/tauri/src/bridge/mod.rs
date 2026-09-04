@@ -1,7 +1,11 @@
 pub mod clash;
 pub mod verge;
+pub mod window;
 
-use chimera_config::clash::config::{ClashConfig, ClashConfigPatch};
+use chimera_config::{
+    clash::config::{ClashConfig, ClashConfigPatch},
+    state::{PersistentState, PersistentStatePatch},
+};
 use serde::{Serialize, de::DeserializeOwned};
 use struct_patch::Patch;
 
@@ -9,6 +13,7 @@ use crate::config::{chimera::IVerge, clash::IClashTemp};
 
 pub(crate) struct LegacyVergePatchPlan {
     pub application: Option<IVerge>,
+    pub session_state: Option<PersistentStatePatch>,
     pub clash_config: Option<ClashConfigPatch>,
 }
 
@@ -19,10 +24,12 @@ pub(crate) fn split_legacy_verge_patch(
 ) -> anyhow::Result<LegacyVergePatchPlan> {
     let mut projected = base.clone();
     projected.patch_config(patch.clone());
+    let next_session = window::persistent_state_from_legacy(&projected)?;
     let next_clash = clash::clash_config_from_legacy(&projected, &legacy_clash.0)?;
 
     Ok(LegacyVergePatchPlan {
         application: application_patch_from_legacy_patch(patch)?,
+        session_state: session_patch_from_legacy_patch(patch, next_session),
         clash_config: clash_patch_from_legacy_patch(patch, next_clash),
     })
 }
@@ -40,11 +47,22 @@ fn application_patch_from_legacy_patch(patch: &IVerge) -> anyhow::Result<Option<
     application.break_when_proxy_change = None;
     application.break_when_profile_change = None;
     application.break_when_mode_change = None;
+    application.window_size_state = None;
 
     let touched = serde_yaml::to_value(&application)?
         .as_mapping()
         .is_some_and(|mapping| mapping.values().any(|value| !value.is_null()));
     Ok(touched.then_some(application))
+}
+
+fn session_patch_from_legacy_patch(
+    patch: &IVerge,
+    next: PersistentState,
+) -> Option<PersistentStatePatch> {
+    patch.window_size_state.as_ref()?;
+    let mut session = PersistentState::new_empty_patch();
+    session.window_state = Some(next.window_state);
+    Some(session)
 }
 
 fn clash_patch_from_legacy_patch(patch: &IVerge, next: ClashConfig) -> Option<ClashConfigPatch> {
@@ -138,6 +156,34 @@ mod tests {
                 .map(|strategy| strategy.on_mode_change),
             Some(true)
         );
+    }
+
+    #[test]
+    fn session_only_patch_does_not_create_application_or_clash_patch() {
+        let patch = IVerge {
+            window_size_state: Some(crate::config::chimera::WindowState {
+                width: 960,
+                height: 720,
+                x: 12,
+                y: 24,
+                maximized: false,
+                fullscreen: false,
+            }),
+            ..IVerge::default()
+        };
+
+        let plan = split_legacy_verge_patch(&IVerge::template(), &patch, &IClashTemp::template())
+            .expect("session patch should split");
+
+        assert!(plan.application.is_none());
+        assert!(plan.clash_config.is_none());
+        let session = plan.session_state.expect("session patch should exist");
+        let window_state = session.window_state.expect("window patch should exist");
+        let state = window_state
+            .get(&chimera_config::state::window::WindowLabel("main".into()))
+            .expect("main window state should exist");
+        assert_eq!(state.width, 960);
+        assert_eq!(state.height, 720);
     }
 
     #[test]

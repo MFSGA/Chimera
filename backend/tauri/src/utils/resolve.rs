@@ -11,7 +11,7 @@ use tracing::debug;
 
 use crate::{
     config::{
-        chimera::{ClashCore, IVerge, WindowState, WindowType},
+        chimera::{ClashCore, WindowState, WindowType},
         core::Config,
     },
     core::{clash::core::CoreManager, handle, sysopt, tray},
@@ -50,13 +50,6 @@ impl AppWindow for LegacyWindow {
     fn get_window_state(&self) -> Option<WindowState> {
         Config::verge().latest().window_size_state.clone()
     }
-
-    fn set_window_state(&self, state: Option<WindowState>) {
-        Config::verge().data().patch_config(IVerge {
-            window_size_state: state,
-            ..IVerge::default()
-        });
-    }
 }
 
 /// Main window implementation (new UI)
@@ -92,8 +85,6 @@ impl AppWindow for ProfileEditorWindow {
     fn get_window_state(&self) -> Option<WindowState> {
         None
     }
-
-    fn set_window_state(&self, _state: Option<WindowState>) {}
 }
 
 impl AppWindow for MainWindow {
@@ -120,13 +111,6 @@ impl AppWindow for MainWindow {
 
     fn get_window_state(&self) -> Option<WindowState> {
         Config::verge().latest().window_size_state.clone()
-    }
-
-    fn set_window_state(&self, state: Option<WindowState>) {
-        Config::verge().data().patch_config(IVerge {
-            window_size_state: state,
-            ..IVerge::default()
-        });
     }
 }
 
@@ -182,14 +166,6 @@ pub fn create_window(app_handle: &AppHandle) {
         WindowType::Legacy => create_legacy_window(app_handle),
         WindowType::Main => create_main_window(app_handle),
     }
-}
-
-pub fn save_legacy_window_state(app_handle: &AppHandle, save_to_file: bool) -> Result<()> {
-    LegacyWindow.save_state(app_handle, save_to_file)
-}
-
-pub fn save_main_window_state(app_handle: &AppHandle, save_to_file: bool) -> Result<()> {
-    MainWindow.save_state(app_handle, save_to_file)
 }
 
 /// handle something when start app
