@@ -207,6 +207,28 @@ impl ChimeraClient {
         lease.stop().await
     }
 
+    pub(crate) async fn ensure_core_stopped_for_update(&self) -> anyhow::Result<()> {
+        const ATTEMPTS: usize = 20;
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+        if matches!(self.core_status().await?.state, CoreState::Stopped(_)) {
+            return Ok(());
+        }
+
+        self.stop_core()
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to stop core before update: {error:#}"))?;
+
+        for _ in 0..ATTEMPTS {
+            if matches!(self.core_status().await?.state, CoreState::Stopped(_)) {
+                return Ok(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+
+        anyhow::bail!("core remained running after update cleanup")
+    }
+
     pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
         Ok(CoreUpdateLease {
             lease: self.inner.core.begin().await?,

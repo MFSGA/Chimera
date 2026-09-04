@@ -15,6 +15,7 @@ use specta::Type;
 use tokio::sync::RwLock;
 
 mod instance;
+pub mod journal;
 mod shared;
 
 pub use instance::UpdaterSummary;

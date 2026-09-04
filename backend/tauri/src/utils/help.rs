@@ -166,7 +166,7 @@ pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
 }
 
 #[instrument(skip(app_handle))]
-pub fn cleanup_processes(app_handle: &AppHandle) {
+pub fn cleanup_processes(app_handle: &AppHandle) -> Result<()> {
     debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
     resolve::resolve_reset();
@@ -177,15 +177,16 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     let client = app_handle
         .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone());
-    log_err!(nyanpasu_utils::runtime::block_on(async {
+    nyanpasu_utils::runtime::block_on(async {
         if let Some(connector) = connector {
             connector.stop().await;
         }
         let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
-        client.stop_core().await
-    }));
+        client.ensure_core_stopped_for_update().await
+    })?;
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -241,7 +242,7 @@ pub fn quit_application(app_handle: &AppHandle) {
 
 #[instrument(skip(app_handle))]
 pub fn restart_application(app_handle: &AppHandle) {
-    cleanup_processes(app_handle);
+    crate::log_err!(cleanup_processes(app_handle));
     let env = app_handle.env();
     let path = current_binary(&env).unwrap();
     let arg = std::env::args().collect::<Vec<String>>();

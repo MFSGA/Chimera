@@ -1,4 +1,9 @@
-import { cleanupProcesses, openThat } from '@chimera/interface';
+import {
+  cleanupProcesses,
+  openThat,
+  recordUpdatePhase,
+  type AppUpdatePhase,
+} from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
 import { Button, LinearProgress } from '@mui/material';
 import { relaunch } from '@tauri-apps/plugin-process';
@@ -54,13 +59,31 @@ export default function UpdaterDialog({
     }
   }, []);
 
+  const recordPhase = useCallback(
+    async (phase: Exclude<AppUpdatePhase, 'checked' | 'completed'>) => {
+      try {
+        await recordUpdatePhase(update.version, phase);
+      } catch (error) {
+        console.warn(
+          'failed to persist update transaction phase',
+          phase,
+          error,
+        );
+      }
+    },
+    [update.version],
+  );
+
   const handleUpdate = useLockFn(async () => {
     startPending(async () => {
       try {
         // Install the update. This will also restart the app on Windows!
         await update.download(onDownloadEvent);
+        await recordPhase('downloaded');
+        await recordPhase('cleanup_started');
         await cleanupProcesses();
-        // cleanup and stop core
+        await recordPhase('cleanup_succeeded');
+        await recordPhase('installer_requested');
         await update.install();
         // On macOS and Linux you will need to restart the app manually.
         // You could use this step to display another confirmation dialog.

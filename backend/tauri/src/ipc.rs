@@ -610,6 +610,10 @@ pub async fn check_update(webview: tauri::Webview) -> Result<Option<UpdateWrappe
     let updater = builder.build().context("failed to build updater")?;
     let update = updater.check().await.context("failed to check update")?;
     Ok(update.map(|u| {
+        crate::log_err!(updater::journal::record(
+            &u.version,
+            updater::journal::AppUpdatePhase::Checked,
+        ));
         let mut wrapper = UpdateWrapper {
             available: true,
             current_version: u.current_version.clone(),
@@ -642,8 +646,18 @@ pub fn open_that(path: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
+pub fn record_update_phase(
+    target_version: String,
+    phase: updater::journal::AppUpdatePhase,
+) -> Result {
+    updater::journal::record(&target_version, phase)?;
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn cleanup_processes(app_handle: AppHandle) -> Result {
-    crate::utils::help::cleanup_processes(&app_handle);
+    crate::utils::help::cleanup_processes(&app_handle)?;
     Ok(())
 }
 

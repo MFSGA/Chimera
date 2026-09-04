@@ -76,6 +76,7 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> std::io::Result<()> {
     crate::log_err!(init::init_config());
+    crate::log_err!(core::updater::journal::reconcile_startup());
     if let Some(lang) = Config::verge().latest().language.clone() {
         rust_i18n::set_locale(lang.to_lowercase().as_str());
     }
@@ -168,7 +169,7 @@ pub fn run() -> std::io::Result<()> {
             {
                 let app_handle = app.handle().clone();
                 shutdown_hook::setup_shutdown_hook(move || {
-                    utils::help::cleanup_processes(&app_handle);
+                    crate::log_err!(utils::help::cleanup_processes(&app_handle));
                 })?;
             }
 
@@ -230,7 +231,7 @@ pub fn run() -> std::io::Result<()> {
             // utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::ExitRequested { .. } => {
-            utils::help::cleanup_processes(app_handle);
+            crate::log_err!(utils::help::cleanup_processes(app_handle));
         }
         tauri::RunEvent::WindowEvent {
             label,

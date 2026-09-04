@@ -243,6 +243,7 @@ macro_rules! build_builder {
                 crate::ipc::is_portable,
                 crate::ipc::is_appimage,
                 crate::ipc::open_that,
+                crate::ipc::record_update_phase,
                 crate::ipc::cleanup_processes,
                 crate::ipc::get_server_port,
                 crate::ipc::get_core_dir,

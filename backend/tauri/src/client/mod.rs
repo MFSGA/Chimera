@@ -255,7 +255,10 @@ impl ChimeraClient {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
@@ -346,6 +349,73 @@ mod tests {
         async fn on_profile_change(&self, _break_when: bool) {
             self.events.lock().unwrap().push("profile-change");
         }
+    }
+
+    struct UpdateCleanupCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        running: Arc<AtomicBool>,
+        fail_stop: bool,
+    }
+
+    struct UpdateCleanupLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        running: Arc<AtomicBool>,
+        fail_stop: bool,
+    }
+
+    #[async_trait]
+    impl CoreLifecycleLease for UpdateCleanupLease {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: chimera_config::clash::config::ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn run_core_from(&mut self, _config_path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            if self.fail_stop {
+                anyhow::bail!("injected update cleanup stop failure");
+            }
+            self.running.store(false, Ordering::Release);
+            Ok(())
+        }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for UpdateCleanupCore {
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+            self.events.lock().unwrap().push("begin");
+            Ok(Box::new(UpdateCleanupLease {
+                events: self.events.clone(),
+                running: self.running.clone(),
+                fail_stop: self.fail_stop,
+            }))
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: if self.running.load(Ordering::Acquire) {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 7,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
     }
 
     struct StaticProfilesRead {
@@ -790,6 +860,30 @@ mod tests {
         recording_client_with_profiles(Profiles::default(), fail_rebuild)
     }
 
+    fn update_cleanup_client(
+        running: bool,
+        fail_stop: bool,
+    ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = ChimeraClient::with_parts(
+            Arc::new(UpdateCleanupCore {
+                events: events.clone(),
+                running: Arc::new(AtomicBool::new(running)),
+                fail_stop,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
+            }),
+            Arc::new(NoopProfileFs),
+            Arc::new(NoopProfilesWrite::default()),
+            Arc::new(NoopSystemDnsCache),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+        (client, events)
+    }
+
     #[test]
     fn duplicate_profile_refresh_is_rejected_until_guard_drops() {
         let (client, _) = recording_client(false);
@@ -1065,6 +1159,47 @@ mod tests {
     async fn stop_core_runs_through_the_injected_lifecycle_lease() {
         let (client, events) = recording_client(false);
         client.stop_core().await.unwrap();
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+    }
+
+    #[tokio::test]
+    async fn update_cleanup_skips_stop_when_core_is_already_stopped() {
+        let (client, events) = update_cleanup_client(false, false);
+
+        client.ensure_core_stopped_for_update().await.unwrap();
+
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_cleanup_stops_and_verifies_a_running_core() {
+        let (client, events) = update_cleanup_client(true, false);
+
+        client.ensure_core_stopped_for_update().await.unwrap();
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+        assert!(matches!(
+            client.core_status().await.unwrap().state,
+            CoreState::Stopped(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn update_cleanup_propagates_stop_failure_instead_of_installing() {
+        let (client, events) = update_cleanup_client(true, true);
+
+        let error = client.ensure_core_stopped_for_update().await.unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to stop core before update")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("injected update cleanup stop failure")
+        );
         assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
     }
 

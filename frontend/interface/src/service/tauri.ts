@@ -1,5 +1,6 @@
 import {
   commands,
+  type AppUpdatePhase,
   type EnvInfo,
   type IpsbResponse,
   type UpdaterSummary,
@@ -18,6 +19,13 @@ export const openThat = async (path: string) => {
 
 export const collectEnvs = async (): Promise<EnvInfo> => {
   return unwrapResult(await commands.collectEnvs());
+};
+
+export const recordUpdatePhase = async (
+  targetVersion: string,
+  phase: AppUpdatePhase,
+) => {
+  unwrapResult(await commands.recordUpdatePhase(targetVersion, phase));
 };
 
 export const cleanupProcesses = async () => {

@@ -228,6 +228,10 @@ export const commands = {
   isAppimage: () => typedError<boolean, string>(__TAURI_INVOKE('is_appimage')),
   openThat: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('open_that', { path })),
+  recordUpdatePhase: (targetVersion: string, phase: AppUpdatePhase) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('record_update_phase', { targetVersion, phase }),
+    ),
   cleanupProcesses: () =>
     typedError<null, string>(__TAURI_INVOKE('cleanup_processes')),
   getServerPort: () =>
@@ -491,6 +495,14 @@ export type AgentTunSnapshot = {
   observed_active: AgentAppliedState;
   applied_consistency: AgentAppliedState;
 };
+
+export type AppUpdatePhase =
+  | 'checked'
+  | 'downloaded'
+  | 'cleanup_started'
+  | 'cleanup_succeeded'
+  | 'installer_requested'
+  | 'completed';
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
