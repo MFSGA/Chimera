@@ -1,4 +1,6 @@
-use chimera_config::{application::ChimeraAppConfig, clash::config::ClashConfig};
+use chimera_config::{
+    application::ChimeraAppConfig, clash::config::ClashConfig, state::PersistentState,
+};
 
 /// A fully prepared, single-use legacy projection.
 pub trait PreparedLegacyMirror: Send {
@@ -43,6 +45,14 @@ pub trait VergeLegacyBridge: Send + Sync + 'static {
 
     /// Legacy seed hook for takeover phases.
     fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig>;
+}
+
+/// Compatibility boundary for typed session/window state infrastructure.
+pub trait WindowLegacyBridge: Send + Sync + 'static {
+    fn prepare(&self, snap: &PersistentState) -> anyhow::Result<Box<dyn PreparedLegacyMirror>>;
+
+    /// Legacy seed hook for takeover phases.
+    fn snapshot_legacy(&self) -> anyhow::Result<PersistentState>;
 }
 
 /// Compatibility boundary for persistent Clash config infrastructure.
