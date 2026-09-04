@@ -19,22 +19,46 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
-pub(crate) use self::core_bridge::RuntimeTransformDiagnostics;
+pub(crate) use self::{
+    core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
+    event_sink::LegacyUiEventSink,
+    profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
+    system_dns::OsSystemDnsCache,
+};
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
     clash_config::ClashConfigClient,
-    core_bridge::{CoreLifecyclePort, LegacyCoreBridge},
-    event_sink::{LegacyUiEventSink, UiEventSink},
-    profiles::{
-        LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
-        ProfilesReadPort, ProfilesWritePort,
-    },
+    core_bridge::CoreLifecyclePort,
+    event_sink::UiEventSink,
+    profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
-    system_dns::{OsSystemDnsCache, SystemDnsCache},
+    system_dns::SystemDnsCache,
 };
 
-use crate::config::profile::item_type::ProfileUid;
+use crate::{
+    config::profile::item_type::ProfileUid,
+    state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
+    utils::path::PathResolver,
+};
+
+#[derive(Clone)]
+pub(crate) struct LegacyBridgeSet {
+    pub(crate) verge: Arc<dyn VergeLegacyBridge>,
+    pub(crate) window: Arc<dyn WindowLegacyBridge>,
+    pub(crate) clash: Arc<dyn ClashLegacyBridge>,
+}
+
+pub(crate) struct ClientSetupArgs {
+    pub(crate) paths: PathResolver,
+    pub(crate) bridges: LegacyBridgeSet,
+    pub(crate) core: Arc<dyn CoreLifecyclePort>,
+    pub(crate) profiles: Arc<dyn ProfilesReadPort>,
+    pub(crate) profile_files: Arc<dyn ProfileFsPort>,
+    pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
+    pub(crate) system_dns: Arc<dyn SystemDnsCache>,
+    pub(crate) ui_sink: Arc<dyn UiEventSink>,
+}
 
 #[derive(Clone)]
 pub(crate) struct ChimeraClient {
@@ -45,6 +69,42 @@ struct TypedConfigClients {
     application: ApplicationClient,
     session_state: SessionStateClient,
     clash_config: ClashConfigClient,
+}
+
+fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
+    camino::Utf8PathBuf::from_path_buf(path)
+        .map_err(|path| anyhow::anyhow!("config path is not UTF-8: {}", path.display()))
+}
+
+async fn new_typed_config_clients(
+    paths: &PathResolver,
+    bridges: &LegacyBridgeSet,
+) -> anyhow::Result<TypedConfigClients> {
+    let application = ApplicationClient::new(
+        utf8_path(paths.application_config_path())?,
+        bridges.verge.snapshot_legacy()?,
+        bridges.verge.clone(),
+    )
+    .await?;
+    let session_state = SessionStateClient::new(
+        utf8_path(paths.session_state_path())?,
+        bridges.window.snapshot_legacy()?,
+        bridges.window.clone(),
+    )
+    .await?;
+    let clash_config = ClashConfigClient::new(
+        utf8_path(paths.clash_config_path())?,
+        bridges.clash.snapshot_legacy()?,
+        bridges.clash.clone(),
+        Arc::new(core_bridge::LegacyRunningConfigBridge),
+    )
+    .await?;
+
+    Ok(TypedConfigClients {
+        application,
+        session_state,
+        clash_config,
+    })
 }
 
 struct ChimeraClientInner {
@@ -62,20 +122,26 @@ struct ChimeraClientInner {
 }
 
 impl ChimeraClient {
-    pub(crate) fn legacy() -> anyhow::Result<Self> {
-        let typed = TypedConfigClients {
-            application: ApplicationClient::legacy()?,
-            session_state: SessionStateClient::legacy()?,
-            clash_config: ClashConfigClient::legacy()?,
-        };
+    pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
+        let ClientSetupArgs {
+            paths,
+            bridges,
+            core,
+            profiles,
+            profile_files,
+            profile_writes,
+            system_dns,
+            ui_sink,
+        } = args;
+        let typed = tauri::async_runtime::block_on(new_typed_config_clients(&paths, &bridges))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
-            Arc::new(LegacyCoreBridge),
-            Arc::new(LegacyProfilesReadPort),
-            Arc::new(LegacyProfileFsPort),
-            Arc::new(LegacyProfilesWritePort),
-            Arc::new(OsSystemDnsCache),
-            Arc::new(LegacyUiEventSink),
+            core,
+            profiles,
+            profile_files,
+            profile_writes,
+            system_dns,
+            ui_sink,
         ))
     }
 
