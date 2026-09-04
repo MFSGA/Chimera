@@ -12,6 +12,7 @@ pub mod init;
 pub mod net;
 /// 4
 pub mod open;
+pub mod path;
 /// 6
 pub mod resolve;
 /// 3
