@@ -16,7 +16,7 @@ use std::path::Path;
 
 pub static MIGRATOR: TypedConfigMigrator = TypedConfigMigrator;
 
-static VERSION_0_22_4: Lazy<Version> = Lazy::new(|| Version::parse("0.22.4").unwrap());
+static VERSION_0_23_0: Lazy<Version> = Lazy::new(|| Version::parse("0.23.0").unwrap());
 static SPLIT_LEGACY_CONFIG: SplitLegacyConfig = SplitLegacyConfig;
 static STEPS: [&dyn MigrationStep; 1] = [&SPLIT_LEGACY_CONFIG];
 
@@ -56,7 +56,7 @@ impl MigrationStep for SplitLegacyConfig {
     }
 
     fn introduced_in(&self) -> &'static Version {
-        &VERSION_0_22_4
+        &VERSION_0_23_0
     }
 
     fn name(&self) -> &'static str {
@@ -443,7 +443,8 @@ mod tests {
 
         let err = MIGRATOR.detect_baseline(&ctx).unwrap_err();
         assert!(
-            err.to_string().contains("partial typed config migration state"),
+            err.to_string()
+                .contains("partial typed config migration state"),
             "{err:#}"
         );
     }
@@ -472,7 +473,8 @@ mod tests {
 
         let err = MIGRATOR.detect_baseline(&ctx).unwrap_err();
         assert!(
-            err.to_string().contains("partial typed config migration state"),
+            err.to_string()
+                .contains("partial typed config migration state"),
             "{err:#}"
         );
         assert!(err.to_string().contains("existing [application.yaml]"));
@@ -490,7 +492,8 @@ mod tests {
 
         let err = MIGRATOR.detect_baseline(&ctx).unwrap_err();
         assert!(
-            err.to_string().contains("partial typed config migration state"),
+            err.to_string()
+                .contains("partial typed config migration state"),
             "{err:#}"
         );
         assert_eq!(std::fs::read(&ctx.clash_config_path()).unwrap(), before);
@@ -503,7 +506,8 @@ mod tests {
 
         let err = MIGRATOR.detect_baseline(&ctx).unwrap_err();
         assert!(
-            err.to_string().contains("partial typed config migration state"),
+            err.to_string()
+                .contains("partial typed config migration state"),
             "{err:#}"
         );
     }
