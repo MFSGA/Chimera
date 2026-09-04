@@ -11,6 +11,7 @@ pub(crate) mod ports;
 mod profiles;
 pub mod rebuild;
 pub mod runtime;
+mod session_state;
 mod system_dns;
 
 use std::{
@@ -29,6 +30,7 @@ use self::{
         LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
         ProfilesReadPort, ProfilesWritePort,
     },
+    session_state::SessionStateClient,
     system_dns::{OsSystemDnsCache, SystemDnsCache},
 };
 
@@ -41,11 +43,13 @@ pub(crate) struct ChimeraClient {
 
 struct TypedConfigClients {
     application: ApplicationClient,
+    session_state: SessionStateClient,
     clash_config: ClashConfigClient,
 }
 
 struct ChimeraClientInner {
     application: ApplicationClient,
+    session_state: SessionStateClient,
     clash_config: ClashConfigClient,
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
@@ -61,6 +65,7 @@ impl ChimeraClient {
     pub(crate) fn legacy() -> anyhow::Result<Self> {
         let typed = TypedConfigClients {
             application: ApplicationClient::legacy()?,
+            session_state: SessionStateClient::legacy()?,
             clash_config: ClashConfigClient::legacy()?,
         };
         Ok(Self::with_parts_and_typed_config(
@@ -86,6 +91,8 @@ impl ChimeraClient {
         let typed = TypedConfigClients {
             application: ApplicationClient::legacy()
                 .expect("test application client should initialize"),
+            session_state: SessionStateClient::legacy()
+                .expect("test session state client should initialize"),
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
@@ -111,6 +118,7 @@ impl ChimeraClient {
     ) -> Self {
         let inner = ChimeraClientInner {
             application: typed.application,
+            session_state: typed.session_state,
             clash_config: typed.clash_config,
             core,
             profiles,
