@@ -116,6 +116,12 @@ describe('Chimera profile runtime product lifecycle', () => {
       await okButton.waitForClickable({ timeout: 15_000 });
       await okButton.click();
 
+      await browser.waitUntil(async () => !(await nameInput.isExisting()), {
+        timeout: 45_000,
+        timeoutMsg:
+          'The local profile dialog did not close after the create transaction finished.',
+      });
+
       await browser.waitUntil(
         async () => {
           const profiles = await readProfiles();

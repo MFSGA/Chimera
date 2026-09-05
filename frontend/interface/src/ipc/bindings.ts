@@ -24,6 +24,8 @@ export const commands = {
   flushSystemDnsCache: () =>
     typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
   /**  later: check in the frontend */
+  getPendingDeepLink: () =>
+    typedError<string | null, string>(__TAURI_INVOKE('get_pending_deep_link')),
   importProfile: (
     url: string,
     option: {

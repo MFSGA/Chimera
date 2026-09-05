@@ -43,6 +43,9 @@ use crate::{
 
 type Result<T = ()> = StdResult<T, IpcError>;
 
+#[derive(Default)]
+pub struct PendingDeepLink(pub std::sync::Mutex<Option<String>>);
+
 #[derive(specta::Type, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EditorWindowType {
@@ -331,6 +334,12 @@ pub fn is_portable() -> Result<bool> {
 }
 
 /// later: check in the frontend
+#[tauri::command]
+#[specta::specta]
+pub async fn get_pending_deep_link(pending: State<'_, PendingDeepLink>) -> Result<Option<String>> {
+    Ok(pending.0.lock().unwrap().take())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn import_profile(
@@ -1372,4 +1381,22 @@ pub async fn clash_api_get_group_delay(
 #[specta::specta]
 pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
     Ok(clash::api::delete_connections(id.as_deref()).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PendingDeepLink;
+
+    #[test]
+    fn pending_deep_link_is_drained_once() {
+        let pending = PendingDeepLink::default();
+        *pending.0.lock().unwrap() =
+            Some("chimera://install-config?url=https%3A%2F%2Fexample.com".into());
+
+        assert_eq!(
+            pending.0.lock().unwrap().take().as_deref(),
+            Some("chimera://install-config?url=https%3A%2F%2Fexample.com")
+        );
+        assert_eq!(pending.0.lock().unwrap().take(), None);
+    }
 }

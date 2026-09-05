@@ -163,6 +163,7 @@ pub fn run() -> std::io::Result<()> {
             features::agent::setup(app);
 
             resolve::resolve_setup(app);
+            app.manage(crate::ipc::PendingDeepLink::default());
 
             #[cfg(windows)]
             {
@@ -205,6 +206,8 @@ pub fn run() -> std::io::Result<()> {
                     .get_current()?
                     .and_then(|urls| urls.first().map(ToString::to_string))
                 {
+                    *app.state::<crate::ipc::PendingDeepLink>().0.lock().unwrap() =
+                        Some(url.clone());
                     if resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
                         app_handle.emit("scheme-request-received", url)?;
                     } else {

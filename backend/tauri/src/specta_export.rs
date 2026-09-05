@@ -196,6 +196,7 @@ macro_rules! build_builder {
                 crate::ipc::get_profiles,
                 crate::ipc::get_runtime_transform_diagnostics,
                 crate::ipc::flush_system_dns_cache,
+                crate::ipc::get_pending_deep_link,
                 crate::ipc::import_profile,
                 crate::ipc::view_profile,
                 crate::ipc::reorder_profile,

@@ -22,6 +22,7 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { Notice } from '@/components/base';
+import SchemeProvider from '@/components/layout/scheme-provider';
 import { BlockTaskProvider } from '@/components/providers/block-task-provider';
 import CustomCssProvider from '@/components/providers/custom-css-provider';
 import { LanguageProvider } from '@/components/providers/language-provider';
@@ -186,6 +187,7 @@ export default function App() {
   return (
     <RootProvider>
       <MutationDegradationNotifier />
+      <SchemeProvider />
       <BlockTaskProvider>
         <LanguageProvider>
           <ExperimentalThemeProvider>

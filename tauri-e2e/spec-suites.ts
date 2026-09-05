@@ -12,6 +12,7 @@ export const baseE2eSuites = {
     './specs/storage-event-resync.e2e.ts',
   ],
   profiles: [
+    './specs/deep-link-main.e2e.ts',
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
     './specs/profile-transform-chain-ui.e2e.ts',
