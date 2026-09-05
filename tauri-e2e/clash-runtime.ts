@@ -1,10 +1,10 @@
-interface ClashInfo {
+export interface ClashInfo {
   secret?: string;
   server: string;
 }
 
-export async function readClashRuntimeConfig<T>(): Promise<T> {
-  const info = await browser.execute(async () => {
+export async function readClashInfo(): Promise<ClashInfo> {
+  return browser.execute(async () => {
     const tauri = (
       window as typeof window & {
         __TAURI_INTERNALS__: {
@@ -14,6 +14,10 @@ export async function readClashRuntimeConfig<T>(): Promise<T> {
     ).__TAURI_INTERNALS__;
     return tauri.invoke('get_clash_info');
   });
+}
+
+export async function readClashRuntimeConfig<T>(): Promise<T> {
+  const info = await readClashInfo();
   const url = `http://${info.server}/configs`;
   const deadline = Date.now() + 30_000;
   let lastError: unknown;

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -33,6 +34,10 @@ const hostProxySnapshot =
     ? null
     : captureWindowsProxySettings();
 const embeddedPort = Number(process.env.CHIMERA_E2E_WEBDRIVER_PORT ?? '4446');
+const occupiedControllerPort = process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT
+  ? Number(process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT)
+  : null;
+let controllerPortReservation: Server | null = null;
 const ownsRuntimeDirectory = !process.env.CHIMERA_E2E_RUNTIME_DIR;
 const runtimeDirectory = resolveRuntimeDirectory(
   runtimeRootDirectory,
@@ -92,6 +97,47 @@ type TauriBrowser = WebdriverIO.Browser & {
     restoreAllMocks: () => Promise<void>;
   };
 };
+
+async function reserveControllerPort(): Promise<void> {
+  if (occupiedControllerPort === null) return;
+  if (
+    !Number.isInteger(occupiedControllerPort) ||
+    occupiedControllerPort < 1 ||
+    occupiedControllerPort > 65_535
+  ) {
+    throw new Error(
+      `Invalid CHIMERA_E2E_OCCUPY_CONTROLLER_PORT: ${String(occupiedControllerPort)}`,
+    );
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const server = createServer();
+    server.once('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.warn(
+          `Controller port ${occupiedControllerPort} is already occupied; using the existing conflict for this regression run.`,
+        );
+        resolve();
+        return;
+      }
+      reject(error);
+    });
+    server.listen(occupiedControllerPort, '127.0.0.1', () => {
+      controllerPortReservation = server;
+      console.log(
+        `Reserved controller port ${occupiedControllerPort} for fallback regression coverage.`,
+      );
+      resolve();
+    });
+  });
+}
+
+async function releaseControllerPortReservation(): Promise<void> {
+  const server = controllerPortReservation;
+  controllerPortReservation = null;
+  if (!server) return;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+}
 
 async function prepareTauriServiceTeardown(): Promise<void> {
   if (browser.isMultiremote) return;
@@ -191,22 +237,27 @@ export const config: WebdriverIO.Config = {
     ui: 'bdd',
     timeout: 120_000,
   },
+  onPrepare: reserveControllerPort,
   afterTest: captureFailedTest,
   after: prepareTauriServiceTeardown,
   onComplete: async () => {
     try {
-      await cleanupE2eProcesses(
-        path.dirname(appBinaryPath),
-        runtimeRootDirectory,
-      );
-    } finally {
       try {
-        if (ownsRuntimeDirectory) {
-          cleanupRuntimeDirectory(runtimeRootDirectory, runtimeDirectory);
-        }
+        await cleanupE2eProcesses(
+          path.dirname(appBinaryPath),
+          runtimeRootDirectory,
+        );
       } finally {
-        restoreWindowsProxySettings(hostProxySnapshot);
+        try {
+          if (ownsRuntimeDirectory) {
+            cleanupRuntimeDirectory(runtimeRootDirectory, runtimeDirectory);
+          }
+        } finally {
+          restoreWindowsProxySettings(hostProxySnapshot);
+        }
       }
+    } finally {
+      await releaseControllerPortReservation();
     }
   },
 };

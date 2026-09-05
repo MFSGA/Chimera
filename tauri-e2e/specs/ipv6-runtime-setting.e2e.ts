@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { readClashRuntimeConfig } from '../clash-runtime.js';
+import { readClashInfo, readClashRuntimeConfig } from '../clash-runtime.js';
 
 const settingsPath = '/main/settings/clash';
+const occupiedControllerPort = process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT
+  ? Number(process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT)
+  : null;
 const ipv6SwitchSelector =
   '[data-slot="ipv6-switch-container"] [role="switch"]';
 
@@ -78,6 +81,16 @@ describe('Chimera IPv6 runtime setting', () => {
   it('persists through the typed runtime transaction and restores the original value', async () => {
     await waitForApp();
     await openClashSettings();
+
+    if (occupiedControllerPort !== null) {
+      const info = await readClashInfo();
+      const actualPort = Number(new URL(`http://${info.server}`).port);
+      assert.notEqual(
+        actualPort,
+        occupiedControllerPort,
+        `Clash should fall back from occupied controller port ${occupiedControllerPort}.`,
+      );
+    }
 
     const original = (await readClashRuntimeState()).ipv6;
     const changed = !original;

@@ -38,6 +38,7 @@ on:
         type: choice
         options:
           - smoke
+          - controller-fallback
           - critical
           - runtime
           - profiles
@@ -130,6 +131,12 @@ jobs:
       - name: Run ${{ env.E2E_SUITE }} suite
         shell: pwsh
         run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite $env:E2E_SUITE
+
+      - name: Run controller fallback regression
+        shell: pwsh
+        env:
+          CHIMERA_E2E_OCCUPY_CONTROLLER_PORT: '9872'
+        run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite controller-fallback
 
       - name: Upload E2E diagnostics
         if: always()

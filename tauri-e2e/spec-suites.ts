@@ -62,6 +62,7 @@ const combine = (...groups: readonly (readonly string[])[]) => groups.flat();
 
 export const e2eSuites = {
   ...baseE2eSuites,
+  'controller-fallback': ['./specs/ipv6-runtime-setting.e2e.ts'],
   critical: combine(
     baseE2eSuites.smoke,
     baseE2eSuites.runtime,
