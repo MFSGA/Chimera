@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readClashRuntimeConfig } from '../clash-runtime.js';
 
 const mainPath = '/main/settings/clash';
 const settingsMenuSelector = '[data-slot="header-settings-menu"]';
@@ -59,29 +60,7 @@ async function openDesktopShell() {
 }
 
 async function readRuntimeMode(): Promise<ProxyMode> {
-  const info = await browser.execute(async () => {
-    const tauri = (
-      window as typeof window & {
-        __TAURI_INTERNALS__: {
-          invoke: (command: string) => Promise<{
-            secret?: string;
-            server: string;
-          }>;
-        };
-      }
-    ).__TAURI_INTERNALS__;
-    return tauri.invoke('get_clash_info');
-  });
-  const response = await fetch(`http://${info.server}/configs`, {
-    headers: info.secret
-      ? { Authorization: `Bearer ${info.secret}` }
-      : undefined,
-  });
-  if (!response.ok) {
-    throw new Error(`Clash config query failed: ${response.status}`);
-  }
-
-  const config = (await response.json()) as { mode: ProxyMode };
+  const config = await readClashRuntimeConfig<{ mode: ProxyMode }>();
   return config.mode.toLowerCase() as ProxyMode;
 }
 
