@@ -76,7 +76,7 @@
     "@commitlint/cli": "21.2.1",
     "@commitlint/config-conventional": "21.2.0",
     "cross-env": "10.1.0",
-    "tsx": "4.23.1",
+    "tsx": "4.23.13",
     "@types/node": "24.13.3",
     "typescript": "7.0.2",
     "prettier-plugin-ember-template-tag": "2.1.7"
