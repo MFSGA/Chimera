@@ -49,7 +49,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-store-
       - name: Install
-        run: pnpm i
+        run: pnpm install --frozen-lockfile
       - name: Install git-cliff
         uses: taiki-e/install-action@git-cliff
       - id: update-version

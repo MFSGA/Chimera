@@ -103,7 +103,7 @@ jobs:
 
       - name: Install Node.js dependencies
         run: |
-          pnpm i
+          pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
         run: pnpm check:service-runtime

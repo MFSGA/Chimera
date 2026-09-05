@@ -115,7 +115,7 @@ jobs:
           key: ${{ inputs.arch }}
 
       - name: Install Node.js dependencies
-        run: pnpm i
+        run: pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
         run: pnpm check:service-runtime

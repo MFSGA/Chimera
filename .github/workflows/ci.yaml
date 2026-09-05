@@ -15,6 +15,10 @@
 # the name of our workflow
 name: CI
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
@@ -98,24 +102,33 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
         run: pnpm check:service-runtime
 
-      - name: Prepare fronend
+      - name: Prepare frontend
         run: pnpm -r build # Build frontend
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
       # TODO: preapre the js script file
       - name: Prepare sidecar and resources
         run: pnpm check
-      - name: Lint
+      - name: Verify quality
         if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: pnpm lint # Lint
-      - name: Lint
+        run: pnpm verify:quality
+
+      - name: Validate E2E harness
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: pnpm --filter @chimera/tauri-e2e test:unit
+
+      - name: Verify generated files are committed
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: git diff --exit-code
+
+      - name: Lint Rust
         if: startsWith(matrix.targets.os, 'ubuntu-') == false
-        run: pnpm run-p lint:clippy lint:rustfmt # Lint
+        run: pnpm run-p lint:clippy lint:rustfmt
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
   # TODO: support test cross-platform
@@ -186,7 +199,7 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
         run: pnpm check:service-runtime

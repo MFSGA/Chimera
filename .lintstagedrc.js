@@ -1,58 +1,36 @@
+const frontendTasks = (typecheckScript) => [
+  'oxlint --fix',
+  'prettier --write',
+  () => `pnpm ${typecheckScript}`,
+];
+
 export default {
-  'scripts/**/*.{ts,tsx}': [
-    'prettier --write',
-    'oxlint --fix .',
-    // () => 'tsc -p scripts/tsconfig.json --noEmit',
-  ],
-  '*.{js,cjs,.mjs,jsx}': (filenames) => {
-    const configFiles = [
-      '.oxlintrc.json',
-      '.lintstagedrc.js',
-      'commitlint.config.js',
-    ];
-    const filtered = filenames.filter(
-      (file) => !configFiles.some((config) => file.endsWith(config)),
-    );
-    if (filtered.length === 0) return [];
-    return ['prettier --write', 'oxlint --fix'];
-  },
-  'frontend/interface/**/*.{ts,tsx}': [
-    'prettier --write',
-    'oxlint --fix',
-    () => 'tsc -p frontend/interface/tsconfig.json --noEmit',
-  ],
-  'frontend/utils/**/*.{ts,tsx}': [
-    'prettier --write',
-    'oxlint --fix',
-    () => 'tsc -p frontend/utils/tsconfig.json --noEmit',
-  ],
-  'frontend/ui/**/*.{ts,tsx}': [
-    'prettier --write',
-    'oxlint --fix',
-    () => 'tsc -p frontend/ui/tsconfig.json --noEmit',
-  ],
-  'frontend/chimera/**/*.{ts,tsx}': [
-    'prettier --write',
-    'oxlint --fix',
-    () => 'tsc -p frontend/chimera/tsconfig.json --noEmit',
-  ],
+  // Scripts are currently a mixed Node/Deno tree and are excluded from oxlint.
+  // Keep commit-time handling deterministic: format staged script files only.
+  'scripts/**/*.{js,cjs,mjs,jsx,ts,tsx}': ['prettier --write'],
+
+  'frontend/interface/**/*.{js,cjs,mjs,jsx,ts,tsx}': frontendTasks(
+    'typecheck:interface',
+  ),
+  'frontend/utils/**/*.{js,cjs,mjs,jsx,ts,tsx}':
+    frontendTasks('typecheck:utils'),
+  'frontend/ui/**/*.{js,cjs,mjs,jsx,ts,tsx}': frontendTasks('typecheck:ui'),
+  'frontend/chimera/**/*.{js,cjs,mjs,jsx,ts,tsx}':
+    frontendTasks('typecheck:chimera'),
+  'tauri-e2e/**/*.{js,cjs,mjs,jsx,ts,tsx}': frontendTasks('typecheck:e2e'),
+
+  // Rust formatting is a check here instead of `cargo fmt --all`: a commit hook
+  // must not rewrite unrelated or unstaged Rust files in the workspace.
   'backend/**/*.{rs,toml}': [
-    () =>
-      'cargo clippy --manifest-path=./backend/Cargo.toml --all-targets --all-features',
-    () => 'cargo fmt --manifest-path ./backend/Cargo.toml --all',
-    // () => 'cargo test --manifest-path=./backend/Cargo.toml',
-    // () => "cargo fmt --manifest-path=./backend/Cargo.toml --all",
-    // do not submit untracked files
-    // () => 'git add -u',
+    () => 'pnpm lint:rustfmt',
+    () => 'pnpm lint:clippy',
   ],
-  '*.{html,sass,scss,less}': ['prettier --write', 'stylelint --fix'],
-  'package.json': ['prettier --write'],
-  '*.{md,json,jsonc,json5,yaml,yml,toml}': (filenames) => {
-    // exclude generated locale files
-    const filtered = filenames.filter(
-      (file) => !file.includes('frontend/chimera/src/paraglide/'),
-    );
-    if (filtered.length === 0) return [];
-    return `prettier --write ${filtered.join(' ')}`;
-  },
+
+  '.lintstagedrc.js': ['prettier --write'],
+  '.prettierrc.cjs': ['prettier --write'],
+  '.stylelintrc.js': ['prettier --write'],
+  'commitlint.config.js': ['prettier --write'],
+  '*.{html,sass,scss,less}': ['stylelint --fix', 'prettier --write'],
+  'cliff.toml': ['prettier --write'],
+  '*.{md,json,jsonc,json5,yaml,yml}': ['prettier --write'],
 };

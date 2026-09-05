@@ -63,7 +63,7 @@ jobs:
           run_install: false
 
       - name: Pnpm install
-        run: pnpm i
+        run: pnpm install --frozen-lockfile
 
       - uses: denoland/setup-deno@v2
         with:
