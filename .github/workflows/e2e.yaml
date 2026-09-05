@@ -51,6 +51,9 @@ concurrency:
   group: tauri-e2e-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
 permissions:
   contents: read
 
