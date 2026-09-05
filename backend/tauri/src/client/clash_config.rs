@@ -253,10 +253,6 @@ impl ClashConfigClient {
         }
     }
 
-    pub(crate) fn get_info(&self) -> ClashInfo {
-        Config::clash().latest().get_client_info()
-    }
-
     pub(super) async fn apply_legacy_patch_runtime(
         &self,
         owner: &ChimeraClient,
@@ -437,7 +433,7 @@ impl ChimeraClient {
     }
 
     pub(crate) fn clash_info(&self) -> ClashInfo {
-        self.inner.clash_config.get_info()
+        crate::core::clash::core::CoreManager::global().effective_clash_info()
     }
 
     pub(crate) async fn patch_clash(&self, patch: Mapping) -> Result<()> {

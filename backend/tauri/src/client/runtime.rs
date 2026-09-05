@@ -22,6 +22,7 @@ use super::ChimeraClient;
 use crate::{
     config::{
         chimera::ClashCore,
+        clash::{ClashInfo, IClashTemp},
         profile::item_type::{ProfileUid, ScriptType},
     },
     enhance::PostProcessingOutput,
@@ -122,6 +123,10 @@ impl RuntimeRebuildGate {
     pub async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.0.lock().await
     }
+
+    pub fn is_locked(&self) -> bool {
+        self.0.try_lock().is_err()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -186,6 +191,10 @@ impl RuntimeSnapshot {
 
     pub fn product_bytes(&self) -> &[u8] {
         &self.product_bytes
+    }
+
+    pub fn clash_info(&self) -> ClashInfo {
+        IClashTemp(self.config.clone()).get_client_info()
     }
 
     fn identity_eq(&self, other: &Self) -> bool {
@@ -947,6 +956,24 @@ mod tests {
             task.await.unwrap();
         }
         assert_eq!(maximum.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn runtime_snapshot_preserves_effective_controller_endpoint() {
+        let config: Mapping = serde_yaml::from_str(
+            "mixed-port: 7890\nexternal-controller: 127.0.0.1:55736\nsecret: chimera\n",
+        )
+        .unwrap();
+        let snapshot = RuntimeSnapshot::new(
+            RuntimeRevision(1),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            config,
+        );
+
+        assert_eq!(snapshot.clash_info().server, "127.0.0.1:55736");
+        assert_eq!(snapshot.clash_info().port, 7890);
+        assert_eq!(snapshot.clash_info().secret.as_deref(), Some("chimera"));
     }
 
     #[test]

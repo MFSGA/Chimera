@@ -9,8 +9,6 @@ use specta::Type;
 use tauri::http::HeaderMap;
 use tracing::instrument;
 
-use crate::config::core::Config;
-
 /// Runtime state returned by the running core's `GET /configs` endpoint.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
 pub struct ClashRuntimeConfig {
@@ -159,7 +157,7 @@ where
 /// 根据clash info获取clash服务地址和请求头
 #[instrument]
 fn clash_client_info() -> Result<(String, HeaderMap)> {
-    let client = { Config::clash().data().get_client_info() };
+    let client = super::core::CoreManager::global().effective_clash_info();
 
     let server = format!("http://{}", client.server);
 
