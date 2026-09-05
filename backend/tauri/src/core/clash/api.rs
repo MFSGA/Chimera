@@ -215,6 +215,21 @@ pub struct ProxiesRes {
     pub proxies: IndexMap<String, ProxyItem>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionItem {
+    pub id: String,
+    #[serde(default)]
+    pub chains: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionsRes {
+    #[serde(default)]
+    pub connections: Vec<ConnectionItem>,
+}
+
 /// GET /configs
 #[instrument]
 pub async fn get_configs() -> Result<ClashRuntimeConfig> {
@@ -230,6 +245,15 @@ pub async fn get_proxies() -> Result<ProxiesRes> {
     let path = "/proxies";
     let resp: ProxiesRes = perform_request((Method::GET, path)).await?.json().await?;
     Ok(resp)
+}
+
+/// GET /connections
+/// Read active connections with just the fields needed by connection interruption logic.
+#[instrument]
+pub async fn get_connections() -> Result<ConnectionsRes> {
+    let path = "/connections";
+    let response: ConnectionsRes = perform_request((Method::GET, path)).await?.json().await?;
+    Ok(response)
 }
 
 /// DELETE /connections

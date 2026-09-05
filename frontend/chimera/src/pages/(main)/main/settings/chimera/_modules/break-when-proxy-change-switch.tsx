@@ -1,5 +1,12 @@
-import { useSetting } from '@chimera/interface';
-import { Switch } from '@/components/ui/switch';
+import { useSetting, type BreakWhenProxyChange } from '@chimera/interface';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
@@ -15,46 +22,66 @@ import {
 
 export default function BreakWhenProxyChangeSwitch() {
   const breakWhenProxyChange = useSetting('break_when_proxy_change');
+  const value = breakWhenProxyChange.value ?? 'none';
 
-  const checked = breakWhenProxyChange.value
-    ? breakWhenProxyChange.value !== 'none'
-    : false;
-
-  const handleChange = useLockFn(async () => {
+  const handleChange = useLockFn(async (mode: BreakWhenProxyChange) => {
     try {
-      await breakWhenProxyChange.upsert(checked ? 'none' : 'all');
+      await breakWhenProxyChange.upsert(mode);
     } catch (error) {
-      message(
-        `Update break when proxy change failed!\n Error: ${formatError(error)}`,
-        {
-          title: 'Error',
-          kind: 'error',
-        },
+      await message(
+        `${m.settings_proxies_break_change_update_failed()}\n${formatError(error)}`,
+        { kind: 'error' },
       );
     }
   });
 
+  const options = {
+    none: m.settings_chimera_enhance_break_when_proxy_change_none(),
+    chain: m.settings_chimera_enhance_break_when_proxy_change_chain(),
+    all: m.settings_chimera_enhance_break_when_proxy_change_all(),
+  } satisfies Record<BreakWhenProxyChange, string>;
+
   return (
-    <SettingsCard data-slot="break-when-proxy-change-switch">
-      <SettingsCardContent>
-        <ItemContainer data-slot="break-when-proxy-change-switch-container">
-          <ItemLabel>
-            <ItemLabelText>
-              {m.settings_chimera_enhance_break_when_proxy_change_label()}
-            </ItemLabelText>
+    <SettingsCard data-slot="break-when-proxy-change-selector">
+      <DropdownMenu align="end">
+        <DropdownMenuTrigger asChild>
+          <SettingsCardContent
+            data-slot="break-when-proxy-change-selector-trigger"
+            asChild
+          >
+            <Button className="text-on-surface! h-auto w-full rounded-none px-5 text-left text-base">
+              <ItemContainer>
+                <ItemLabel>
+                  <ItemLabelText>
+                    {m.settings_chimera_enhance_break_when_proxy_change_label()}
+                  </ItemLabelText>
 
-            <ItemLabelDescription>
-              {m.settings_chimera_enhance_break_when_proxy_change_description()}
-            </ItemLabelDescription>
-          </ItemLabel>
+                  <ItemLabelDescription>
+                    {m.settings_chimera_enhance_break_when_proxy_change_description()}
+                    {' · '}
+                    {options[value]}
+                  </ItemLabelDescription>
+                </ItemLabel>
 
-          <Switch
-            checked={checked}
-            onCheckedChange={handleChange}
-            loading={breakWhenProxyChange.isPending}
-          />
-        </ItemContainer>
-      </SettingsCardContent>
+                <ArrowForwardIosRounded />
+              </ItemContainer>
+            </Button>
+          </SettingsCardContent>
+        </DropdownMenuTrigger>
+
+        <DropdownMenuContent sideOffset={-16} alignOffset={16}>
+          {Object.entries(options).map(([key, label]) => (
+            <DropdownMenuCheckboxItem
+              checked={value === key}
+              disabled={breakWhenProxyChange.isPending}
+              key={key}
+              onSelect={() => void handleChange(key as BreakWhenProxyChange)}
+            >
+              {label}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
     </SettingsCard>
   );
 }

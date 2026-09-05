@@ -825,7 +825,7 @@ pub async fn select_proxy(
     ProxiesGuard::global().select_proxy(&group, &name).await?;
     handle::Handle::mutate_proxies();
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-        break_when,
+        break_when, &group,
     )
     .await;
     Ok(())
