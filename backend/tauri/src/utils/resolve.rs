@@ -60,6 +60,8 @@ struct ProfileEditorWindow {
     url: String,
 }
 
+struct CssEditorWindow;
+
 impl AppWindow for ProfileEditorWindow {
     fn label(&self) -> &str {
         &self.label
@@ -79,6 +81,33 @@ impl AppWindow for ProfileEditorWindow {
             .visible_on_create(true)
             .default_size(960.0, 680.0)
             .min_size(600.0, 400.0)
+            .center(true)
+    }
+
+    fn get_window_state(&self) -> Option<WindowState> {
+        None
+    }
+}
+
+impl AppWindow for CssEditorWindow {
+    fn label(&self) -> &str {
+        "editor-css"
+    }
+
+    fn title(&self) -> &str {
+        "Clash Chimera - CSS Editor"
+    }
+
+    fn url(&self) -> &str {
+        "/editor/css"
+    }
+
+    fn config(&self) -> WindowConfig {
+        WindowConfig::new()
+            .singleton(true)
+            .visible_on_create(true)
+            .default_size(800.0, 636.0)
+            .min_size(400.0, 500.0)
             .center(true)
     }
 
@@ -133,6 +162,10 @@ pub fn create_profile_editor_window(app_handle: &AppHandle, uid: &str) -> Result
         url: format!("/editor/profile?uid={encoded_uid}"),
     }
     .create(app_handle)
+}
+
+pub fn create_css_editor_window(app_handle: &AppHandle) -> Result<()> {
+    CssEditorWindow.create(app_handle)
 }
 
 pub fn mark_frontend_unmounted() {

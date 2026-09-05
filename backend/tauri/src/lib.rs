@@ -1,9 +1,9 @@
 #[cfg(debug_assertions)]
 use std::{io::Write, time::SystemTime};
 
-use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Listener;
+use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -232,12 +232,35 @@ pub fn run() -> std::io::Result<()> {
         tauri::RunEvent::ExitRequested { .. } => {
             utils::help::cleanup_processes(app_handle);
         }
-        tauri::RunEvent::WindowEvent {
-            label,
-            event: tauri::WindowEvent::Destroyed,
-            ..
-        } if label == crate::consts::LEGACY_WINDOW_LABEL || label == "main" => {
-            resolve::mark_frontend_unmounted();
+        tauri::RunEvent::WindowEvent { label, event, .. }
+            if label == crate::consts::LEGACY_WINDOW_LABEL
+                || label == crate::consts::MAIN_WINDOW_LABEL =>
+        {
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    log::debug!(target: "app", "window close requested: {label}");
+                    match app_handle.try_state::<crate::client::ChimeraClient>() {
+                        Some(client) => {
+                            if let Err(error) = nyanpasu_utils::runtime::block_on(
+                                crate::window::persist_window_state(
+                                    app_handle,
+                                    client.inner(),
+                                    label.as_str(),
+                                ),
+                            ) {
+                                log::error!(target: "app", "failed to persist window state for {label}: {error:?}");
+                            }
+                        }
+                        None => {
+                            log::warn!(target: "app", "ChimeraClient unavailable while persisting window state for {label}");
+                        }
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    resolve::mark_frontend_unmounted();
+                }
+                _ => {}
+            }
         }
         e => {
             // tracing::debug!("Tauri Event: {:?}", e);

@@ -182,6 +182,9 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
             connector.stop().await;
         }
         let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
+        if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
+            log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
+        }
         client.stop_core().await
     }));
     #[cfg(windows)]

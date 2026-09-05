@@ -176,31 +176,117 @@ fn should_center_window(window: &WebviewWindow, state: Option<&WindowState>) -> 
         .any(|(px, py)| px >= x && px < right && py >= y && py < bottom))
 }
 
-pub(crate) fn capture_window_state(window: &WebviewWindow) -> Result<Option<WindowState>> {
-    if window.current_monitor()?.is_none() {
-        return Ok(None);
+fn merge_captured_window_state(
+    previous: Option<WindowState>,
+    size: PhysicalSize<u32>,
+    position: PhysicalPosition<i32>,
+    maximized: bool,
+    fullscreen: bool,
+    minimized: bool,
+) -> Option<WindowState> {
+    if minimized {
+        return previous;
     }
 
-    let mut state = WindowState {
-        maximized: window.is_maximized()?,
-        fullscreen: window.is_fullscreen()?,
-        ..WindowState::default()
-    };
-    let is_minimized = window.is_minimized()?;
+    if !maximized && !fullscreen && (size.width == 0 || size.height == 0) {
+        return previous;
+    }
 
-    let size = window.inner_size()?;
-    if size.width > 0 && size.height > 0 && !state.maximized && !is_minimized {
+    let mut state = previous.unwrap_or_default();
+    state.maximized = maximized;
+    state.fullscreen = fullscreen;
+
+    if !maximized && !fullscreen {
         state.width = size.width;
         state.height = size.height;
-    }
-
-    let position = window.outer_position()?;
-    if !state.maximized && !is_minimized {
         state.x = position.x;
         state.y = position.y;
+    } else if state.width == 0 || state.height == 0 {
+        // First-run fallback: if no normal geometry has ever been saved, keep a
+        // usable size instead of persisting 0x0 while maximized/fullscreen.
+        if size.width > 0 && size.height > 0 {
+            state.width = size.width;
+            state.height = size.height;
+            state.x = position.x;
+            state.y = position.y;
+        }
     }
 
-    Ok(Some(state))
+    Some(state)
+}
+
+pub(crate) fn capture_window_state(window: &WebviewWindow) -> Result<Option<WindowState>> {
+    let previous = Config::verge().latest().window_size_state.clone();
+    if window.current_monitor()?.is_none() {
+        return Ok(previous);
+    }
+
+    let maximized = window.is_maximized()?;
+    let fullscreen = window.is_fullscreen()?;
+    let minimized = window.is_minimized()?;
+    let size = window.inner_size()?;
+    let position = window.outer_position()?;
+
+    Ok(merge_captured_window_state(
+        previous, size, position, maximized, fullscreen, minimized,
+    ))
+}
+
+pub(crate) async fn persist_window_state(
+    app_handle: &AppHandle,
+    client: &crate::client::ChimeraClient,
+    label: &str,
+) -> Result<()> {
+    if !matches!(
+        label,
+        crate::consts::LEGACY_WINDOW_LABEL | crate::consts::MAIN_WINDOW_LABEL
+    ) {
+        return Err(anyhow!("unknown window label: {label}"));
+    }
+
+    let Some(window) = app_handle.get_webview_window(label) else {
+        return Ok(());
+    };
+    if window.is_minimized()? {
+        return Ok(());
+    }
+
+    let state =
+        capture_window_state(&window)?.map(|state| chimera_config::state::window::WindowState {
+            width: state.width,
+            height: state.height,
+            x: state.x,
+            y: state.y,
+            maximized: state.maximized,
+            fullscreen: state.fullscreen,
+        });
+    client.save_main_window_state(state).await?;
+    Ok(())
+}
+
+pub(crate) async fn persist_active_window_state(
+    app_handle: &AppHandle,
+    client: &crate::client::ChimeraClient,
+) -> Result<()> {
+    let preferred = match Config::verge().latest().window_type.unwrap_or_default() {
+        crate::config::chimera::WindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+        crate::config::chimera::WindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
+    };
+    let fallback = if preferred == crate::consts::MAIN_WINDOW_LABEL {
+        crate::consts::LEGACY_WINDOW_LABEL
+    } else {
+        crate::consts::MAIN_WINDOW_LABEL
+    };
+
+    let label = if app_handle.get_webview_window(preferred).is_some() {
+        preferred
+    } else if app_handle.get_webview_window(fallback).is_some() {
+        fallback
+    } else {
+        return Ok(());
+    };
+
+    persist_window_state(app_handle, client, label).await
 }
 
 /// Trait for window management
@@ -279,5 +365,118 @@ pub trait AppWindow {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_capture_replaces_saved_geometry() {
+        let state = merge_captured_window_state(
+            Some(WindowState {
+                width: 800,
+                height: 636,
+                x: 10,
+                y: 20,
+                maximized: false,
+                fullscreen: false,
+            }),
+            PhysicalSize::new(1024, 720),
+            PhysicalPosition::new(120, 80),
+            false,
+            false,
+            false,
+        )
+        .expect("normal window state should be captured");
+
+        assert_eq!(state.width, 1024);
+        assert_eq!(state.height, 720);
+        assert_eq!(state.x, 120);
+        assert_eq!(state.y, 80);
+        assert!(!state.maximized);
+        assert!(!state.fullscreen);
+    }
+
+    #[test]
+    fn maximized_capture_preserves_last_normal_geometry() {
+        let previous = WindowState {
+            width: 960,
+            height: 680,
+            x: 44,
+            y: 66,
+            maximized: false,
+            fullscreen: false,
+        };
+        let state = merge_captured_window_state(
+            Some(previous.clone()),
+            PhysicalSize::new(1920, 1080),
+            PhysicalPosition::new(0, 0),
+            true,
+            false,
+            false,
+        )
+        .expect("maximized state should be captured");
+
+        assert_eq!(state.width, previous.width);
+        assert_eq!(state.height, previous.height);
+        assert_eq!(state.x, previous.x);
+        assert_eq!(state.y, previous.y);
+        assert!(state.maximized);
+    }
+
+    #[test]
+    fn invalid_normal_resize_keeps_last_valid_state() {
+        let previous = WindowState {
+            width: 900,
+            height: 650,
+            x: 30,
+            y: 40,
+            maximized: false,
+            fullscreen: false,
+        };
+
+        let state = merge_captured_window_state(
+            Some(previous.clone()),
+            PhysicalSize::new(0, 0),
+            PhysicalPosition::new(0, 0),
+            false,
+            false,
+            false,
+        )
+        .expect("previous state should be preserved");
+
+        assert_eq!(state.width, previous.width);
+        assert_eq!(state.height, previous.height);
+        assert_eq!(state.x, previous.x);
+        assert_eq!(state.y, previous.y);
+    }
+
+    #[test]
+    fn minimized_capture_does_not_overwrite_saved_geometry() {
+        let previous = WindowState {
+            width: 880,
+            height: 640,
+            x: 70,
+            y: 90,
+            maximized: false,
+            fullscreen: false,
+        };
+
+        let state = merge_captured_window_state(
+            Some(previous.clone()),
+            PhysicalSize::new(160, 28),
+            PhysicalPosition::new(-32000, -32000),
+            false,
+            false,
+            true,
+        )
+        .expect("previous state should be preserved");
+
+        assert_eq!(state.width, previous.width);
+        assert_eq!(state.height, previous.height);
+        assert_eq!(state.x, previous.x);
+        assert_eq!(state.y, previous.y);
     }
 }

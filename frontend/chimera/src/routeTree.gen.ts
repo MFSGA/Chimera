@@ -31,6 +31,7 @@ import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/
 import { Route as mainMainProxiesRouteRouteImport } from './pages/(main)/main/proxies/route'
 import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
 import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
+import { Route as editorEditorCssIndexRouteImport } from './pages/(editor)/editor/css/index'
 import { Route as editorEditorProfileIndexRouteImport } from './pages/(editor)/editor/profile/index'
 import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
 import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
@@ -163,6 +164,11 @@ const mainMainSettingsRouteRoute = mainMainSettingsRouteRouteImport.update({
   id: '/main/settings',
   path: '/main/settings',
   getParentRoute: () => mainRouteRoute,
+} as any)
+const editorEditorCssIndexRoute = editorEditorCssIndexRouteImport.update({
+  id: '/css/',
+  path: '/css/',
+  getParentRoute: () => editorEditorRouteRoute,
 } as any)
 const editorEditorProfileIndexRoute =
   editorEditorProfileIndexRouteImport.update({
@@ -325,6 +331,7 @@ export interface FileRoutesByFullPath {
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/editor/css/': typeof editorEditorCssIndexRoute
   '/editor/profile/': typeof editorEditorProfileIndexRoute
   '/main/connections/': typeof mainMainConnectionsIndexRoute
   '/main/dashboard/': typeof mainMainDashboardIndexRoute
@@ -361,6 +368,7 @@ export interface FileRoutesByTo {
   '/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/editor/css': typeof editorEditorCssIndexRoute
   '/editor/profile': typeof editorEditorProfileIndexRoute
   '/main/connections': typeof mainMainConnectionsIndexRoute
   '/main/dashboard': typeof mainMainDashboardIndexRoute
@@ -409,6 +417,7 @@ export interface FileRoutesById {
   '/(main)/main/settings/user-interface': typeof mainMainSettingsUserInterfaceRouteRoute
   '/(main)/main/settings/web-ui': typeof mainMainSettingsWebUiRouteRoute
   '/(main)/main/proxies/$name': typeof mainMainProxiesNameRoute
+  '/(editor)/editor/css/': typeof editorEditorCssIndexRoute
   '/(editor)/editor/profile/': typeof editorEditorProfileIndexRoute
   '/(main)/main/connections/': typeof mainMainConnectionsIndexRoute
   '/(main)/main/dashboard/': typeof mainMainDashboardIndexRoute
@@ -456,6 +465,7 @@ export interface FileRouteTypes {
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
     | '/main/proxies/$name'
+    | '/editor/css/'
     | '/editor/profile/'
     | '/main/connections/'
     | '/main/dashboard/'
@@ -492,6 +502,7 @@ export interface FileRouteTypes {
     | '/main/settings/user-interface'
     | '/main/settings/web-ui'
     | '/main/proxies/$name'
+    | '/editor/css'
     | '/editor/profile'
     | '/main/connections'
     | '/main/dashboard'
@@ -539,6 +550,7 @@ export interface FileRouteTypes {
     | '/(main)/main/settings/user-interface'
     | '/(main)/main/settings/web-ui'
     | '/(main)/main/proxies/$name'
+    | '/(editor)/editor/css/'
     | '/(editor)/editor/profile/'
     | '/(main)/main/connections/'
     | '/(main)/main/dashboard/'
@@ -716,6 +728,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/main/settings'
       preLoaderRoute: typeof mainMainSettingsRouteRouteImport
       parentRoute: typeof mainRouteRoute
+    }
+    '/(editor)/editor/css/': {
+      id: '/(editor)/editor/css/'
+      path: '/css'
+      fullPath: '/editor/css/'
+      preLoaderRoute: typeof editorEditorCssIndexRouteImport
+      parentRoute: typeof editorEditorRouteRoute
     }
     '/(editor)/editor/profile/': {
       id: '/(editor)/editor/profile/'
@@ -1082,10 +1101,12 @@ const mainRouteRouteWithChildren = mainRouteRoute._addFileChildren(
 )
 
 interface editorEditorRouteRouteChildren {
+  editorEditorCssIndexRoute: typeof editorEditorCssIndexRoute
   editorEditorProfileIndexRoute: typeof editorEditorProfileIndexRoute
 }
 
 const editorEditorRouteRouteChildren: editorEditorRouteRouteChildren = {
+  editorEditorCssIndexRoute: editorEditorCssIndexRoute,
   editorEditorProfileIndexRoute: editorEditorProfileIndexRoute,
 }
 

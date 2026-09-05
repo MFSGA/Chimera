@@ -378,26 +378,30 @@ pub async fn create_editor_window(
     window_type: EditorWindowType,
     uid: Option<String>,
 ) -> Result {
-    let uid = match window_type {
+    let profile_uid = match window_type {
         EditorWindowType::Profile => {
-            uid.ok_or_else(|| anyhow!("uid required for profile editor"))?
+            Some(uid.ok_or_else(|| anyhow!("uid required for profile editor"))?)
         }
-        EditorWindowType::CssEditor => {
-            return Err(anyhow!("CSS editor is not supported yet").into());
-        }
+        EditorWindowType::CssEditor => None,
     };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let handle = app_handle.clone();
     app_handle
         .run_on_main_thread(move || {
-            let result = resolve::create_profile_editor_window(&handle, &uid)
-                .map_err(|error| error.to_string());
+            let result = match window_type {
+                EditorWindowType::Profile => resolve::create_profile_editor_window(
+                    &handle,
+                    profile_uid.as_deref().expect("profile uid was validated"),
+                ),
+                EditorWindowType::CssEditor => resolve::create_css_editor_window(&handle),
+            }
+            .map_err(|error| error.to_string());
             let _ = sender.send(result);
         })
-        .context("failed to schedule profile editor window creation")?;
+        .context("failed to schedule editor window creation")?;
     receiver
         .await
-        .context("profile editor window creation was cancelled")?
+        .context("editor window creation was cancelled")?
         .map_err(anyhow::Error::msg)?;
     Ok(())
 }
@@ -1153,31 +1157,7 @@ pub async fn save_window_size_state(
     app_handle: AppHandle,
     label: String,
 ) -> Result {
-    if !matches!(
-        label.as_str(),
-        crate::consts::LEGACY_WINDOW_LABEL | crate::consts::MAIN_WINDOW_LABEL
-    ) {
-        return Err(IpcError::Custom(format!("unknown window label: {label}")));
-    }
-
-    let window = app_handle
-        .get_webview_window(&label)
-        .ok_or_else(|| IpcError::Custom(format!("window not found: {label}")))?;
-    if window.is_minimized().map_err(anyhow::Error::from)? {
-        return Ok(());
-    }
-
-    let state = crate::window::capture_window_state(&window)?.map(|state| {
-        chimera_config::state::window::WindowState {
-            width: state.width,
-            height: state.height,
-            x: state.x,
-            y: state.y,
-            maximized: state.maximized,
-            fullscreen: state.fullscreen,
-        }
-    });
-    client.save_main_window_state(state).await?;
+    crate::window::persist_window_state(&app_handle, client.inner(), &label).await?;
     Ok(())
 }
 
