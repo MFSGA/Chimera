@@ -29,11 +29,42 @@ AChimera · Proxy Wiki
 - [AChimera](https://github.com/MFSGA/AChimera) — Android client
 - [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
 
+> **Chimera Proxy** — a Rust-native desktop client for the Chimera proxy ecosystem.
+
+## Chimera Ecosystem
+
+```text
+Chimera Desktop
+       ↕
+Chimera Client (Rust client core)
+       ↕ VLESS / REALITY
+Chimera Proxy Server (Rust server core)
+       ↕
+AChimera · Proxy Wiki
+```
+
+- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust client core with Clash / Mihomo compatibility
+- [Chimera Proxy Server](https://github.com/MFSGA/Chimera_Service) — Pure Rust Xray-compatible server core
+- [AChimera](https://github.com/MFSGA/AChimera) — Android client
+- [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
+
 ---
 
 ## Overview
 
 Chimera is a modern desktop proxy client built for users who want a stable, clear, and maintainable experience on Windows, macOS, and Linux/NixOS. It is built with Tauri, Rust, and React, keeping the responsiveness and lightweight feel expected from a desktop app while providing reliable support for proxy cores, subscription profiles, system proxy integration, service mode, and update workflows.
+
+## Protocol Compatibility Matrix
+
+| Capability | Status |
+| --- | --- |
+| VLESS + REALITY | Stable |
+| XHTTP | Stable |
+| TUN / DNS / REST API | Stable |
+| Clash / Mihomo core compatibility | Partial |
+| VMess / Vision | Experimental |
+
+Chimera Desktop provides the desktop orchestration layer; exact protocol availability depends on the selected core and its version.
 
 ## Protocol Compatibility Matrix
 

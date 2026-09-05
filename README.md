@@ -29,11 +29,42 @@ AChimera · Proxy Wiki
 - [AChimera](https://github.com/MFSGA/AChimera) — Android client
 - [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
 
+> **Chimera Proxy** — Rust-native desktop client for the Chimera proxy ecosystem.
+
+## Chimera Ecosystem
+
+```text
+Chimera Desktop
+       ↕
+Chimera Client (Rust client core)
+       ↕ VLESS / REALITY
+Chimera Proxy Server (Rust server core)
+       ↕
+AChimera · Proxy Wiki
+```
+
+- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust client core with Clash / Mihomo compatibility
+- [Chimera Proxy Server](https://github.com/MFSGA/Chimera_Service) — Pure Rust Xray-compatible server core
+- [AChimera](https://github.com/MFSGA/AChimera) — Android client
+- [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
+
 ---
 
 ## 项目简介
 
 Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windows、macOS 与 Linux/NixOS 上提供稳定、清晰、可维护的代理使用体验。它基于 Tauri、Rust 与 React 构建，既保留了桌面应用应有的轻量与响应速度，也为代理核心、订阅配置、系统代理、服务模式和更新能力提供可靠支撑。
+
+## 协议兼容矩阵
+
+| 能力 | 状态 |
+| --- | --- |
+| VLESS + REALITY | Stable |
+| XHTTP | Stable |
+| TUN / DNS / REST API | Stable |
+| Clash / Mihomo 核心兼容 | Partial |
+| VMess / Vision | Experimental |
+
+Chimera Desktop 负责桌面编排；具体协议能力取决于所选核心及其版本。
 
 ## 协议兼容矩阵
 
