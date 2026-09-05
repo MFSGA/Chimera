@@ -522,11 +522,16 @@ pub async fn replace_profile_definition(
                 transforms,
             },
     } = definition;
-    if !transforms.is_empty() {
-        return Err(anyhow!("scoped profile transforms are not supported yet").into());
-    }
     Ok(client
-        .replace_remote_profile_definition(uid, file, updated_at, url, option, subscription)
+        .replace_remote_profile_definition(
+            uid,
+            file,
+            updated_at,
+            url,
+            option,
+            subscription,
+            transforms,
+        )
         .await?)
 }
 

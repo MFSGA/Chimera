@@ -457,6 +457,7 @@ mod tests {
             _url: url::Url,
             _option: Option<RemoteProfileOptions>,
             _subscription: Option<SubscriptionInfo>,
+            _transforms: &[ProfileUid],
         ) -> anyhow::Result<bool> {
             Ok(false)
         }

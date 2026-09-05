@@ -98,6 +98,7 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
         url: url::Url,
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
+        transforms: &[ProfileUid],
     ) -> anyhow::Result<bool>;
 }
 
@@ -359,20 +360,21 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         url: url::Url,
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
+        transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
         let uid = uid.clone();
         let file = file.to_string();
+        let transforms = transforms.to_vec();
         Self::persist(move |profiles| {
-            let affects_current = profiles.current.iter().any(|current| current == &uid);
-            profiles.replace_remote_definition(
+            profiles.replace_remote_definition_with_transforms(
                 &uid,
                 &file,
                 updated_at,
                 url,
                 option,
                 subscription,
-            )?;
-            Ok(affects_current)
+                transforms,
+            )
         })
         .await
     }
@@ -663,13 +665,22 @@ impl ChimeraClient {
         url: url::Url,
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
+        transforms: Vec<ProfileUid>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let affects_current = {
             let _commit = self.inner.profile_commit.lock().await;
             let affects_current = self
                 .inner
                 .profile_writes
-                .replace_remote_definition(&uid, &file, updated_at, url, option, subscription)
+                .replace_remote_definition(
+                    &uid,
+                    &file,
+                    updated_at,
+                    url,
+                    option,
+                    subscription,
+                    &transforms,
+                )
                 .await?;
             self.inner.ui_sink.refresh_profiles();
             affects_current
