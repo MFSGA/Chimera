@@ -1,3 +1,13 @@
+## [0.23.1] - 2026-09-05 04:27:00
+
+### ✨ Features
+
+- **agent:** Add guided readonly network assistant by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.23.0...v0.23.1
+
 ## [0.22.3] - 2026-09-03 10:26:37
 
 ### ✨ Features
