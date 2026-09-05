@@ -3,7 +3,7 @@ packages:
   - 'scripts'
   - 'tauri-e2e'
 overrides:
-  '@wdio/native-utils': 2.5.0
+  '@wdio/native-utils': 2.6.0
   material-react-table: npm:@greenhat616/material-react-table@4.0.0
 #patchedDependencies:
 #  monaco-worker-manager@2.0.1: patches/monaco-worker-manager@2.0.1.patch
