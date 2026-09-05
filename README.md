@@ -56,18 +56,6 @@ Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windo
 
 ## 协议兼容矩阵
 
-| 能力 | 状态 |
-| --- | --- |
-| VLESS + REALITY | Stable |
-| XHTTP | Stable |
-| TUN / DNS / REST API | Stable |
-| Clash / Mihomo 核心兼容 | Partial |
-| VMess / Vision | Experimental |
-
-Chimera Desktop 负责桌面编排；具体协议能力取决于所选核心及其版本。
-
-## 协议兼容矩阵
-
 | 能力                    | 状态         |
 | ----------------------- | ------------ |
 | VLESS + REALITY         | Stable       |

@@ -56,18 +56,6 @@ Chimera is a modern desktop proxy client built for users who want a stable, clea
 
 ## Protocol Compatibility Matrix
 
-| Capability | Status |
-| --- | --- |
-| VLESS + REALITY | Stable |
-| XHTTP | Stable |
-| TUN / DNS / REST API | Stable |
-| Clash / Mihomo core compatibility | Partial |
-| VMess / Vision | Experimental |
-
-Chimera Desktop provides the desktop orchestration layer; exact protocol availability depends on the selected core and its version.
-
-## Protocol Compatibility Matrix
-
 | Capability                        | Status       |
 | --------------------------------- | ------------ |
 | VLESS + REALITY                   | Stable       |
