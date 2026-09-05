@@ -264,8 +264,8 @@ importers:
         specifier: 8.1.0
         version: 8.1.0(@svgr/core@8.1.0(typescript@7.0.2))
       '@tanstack/react-query':
-        specifier: 5.101.3
-        version: 5.101.3(react@19.2.7)
+        specifier: 5.102.8
+        version: 5.102.8(react@19.2.7)
       '@tanstack/react-router':
         specifier: 1.170.18
         version: 1.170.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -354,8 +354,8 @@ importers:
   frontend/interface:
     dependencies:
       '@tanstack/react-query':
-        specifier: 5.101.3
-        version: 5.101.3(react@19.2.7)
+        specifier: 5.102.8
+        version: 5.102.8(react@19.2.7)
       '@tauri-apps/api':
         specifier: 2.11.1
         version: 2.11.1
@@ -526,7 +526,7 @@ importers:
         version: 9.29.1
       '@wdio/tauri-service':
         specifier: 1.2.0
-        version: 1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)
+        version: 1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -3336,11 +3336,11 @@ packages:
     resolution: {integrity: sha512-Wo1iKt2b9OT7d+YGhvEPD3DXvPv2etTusIMhMUoG7fbhmxcXCtIjJDEygy91Y2JFlwGyjqiBPRozme7UD8hoqg==}
     engines: {node: '>=12'}
 
-  '@tanstack/query-core@5.101.3':
-    resolution: {integrity: sha512-pWLyu7AjFFVM5G+frjcL81kKEW9R8GCCPKnL3uaWbMwd2f3ZINFCuy+PtKkdz/+pKw/f/XMsFsYq/H+uJHM4GQ==}
+  '@tanstack/query-core@5.102.8':
+    resolution: {integrity: sha512-ZNjkJ33CqvPNec/6lZBnHqLc3EVGPZ9ySLhYahU9TcuRFdmwXewuj0c4hwSWcGHqEUwcSrKeZ+oGcvPBqXcQcg==}
 
-  '@tanstack/react-query@5.101.3':
-    resolution: {integrity: sha512-ZjgcRwmQUSCythDPj6pE2NKFi9bpQegxIBxgt3hPytXI1ElFHNaa3A7aWW8vFaLCIRjPv467rbREYHbxcdgQbg==}
+  '@tanstack/react-query@5.102.8':
+    resolution: {integrity: sha512-TYBea4OuXWD7MhaSHq069TWbFe7rcwWN6kzT7JF0OKi1K6c1gTv2IzD6A6ExJsCMozdkqBWeuIUZmu4KQg0O5A==}
     peerDependencies:
       react: ^18 || ^19
 
@@ -5404,7 +5404,7 @@ packages:
   glob@8.1.0:
     resolution: {integrity: sha512-r8hpEjiQEYlF2QU0df3dS+nxxSIreXQS1qRhMJM0Q5NDdR386C7jb7Hwwod8Fgiuex+k0GFjgft18yvxm5XoCQ==}
     engines: {node: '>=12'}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
@@ -10997,11 +10997,11 @@ snapshots:
     dependencies:
       remove-accents: 0.5.0
 
-  '@tanstack/query-core@5.101.3': {}
+  '@tanstack/query-core@5.102.8': {}
 
-  '@tanstack/react-query@5.101.3(react@19.2.7)':
+  '@tanstack/react-query@5.102.8(react@19.2.7)':
     dependencies:
-      '@tanstack/query-core': 5.101.3
+      '@tanstack/query-core': 5.102.8
       react: 19.2.7
 
   '@tanstack/react-router-devtools@1.167.0(@tanstack/react-router@1.170.18(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@tanstack/router-core@1.171.15)(csstype@3.2.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
@@ -11668,7 +11668,7 @@ snapshots:
 
   '@wdio/logger@9.29.1':
     dependencies:
-      chalk: 5.1.2
+      chalk: 5.4.1
       loglevel: 1.9.2
       loglevel-plugin-prefix: 0.8.4
       safe-regex2: 5.1.1
@@ -11688,7 +11688,7 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@wdio/native-core@1.0.0(tsx@4.23.1)':
+  '@wdio/native-core@1.0.0(supports-color@10.2.2)(tsx@4.23.1)':
     dependencies:
       '@wdio/logger': 9.18.0
       '@wdio/native-types': 2.3.1
@@ -11779,11 +11779,11 @@ snapshots:
       easy-table: 1.2.0
       pretty-ms: 9.3.0
 
-  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)':
+  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)':
     dependencies:
       '@wdio/globals': 9.27.1(expect-webdriverio@5.7.0)(webdriverio@9.29.1)
       '@wdio/logger': 9.18.0
-      '@wdio/native-core': 1.0.0(tsx@4.23.1)
+      '@wdio/native-core': 1.0.0(supports-color@10.2.2)(tsx@4.23.1)
       '@wdio/native-spy': 1.1.0
       '@wdio/native-types': 2.4.0
       '@wdio/native-utils': 2.5.0(tsx@4.23.1)
