@@ -78,7 +78,7 @@
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/validator": "13.15.10",
-    "@vitejs/plugin-react": "6.0.3",
+    "@vitejs/plugin-react": "6.1.1",
     "cross-env": "10.1.0",
     "filesize": "11.0.22",
     "meta-json-schema": "1.19.28",
@@ -91,7 +91,7 @@
     "typescript": "7.0.2",
     "unplugin-icons": "23.0.1",
     "validator": "13.15.35",
-    "vite": "8.1.5",
+    "vite": "8.2.2",
     "vite-plugin-html": "3.2.2",
     "vite-plugin-sass-dts": "1.3.37"
   }
