@@ -13,6 +13,7 @@
     "test:runtime": "wdio run ./wdio.conf.ts --suite runtime",
     "test:profiles": "wdio run ./wdio.conf.ts --suite profiles",
     "test:settings": "wdio run ./wdio.conf.ts --suite settings",
+    "test:agent": "wdio run ./wdio.conf.ts --suite agent",
     "test:main": "wdio run ./wdio.conf.ts --suite main",
     "test:network": "wdio run ./wdio.conf.ts --suite network",
     "test:hermetic": "wdio run ./wdio.conf.ts --suite hermetic",

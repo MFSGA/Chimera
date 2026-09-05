@@ -36,6 +36,7 @@ export const baseE2eSuites = {
     './specs/user-interface-main.e2e.ts',
     './specs/web-ui-main-layout.e2e.ts',
   ],
+  agent: ['./specs/agent-assistant.e2e.ts'],
   main: [
     './specs/about-main-layout.e2e.ts',
     './specs/connections-main-layout.e2e.ts',
@@ -71,6 +72,7 @@ export const e2eSuites = {
     baseE2eSuites.profiles,
     baseE2eSuites.settings,
     baseE2eSuites.main,
+    baseE2eSuites.agent,
   ),
   all: combine(
     baseE2eSuites.smoke,
@@ -78,6 +80,7 @@ export const e2eSuites = {
     baseE2eSuites.profiles,
     baseE2eSuites.settings,
     baseE2eSuites.main,
+    baseE2eSuites.agent,
     baseE2eSuites.network,
     baseE2eSuites.upgrade,
   ),

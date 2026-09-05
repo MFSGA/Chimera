@@ -1,9 +1,25 @@
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 use super::{
-    AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState,
-    AgentNetworkSnapshot, AgentProposal, collect_network_snapshot,
+    AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState, AgentManifest,
+    AgentNetworkSnapshot, AgentProposal, AgentToolError, AgentToolName, AgentToolResult,
+    agent_manifest, collect_network_snapshot, execute_readonly_tool,
 };
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn agent_get_manifest() -> AgentManifest {
+    agent_manifest()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_execute_readonly_tool(
+    app: AppHandle,
+    tool: AgentToolName,
+) -> Result<AgentToolResult, AgentToolError> {
+    execute_readonly_tool(&app, tool).await
+}
 
 #[tauri::command]
 #[specta::specta]

@@ -20,16 +20,21 @@ use crate::{
 use super::{
     core_probe,
     model::{
-        AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
-        AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostScope, AgentNetworkSnapshot,
-        AgentPrivacyBoundary, AgentProbeCode, AgentProbeFailure, AgentProfileSnapshot,
-        AgentRoutingMode, AgentRunType, AgentServiceSnapshot, AgentServiceState,
-        AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
-        NETWORK_SNAPSHOT_SCHEMA_VERSION,
+        AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot,
+        AgentCoreState, AgentFinding, AgentFindingCode, AgentFindingSeverity, AgentHealth,
+        AgentHostScope, AgentNetworkSnapshot, AgentPrivacyBoundary, AgentProbeCode,
+        AgentProbeFailure, AgentProfileSnapshot, AgentRoutingMode, AgentRunType,
+        AgentServiceSnapshot, AgentServiceState, AgentSystemProxySnapshot, AgentTelemetrySnapshot,
+        AgentTunSnapshot, NETWORK_SNAPSHOT_SCHEMA_VERSION,
     },
 };
 
 pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSnapshot {
+    #[cfg(feature = "e2e")]
+    if let Some(snapshot) = super::e2e::collect_network_snapshot() {
+        return snapshot;
+    }
+
     let verge = Config::verge().latest().clone();
     let clash = Config::clash().latest().clone();
     let runtime = Config::runtime().latest().clone();
@@ -364,30 +369,37 @@ fn derive_findings(
         secret_is_weak,
         AgentFindingCode::WeakControllerSecret,
         AgentFindingSeverity::Warning,
+        None,
     );
+    let stale_proxy = system_proxy_without_running_core(core.state, proxy.observed_enabled);
+    let stale_proxy_action = stale_proxy_recommended_action(proxy);
     push_finding(
         &mut findings,
-        system_proxy_without_running_core(core.state, proxy.observed_enabled),
+        stale_proxy,
         AgentFindingCode::SystemProxyWithoutRunningCore,
         AgentFindingSeverity::Critical,
+        stale_proxy_action,
     );
     push_finding(
         &mut findings,
         proxy.observed_enabled == Some(true) && proxy.matches_expected_endpoint == Some(false),
         AgentFindingCode::SystemProxyEndpointMismatch,
         AgentFindingSeverity::Warning,
+        None,
     );
     push_finding(
         &mut findings,
         !core.runtime_config_present,
         AgentFindingCode::RuntimeConfigMissing,
         AgentFindingSeverity::Critical,
+        None,
     );
     push_finding(
         &mut findings,
         profiles.active_count == 0 || !profiles.active_references_valid,
         AgentFindingCode::ActiveProfileMissing,
         AgentFindingSeverity::Warning,
+        None,
     );
     push_finding(
         &mut findings,
@@ -395,6 +407,7 @@ fn derive_findings(
             && (!service.ipc_connected || service.runtime_compatible == Some(false)),
         AgentFindingCode::ServiceModeInconsistent,
         AgentFindingSeverity::Warning,
+        None,
     );
     push_finding(
         &mut findings,
@@ -402,20 +415,28 @@ fn derive_findings(
             && telemetry.state == AgentConnectorState::Disconnected,
         AgentFindingCode::ClashConnectorDisconnected,
         AgentFindingSeverity::Warning,
+        None,
     );
     push_finding(
         &mut findings,
         tun.desired_enabled && tun.generated_runtime_enabled == Some(false),
         AgentFindingCode::TunRuntimeMismatch,
         AgentFindingSeverity::Critical,
+        None,
     );
     push_finding(
         &mut findings,
         telemetry.recent_error_count > 0,
         AgentFindingCode::RecentCoreErrors,
         AgentFindingSeverity::Info,
+        None,
     );
     findings
+}
+
+fn stale_proxy_recommended_action(proxy: &AgentSystemProxySnapshot) -> Option<AgentActionRequest> {
+    (proxy.matches_expected_endpoint == Some(true))
+        .then_some(AgentActionRequest::DisableStaleSystemProxy)
 }
 
 fn push_finding(
@@ -423,9 +444,14 @@ fn push_finding(
     condition: bool,
     code: AgentFindingCode,
     severity: AgentFindingSeverity,
+    recommended_action: Option<AgentActionRequest>,
 ) {
     if condition {
-        findings.push(AgentFinding { code, severity });
+        findings.push(AgentFinding {
+            code,
+            severity,
+            recommended_action,
+        });
     }
 }
 
@@ -473,8 +499,13 @@ fn snapshot_revision(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_scope, summarize_system_proxy, system_proxy_without_running_core};
-    use crate::features::agent::model::{AgentCoreState, AgentHostScope};
+    use super::{
+        host_scope, stale_proxy_recommended_action, summarize_system_proxy,
+        system_proxy_without_running_core,
+    };
+    use crate::features::agent::model::{
+        AgentActionRequest, AgentCoreState, AgentHostScope, AgentSystemProxySnapshot,
+    };
     use sysproxy::Sysproxy;
 
     #[test]
@@ -495,6 +526,27 @@ mod tests {
             AgentCoreState::Unknown,
             Some(true)
         ));
+    }
+
+    #[test]
+    fn stale_proxy_fix_is_only_recommended_for_chimera_endpoint() {
+        let mut proxy = AgentSystemProxySnapshot {
+            desired_enabled: true,
+            observed_enabled: Some(true),
+            observed_host_scope: AgentHostScope::Loopback,
+            observed_port: Some(7890),
+            expected_mixed_port: 7890,
+            matches_expected_endpoint: Some(true),
+        };
+        assert!(matches!(
+            stale_proxy_recommended_action(&proxy),
+            Some(AgentActionRequest::DisableStaleSystemProxy)
+        ));
+
+        proxy.matches_expected_endpoint = Some(false);
+        assert!(stale_proxy_recommended_action(&proxy).is_none());
+        proxy.matches_expected_endpoint = None;
+        assert!(stale_proxy_recommended_action(&proxy).is_none());
     }
 
     #[test]

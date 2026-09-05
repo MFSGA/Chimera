@@ -457,6 +457,12 @@ async fn disable_stale_system_proxy(
     expected_port: u16,
     desired_before: bool,
 ) -> AgentResult<()> {
+    #[cfg(feature = "e2e")]
+    if super::e2e::fixture_enabled() {
+        super::e2e::mark_stale_proxy_repaired();
+        return Ok(());
+    }
+
     if snapshot.core.state != AgentCoreState::Stopped {
         return Err(AgentCommandError::NetworkStateChanged);
     }
@@ -553,6 +559,11 @@ async fn confirm_network_change(
     window: &WebviewWindow,
     proposal: &AgentProposal,
 ) -> AgentResult<bool> {
+    #[cfg(feature = "e2e")]
+    if super::e2e::fixture_enabled() {
+        return Ok(true);
+    }
+
     let window = window.clone();
     let message = proposal
         .changes

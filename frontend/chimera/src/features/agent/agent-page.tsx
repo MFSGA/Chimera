@@ -4,7 +4,6 @@ import {
   type AgentProposal,
 } from '@chimera/interface';
 import {
-  ContentCopyRounded,
   HealthAndSafetyRounded,
   RefreshRounded,
   SmartToyRounded,
@@ -13,14 +12,84 @@ import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { useState } from 'react';
 import { Notice } from '@/components/base';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
-import { ActionPanel } from './components/action-panel';
-import { FindingList, ProbeFailureList } from './components/finding-list';
+import { DiagnosisOverview } from './components/diagnosis-overview';
 import { ProposalDialog } from './components/proposal-dialog';
-import { SnapshotSummary } from './components/snapshot-summary';
-import { presentHealth } from './model/presenter';
+import { TechnicalDetails } from './components/technical-details';
+
+function AgentHeader({
+  hasSnapshot,
+  refreshing,
+  onRefresh,
+}: {
+  hasSnapshot: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div>
+        <div className="flex items-center gap-3">
+          <SmartToyRounded className="text-primary size-8" />
+          <h1 className="text-2xl font-semibold">{m.agent_title()}</h1>
+        </div>
+        <p className="text-on-surface-variant mt-2 max-w-3xl text-sm">
+          {m.agent_subtitle()}
+        </p>
+      </div>
+      {hasSnapshot && (
+        <Button
+          className="self-start"
+          loading={refreshing}
+          variant="flat"
+          onClick={onRefresh}
+        >
+          <RefreshRounded />
+          {m.agent_refresh()}
+        </Button>
+      )}
+    </header>
+  );
+}
+
+function WelcomeCard({
+  loading,
+  onStart,
+}: {
+  loading: boolean;
+  onStart: () => void;
+}) {
+  return (
+    <Card variant="raised">
+      <CardContent className="items-start gap-4 p-5 md:p-6">
+        <div>
+          <h2 className="text-xl font-semibold">{m.agent_intro_title()}</h2>
+          <p className="text-on-surface-variant mt-2 max-w-3xl text-sm">
+            {m.agent_intro_description()}
+          </p>
+        </div>
+        <div className="bg-secondary-container/45 flex items-start gap-3 rounded-2xl p-3 text-sm">
+          <HealthAndSafetyRounded className="mt-0.5 size-5 shrink-0" />
+          <span>{m.agent_readonly_notice()}</span>
+        </div>
+        <Button loading={loading} variant="flat" onClick={onStart}>
+          <HealthAndSafetyRounded />
+          {m.agent_check_network()}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ErrorCard() {
+  return (
+    <Card variant="outline" className="border-error text-error">
+      <CardContent>{m.agent_error_title()}</CardContent>
+    </Card>
+  );
+}
 
 export function AgentPage() {
   const agent = useAgent();
@@ -78,48 +147,36 @@ export function AgentPage() {
       className="h-full overflow-hidden"
       data-slot="agent-page-scroll-area"
     >
-      <main className="container mx-auto flex min-h-full w-full max-w-7xl flex-col gap-5 p-4 md:p-6">
-        <header className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="flex items-center gap-3">
-              <SmartToyRounded className="text-primary size-8" />
-              <h1 className="text-2xl font-semibold">{m.agent_title()}</h1>
-            </div>
-            <p className="text-on-surface-variant mt-2 max-w-3xl text-sm">
-              {m.agent_subtitle()}
-            </p>
-          </div>
-          <Button
-            className="self-start"
-            loading={agent.snapshot.isFetching}
-            variant="flat"
-            onClick={() => void agent.snapshot.refetch()}
-          >
-            {snapshot ? <RefreshRounded /> : <HealthAndSafetyRounded />}
-            {snapshot ? m.agent_refresh() : m.agent_start_diagnostics()}
-          </Button>
-        </header>
-
-        <PrivacyCard />
+      <main className="container mx-auto flex min-h-full w-full max-w-5xl flex-col gap-5 p-4 md:p-6">
+        <AgentHeader
+          hasSnapshot={Boolean(snapshot)}
+          refreshing={agent.snapshot.isFetching}
+          onRefresh={() => void agent.snapshot.refetch()}
+        />
 
         {agent.snapshot.isError && <ErrorCard />}
-        {snapshot && (
+        {!snapshot ? (
+          <WelcomeCard
+            loading={agent.snapshot.isFetching}
+            onStart={() => void agent.snapshot.refetch()}
+          />
+        ) : (
           <>
-            <HealthCard snapshot={snapshot} onCopy={copyContext} />
-            <SnapshotSummary snapshot={snapshot} />
-            <div className="grid gap-4 lg:grid-cols-2">
-              <FindingList findings={snapshot.findings} />
-              <ProbeFailureList failures={snapshot.probe_failures} />
-            </div>
-            <ActionPanel
+            <DiagnosisOverview
               snapshot={snapshot}
               pending={agent.propose.isPending}
               onPropose={(action) => void propose(action)}
             />
-            <ContextPreview snapshot={snapshot} />
+            <TechnicalDetails
+              snapshot={snapshot}
+              pending={agent.propose.isPending}
+              onCopy={() => void copyContext()}
+              onPropose={(action) => void propose(action)}
+            />
           </>
         )}
       </main>
+
       <ProposalDialog
         proposal={proposal}
         executing={agent.execute.isPending}
@@ -127,83 +184,5 @@ export function AgentPage() {
         onConfirm={() => void executeProposal()}
       />
     </AppContentScrollArea>
-  );
-}
-
-function PrivacyCard() {
-  return (
-    <Card variant="raised">
-      <CardHeader className="text-base">
-        <HealthAndSafetyRounded />
-        {m.agent_privacy_title()}
-      </CardHeader>
-      <CardContent className="text-on-surface-variant text-sm">
-        <p>{m.agent_privacy_description()}</p>
-        <p className="font-medium">{m.agent_privacy_safe_context()}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ErrorCard() {
-  return (
-    <Card variant="outline" className="border-error text-error">
-      <CardContent>{m.agent_error_title()}</CardContent>
-    </Card>
-  );
-}
-
-function HealthCard({
-  snapshot,
-  onCopy,
-}: {
-  snapshot: NonNullable<ReturnType<typeof useAgent>['snapshot']['data']>;
-  onCopy: () => void;
-}) {
-  return (
-    <Card variant="basic">
-      <CardContent className="flex-row items-center justify-between gap-4">
-        <div>
-          <p className="text-on-surface-variant text-sm">
-            {m.agent_health_title()}
-          </p>
-          <p className="mt-1 text-xl font-semibold">
-            {presentHealth(snapshot.health)}
-          </p>
-          <p className="text-on-surface-variant mt-1 text-xs">
-            {m.agent_captured_at()}:{' '}
-            {new Date(snapshot.captured_at).toLocaleString()}
-          </p>
-        </div>
-        <Button variant="stroked" onClick={onCopy}>
-          <ContentCopyRounded />
-          {m.agent_copy_context()}
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ContextPreview({
-  snapshot,
-}: {
-  snapshot: NonNullable<ReturnType<typeof useAgent>['snapshot']['data']>;
-}) {
-  return (
-    <Card variant="outline">
-      <CardContent>
-        <details>
-          <summary className="cursor-pointer font-medium">
-            {m.agent_context_preview()}
-          </summary>
-          <p className="text-on-surface-variant my-3 text-sm">
-            {m.agent_context_description()}
-          </p>
-          <pre className="bg-surface-variant/30 overflow-x-auto rounded-2xl p-3 text-xs break-all whitespace-pre-wrap">
-            {JSON.stringify(snapshot, null, 2)}
-          </pre>
-        </details>
-      </CardContent>
-    </Card>
   );
 }

@@ -189,6 +189,7 @@ pub enum AgentFindingCode {
 pub struct AgentFinding {
     pub code: AgentFindingCode,
     pub severity: AgentFindingSeverity,
+    pub recommended_action: Option<AgentActionRequest>,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]
@@ -217,6 +218,97 @@ pub struct AgentNetworkSnapshot {
     pub findings: Vec<AgentFinding>,
     pub probe_failures: Vec<AgentProbeFailure>,
     pub privacy: AgentPrivacyBoundary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize, Type)]
+pub enum AgentToolName {
+    #[serde(rename = "system.snapshot")]
+    SystemSnapshot,
+    #[serde(rename = "network.diagnose")]
+    NetworkDiagnose,
+    #[serde(rename = "core.status")]
+    CoreStatus,
+    #[serde(rename = "proxy.status")]
+    ProxyStatus,
+    #[serde(rename = "tun.status")]
+    TunStatus,
+    #[serde(rename = "profile.summary")]
+    ProfileSummary,
+    #[serde(rename = "service.status")]
+    ServiceStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolRisk {
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentToolManifest {
+    pub name: AgentToolName,
+    pub version: u16,
+    pub description: String,
+    pub risk: AgentToolRisk,
+    pub read_only: bool,
+    pub timeout_ms: u32,
+    pub output_schema_version: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentManifest {
+    pub schema_version: u16,
+    pub tools: Vec<AgentToolManifest>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentDiagnosticSummary {
+    pub revision: String,
+    pub captured_at: i64,
+    pub health: AgentHealth,
+    pub findings: Vec<AgentFinding>,
+    pub probe_failures: Vec<AgentProbeFailure>,
+    pub privacy: AgentPrivacyBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(tag = "tool")]
+pub enum AgentToolResult {
+    #[serde(rename = "system.snapshot")]
+    SystemSnapshot { output: Box<AgentNetworkSnapshot> },
+    #[serde(rename = "network.diagnose")]
+    NetworkDiagnose { output: AgentDiagnosticSummary },
+    #[serde(rename = "core.status")]
+    CoreStatus { output: AgentCoreSnapshot },
+    #[serde(rename = "proxy.status")]
+    ProxyStatus { output: AgentSystemProxySnapshot },
+    #[serde(rename = "tun.status")]
+    TunStatus { output: AgentTunSnapshot },
+    #[serde(rename = "profile.summary")]
+    ProfileSummary { output: AgentProfileSnapshot },
+    #[serde(rename = "service.status")]
+    ServiceStatus { output: AgentServiceSnapshot },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AgentToolError {
+    #[error("agent_tool_timed_out")]
+    TimedOut,
+}
+
+impl Serialize for AgentToolError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl Type for AgentToolError {
+    fn definition(_: &mut specta::Types) -> specta::datatype::DataType {
+        specta::datatype::DataType::Primitive(specta::datatype::Primitive::str)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Type)]

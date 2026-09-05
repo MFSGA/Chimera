@@ -14,6 +14,15 @@ import {
 import { e2eSuites } from './spec-suites.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
+const selectedSuiteIndex = process.argv.indexOf('--suite');
+const selectedSuite =
+  selectedSuiteIndex >= 0 ? process.argv[selectedSuiteIndex + 1] : undefined;
+const agentFixtureSuites = new Set(['agent', 'hermetic', 'all']);
+const agentFixture =
+  process.env.CHIMERA_E2E_AGENT_FIXTURE ??
+  (selectedSuite && agentFixtureSuites.has(selectedSuite)
+    ? 'stale-proxy'
+    : undefined);
 const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
 const appBinaryPath =
   process.env.CHIMERA_E2E_BINARY ??
@@ -164,6 +173,7 @@ export const config: WebdriverIO.Config = {
         env: {
           CHIMERA_E2E_CONFIG_DIR: configDirectoryOverride,
           CHIMERA_E2E_DATA_DIR: dataDirectoryOverride,
+          ...(agentFixture ? { CHIMERA_E2E_AGENT_FIXTURE: agentFixture } : {}),
           TAURI_WEBDRIVER_PORT: String(embeddedPort),
         },
       },

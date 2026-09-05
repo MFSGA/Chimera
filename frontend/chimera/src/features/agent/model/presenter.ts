@@ -1,5 +1,7 @@
 import type {
+  AgentActionRequest,
   AgentFindingCode,
+  AgentFindingSeverity,
   AgentHealth,
   AgentImpact,
   AgentProbeCode,
@@ -12,6 +14,21 @@ const healthMessages: Record<AgentHealth, () => string> = {
   warning: m.agent_health_warning,
   critical: m.agent_health_critical,
   degraded: m.agent_health_degraded,
+};
+
+const findingTitleMessages: Record<AgentFindingCode, () => string> = {
+  weak_controller_secret: m.agent_finding_title_weak_controller_secret,
+  system_proxy_without_running_core:
+    m.agent_finding_title_system_proxy_without_running_core,
+  system_proxy_endpoint_mismatch:
+    m.agent_finding_title_system_proxy_endpoint_mismatch,
+  runtime_config_missing: m.agent_finding_title_runtime_config_missing,
+  active_profile_missing: m.agent_finding_title_active_profile_missing,
+  service_mode_inconsistent: m.agent_finding_title_service_mode_inconsistent,
+  clash_connector_disconnected:
+    m.agent_finding_title_clash_connector_disconnected,
+  tun_runtime_mismatch: m.agent_finding_title_tun_runtime_mismatch,
+  recent_core_errors: m.agent_finding_title_recent_core_errors,
 };
 
 const findingMessages: Record<AgentFindingCode, () => string> = {
@@ -46,6 +63,12 @@ const impactMessages: Record<AgentImpact, () => string> = {
   host_system_proxy_disabled: m.agent_impact_host_system_proxy_disabled,
 };
 
+const severityMessages: Record<AgentFindingSeverity, () => string> = {
+  critical: m.agent_severity_critical,
+  warning: m.agent_severity_warning,
+  info: m.agent_severity_info,
+};
+
 const routingModeMessages: Record<AgentRoutingMode, () => string> = {
   rule: m.agent_mode_rule,
   global: m.agent_mode_global,
@@ -54,8 +77,14 @@ const routingModeMessages: Record<AgentRoutingMode, () => string> = {
 
 export const presentHealth = (health: AgentHealth) => healthMessages[health]();
 
+export const presentFindingTitle = (code: AgentFindingCode) =>
+  findingTitleMessages[code]();
+
 export const presentFinding = (code: AgentFindingCode) =>
   findingMessages[code]();
+
+export const presentFindingSeverity = (severity: AgentFindingSeverity) =>
+  severityMessages[severity]();
 
 export const presentProbe = (code: AgentProbeCode) => probeMessages[code]();
 
@@ -63,6 +92,13 @@ export const presentImpact = (impact: AgentImpact) => impactMessages[impact]();
 
 export const presentRoutingMode = (mode: AgentRoutingMode | null) =>
   mode ? routingModeMessages[mode]() : m.agent_unknown();
+
+export const presentAgentAction = (action: AgentActionRequest) => {
+  if (action.action === 'disable_stale_system_proxy') {
+    return m.agent_disable_stale_proxy();
+  }
+  return `${m.agent_set_mode()}: ${presentRoutingMode(action.mode)}`;
+};
 
 export const presentBoolean = (value: boolean | null) => {
   if (value === null) return m.agent_unknown();

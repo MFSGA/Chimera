@@ -297,6 +297,11 @@ export const commands = {
     typedError<null, string>(__TAURI_INVOKE('create_main_window')),
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
+  agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
+  agentExecuteReadonlyTool: (tool: AgentToolName) =>
+    typedError<AgentToolResult, string>(
+      __TAURI_INVOKE('agent_execute_readonly_tool', { tool }),
+    ),
   agentGetNetworkSnapshot: () =>
     __TAURI_INVOKE<AgentNetworkSnapshot>('agent_get_network_snapshot'),
   agentProposeNetworkAction: (action: AgentActionRequest) =>
@@ -358,9 +363,19 @@ export type AgentCoreSnapshot = {
 
 export type AgentCoreState = 'running' | 'stopped' | 'unknown';
 
+export type AgentDiagnosticSummary = {
+  revision: string;
+  captured_at: number;
+  health: AgentHealth;
+  findings: AgentFinding[];
+  probe_failures: AgentProbeFailure[];
+  privacy: AgentPrivacyBoundary;
+};
+
 export type AgentFinding = {
   code: AgentFindingCode;
   severity: AgentFindingSeverity;
+  recommended_action: AgentActionRequest | null;
 };
 
 export type AgentFindingCode =
@@ -386,6 +401,11 @@ export type AgentImpact =
   | 'all_traffic_uses_proxy'
   | 'restore_rule_routing'
   | 'host_system_proxy_disabled';
+
+export type AgentManifest = {
+  schema_version: number;
+  tools: AgentToolManifest[];
+};
 
 export type AgentNetworkSnapshot = {
   schema_version: number;
@@ -484,6 +504,36 @@ export type AgentTelemetrySnapshot = {
   download_total: string | null;
   recent_error_count: number;
 };
+
+export type AgentToolManifest = {
+  name: AgentToolName;
+  version: number;
+  description: string;
+  risk: AgentToolRisk;
+  read_only: boolean;
+  timeout_ms: number;
+  output_schema_version: number;
+};
+
+export type AgentToolName =
+  | 'system.snapshot'
+  | 'network.diagnose'
+  | 'core.status'
+  | 'proxy.status'
+  | 'tun.status'
+  | 'profile.summary'
+  | 'service.status';
+
+export type AgentToolResult =
+  | { tool: 'system.snapshot'; output: AgentNetworkSnapshot }
+  | { tool: 'network.diagnose'; output: AgentDiagnosticSummary }
+  | { tool: 'core.status'; output: AgentCoreSnapshot }
+  | { tool: 'proxy.status'; output: AgentSystemProxySnapshot }
+  | { tool: 'tun.status'; output: AgentTunSnapshot }
+  | { tool: 'profile.summary'; output: AgentProfileSnapshot }
+  | { tool: 'service.status'; output: AgentServiceSnapshot };
+
+export type AgentToolRisk = 'read_only';
 
 export type AgentTunSnapshot = {
   desired_enabled: boolean;

@@ -20,11 +20,6 @@ export function ActionPanel({
   pending: boolean;
   onPropose: (action: AgentActionRequest) => void;
 }) {
-  const staleProxyCanBeDisabled =
-    snapshot.core.state === 'stopped' &&
-    snapshot.system_proxy.observed_enabled === true &&
-    snapshot.system_proxy.matches_expected_endpoint === true;
-
   return (
     <Card variant="outline">
       <CardHeader className="text-base">
@@ -60,15 +55,6 @@ export function ActionPanel({
             ))}
           </div>
         </div>
-        {staleProxyCanBeDisabled && (
-          <Button
-            disabled={pending}
-            variant="stroked"
-            onClick={() => onPropose({ action: 'disable_stale_system_proxy' })}
-          >
-            {m.agent_disable_stale_proxy()}
-          </Button>
-        )}
       </CardContent>
     </Card>
   );
