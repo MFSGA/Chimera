@@ -501,8 +501,8 @@ importers:
         specifier: 7.5.20
         version: 7.5.20
       undici:
-        specifier: 8.8.0
-        version: 8.8.0
+        specifier: 8.10.2
+        version: 8.10.2
 
   tauri-e2e:
     devDependencies:
@@ -526,7 +526,7 @@ importers:
         version: 9.29.1
       '@wdio/tauri-service':
         specifier: 1.2.0
-        version: 1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)
+        version: 1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -5404,7 +5404,7 @@ packages:
   glob@8.1.0:
     resolution: {integrity: sha512-r8hpEjiQEYlF2QU0df3dS+nxxSIreXQS1qRhMJM0Q5NDdR386C7jb7Hwwod8Fgiuex+k0GFjgft18yvxm5XoCQ==}
     engines: {node: '>=12'}
-    deprecated: Glob versions prior to v9 are no longer supported
+    deprecated: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
   global-agent@3.0.0:
     resolution: {integrity: sha512-PT6XReJ+D07JvGoxQMkT6qji/jVNfX/h364XHZOWeRzy64sSFr+xJ5OX7LI3b4MPQzdL4H8Y8M0xzPpsVMwA8Q==}
@@ -7890,8 +7890,8 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.8.0:
-    resolution: {integrity: sha512-ubshXMXwF3MQIMF1y/WxZdNBnjEKeSg2wF5mcGUtU55YTw34tnVVpKRlLf7ruDXZ5344KokPVX4RBx1wJm64Bw==}
+  undici@8.10.2:
+    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.3.0:
@@ -11668,7 +11668,7 @@ snapshots:
 
   '@wdio/logger@9.29.1':
     dependencies:
-      chalk: 5.1.2
+      chalk: 5.4.1
       loglevel: 1.9.2
       loglevel-plugin-prefix: 0.8.4
       safe-regex2: 5.1.1
@@ -11688,7 +11688,7 @@ snapshots:
       - react-native-b4a
       - supports-color
 
-  '@wdio/native-core@1.0.0(tsx@4.23.1)':
+  '@wdio/native-core@1.0.0(supports-color@10.2.2)(tsx@4.23.1)':
     dependencies:
       '@wdio/logger': 9.18.0
       '@wdio/native-types': 2.3.1
@@ -11779,11 +11779,11 @@ snapshots:
       easy-table: 1.2.0
       pretty-ms: 9.3.0
 
-  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(tsx@4.23.1)(webdriverio@9.29.1)':
+  '@wdio/tauri-service@1.2.0(expect-webdriverio@5.7.0)(supports-color@10.2.2)(tsx@4.23.1)(webdriverio@9.29.1)':
     dependencies:
       '@wdio/globals': 9.27.1(expect-webdriverio@5.7.0)(webdriverio@9.29.1)
       '@wdio/logger': 9.18.0
-      '@wdio/native-core': 1.0.0(tsx@4.23.1)
+      '@wdio/native-core': 1.0.0(supports-color@10.2.2)(tsx@4.23.1)
       '@wdio/native-spy': 1.1.0
       '@wdio/native-types': 2.4.0
       '@wdio/native-utils': 2.5.0(tsx@4.23.1)
@@ -15960,7 +15960,7 @@ snapshots:
 
   undici@7.29.0: {}
 
-  undici@8.8.0: {}
+  undici@8.10.2: {}
 
   unicorn-magic@0.3.0: {}
 
