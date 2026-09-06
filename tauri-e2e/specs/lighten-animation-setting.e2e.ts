@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const settingsPath = '/main/settings/nyanpasu';
+const settingsPath = '/main/settings/chimera';
 const settingSelector =
   '[data-slot="app-settings-container"]:last-child [role="switch"]';
 

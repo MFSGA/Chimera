@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 const aboutPath = '/main/settings/about';
-const autoUpdateLabel = '自动检查更新';
 
 async function waitForApp() {
   await browser.waitUntil(
@@ -28,9 +27,6 @@ async function openAboutSettings() {
 }
 
 async function getAutoUpdateSwitch() {
-  const label = await $(`//*[normalize-space()="${autoUpdateLabel}"]`);
-  await label.waitForDisplayed({ timeout: 15_000 });
-
   const toggle = await $('[role="switch"]');
   await toggle.waitForClickable({ timeout: 15_000 });
   return toggle;

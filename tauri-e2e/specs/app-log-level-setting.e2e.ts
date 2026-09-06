@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-const settingsPath = '/main/settings/nyanpasu';
+const settingsPath = '/main/settings/chimera';
 const appLogLevelSelect = '[data-slot="log-level-selector"] button';
 const levels = ['trace', 'debug', 'info', 'warn', 'error', 'silent'] as const;
 type AppLogLevel = (typeof levels)[number];
