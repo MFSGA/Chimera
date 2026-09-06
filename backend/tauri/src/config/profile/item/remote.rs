@@ -98,6 +98,7 @@ pub struct RemoteProfile {
         ty = "RemoteProfileOptionsBuilder",
         build = "self.option.build().map_err(Into::into)?"
     ))]
+    #[serde(default)]
     pub option: RemoteProfileOptions,
     #[serde(flatten)]
     #[builder(field(
@@ -108,6 +109,7 @@ pub struct RemoteProfile {
     // #[builder_update(nested)]
     pub shared: ProfileShared,
 
+    #[serde(default)]
     pub chain: Vec<ProfileUid>,
     /// subscription user info
     #[builder(default)]
