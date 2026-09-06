@@ -2,7 +2,7 @@ import { useSetting } from '@chimera/interface';
 import { alpha, cn } from '@chimera/ui';
 import { SvgIconComponent } from '@mui/icons-material';
 import { Box, ListItemButton, ListItemIcon, Tooltip } from '@mui/material';
-import { useMatch, useNavigate } from '@tanstack/react-router';
+import { useLocation, useNavigate } from '@tanstack/react-router';
 import { createElement } from 'react';
 import * as m from '@/paraglide/messages';
 import { languageQuirks } from '@/utils/language';
@@ -29,11 +29,10 @@ export const RouteListItem = ({
   icon: SvgIconComponent;
   onlyIcon?: boolean;
 }) => {
-  const match = useMatch({
-    strict: false,
-    shouldThrow: false,
-    from: path as never,
+  const pathname = useLocation({
+    select: (location) => location.pathname,
   });
+  const isActive = pathname === path || pathname.startsWith(`${path}/`);
 
   const navigate = useNavigate();
 
@@ -43,45 +42,51 @@ export const RouteListItem = ({
     <ListItemButton
       data-testid={`sidebar-route-${name}`}
       className={cn(
-        onlyIcon ? '!mx-auto !size-16 !rounded-3xl' : '!rounded-full !pr-14',
+        onlyIcon
+          ? '!mx-auto !size-12 !rounded-2xl !p-0'
+          : '!min-h-12 !rounded-2xl !px-4',
       )}
-      sx={[
-        (theme) => ({
-          backgroundColor: match
-            ? alpha(theme.vars.palette.primary.main, 0.3)
-            : alpha(theme.vars.palette.background.paper, 0.15),
+      sx={(theme) => ({
+        backgroundColor: isActive
+          ? alpha(theme.vars.palette.primary.main, 0.16)
+          : 'transparent',
+        transition: theme.transitions.create(['background-color', 'color'], {
+          duration: theme.transitions.duration.shorter,
         }),
-        (theme) => ({
-          '&:hover': {
-            backgroundColor: match
-              ? alpha(theme.vars.palette.primary.main, 0.5)
-              : null,
-          },
-        }),
-      ]}
+        '&:hover': {
+          backgroundColor: alpha(
+            theme.vars.palette.primary.main,
+            isActive ? 0.24 : 0.08,
+          ),
+        },
+      })}
       onClick={() => {
         navigate({
           to: path,
         });
       }}
     >
-      <ListItemIcon>
+      <ListItemIcon
+        sx={(theme) => ({
+          minWidth: onlyIcon ? 0 : 40,
+          justifyContent: 'center',
+          color: isActive ? theme.vars.palette.primary.main : undefined,
+        })}
+      >
         {createElement(icon, {
-          sx: (theme) => ({
-            fill: match ? theme.vars.palette.primary.main : undefined,
-          }),
-          className: onlyIcon ? '!size-8' : undefined,
+          className: onlyIcon ? '!size-6' : undefined,
         })}
       </ListItemIcon>
       {!onlyIcon && (
         <Box
           className={cn(
-            'w-full pt-1 pb-1 text-nowrap',
+            'w-full text-nowrap',
             language &&
               languageQuirks[language.toLowerCase()]?.drawer.itemClassNames,
           )}
           sx={(theme) => ({
-            color: match ? theme.vars.palette.primary.main : undefined,
+            color: isActive ? theme.vars.palette.primary.main : undefined,
+            fontWeight: isActive ? 600 : 400,
           })}
         >
           {labelMap[name]?.() ?? name}

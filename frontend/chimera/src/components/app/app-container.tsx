@@ -59,7 +59,7 @@ export const AppContainer = ({
       }}
     >
       {!isDrawer && (
-        <div className={cn(onlyIcon ? 'w-24' : 'w-64')}>
+        <div className={cn(onlyIcon ? 'w-20' : 'w-60')}>
           <DrawerContent data-tauri-drag-region onlyIcon={onlyIcon} />
         </div>
       )}

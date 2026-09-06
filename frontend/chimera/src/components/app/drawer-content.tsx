@@ -18,7 +18,7 @@ export const DrawerContent = ({
   return (
     <Box
       className={cn(
-        'p-4',
+        'px-3 pb-3',
         getSystem() === 'macos' ? 'pt-14' : 'pt-8',
         'w-full',
         'h-full',
@@ -34,7 +34,7 @@ export const DrawerContent = ({
       ]}
       {...props}
     >
-      <div className="scrollbar-hidden flex flex-col gap-2 !overflow-x-hidden overflow-y-auto">
+      <div className="scrollbar-hidden flex flex-col gap-1 !overflow-x-hidden overflow-y-auto">
         {Object.entries(routes).map(([name, { path, icon }]) => {
           return (
             <RouteListItem
