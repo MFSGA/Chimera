@@ -189,19 +189,27 @@ pub fn run() -> std::io::Result<()> {
                         return;
                     };
 
+                    let target_label = resolve::configured_window_label();
                     resolve::create_window(&on_open_url_handle);
 
                     let entry = on_open_url_handle
                         .state::<crate::ipc::PendingDeepLink>()
                         .store(url.clone());
 
-                    if !resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
-                        log::warn!(target: "app", "frontend did not become ready before delivering scheme request");
+                    if !resolve::wait_for_frontend_ready(
+                        target_label,
+                        std::time::Duration::from_secs(15),
+                    ) {
+                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
                         return;
                     }
 
-                    if let Err(error) = on_open_url_handle.emit("scheme-request-received", entry) {
-                        log::error!(target: "app", "failed to emit scheme request {url}: {error:?}");
+                    if let Err(error) = on_open_url_handle.emit_to(
+                        target_label,
+                        "scheme-request-received",
+                        entry,
+                    ) {
+                        log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
                     }
                 });
 
@@ -210,13 +218,17 @@ pub fn run() -> std::io::Result<()> {
                     .get_current()?
                     .and_then(|urls| urls.first().map(ToString::to_string))
                 {
+                    let target_label = resolve::configured_window_label();
                     let entry = app
                         .state::<crate::ipc::PendingDeepLink>()
                         .store(url.clone());
-                    if resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
-                        app_handle.emit("scheme-request-received", entry)?;
+                    if resolve::wait_for_frontend_ready(
+                        target_label,
+                        std::time::Duration::from_secs(15),
+                    ) {
+                        app_handle.emit_to(target_label, "scheme-request-received", entry)?;
                     } else {
-                        log::warn!(target: "app", "frontend did not become ready before delivering startup scheme request");
+                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
                     }
                 }
             }

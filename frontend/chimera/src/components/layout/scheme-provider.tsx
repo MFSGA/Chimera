@@ -2,6 +2,7 @@ import {
   commands,
   unwrapResult,
   useProfile,
+  type IVerge_Deserialize,
   type PendingDeepLinkEntry,
 } from '@chimera/interface';
 import { useNavigate } from '@tanstack/react-router';
@@ -9,34 +10,14 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useEffect, useRef } from 'react';
 import { Notice } from '@/components/base';
+import { parseDeepLink } from '@/features/deep-link/parser';
+import {
+  applySettingsDeepLink,
+  type DeepLinkSettingsGateway,
+} from '@/features/deep-link/settings';
 import * as m from '@/paraglide/messages';
+import { setLocale } from '@/paraglide/runtime';
 import { formatError } from '@/utils';
-
-const normalizeSchemePath = (url: URL) => {
-  let pathname = `${url.hostname || ''}${url.pathname || ''}`;
-
-  if (pathname.endsWith('/')) {
-    pathname = pathname.slice(0, -1);
-  }
-
-  if (pathname.startsWith('//')) {
-    pathname = pathname.slice(2);
-  }
-
-  return pathname;
-};
-
-const decodeSearchParam = (value: string | null) => {
-  if (!value) {
-    return undefined;
-  }
-
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-};
 
 const APP_WINDOW_LABELS = new Set(['legacy', 'main']);
 
@@ -55,61 +36,62 @@ export const SchemeProvider = () => {
 
     let disposed = false;
 
+    const settingsGateway: DeepLinkSettingsGateway = {
+      getSystemProxyEnabled: async () => {
+        const config = unwrapResult(await commands.getVergeConfig());
+        return config.enable_system_proxy ?? false;
+      },
+      setSystemProxyEnabled: async (enabled) => {
+        unwrapResult(
+          await commands.patchVergeConfig({
+            enable_system_proxy: enabled,
+          } as unknown as IVerge_Deserialize),
+        );
+      },
+      setLanguage: async (locale) => {
+        unwrapResult(
+          await commands.patchVergeConfig({
+            language: locale,
+          } as unknown as IVerge_Deserialize),
+        );
+        setLocale(locale);
+      },
+    };
+
     const handleSchemeRequest = async (raw: string) => {
-      const url = new URL(raw);
-      const pathname = normalizeSchemePath(url);
+      const command = parseDeepLink(raw);
 
-      switch (pathname) {
-        case 'install-config': {
-          const subscribeUrl = url.searchParams.get('url');
-          if (!subscribeUrl) {
-            Notice.error('Invalid install-config deep link', 3000);
-            return;
-          }
-
-          try {
-            const parsedSubscribeUrl = new URL(subscribeUrl);
-            if (!['http:', 'https:'].includes(parsedSubscribeUrl.protocol)) {
-              throw new Error('subscription URL must use http or https');
-            }
-
-            await createRef.current.mutateAsync({
-              type: 'url',
-              data: {
-                url: subscribeUrl,
-                name: decodeSearchParam(url.searchParams.get('name')) ?? null,
-                option: null,
-              },
-            });
-            Notice.success(m.profile_quick_import_success_message());
-          } catch (error) {
-            Notice.error(
-              `Failed to import profile: ${formatError(error)}`,
-              3000,
-            );
-          }
-          break;
-        }
+      switch (command.type) {
+        case 'system-proxy':
+        case 'language':
+          await applySettingsDeepLink(command, settingsGateway);
+          return;
+        case 'install-config':
+          await createRef.current.mutateAsync({
+            type: 'url',
+            data: {
+              url: command.url,
+              name: command.name ?? null,
+              option: null,
+            },
+          });
+          Notice.success(m.profile_quick_import_success_message());
+          return;
         case 'subscribe-remote-profile': {
           const search = {
-            subscribeUrl: url.searchParams.get('url') || undefined,
-            subscribeName: decodeSearchParam(url.searchParams.get('name')),
-            subscribeDesc: decodeSearchParam(url.searchParams.get('desc')),
+            subscribeUrl: command.url,
+            subscribeName: command.name,
+            subscribeDesc: command.description,
           };
-
-          if (windowLabel === 'main') {
-            await navigate({
-              to: '/main/profiles/$type',
-              params: { type: 'profile' },
-              search,
-            } as never);
-          } else {
-            await navigate({
-              to: '/profiles',
-              search,
-            } as never);
-          }
-          break;
+          await navigate(
+            windowLabel === 'main'
+              ? ({
+                  to: '/main/profiles/$type',
+                  params: { type: 'profile' },
+                  search,
+                } as never)
+              : ({ to: '/profiles', search } as never),
+          );
         }
       }
     };
@@ -126,7 +108,11 @@ export const SchemeProvider = () => {
               await handleSchemeRequest(payload.url);
             }
           })().catch((error) => {
-            console.error(error);
+            console.error('[deep-link] failed to handle request', error);
+            Notice.error(
+              `Failed to handle deep link: ${formatError(error)}`,
+              3000,
+            );
           });
         },
       );
@@ -147,13 +133,17 @@ export const SchemeProvider = () => {
             await handleSchemeRequest(entry.url);
           }
         } catch (error) {
-          console.error(error);
+          console.error('[deep-link] failed to handle pending request', error);
+          Notice.error(
+            `Failed to handle deep link: ${formatError(error)}`,
+            3000,
+          );
         }
       }
     };
 
     run().catch((error) => {
-      console.error(error);
+      console.error('[deep-link] initialization failed', error);
     });
 
     return () => {

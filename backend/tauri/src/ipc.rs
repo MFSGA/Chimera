@@ -5,7 +5,7 @@ use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
@@ -473,8 +473,15 @@ pub fn get_verge_config(client: State<'_, ChimeraClient>) -> Result<IVerge> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_verge_config(client: State<'_, ChimeraClient>, payload: IVerge) -> Result {
+pub async fn patch_verge_config(
+    app_handle: AppHandle,
+    client: State<'_, ChimeraClient>,
+    payload: IVerge,
+) -> Result {
     client.patch_verge(payload).await?;
+    if let Err(error) = app_handle.emit("verge-config-updated", ()) {
+        log::warn!(target: "app", "failed to emit verge config update: {error:?}");
+    }
     Ok(())
 }
 
@@ -1442,6 +1449,8 @@ pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+
     use super::PendingDeepLink;
 
     #[test]
@@ -1476,5 +1485,31 @@ mod tests {
         assert!(pending.claim(first.id));
         assert!(!pending.claim(first.id));
         assert!(pending.claim(second.id));
+    }
+
+    #[test]
+    fn competing_webviews_only_claim_a_deep_link_once() {
+        let pending = Arc::new(PendingDeepLink::default());
+        let entry = pending.store("chimera://system-proxy?mode=on".into());
+        let barrier = Arc::new(Barrier::new(3));
+
+        let claims = (0..2)
+            .map(|_| {
+                let pending = Arc::clone(&pending);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    pending.claim(entry.id)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        let successes = claims
+            .into_iter()
+            .map(|claim| claim.join().unwrap())
+            .filter(|claimed| *claimed)
+            .count();
+        assert_eq!(successes, 1);
     }
 }

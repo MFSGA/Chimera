@@ -190,10 +190,10 @@ pub fn mark_frontend_unmounted(label: &str) {
     frontend_ready_windows().write().unwrap().remove(label);
 }
 
-pub fn wait_for_frontend_ready(timeout: Duration) -> bool {
+pub fn wait_for_frontend_ready(label: &str, timeout: Duration) -> bool {
     let start_at = Instant::now();
 
-    while frontend_ready_windows().read().unwrap().is_empty() {
+    while !frontend_ready_windows().read().unwrap().contains(label) {
         if start_at.elapsed() >= timeout {
             return false;
         }
@@ -204,18 +204,24 @@ pub fn wait_for_frontend_ready(timeout: Duration) -> bool {
     true
 }
 
+pub fn configured_window_label() -> &'static str {
+    match Config::verge()
+        .latest()
+        .window_type
+        .unwrap_or(WindowType::Main)
+    {
+        WindowType::Legacy => crate::consts::LEGACY_WINDOW_LABEL,
+        WindowType::Main => crate::consts::MAIN_WINDOW_LABEL,
+    }
+}
+
 /// Create window based on window_type config
 /// This is the primary function to use when opening window from tray, etc.
 #[tracing_attributes::instrument(skip(app_handle))]
 pub fn create_window(app_handle: &AppHandle) {
-    let window_type = Config::verge()
-        .latest()
-        .window_type
-        .unwrap_or(WindowType::Main);
-
-    match window_type {
-        WindowType::Legacy => create_legacy_window(app_handle),
-        WindowType::Main => create_main_window(app_handle),
+    match configured_window_label() {
+        crate::consts::LEGACY_WINDOW_LABEL => create_legacy_window(app_handle),
+        _ => create_main_window(app_handle),
     }
 }
 
@@ -352,13 +358,22 @@ mod frontend_ready_tests {
 
         mark_frontend_mounted(crate::consts::MAIN_WINDOW_LABEL);
         mark_frontend_mounted(crate::consts::LEGACY_WINDOW_LABEL);
-        assert!(wait_for_frontend_ready(Duration::ZERO));
+        assert!(wait_for_frontend_ready(
+            crate::consts::MAIN_WINDOW_LABEL,
+            Duration::ZERO
+        ));
 
         mark_frontend_unmounted(crate::consts::LEGACY_WINDOW_LABEL);
-        assert!(wait_for_frontend_ready(Duration::ZERO));
+        assert!(wait_for_frontend_ready(
+            crate::consts::MAIN_WINDOW_LABEL,
+            Duration::ZERO
+        ));
 
         mark_frontend_unmounted(crate::consts::MAIN_WINDOW_LABEL);
-        assert!(!wait_for_frontend_ready(Duration::ZERO));
+        assert!(!wait_for_frontend_ready(
+            crate::consts::MAIN_WINDOW_LABEL,
+            Duration::ZERO
+        ));
     }
 
     #[test]
@@ -369,6 +384,26 @@ mod frontend_ready_tests {
         mark_frontend_mounted("editor-css");
         mark_frontend_mounted("profile-editor-example");
 
-        assert!(!wait_for_frontend_ready(Duration::ZERO));
+        assert!(!wait_for_frontend_ready(
+            crate::consts::MAIN_WINDOW_LABEL,
+            Duration::ZERO
+        ));
+    }
+
+    #[test]
+    fn waiting_for_main_does_not_accept_ready_legacy_window() {
+        let _guard = test_lock();
+        frontend_ready_windows().write().unwrap().clear();
+
+        mark_frontend_mounted(crate::consts::LEGACY_WINDOW_LABEL);
+
+        assert!(!wait_for_frontend_ready(
+            crate::consts::MAIN_WINDOW_LABEL,
+            Duration::ZERO
+        ));
+        assert!(wait_for_frontend_ready(
+            crate::consts::LEGACY_WINDOW_LABEL,
+            Duration::ZERO
+        ));
     }
 }

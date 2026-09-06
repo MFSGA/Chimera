@@ -19,6 +19,11 @@ export const RROFILES_QUERY_KEY = 'profiles';
 export const CHIMERA_SETTING_QUERY_KEY = 'settings';
 
 /**
+ * Emitted after the backend commits a Verge setting patch so every WebView can refresh.
+ */
+export const CHIMERA_SETTING_UPDATED_EVENT = 'verge-config-updated';
+
+/**
  * Nyanpasu system proxy query key, used by useSystemProxy hook
  */
 export const CHIMERA_SYSTEM_PROXY_QUERY_KEY = 'system-proxy';
