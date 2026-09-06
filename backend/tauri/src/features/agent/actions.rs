@@ -5,7 +5,7 @@ use std::{
 
 use sha2::Digest;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, Manager, WebviewWindow};
+use tauri::{AppHandle, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::Mutex;
 
@@ -60,6 +60,7 @@ pub(super) struct ProposalStore {
 }
 
 pub(crate) struct AgentFeatureState {
+    pub(super) client: ChimeraClient,
     pub(super) proposals: Mutex<ProposalStore>,
     pub(super) execution: Mutex<()>,
 }
@@ -120,7 +121,7 @@ impl AgentFeatureState {
     ) -> AgentResult<AgentActionResult> {
         let _execution = self.execution.lock().await;
         let pending = self.take_proposal(window.label(), proposal_id).await?;
-        let result = execute_pending(app, window, pending.clone(), digest).await;
+        let result = execute_pending(&self.client, app, window, pending.clone(), digest).await;
         let outcome = result
             .as_ref()
             .map(|_| "verified")
@@ -204,6 +205,7 @@ impl AgentCommandError {
 }
 
 async fn execute_pending(
+    client: &ChimeraClient,
     app: &AppHandle,
     window: &WebviewWindow,
     pending: PendingProposal,
@@ -224,7 +226,7 @@ async fn execute_pending(
     }
     let current = collect_network_snapshot(app).await;
     validate_preconditions(&current, &pending.preconditions)?;
-    execute_action(app, &current, &proposal.action, &pending.preconditions).await?;
+    execute_action(client, &current, &proposal.action, &pending.preconditions).await?;
     let snapshot = collect_network_snapshot(app).await;
     if !verify_action(&snapshot, &proposal.action) {
         return Err(AgentCommandError::VerificationFailed);
@@ -362,7 +364,7 @@ fn routing_impacts(mode: AgentRoutingMode) -> Vec<AgentImpact> {
 }
 
 async fn execute_action(
-    app: &AppHandle,
+    client: &ChimeraClient,
     snapshot: &AgentNetworkSnapshot,
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
@@ -371,7 +373,7 @@ async fn execute_action(
         (
             AgentActionRequest::SetRoutingMode { mode },
             ActionPreconditions::SetRoutingMode { before, .. },
-        ) => set_routing_mode(app, *before, *mode).await,
+        ) => set_routing_mode(client, *before, *mode).await,
         (
             AgentActionRequest::DisableStaleSystemProxy,
             ActionPreconditions::DisableStaleSystemProxy {
@@ -379,17 +381,17 @@ async fn execute_action(
                 desired_before,
                 ..
             },
-        ) => disable_stale_system_proxy(snapshot, *expected_port, *desired_before).await,
+        ) => disable_stale_system_proxy(client, snapshot, *expected_port, *desired_before).await,
         _ => Err(AgentCommandError::NetworkStateChanged),
     }
 }
 
 async fn set_routing_mode(
-    app: &AppHandle,
+    client: &ChimeraClient,
     before: AgentRoutingMode,
     target: AgentRoutingMode,
 ) -> AgentResult<()> {
-    let outcome = apply_routing_mode_transaction(app, target).await?;
+    let outcome = apply_routing_mode_transaction(client, target).await?;
     if let Some(error) = routing_transaction_error(&outcome) {
         return Err(error);
     }
@@ -399,7 +401,7 @@ async fn set_routing_mode(
     }
 
     let restored = matches!(
-        apply_routing_mode_transaction(app, before).await,
+        apply_routing_mode_transaction(client, before).await,
         Ok(TransactionOutcome::Committed)
     ) && routing_mode_is_applied_with_timeout(before).await;
 
@@ -421,18 +423,15 @@ fn routing_transaction_error(outcome: &TransactionOutcome) -> Option<AgentComman
 }
 
 async fn apply_routing_mode_transaction(
-    app: &AppHandle,
+    client: &ChimeraClient,
     mode: AgentRoutingMode,
 ) -> AgentResult<TransactionOutcome> {
-    let client = app
-        .try_state::<ChimeraClient>()
-        .ok_or(AgentCommandError::ActionFailed)?;
     let overrides = ClashConfigOverrides {
         mode: Some(mode.as_core_value().into()),
         ..ClashConfigOverrides::default()
     };
 
-    Ok(feat::patch_running_clash_overrides(&client, overrides).await)
+    Ok(feat::patch_running_clash_overrides(client, overrides).await)
 }
 
 async fn routing_mode_is_applied_with_timeout(mode: AgentRoutingMode) -> bool {
@@ -453,6 +452,7 @@ async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
 }
 
 async fn disable_stale_system_proxy(
+    client: &ChimeraClient,
     snapshot: &AgentNetworkSnapshot,
     expected_port: u16,
     desired_before: bool,
@@ -470,8 +470,8 @@ async fn disable_stale_system_proxy(
     if !is_expected_enabled_proxy(&original, expected_port) {
         return Err(AgentCommandError::NetworkStateChanged);
     }
-    if persist_system_proxy_desired(false).await.is_err() {
-        return if rollback_system_proxy(original, desired_before).await {
+    if persist_system_proxy_desired(client, false).await.is_err() {
+        return if rollback_system_proxy(client, original, desired_before).await {
             Err(AgentCommandError::ActionFailed)
         } else {
             Err(AgentCommandError::PartialApply)
@@ -480,7 +480,7 @@ async fn disable_stale_system_proxy(
     let mut disabled = original.clone();
     disabled.enable = false;
     if write_system_proxy(disabled).await.is_err() {
-        return if rollback_system_proxy(original, desired_before).await {
+        return if rollback_system_proxy(client, original, desired_before).await {
             Err(AgentCommandError::ActionFailed)
         } else {
             Err(AgentCommandError::PartialApply)
@@ -489,7 +489,7 @@ async fn disable_stale_system_proxy(
     let observed = match read_system_proxy().await {
         Ok(observed) => observed,
         Err(_) => {
-            return if rollback_system_proxy(original, desired_before).await {
+            return if rollback_system_proxy(client, original, desired_before).await {
                 Err(AgentCommandError::VerificationFailed)
             } else {
                 Err(AgentCommandError::PartialApply)
@@ -499,24 +499,31 @@ async fn disable_stale_system_proxy(
     if !observed.enable {
         return Ok(());
     }
-    if rollback_system_proxy(original, desired_before).await {
+    if rollback_system_proxy(client, original, desired_before).await {
         Err(AgentCommandError::VerificationFailed)
     } else {
         Err(AgentCommandError::PartialApply)
     }
 }
 
-async fn persist_system_proxy_desired(enabled: bool) -> AgentResult<()> {
-    feat::patch_verge(IVerge {
-        enable_system_proxy: Some(enabled),
-        ..Default::default()
-    })
-    .await
-    .map_err(|_| AgentCommandError::ActionFailed)
+async fn persist_system_proxy_desired(client: &ChimeraClient, enabled: bool) -> AgentResult<()> {
+    client
+        .patch_verge(IVerge {
+            enable_system_proxy: Some(enabled),
+            ..Default::default()
+        })
+        .await
+        .map_err(|_| AgentCommandError::ActionFailed)
 }
 
-async fn rollback_system_proxy(original: Sysproxy, desired_before: bool) -> bool {
-    let persisted = persist_system_proxy_desired(desired_before).await.is_ok();
+async fn rollback_system_proxy(
+    client: &ChimeraClient,
+    original: Sysproxy,
+    desired_before: bool,
+) -> bool {
+    let persisted = persist_system_proxy_desired(client, desired_before)
+        .await
+        .is_ok();
     let restored = write_system_proxy(original).await.is_ok();
     persisted && restored
 }

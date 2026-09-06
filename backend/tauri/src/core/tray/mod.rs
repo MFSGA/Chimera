@@ -138,13 +138,13 @@ impl Tray {
             "rule_mode" => feat::change_clash_mode(app_handle, "rule".to_string()),
             "global_mode" => feat::change_clash_mode(app_handle, "global".to_string()),
             "direct_mode" => feat::change_clash_mode(app_handle, "direct".to_string()),
-            "system_proxy" => feat::toggle_system_proxy(),
-            "tun_mode" => feat::toggle_tun_mode(),
+            "system_proxy" => feat::toggle_system_proxy(app_handle),
+            "tun_mode" => feat::toggle_tun_mode(app_handle),
             "open_app_config_dir" => crate::log_err!(ipc::open_app_config_dir()),
             "open_app_data_dir" => crate::log_err!(ipc::open_app_data_dir()),
             "open_core_dir" => crate::log_err!(ipc::open_core_dir()),
             "open_logs_dir" => crate::log_err!(ipc::open_logs_dir()),
-            "restart_clash" => feat::restart_clash_core(),
+            "restart_clash" => feat::restart_clash_core(app_handle),
             "restart_app" => help::restart_application(app_handle),
             "quit" => {
                 help::quit_application(app_handle);

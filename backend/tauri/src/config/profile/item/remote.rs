@@ -178,6 +178,10 @@ impl RemoteProfileBuilder {
         self.shared.assign_managed_identity(&PROFILE_TYPE, uid);
     }
 
+    pub fn set_name(&mut self, name: String) {
+        self.shared.name(name);
+    }
+
     fn validate(&self) -> Result<(), RemoteProfileBuilderError> {
         if self.url.is_none() {
             return Err(RemoteProfileBuilderError::Validation(

@@ -191,12 +191,16 @@ pub fn run() -> std::io::Result<()> {
 
                     resolve::create_window(&on_open_url_handle);
 
+                    let entry = on_open_url_handle
+                        .state::<crate::ipc::PendingDeepLink>()
+                        .store(url.clone());
+
                     if !resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
                         log::warn!(target: "app", "frontend did not become ready before delivering scheme request");
                         return;
                     }
 
-                    if let Err(error) = on_open_url_handle.emit("scheme-request-received", url.clone()) {
+                    if let Err(error) = on_open_url_handle.emit("scheme-request-received", entry) {
                         log::error!(target: "app", "failed to emit scheme request {url}: {error:?}");
                     }
                 });
@@ -206,10 +210,11 @@ pub fn run() -> std::io::Result<()> {
                     .get_current()?
                     .and_then(|urls| urls.first().map(ToString::to_string))
                 {
-                    *app.state::<crate::ipc::PendingDeepLink>().0.lock().unwrap() =
-                        Some(url.clone());
+                    let entry = app
+                        .state::<crate::ipc::PendingDeepLink>()
+                        .store(url.clone());
                     if resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
-                        app_handle.emit("scheme-request-received", url)?;
+                        app_handle.emit("scheme-request-received", entry)?;
                     } else {
                         log::warn!(target: "app", "frontend did not become ready before delivering startup scheme request");
                     }
@@ -260,7 +265,7 @@ pub fn run() -> std::io::Result<()> {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
-                    resolve::mark_frontend_unmounted();
+                    resolve::mark_frontend_unmounted(label.as_str());
                 }
                 _ => {}
             }

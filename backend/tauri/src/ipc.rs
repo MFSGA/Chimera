@@ -43,8 +43,46 @@ use crate::{
 
 type Result<T = ()> = StdResult<T, IpcError>;
 
+#[derive(Clone, Debug, serde::Serialize, specta::Type, PartialEq, Eq)]
+pub struct PendingDeepLinkEntry {
+    pub id: u32,
+    pub url: String,
+}
+
 #[derive(Default)]
-pub struct PendingDeepLink(pub std::sync::Mutex<Option<String>>);
+struct PendingDeepLinkState {
+    next_id: u32,
+    entries: std::collections::VecDeque<PendingDeepLinkEntry>,
+}
+
+#[derive(Default)]
+pub struct PendingDeepLink(std::sync::Mutex<PendingDeepLinkState>);
+
+impl PendingDeepLink {
+    pub fn store(&self, url: String) -> PendingDeepLinkEntry {
+        let mut pending = self.0.lock().unwrap();
+        pending.next_id = pending.next_id.wrapping_add(1).max(1);
+        let entry = PendingDeepLinkEntry {
+            id: pending.next_id,
+            url,
+        };
+        pending.entries.push_back(entry.clone());
+        entry
+    }
+
+    fn take_all(&self) -> Vec<PendingDeepLinkEntry> {
+        self.0.lock().unwrap().entries.drain(..).collect()
+    }
+
+    fn claim(&self, id: u32) -> bool {
+        let mut pending = self.0.lock().unwrap();
+        let Some(index) = pending.entries.iter().position(|entry| entry.id == id) else {
+            return false;
+        };
+        pending.entries.remove(index);
+        true
+    }
+}
 
 #[derive(specta::Type, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -336,8 +374,16 @@ pub fn is_portable() -> Result<bool> {
 /// later: check in the frontend
 #[tauri::command]
 #[specta::specta]
-pub async fn get_pending_deep_link(pending: State<'_, PendingDeepLink>) -> Result<Option<String>> {
-    Ok(pending.0.lock().unwrap().take())
+pub async fn get_pending_deep_links(
+    pending: State<'_, PendingDeepLink>,
+) -> Result<Vec<PendingDeepLinkEntry>> {
+    Ok(pending.take_all())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn claim_pending_deep_link(pending: State<'_, PendingDeepLink>, id: u32) -> Result<bool> {
+    Ok(pending.claim(id))
 }
 
 #[tauri::command]
@@ -345,6 +391,7 @@ pub async fn get_pending_deep_link(pending: State<'_, PendingDeepLink>) -> Resul
 pub async fn import_profile(
     client: State<'_, ChimeraClient>,
     url: String,
+    name: Option<String>,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
@@ -352,6 +399,9 @@ pub async fn import_profile(
     let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
     builder.assign_managed_identity(uid);
     builder.url(url);
+    if let Some(name) = name {
+        builder.set_name(name);
+    }
     if let Some(option) = option {
         builder.option(option.clone());
     }
@@ -423,8 +473,8 @@ pub fn get_verge_config(client: State<'_, ChimeraClient>) -> Result<IVerge> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_verge_config(payload: IVerge) -> Result {
-    feat::patch_verge(payload).await?;
+pub async fn patch_verge_config(client: State<'_, ChimeraClient>, payload: IVerge) -> Result {
+    client.patch_verge(payload).await?;
     Ok(())
 }
 
@@ -684,8 +734,8 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn install_service() -> Result {
-        service::control::install_service().await?;
+    pub async fn install_service(client: State<'_, ChimeraClient>) -> Result {
+        service::control::install_service((*client).clone()).await?;
         Ok(())
     }
     #[tauri::command]
@@ -697,7 +747,7 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn start_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::start_service().await;
+        let result = service::control::start_service((*client).clone()).await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
@@ -725,7 +775,7 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn restart_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::restart_service().await;
+        let result = service::control::restart_service((*client).clone()).await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
@@ -976,9 +1026,10 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
 #[specta::specta]
 pub async fn update_core(
     client: State<'_, ChimeraClient>,
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
     core_type: chimera::ClashCore,
 ) -> Result<usize> {
-    let event_id = updater::UpdaterManager::global()
+    let event_id = updater
         .write()
         .await
         .update_core(&client, &core_type)
@@ -1008,16 +1059,21 @@ pub async fn restart_sidecar(client: State<'_, ChimeraClient>) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
-    let mut updater = updater::UpdaterManager::global().write().await;
+pub async fn fetch_latest_core_versions(
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
+) -> Result<ManifestVersionLatest> {
+    let mut updater = updater.write().await;
     updater.fetch_latest().await?;
     Ok(updater.get_latest_versions())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummary> {
-    let updater = updater::UpdaterManager::global()
+pub async fn inspect_updater(
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
+    updater_id: usize,
+) -> Result<updater::UpdaterSummary> {
+    let updater = updater
         .read()
         .await
         .inspect_updater(updater_id)
@@ -1028,10 +1084,11 @@ pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummar
 #[tauri::command]
 #[specta::specta]
 pub async fn update_profile(
+    client: State<'_, ChimeraClient>,
     uid: String,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<()>> {
-    Ok(feat::update_profile(uid, option).await?)
+    Ok(client.refresh_profile(uid, option).await?)
 }
 
 #[tauri::command]
@@ -1388,15 +1445,34 @@ mod tests {
     use super::PendingDeepLink;
 
     #[test]
-    fn pending_deep_link_is_drained_once() {
+    fn pending_deep_links_are_drained_in_arrival_order() {
         let pending = PendingDeepLink::default();
-        *pending.0.lock().unwrap() =
-            Some("chimera://install-config?url=https%3A%2F%2Fexample.com".into());
+        let first = pending.store("chimera://install-config?url=https%3A%2F%2Fone.example".into());
+        let second = pending.store("chimera://install-config?url=https%3A%2F%2Ftwo.example".into());
 
-        assert_eq!(
-            pending.0.lock().unwrap().take().as_deref(),
-            Some("chimera://install-config?url=https%3A%2F%2Fexample.com")
-        );
-        assert_eq!(pending.0.lock().unwrap().take(), None);
+        assert_eq!(pending.take_all(), vec![first, second]);
+        assert!(pending.take_all().is_empty());
+    }
+
+    #[test]
+    fn pending_deep_link_can_only_be_claimed_once() {
+        let pending = PendingDeepLink::default();
+        let entry = pending.store("chimera://install-config?url=https%3A%2F%2Fexample.com".into());
+
+        assert!(pending.claim(entry.id));
+        assert!(!pending.claim(entry.id));
+    }
+
+    #[test]
+    fn identical_deep_links_have_independent_claims() {
+        let pending = PendingDeepLink::default();
+        let url = "chimera://install-config?url=https%3A%2F%2Fexample.com";
+        let first = pending.store(url.into());
+        let second = pending.store(url.into());
+
+        assert_ne!(first.id, second.id);
+        assert!(pending.claim(first.id));
+        assert!(!pending.claim(first.id));
+        assert!(pending.claim(second.id));
     }
 }

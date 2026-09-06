@@ -25,7 +25,8 @@ export type CreateParams =
       type: 'url';
       data: {
         url: URLImportParams[0];
-        option: URLImportParams[1];
+        name?: URLImportParams[1];
+        option: URLImportParams[2];
       };
     }
   | {
@@ -117,8 +118,10 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const create = useMutation({
     mutationFn: async ({ type, data }: CreateParams) => {
       if (type === 'url') {
-        const { url, option } = data;
-        return unwrapResult(await commands.importProfile(url, option));
+        const { url, name, option } = data;
+        return unwrapResult(
+          await commands.importProfile(url, name ?? null, option),
+        );
       } else {
         const { item, fileData } = data;
         return unwrapResult(await commands.createProfile(item, fileData));

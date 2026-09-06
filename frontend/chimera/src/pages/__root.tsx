@@ -178,7 +178,7 @@ export default function App() {
         console.error(error);
       })
       .finally(() => {
-        emit('react_app_mounted').catch((error) => {
+        emit('react_app_mounted', { label: appWindow.label }).catch((error) => {
           console.error(error);
         });
       });

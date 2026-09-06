@@ -1,5 +1,6 @@
 use std::{
-    sync::atomic::{AtomicBool, Ordering},
+    collections::HashSet,
+    sync::{OnceLock, RwLock},
     time::{Duration, Instant},
 };
 
@@ -23,7 +24,24 @@ use crate::{
 /// Legacy window implementation (original UI)
 struct LegacyWindow;
 
-static FRONTEND_READY: AtomicBool = AtomicBool::new(false);
+static FRONTEND_READY_WINDOWS: OnceLock<RwLock<HashSet<String>>> = OnceLock::new();
+
+fn frontend_ready_windows() -> &'static RwLock<HashSet<String>> {
+    FRONTEND_READY_WINDOWS.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+fn is_primary_window_label(label: &str) -> bool {
+    label == crate::consts::LEGACY_WINDOW_LABEL || label == crate::consts::MAIN_WINDOW_LABEL
+}
+
+fn mark_frontend_mounted(label: &str) {
+    if is_primary_window_label(label) {
+        frontend_ready_windows()
+            .write()
+            .unwrap()
+            .insert(label.to_string());
+    }
+}
 
 impl AppWindow for LegacyWindow {
     fn label(&self) -> &str {
@@ -168,14 +186,14 @@ pub fn create_css_editor_window(app_handle: &AppHandle) -> Result<()> {
     CssEditorWindow.create(app_handle)
 }
 
-pub fn mark_frontend_unmounted() {
-    FRONTEND_READY.store(false, Ordering::Release);
+pub fn mark_frontend_unmounted(label: &str) {
+    frontend_ready_windows().write().unwrap().remove(label);
 }
 
 pub fn wait_for_frontend_ready(timeout: Duration) -> bool {
     let start_at = Instant::now();
 
-    while !FRONTEND_READY.load(Ordering::Acquire) {
+    while frontend_ready_windows().read().unwrap().is_empty() {
         if start_at.elapsed() >= timeout {
             return false;
         }
@@ -203,9 +221,20 @@ pub fn create_window(app_handle: &AppHandle) {
 
 /// handle something when start app
 pub fn resolve_setup(app: &mut App) {
-    app.listen("react_app_mounted", move |_| {
-        tracing::debug!("frontend react app mounted");
-        FRONTEND_READY.store(true, Ordering::Release);
+    app.listen("react_app_mounted", move |event| {
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) else {
+            tracing::warn!("invalid react_app_mounted payload: {}", event.payload());
+            return;
+        };
+        let Some(label) = payload.get("label").and_then(serde_json::Value::as_str) else {
+            tracing::warn!(
+                "react_app_mounted payload missing label: {}",
+                event.payload()
+            );
+            return;
+        };
+        tracing::debug!("frontend react app mounted: {label}");
+        mark_frontend_mounted(label);
     });
 
     handle::Handle::global().init(app.app_handle().clone());
@@ -213,9 +242,9 @@ pub fn resolve_setup(app: &mut App) {
     crate::consts::setup_app_handle(app.app_handle().clone());
 
     log_err!(init::init_resources());
-    log_err!(init::init_service());
 
     let client = app.state::<crate::client::ChimeraClient>();
+    log_err!(init::init_service((*client).clone()));
     log_err!(crate::client::ports::resolve_random_mixed_port(&client));
 
     // 启动核心
@@ -304,4 +333,42 @@ pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore)
         }
     }
     Err(anyhow::anyhow!("failed to get core version"))
+}
+
+#[cfg(test)]
+mod frontend_ready_tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    #[test]
+    fn primary_frontend_ready_survives_other_primary_window_destroy() {
+        let _guard = test_lock();
+        frontend_ready_windows().write().unwrap().clear();
+
+        mark_frontend_mounted(crate::consts::MAIN_WINDOW_LABEL);
+        mark_frontend_mounted(crate::consts::LEGACY_WINDOW_LABEL);
+        assert!(wait_for_frontend_ready(Duration::ZERO));
+
+        mark_frontend_unmounted(crate::consts::LEGACY_WINDOW_LABEL);
+        assert!(wait_for_frontend_ready(Duration::ZERO));
+
+        mark_frontend_unmounted(crate::consts::MAIN_WINDOW_LABEL);
+        assert!(!wait_for_frontend_ready(Duration::ZERO));
+    }
+
+    #[test]
+    fn editor_frontend_does_not_mark_primary_frontend_ready() {
+        let _guard = test_lock();
+        frontend_ready_windows().write().unwrap().clear();
+
+        mark_frontend_mounted("editor-css");
+        mark_frontend_mounted("profile-editor-example");
+
+        assert!(!wait_for_frontend_ready(Duration::ZERO));
+    }
 }
