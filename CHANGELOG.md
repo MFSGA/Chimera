@@ -1,3 +1,53 @@
+## [0.23.2] - 2026-09-06 04:19:19
+
+### ✅ Testing
+
+- **e2e:** Cover controller port fallback by @MFSGA
+
+- **e2e:** Wait for Clash runtime API readiness by @MFSGA
+
+### ✨ Features
+
+- **editor:** Add custom CSS editor and window state persistence by @MFSGA
+
+- **profile:** Support scoped transforms on remote updates by @MFSGA
+
+- **proxy:** Interrupt connections by proxy group by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **core:** Use effective runtime controller info by @MFSGA
+
+- **deeplink:** Handle pending profile imports by @MFSGA
+
+- **deps:** Update dependency jotai to v2.20.3 by @renovate-bot in [#344](https://github.com/MFSGA/Chimera/pull/344)
+
+- **network:** Flush DNS cache on Linux by @MFSGA
+
+- **updater:** Validate release manifests by @MFSGA
+
+- **window:** Preserve legacy geometry during migration by @MFSGA
+
+### 💅 Styling
+
+- **ui:** Refine sidebar navigation by @MFSGA
+
+### 📚 Documentation
+
+- Remove duplicate protocol matrix by @MFSGA
+
+- Highlight Chimera proxy ecosystem by @MFSGA
+
+- Highlight Chimera proxy ecosystem by @MFSGA
+
+### 🔨 Refactor
+
+- **runtime:** Centralize app services and deep links by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.23.1...v0.23.2
+
 ## [0.23.1] - 2026-09-05 04:27:00
 
 ### ✨ Features
