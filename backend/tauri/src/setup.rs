@@ -28,6 +28,9 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         window: Arc::new(LegacyWindowBridge::new(legacy_lock.clone())),
         clash: Arc::new(LegacyClashBridge::new(legacy_lock)),
     };
+    app.manage(tokio::sync::RwLock::new(
+        crate::core::updater::UpdaterManager::new(),
+    ));
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
         bridges,
