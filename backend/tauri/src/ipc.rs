@@ -70,8 +70,8 @@ impl PendingDeepLink {
         entry
     }
 
-    fn take_all(&self) -> Vec<PendingDeepLinkEntry> {
-        self.0.lock().unwrap().entries.drain(..).collect()
+    fn list_all(&self) -> Vec<PendingDeepLinkEntry> {
+        self.0.lock().unwrap().entries.iter().cloned().collect()
     }
 
     fn claim(&self, id: u32) -> bool {
@@ -377,7 +377,7 @@ pub fn is_portable() -> Result<bool> {
 pub async fn get_pending_deep_links(
     pending: State<'_, PendingDeepLink>,
 ) -> Result<Vec<PendingDeepLinkEntry>> {
-    Ok(pending.take_all())
+    Ok(pending.list_all())
 }
 
 #[tauri::command]
@@ -1445,13 +1445,15 @@ mod tests {
     use super::PendingDeepLink;
 
     #[test]
-    fn pending_deep_links_are_drained_in_arrival_order() {
+    fn pending_deep_links_are_listed_without_claiming() {
         let pending = PendingDeepLink::default();
         let first = pending.store("chimera://install-config?url=https%3A%2F%2Fone.example".into());
         let second = pending.store("chimera://install-config?url=https%3A%2F%2Ftwo.example".into());
 
-        assert_eq!(pending.take_all(), vec![first, second]);
-        assert!(pending.take_all().is_empty());
+        assert_eq!(pending.list_all(), vec![first.clone(), second.clone()]);
+        assert_eq!(pending.list_all(), vec![first.clone(), second.clone()]);
+        assert!(pending.claim(first.id));
+        assert_eq!(pending.list_all(), vec![second]);
     }
 
     #[test]

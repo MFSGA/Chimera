@@ -140,7 +140,12 @@ export const SchemeProvider = () => {
       const pending = unwrapResult(await commands.getPendingDeepLinks());
       for (const entry of pending) {
         try {
-          await handleSchemeRequest(entry.url);
+          const claimed = unwrapResult(
+            await commands.claimPendingDeepLink(entry.id),
+          );
+          if (claimed) {
+            await handleSchemeRequest(entry.url);
+          }
         } catch (error) {
           console.error(error);
         }
