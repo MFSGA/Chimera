@@ -25,7 +25,7 @@
     "motion": "12.42.2",
     "@mui/material": "9.4.0",
     "@radix-ui/react-portal": "1.1.14",
-    "ahooks": "3.9.7",
+    "ahooks": "3.10.0",
     "@radix-ui/react-scroll-area": "1.2.15",
     "tailwindcss": "4.3.3",
     "@material/material-color-utilities": "0.4.0",
