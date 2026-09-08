@@ -275,6 +275,23 @@ impl Profiles {
         Ok(())
     }
 
+    pub fn replace_remote_definition_with_transforms(
+        &mut self,
+        uid: &str,
+        file: &str,
+        updated_at: Option<usize>,
+        url: url::Url,
+        option: Option<RemoteProfileOptions>,
+        subscription: Option<SubscriptionInfo>,
+        transforms: Vec<ProfileUid>,
+    ) -> Result<bool> {
+        self.validate_transform_chain(&transforms)?;
+        let affects_current = self.current.iter().any(|current| current == uid);
+        self.replace_remote_definition(uid, file, updated_at, url, option, subscription)?;
+        self.set_profile_transform_chain(uid, transforms)?;
+        Ok(affects_current)
+    }
+
     pub fn patch_remote_options(
         &mut self,
         uid: &str,
@@ -435,7 +452,8 @@ mod tests {
 
     use crate::config::profile::{
         item::{
-            local::LocalProfile, merge::MergeProfile, script::ScriptProfile, shared::ProfileShared,
+            local::LocalProfile, merge::MergeProfile, remote::RemoteProfile, script::ScriptProfile,
+            shared::ProfileShared,
         },
         item_type::ScriptType,
     };
@@ -606,6 +624,85 @@ mod tests {
                 .to_string()
                 .contains("failed to get the profile item")
         );
+    }
+
+    #[test]
+    fn remote_definition_replace_validates_and_applies_scoped_transforms_together() {
+        let remote_uid = "r-source".to_string();
+        let merge_uid = "m-transform".to_string();
+        let original_url = url::Url::parse("https://example.com/old.yaml").unwrap();
+        let replacement_url = url::Url::parse("https://example.com/new.yaml").unwrap();
+        let mut profiles = Profiles {
+            current: vec![remote_uid.clone()],
+            items: vec![
+                Profile::Remote(RemoteProfile {
+                    url: original_url.clone(),
+                    option: RemoteProfileOptions::default(),
+                    shared: ProfileShared {
+                        uid: remote_uid.clone(),
+                        name: "Remote".to_string(),
+                        file: "r-source.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                    chain: Vec::new(),
+                    extra: SubscriptionInfo::default(),
+                }),
+                Profile::Merge(MergeProfile {
+                    shared: ProfileShared {
+                        uid: merge_uid.clone(),
+                        name: "Transform".to_string(),
+                        file: "m-transform.yaml".to_string(),
+                        desc: None,
+                        updated: 1,
+                    },
+                }),
+            ],
+            ..Profiles::default()
+        };
+
+        let invalid = profiles
+            .replace_remote_definition_with_transforms(
+                &remote_uid,
+                "r-source.yaml",
+                Some(2),
+                replacement_url.clone(),
+                None,
+                None,
+                vec!["m-missing".to_string()],
+            )
+            .unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .contains("failed to get the profile item")
+        );
+        let Profile::Remote(remote) = &profiles.items[0] else {
+            panic!("expected remote profile");
+        };
+        assert_eq!(remote.url, original_url);
+        assert_eq!(remote.shared.updated, 1);
+        assert!(remote.chain.is_empty());
+
+        assert!(
+            profiles
+                .replace_remote_definition_with_transforms(
+                    &remote_uid,
+                    "r-source.yaml",
+                    Some(2),
+                    replacement_url.clone(),
+                    None,
+                    None,
+                    vec![merge_uid.clone()],
+                )
+                .unwrap()
+        );
+        let Profile::Remote(remote) = &profiles.items[0] else {
+            panic!("expected remote profile");
+        };
+        assert_eq!(remote.url, replacement_url);
+        assert_eq!(remote.shared.updated, 2);
+        assert_eq!(remote.chain, vec![merge_uid]);
     }
 
     #[test]

@@ -4,6 +4,7 @@ import { Octokit } from 'npm:octokit';
 import semver from 'npm:semver';
 import { z } from 'npm:zod';
 import { colorize, consola } from './deno/utils/logger.ts';
+import { assertUpdaterManifest } from './updater-manifest.ts';
 
 const GITHUB_PROXY = 'https://gh-proxy.com/';
 const PRE_RELEASE_TAG = 'pre-release';
@@ -246,7 +247,7 @@ async function resolveUpdater() {
 
   const signature = await getSignature(signatureAsset.browser_download_url);
   const updateData = {
-    name: `v${nightlyVersion}-alpha+${shortHash}`,
+    version: `v${nightlyVersion}-alpha+${shortHash}`,
     notes: 'Nightly build. Full changes see commit history.',
     pub_date: new Date().toISOString(),
     platforms: {
@@ -260,6 +261,7 @@ async function resolveUpdater() {
       },
     },
   };
+  assertUpdaterManifest(updateData);
   consola.info(updateData);
 
   const updateDataNew = JSON.parse(
@@ -273,6 +275,7 @@ async function resolveUpdater() {
       consola.error(`updateDataNew.platforms.${key} is null`);
     }
   });
+  assertUpdaterManifest(updateDataNew);
 
   consola.debug('update updater files...');
   const updateRelease = await getOrCreateUpdaterRelease(github, options);

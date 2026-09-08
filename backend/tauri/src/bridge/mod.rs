@@ -59,6 +59,10 @@ fn application_patch_from_legacy_patch(patch: &IVerge) -> anyhow::Result<Option<
     application.break_when_proxy_change = None;
     application.break_when_profile_change = None;
     application.break_when_mode_change = None;
+    #[allow(deprecated)]
+    {
+        application.window_size_position = None;
+    }
     application.window_size_state = None;
 
     let touched = serde_yaml::to_value(&application)?
@@ -71,7 +75,12 @@ fn session_patch_from_legacy_patch(
     patch: &IVerge,
     next: PersistentState,
 ) -> Option<PersistentStatePatch> {
-    patch.window_size_state.as_ref()?;
+    #[allow(deprecated)]
+    let touched = patch.window_size_state.is_some() || patch.window_size_position.is_some();
+    if !touched {
+        return None;
+    }
+
     let mut session = PersistentState::new_empty_patch();
     session.window_state = Some(next.window_state);
     Some(session)
@@ -196,6 +205,30 @@ mod tests {
             .expect("main window state should exist");
         assert_eq!(state.width, 960);
         assert_eq!(state.height, 720);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn legacy_window_position_patch_routes_to_session_state() {
+        let patch = IVerge {
+            window_size_position: Some(vec![800.0, 600.0, 30.0, 45.0]),
+            ..IVerge::default()
+        };
+
+        let plan = split_legacy_verge_patch(&IVerge::template(), &patch, &IClashTemp::template())
+            .expect("legacy position patch should split");
+
+        assert!(plan.application.is_none());
+        assert!(plan.clash_config.is_none());
+        let session = plan.session_state.expect("session patch should exist");
+        let window_state = session.window_state.expect("window patch should exist");
+        let state = window_state
+            .get(&chimera_config::state::window::WindowLabel("main".into()))
+            .expect("main window state should exist");
+        assert_eq!(state.width, 800);
+        assert_eq!(state.height, 600);
+        assert_eq!(state.x, 30);
+        assert_eq!(state.y, 45);
     }
 
     #[test]

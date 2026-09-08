@@ -1,9 +1,4 @@
-import {
-  commands,
-  unwrapResult,
-  useIsAppImage,
-  useSetting,
-} from '@chimera/interface';
+import { commands, unwrapResult, useSetting } from '@chimera/interface';
 import { Update } from '@tauri-apps/plugin-updater';
 import {
   createContext,
@@ -40,8 +35,7 @@ export default function ChimeraUpdateProvider({ children }: PropsWithChildren) {
   const { value: enableAutoCheckUpdate } = useSetting(
     'enable_auto_check_update',
   );
-  const { data: isAppImage } = useIsAppImage();
-  const isSupported = !isAppImage || !WIN_PORTABLE;
+  const isSupported = !WIN_PORTABLE;
   const [hasNewVersion, setHasNewVersion] = useState(false);
   const [newVersion, setNewVersion] = useState<Update | null>(null);
 

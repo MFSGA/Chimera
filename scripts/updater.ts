@@ -3,6 +3,10 @@ import path from 'path';
 import { context, getOctokit } from '@actions/github';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import {
+  assertUpdaterManifest,
+  matchStableUpdaterAsset,
+} from './updater-manifest.ts';
 import { colorize, consola } from './utils/logger';
 
 const UPDATE_TAG_NAME = 'updater';
@@ -58,54 +62,50 @@ async function resolveUpdater() {
   }
 
   const updateData = {
-    name: tag.name,
+    version: tag.name,
     notes: UPDATE_RELEASE_BODY || updateLog || latestRelease.body,
     pub_date: new Date().toISOString(),
     platforms: {
       win64: { signature: '', url: '' }, // compatible with older formats
+      darwin: { signature: '', url: '' },
+      'darwin-aarch64': { signature: '', url: '' },
+      'darwin-intel': { signature: '', url: '' },
+      'darwin-x86_64': { signature: '', url: '' },
       'windows-x86_64': { signature: '', url: '' },
     },
   };
 
   const promises = latestRelease.assets.map(async (asset) => {
     const { name, browser_download_url: browserDownloadUrl } = asset;
-
-    function isMatch(name: string, extension: string, arch: string) {
-      return (
-        name.endsWith(extension) &&
-        name.includes(arch) &&
-        (argv.fixedWebview
-          ? name.includes('fixed-webview')
-          : !name.includes('fixed-webview'))
-      );
+    const match = matchStableUpdaterAsset(name, argv.fixedWebview);
+    if (!match) {
+      return;
     }
 
-    // win64 url
-    // todo
-    if (isMatch(name, '.exe', 'x64')) {
-      updateData.platforms.win64.url = browserDownloadUrl;
-      updateData.platforms['windows-x86_64'].url = browserDownloadUrl;
+    if (match.kind === 'url') {
+      for (const target of match.targets) {
+        updateData.platforms[target].url = browserDownloadUrl;
+      }
+      return;
     }
-    // win64 signature
-    // todo
-    if (isMatch(name, '.sig', 'x64')) {
-      const sig = await getSignature(browserDownloadUrl);
-      updateData.platforms.win64.signature = sig;
-      updateData.platforms['windows-x86_64'].signature = sig;
+
+    const signature = await getSignature(browserDownloadUrl);
+    for (const target of match.targets) {
+      updateData.platforms[target].signature = signature;
     }
   });
 
-  await Promise.allSettled(promises);
-  consola.info(updateData);
+  await Promise.all(promises);
 
-  // maybe should test the signature as well
-  // delete the null field
+  // delete platforms that are not present in this release
   Object.entries(updateData.platforms).forEach(([key, value]) => {
     if (!value.url) {
       consola.error(`failed to parse release for "${key}"`);
       delete updateData.platforms[key as keyof typeof updateData.platforms];
     }
   });
+  assertUpdaterManifest(updateData);
+  consola.info(updateData);
 
   // 生成一个代理github的更新文件
   // 使用 https://hub.fastgit.xyz/ 做github资源的加速
@@ -122,6 +122,7 @@ async function resolveUpdater() {
       consola.error(`updateDataNew.platforms.${key} is null`);
     }
   });
+  assertUpdaterManifest(updateDataNew);
 
   // update the update.json
   const { data: updateRelease } = await github.rest.repos.getReleaseByTag({
@@ -201,12 +202,16 @@ async function getSignature(url: string) {
   const response = await fetch(url, {
     method: 'GET',
     headers: { 'Content-Type': 'application/octet-stream' },
-    dispatcher: undefined,
   });
+
+  if (!response.ok) {
+    throw new Error(`failed to fetch signature: ${response.status} ${url}`);
+  }
 
   return response.text();
 }
 
 resolveUpdater().catch((err) => {
   consola.error(err);
+  process.exitCode = 1;
 });

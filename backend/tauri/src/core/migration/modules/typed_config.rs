@@ -18,7 +18,8 @@ pub static MIGRATOR: TypedConfigMigrator = TypedConfigMigrator;
 
 static VERSION_0_23_0: Lazy<Version> = Lazy::new(|| Version::parse("0.23.0").unwrap());
 static SPLIT_LEGACY_CONFIG: SplitLegacyConfig = SplitLegacyConfig;
-static STEPS: [&dyn MigrationStep; 1] = [&SPLIT_LEGACY_CONFIG];
+static REPAIR_CLASH_CONFIG: RepairClashConfig = RepairClashConfig;
+static STEPS: [&dyn MigrationStep; 2] = [&SPLIT_LEGACY_CONFIG, &REPAIR_CLASH_CONFIG];
 
 pub struct TypedConfigMigrator;
 
@@ -31,6 +32,7 @@ impl ModuleMigrator for TypedConfigMigrator {
         match typed_file_state(ctx)? {
             TypedFileState::All => Ok(current_revision()),
             TypedFileState::None => Ok(0),
+            TypedFileState::NeedsClashRepair => Ok(1),
         }
     }
 
@@ -67,6 +69,7 @@ impl MigrationStep for SplitLegacyConfig {
         match typed_file_state(ctx)? {
             TypedFileState::All => return Ok(()),
             TypedFileState::None => {}
+            TypedFileState::NeedsClashRepair => return Ok(()),
         }
 
         let legacy = read_legacy_verge(&ctx.chimera_config_path())?;
@@ -85,10 +88,54 @@ impl MigrationStep for SplitLegacyConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RepairClashConfig;
+
+impl MigrationStep for RepairClashConfig {
+    fn id(&self) -> &'static str {
+        "typed_config/repair_clash_config"
+    }
+
+    fn module(&self) -> &'static str {
+        "typed_config"
+    }
+
+    fn revision(&self) -> u64 {
+        2
+    }
+
+    fn introduced_in(&self) -> &'static Version {
+        &VERSION_0_23_0
+    }
+
+    fn name(&self) -> &'static str {
+        "RepairClashConfig"
+    }
+
+    fn run(&self, ctx: &mut Ctx) -> anyhow::Result<()> {
+        match typed_file_state(ctx)? {
+            TypedFileState::All => return Ok(()),
+            TypedFileState::None => {
+                bail!("cannot repair typed clash config before split_legacy_config has completed")
+            }
+            TypedFileState::NeedsClashRepair => {}
+        }
+
+        let legacy = read_legacy_verge(&ctx.chimera_config_path())?;
+        let legacy_clash = read_legacy_clash_inputs(ctx)?;
+        let (_, _, clash_config) = typed_config_from_legacy_parts(&legacy, &legacy_clash)?;
+        let clash_yaml =
+            serialize_yaml(&clash_config).context("failed to serialize repaired clash config")?;
+        crate::core::migration::fs::atomic_write(&ctx.clash_config_path(), clash_yaml.as_bytes())
+            .context("failed to write repaired clash config")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypedFileState {
     All,
     None,
+    NeedsClashRepair,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +167,18 @@ fn typed_file_state(ctx: &Ctx) -> anyhow::Result<TypedFileState> {
         };
     }
 
-    if application_exists && session_exists && clash_state == SharedClashFileState::Typed {
-        validate_existing_typed_files(ctx)?;
-        return Ok(TypedFileState::All);
+    if application_exists && session_exists {
+        match clash_state {
+            SharedClashFileState::Typed => {
+                validate_existing_typed_files(ctx)?;
+                return Ok(TypedFileState::All);
+            }
+            SharedClashFileState::Missing | SharedClashFileState::LegacyRuntime => {
+                validate_existing_application_and_session(ctx)?;
+                return Ok(TypedFileState::NeedsClashRepair);
+            }
+            SharedClashFileState::Unrecognized => {}
+        }
     }
 
     if clash_state == SharedClashFileState::Unrecognized {
@@ -435,18 +491,34 @@ mod tests {
     }
 
     #[test]
-    fn application_and_session_with_legacy_clash_fail_closed() {
+    fn application_and_session_with_legacy_clash_detect_repair_baseline() {
         let (ctx, _temp) = test_ctx();
         write_yaml(&ctx.application_config_path(), &ChimeraAppConfig::default());
         write_yaml(&ctx.session_state_path(), &PersistentState::default());
         write_legacy_clash(&ctx.clash_config_path());
 
-        let err = MIGRATOR.detect_baseline(&ctx).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("partial typed config migration state"),
-            "{err:#}"
-        );
+        assert_eq!(MIGRATOR.detect_baseline(&ctx).unwrap(), 1);
+    }
+
+    #[test]
+    fn repair_clash_config_rebuilds_typed_state_from_legacy_inputs() {
+        let (mut ctx, _temp) = test_ctx();
+        let legacy = IVerge {
+            enable_tun_mode: Some(true),
+            verge_mixed_port: Some(7899),
+            ..IVerge::template()
+        };
+        write_yaml(&ctx.chimera_config_path(), &legacy);
+        write_yaml(&ctx.application_config_path(), &ChimeraAppConfig::default());
+        write_yaml(&ctx.session_state_path(), &PersistentState::default());
+        write_legacy_clash(&ctx.clash_config_path());
+
+        REPAIR_CLASH_CONFIG.run(&mut ctx).unwrap();
+
+        let clash: ClashConfig = read_typed(&ctx.clash_config_path());
+        assert!(clash.enable_tun_mode);
+        assert_eq!(clash.mixed_port.start_port, 7899);
+        assert_eq!(MIGRATOR.detect_baseline(&ctx).unwrap(), current_revision());
     }
 
     #[test]

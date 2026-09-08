@@ -1,9 +1,9 @@
 #[cfg(debug_assertions)]
 use std::{io::Write, time::SystemTime};
 
-use tauri::Emitter;
 #[cfg(debug_assertions)]
 use tauri::Listener;
+use tauri::{Emitter, Manager};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use tauri_plugin_deep_link::DeepLinkExt;
 
@@ -163,6 +163,7 @@ pub fn run() -> std::io::Result<()> {
             features::agent::setup(app);
 
             resolve::resolve_setup(app);
+            app.manage(crate::ipc::PendingDeepLink::default());
 
             #[cfg(windows)]
             {
@@ -188,15 +189,27 @@ pub fn run() -> std::io::Result<()> {
                         return;
                     };
 
+                    let target_label = resolve::configured_window_label();
                     resolve::create_window(&on_open_url_handle);
 
-                    if !resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
-                        log::warn!(target: "app", "frontend did not become ready before delivering scheme request");
+                    let entry = on_open_url_handle
+                        .state::<crate::ipc::PendingDeepLink>()
+                        .store(url.clone());
+
+                    if !resolve::wait_for_frontend_ready(
+                        target_label,
+                        std::time::Duration::from_secs(15),
+                    ) {
+                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering scheme request");
                         return;
                     }
 
-                    if let Err(error) = on_open_url_handle.emit("scheme-request-received", url.clone()) {
-                        log::error!(target: "app", "failed to emit scheme request {url}: {error:?}");
+                    if let Err(error) = on_open_url_handle.emit_to(
+                        target_label,
+                        "scheme-request-received",
+                        entry,
+                    ) {
+                        log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
                     }
                 });
 
@@ -205,10 +218,17 @@ pub fn run() -> std::io::Result<()> {
                     .get_current()?
                     .and_then(|urls| urls.first().map(ToString::to_string))
                 {
-                    if resolve::wait_for_frontend_ready(std::time::Duration::from_secs(15)) {
-                        app_handle.emit("scheme-request-received", url)?;
+                    let target_label = resolve::configured_window_label();
+                    let entry = app
+                        .state::<crate::ipc::PendingDeepLink>()
+                        .store(url.clone());
+                    if resolve::wait_for_frontend_ready(
+                        target_label,
+                        std::time::Duration::from_secs(15),
+                    ) {
+                        app_handle.emit_to(target_label, "scheme-request-received", entry)?;
                     } else {
-                        log::warn!(target: "app", "frontend did not become ready before delivering startup scheme request");
+                        log::warn!(target: "app", "frontend {target_label} did not become ready before delivering startup scheme request");
                     }
                 }
             }
@@ -232,12 +252,35 @@ pub fn run() -> std::io::Result<()> {
         tauri::RunEvent::ExitRequested { .. } => {
             utils::help::cleanup_processes(app_handle);
         }
-        tauri::RunEvent::WindowEvent {
-            label,
-            event: tauri::WindowEvent::Destroyed,
-            ..
-        } if label == crate::consts::LEGACY_WINDOW_LABEL || label == "main" => {
-            resolve::mark_frontend_unmounted();
+        tauri::RunEvent::WindowEvent { label, event, .. }
+            if label == crate::consts::LEGACY_WINDOW_LABEL
+                || label == crate::consts::MAIN_WINDOW_LABEL =>
+        {
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    log::debug!(target: "app", "window close requested: {label}");
+                    match app_handle.try_state::<crate::client::ChimeraClient>() {
+                        Some(client) => {
+                            if let Err(error) = nyanpasu_utils::runtime::block_on(
+                                crate::window::persist_window_state(
+                                    app_handle,
+                                    client.inner(),
+                                    label.as_str(),
+                                ),
+                            ) {
+                                log::error!(target: "app", "failed to persist window state for {label}: {error:?}");
+                            }
+                        }
+                        None => {
+                            log::warn!(target: "app", "ChimeraClient unavailable while persisting window state for {label}");
+                        }
+                    }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    resolve::mark_frontend_unmounted(label.as_str());
+                }
+                _ => {}
+            }
         }
         e => {
             // tracing::debug!("Tauri Event: {:?}", e);

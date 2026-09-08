@@ -12,6 +12,7 @@ export const baseE2eSuites = {
     './specs/storage-event-resync.e2e.ts',
   ],
   profiles: [
+    './specs/deep-link-main.e2e.ts',
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
     './specs/profile-transform-chain-ui.e2e.ts',
@@ -27,6 +28,7 @@ export const baseE2eSuites = {
     './specs/auto-update-setting.e2e.ts',
     './specs/clash-settings-main.e2e.ts',
     './specs/core-manager-main.e2e.ts',
+    './specs/custom-css-editor.e2e.ts',
     './specs/debug-main-layout.e2e.ts',
     './specs/lighten-animation-setting.e2e.ts',
     './specs/nyanpasu-settings-main-layout.e2e.ts',
@@ -61,6 +63,7 @@ const combine = (...groups: readonly (readonly string[])[]) => groups.flat();
 
 export const e2eSuites = {
   ...baseE2eSuites,
+  'controller-fallback': ['./specs/ipv6-runtime-setting.e2e.ts'],
   critical: combine(
     baseE2eSuites.smoke,
     baseE2eSuites.runtime,

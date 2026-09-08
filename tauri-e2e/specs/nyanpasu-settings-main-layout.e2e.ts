@@ -49,12 +49,12 @@ describe('main Chimera settings reference layout', () => {
       { timeout: 15_000, timeoutMsg: 'Settings route did not open.' },
     );
 
-    const chimeraLink = await $('a[href="/main/settings/nyanpasu"]');
+    const chimeraLink = await $('a[href="/main/settings/chimera"]');
     await chimeraLink.waitForDisplayed({ timeout: 15_000 });
     await browser.execute((link) => link.click(), chimeraLink);
     await browser.waitUntil(
       async () =>
-        browser.execute(() => location.pathname === '/main/settings/nyanpasu'),
+        browser.execute(() => location.pathname === '/main/settings/chimera'),
       { timeout: 15_000, timeoutMsg: 'Chimera settings route did not open.' },
     );
   });
@@ -132,7 +132,7 @@ describe('main Chimera settings reference layout', () => {
       };
     });
 
-    assert.equal(state.path, '/main/settings/nyanpasu');
+    assert.equal(state.path, '/main/settings/chimera');
     assert.deepEqual(state.viewport, { width: 1224, height: 629 });
     assert.equal(state.groupCount, 4);
     assert.deepEqual(state.groupTags, ['DIV', 'DIV', 'DIV', 'DIV']);

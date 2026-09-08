@@ -1,69 +1,101 @@
-use crate::core::clash::api;
 use anyhow::Result;
 use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
-use serde::{Deserialize, Serialize};
-use specta::Type;
+use futures_util::future::join_all;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Type)]
-pub struct ConnectionInfo {
-    pub id: String,
-    pub chains: Vec<String>,
-}
+use crate::core::clash::api::{self, ConnectionItem};
 
-/// Connection interruption service that handles closing connections based on configuration settings
+/// Connection interruption service that handles closing connections based on configuration settings.
 pub struct ConnectionInterruptionService;
 
 impl ConnectionInterruptionService {
-    /// Interrupt connections when proxy changes
-    pub async fn on_proxy_change(break_when: ProxyChangeBreakMode) -> Result<()> {
+    /// Interrupt connections when proxy changes.
+    pub async fn on_proxy_change(break_when: ProxyChangeBreakMode, group: &str) -> Result<()> {
         match break_when {
-            ProxyChangeBreakMode::Off => {
-                // Do nothing
-                Ok(())
-            }
-            ProxyChangeBreakMode::ProxyGroup => {
-                // TODO: Implement chain-based connection interruption
-                // This would require tracking which connections use which proxy chains
-                // For now, we'll fall back to closing all connections
-                api::delete_connections(None).await
-            }
+            ProxyChangeBreakMode::Off => Ok(()),
+            ProxyChangeBreakMode::ProxyGroup => Self::interrupt_by_chain(&[group]).await,
             ProxyChangeBreakMode::All => api::delete_connections(None).await,
         }
     }
 
-    /// Interrupt connections when profile changes
+    /// Interrupt connections when profile changes.
     pub async fn on_profile_change(break_when: bool) -> Result<()> {
         if break_when {
             api::delete_connections(None).await
         } else {
-            // Do nothing
             Ok(())
         }
     }
 
-    /// Interrupt connections when mode changes
+    /// Interrupt connections when mode changes.
     pub async fn on_mode_change(break_when: bool) -> Result<()> {
         if break_when {
             api::delete_connections(None).await
         } else {
-            // Do nothing
             Ok(())
         }
     }
 
-    /// Interrupt all connections
-    pub async fn interrupt_all() -> Result<()> {
-        api::delete_connections(None).await
+    /// Interrupt only connections whose active proxy chain contains one of the supplied names.
+    pub async fn interrupt_by_chain(chain: &[&str]) -> Result<()> {
+        let connections = api::get_connections().await?.connections;
+        let ids = connection_ids_for_chain(&connections, chain);
+        let results = join_all(ids.iter().map(|id| api::delete_connections(Some(id)))).await;
+
+        for result in results {
+            result?;
+        }
+        Ok(())
+    }
+}
+
+fn connection_ids_for_chain(connections: &[ConnectionItem], chain: &[&str]) -> Vec<String> {
+    connections
+        .iter()
+        .filter(|connection| {
+            connection
+                .chains
+                .iter()
+                .any(|name| chain.iter().any(|expected| name == expected))
+        })
+        .map(|connection| connection.id.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::connection_ids_for_chain;
+    use crate::core::clash::api::ConnectionItem;
+
+    fn connection(id: &str, chains: &[&str]) -> ConnectionItem {
+        ConnectionItem {
+            id: id.to_owned(),
+            chains: chains.iter().map(|value| (*value).to_owned()).collect(),
+        }
     }
 
-    /// Interrupt connections based on proxy chain (not yet implemented)
-    pub async fn interrupt_by_chain(_chain: &[String]) -> Result<()> {
-        // TODO: Implement chain-based connection interruption
-        // This would require:
-        // 1. Getting the current connections from the Clash API
-        // 2. Filtering connections that use the specified proxy chain
-        // 3. Closing only those connections
-        // For now, we'll close all connections as a fallback
-        api::delete_connections(None).await
+    #[test]
+    fn chain_filter_only_selects_related_connections() {
+        let connections = vec![
+            connection("a", &["Node A", "Auto", "GLOBAL"]),
+            connection("b", &["Node B", "Fallback", "GLOBAL"]),
+            connection("c", &["DIRECT"]),
+        ];
+
+        let ids = connection_ids_for_chain(&connections, &["Auto"]);
+
+        assert_eq!(ids, vec!["a"]);
+    }
+
+    #[test]
+    fn chain_filter_matches_any_requested_chain_name_exactly() {
+        let connections = vec![
+            connection("a", &["Auto", "GLOBAL"]),
+            connection("b", &["Auto Backup", "GLOBAL"]),
+            connection("c", &["Fallback", "GLOBAL"]),
+        ];
+
+        let ids = connection_ids_for_chain(&connections, &["Auto", "Fallback"]);
+
+        assert_eq!(ids, vec!["a", "c"]);
     }
 }

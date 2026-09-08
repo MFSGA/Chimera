@@ -3,8 +3,13 @@ import {
   QueryClient,
   QueryClientProvider,
 } from '@tanstack/react-query';
-import type { PropsWithChildren } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useEffect, type PropsWithChildren } from 'react';
 import type { Degradation } from '../ipc/bindings';
+import {
+  CHIMERA_SETTING_QUERY_KEY,
+  CHIMERA_SETTING_UPDATED_EVENT,
+} from '../ipc/consts';
 import { ClashWSProvider, useClashWSContext } from './clash-ws-provider';
 import { MutationProvider } from './mutation-provider';
 
@@ -42,12 +47,41 @@ const queryClient = new QueryClient({
   }),
 });
 
+const SettingSyncProvider = ({ children }: PropsWithChildren) => {
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+
+    listen(CHIMERA_SETTING_UPDATED_EVENT, () => {
+      void queryClient.invalidateQueries({
+        queryKey: [CHIMERA_SETTING_QUERY_KEY],
+      });
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error) => {
+        console.error('[settings] failed to listen for config updates', error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  return children;
+};
+
 export const RootProvider: any = ({ children }: PropsWithChildren) => {
   return (
     <QueryClientProvider client={queryClient}>
-      <MutationProvider>
-        <ClashWSProvider>{children}</ClashWSProvider>
-      </MutationProvider>
+      <SettingSyncProvider>
+        <MutationProvider>
+          <ClashWSProvider>{children}</ClashWSProvider>
+        </MutationProvider>
+      </SettingSyncProvider>
     </QueryClientProvider>
   );
 };

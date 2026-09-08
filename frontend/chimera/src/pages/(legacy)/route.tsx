@@ -8,7 +8,6 @@ import { PropsWithChildren, useEffect } from 'react';
 import { AppContainer } from '@/components/app/app-container';
 import NoticeProvider from '@/components/layout/notice-provider';
 import PageTransition from '@/components/layout/page-transition';
-import SchemeProvider from '@/components/layout/scheme-provider';
 import { ThemeModeProvider } from '@/components/layout/use-custom-theme';
 import ChimeraUpdateProvider from '@/components/providers/chimera-update-provider';
 import UpdaterDialog from '@/components/updater/updater-dialog-wrapper';
@@ -53,7 +52,6 @@ function Layout() {
           <ThemeModeProvider>
             <CssBaseline />
             <NoticeProvider />
-            <SchemeProvider />
             <UpdaterDialog />
             <LegacyUpdaterAdapter />
 

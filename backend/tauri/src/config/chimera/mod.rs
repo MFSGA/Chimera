@@ -110,7 +110,11 @@ pub struct IVerge {
     /// 6.1. window always on top
     #[serde(skip_serializing_if = "Option::is_none")]
     pub always_on_top: Option<bool>,
-    /// 6.2. window size and position
+    /// 6.2. legacy window size and position tuple
+    #[deprecated(note = "use `window_size_state` instead")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_size_position: Option<Vec<f64>>,
+    /// 6.3. window size and position
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_size_state: Option<WindowState>,
     /// 6.3. global ui framer motion effects

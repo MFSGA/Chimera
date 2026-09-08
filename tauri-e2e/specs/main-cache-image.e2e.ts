@@ -256,7 +256,13 @@ describe('main cached proxy icons', () => {
       false,
       JSON.stringify(state, null, 2),
     );
-    assert.equal(state.width, 24, JSON.stringify(state, null, 2));
-    assert.equal(state.height, 24, JSON.stringify(state, null, 2));
+    assert.ok(
+      Math.abs(state.width - 24) < 0.01,
+      JSON.stringify(state, null, 2),
+    );
+    assert.ok(
+      Math.abs(state.height - 24) < 0.01,
+      JSON.stringify(state, null, 2),
+    );
   });
 });

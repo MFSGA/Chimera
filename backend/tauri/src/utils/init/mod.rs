@@ -107,8 +107,8 @@ pub fn init_resources() -> Result<()> {
 
 /// initialize service resources
 /// after tauri setup
-#[tracing::instrument]
-pub fn init_service() -> Result<()> {
+#[tracing::instrument(skip(client))]
+pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
     use nyanpasu_utils::runtime::block_on;
 
     tracing::debug!("init services");
@@ -155,7 +155,7 @@ pub fn init_service() -> Result<()> {
                 }
             }
         }
-        crate::core::service::init_service().await;
+        crate::core::service::init_service(client).await;
     });
     Ok(())
 }

@@ -34,7 +34,7 @@ use crate::{
         RuntimeTransactionSnapshot, RuntimeTransformFailure, capture_runtime_transaction,
         check_and_promote_candidate, restore_failed_apply,
     },
-    config::{chimera::ClashCore, core::Config},
+    config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{clash::api, logger::Logger},
     enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
@@ -510,6 +510,22 @@ impl CoreManager {
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
         self.runtime_lifecycle.snapshot().last_transform_failure
+    }
+
+    pub(crate) fn applied_clash_info(&self) -> Option<ClashInfo> {
+        self.runtime_lifecycle
+            .snapshot()
+            .applied
+            .map(|snapshot| snapshot.clash_info())
+    }
+
+    pub(crate) fn effective_clash_info(&self) -> ClashInfo {
+        if self.run_lock.is_locked() {
+            return Config::clash().latest().get_client_info();
+        }
+
+        self.applied_clash_info()
+            .unwrap_or_else(|| Config::clash().latest().get_client_info())
     }
 
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {

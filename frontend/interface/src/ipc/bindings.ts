@@ -24,8 +24,17 @@ export const commands = {
   flushSystemDnsCache: () =>
     typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
   /**  later: check in the frontend */
+  getPendingDeepLinks: () =>
+    typedError<PendingDeepLinkEntry[], string>(
+      __TAURI_INVOKE('get_pending_deep_links'),
+    ),
+  claimPendingDeepLink: (id: number) =>
+    typedError<boolean, string>(
+      __TAURI_INVOKE('claim_pending_deep_link', { id }),
+    ),
   importProfile: (
     url: string,
+    name: string | null,
     option: {
       /**  see issue #13. must set the builder attr for build the user_agent for client */
       user_agent: string | null;
@@ -36,7 +45,7 @@ export const commands = {
     } | null,
   ) =>
     typedError<MutationOutcome<string>, string>(
-      __TAURI_INVOKE('import_profile', { url, option }),
+      __TAURI_INVOKE('import_profile', { url, name, option }),
     ),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
@@ -797,7 +806,12 @@ export type IVerge_Deserialize =
       enable_service_mode: boolean | null;
       /**  6.1. window always on top */
       always_on_top: boolean | null;
-      /**  6.2. window size and position */
+      /**
+       *  6.2. legacy window size and position tuple
+       * @deprecated use `window_size_state` instead
+       */
+      window_size_position: (number | null)[] | null;
+      /**  6.3. window size and position */
       window_size_state: WindowState | null;
       /**  6.3. global ui framer motion effects */
       lighten_animation_effects: boolean | null;
@@ -893,7 +907,12 @@ export type IVerge_Serialize = {
   enable_service_mode?: boolean | null;
   /**  6.1. window always on top */
   always_on_top?: boolean | null;
-  /**  6.2. window size and position */
+  /**
+   *  6.2. legacy window size and position tuple
+   * @deprecated use `window_size_state` instead
+   */
+  window_size_position?: (number | null)[] | null;
+  /**  6.3. window size and position */
   window_size_state?: WindowState | null;
   /**  6.3. global ui framer motion effects */
   lighten_animation_effects: boolean | null;
@@ -1086,6 +1105,11 @@ export type PatchRuntimeConfig_Serialize = {
   ipv6?: boolean | null;
   'log-level'?: string | null;
   mode?: string | null;
+};
+
+export type PendingDeepLinkEntry = {
+  id: number;
+  url: string;
 };
 
 /**  后处理输出 */

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readClashRuntimeConfig } from '../clash-runtime.js';
 
 const settingsPath = '/main/settings/clash';
 const logLevelTrigger = '[data-slot="log-level-selector-card"] button';
@@ -23,29 +24,7 @@ async function waitForApp() {
 }
 
 async function readRuntimeLogLevel(): Promise<string> {
-  const info = await browser.execute(async () => {
-    const tauri = (
-      window as typeof window & {
-        __TAURI_INTERNALS__: {
-          invoke: (command: string) => Promise<{
-            secret?: string;
-            server: string;
-          }>;
-        };
-      }
-    ).__TAURI_INTERNALS__;
-    return tauri.invoke('get_clash_info');
-  });
-  const response = await fetch(`http://${info.server}/configs`, {
-    headers: info.secret
-      ? { Authorization: `Bearer ${info.secret}` }
-      : undefined,
-  });
-  if (!response.ok) {
-    throw new Error(`Clash config query failed: ${response.status}`);
-  }
-
-  const config = (await response.json()) as { 'log-level': string };
+  const config = await readClashRuntimeConfig<{ 'log-level': string }>();
   return config['log-level'];
 }
 

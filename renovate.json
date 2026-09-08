@@ -8,7 +8,16 @@
     "default:rebaseStalePrs",
     "group:monorepos"
   ],
+  "statusCheckWhen": {
+    "minimumReleaseAge": "never"
+  },
   "packageRules": [
+    {
+      "description": "Match pnpm 11's 24-hour release-age safety window",
+      "matchDatasources": ["npm"],
+      "minimumReleaseAge": "1 day",
+      "internalChecksFilter": "strict"
+    },
     {
       "matchManagers": ["npm"],
       "rangeStrategy": "pin"

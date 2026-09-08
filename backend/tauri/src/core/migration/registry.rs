@@ -1,8 +1,12 @@
 use super::{ModuleMigrator, modules};
 use once_cell::sync::Lazy;
 
-pub static MODULES: Lazy<Vec<&'static dyn ModuleMigrator>> =
-    Lazy::new(|| vec![&modules::typed_config::MIGRATOR]);
+pub static MODULES: Lazy<Vec<&'static dyn ModuleMigrator>> = Lazy::new(|| {
+    vec![
+        &modules::typed_config::MIGRATOR,
+        &modules::profiles::MIGRATOR,
+    ]
+});
 
 pub fn modules() -> impl Iterator<Item = &'static dyn ModuleMigrator> {
     MODULES.iter().copied()

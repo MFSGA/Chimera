@@ -1,15 +1,10 @@
-use std::borrow::Borrow;
-
 use anyhow::Result;
 use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
 
 use crate::{
     client::ChimeraClient,
-    config::{
-        chimera::IVerge, profile::item::remote::RemoteProfileOptionsBuilder,
-        runtime::ClashConfigOverrides,
-    },
+    config::{chimera::IVerge, runtime::ClashConfigOverrides},
     core::{clash::transaction::TransactionOutcome, handle},
     log_err,
 };
@@ -27,32 +22,6 @@ pub async fn patch_running_clash_overrides(
 /// runtime overrides for the generated config.
 pub async fn patch_clash(client: &ChimeraClient, patch: Mapping) -> Result<()> {
     client.patch_clash(patch).await
-}
-
-fn managed_client() -> Result<ChimeraClient> {
-    let app_handle = handle::Handle::app_handle()
-        .ok_or_else(|| anyhow::anyhow!("app handle is not initialized"))?;
-    app_handle
-        .try_state::<ChimeraClient>()
-        .map(|state| state.inner().clone())
-        .ok_or_else(|| anyhow::anyhow!("nyanpasu client is not managed"))
-}
-
-/// 修改verge的配置
-/// 一般都是一个个的修改
-pub async fn patch_verge(patch: IVerge) -> Result<()> {
-    managed_client()?.patch_verge(patch).await
-}
-
-/// 更新某个profile
-/// 如果更新当前配置就激活配置
-pub async fn update_profile<T: Borrow<String>>(
-    uid: T,
-    opts: Option<RemoteProfileOptionsBuilder>,
-) -> Result<crate::client::MutationOutcome<()>> {
-    managed_client()?
-        .refresh_profile(uid.borrow().clone(), opts)
-        .await
 }
 
 pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
@@ -97,13 +66,13 @@ pub fn change_clash_mode(app_handle: &AppHandle, mode: String) {
     });
 }
 
-pub fn toggle_system_proxy() {
-    let client = match managed_client() {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!(target: "app", "failed to resolve client for system proxy toggle: {err:?}");
-            return;
-        }
+pub fn toggle_system_proxy(app_handle: &AppHandle) {
+    let Some(client) = app_handle
+        .try_state::<ChimeraClient>()
+        .map(|state| state.inner().clone())
+    else {
+        log::error!(target: "app", "failed to resolve client for system proxy toggle");
+        return;
     };
     let enabled = match client.get_app_config() {
         Ok(config) => config.enable_system_proxy,
@@ -124,13 +93,13 @@ pub fn toggle_system_proxy() {
     });
 }
 
-pub fn toggle_tun_mode() {
-    let client = match managed_client() {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!(target: "app", "failed to resolve client for tun toggle: {err:?}");
-            return;
-        }
+pub fn toggle_tun_mode(app_handle: &AppHandle) {
+    let Some(client) = app_handle
+        .try_state::<ChimeraClient>()
+        .map(|state| state.inner().clone())
+    else {
+        log::error!(target: "app", "failed to resolve client for tun toggle");
+        return;
     };
     let enabled = match client.get_clash_config() {
         Ok(config) => config.enable_tun_mode,
@@ -151,13 +120,13 @@ pub fn toggle_tun_mode() {
     });
 }
 
-pub fn restart_clash_core() {
-    let client = match managed_client() {
-        Ok(client) => client,
-        Err(err) => {
-            log::error!(target: "app", "failed to resolve client for core restart: {err:?}");
-            return;
-        }
+pub fn restart_clash_core(app_handle: &AppHandle) {
+    let Some(client) = app_handle
+        .try_state::<ChimeraClient>()
+        .map(|state| state.inner().clone())
+    else {
+        log::error!(target: "app", "failed to resolve client for core restart");
+        return;
     };
     tauri::async_runtime::spawn(async move {
         if let Err(err) = client.rebuild_running_config().await {

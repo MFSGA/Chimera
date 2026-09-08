@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
+import { Route as ProfilesRoute } from '../../route';
 import { Action, Route as IndexRoute } from '../index';
 
 type ImportType = NonNullable<AddProfileContextValue['type']>;
@@ -56,6 +57,8 @@ const SelectButton = ({
 export default function ImportButton() {
   const { type } = IndexRoute.useParams();
   const { action } = IndexRoute.useSearch();
+  const { subscribeUrl, subscribeName, subscribeDesc } =
+    ProfilesRoute.useSearch();
   const navigate = IndexRoute.useNavigate();
   const { isScrolling } = useScrollArea();
   const [expanded, setExpanded] = useState(false);
@@ -69,25 +72,49 @@ export default function ImportButton() {
   }, [action]);
 
   useEffect(() => {
+    if (subscribeUrl) {
+      setExpanded(false);
+      setImportType('remote');
+    }
+  }, [subscribeUrl]);
+
+  useEffect(() => {
     if (isScrolling && expanded) {
       setExpanded(false);
     }
   }, [expanded, isScrolling]);
 
-  const contextValue = useMemo<AddProfileContextValue | null>(
-    () =>
-      importType ? { type: importType, name: null, desc: null, url: '' } : null,
-    [importType],
-  );
+  const contextValue = useMemo<AddProfileContextValue | null>(() => {
+    if (!importType) return null;
+
+    if (importType === 'remote' && subscribeUrl) {
+      return {
+        type: 'remote',
+        name: subscribeName ?? null,
+        desc: subscribeDesc ?? null,
+        url: subscribeUrl,
+      };
+    }
+
+    return { type: importType, name: null, desc: null, url: '' };
+  }, [importType, subscribeDesc, subscribeName, subscribeUrl]);
 
   const closeImport = () => {
     setImportType(null);
-    if (action === Action.ImportLocalProfile) {
+    if (action === Action.ImportLocalProfile || subscribeUrl) {
       void navigate({
         replace: true,
-        search: (previous: { action?: Action }) => ({
+        search: (previous: {
+          action?: Action;
+          subscribeUrl?: string;
+          subscribeName?: string;
+          subscribeDesc?: string;
+        }) => ({
           ...previous,
           action: undefined,
+          subscribeUrl: undefined,
+          subscribeName: undefined,
+          subscribeDesc: undefined,
         }),
       } as never);
     }

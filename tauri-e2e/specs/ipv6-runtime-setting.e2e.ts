@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { readClashInfo, readClashRuntimeConfig } from '../clash-runtime.js';
 
 const settingsPath = '/main/settings/clash';
+const occupiedControllerPort = process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT
+  ? Number(process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT)
+  : null;
 const ipv6SwitchSelector =
   '[data-slot="ipv6-switch-container"] [role="switch"]';
 
@@ -19,29 +23,7 @@ async function waitForApp() {
 }
 
 async function readClashRuntimeState(): Promise<ClashRuntimeState> {
-  const info = await browser.execute(async () => {
-    const tauri = (
-      window as typeof window & {
-        __TAURI_INTERNALS__: {
-          invoke: (command: string) => Promise<{
-            secret?: string;
-            server: string;
-          }>;
-        };
-      }
-    ).__TAURI_INTERNALS__;
-    return tauri.invoke('get_clash_info');
-  });
-  const response = await fetch(`http://${info.server}/configs`, {
-    headers: info.secret
-      ? { Authorization: `Bearer ${info.secret}` }
-      : undefined,
-  });
-  if (!response.ok) {
-    throw new Error(`Clash config query failed: ${response.status}`);
-  }
-
-  const config = (await response.json()) as { ipv6: boolean };
+  const config = await readClashRuntimeConfig<{ ipv6: boolean }>();
   return { ipv6: config.ipv6 };
 }
 
@@ -99,6 +81,16 @@ describe('Chimera IPv6 runtime setting', () => {
   it('persists through the typed runtime transaction and restores the original value', async () => {
     await waitForApp();
     await openClashSettings();
+
+    if (occupiedControllerPort !== null) {
+      const info = await readClashInfo();
+      const actualPort = Number(new URL(`http://${info.server}`).port);
+      assert.notEqual(
+        actualPort,
+        occupiedControllerPort,
+        `Clash should fall back from occupied controller port ${occupiedControllerPort}.`,
+      );
+    }
 
     const original = (await readClashRuntimeState()).ipv6;
     const changed = !original;

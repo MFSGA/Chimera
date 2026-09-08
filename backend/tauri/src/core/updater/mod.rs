@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, OnceLock},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     client::ChimeraClient,
@@ -12,7 +9,6 @@ use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tokio::sync::RwLock;
 
 mod instance;
 mod shared;
@@ -161,11 +157,6 @@ impl ManifestVersion {
 impl UpdaterManager {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn global() -> &'static RwLock<Self> {
-        static INSTANCE: OnceLock<RwLock<UpdaterManager>> = OnceLock::new();
-        INSTANCE.get_or_init(|| RwLock::new(UpdaterManager::new()))
     }
 
     pub fn get_latest_versions(&self) -> ManifestVersionLatest {

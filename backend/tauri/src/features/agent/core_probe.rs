@@ -2,7 +2,7 @@ use std::{net::SocketAddr, time::Duration};
 
 use serde::Deserialize;
 
-use crate::config::core::Config;
+use crate::core::clash::core::CoreManager;
 
 use super::model::AgentRoutingMode;
 
@@ -16,7 +16,7 @@ struct CoreConfigResponse {
 /// Reads only the routing mode from the loopback controller.
 /// The controller secret never leaves this module or enters an error message.
 pub(super) async fn observed_routing_mode() -> Result<AgentRoutingMode, ()> {
-    let info = Config::clash().latest().get_client_info();
+    let info = CoreManager::global().effective_clash_info();
     let url = loopback_controller_url(&info.server)?;
     let client = reqwest::ClientBuilder::new()
         .no_proxy()

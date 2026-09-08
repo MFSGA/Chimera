@@ -2,7 +2,7 @@ import { useSetting } from '@chimera/interface';
 import { locale } from 'dayjs';
 import { createContext, PropsWithChildren, useContext, useEffect } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
-import { getLocale, Locale, setLocale } from '@/paraglide/runtime';
+import { getLocale, Locale, locales, setLocale } from '@/paraglide/runtime';
 
 const LanguageContext = createContext<{
   language?: Locale;
@@ -19,20 +19,36 @@ export const useLanguage = () => {
   return context;
 };
 
+const normalizeConfiguredLocale = (
+  value?: string | null,
+): Locale | undefined => {
+  if (!value) return undefined;
+
+  const normalized = value.toLowerCase();
+  if (normalized === 'en-us') return 'en';
+  return locales.includes(normalized as Locale)
+    ? (normalized as Locale)
+    : undefined;
+};
+
 export const LanguageProvider = ({ children }: PropsWithChildren) => {
   const language = useSetting('language');
+  const configuredLocale = normalizeConfiguredLocale(language.value);
 
   const setLanguage = useLockFn(async (value: Locale) => {
     await language.upsert(value);
     setLocale(value);
   });
 
-  // sync dayjs locale
+  // Keep Paraglide and dayjs aligned when another WebView changes the setting.
   useEffect(() => {
-    if (language) {
-      locale(language.value || 'en');
+    if (!configuredLocale) return;
+
+    locale(configuredLocale);
+    if (getLocale() !== configuredLocale) {
+      setLocale(configuredLocale);
     }
-  }, [language]);
+  }, [configuredLocale]);
 
   return (
     <LanguageContext.Provider

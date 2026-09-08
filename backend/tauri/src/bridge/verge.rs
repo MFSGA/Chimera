@@ -154,10 +154,8 @@ struct PreparedVergeMirror {
 impl PreparedLegacyMirror for PreparedVergeMirror {
     fn apply(self: Box<Self>) {
         let _guard = self.legacy_lock.lock();
-        let mut next = Config::verge().latest().clone();
-        apply_prepared_app_projection(&mut next, &self.projected);
-        *Config::verge().draft() = next;
-        Config::verge().apply();
+        Config::verge()
+            .apply_update(|target| apply_prepared_app_projection(target, &self.projected));
     }
 }
 

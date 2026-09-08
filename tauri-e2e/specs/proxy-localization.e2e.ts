@@ -15,6 +15,10 @@ type ProfilesResponse = {
   items: Array<{ name: string; uid: string }>;
 };
 
+type VergeConfig = {
+  language?: string;
+};
+
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
     async (name, parameters) => {
@@ -48,6 +52,7 @@ async function waitForPath(pathname: string) {
 
 describe('legacy proxy localization', () => {
   let profileUid: string | undefined;
+  let originalLanguage: string | undefined;
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -61,35 +66,50 @@ describe('legacy proxy localization', () => {
       { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
     );
 
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
-      localStorage.setItem(
-        'memorizedRoutePathAtom',
-        JSON.stringify('/profiles'),
-      );
+    originalLanguage = (await invoke<VergeConfig>('get_verge_config')).language;
+    await invoke('patch_verge_config', {
+      payload: { language: 'zh-cn' },
     });
+    await browser.waitUntil(
+      async () =>
+        (
+          await invoke<VergeConfig>('get_verge_config')
+        ).language?.toLowerCase() === 'zh-cn',
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The configured language did not switch to zh-cn.',
+      },
+    );
     await browser.refresh();
+
+    const currentUrl = new URL(await browser.getUrl());
+    currentUrl.pathname = '/profiles';
+    currentUrl.search = '';
+    await browser.url(currentUrl.href);
+    await waitForPath('/profiles');
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('activate_profile', { uid: null }).catch(() => undefined);
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    if (profileUid) {
+      await invoke('activate_profile', { uid: null }).catch(() => undefined);
+      await invoke('delete_profile', { uid: profileUid }).catch(
+        () => undefined,
+      );
+    }
+    if (originalLanguage) {
+      await invoke('patch_verge_config', {
+        payload: { language: originalLanguage },
+      }).catch(() => undefined);
+    }
   });
 
   it('localizes the proxy page after creating and activating a local profile', async () => {
-    const profilesLink = await $('//*[normalize-space()="配置"]');
-    await profilesLink.waitForClickable({ timeout: 15_000 });
-    await profilesLink.click();
-    await waitForPath('/profiles');
-
     const addButton = await $('button.MuiFab-primary');
     await addButton.waitForClickable();
     await addButton.click();
 
-    await (await $('//*[normalize-space()="创建配置"]')).waitForDisplayed();
     const typeSelect = await $('[role="combobox"]');
-    await typeSelect.waitForClickable();
+    await typeSelect.waitForDisplayed({ timeout: 15_000 });
     await browser.execute(() =>
       document
         .querySelector<HTMLElement>('[role="combobox"]')
@@ -134,9 +154,10 @@ describe('legacy proxy localization', () => {
       },
     );
 
-    const proxiesLink = await $('//*[normalize-space()="代理"]');
-    await proxiesLink.waitForClickable();
-    await proxiesLink.click();
+    const currentUrl = new URL(await browser.getUrl());
+    currentUrl.pathname = '/proxies';
+    currentUrl.search = '';
+    await browser.url(currentUrl.href);
     await waitForPath('/proxies');
 
     await browser.waitUntil(

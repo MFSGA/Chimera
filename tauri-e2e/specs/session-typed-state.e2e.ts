@@ -108,7 +108,23 @@ async function saveCurrentWindowState(label: string): Promise<void> {
   await invoke<null>('save_window_size_state', { label });
 }
 
-async function waitForMirroredState(): Promise<WindowState> {
+async function waitForWindow(label: string): Promise<void> {
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes(label),
+    { timeout: 15_000, timeoutMsg: `The ${label} window was not created.` },
+  );
+}
+
+async function waitForWindowClosed(label: string): Promise<void> {
+  await browser.waitUntil(
+    async () => !(await browser.getWindowHandles()).includes(label),
+    { timeout: 15_000, timeoutMsg: `The ${label} window was not closed.` },
+  );
+}
+
+async function waitForMirroredState(
+  predicate: (state: WindowState) => boolean = () => true,
+): Promise<WindowState> {
   const file = sessionStatePath();
   let persisted: WindowState | null = null;
   await browser.waitUntil(
@@ -125,7 +141,8 @@ async function waitForMirroredState(): Promise<WindowState> {
         persisted.x === legacy.window_size_state.x &&
         persisted.y === legacy.window_size_state.y &&
         persisted.maximized === legacy.window_size_state.maximized &&
-        persisted.fullscreen === legacy.window_size_state.fullscreen,
+        persisted.fullscreen === legacy.window_size_state.fullscreen &&
+        predicate(persisted),
       );
     },
     {
@@ -168,6 +185,93 @@ describe('typed session/window state ownership', () => {
     } finally {
       await browser.setWindowSize(original.width, original.height);
       await saveCurrentWindowState(label);
+      await waitForMirroredState();
+    }
+  });
+
+  it('restores window size and position across UI creation and the app close control', async () => {
+    await waitForApp();
+    await browser.switchToWindow('legacy');
+
+    const originalRect = await browser.getWindowRect();
+    const firstGeometry = {
+      width: Math.max(900, originalRect.width + 64),
+      height: Math.max(700, originalRect.height + 48),
+      x: Math.max(80, originalRect.x + 40),
+      y: Math.max(80, originalRect.y + 40),
+    };
+    const secondGeometry = {
+      width: firstGeometry.width + 80,
+      height: firstGeometry.height + 50,
+      x: firstGeometry.x + 60,
+      y: firstGeometry.y + 50,
+    };
+
+    try {
+      await browser.setWindowRect(
+        firstGeometry.x,
+        firstGeometry.y,
+        firstGeometry.width,
+        firstGeometry.height,
+      );
+      await saveCurrentWindowState('legacy');
+      const firstPersisted = await waitForMirroredState();
+
+      await invoke<null>('create_main_window');
+      await waitForWindow('main');
+      await browser.switchToWindow('main');
+      await waitForApp();
+
+      await saveCurrentWindowState('main');
+      const restoredCapture = await waitForMirroredState();
+      assert.deepEqual(restoredCapture, firstPersisted);
+
+      await browser.setWindowRect(
+        secondGeometry.x,
+        secondGeometry.y,
+        secondGeometry.width,
+        secondGeometry.height,
+      );
+      const closeButton = await $('[data-slot="window-control-close-button"]');
+      await closeButton.waitForClickable({ timeout: 15_000 });
+      await closeButton.click();
+      await waitForWindowClosed('main');
+      await browser.switchToWindow('legacy');
+
+      const secondPersisted = await waitForMirroredState(
+        (state) =>
+          state.width !== firstPersisted.width ||
+          state.height !== firstPersisted.height ||
+          state.x !== firstPersisted.x ||
+          state.y !== firstPersisted.y,
+      );
+      assert.equal(secondPersisted.x, secondGeometry.x);
+      assert.equal(secondPersisted.y, secondGeometry.y);
+      assert.ok(secondPersisted.width > firstPersisted.width);
+      assert.ok(secondPersisted.height > firstPersisted.height);
+
+      await invoke<null>('create_main_window');
+      await waitForWindow('main');
+      await browser.switchToWindow('main');
+      await waitForApp();
+
+      await saveCurrentWindowState('main');
+      const reopenedCapture = await waitForMirroredState();
+      assert.deepEqual(reopenedCapture, secondPersisted);
+    } finally {
+      if ((await browser.getWindowHandles()).includes('main')) {
+        await browser.switchToWindow('main');
+        await browser.closeWindow();
+        await waitForWindowClosed('main');
+      }
+      await browser.switchToWindow('legacy');
+      await browser.setWindowRect(
+        originalRect.x,
+        originalRect.y,
+        originalRect.width,
+        originalRect.height,
+      );
+      await saveCurrentWindowState('legacy');
       await waitForMirroredState();
     }
   });

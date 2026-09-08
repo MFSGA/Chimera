@@ -48,7 +48,30 @@ fn flush_system_dns_cache() -> anyhow::Result<()> {
     ensure_success(status, "macOS DNS cache flush")
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_os = "linux")]
+fn flush_system_dns_cache() -> anyhow::Result<()> {
+    const CANDIDATES: &[(&str, &[&str])] = &[
+        ("resolvectl", &["flush-caches"]),
+        ("systemd-resolve", &["--flush-caches"]),
+        ("nscd", &["-i", "hosts"]),
+    ];
+
+    let mut attempts = Vec::new();
+    for (program, args) in CANDIDATES {
+        match std::process::Command::new(program).args(*args).status() {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => attempts.push(format!("{program} exited with status {status}")),
+            Err(error) => attempts.push(format!("{program}: {error}")),
+        }
+    }
+
+    anyhow::bail!(
+        "failed to flush the Linux DNS cache; tried resolvectl, systemd-resolve, and nscd: {}",
+        attempts.join("; ")
+    )
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn flush_system_dns_cache() -> anyhow::Result<()> {
     anyhow::bail!("flushing the system DNS cache is not supported on this platform")
 }

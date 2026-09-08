@@ -720,7 +720,7 @@ impl ClashConnectionsConnector {
 
     pub fn endpoint(path: &str) -> anyhow::Result<Request> {
         let (server, secret) = {
-            let info = crate::Config::clash().data().get_client_info();
+            let info = super::core::CoreManager::global().effective_clash_info();
             (info.server, info.secret)
         };
         let token = urlencoding::encode(secret.as_deref().unwrap_or_default());

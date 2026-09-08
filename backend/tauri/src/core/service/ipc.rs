@@ -4,14 +4,9 @@ use atomic_enum::atomic_enum;
 use chimera_ipc::types::ServiceStatus;
 use chimera_utils::runtime::block_on;
 use serde::Serialize;
-use tauri::Manager;
 use tracing::instrument;
 
-use crate::{
-    client::ChimeraClient,
-    core::{RunType, handle::Handle},
-    log_err,
-};
+use crate::{client::ChimeraClient, core::RunType, log_err};
 
 use super::compat::ServiceCompat;
 
@@ -37,12 +32,12 @@ pub fn get_ipc_state() -> IpcState {
     IPC_STATE.load(Ordering::Relaxed)
 }
 
-pub(super) fn set_ipc_state(state: IpcState) {
+pub(super) fn set_ipc_state(state: IpcState, client: &ChimeraClient) {
     IPC_STATE.store(state, Ordering::Relaxed);
-    on_ipc_state_changed(state);
+    on_ipc_state_changed(state, client);
 }
 
-fn dispatch_disconnected() {
+fn dispatch_disconnected(client: &ChimeraClient) {
     if IPC_STATE
         .compare_exchange(
             IpcState::Connected,
@@ -52,11 +47,11 @@ fn dispatch_disconnected() {
         )
         .is_ok()
     {
-        on_ipc_state_changed(IpcState::Disconnected)
+        on_ipc_state_changed(IpcState::Disconnected, client)
     }
 }
 
-fn dispatch_connected() {
+fn dispatch_connected(client: &ChimeraClient) {
     if IPC_STATE
         .compare_exchange(
             IpcState::Disconnected,
@@ -66,7 +61,7 @@ fn dispatch_connected() {
         )
         .is_ok()
     {
-        on_ipc_state_changed(IpcState::Connected)
+        on_ipc_state_changed(IpcState::Connected, client)
     }
 }
 
@@ -77,8 +72,8 @@ fn should_rebuild_for_ipc_transition(state: IpcState, run_type: RunType) -> bool
     )
 }
 
-#[instrument]
-fn on_ipc_state_changed(state: IpcState) {
+#[instrument(skip(client))]
+fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient) {
     tracing::info!("IPC state changed: {:?}", state);
     let enabled_service = {
         *crate::config::core::Config::verge()
@@ -87,21 +82,13 @@ fn on_ipc_state_changed(state: IpcState) {
             .as_ref()
             .unwrap_or(&false)
     };
-    let app_handle = Handle::app_handle();
+    let client = client.clone();
     std::thread::spawn(move || {
         nyanpasu_utils::runtime::block_on(async move {
             if !enabled_service {
                 return;
             }
 
-            let Some(app_handle) = app_handle else {
-                tracing::warn!("app handle is unavailable during service IPC transition");
-                return;
-            };
-            let Some(client) = app_handle.try_state::<ChimeraClient>() else {
-                tracing::warn!("ChimeraClient is unavailable during service IPC transition");
-                return;
-            };
             let status = match client.core_status().await {
                 Ok(status) => status,
                 Err(err) => {
@@ -120,19 +107,19 @@ fn on_ipc_state_changed(state: IpcState) {
     });
 }
 
-pub(super) fn spawn_health_check() {
+pub(super) fn spawn_health_check(client: ChimeraClient) {
     KILL_FLAG.store(false, Ordering::Relaxed);
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         HEALTH_CHECK_RUNNING.store(true, Ordering::Release);
         block_on(async {
             let mut warned_ineligible = false;
             loop {
                 if KILL_FLAG.load(Ordering::Acquire) {
-                    set_ipc_state(IpcState::Disconnected);
+                    set_ipc_state(IpcState::Disconnected, &client);
                     HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
                     break;
                 }
-                warned_ineligible = health_check(warned_ineligible).await;
+                warned_ineligible = health_check(warned_ineligible, &client).await;
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         })
@@ -168,8 +155,8 @@ fn target_ipc_state(
     (state, compat)
 }
 
-#[instrument]
-async fn health_check(warned: bool) -> bool {
+#[instrument(skip(client))]
+async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
     match super::control::status().await {
         Ok(info) => {
             let runtime_owned = super::is_service_runtime_owned(&info);
@@ -194,14 +181,14 @@ async fn health_check(warned: bool) -> bool {
             }
 
             match state {
-                IpcState::Connected => dispatch_connected(),
-                IpcState::Disconnected => dispatch_disconnected(),
+                IpcState::Connected => dispatch_connected(client),
+                IpcState::Disconnected => dispatch_disconnected(client),
             }
             next_warned
         }
         Err(e) => {
             tracing::error!("IPC health check failed: {}", e);
-            dispatch_disconnected();
+            dispatch_disconnected(client);
             let (_, next_warned) = next_ineligible_warning_state(warned, false);
             next_warned
         }

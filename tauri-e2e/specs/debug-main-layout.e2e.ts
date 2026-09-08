@@ -50,7 +50,7 @@ describe('main debug settings reference layout', () => {
   });
 
   it('uses the ref debug groups and reveals window debug tools', async () => {
-    const advanced = await $('[data-slot="advanced-tools-switch-container"]');
+    const advanced = await $('[data-slot="advance-tools-switch-container"]');
     await advanced.waitForDisplayed({ timeout: 15_000 });
 
     const switchControl = await advanced.$('button[role="switch"]');

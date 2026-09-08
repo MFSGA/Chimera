@@ -5,7 +5,7 @@ use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
 use sysproxy::Sysproxy;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
@@ -42,6 +42,47 @@ use crate::{
 };
 
 type Result<T = ()> = StdResult<T, IpcError>;
+
+#[derive(Clone, Debug, serde::Serialize, specta::Type, PartialEq, Eq)]
+pub struct PendingDeepLinkEntry {
+    pub id: u32,
+    pub url: String,
+}
+
+#[derive(Default)]
+struct PendingDeepLinkState {
+    next_id: u32,
+    entries: std::collections::VecDeque<PendingDeepLinkEntry>,
+}
+
+#[derive(Default)]
+pub struct PendingDeepLink(std::sync::Mutex<PendingDeepLinkState>);
+
+impl PendingDeepLink {
+    pub fn store(&self, url: String) -> PendingDeepLinkEntry {
+        let mut pending = self.0.lock().unwrap();
+        pending.next_id = pending.next_id.wrapping_add(1).max(1);
+        let entry = PendingDeepLinkEntry {
+            id: pending.next_id,
+            url,
+        };
+        pending.entries.push_back(entry.clone());
+        entry
+    }
+
+    fn list_all(&self) -> Vec<PendingDeepLinkEntry> {
+        self.0.lock().unwrap().entries.iter().cloned().collect()
+    }
+
+    fn claim(&self, id: u32) -> bool {
+        let mut pending = self.0.lock().unwrap();
+        let Some(index) = pending.entries.iter().position(|entry| entry.id == id) else {
+            return false;
+        };
+        pending.entries.remove(index);
+        true
+    }
+}
 
 #[derive(specta::Type, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -333,9 +374,24 @@ pub fn is_portable() -> Result<bool> {
 /// later: check in the frontend
 #[tauri::command]
 #[specta::specta]
+pub async fn get_pending_deep_links(
+    pending: State<'_, PendingDeepLink>,
+) -> Result<Vec<PendingDeepLinkEntry>> {
+    Ok(pending.list_all())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn claim_pending_deep_link(pending: State<'_, PendingDeepLink>, id: u32) -> Result<bool> {
+    Ok(pending.claim(id))
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn import_profile(
     client: State<'_, ChimeraClient>,
     url: String,
+    name: Option<String>,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
@@ -343,6 +399,9 @@ pub async fn import_profile(
     let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
     builder.assign_managed_identity(uid);
     builder.url(url);
+    if let Some(name) = name {
+        builder.set_name(name);
+    }
     if let Some(option) = option {
         builder.option(option.clone());
     }
@@ -378,26 +437,30 @@ pub async fn create_editor_window(
     window_type: EditorWindowType,
     uid: Option<String>,
 ) -> Result {
-    let uid = match window_type {
+    let profile_uid = match window_type {
         EditorWindowType::Profile => {
-            uid.ok_or_else(|| anyhow!("uid required for profile editor"))?
+            Some(uid.ok_or_else(|| anyhow!("uid required for profile editor"))?)
         }
-        EditorWindowType::CssEditor => {
-            return Err(anyhow!("CSS editor is not supported yet").into());
-        }
+        EditorWindowType::CssEditor => None,
     };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let handle = app_handle.clone();
     app_handle
         .run_on_main_thread(move || {
-            let result = resolve::create_profile_editor_window(&handle, &uid)
-                .map_err(|error| error.to_string());
+            let result = match window_type {
+                EditorWindowType::Profile => resolve::create_profile_editor_window(
+                    &handle,
+                    profile_uid.as_deref().expect("profile uid was validated"),
+                ),
+                EditorWindowType::CssEditor => resolve::create_css_editor_window(&handle),
+            }
+            .map_err(|error| error.to_string());
             let _ = sender.send(result);
         })
-        .context("failed to schedule profile editor window creation")?;
+        .context("failed to schedule editor window creation")?;
     receiver
         .await
-        .context("profile editor window creation was cancelled")?
+        .context("editor window creation was cancelled")?
         .map_err(anyhow::Error::msg)?;
     Ok(())
 }
@@ -410,8 +473,15 @@ pub fn get_verge_config(client: State<'_, ChimeraClient>) -> Result<IVerge> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_verge_config(payload: IVerge) -> Result {
-    feat::patch_verge(payload).await?;
+pub async fn patch_verge_config(
+    app_handle: AppHandle,
+    client: State<'_, ChimeraClient>,
+    payload: IVerge,
+) -> Result {
+    client.patch_verge(payload).await?;
+    if let Err(error) = app_handle.emit("verge-config-updated", ()) {
+        log::warn!(target: "app", "failed to emit verge config update: {error:?}");
+    }
     Ok(())
 }
 
@@ -522,11 +592,16 @@ pub async fn replace_profile_definition(
                 transforms,
             },
     } = definition;
-    if !transforms.is_empty() {
-        return Err(anyhow!("scoped profile transforms are not supported yet").into());
-    }
     Ok(client
-        .replace_remote_profile_definition(uid, file, updated_at, url, option, subscription)
+        .replace_remote_profile_definition(
+            uid,
+            file,
+            updated_at,
+            url,
+            option,
+            subscription,
+            transforms,
+        )
         .await?)
 }
 
@@ -666,8 +741,8 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn install_service() -> Result {
-        service::control::install_service().await?;
+    pub async fn install_service(client: State<'_, ChimeraClient>) -> Result {
+        service::control::install_service((*client).clone()).await?;
         Ok(())
     }
     #[tauri::command]
@@ -679,7 +754,7 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn start_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::start_service().await;
+        let result = service::control::start_service((*client).clone()).await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
@@ -707,7 +782,7 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn restart_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::restart_service().await;
+        let result = service::control::restart_service((*client).clone()).await;
         let enabled_service = *crate::config::core::Config::verge()
             .latest()
             .enable_service_mode
@@ -820,7 +895,7 @@ pub async fn select_proxy(
     ProxiesGuard::global().select_proxy(&group, &name).await?;
     handle::Handle::mutate_proxies();
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-        break_when,
+        break_when, &group,
     )
     .await;
     Ok(())
@@ -958,9 +1033,10 @@ pub async fn set_custom_app_dir(_app_handle: AppHandle, path: String) -> Result 
 #[specta::specta]
 pub async fn update_core(
     client: State<'_, ChimeraClient>,
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
     core_type: chimera::ClashCore,
 ) -> Result<usize> {
-    let event_id = updater::UpdaterManager::global()
+    let event_id = updater
         .write()
         .await
         .update_core(&client, &core_type)
@@ -990,16 +1066,21 @@ pub async fn restart_sidecar(client: State<'_, ChimeraClient>) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn fetch_latest_core_versions() -> Result<ManifestVersionLatest> {
-    let mut updater = updater::UpdaterManager::global().write().await;
+pub async fn fetch_latest_core_versions(
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
+) -> Result<ManifestVersionLatest> {
+    let mut updater = updater.write().await;
     updater.fetch_latest().await?;
     Ok(updater.get_latest_versions())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummary> {
-    let updater = updater::UpdaterManager::global()
+pub async fn inspect_updater(
+    updater: State<'_, tokio::sync::RwLock<updater::UpdaterManager>>,
+    updater_id: usize,
+) -> Result<updater::UpdaterSummary> {
+    let updater = updater
         .read()
         .await
         .inspect_updater(updater_id)
@@ -1010,10 +1091,11 @@ pub async fn inspect_updater(updater_id: usize) -> Result<updater::UpdaterSummar
 #[tauri::command]
 #[specta::specta]
 pub async fn update_profile(
+    client: State<'_, ChimeraClient>,
     uid: String,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<()>> {
-    Ok(feat::update_profile(uid, option).await?)
+    Ok(client.refresh_profile(uid, option).await?)
 }
 
 #[tauri::command]
@@ -1148,31 +1230,7 @@ pub async fn save_window_size_state(
     app_handle: AppHandle,
     label: String,
 ) -> Result {
-    if !matches!(
-        label.as_str(),
-        crate::consts::LEGACY_WINDOW_LABEL | crate::consts::MAIN_WINDOW_LABEL
-    ) {
-        return Err(IpcError::Custom(format!("unknown window label: {label}")));
-    }
-
-    let window = app_handle
-        .get_webview_window(&label)
-        .ok_or_else(|| IpcError::Custom(format!("window not found: {label}")))?;
-    if window.is_minimized().map_err(anyhow::Error::from)? {
-        return Ok(());
-    }
-
-    let state = crate::window::capture_window_state(&window)?.map(|state| {
-        chimera_config::state::window::WindowState {
-            width: state.width,
-            height: state.height,
-            x: state.x,
-            y: state.y,
-            maximized: state.maximized,
-            fullscreen: state.fullscreen,
-        }
-    });
-    client.save_main_window_state(state).await?;
+    crate::window::persist_window_state(&app_handle, client.inner(), &label).await?;
     Ok(())
 }
 
@@ -1387,4 +1445,71 @@ pub async fn clash_api_get_group_delay(
 #[specta::specta]
 pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
     Ok(clash::api::delete_connections(id.as_deref()).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+
+    use super::PendingDeepLink;
+
+    #[test]
+    fn pending_deep_links_are_listed_without_claiming() {
+        let pending = PendingDeepLink::default();
+        let first = pending.store("chimera://install-config?url=https%3A%2F%2Fone.example".into());
+        let second = pending.store("chimera://install-config?url=https%3A%2F%2Ftwo.example".into());
+
+        assert_eq!(pending.list_all(), vec![first.clone(), second.clone()]);
+        assert_eq!(pending.list_all(), vec![first.clone(), second.clone()]);
+        assert!(pending.claim(first.id));
+        assert_eq!(pending.list_all(), vec![second]);
+    }
+
+    #[test]
+    fn pending_deep_link_can_only_be_claimed_once() {
+        let pending = PendingDeepLink::default();
+        let entry = pending.store("chimera://install-config?url=https%3A%2F%2Fexample.com".into());
+
+        assert!(pending.claim(entry.id));
+        assert!(!pending.claim(entry.id));
+    }
+
+    #[test]
+    fn identical_deep_links_have_independent_claims() {
+        let pending = PendingDeepLink::default();
+        let url = "chimera://install-config?url=https%3A%2F%2Fexample.com";
+        let first = pending.store(url.into());
+        let second = pending.store(url.into());
+
+        assert_ne!(first.id, second.id);
+        assert!(pending.claim(first.id));
+        assert!(!pending.claim(first.id));
+        assert!(pending.claim(second.id));
+    }
+
+    #[test]
+    fn competing_webviews_only_claim_a_deep_link_once() {
+        let pending = Arc::new(PendingDeepLink::default());
+        let entry = pending.store("chimera://system-proxy?mode=on".into());
+        let barrier = Arc::new(Barrier::new(3));
+
+        let claims = (0..2)
+            .map(|_| {
+                let pending = Arc::clone(&pending);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    pending.claim(entry.id)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        barrier.wait();
+        let successes = claims
+            .into_iter()
+            .map(|claim| claim.join().unwrap())
+            .filter(|claimed| *claimed)
+            .count();
+        assert_eq!(successes, 1);
+    }
 }
