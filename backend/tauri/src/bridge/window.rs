@@ -40,10 +40,10 @@ impl PreparedLegacyMirror for PreparedWindowMirror {
     #[allow(deprecated)]
     fn apply(self: Box<Self>) {
         let _guard = self.legacy_lock.lock();
-        let store = Config::verge();
-        let mut current = store.data();
-        current.window_size_state = self.projected.window_size_state;
-        current.window_size_position = self.projected.window_size_position;
+        Config::verge().apply_update(|target| {
+            target.window_size_state = self.projected.window_size_state.clone();
+            target.window_size_position = self.projected.window_size_position.clone();
+        });
     }
 }
 

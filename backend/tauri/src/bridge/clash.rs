@@ -41,10 +41,10 @@ struct PreparedClashMirror {
 impl PreparedLegacyMirror for PreparedClashMirror {
     fn apply(self: Box<Self>) {
         let _guard = self.legacy_lock.lock();
-        *Config::clash().data() = self.clash_projected;
-        let verge_store = Config::verge();
-        let mut verge = verge_store.data();
-        apply_prepared_clash_verge_projection(&mut verge, &self.verge_projected);
+        Config::clash().apply_update(|target| *target = self.clash_projected.clone());
+        Config::verge().apply_update(|target| {
+            apply_prepared_clash_verge_projection(target, &self.verge_projected)
+        });
     }
 }
 
