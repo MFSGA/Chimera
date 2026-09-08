@@ -41,8 +41,10 @@ describe('main ref dropdown menu', () => {
     await browser.setWindowSize(1240, 638);
 
     const appHeader = await $('[data-slot="app-header"]');
-    const settingsButton = await appHeader.$('button=设置');
-    await settingsButton.waitForClickable({ timeout: 15_000 });
+    const settingsButton = await appHeader.$(
+      '[data-slot="header-settings-menu"]',
+    );
+    await settingsButton.waitForDisplayed({ timeout: 15_000 });
     await browser.execute((button) => button.focus(), settingsButton);
     await browser.keys('Enter');
 

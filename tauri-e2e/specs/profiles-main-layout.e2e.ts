@@ -141,9 +141,29 @@ describe('main profiles reference layout', () => {
       );
     }, remoteImport);
 
-    const tooltip = await $('[role="tooltip"]');
-    await tooltip.waitForDisplayed({ timeout: 15_000 });
-    assert.equal((await tooltip.getText()).includes('远程配置'), true);
+    const remoteLabel = await remoteImport.getAttribute('aria-label');
+    assert.ok(
+      remoteLabel,
+      'Remote import action must expose an accessible label.',
+    );
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          (expectedLabel) =>
+            Array.from(
+              document.querySelectorAll<HTMLElement>('[role="tooltip"]'),
+            ).some(
+              (tooltip) =>
+                tooltip.getClientRects().length > 0 &&
+                tooltip.textContent?.includes(expectedLabel),
+            ),
+          remoteLabel,
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Remote import tooltip did not open with the action label.',
+      },
+    );
 
     await importToggle.click();
   });

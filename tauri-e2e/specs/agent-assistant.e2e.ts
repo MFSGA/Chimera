@@ -48,7 +48,7 @@ async function openMainWindow() {
 async function openAgentFromHelp() {
   const appHeader = await $('[data-slot="app-header"]');
   const helpButton = await appHeader.$('button=帮助');
-  await helpButton.waitForClickable({ timeout: 15_000 });
+  await helpButton.waitForDisplayed({ timeout: 15_000 });
   await browser.execute((button) => button.focus(), helpButton);
   await browser.keys('Enter');
 
