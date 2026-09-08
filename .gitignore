@@ -35,7 +35,10 @@ release.sh
 *.tsbuildinfo
 .tmp/
 
-docs/
+# Keep governing guides versionable without exposing local reports and evidence.
+/docs/*
+!/docs/ref-alignment-guide.md
+!/docs/tauri-e2e-minimal-architecture.md
 # new rust-analyzer
 target/
 ref/
