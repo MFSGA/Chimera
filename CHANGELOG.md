@@ -1,3 +1,37 @@
+## [0.23.3] - 2026-09-08 07:17:49
+
+### ✅ Testing
+
+- **e2e:** Stabilize desktop coverage and document suites by @MFSGA
+
+- **e2e:** Align settings routes and selectors by @MFSGA
+
+### ✨ Features
+
+- **deep-link:** Add proxy and language controls by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **client:** Reconcile legacy runtime side effects by @MFSGA
+
+- **config:** Apply legacy mirrors atomically by @MFSGA
+
+- **deep-link:** Preserve pending links until claimed by @MFSGA
+
+- **installer:** Clean Chimera data on uninstall by @MFSGA
+
+- **migration:** Migrate legacy profile shapes by @MFSGA
+
+- **migration:** Repair typed clash config state by @MFSGA
+
+### 📚 Documentation
+
+- **governance:** Document ref alignment and E2E boundaries by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.23.2...v0.23.3
+
 ## [0.23.2] - 2026-09-06 04:19:19
 
 ### ✅ Testing
