@@ -73,7 +73,9 @@ export default function HeaderMenu({
       </HeaderSettingsAction>
 
       <HeaderHelpAction>
-        <MenuButton>{m.header_help_action_title()}</MenuButton>
+        <MenuButton data-slot="header-help-menu">
+          {m.header_help_action_title()}
+        </MenuButton>
       </HeaderHelpAction>
 
       <UpdateButton />

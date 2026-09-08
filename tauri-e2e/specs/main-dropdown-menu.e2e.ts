@@ -34,9 +34,6 @@ async function openMainWindow() {
 describe('main ref dropdown menu', () => {
   it('uses the ref menu geometry without changing the legacy primitive', async () => {
     await browser.setWindowSize(1240, 638);
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
-    });
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
@@ -49,11 +46,9 @@ describe('main ref dropdown menu', () => {
     await browser.keys('Enter');
 
     const openState = await browser.execute(() => {
-      const trigger = Array.from(
-        document.querySelectorAll<HTMLButtonElement>(
-          '[data-slot="app-header"] button',
-        ),
-      ).find((button) => button.textContent?.trim() === '设置');
+      const trigger = document.querySelector<HTMLButtonElement>(
+        '[data-slot="header-settings-menu"]',
+      );
       return {
         triggerState: trigger?.getAttribute('data-state') ?? '',
         roleMenuCount: document.querySelectorAll('[role="menu"]').length,
