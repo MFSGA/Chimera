@@ -325,7 +325,9 @@ struct VergePatchPlan {
     enable_proxy_guard: bool,
     log_level_changed: bool,
     log_max_files_changed: bool,
+    language_changed: bool,
     refresh_systray: bool,
+    refresh_systray_part: bool,
 }
 
 fn plan_verge_patch(
@@ -347,7 +349,9 @@ fn plan_verge_patch(
         enable_proxy_guard: patch.enable_proxy_guard == Some(true),
         log_level_changed: patch.app_log_level.is_some(),
         log_max_files_changed: patch.max_log_files.is_some(),
-        refresh_systray: patch.enable_system_proxy.is_some()
+        language_changed: patch.language.is_some(),
+        refresh_systray: patch.language.is_some() || patch.clash_tray_selector.is_some(),
+        refresh_systray_part: patch.enable_system_proxy.is_some()
             || clash_patch.is_some_and(|patch| patch.enable_tun_mode.is_some()),
     })
 }
@@ -379,16 +383,30 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
         sysopt::Sysopt::global().guard_proxy();
     }
 
+    if plan.language_changed
+        && let Some(language) = patch.language.as_deref()
+    {
+        rust_i18n::set_locale(language.to_lowercase().as_str());
+    }
+
     if plan.log_level_changed || plan.log_max_files_changed {
         utils::init::refresh_logger((patch.app_log_level.clone(), patch.max_log_files))?;
     }
 
     if plan.refresh_systray {
+        handle::Handle::update_systray()?;
+    } else if plan.refresh_systray_part {
         handle::Handle::update_systray_part()?;
     }
 
     log::debug!("todo: handle other fields");
     Ok(())
+}
+
+fn legacy_finalize_error(error: anyhow::Error) -> anyhow::Error {
+    anyhow::anyhow!(
+        "legacy mutation may have non-reversible runtime or OS side effects and requires reconciliation: {error:#}"
+    )
 }
 
 async fn rollback_legacy_domains(
@@ -643,7 +661,7 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         return Err(rollback_legacy_domains(
             client,
             committed,
-            error.context("failed to finalize legacy verge patch"),
+            legacy_finalize_error(error.context("failed to finalize legacy verge patch")),
         )
         .await);
     }
@@ -687,6 +705,42 @@ mod tests {
         fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig> {
             Ok(self.legacy.clone())
         }
+    }
+
+    #[test]
+    fn legacy_finalize_error_reports_runtime_reconciliation_requirement() {
+        let error = legacy_finalize_error(anyhow::anyhow!("tray refresh failed"));
+        let message = format!("{error:#}");
+        assert!(message.contains("non-reversible runtime or OS side effects"));
+        assert!(message.contains("requires reconciliation"));
+        assert!(message.contains("tray refresh failed"));
+    }
+
+    #[test]
+    fn verge_patch_plan_rebuilds_full_tray_for_language_or_selector_changes() {
+        let language = plan_verge_patch(
+            &IVerge {
+                language: Some("zh-cn".into()),
+                ..IVerge::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(language.language_changed);
+        assert!(language.refresh_systray);
+        assert!(!language.refresh_systray_part);
+
+        let selector = plan_verge_patch(
+            &IVerge {
+                clash_tray_selector: Some(crate::config::chimera::ProxiesSelectorMode::Hidden),
+                ..IVerge::default()
+            },
+            None,
+        )
+        .unwrap();
+        assert!(!selector.language_changed);
+        assert!(selector.refresh_systray);
+        assert!(!selector.refresh_systray_part);
     }
 
     #[tokio::test]
