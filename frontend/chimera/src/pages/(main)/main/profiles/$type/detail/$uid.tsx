@@ -24,14 +24,14 @@ function RouteComponent() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-slot="profile-detail">
       <DetailHeader type={type}>
         <TextMarquee className="w-0 min-w-0 flex-1 text-lg font-bold">
           {profile.name}
         </TextMarquee>
 
         <ProfileNameEditor profile={profile} asChild>
-          <Button icon className="shrink-0">
+          <Button icon className="shrink-0" data-slot="profile-name-edit">
             <EditSquareOutlineRounded className="size-4" />
           </Button>
         </ProfileNameEditor>

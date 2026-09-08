@@ -6,17 +6,24 @@ const targetPath = '/main/assistant';
 const artifactDirectory = path.resolve('.tmp');
 
 /** Invoke a backend command through the current Tauri page internals. */
-async function invoke(command: string) {
-  return browser.execute(async (name) => {
-    const internals = (
-      window as typeof window & {
-        __TAURI_INTERNALS__: {
-          invoke: (command: string) => Promise<unknown>;
-        };
-      }
-    ).__TAURI_INTERNALS__;
-    return internals.invoke(name);
-  }, command);
+async function invoke(command: string, args?: Record<string, unknown>) {
+  return browser.execute(
+    async (name, parameters) => {
+      const internals = (
+        window as typeof window & {
+          __TAURI_INTERNALS__: {
+            invoke: (
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<unknown>;
+          };
+        }
+      ).__TAURI_INTERNALS__;
+      return internals.invoke(name, parameters);
+    },
+    command,
+    args,
+  );
 }
 
 /** Open the main window and wait until its real application shell has rendered. */
@@ -47,7 +54,7 @@ async function openMainWindow() {
 /** Navigate through the real Help menu so Agent discoverability stays covered. */
 async function openAgentFromHelp() {
   const appHeader = await $('[data-slot="app-header"]');
-  const helpButton = await appHeader.$('button=帮助');
+  const helpButton = await appHeader.$('[data-slot="header-help-menu"]');
   await helpButton.waitForDisplayed({ timeout: 15_000 });
   await browser.execute((button) => button.focus(), helpButton);
   await browser.keys('Enter');
@@ -83,8 +90,8 @@ async function getLayoutState() {
 describe('network assistant guided diagnosis', () => {
   before(async () => {
     fs.mkdirSync(artifactDirectory, { recursive: true });
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
+    await invoke('patch_verge_config', {
+      payload: { language: 'zh-cn' },
     });
     await openMainWindow();
     await openAgentFromHelp();
