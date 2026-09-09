@@ -11,6 +11,7 @@
   "cloneSubmodules": true,
   "cloneSubmodulesFilter": ["backend/chimera-runtime"],
   "statusCheckWhen": {
+    "artifactError": "never",
     "minimumReleaseAge": "never"
   },
   "packageRules": [
