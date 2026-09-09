@@ -12,7 +12,7 @@ default-meta = []
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 specta = { version = "^2.0.0-rc.25", features = ["derive", "serde_json"] }
-struct-patch = "0.13"
+struct-patch = "0.14"
 serde_with = "=3.20.0"
 strum = { version = "0.28", features = ["derive"] }
 thiserror.workspace = true
