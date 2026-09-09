@@ -8,6 +8,8 @@
     "default:rebaseStalePrs",
     "group:monorepos"
   ],
+  "cloneSubmodules": true,
+  "cloneSubmodulesFilter": ["backend/chimera-runtime"],
   "statusCheckWhen": {
     "minimumReleaseAge": "never"
   },
