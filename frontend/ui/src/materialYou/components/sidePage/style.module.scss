@@ -1,5 +1,3 @@
-@reference "tailwindcss";
-
 .MDYSidePage-Main {
   display: flex;
   flex-direction: column;
@@ -23,9 +21,11 @@
 }
 
 .Container-common {
-  @apply relative h-full overflow-hidden rounded-3xl;
-
+  position: relative;
+  height: 100%;
+  overflow: hidden;
   background-color: var(--background-color);
+  border-radius: 1.5rem;
 }
 
 .ScrollArea-Thumb {
