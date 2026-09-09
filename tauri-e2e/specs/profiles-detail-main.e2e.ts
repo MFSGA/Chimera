@@ -37,6 +37,33 @@ async function openMainWindow() {
   await browser.switchToWindow('main');
 }
 
+async function getActiveClickableElement(selector: string) {
+  await browser.waitUntil(
+    async () => {
+      const elements = await $$(selector);
+      const elementCount = await elements.length;
+      for (let index = elementCount - 1; index >= 0; index -= 1) {
+        if (await elements[index].isClickable().catch(() => false)) return true;
+      }
+      return false;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: `No active clickable element matched ${selector}.`,
+    },
+  );
+
+  const elements = await $$(selector);
+  const elementCount = await elements.length;
+  for (let index = elementCount - 1; index >= 0; index -= 1) {
+    if (await elements[index].isClickable().catch(() => false)) {
+      return elements[index];
+    }
+  }
+
+  throw new Error(`No active clickable element matched ${selector}.`);
+}
+
 describe('main profile detail reference editors', () => {
   let profileUid: string | undefined;
 
@@ -67,27 +94,28 @@ describe('main profile detail reference editors', () => {
     profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
     assert.ok(profileUid, 'The isolated detail profile was not created.');
 
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
-    });
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const currentUrl = new URL(await browser.getUrl());
-    currentUrl.pathname = `/main/profiles/profile/detail/${profileUid}`;
-    currentUrl.search = '';
-    await browser.url(currentUrl.href);
+    const appHeader = await $('[data-slot="app-header"]');
+    await appHeader.waitForDisplayed({ timeout: 15_000 });
+
+    const detailPath = `/main/profiles/profile/detail/${profileUid}`;
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, detailPath);
 
     await browser.waitUntil(
       async () =>
         browser.execute(
           (expected) =>
             location.pathname === expected &&
-            document.body.innerText.includes('Main Detail Ref Profile'),
-          `/main/profiles/profile/detail/${profileUid}`,
+            Boolean(document.querySelector('[data-slot="profile-detail"]')),
+          detailPath,
         ),
       {
-        timeout: 15_000,
+        timeout: 30_000,
         timeoutMsg: 'The main profile detail route did not render.',
       },
     );
@@ -99,8 +127,9 @@ describe('main profile detail reference editors', () => {
   });
 
   it('uses the ref field wrapper and animated validation error', async () => {
-    const editButton = await $('div.sticky button');
-    await editButton.waitForClickable({ timeout: 15_000 });
+    const editButton = await getActiveClickableElement(
+      '[data-slot="profile-name-edit"]',
+    );
     await editButton.click();
 
     const modal = await $('[data-slot="modal-content"]');

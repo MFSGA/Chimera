@@ -35,6 +35,9 @@ dayjs.extend(customParseFormat);
 const appWindow = getCurrentWebviewWindow();
 
 export const Catch = ({ error }: ErrorComponentProps) => {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const errorStack = error instanceof Error ? error.stack : undefined;
+
   return (
     <div className={cn('h-dvh bg-black text-white', 'flex flex-col gap-4 p-4')}>
       <div
@@ -47,8 +50,8 @@ export const Catch = ({ error }: ErrorComponentProps) => {
       <p>Something went wrong... Caught in error boundary.</p>
 
       <pre className="overflow-x-auto font-mono whitespace-pre-wrap select-text">
-        {error.message}
-        {error.stack}
+        {errorMessage}
+        {errorStack}
       </pre>
 
       <div className="flex items-center gap-2">
