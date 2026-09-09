@@ -501,8 +501,8 @@ importers:
         specifier: 7.5.20
         version: 7.5.20
       undici:
-        specifier: 8.8.0
-        version: 8.8.0
+        specifier: 8.10.2
+        version: 8.10.2
 
   tauri-e2e:
     devDependencies:
@@ -8094,8 +8094,8 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.8.0:
-    resolution: {integrity: sha512-ubshXMXwF3MQIMF1y/WxZdNBnjEKeSg2wF5mcGUtU55YTw34tnVVpKRlLf7ruDXZ5344KokPVX4RBx1wJm64Bw==}
+  undici@8.10.2:
+    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.3.0:
@@ -16329,7 +16329,7 @@ snapshots:
 
   undici@7.29.0: {}
 
-  undici@8.8.0: {}
+  undici@8.10.2: {}
 
   unicorn-magic@0.3.0: {}
 
