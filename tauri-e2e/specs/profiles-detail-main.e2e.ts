@@ -37,6 +37,33 @@ async function openMainWindow() {
   await browser.switchToWindow('main');
 }
 
+async function getActiveClickableElement(selector: string) {
+  await browser.waitUntil(
+    async () => {
+      const elements = await $$(selector);
+      const elementCount = await elements.length;
+      for (let index = elementCount - 1; index >= 0; index -= 1) {
+        if (await elements[index].isClickable().catch(() => false)) return true;
+      }
+      return false;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: `No active clickable element matched ${selector}.`,
+    },
+  );
+
+  const elements = await $$(selector);
+  const elementCount = await elements.length;
+  for (let index = elementCount - 1; index >= 0; index -= 1) {
+    if (await elements[index].isClickable().catch(() => false)) {
+      return elements[index];
+    }
+  }
+
+  throw new Error(`No active clickable element matched ${selector}.`);
+}
+
 describe('main profile detail reference editors', () => {
   let profileUid: string | undefined;
 
@@ -100,8 +127,9 @@ describe('main profile detail reference editors', () => {
   });
 
   it('uses the ref field wrapper and animated validation error', async () => {
-    const editButton = await $('[data-slot="profile-name-edit"]');
-    await editButton.waitForClickable({ timeout: 15_000 });
+    const editButton = await getActiveClickableElement(
+      '[data-slot="profile-name-edit"]',
+    );
     await editButton.click();
 
     const modal = await $('[data-slot="modal-content"]');
