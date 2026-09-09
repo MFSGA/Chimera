@@ -81,7 +81,7 @@
     "@vitejs/plugin-react": "6.0.3",
     "cross-env": "10.1.0",
     "filesize": "11.0.22",
-    "meta-json-schema": "1.19.28",
+    "meta-json-schema": "1.19.30",
     "monaco-yaml": "5.5.1",
     "nanoid": "6.0.1",
     "postcss": "8.5.20",
