@@ -84,7 +84,7 @@
     "meta-json-schema": "1.19.30",
     "monaco-yaml": "5.5.1",
     "nanoid": "6.0.1",
-    "postcss": "8.5.20",
+    "postcss": "8.5.28",
     "sass-embedded": "1.100.0",
     "shiki": "4.4.3",
     "tailwindcss": "4.3.3",
