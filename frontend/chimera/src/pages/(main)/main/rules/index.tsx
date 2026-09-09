@@ -2,10 +2,12 @@ import { useClashRules } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { createFileRoute } from '@tanstack/react-router';
 import {
+  columnVisibilityFeature,
+  createSortedRowModel,
   flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
+  rowSortingFeature,
+  tableFeatures,
+  useTable,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useState } from 'react';
@@ -15,6 +17,12 @@ import { Route as IndexRoute } from './route';
 
 export const Route = createFileRoute('/(main)/main/rules/')({
   component: RouteComponent,
+});
+
+const features = tableFeatures({
+  rowSortingFeature,
+  columnVisibilityFeature,
+  sortedRowModel: createSortedRowModel(),
 });
 
 const Viewer = ({ search }: { search: string }) => {
@@ -54,7 +62,8 @@ const Viewer = ({ search }: { search: string }) => {
 
   const virtualItems = rowVirtualizer.getVirtualItems();
 
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: filteredRules,
     columns: [
       {
@@ -90,8 +99,6 @@ const Viewer = ({ search }: { search: string }) => {
         ),
       },
     ],
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
     debugTable: true,
   });
 
