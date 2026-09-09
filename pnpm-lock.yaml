@@ -176,8 +176,8 @@ importers:
         specifier: 2.4.1
         version: 2.4.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       ahooks:
-        specifier: 3.9.7
-        version: 3.9.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: 3.10.0
+        version: 3.10.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       change-case:
         specifier: 5.4.4
         version: 5.4.4
@@ -360,8 +360,8 @@ importers:
         specifier: 2.11.1
         version: 2.11.1
       ahooks:
-        specifier: 3.9.7
-        version: 3.9.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: 3.10.0
+        version: 3.10.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       dayjs:
         specifier: 1.11.21
         version: 1.11.21
@@ -409,8 +409,8 @@ importers:
         specifier: 19.2.17
         version: 19.2.17
       ahooks:
-        specifier: 3.9.7
-        version: 3.9.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: 3.10.0
+        version: 3.10.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       d3:
         specifier: 7.9.0
         version: 7.9.0
@@ -4371,8 +4371,8 @@ packages:
     resolution: {integrity: sha512-JVzqkCNRT+VfqzzgPWDPnwvDheSAUdiMUn3NoLXpDJF5lRqeJqyC9iGsAxIOAW+mzIdq+uP1TvcX6bMtrH0agg==}
     engines: {node: '>= 14'}
 
-  ahooks@3.9.7:
-    resolution: {integrity: sha512-S0lvzhbdlhK36RFBkGv+RbOM/dbbweym+BIHM/bwwuWVSVN5TuVErHPMWo4w0t1NDYg5KPp2iEf7Y7E5LASYiw==}
+  ahooks@3.10.0:
+    resolution: {integrity: sha512-gwlBIjvG6x9UDOxZJeJ9l4x/nlrfrHBEqmau0b2mqchwWKOwAGAMXVE7rJXy883y9hzUTn+xlHgJHcJrf98Haw==}
     peerDependencies:
       react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
       react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -5870,10 +5870,6 @@ packages:
   internmap@2.0.3:
     resolution: {integrity: sha512-5Hh7Y1wQbvY5ooGgPbDaL5iYLAPzMTUrjMulskHLH6wnv/A+1q5rgEaiuqEjB+oxGXIVZs1FF+R/KPN3ZSQYYg==}
     engines: {node: '>=12'}
-
-  intersection-observer@0.12.2:
-    resolution: {integrity: sha512-7m1vEcPCxXYI8HqnL8CKI6siDyD+eIWSwgB3DZA+ZTogxk9I4CDnj4wilt9x/+/QbHI4YG5YZNmC6458/e9Ktg==}
-    deprecated: The Intersection Observer polyfill is no longer needed and can safely be removed. Intersection Observer has been Baseline since 2019.
 
   ip-address@10.4.0:
     resolution: {integrity: sha512-oSK96Grm3aP6OrS263xVxbNDGVL7rzBtYdpGqlDG8iQdoenDoTs/nkki+DflYbAEE8Xl6o5YxhxlrKvI3nqKXQ==}
@@ -12274,12 +12270,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  ahooks@3.9.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
+  ahooks@3.10.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7):
     dependencies:
       '@babel/runtime': 7.29.7
-      '@types/js-cookie': 3.0.6
       dayjs: 1.11.21
-      intersection-observer: 0.12.2
       js-cookie: 3.0.8
       lodash: 4.18.1
       react: 19.2.7
@@ -13905,8 +13899,6 @@ snapshots:
       p-event: 4.2.0
 
   internmap@2.0.3: {}
-
-  intersection-observer@0.12.2: {}
 
   ip-address@10.4.0: {}
 
