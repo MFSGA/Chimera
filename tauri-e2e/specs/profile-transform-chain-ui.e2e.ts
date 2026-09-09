@@ -262,6 +262,13 @@ describe('main transform chain editor', () => {
   const mergeAName = `chain-ui-merge-a-${suffix}`;
   const mergeBName = `chain-ui-merge-b-${suffix}`;
   const javascriptName = `chain-ui-javascript-${suffix}`;
+  const javascriptFileData = [
+    'export default function (config) {',
+    '  console.info("chain ui javascript log");',
+    '  return config;',
+    '}',
+    '',
+  ].join('\n');
   const failingJavascriptName = `chain-ui-javascript-failing-${suffix}`;
   const failingMergeName = `chain-ui-merge-failing-${suffix}`;
   let previousCurrent: string | null = null;
@@ -322,13 +329,7 @@ describe('main transform chain editor', () => {
           desc: null,
           script_type: 'javascript',
         },
-        fileData: [
-          'export default function (config) {',
-          '  console.info("chain ui javascript log");',
-          '  return config;',
-          '}',
-          '',
-        ].join('\n'),
+        fileData: javascriptFileData,
       }),
       'JavaScript profile creation',
     );
@@ -365,6 +366,32 @@ describe('main transform chain editor', () => {
 
     await openMainWindow();
     await browser.setWindowSize(1240, 720);
+  });
+
+  afterEach(async () => {
+    const handles = await browser.getWindowHandles().catch(() => []);
+    if (handles.includes('main')) {
+      await browser.switchToWindow('main').catch(() => undefined);
+    }
+
+    if (javascriptUid) {
+      await invoke<MutationOutcome<null>>('save_profile_file', {
+        uid: javascriptUid,
+        fileData: javascriptFileData,
+      }).catch(() => undefined);
+
+      const editorLabel = `profile-editor-${javascriptUid}`;
+      const currentHandles = await browser.getWindowHandles().catch(() => []);
+      if (currentHandles.includes(editorLabel)) {
+        await browser.switchToWindow(editorLabel).catch(() => undefined);
+        await browser.closeWindow().catch(() => undefined);
+      }
+    }
+
+    const remainingHandles = await browser.getWindowHandles().catch(() => []);
+    if (remainingHandles.includes('main')) {
+      await browser.switchToWindow('main').catch(() => undefined);
+    }
   });
 
   after(async () => {
