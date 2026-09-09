@@ -71,6 +71,14 @@ function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
   return outcome.value;
 }
 
+async function getWindowHandlesSafe(): Promise<string[]> {
+  try {
+    return await browser.getWindowHandles();
+  } catch {
+    return [];
+  }
+}
+
 async function openMainWindow() {
   await invoke('create_main_window');
   await browser.waitUntil(
@@ -369,7 +377,7 @@ describe('main transform chain editor', () => {
   });
 
   afterEach(async () => {
-    const handles = await browser.getWindowHandles().catch(() => []);
+    const handles = await getWindowHandlesSafe();
     if (handles.includes('main')) {
       await browser.switchToWindow('main').catch(() => undefined);
     }
@@ -381,14 +389,14 @@ describe('main transform chain editor', () => {
       }).catch(() => undefined);
 
       const editorLabel = `profile-editor-${javascriptUid}`;
-      const currentHandles = await browser.getWindowHandles().catch(() => []);
+      const currentHandles = await getWindowHandlesSafe();
       if (currentHandles.includes(editorLabel)) {
         await browser.switchToWindow(editorLabel).catch(() => undefined);
         await browser.closeWindow().catch(() => undefined);
       }
     }
 
-    const remainingHandles = await browser.getWindowHandles().catch(() => []);
+    const remainingHandles = await getWindowHandlesSafe();
     if (remainingHandles.includes('main')) {
       await browser.switchToWindow('main').catch(() => undefined);
     }
