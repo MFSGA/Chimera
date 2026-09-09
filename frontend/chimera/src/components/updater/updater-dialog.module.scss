@@ -1,46 +1,65 @@
-@reference "tailwindcss";
-
 .UpdaterDialog {
   .MarkdownContent {
     h1 {
-      @apply pb-2 text-3xl font-bold;
+      padding-bottom: 0.5rem;
+      font-size: 1.875rem;
+      font-weight: 700;
+      line-height: 2.25rem;
     }
 
     h2 {
-      @apply pb-2 text-2xl font-bold;
+      padding-bottom: 0.5rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      line-height: 2rem;
     }
 
     h3 {
-      @apply pb-2 text-xl font-bold;
+      padding-bottom: 0.5rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      line-height: 1.75rem;
     }
 
     h4 {
-      @apply text-lg font-bold;
+      font-size: 1.125rem;
+      font-weight: 700;
+      line-height: 1.75rem;
     }
 
     h5 {
-      @apply text-base font-bold;
+      font-size: 1rem;
+      font-weight: 700;
+      line-height: 1.5rem;
     }
 
     h6 {
-      @apply text-sm font-bold;
+      font-size: 0.875rem;
+      font-weight: 700;
+      line-height: 1.25rem;
     }
 
     p,
     li {
-      @apply text-base;
+      font-size: 1rem;
+      line-height: 1.5rem;
     }
 
     a {
-      @apply text-blue-500 underline underline-offset-2;
+      color: var(--color-blue-500);
+      text-decoration-line: underline;
+      text-underline-offset: 2px;
     }
 
     ul {
-      @apply list-inside list-disc pb-4;
+      padding-bottom: 1rem;
+      list-style-position: inside;
+      list-style-type: disc;
     }
 
     ol {
-      @apply list-inside list-decimal;
+      list-style-position: inside;
+      list-style-type: decimal;
     }
   }
 }
