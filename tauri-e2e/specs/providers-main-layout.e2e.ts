@@ -20,16 +20,31 @@ describe('main providers reference layout', () => {
     await firstGroup.waitForDisplayed({ timeout: 15_000 });
 
     const state = await browser.execute(() => {
-      const content = document.querySelector<HTMLElement>(
-        '[data-slot="providers-content"]',
+      const transitions = Array.from(
+        document.querySelectorAll<HTMLElement>('.page-transition'),
       );
+      const activeTransition = transitions.find((element) => {
+        const style = getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return (
+          Number.parseFloat(style.opacity || '1') > 0.5 &&
+          rect.right > 0 &&
+          rect.left < window.innerWidth
+        );
+      });
+      const content =
+        activeTransition?.querySelector<HTMLElement>(
+          '[data-slot="providers-content"]',
+        ) ?? null;
       const groups = Array.from(
-        document.querySelectorAll<HTMLElement>('[data-slot="providers-group"]'),
+        activeTransition?.querySelectorAll<HTMLElement>(
+          '[data-slot="providers-group"]',
+        ) ?? [],
       );
       const titles = Array.from(
-        document.querySelectorAll<HTMLElement>(
+        activeTransition?.querySelectorAll<HTMLElement>(
           '[data-slot="providers-group-title"]',
-        ),
+        ) ?? [],
       );
       const emptyCards = groups.map((group) =>
         group.querySelector<HTMLElement>('[data-slot="card"]'),
