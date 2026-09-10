@@ -9,7 +9,7 @@
     "jsr:@std/path@^1.1.2": "1.1.5",
     "jsr:@std/path@^1.1.5": "1.1.5",
     "npm:@actions/github@9.1.1": "9.1.1",
-    "npm:@octokit/types@16.0.0": "16.0.0",
+    "npm:@octokit/types@18.0.0": "18.0.0",
     "npm:@types/adm-zip@0.5.8": "0.5.8",
     "npm:@types/fs-extra@11.0.4": "11.0.4",
     "npm:@types/yargs@17.0.35": "17.0.35",
@@ -27,7 +27,7 @@
     "npm:picocolors@1.1.1": "1.1.1",
     "npm:semver@*": "7.8.1",
     "npm:tar@7.5.20": "7.5.20",
-    "npm:undici@8.8.0": "8.8.0",
+    "npm:undici@8.10.2": "8.10.2",
     "npm:yargs@18.0.0": "18.0.0",
     "npm:zod@*": "4.4.3"
   },
@@ -103,7 +103,7 @@
         "@octokit/core",
         "@octokit/oauth-app",
         "@octokit/plugin-paginate-rest",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "@octokit/webhooks"
       ]
     },
@@ -114,7 +114,7 @@
         "@octokit/auth-oauth-user",
         "@octokit/request",
         "@octokit/request-error",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "toad-cache",
         "universal-github-app-jwt",
         "universal-user-agent"
@@ -126,7 +126,7 @@
         "@octokit/auth-oauth-device",
         "@octokit/auth-oauth-user",
         "@octokit/request",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "universal-user-agent"
       ]
     },
@@ -135,7 +135,7 @@
       "dependencies": [
         "@octokit/oauth-methods",
         "@octokit/request",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "universal-user-agent"
       ]
     },
@@ -145,7 +145,7 @@
         "@octokit/auth-oauth-device",
         "@octokit/oauth-methods",
         "@octokit/request",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "universal-user-agent"
       ]
     },
@@ -156,7 +156,7 @@
       "integrity": "sha512-8Jb1mtUdmBHL7lGmop9mU9ArMRUTRhg8vp0T1VtZ4yd9vEm3zcLwmjQkhNEduKawOOORie61xhtYIhTDN+ZQ3g==",
       "dependencies": [
         "@octokit/request-error",
-        "@octokit/types"
+        "@octokit/types@16.0.0"
       ]
     },
     "@octokit/core@7.0.6": {
@@ -166,7 +166,7 @@
         "@octokit/graphql",
         "@octokit/request",
         "@octokit/request-error",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "before-after-hook",
         "universal-user-agent"
       ]
@@ -174,7 +174,7 @@
     "@octokit/endpoint@11.0.3": {
       "integrity": "sha512-FWFlNxghg4HrXkD3ifYbS/IdL/mDHjh9QcsNyhQjN8dplUoZbejsdpmuqdA76nxj2xoWPs7p8uX2SNr9rYu0Ag==",
       "dependencies": [
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "universal-user-agent"
       ]
     },
@@ -182,7 +182,7 @@
       "integrity": "sha512-grAEuupr/C1rALFnXTv6ZQhFuL1D8G5y8CN04RgrO4FIPMrtm+mcZzFG7dcBm+nq+1ppNixu+Jd78aeJOYxlGA==",
       "dependencies": [
         "@octokit/request",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "universal-user-agent"
       ]
     },
@@ -208,11 +208,14 @@
         "@octokit/oauth-authorization-url",
         "@octokit/request",
         "@octokit/request-error",
-        "@octokit/types"
+        "@octokit/types@16.0.0"
       ]
     },
     "@octokit/openapi-types@27.0.0": {
       "integrity": "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA=="
+    },
+    "@octokit/openapi-types@29.0.1": {
+      "integrity": "sha512-9qWOMFNxxLokERcms42rU0PTLqQmVs7g5E41TI4mCOxmpFayD1rfC7XxOL55cG9MBZLFlC31BrR37myMKardwg=="
     },
     "@octokit/openapi-webhooks-types@12.1.0": {
       "integrity": "sha512-WiuzhOsiOvb7W3Pvmhf8d2C6qaLHXrWiLBP4nJ/4kydu+wpagV5Fkz9RfQwV2afYzv3PB+3xYgp4mAdNGjDprA=="
@@ -227,14 +230,14 @@
       "integrity": "sha512-fNVRE7ufJiAA3XUrha2omTA39M6IXIc6GIZLvlbsm8QOQCYvpq/LkMNGyFlB1d8hTDzsAXa3OKtybdMAYsV/fw==",
       "dependencies": [
         "@octokit/core",
-        "@octokit/types"
+        "@octokit/types@16.0.0"
       ]
     },
     "@octokit/plugin-rest-endpoint-methods@17.0.0_@octokit+core@7.0.6": {
       "integrity": "sha512-B5yCyIlOJFPqUUeiD0cnBJwWJO8lkJs5d8+ze9QDP6SvfiXSz1BF+91+0MeI1d2yxgOhU/O+CvtiZ9jSkHhFAw==",
       "dependencies": [
         "@octokit/core",
-        "@octokit/types"
+        "@octokit/types@16.0.0"
       ]
     },
     "@octokit/plugin-retry@8.1.0_@octokit+core@7.0.6": {
@@ -242,7 +245,7 @@
       "dependencies": [
         "@octokit/core",
         "@octokit/request-error",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "bottleneck"
       ]
     },
@@ -250,14 +253,14 @@
       "integrity": "sha512-34eE0RkFCKycLl2D2kq7W+LovheM/ex3AwZCYN8udpi6bxsyjZidb2McXs69hZhLmJlDqTSP8cH+jSRpiaijBg==",
       "dependencies": [
         "@octokit/core",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "bottleneck"
       ]
     },
     "@octokit/request-error@7.1.0": {
       "integrity": "sha512-KMQIfq5sOPpkQYajXHwnhjCC0slzCNScLHs9JafXc4RAJI+9f+jNDlBNaIMTvazOPLgb4BnlhGJOTbnN0wIjPw==",
       "dependencies": [
-        "@octokit/types"
+        "@octokit/types@16.0.0"
       ]
     },
     "@octokit/request@10.0.10": {
@@ -265,7 +268,7 @@
       "dependencies": [
         "@octokit/endpoint",
         "@octokit/request-error",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "content-type",
         "json-with-bigint",
         "universal-user-agent"
@@ -274,7 +277,13 @@
     "@octokit/types@16.0.0": {
       "integrity": "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg==",
       "dependencies": [
-        "@octokit/openapi-types"
+        "@octokit/openapi-types@27.0.0"
+      ]
+    },
+    "@octokit/types@18.0.0": {
+      "integrity": "sha512-l6bAF43PNxkJp6g+W4PjoUSSkxHomXw2nOum5CTftJz1NlV3vu93NImgOYtLf6CbBUb5j+fiuzW0PPQ5JTSvZA==",
+      "dependencies": [
+        "@octokit/openapi-types@29.0.1"
       ]
     },
     "@octokit/webhooks-methods@6.0.0": {
@@ -495,7 +504,7 @@
         "@octokit/plugin-retry",
         "@octokit/plugin-throttling",
         "@octokit/request-error",
-        "@octokit/types",
+        "@octokit/types@16.0.0",
         "@octokit/webhooks"
       ]
     },
@@ -566,8 +575,8 @@
     "undici@6.27.0": {
       "integrity": "sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg=="
     },
-    "undici@8.8.0": {
-      "integrity": "sha512-ubshXMXwF3MQIMF1y/WxZdNBnjEKeSg2wF5mcGUtU55YTw34tnVVpKRlLf7ruDXZ5344KokPVX4RBx1wJm64Bw=="
+    "undici@8.10.2": {
+      "integrity": "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ=="
     },
     "unicorn-magic@0.4.0": {
       "integrity": "sha512-wH590V9VNgYH9g3lH9wWjTrUoKsjLF6sGLjhR4sH1LWpLmCOH0Zf7PukhDA8BiS7KHe4oPNkcTHqYkj7SOGUOw=="
@@ -617,7 +626,7 @@
     "packageJson": {
       "dependencies": [
         "npm:@actions/github@9.1.1",
-        "npm:@octokit/types@16.0.0",
+        "npm:@octokit/types@18.0.0",
         "npm:@types/adm-zip@0.5.8",
         "npm:@types/fs-extra@11.0.4",
         "npm:@types/yargs@17.0.35",
@@ -628,7 +637,7 @@
         "npm:octokit@5.0.5",
         "npm:picocolors@1.1.1",
         "npm:tar@7.5.20",
-        "npm:undici@8.8.0",
+        "npm:undici@8.10.2",
         "npm:yargs@18.0.0"
       ]
     }

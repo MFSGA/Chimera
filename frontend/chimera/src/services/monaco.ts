@@ -1,18 +1,19 @@
 // features
 // langs
-import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js';
-import 'monaco-editor/esm/vs/basic-languages/lua/lua.contribution.js';
-import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js';
-import 'monaco-editor/esm/vs/editor/editor.all.js';
-import 'monaco-editor/esm/vs/editor/contrib/links/browser/links.js';
+import 'monaco-editor/languages/definitions/javascript/register';
+import 'monaco-editor/languages/definitions/lua/register';
+import 'monaco-editor/languages/definitions/yaml/register';
+import 'monaco-editor/features/register.all';
+import 'monaco-editor/features/links/register';
 // language services
 import * as monaco from 'monaco-editor';
-import 'monaco-editor/esm/vs/language/typescript/monaco.contribution.js';
+import 'monaco-editor/languages/features/typescript/register';
 // others
 import { loader } from '@monaco-editor/react';
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import editorWorker from 'monaco-editor/editor/editor.worker?worker';
+import cssWorker from 'monaco-editor/language/css/css.worker?worker';
+import jsonWorker from 'monaco-editor/language/json/json.worker?worker';
+import tsWorker from 'monaco-editor/language/typescript/ts.worker?worker';
 // workers
 import yamlWorker from '@/utils/monaco-yaml.worker?worker';
 
@@ -24,6 +25,10 @@ self.MonacoEnvironment = {
       case 'typescript':
       case 'javascript':
         return new tsWorker();
+      case 'css':
+      case 'less':
+      case 'scss':
+        return new cssWorker();
       case 'yaml':
         return new yamlWorker();
       default:
