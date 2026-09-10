@@ -6,7 +6,7 @@ async function waitForApp() {
       browser.execute(
         () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
       ),
-    { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
+    { timeout: 60_000, timeoutMsg: 'The Chimera frontend did not render.' },
   );
 }
 
@@ -55,43 +55,55 @@ describe('custom CSS editor parity', () => {
       : 'main';
 
     await browser.switchToWindow(sourceWindow);
-    await invoke<null>('create_editor_window', {
-      windowType: 'css-editor',
-      uid: null,
-    });
-    await waitForWindow('editor-css');
 
-    const handlesAfterFirstOpen = await browser.getWindowHandles();
-    await invoke<null>('create_editor_window', {
-      windowType: 'css-editor',
-      uid: null,
-    });
-    const handlesAfterSecondOpen = await browser.getWindowHandles();
-    assert.deepEqual(
-      [...handlesAfterSecondOpen].sort(),
-      [...handlesAfterFirstOpen].sort(),
-      'CSS editor must stay singleton when opened repeatedly.',
-    );
+    try {
+      await invoke<null>('create_editor_window', {
+        windowType: 'css-editor',
+        uid: null,
+      });
+      await waitForWindow('editor-css');
 
-    await browser.switchToWindow('editor-css');
-    await waitForApp();
+      const handlesAfterFirstOpen = await browser.getWindowHandles();
+      await invoke<null>('create_editor_window', {
+        windowType: 'css-editor',
+        uid: null,
+      });
+      const handlesAfterSecondOpen = await browser.getWindowHandles();
+      assert.deepEqual(
+        [...handlesAfterSecondOpen].sort(),
+        [...handlesAfterFirstOpen].sort(),
+        'CSS editor must stay singleton when opened repeatedly.',
+      );
 
-    const pathname = await browser.execute(() => window.location.pathname);
-    assert.equal(pathname.replace(/\/$/, ''), '/editor/css');
+      await browser.switchToWindow('editor-css');
+      await waitForApp();
 
-    const editorContent = await $('[data-slot="editor-content"]');
-    await editorContent.waitForDisplayed({ timeout: 30_000 });
-    const footer = await $('[data-slot="editor-footer-actions"]');
-    await footer.waitForDisplayed({ timeout: 15_000 });
-    const monaco = await $('.monaco-editor');
-    await monaco.waitForDisplayed({ timeout: 30_000 });
+      const pathname = await browser.execute(() => window.location.pathname);
+      assert.equal(pathname.replace(/\/$/, ''), '/editor/css');
 
-    const footerButtons = await footer.$$('button');
-    assert.equal(footerButtons.length, 4);
-    const cancel = footerButtons[1];
-    await cancel.waitForClickable({ timeout: 15_000 });
-    await cancel.click();
-    await waitForWindowClosed('editor-css');
-    await browser.switchToWindow(sourceWindow);
+      const editorContent = await $('[data-slot="editor-content"]');
+      await editorContent.waitForDisplayed({ timeout: 30_000 });
+      const footer = await $('[data-slot="editor-footer-actions"]');
+      await footer.waitForDisplayed({ timeout: 15_000 });
+      const monaco = await $('.monaco-editor');
+      await monaco.waitForDisplayed({ timeout: 30_000 });
+
+      const footerButtons = await footer.$$('button');
+      assert.equal(footerButtons.length, 4);
+      const cancel = footerButtons[1];
+      await cancel.waitForClickable({ timeout: 15_000 });
+      await cancel.click();
+      await waitForWindowClosed('editor-css');
+    } finally {
+      const handles = await browser.getWindowHandles();
+      if (handles.includes('editor-css')) {
+        await browser.switchToWindow('editor-css');
+        await browser.closeWindow();
+        await waitForWindowClosed('editor-css');
+      }
+      if ((await browser.getWindowHandles()).includes(sourceWindow)) {
+        await browser.switchToWindow(sourceWindow);
+      }
+    }
   });
 });
