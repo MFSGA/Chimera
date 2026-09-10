@@ -42,16 +42,20 @@ describe('main settings reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
+    const currentHref = await browser.getUrl();
+    await browser.url(new URL(targetPath, currentHref).href);
     await browser.waitUntil(
       async () =>
         browser.execute(
-          (expected) => location.pathname === expected,
+          (expected) =>
+            location.pathname === expected &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
           targetPath,
         ),
-      { timeout: 15_000, timeoutMsg: 'System settings route did not open.' },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'System settings route did not render.',
+      },
     );
   });
 

@@ -38,6 +38,7 @@ const occupiedControllerPort = process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT
   ? Number(process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT)
   : null;
 let controllerPortReservation: Server | null = null;
+let legacyEntryUrl: string | null = null;
 const ownsRuntimeDirectory = !process.env.CHIMERA_E2E_RUNTIME_DIR;
 const runtimeDirectory = resolveRuntimeDirectory(
   runtimeRootDirectory,
@@ -139,6 +140,59 @@ async function releaseControllerPortReservation(): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+async function captureLegacyEntryUrl(): Promise<void> {
+  if (browser.isMultiremote || !browser.sessionId) return;
+
+  const handles = await browser.getWindowHandles();
+  if (!handles.includes('legacy')) {
+    throw new Error('The legacy E2E window is unavailable at session start.');
+  }
+
+  await browser.switchToWindow('legacy');
+  legacyEntryUrl = await browser.getUrl();
+}
+
+async function resetE2eWindowState(): Promise<void> {
+  if (browser.isMultiremote || !browser.sessionId) return;
+
+  for (const handle of await browser.getWindowHandles()) {
+    if (handle === 'legacy') continue;
+
+    const currentHandles = await browser.getWindowHandles();
+    if (!currentHandles.includes(handle)) continue;
+
+    await browser.switchToWindow(handle);
+    await browser.closeWindow();
+    await browser.waitUntil(
+      async () => !(await browser.getWindowHandles()).includes(handle),
+      {
+        timeout: 15_000,
+        timeoutMsg: `The E2E window ${handle} was not closed.`,
+      },
+    );
+  }
+
+  const handles = await browser.getWindowHandles();
+  if (!handles.includes('legacy')) {
+    throw new Error('The legacy E2E window is unavailable during suite reset.');
+  }
+
+  await browser.switchToWindow('legacy');
+  if (legacyEntryUrl && (await browser.getUrl()) !== legacyEntryUrl) {
+    await browser.url(legacyEntryUrl);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
+        ),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'The legacy E2E window did not render after reset.',
+      },
+    );
+  }
+}
+
 async function prepareTauriServiceTeardown(): Promise<void> {
   if (browser.isMultiremote) return;
 
@@ -238,7 +292,14 @@ export const config: WebdriverIO.Config = {
     timeout: 120_000,
   },
   onPrepare: reserveControllerPort,
+  before: captureLegacyEntryUrl,
+  beforeSuite: async (suite) => {
+    if (!suite.parent) await resetE2eWindowState();
+  },
   afterTest: captureFailedTest,
+  afterSuite: async (suite) => {
+    if (!suite.parent) await resetE2eWindowState();
+  },
   after: prepareTauriServiceTeardown,
   onComplete: async () => {
     try {
