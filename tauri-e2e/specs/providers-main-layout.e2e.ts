@@ -16,8 +16,28 @@ describe('main providers reference layout', () => {
   });
 
   it('keeps the ref group rhythm and balanced empty states', async () => {
-    const firstGroup = await $('[data-slot="providers-group"]');
-    await firstGroup.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const transitions = Array.from(
+            document.querySelectorAll<HTMLElement>('.page-transition'),
+          );
+          return transitions.some((element) => {
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return (
+              Number.parseFloat(style.opacity || '1') > 0.5 &&
+              rect.right > 0 &&
+              rect.left < window.innerWidth &&
+              element.querySelector('[data-slot="providers-content"]') !== null
+            );
+          });
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The active Providers route did not render.',
+      },
+    );
 
     const state = await browser.execute(() => {
       const transitions = Array.from(
