@@ -3,22 +3,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
 
-async function closeMainWindow() {
-  const handles = await browser.getWindowHandles();
-  if (handles.includes('main')) {
-    await browser.switchToWindow('main');
-    await browser.closeWindow();
-    await browser.waitUntil(
-      async () => !(await browser.getWindowHandles()).includes('main'),
-      { timeout: 15_000, timeoutMsg: 'The main window was not closed.' },
-    );
-  }
-
-  if ((await browser.getWindowHandles()).includes('legacy')) {
-    await browser.switchToWindow('legacy');
-  }
-}
-
 describe('main debug settings reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -27,10 +11,6 @@ describe('main debug settings reference layout', () => {
     });
     await openMainRoute('/main/settings/debug');
     await browser.setWindowSize(1240, 638);
-  });
-
-  after(async () => {
-    await closeMainWindow();
   });
 
   it('uses the ref debug groups and reveals window debug tools', async () => {

@@ -18,13 +18,18 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-export async function waitForApp(timeout = 30_000) {
+async function waitForMainApp(timeout = 30_000) {
   await browser.waitUntil(
     async () =>
-      browser.execute(
-        () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
-      ),
-    { timeout, timeoutMsg: 'The Chimera frontend did not render.' },
+      browser.execute(() => {
+        const root = document.getElementById('root');
+        return (
+          (root?.childElementCount ?? 0) > 0 &&
+          document.documentElement.classList.contains('chimera-main') &&
+          document.querySelector('[data-slot="app-header"]') !== null
+        );
+      }),
+    { timeout, timeoutMsg: 'The Chimera main frontend did not render.' },
   );
 }
 
@@ -41,7 +46,7 @@ async function createMainWindow() {
     { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
   );
   await browser.switchToWindow('main');
-  await waitForApp();
+  await waitForMainApp();
 }
 
 async function recoverStaleMainWindow() {
@@ -65,7 +70,7 @@ export async function ensureMainWindow() {
 
   await browser.switchToWindow('main');
   try {
-    await waitForApp(5_000);
+    await waitForMainApp(5_000);
   } catch {
     await recoverStaleMainWindow();
   }
@@ -76,6 +81,15 @@ export async function openMainRoute(pathname: string) {
 
   if ((await browser.execute(() => location.pathname)) !== pathname) {
     await browser.execute((target) => {
+      const link = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>('a'),
+      ).find((candidate) => candidate.getAttribute('href') === target);
+
+      if (link) {
+        link.click();
+        return;
+      }
+
       history.pushState({}, '', target);
       window.dispatchEvent(new PopStateEvent('popstate'));
     }, pathname);
@@ -86,7 +100,8 @@ export async function openMainRoute(pathname: string) {
       browser.execute(
         (expected) =>
           location.pathname === expected &&
-          (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          document.documentElement.classList.contains('chimera-main') &&
+          document.querySelector('[data-slot="app-header"]') !== null,
         pathname,
       ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },

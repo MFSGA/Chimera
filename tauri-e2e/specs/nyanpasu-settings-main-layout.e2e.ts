@@ -1,68 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
-
-async function closeMainWindow() {
-  const handles = await browser.getWindowHandles();
-  if (handles.includes('main')) {
-    await browser.switchToWindow('main');
-    await browser.closeWindow();
-    await browser.waitUntil(
-      async () => !(await browser.getWindowHandles()).includes('main'),
-      { timeout: 15_000, timeoutMsg: 'The main window was not closed.' },
-    );
-  }
-
-  if ((await browser.getWindowHandles()).includes('legacy')) {
-    await browser.switchToWindow('legacy');
-  }
-}
-
-async function openChimeraSettings() {
-  const currentHref = await browser.getUrl();
-  await browser.url(new URL('/main/settings/chimera', currentHref).href);
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
-      ),
-    { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
-  );
-  await browser.waitUntil(
-    async () =>
-      browser.execute(() => location.pathname === '/main/settings/chimera'),
-    { timeout: 15_000, timeoutMsg: 'Chimera settings route did not open.' },
-  );
-}
+import { openMainRoute } from './main-window.js';
 
 describe('main Chimera settings reference layout', () => {
   before(async () => {
@@ -70,14 +9,8 @@ describe('main Chimera settings reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute('/main/settings/chimera');
     await browser.setWindowSize(1240, 638);
-
-    await openChimeraSettings();
-  });
-
-  after(async () => {
-    await closeMainWindow();
   });
 
   it('matches the ref settings-group DOM and spacing contract', async () => {

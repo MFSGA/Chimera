@@ -6,21 +6,25 @@ import { openMainRoute } from './main-window.js';
 const targetPath = '/main/assistant';
 const artifactDirectory = path.resolve('.tmp');
 
+type VergeConfig = {
+  language?: string | null;
+};
+
 /** Invoke a backend command through the current Tauri page internals. */
-async function invoke(command: string, args?: Record<string, unknown>) {
+async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
     async (name, parameters) => {
       const internals = (
         window as typeof window & {
           __TAURI_INTERNALS__: {
-            invoke: (
+            invoke: <R>(
               command: string,
               args?: Record<string, unknown>,
-            ) => Promise<unknown>;
+            ) => Promise<R>;
           };
         }
       ).__TAURI_INTERNALS__;
-      return internals.invoke(name, parameters);
+      return internals.invoke<T>(name, parameters);
     },
     command,
     args,
@@ -64,14 +68,25 @@ async function getLayoutState() {
 }
 
 describe('network assistant guided diagnosis', () => {
+  let originalLanguage: string | undefined;
+
   before(async () => {
     fs.mkdirSync(artifactDirectory, { recursive: true });
+    originalLanguage =
+      (await invoke<VergeConfig>('get_verge_config')).language ?? undefined;
     await invoke('patch_verge_config', {
       payload: { language: 'zh-cn' },
     });
     await openMainRoute('/main/dashboard');
     await browser.setWindowSize(1240, 720);
     await openAgentFromHelp();
+  });
+
+  after(async () => {
+    if (originalLanguage === undefined) return;
+    await invoke('patch_verge_config', {
+      payload: { language: originalLanguage },
+    }).catch(() => undefined);
   });
 
   it('starts with a clear read-only guided action', async () => {
