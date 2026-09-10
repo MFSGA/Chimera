@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { focusElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/user-interface';
-const themeModeTrigger = '[data-slot="theme-mode-selector"] button';
+const themeModeTrigger = '[data-slot="theme-mode-selector-trigger"]';
 const themeModes = ['light', 'dark', 'system'] as const;
 type ThemeMode = (typeof themeModes)[number];
 
@@ -10,9 +11,7 @@ async function openUserInterfaceSettings() {
   await openMainRoute(settingsPath);
 
   const trigger = await $(themeModeTrigger);
-  await trigger.waitForDisplayed({ timeout: 15_000 });
-  await trigger.scrollIntoView({ block: 'center' });
-  await trigger.waitForClickable({ timeout: 15_000 });
+  await focusElement(trigger);
 }
 
 async function readThemeMode(): Promise<ThemeMode> {
@@ -31,12 +30,7 @@ async function readThemeMode(): Promise<ThemeMode> {
 
 async function openThemeModeMenu() {
   const trigger = await $(themeModeTrigger);
-  await trigger.waitForClickable({ timeout: 15_000 });
-  const focused = await browser.execute((element) => {
-    (element as HTMLElement).focus();
-    return document.activeElement === element;
-  }, trigger);
-  assert.equal(focused, true, 'The theme-mode trigger was not focusable.');
+  await focusElement(trigger);
   await browser.keys('Enter');
   await browser.waitUntil(
     async () =>
@@ -59,8 +53,8 @@ async function setThemeMode(mode: ThemeMode) {
     'Unexpected theme-mode options.',
   );
   const option = options[themeModes.indexOf(mode)];
-  await option.waitForClickable({ timeout: 15_000 });
-  await option.click();
+  await focusElement(option);
+  await browser.keys('Enter');
 
   await browser.waitUntil(async () => (await readThemeMode()) === mode, {
     timeout: 15_000,

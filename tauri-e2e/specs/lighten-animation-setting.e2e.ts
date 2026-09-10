@@ -1,17 +1,16 @@
 import assert from 'node:assert/strict';
+import { focusElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/chimera';
 const settingSelector =
-  '[data-slot="app-settings-container"]:last-child [role="switch"]';
+  '[data-slot="lighten-animation-effects-switch"] [role="switch"]';
 
 async function openSettings() {
   await openMainRoute(settingsPath);
 
   const toggle = await $(settingSelector);
-  await toggle.waitForDisplayed({ timeout: 15_000 });
-  await toggle.scrollIntoView({ block: 'center' });
-  await toggle.waitForClickable({ timeout: 15_000 });
+  await focusElement(toggle);
 }
 
 async function isChecked() {
@@ -24,7 +23,8 @@ async function setChecked(expected: boolean) {
   const current = (await toggle.getAttribute('aria-checked')) === 'true';
 
   if (current !== expected) {
-    await toggle.click();
+    await focusElement(toggle);
+    await browser.keys('Space');
   }
 
   await browser.waitUntil(async () => (await isChecked()) === expected, {
