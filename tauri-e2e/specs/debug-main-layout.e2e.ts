@@ -31,6 +31,22 @@ async function openMainWindow() {
   await browser.switchToWindow('main');
 }
 
+async function closeMainWindow() {
+  const handles = await browser.getWindowHandles();
+  if (handles.includes('main')) {
+    await browser.switchToWindow('main');
+    await browser.closeWindow();
+    await browser.waitUntil(
+      async () => !(await browser.getWindowHandles()).includes('main'),
+      { timeout: 15_000, timeoutMsg: 'The main window was not closed.' },
+    );
+  }
+
+  if ((await browser.getWindowHandles()).includes('legacy')) {
+    await browser.switchToWindow('legacy');
+  }
+}
+
 describe('main debug settings reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -47,6 +63,10 @@ describe('main debug settings reference layout', () => {
     const debugLink = await $('a[href="/main/settings/debug"]');
     await debugLink.waitForClickable({ timeout: 15_000 });
     await debugLink.click();
+  });
+
+  after(async () => {
+    await closeMainWindow();
   });
 
   it('uses the ref debug groups and reveals window debug tools', async () => {
@@ -87,6 +107,9 @@ describe('main debug settings reference layout', () => {
       const pathGrid = containers[0]?.querySelector<HTMLElement>('.grid');
       const pathButton = pathGrid?.querySelector<HTMLElement>('button');
       const content = containers[0]?.parentElement;
+      const topLevelContainers = content?.querySelectorAll<HTMLElement>(
+        ':scope > [data-slot="debug-settings-container"]',
+      );
       const settingsTitles = document.querySelectorAll<HTMLElement>(
         '[data-slot="settings-title"]',
       );
@@ -95,7 +118,7 @@ describe('main debug settings reference layout', () => {
       return {
         path: location.pathname,
         viewport: { width: innerWidth, height: innerHeight },
-        groupCount: containers.length,
+        groupCount: topLevelContainers?.length ?? 0,
         content: content
           ? {
               display: getComputedStyle(content).display,
