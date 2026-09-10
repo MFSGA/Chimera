@@ -193,6 +193,13 @@ describe('typed session/window state ownership', () => {
     await waitForApp();
     await browser.switchToWindow('legacy');
 
+    if ((await browser.getWindowHandles()).includes('main')) {
+      await browser.switchToWindow('main');
+      await browser.closeWindow();
+      await waitForWindowClosed('main');
+      await browser.switchToWindow('legacy');
+    }
+
     const originalRect = await browser.getWindowRect();
     const firstGeometry = {
       width: Math.max(900, originalRect.width + 64),
