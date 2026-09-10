@@ -136,9 +136,9 @@ const Viewer = ({ search }: { search: string }) => {
                   transform: `translateY(${offset}px)`,
                 }}
               >
-                {row.getVisibleCells().map(({ column, id, getContext }) => (
-                  <td key={id} data-slot="rules-virtual-td">
-                    {flexRender(column.columnDef.cell, getContext())}
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} data-slot="rules-virtual-td">
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}
               </tr>

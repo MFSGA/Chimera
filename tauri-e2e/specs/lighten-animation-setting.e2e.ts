@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { focusElement } from './interaction.js';
+import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/chimera';
@@ -9,22 +9,36 @@ const settingSelector =
 async function openSettings() {
   await openMainRoute(settingsPath);
 
-  const toggle = await $(settingSelector);
-  await focusElement(toggle);
+  await displayedElement(settingSelector);
 }
 
 async function isChecked() {
-  const toggle = await $(settingSelector);
+  const toggle = await displayedElement(settingSelector);
   return (await toggle.getAttribute('aria-checked')) === 'true';
 }
 
+async function readPersistedValue() {
+  return browser.execute(async () => {
+    const internals = (
+      window as typeof window & {
+        __TAURI_INTERNALS__: {
+          invoke: (command: string) => Promise<{
+            lighten_animation_effects?: boolean | null;
+          }>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    const config = await internals.invoke('get_verge_config');
+    return Boolean(config.lighten_animation_effects);
+  });
+}
+
 async function setChecked(expected: boolean) {
-  const toggle = await $(settingSelector);
+  const toggle = await displayedElement(settingSelector);
   const current = (await toggle.getAttribute('aria-checked')) === 'true';
 
   if (current !== expected) {
-    await focusElement(toggle);
-    await browser.keys('Space');
+    await clickElement(toggle);
   }
 
   await browser.waitUntil(async () => (await isChecked()) === expected, {
@@ -42,12 +56,14 @@ describe('Chimera lighten-animation preference', () => {
 
     try {
       await setChecked(changed);
-      await browser.refresh();
+      assert.equal(await readPersistedValue(), changed);
+      await openMainRoute('/main/dashboard');
       await openSettings();
       assert.equal(await isChecked(), changed);
     } finally {
       await setChecked(original);
-      await browser.refresh();
+      assert.equal(await readPersistedValue(), original);
+      await openMainRoute('/main/dashboard');
       await openSettings();
       assert.equal(await isChecked(), original);
     }

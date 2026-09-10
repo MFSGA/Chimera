@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/web-ui';
@@ -33,19 +34,15 @@ describe('main ref input primitive', () => {
       (element as HTMLElement).click();
     }, trigger);
 
-    const modal = await $('[data-slot="modal-content"]');
-    await modal.waitForDisplayed({ timeout: 15_000 });
-
+    const modal = await displayedElement('[data-slot="modal-content"]');
     const input = await modal.$('input');
     await input.waitForDisplayed({ timeout: 15_000 });
     await input.click();
     await browser.pause(500);
 
-    const state = await browser.execute(() => {
-      const modal = document.querySelector<HTMLElement>(
-        '[data-slot="modal-content"]',
-      );
-      const input = modal?.querySelector<HTMLInputElement>('input') ?? null;
+    const state = await browser.execute((modalNode) => {
+      const modal = modalNode as HTMLElement;
+      const input = modal.querySelector<HTMLInputElement>('input');
       const container = input?.parentElement ?? null;
       const fieldset =
         container?.querySelector<HTMLElement>('fieldset') ?? null;
@@ -86,7 +83,7 @@ describe('main ref input primitive', () => {
         labelFontSize: label ? getComputedStyle(label).fontSize : null,
         lineDisplay: line ? getComputedStyle(line).display : null,
       };
-    });
+    }, modal);
 
     assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
     assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));

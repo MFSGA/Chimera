@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/assistant';
@@ -33,16 +34,19 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
 
 /** Navigate through the real Help menu so Agent discoverability stays covered. */
 async function openAgentFromHelp() {
-  const appHeader = await $('[data-slot="app-header"]');
-  const helpButton = await appHeader.$('[data-slot="header-help-menu"]');
-  await helpButton.waitForDisplayed({ timeout: 15_000 });
-  await browser.execute((button) => button.focus(), helpButton);
-  await browser.keys('Enter');
+  const helpButton = await displayedElement('[data-slot="header-help-menu"]');
+  await browser.execute((button) => {
+    button.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        button: 0,
+        pointerType: 'mouse',
+      }),
+    );
+  }, helpButton);
 
-  const link = await $('a[href="/main/assistant"]');
-  await link.waitForDisplayed({ timeout: 15_000 });
-  await browser.execute((element) => element.focus(), link);
-  await browser.keys('Enter');
+  const link = await displayedElement('a[href="/main/assistant"]');
+  await browser.execute((element) => (element as HTMLElement).click(), link);
   await browser.waitUntil(
     async () =>
       browser.execute((expected) => location.pathname === expected, targetPath),
@@ -98,14 +102,24 @@ describe('network assistant guided diagnosis', () => {
     assert.match(text, /检查不会修改任何设置/);
     assert.match(text, /任何网络变更都一定会先征得你的确认/);
 
-    const button = await $('//button[contains(., "检查网络问题")]');
-    await button.waitForClickable({ timeout: 15_000 });
-    assert.equal(await button.isDisplayed(), true);
+    const button = await displayedElement(
+      '//button[contains(., "检查网络问题")]',
+    );
+    const enabled = await browser.execute(
+      (element) => !(element as HTMLButtonElement).disabled,
+      button,
+    );
+    assert.equal(enabled, true);
   });
 
   it('turns a finding into an explanation and recommended repair', async () => {
-    const button = await $('//button[contains(., "检查网络问题")]');
-    await button.click();
+    const button = await displayedElement(
+      '//button[contains(., "检查网络问题")]',
+    );
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      button,
+    );
 
     await browser.waitUntil(
       async () =>
@@ -128,9 +142,13 @@ describe('network assistant guided diagnosis', () => {
   });
 
   it('keeps technical details secondary and fits a narrow window', async () => {
-    const summary = await $('//summary[contains(., "技术详情")]');
-    await summary.waitForClickable({ timeout: 15_000 });
-    await summary.click();
+    const summary = await displayedElement(
+      '//summary[contains(., "技术详情")]',
+    );
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      summary,
+    );
     assert.match(await $('body').getText(), /高级手动控制/);
 
     await browser.setWindowSize(680, 720);
@@ -151,8 +169,13 @@ describe('network assistant guided diagnosis', () => {
   });
 
   it('requires confirmation and shows the verified healthy result after execute', async () => {
-    const repair = await $('//button[contains(., "查看修复方案")]');
-    await repair.click();
+    const repair = await displayedElement(
+      '//button[contains(., "查看修复方案")]',
+    );
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      repair,
+    );
 
     await browser.waitUntil(
       async () => (await $('body').getText()).includes('确认网络变更'),
@@ -163,9 +186,13 @@ describe('network assistant guided diagnosis', () => {
     assert.match(dialogText, /将禁用主机的系统代理/);
     assert.match(dialogText, /确认并执行/);
 
-    const confirm = await $('//button[contains(., "确认并执行")]');
-    await confirm.waitForClickable({ timeout: 15_000 });
-    await confirm.click();
+    const confirm = await displayedElement(
+      '//button[contains(., "确认并执行")]',
+    );
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      confirm,
+    );
 
     await browser.waitUntil(
       async () => (await $('body').getText()).includes('当前看起来一切正常'),

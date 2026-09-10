@@ -124,7 +124,7 @@ describe('main settings reference layout', () => {
       JSON.stringify(state, null, 2),
     );
     assert.ok(
-      (state.animatedOutlet?.height ?? 0) >= (state.content?.height ?? 0) - 2,
+      (state.animatedOutlet?.height ?? 0) >= (state.container?.height ?? 0) - 2,
       JSON.stringify(state, null, 2),
     );
     assert.ok(state.routeContent, JSON.stringify(state, null, 2));

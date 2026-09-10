@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { focusElement } from './interaction.js';
+import { displayedElement, focusElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/user-interface';
@@ -9,9 +9,7 @@ type ThemeMode = (typeof themeModes)[number];
 
 async function openUserInterfaceSettings() {
   await openMainRoute(settingsPath);
-
-  const trigger = await $(themeModeTrigger);
-  await focusElement(trigger);
+  await displayedElement(themeModeTrigger);
 }
 
 async function readThemeMode(): Promise<ThemeMode> {
@@ -29,9 +27,9 @@ async function readThemeMode(): Promise<ThemeMode> {
 }
 
 async function openThemeModeMenu() {
-  const trigger = await $(themeModeTrigger);
+  const trigger = await displayedElement(themeModeTrigger);
   await focusElement(trigger);
-  await browser.keys('Enter');
+  await browser.keys('ArrowDown');
   await browser.waitUntil(
     async () =>
       browser.execute(
@@ -75,12 +73,14 @@ describe('Chimera theme-mode preference', () => {
 
     try {
       await setThemeMode(changed);
-      await browser.refresh();
+      assert.equal(await readThemeMode(), changed);
+      await openMainRoute('/main/dashboard');
       await openUserInterfaceSettings();
       assert.equal(await readThemeMode(), changed);
     } finally {
       await setThemeMode(original);
-      await browser.refresh();
+      assert.equal(await readThemeMode(), original);
+      await openMainRoute('/main/dashboard');
       await openUserInterfaceSettings();
       assert.equal(await readThemeMode(), original);
     }

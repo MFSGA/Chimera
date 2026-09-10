@@ -445,13 +445,18 @@ export default function ConnectionsTable({
                   }}
                   onClick={() => setSelected(row.original)}
                 >
-                  {row.getVisibleCells().map(({ column, id, getContext }) => (
+                  {row.getVisibleCells().map((cell) => (
                     <td
-                      key={id}
+                      key={cell.id}
                       className="border-outline-variant/30 max-w-0 truncate border-b px-3 text-sm"
-                      style={{ width: column.getSize() + extraWidthPerColumn }}
+                      style={{
+                        width: cell.column.getSize() + extraWidthPerColumn,
+                      }}
                     >
-                      {flexRender(column.columnDef.cell, getContext())}
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext(),
+                      )}
                     </td>
                   ))}
                 </tr>

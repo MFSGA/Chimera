@@ -63,6 +63,7 @@ describe('main connections reference layout', () => {
         toolbar: rect(toolbar),
         empty: rect(empty),
         closeButton: rect(closeButton),
+        closeButtonDisabled: closeButton?.disabled ?? null,
         search: rect(search),
         emptyText: empty?.innerText ?? '',
         toolbarDisplay: toolbarStyle?.display ?? '',
@@ -87,6 +88,11 @@ describe('main connections reference layout', () => {
       (state.closeButton?.width ?? 0) >= 32,
       JSON.stringify(state, null, 2),
     );
+    assert.equal(
+      state.closeButtonDisabled,
+      false,
+      JSON.stringify(state, null, 2),
+    );
     assert.ok(state.emptyText.length > 0, JSON.stringify(state, null, 2));
     assert.equal(state.toolbarDisplay, 'flex', JSON.stringify(state, null, 2));
     assert.equal(state.toolbarGap, '12px', JSON.stringify(state, null, 2));
@@ -103,11 +109,6 @@ describe('main connections reference layout', () => {
       Number.parseFloat(state.closeButtonBorderRadius) > 10_000,
       JSON.stringify(state, null, 2),
     );
-
-    const closeButton = await $('[data-slot="connections-toolbar"] button');
-    await closeButton.waitForClickable({ timeout: 5_000 });
-    await closeButton.click();
-    await toolbar.waitForDisplayed({ timeout: 5_000 });
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {

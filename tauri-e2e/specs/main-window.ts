@@ -49,17 +49,36 @@ async function createMainWindow() {
   await waitForMainApp();
 }
 
-async function recoverStaleMainWindow() {
-  if ((await browser.getWindowHandles()).includes('main')) {
-    await browser.switchToWindow('main');
-    await browser.closeWindow();
-    await browser.waitUntil(
-      async () => !(await browser.getWindowHandles()).includes('main'),
-      { timeout: 15_000, timeoutMsg: 'The stale main window was not closed.' },
-    );
-  }
+const animatedOutletHosts = [
+  '[data-slot="app-content"]',
+  '[data-slot="settings-content"]',
+  '[data-slot="providers-content"]',
+  '[data-slot="profiles-content"]',
+  '[data-slot="proxies-content"]',
+] as const;
 
-  await createMainWindow();
+async function waitForMainRouteSettled(timeout = 15_000) {
+  await browser.waitUntil(
+    async () =>
+      browser.execute((selectors) => {
+        const hostGroups = selectors.map((selector) =>
+          Array.from(document.querySelectorAll<HTMLElement>(selector)),
+        );
+        const appContent = hostGroups[0];
+        if (appContent.length !== 1 || appContent[0].children.length === 0) {
+          return false;
+        }
+
+        return hostGroups.slice(1).every((hosts) => {
+          if (hosts.length > 1) return false;
+          return hosts.length === 0 || hosts[0].children.length === 1;
+        });
+      }, animatedOutletHosts),
+    {
+      timeout,
+      timeoutMsg: 'The Chimera main route animation did not settle.',
+    },
+  );
 }
 
 export async function ensureMainWindow() {
@@ -69,11 +88,7 @@ export async function ensureMainWindow() {
   }
 
   await browser.switchToWindow('main');
-  try {
-    await waitForMainApp(5_000);
-  } catch {
-    await recoverStaleMainWindow();
-  }
+  await waitForMainApp();
 }
 
 export async function openMainRoute(pathname: string) {
@@ -106,4 +121,5 @@ export async function openMainRoute(pathname: string) {
       ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },
   );
+  await waitForMainRouteSettled();
 }
