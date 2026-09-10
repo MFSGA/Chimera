@@ -28,31 +28,67 @@ export async function waitForApp(timeout = 30_000) {
   );
 }
 
-export async function ensureMainWindow() {
-  if (!(await browser.getWindowHandles()).includes('main')) {
-    await invoke('create_main_window');
+async function createMainWindow() {
+  const handles = await browser.getWindowHandles();
+  if (!handles.includes('legacy')) {
+    throw new Error('The legacy E2E window is unavailable.');
+  }
+
+  await browser.switchToWindow('legacy');
+  await invoke('create_main_window');
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes('main'),
+    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
+  );
+  await browser.switchToWindow('main');
+  await waitForApp();
+}
+
+async function recoverStaleMainWindow() {
+  if ((await browser.getWindowHandles()).includes('main')) {
+    await browser.switchToWindow('main');
+    await browser.closeWindow();
     await browser.waitUntil(
-      async () => (await browser.getWindowHandles()).includes('main'),
-      { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
+      async () => !(await browser.getWindowHandles()).includes('main'),
+      { timeout: 15_000, timeoutMsg: 'The stale main window was not closed.' },
     );
   }
 
+  await createMainWindow();
+}
+
+export async function ensureMainWindow() {
+  if (!(await browser.getWindowHandles()).includes('main')) {
+    await createMainWindow();
+    return;
+  }
+
   await browser.switchToWindow('main');
-  await waitForApp();
+  try {
+    await waitForApp(5_000);
+  } catch {
+    await recoverStaleMainWindow();
+  }
 }
 
 export async function openMainRoute(pathname: string) {
   await ensureMainWindow();
 
-  const currentHref = await browser.getUrl();
-  if (new URL(currentHref).pathname !== pathname) {
-    await browser.url(new URL(pathname, currentHref).href);
+  if ((await browser.execute(() => location.pathname)) !== pathname) {
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, pathname);
   }
 
-  await waitForApp();
   await browser.waitUntil(
     async () =>
-      browser.execute((expected) => location.pathname === expected, pathname),
+      browser.execute(
+        (expected) =>
+          location.pathname === expected &&
+          (document.getElementById('root')?.childElementCount ?? 0) > 0,
+        pathname,
+      ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },
   );
 }

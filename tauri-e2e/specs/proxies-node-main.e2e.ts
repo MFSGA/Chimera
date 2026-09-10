@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const profileName = 'TDD Main Proxy Node';
 const groupName = 'TDD Node Group';
@@ -52,15 +53,6 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
-
 describe('main proxy node reference layout', () => {
   let profileUid: string | undefined;
 
@@ -97,26 +89,14 @@ describe('main proxy node reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute('/main/proxies');
     await browser.setWindowSize(1240, 638);
-
-    await browser.execute(() => {
-      history.pushState({}, '', '/main/proxies');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    });
-    await browser.waitUntil(
-      async () => browser.execute(() => location.pathname === '/main/proxies'),
-      { timeout: 15_000, timeoutMsg: 'The proxies route did not open.' },
-    );
 
     const proxiesLink = await $('a[href^="/main/proxies/"]');
     await proxiesLink.waitForExist({ timeout: 30_000 });
     const proxiesPath = await proxiesLink.getAttribute('href');
     assert.ok(proxiesPath, 'The proxy group route was not available.');
-    await browser.execute((target) => {
-      history.pushState({}, '', target);
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    }, proxiesPath);
+    await openMainRoute(proxiesPath);
     await browser.waitUntil(
       async () =>
         browser.execute(

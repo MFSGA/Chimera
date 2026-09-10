@@ -1,24 +1,13 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/user-interface';
 const themeModeTrigger = '[data-slot="theme-mode-selector"] button';
 const themeModes = ['light', 'dark', 'system'] as const;
 type ThemeMode = (typeof themeModes)[number];
 
-async function waitForApp() {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
-      ),
-    { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
-  );
-}
-
 async function openUserInterfaceSettings() {
-  const currentHref = await browser.getUrl();
-  await browser.url(new URL(settingsPath, currentHref).href);
-  await waitForApp();
+  await openMainRoute(settingsPath);
 
   const trigger = await $(themeModeTrigger);
   await trigger.waitForDisplayed({ timeout: 15_000 });
@@ -80,7 +69,6 @@ async function setThemeMode(mode: ThemeMode) {
 
 describe('Chimera theme-mode preference', () => {
   it('persists a selected mode and restores the original value', async () => {
-    await waitForApp();
     await openUserInterfaceSettings();
 
     const original = await readThemeMode();

@@ -1,48 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/web-ui';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function waitForPath(pathname: string) {
-  await browser.waitUntil(
-    async () =>
-      browser.execute((expected) => location.pathname === expected, pathname),
-    {
-      timeout: 15_000,
-      timeoutMsg: `Navigation to ${pathname} did not complete.`,
-    },
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
 
 describe('main ref input primitive', () => {
   before(async () => {
@@ -50,14 +11,8 @@ describe('main ref input primitive', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
-
-    await browser.execute((target) => {
-      history.pushState({}, '', target);
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    }, targetPath);
-    await waitForPath(targetPath);
   });
 
   it('uses the ref outlined fieldset, floating label, and hidden filled line', async () => {
