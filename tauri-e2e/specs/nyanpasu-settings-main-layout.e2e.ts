@@ -31,6 +31,39 @@ async function openMainWindow() {
   await browser.switchToWindow('main');
 }
 
+async function closeMainWindow() {
+  const handles = await browser.getWindowHandles();
+  if (handles.includes('main')) {
+    await browser.switchToWindow('main');
+    await browser.closeWindow();
+    await browser.waitUntil(
+      async () => !(await browser.getWindowHandles()).includes('main'),
+      { timeout: 15_000, timeoutMsg: 'The main window was not closed.' },
+    );
+  }
+
+  if ((await browser.getWindowHandles()).includes('legacy')) {
+    await browser.switchToWindow('legacy');
+  }
+}
+
+async function openChimeraSettings() {
+  const currentHref = await browser.getUrl();
+  await browser.url(new URL('/main/settings/chimera', currentHref).href);
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
+      ),
+    { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
+  );
+  await browser.waitUntil(
+    async () =>
+      browser.execute(() => location.pathname === '/main/settings/chimera'),
+    { timeout: 15_000, timeoutMsg: 'Chimera settings route did not open.' },
+  );
+}
+
 describe('main Chimera settings reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -40,23 +73,11 @@ describe('main Chimera settings reference layout', () => {
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
 
-    const settingsLink = await $('a[href="/main/settings/system"]');
-    await settingsLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((link) => link.click(), settingsLink);
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => location.pathname.startsWith('/main/settings')),
-      { timeout: 15_000, timeoutMsg: 'Settings route did not open.' },
-    );
+    await openChimeraSettings();
+  });
 
-    const chimeraLink = await $('a[href="/main/settings/chimera"]');
-    await chimeraLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((link) => link.click(), chimeraLink);
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => location.pathname === '/main/settings/chimera'),
-      { timeout: 15_000, timeoutMsg: 'Chimera settings route did not open.' },
-    );
+  after(async () => {
+    await closeMainWindow();
   });
 
   it('matches the ref settings-group DOM and spacing contract', async () => {
