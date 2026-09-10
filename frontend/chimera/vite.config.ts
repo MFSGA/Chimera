@@ -75,6 +75,13 @@ export default defineConfig(async ({ command, mode }) => {
         { find: '~', replacement: path.resolve(__dirname, '.') },
         { find: '@chimera/utils', replacement: path.resolve('../utils/src') },
         { find: '@interface', replacement: path.resolve('../interface/src') },
+        {
+          // monaco-worker-manager (monaco-yaml dep) still imports the pre-0.56
+          // deep `monaco-editor/esm/vs/*` paths; rewrite them to specifiers the
+          // new exports map resolves to the same files.
+          find: /^monaco-editor\/esm\/vs\//,
+          replacement: 'monaco-editor/',
+        },
       ],
       dedupe: ['react', 'react-dom'],
     },

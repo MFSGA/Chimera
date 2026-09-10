@@ -34,78 +34,71 @@ export interface ProfileMonacoViewRef {
 let initd = false;
 
 export const beforeEditorMount = () => {
-  if (!initd) {
-    // typescriptDefaults and ScriptTarget are deprecated in monaco-editor v0.55+, use type assertion
-    const tsDefaults = (monaco.languages.typescript as any).typescriptDefaults;
-    const ScriptTarget = (monaco.languages.typescript as any).ScriptTarget;
-    tsDefaults.setCompilerOptions({
-      target: ScriptTarget.ES2020,
-      allowNonTsExtensions: true,
-      allowJs: true,
-    });
-    console.log(clashMetaSchema);
-    console.log(nyanpasuMergeSchema);
-    configureMonacoYaml(monaco, {
-      validate: true,
-      enableSchemaRequest: true,
-      completion: true,
-      schemas: [
-        {
-          uri: 'http://example.com/schema-name.json',
-          fileMatch: ['**/*.clash.yaml'],
-          // @ts-expect-error JSONSchema7 as JSONSchema
-          schema: clashMetaSchema as JSONSchema7,
-        },
-        {
-          uri: 'http://example.com/schema-name.json',
-          fileMatch: ['**/*.merge.yaml'],
-          // @ts-expect-error JSONSchema7 as JSONSchema
-          schema: nyanpasuMergeSchema as JSONSchema7,
-        },
-      ],
-    });
+  if (initd) return;
 
-    // Register link provider for all supported languages
-    const registerLinkProvider = (language: string) => {
-      monaco.languages.registerLinkProvider(language, {
-        provideLinks: (model, token) => {
-          const links = [];
-          // More robust URL regex pattern
-          const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>"']*[^<>\s"',.!?]/gi;
+  monaco.typescript.javascriptDefaults.setCompilerOptions({
+    target: monaco.typescript.ScriptTarget.ES2020,
+    allowNonTsExtensions: true,
+    allowJs: true,
+  });
 
-          for (let i = 1; i <= model.getLineCount(); i++) {
-            const line = model.getLineContent(i);
-            let match;
+  configureMonacoYaml(monaco, {
+    validate: true,
+    enableSchemaRequest: true,
+    completion: true,
+    schemas: [
+      {
+        uri: 'http://example.com/schema-name.json',
+        fileMatch: ['**/*.clash.yaml'],
+        // @ts-expect-error JSONSchema7 as JSONSchema
+        schema: clashMetaSchema as JSONSchema7,
+      },
+      {
+        uri: 'http://example.com/schema-name.json',
+        fileMatch: ['**/*.merge.yaml'],
+        // @ts-expect-error JSONSchema7 as JSONSchema
+        schema: nyanpasuMergeSchema as JSONSchema7,
+      },
+    ],
+  });
 
-            while ((match = urlRegex.exec(line)) !== null) {
-              const url = match[0].startsWith('http')
-                ? match[0]
-                : `https://${match[0]}`;
-              links.push({
-                range: new monaco.Range(
-                  i,
-                  match.index + 1,
-                  i,
-                  match.index + match[0].length + 1,
-                ),
-                url,
-              });
-            }
+  const registerLinkProvider = (language: string) => {
+    monaco.languages.registerLinkProvider(language, {
+      provideLinks: (model) => {
+        const links = [];
+        const urlRegex = /\b(?:https?:\/\/|www\.)[^\s<>"']*[^<>\s"',.!?]/gi;
+
+        for (let i = 1; i <= model.getLineCount(); i++) {
+          const line = model.getLineContent(i);
+          let match;
+
+          while ((match = urlRegex.exec(line)) !== null) {
+            const url = match[0].startsWith('http')
+              ? match[0]
+              : `https://${match[0]}`;
+            links.push({
+              range: new monaco.Range(
+                i,
+                match.index + 1,
+                i,
+                match.index + match[0].length + 1,
+              ),
+              url,
+            });
           }
+        }
 
-          return {
-            links,
-            dispose: () => {},
-          };
-        },
-      });
-    };
+        return {
+          links,
+          dispose: () => {},
+        };
+      },
+    });
+  };
 
-    // Register link provider for all languages we support
-    registerLinkProvider('javascript');
-    registerLinkProvider('lua');
-    registerLinkProvider('yaml');
-  }
+  registerLinkProvider('javascript');
+  registerLinkProvider('lua');
+  registerLinkProvider('yaml');
   initd = true;
 };
 
