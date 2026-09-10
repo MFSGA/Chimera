@@ -18,6 +18,7 @@ import * as m from '@/paraglide/messages';
 import { DiagnosisOverview } from './components/diagnosis-overview';
 import { ProposalDialog } from './components/proposal-dialog';
 import { TechnicalDetails } from './components/technical-details';
+import { serializePrivacySafeSnapshot } from './model/privacy-safe-context';
 
 function AgentHeader({
   hasSnapshot,
@@ -134,8 +135,13 @@ export function AgentPage() {
 
   const copyContext = async () => {
     if (!snapshot) return;
+    const context = serializePrivacySafeSnapshot(snapshot);
+    if (!context) {
+      Notice.error(m.agent_error_title());
+      return;
+    }
     try {
-      await writeText(JSON.stringify(snapshot, null, 2));
+      await writeText(context);
       Notice.success(m.agent_context_copied());
     } catch {
       Notice.error(m.agent_error_title());
