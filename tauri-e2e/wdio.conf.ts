@@ -156,7 +156,7 @@ async function resetE2eWindowState(): Promise<void> {
   if (browser.isMultiremote || !browser.sessionId) return;
 
   for (const handle of await browser.getWindowHandles()) {
-    if (handle === 'legacy') continue;
+    if (handle === 'legacy' || handle === 'main') continue;
 
     const currentHandles = await browser.getWindowHandles();
     if (!currentHandles.includes(handle)) continue;

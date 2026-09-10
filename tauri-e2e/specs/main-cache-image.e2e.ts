@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const profileName = 'TDD Cache Icon Profile';
 const groupName = 'TDD Icon Group';
@@ -62,15 +63,6 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
-
 describe('main cached proxy icons', () => {
   let profileUid: string | undefined;
 
@@ -107,20 +99,8 @@ describe('main cached proxy icons', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute('/main/proxies');
     await browser.setWindowSize(1240, 638);
-
-    const proxiesLink = await $('a[href^="/main/proxies"]');
-    await proxiesLink.waitForClickable({ timeout: 15_000 });
-    await proxiesLink.click();
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => location.pathname.startsWith('/main/proxies')),
-      {
-        timeout: 15_000,
-        timeoutMsg: 'Proxies route did not open.',
-      },
-    );
   });
 
   after(async () => {
@@ -206,14 +186,7 @@ describe('main cached proxy icons', () => {
   });
 
   it('keeps loaded Rules proxy artwork square like ref', async () => {
-    const rulesLink = await $('a[href="/main/rules"]');
-    await rulesLink.waitForClickable({ timeout: 15_000 });
-    await rulesLink.click();
-
-    await browser.waitUntil(
-      async () => browser.execute(() => location.pathname === '/main/rules'),
-      { timeout: 15_000, timeoutMsg: 'Rules route did not open.' },
-    );
+    await openMainRoute('/main/rules');
 
     const groupLabel = await $(`//*[normalize-space()="${svgGroupName}"]`);
     await groupLabel.waitForDisplayed({ timeout: 30_000 });

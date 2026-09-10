@@ -1,35 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
+import { openMainRoute } from './main-window.js';
 
 async function closeMainWindow() {
   const handles = await browser.getWindowHandles();
@@ -53,16 +25,8 @@ describe('main debug settings reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute('/main/settings/debug');
     await browser.setWindowSize(1240, 638);
-
-    const settingsLink = await $('a[href="/main/settings/system"]');
-    await settingsLink.waitForClickable({ timeout: 15_000 });
-    await settingsLink.click();
-
-    const debugLink = await $('a[href="/main/settings/debug"]');
-    await debugLink.waitForClickable({ timeout: 15_000 });
-    await debugLink.click();
   });
 
   after(async () => {

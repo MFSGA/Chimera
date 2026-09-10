@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/assistant';
 const artifactDirectory = path.resolve('.tmp');
@@ -23,31 +24,6 @@ async function invoke(command: string, args?: Record<string, unknown>) {
     },
     command,
     args,
-  );
-}
-
-/** Open the main window and wait until its real application shell has rendered. */
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-  await browser.setWindowSize(1240, 720);
-  await browser.waitUntil(
-    async () =>
-      browser.execute(() => {
-        const root = document.getElementById('root');
-        return (
-          (root?.childElementCount ?? 0) > 0 &&
-          document.querySelector('[data-slot="app-header"]') !== null
-        );
-      }),
-    {
-      timeout: 15_000,
-      timeoutMsg: 'The main application shell did not render.',
-    },
   );
 }
 
@@ -93,7 +69,8 @@ describe('network assistant guided diagnosis', () => {
     await invoke('patch_verge_config', {
       payload: { language: 'zh-cn' },
     });
-    await openMainWindow();
+    await openMainRoute('/main/dashboard');
+    await browser.setWindowSize(1240, 720);
     await openAgentFromHelp();
   });
 

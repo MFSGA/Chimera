@@ -1,38 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/connections';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-/** Create and focus the ref-aligned main window. */
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
 
 describe('main connections reference layout', () => {
   before(async () => {
@@ -40,20 +11,8 @@ describe('main connections reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
-
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          (expected) => location.pathname === expected,
-          targetPath,
-        ),
-      { timeout: 15_000, timeoutMsg: 'Connections route did not open.' },
-    );
   });
 
   it('keeps the ref empty-state, toolbar, and context-menu structure', async () => {

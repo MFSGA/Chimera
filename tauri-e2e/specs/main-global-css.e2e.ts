@@ -1,35 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
+import { openMainRoute } from './main-window.js';
 
 describe('main global CSS contract', () => {
   it('scopes the ref baseline to main without changing legacy', async () => {
@@ -51,13 +23,8 @@ describe('main global CSS contract', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute('/main/dashboard');
     await browser.setWindowSize(1240, 638);
-
-    await browser.execute(() => {
-      history.pushState({}, '', '/main/dashboard');
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    });
 
     const state = await browser.execute(() => {
       const rootStyle = getComputedStyle(document.documentElement);

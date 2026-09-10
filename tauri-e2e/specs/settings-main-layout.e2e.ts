@@ -1,37 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/system';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
 
 describe('main settings reference layout', () => {
   before(async () => {
@@ -39,24 +11,8 @@ describe('main settings reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
-
-    const currentHref = await browser.getUrl();
-    await browser.url(new URL(targetPath, currentHref).href);
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          (expected) =>
-            location.pathname === expected &&
-            (document.getElementById('root')?.childElementCount ?? 0) > 0,
-          targetPath,
-        ),
-      {
-        timeout: 30_000,
-        timeoutMsg: 'System settings route did not render.',
-      },
-    );
   });
 
   it('keeps the ref sidebar and full-height flex content chain', async () => {
