@@ -1,11 +1,14 @@
 import { useClashRules } from '@chimera/interface';
-import { alpha, BasePage } from '@chimera/ui';
-import { TextField, type FilledInputProps } from '@mui/material';
+import { BasePage, cn } from '@chimera/ui';
 import { createFileRoute } from '@tanstack/react-router';
-import { useDebounceEffect } from 'ahooks';
-import { useSetAtom } from 'jotai';
-import { lazy, Suspense, useRef, useState, type RefObject } from 'react';
-import { atomRulePage } from '@/components/rules/modules/store';
+import {
+  lazy,
+  Suspense,
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import * as m from '@/paraglide/messages';
 
 const RulePageComponent = lazy(() => import('@/components/rules/rule-page'));
@@ -17,68 +20,52 @@ export const Route = createFileRoute('/(legacy)/rules')({
 function RulesPage() {
   const { data } = useClashRules();
   const [filterText, setFilterText] = useState('');
-  const setRule = useSetAtom(atomRulePage);
+  const deferredFilterText = useDeferredValue(filterText);
   const viewportRef = useRef<HTMLDivElement>(null);
 
-  useDebounceEffect(
-    () => {
-      const search = filterText.trim().toLowerCase();
+  const filteredRules = useMemo(() => {
+    const search = deferredFilterText.trim().toLowerCase();
+    const rules = data?.rules ?? [];
 
-      setRule({
-        data: data?.rules.filter((each) => {
-          if (!search) {
-            return true;
-          }
+    if (!search) {
+      return rules;
+    }
 
-          return [each.type, each.payload, each.proxy].some((value) =>
-            value?.toLowerCase().includes(search),
-          );
-        }),
-        scrollRef: viewportRef as RefObject<HTMLElement>,
-        searchText: filterText,
-      });
-
-      viewportRef.current?.scrollTo({
-        top: 0,
-      });
-    },
-    [data, viewportRef.current, filterText],
-    { wait: 150 },
-  );
-
-  const inputProps: Partial<FilledInputProps> = {
-    sx: (theme) => ({
-      borderRadius: 7,
-      backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
-      fieldset: {
-        border: 'none',
-      },
-    }),
-  };
+    return rules.filter((rule) =>
+      [rule.type, rule.payload, rule.proxy].some((value) =>
+        value?.toLowerCase().includes(search),
+      ),
+    );
+  }, [data?.rules, deferredFilterText]);
 
   return (
     <BasePage
       full
       title={m.navbar_label_rules()}
       header={
-        <TextField
-          hiddenLabel
+        <input
           autoComplete="off"
           spellCheck="false"
           value={filterText}
-          placeholder={'Filter conditions'}
-          onChange={(e) => setFilterText(e.target.value)}
-          className="!pb-0"
-          sx={{ input: { py: 1, fontSize: 14 } }}
-          slotProps={{
-            input: inputProps,
+          placeholder="Filter conditions"
+          onChange={(event) => {
+            setFilterText(event.target.value);
+            viewportRef.current?.scrollTo({ top: 0 });
           }}
+          className={cn(
+            'bg-primary/10 h-10 min-w-0 rounded-full border-0 px-4 text-sm outline-none',
+            'placeholder:text-on-surface-variant focus:ring-primary/40 focus:ring-2',
+          )}
         />
       }
       viewportRef={viewportRef}
     >
       <Suspense fallback={null}>
-        <RulePageComponent />
+        <RulePageComponent
+          data={filteredRules}
+          scrollRef={viewportRef}
+          searchText={deferredFilterText}
+        />
       </Suspense>
     </BasePage>
   );

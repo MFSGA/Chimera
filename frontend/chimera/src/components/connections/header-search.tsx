@@ -1,35 +1,21 @@
-import { alpha } from '@chimera/ui';
-import { FilledInputProps, TextField, TextFieldProps } from '@mui/material';
+import { cn } from '@chimera/utils';
+import type { ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
 
-export const HeaderSearch = (props: TextFieldProps) => {
-  const inputProps: Partial<FilledInputProps> = {
-    sx: (theme) => ({
-      borderRadius: 7,
-      backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
-
-      '&::before': {
-        display: 'none',
-      },
-
-      '&::after': {
-        display: 'none',
-      },
-    }),
-  };
-
+export const HeaderSearch = ({
+  className,
+  ...props
+}: ComponentProps<'input'>) => {
   return (
-    <TextField
+    <input
       autoComplete="off"
       spellCheck="false"
-      hiddenLabel
       placeholder={m.connections_search_placeholder()}
-      variant="filled"
-      className="!pb-0"
-      sx={{ input: { py: 1, fontSize: 14 } }}
-      slotProps={{
-        input: inputProps,
-      }}
+      className={cn(
+        'bg-primary/10 h-10 min-w-0 rounded-full border-0 px-4 text-sm outline-none',
+        'placeholder:text-on-surface-variant focus:ring-primary/40 focus:ring-2',
+        className,
+      )}
       {...props}
     />
   );

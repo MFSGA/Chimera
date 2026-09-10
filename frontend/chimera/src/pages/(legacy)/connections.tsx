@@ -1,8 +1,6 @@
 import { BasePage } from '@chimera/ui';
-import { FilterAlt } from '@mui/icons-material';
-import { Box, CircularProgress, IconButton } from '@mui/material';
 import { createFileRoute, useBlocker } from '@tanstack/react-router';
-import { useThrottle } from 'ahooks';
+import FilterAltRounded from '~icons/material-symbols/filter-alt-rounded';
 import {
   lazy,
   Suspense,
@@ -13,31 +11,39 @@ import {
 } from 'react';
 import { SearchTermCtx } from '@/components/connections/connection-search-term';
 import HeaderSearch from '@/components/connections/header-search';
+import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 
 const Component = lazy(
   () => import('@/components/connections/connection-page'),
 );
-
 const ColumnFilterDialog = lazy(
   () => import('@/components/connections/connections-column-filter'),
 );
-
 const ConnectionTotal = lazy(
   () => import('@/components/connections/connections-total'),
 );
+
 export const Route = createFileRoute('/(legacy)/connections')({
   component: Connections,
 });
 
+function LoadingFallback() {
+  return (
+    <div className="grid h-full min-h-52 place-items-center">
+      <div className="border-primary/20 border-t-primary size-8 animate-spin rounded-full border-2" />
+    </div>
+  );
+}
+
 function Connections() {
   const [openColumnFilter, setOpenColumnFilter] = useState(false);
-
-  const [searchTerm, setSearchTerm] = useState<string>();
-  const throttledSearchTerm = useThrottle(searchTerm, { wait: 150 });
+  const [searchTerm, setSearchTerm] = useState('');
+  const deferredSearchTerm = useDeferredValue(searchTerm);
 
   const [mountTable, setMountTable] = useState(true);
   const deferredMountTable = useDeferredValue(mountTable);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const pendingNavigationRef = useRef(false);
   const { proceed } = useBlocker({
     shouldBlockFn: () => {
@@ -58,26 +64,12 @@ function Connections() {
     }
   }, [proceed, deferredMountTable]);
 
-  // Loading fallback component
-  const LoadingFallback = () => (
-    <Box
-      sx={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100%',
-        minHeight: 200,
-      }}
-    >
-      <CircularProgress />
-    </Box>
-  );
-
   return (
-    <SearchTermCtx.Provider value={throttledSearchTerm}>
+    <SearchTermCtx.Provider value={deferredSearchTerm}>
       <BasePage
         title={m.navbar_label_connections()}
         full
+        viewportRef={viewportRef}
         header={
           <div className="flex max-h-96 w-full flex-1 items-center justify-between gap-2 pl-5">
             <Suspense fallback={null}>
@@ -92,17 +84,22 @@ function Connections() {
               </Suspense>
               <HeaderSearch
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(event) => setSearchTerm(event.target.value)}
               />
-              <IconButton onClick={() => setOpenColumnFilter(true)}>
-                <FilterAlt />
-              </IconButton>
+              <Button
+                icon
+                variant="flat"
+                aria-label={m.connections_column_filter_title()}
+                onClick={() => setOpenColumnFilter(true)}
+              >
+                <FilterAltRounded className="size-5" />
+              </Button>
             </div>
           </div>
         }
       >
         <Suspense fallback={<LoadingFallback />}>
-          {mountTable && <Component />}
+          {mountTable && <Component viewportRef={viewportRef} />}
         </Suspense>
       </BasePage>
     </SearchTermCtx.Provider>

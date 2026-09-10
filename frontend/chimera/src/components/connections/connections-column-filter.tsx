@@ -1,196 +1,55 @@
-import { useClashConnections } from '@chimera/interface';
-import { BaseDialog, BaseDialogProps } from '@chimera/ui';
-import { Cancel, Menu } from '@mui/icons-material';
-import { Checkbox, CircularProgress, IconButton } from '@mui/material';
-import { useLockFn } from 'ahooks';
-import { snakeCase } from 'change-case';
-import dayjs from 'dayjs';
+import { BaseDialog, cn, type BaseDialogProps } from '@chimera/ui';
+import DragIndicatorRounded from '~icons/material-symbols/drag-indicator';
 import { useAtom } from 'jotai';
-import { type MRT_ColumnDef } from 'material-react-table';
-import { AnimatePresence, Reorder, useDragControls } from 'motion/react';
-import { MouseEventHandler, useCallback, useMemo, useState } from 'react';
+import { Reorder, useDragControls } from 'motion/react';
+import { useMemo, type ChangeEvent } from 'react';
 import * as m from '@/paraglide/messages';
 import { connectionTableColumnsAtom } from '@/store';
-import parseTraffic from '@/utils/parse-traffic';
-import { TableConnection } from './connections-table';
+import { CONNECTION_COLUMNS } from './connections-table';
 
-function CloseConnectionButton({ id }: { id: string }) {
-  const { deleteConnections } = useClashConnections();
+export type ConnectionColumnFilterDialogProps = Omit<BaseDialogProps, 'title'>;
 
-  const closeConnect = useLockFn(async (id?: string) => {
-    await deleteConnections.mutateAsync(id);
-  });
-
-  const [loading, setLoading] = useState(false);
-
-  const onClick: MouseEventHandler<HTMLButtonElement> = useCallback(
-    (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setLoading(true);
-      closeConnect(id).finally(() => setLoading(false));
-    },
-    [closeConnect, id],
-  );
-
-  return (
-    <div className="flex w-full items-center justify-center gap-2">
-      <IconButton
-        color="primary"
-        className="size-4"
-        onClick={onClick}
-        disabled={loading}
-      >
-        {loading ? <CircularProgress color="primary" /> : <Cancel />}
-      </IconButton>
-    </div>
-  );
-}
-
-export const useColumns = (): Array<MRT_ColumnDef<TableConnection>> => {
-  return useMemo(
-    () =>
-      (
-        [
-          {
-            header: 'Actions',
-            size: 60,
-            enableSorting: false,
-            enableGlobalFilter: false,
-            enableResizing: false,
-            accessorFn: ({ id }) => <CloseConnectionButton id={id} />,
-          },
-          {
-            header: 'Host',
-            size: 240,
-            accessorFn: ({ metadata }) =>
-              metadata.host || metadata.destinationIP,
-          },
-          {
-            header: 'Process',
-            size: 140,
-            accessorFn: ({ metadata }) => metadata.process,
-          },
-          {
-            header: 'Downloaded',
-            size: 88,
-            accessorFn: ({ download }) => parseTraffic(download).join(' '),
-            sortingFn: (rowA, rowB) =>
-              rowA.original.download - rowB.original.download,
-          },
-          {
-            header: 'Uploaded',
-            size: 88,
-            accessorFn: ({ upload }) => parseTraffic(upload).join(' '),
-            sortingFn: (rowA, rowB) =>
-              rowA.original.upload - rowB.original.upload,
-          },
-          {
-            header: 'DL Speed',
-            size: 88,
-            accessorFn: ({ downloadSpeed }) =>
-              parseTraffic(downloadSpeed).join(' ') + '/s',
-            sortingFn: (rowA, rowB) =>
-              (rowA.original.downloadSpeed || 0) -
-              (rowB.original.downloadSpeed || 0),
-          },
-          {
-            header: 'UL Speed',
-            size: 88,
-            accessorFn: ({ uploadSpeed }) =>
-              parseTraffic(uploadSpeed).join(' ') + '/s',
-            sortingFn: (rowA, rowB) =>
-              (rowA.original.uploadSpeed || 0) -
-              (rowB.original.uploadSpeed || 0),
-          },
-          {
-            header: 'Chains',
-            size: 360,
-            accessorFn: ({ chains }) => [...chains].reverse().join(' / '),
-          },
-          {
-            header: 'Rule',
-            size: 200,
-            accessorFn: ({ rule, rulePayload }) =>
-              rulePayload ? `${rule} (${rulePayload})` : rule,
-          },
-          {
-            header: 'Time',
-            size: 120,
-            accessorFn: ({ start }) => dayjs(start).fromNow(),
-            sortingFn: (rowA, rowB) =>
-              dayjs(rowA.original.start).diff(rowB.original.start),
-          },
-          {
-            header: 'Source',
-            size: 200,
-            accessorFn: ({ metadata: { sourceIP, sourcePort } }) =>
-              `${sourceIP}:${sourcePort}`,
-          },
-          {
-            header: 'Destination IP',
-            size: 200,
-            accessorFn: ({ metadata: { destinationIP, destinationPort } }) =>
-              `${destinationIP}:${destinationPort}`,
-          },
-          {
-            header: 'Destination ASN',
-            size: 200,
-            accessorFn: ({ metadata: { destinationIPASN } }) =>
-              `${destinationIPASN}`,
-          },
-          {
-            header: 'Type',
-            size: 160,
-            accessorFn: ({ metadata }) =>
-              `${metadata.type} (${metadata.network})`,
-          },
-        ] satisfies Array<MRT_ColumnDef<TableConnection>>
-      ).map(
-        (column) =>
-          ({
-            ...column,
-            id: snakeCase(column.header),
-            header: column.header,
-          }) satisfies MRT_ColumnDef<TableConnection>,
-      ),
-    [],
-  );
-};
-
-export type ConnectionColumnFilterDialogProps = {} & Omit<
-  BaseDialogProps,
-  'title'
->;
+type ColumnState = [string, boolean];
 
 function ColItem({
-  column,
-  checked,
-  onChange,
   value,
+  label,
+  onChange,
 }: {
-  column: MRT_ColumnDef<TableConnection>;
-  checked: boolean;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  value: [string, boolean];
+  value: ColumnState;
+  label: string;
+  onChange: (event: ChangeEvent<HTMLInputElement>) => void;
 }) {
   const controls = useDragControls();
+
   return (
     <Reorder.Item
       value={value}
       dragListener={false}
       dragControls={controls}
-      className="flex gap-1"
+      className="flex items-center gap-3 rounded-xl px-2 py-1.5"
     >
-      <div className="flex-1">
-        <Checkbox checked={checked} onChange={onChange} />
-        {column.header}
-      </div>
-      <div className="w-12">
-        <IconButton onPointerDown={(e) => controls.start(e)}>
-          <Menu />
-        </IconButton>
-      </div>
+      <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+        <input
+          type="checkbox"
+          checked={value[1]}
+          onChange={onChange}
+          className="accent-primary size-4"
+        />
+        <span className="truncate text-sm">{label}</span>
+      </label>
+
+      <button
+        type="button"
+        aria-label={`Reorder ${label}`}
+        className={cn(
+          'text-on-surface-variant hover:bg-primary/10 hover:text-primary',
+          'grid size-9 cursor-grab place-items-center rounded-full active:cursor-grabbing',
+        )}
+        onPointerDown={(event) => controls.start(event)}
+      >
+        <DragIndicatorRounded className="size-5" />
+      </button>
     </Reorder.Item>
   );
 }
@@ -198,62 +57,61 @@ function ColItem({
 export default function ConnectionColumnFilterDialog(
   props: ConnectionColumnFilterDialogProps,
 ) {
-  const columns = useColumns();
-  const [filteredCols, setFilteredCols] = useAtom(connectionTableColumnsAtom);
-  const sortedCols = useMemo(
-    () =>
-      columns
-        .filter((o) => o.id !== 'actions')
-        .sort((a, b) => {
-          const aIndex = filteredCols.findIndex((o) => o[0] === a.id);
-          const bIndex = filteredCols.findIndex((o) => o[0] === b.id);
-          if (aIndex === -1 && bIndex === -1) {
-            return 0;
-          }
-          if (aIndex === -1) {
-            return 1;
-          }
-          if (bIndex === -1) {
-            return -1;
-          }
-          return aIndex - bIndex;
-        }),
-    [columns, filteredCols],
-  );
+  const [storedColumns, setStoredColumns] = useAtom(connectionTableColumnsAtom);
 
-  const latestFilteredCols = sortedCols.map((column) => [
-    column.id,
-    filteredCols.find((o) => o[0] === column.id)?.[1] ?? true,
-  ]) as Array<[string, boolean]>;
+  const columns = useMemo(() => {
+    const byId = new Map(CONNECTION_COLUMNS.map(([id, label]) => [id, label]));
+    const stored = storedColumns
+      .filter(([id]) => byId.has(id as (typeof CONNECTION_COLUMNS)[number][0]))
+      .map(([id, visible]) => ({
+        id,
+        label: byId.get(id as (typeof CONNECTION_COLUMNS)[number][0]) ?? id,
+        value: [id, visible] as ColumnState,
+      }));
+
+    const missing = CONNECTION_COLUMNS.filter(
+      ([id]) => !storedColumns.some(([storedId]) => storedId === id),
+    ).map(([id, label]) => ({
+      id,
+      label,
+      value: [id, true] as ColumnState,
+    }));
+
+    return [...stored, ...missing];
+  }, [storedColumns]);
+
+  const values = columns.map(({ value }) => value);
 
   return (
     <BaseDialog title={m.connections_column_filter_title()} {...props}>
-      <div className="grid grid-cols-1 gap-1">
-        <AnimatePresence>
-          <Reorder.Group
-            values={latestFilteredCols}
-            onReorder={setFilteredCols}
-          >
-            {sortedCols.map((column, index) => (
-              <ColItem
-                key={column.id}
-                column={column}
-                checked={
-                  filteredCols.find((o) => o[0] === column.id)?.[1] ?? true
-                }
-                onChange={(e) => {
-                  console.log(e.target.checked);
-                  const newCols = [...filteredCols];
-                  newCols[index] = [newCols[index][0], e.target.checked];
-                  console.log(newCols);
-                  setFilteredCols(newCols);
-                }}
-                value={latestFilteredCols[index]}
-              />
-            ))}
-          </Reorder.Group>
-        </AnimatePresence>
-      </div>
+      <Reorder.Group
+        axis="y"
+        values={values}
+        onReorder={(next) => setStoredColumns(next)}
+        className="grid grid-cols-1 gap-1"
+      >
+        {columns.map(({ id, label, value }) => (
+          <ColItem
+            key={id}
+            value={value}
+            label={label}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              const hasColumn = storedColumns.some(
+                ([columnId]) => columnId === id,
+              );
+              const nextColumns = hasColumn
+                ? storedColumns.map(([columnId, visible]) =>
+                    columnId === id
+                      ? ([columnId, checked] as ColumnState)
+                      : ([columnId, visible] as ColumnState),
+                  )
+                : [...storedColumns, [id, checked] as ColumnState];
+              setStoredColumns(nextColumns);
+            }}
+          />
+        ))}
+      </Reorder.Group>
     </BaseDialog>
   );
 }

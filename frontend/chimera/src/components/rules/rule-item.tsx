@@ -1,5 +1,6 @@
 import type { ClashRule } from '@chimera/interface';
-import { Box, type SxProps, type Theme } from '@mui/material';
+import { cn } from '@chimera/utils';
+import HighlightText from '@/components/ui/highlight-text';
 
 interface Props {
   index: number;
@@ -7,101 +8,58 @@ interface Props {
   searchText?: string;
 }
 
-const COLOR = [
-  (theme: Theme) => ({
-    color: theme.vars.palette.primary.main,
-  }),
-  (theme: Theme) => ({
-    color: theme.vars.palette.secondary.main,
-  }),
-  (theme: Theme) => ({
-    color: theme.vars.palette.info.main,
-  }),
-  (theme: Theme) => ({
-    color: theme.vars.palette.warning.main,
-  }),
-  (theme: Theme) => ({
-    color: theme.vars.palette.success.main,
-  }),
-] satisfies SxProps<Theme>[];
+const PROXY_COLORS = [
+  'text-primary',
+  'text-secondary',
+  'text-tertiary',
+  'text-warning',
+  'text-success',
+] as const;
 
-const RuleItem = ({ index, value, searchText }: Props) => {
-  const parseColorSx = (text: string): SxProps<Theme> => {
-    const typeMap = {
-      reject: ['REJECT', 'REJECT-DROP'],
-      direct: ['DIRECT'],
-    };
+const getProxyColor = (text: string) => {
+  if (text === 'REJECT' || text === 'REJECT-DROP') {
+    return 'text-error';
+  }
 
-    if (typeMap.reject.includes(text)) {
-      return (theme) => ({ color: theme.vars.palette.error.main });
-    }
+  if (text === 'DIRECT') {
+    return 'text-on-surface';
+  }
 
-    if (typeMap.direct.includes(text)) {
-      return (theme) => ({ color: theme.vars.palette.text.primary });
-    }
+  let sum = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    sum += text.charCodeAt(index);
+  }
 
-    let sum = 0;
-    for (let i = 0; i < text.length; i++) {
-      sum += text.charCodeAt(i);
-    }
+  return PROXY_COLORS[sum % PROXY_COLORS.length];
+};
 
-    return COLOR[sum % COLOR.length];
-  };
-
-  const renderHighlightedText = (text: string) => {
-    const keyword = searchText?.trim();
-    if (!keyword) {
-      return text;
-    }
-
-    const pattern = new RegExp(
-      `(${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`,
-      'ig',
-    );
-    const parts = text.split(pattern);
-
-    return parts.map((part, index) => {
-      if (part.toLowerCase() === keyword.toLowerCase()) {
-        return (
-          <mark
-            key={`${part}-${index}`}
-            className="rounded-sm bg-amber-200/70 px-0.5 text-inherit dark:bg-amber-500/30"
-          >
-            {part}
-          </mark>
-        );
-      }
-
-      return part;
-    });
-  };
-
+const RuleItem = ({ index, value, searchText = '' }: Props) => {
   return (
     <div className="grid grid-cols-[5rem_10rem_minmax(0,1fr)_10rem] items-start gap-4 border-b border-black/5 px-8 py-3 select-text last:border-b-0 dark:border-white/5">
-      <Box
-        sx={(theme) => ({ color: theme.vars.palette.text.secondary })}
-        className="text-sm tabular-nums"
-      >
+      <div className="text-on-surface-variant text-sm tabular-nums">
         {index + 1}
-      </Box>
-
-      <div className="min-w-0 text-sm font-medium">
-        {renderHighlightedText(value.type || '-')}
       </div>
 
-      <Box
-        sx={(theme) => ({ color: theme.vars.palette.text.primary })}
-        className="min-w-0 break-all"
+      <HighlightText
+        className="min-w-0 text-sm font-medium"
+        searchText={searchText}
       >
-        {renderHighlightedText(value.payload || '-')}
-      </Box>
+        {value.type || '-'}
+      </HighlightText>
 
-      <Box
-        className="min-w-0 text-sm font-medium break-all"
-        sx={parseColorSx(value.proxy)}
+      <HighlightText className="min-w-0 break-all" searchText={searchText}>
+        {value.payload || '-'}
+      </HighlightText>
+
+      <HighlightText
+        className={cn(
+          'min-w-0 text-sm font-medium break-all',
+          getProxyColor(value.proxy),
+        )}
+        searchText={searchText}
       >
-        {renderHighlightedText(value.proxy)}
-      </Box>
+        {value.proxy}
+      </HighlightText>
     </div>
   );
 };

@@ -1,8 +1,12 @@
 import { useClashConnections } from '@chimera/interface';
-import { FloatingButton } from '@chimera/ui';
-import { Close } from '@mui/icons-material';
-import { Tooltip } from '@mui/material';
-import { useLockFn } from 'ahooks';
+import CloseRounded from '~icons/material-symbols/close-rounded';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 
 export const CloseConnectionsButton = () => {
@@ -13,10 +17,19 @@ export const CloseConnectionsButton = () => {
   });
 
   return (
-    <Tooltip title={m.connections_close_all_connections()}>
-      <FloatingButton onClick={onCloseAll}>
-        <Close className="absolute !size-8" />
-      </FloatingButton>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="fab"
+          icon
+          className="fixed right-8 bottom-8 z-10 size-16 rounded-2xl backdrop-blur"
+          aria-label={m.connections_close_all_connections()}
+          onClick={onCloseAll}
+        >
+          <CloseRounded className="size-8" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{m.connections_close_all_connections()}</TooltipContent>
     </Tooltip>
   );
 };
