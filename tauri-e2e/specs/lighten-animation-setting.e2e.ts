@@ -1,26 +1,16 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/chimera';
 const settingSelector =
   '[data-slot="app-settings-container"]:last-child [role="switch"]';
 
-async function waitForApp() {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        () => (document.getElementById('root')?.childElementCount ?? 0) > 0,
-      ),
-    { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
-  );
-}
-
 async function openSettings() {
-  const currentHref = await browser.getUrl();
-  await browser.url(new URL(settingsPath, currentHref).href);
-  await waitForApp();
+  await openMainRoute(settingsPath);
 
   const toggle = await $(settingSelector);
   await toggle.waitForDisplayed({ timeout: 15_000 });
+  await toggle.scrollIntoView({ block: 'center' });
   await toggle.waitForClickable({ timeout: 15_000 });
 }
 
@@ -45,7 +35,6 @@ async function setChecked(expected: boolean) {
 
 describe('Chimera lighten-animation preference', () => {
   it('persists the setting and restores the original value', async () => {
-    await waitForApp();
     await openSettings();
 
     const original = await isChecked();
@@ -54,12 +43,12 @@ describe('Chimera lighten-animation preference', () => {
     try {
       await setChecked(changed);
       await browser.refresh();
-      await waitForApp();
+      await openSettings();
       assert.equal(await isChecked(), changed);
     } finally {
       await setChecked(original);
       await browser.refresh();
-      await waitForApp();
+      await openSettings();
       assert.equal(await isChecked(), original);
     }
   });

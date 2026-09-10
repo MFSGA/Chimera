@@ -11,6 +11,29 @@ describe('main Chimera settings reference layout', () => {
     });
     await openMainRoute('/main/settings/chimera');
     await browser.setWindowSize(1240, 638);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const groups = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="app-settings-container"]',
+            ),
+          );
+          return (
+            groups.length === 4 &&
+            groups.every(
+              (group) =>
+                group.querySelector('[data-slot="settings-label"]') &&
+                group.querySelector('[data-slot="settings-group"]'),
+            ) &&
+            document.querySelector('[data-slot="settings-title"]') !== null
+          );
+        }),
+      {
+        timeout: 30_000,
+        timeoutMsg: 'Chimera settings reference DOM did not render.',
+      },
+    );
   });
 
   it('matches the ref settings-group DOM and spacing contract', async () => {

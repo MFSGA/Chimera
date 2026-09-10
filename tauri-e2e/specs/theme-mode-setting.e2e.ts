@@ -11,6 +11,7 @@ async function openUserInterfaceSettings() {
 
   const trigger = await $(themeModeTrigger);
   await trigger.waitForDisplayed({ timeout: 15_000 });
+  await trigger.scrollIntoView({ block: 'center' });
   await trigger.waitForClickable({ timeout: 15_000 });
 }
 
