@@ -175,6 +175,15 @@ describe('network assistant guided diagnosis', () => {
     await input.scrollIntoView();
     await input.setValue('http://127.0.0.1/health');
 
+    const expectedStatus = await displayedElement(
+      '[data-slot="agent-network-probe-expected-status"]',
+    );
+    await expectedStatus.setValue('204');
+    const timeout = await displayedElement(
+      '[data-slot="agent-network-probe-timeout"]',
+    );
+    await timeout.setValue('1500');
+
     const submit = await displayedElement(
       '[data-slot="agent-network-probe-submit"]',
     );

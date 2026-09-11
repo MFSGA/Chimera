@@ -3,6 +3,7 @@ import {
   openThat,
   useAgent,
   type AgentActionRequest,
+  type AgentNetworkProbeRequest,
   type AgentProposal,
 } from '@chimera/interface';
 import {
@@ -156,13 +157,9 @@ export function AgentPage() {
     }
   };
 
-  const probeNetwork = async (url: string) => {
+  const probeNetwork = async (request: AgentNetworkProbeRequest) => {
     try {
-      await agent.probeNetwork.mutateAsync({
-        url,
-        expected_status: null,
-        timeout_ms: null,
-      });
+      await agent.probeNetwork.mutateAsync(request);
     } catch {
       Notice.error(m.agent_error_title());
     }
