@@ -572,11 +572,7 @@ async fn confirm_network_change(
     }
 
     let window = window.clone();
-    let message = proposal
-        .changes
-        .first()
-        .map(|change| format!("{}\n{} → {}", change.field, change.before, change.after))
-        .unwrap_or_else(|| "Chimera network change".to_owned());
+    let message = proposal_confirmation_message(proposal);
     tokio::task::spawn_blocking(move || {
         window
             .dialog()
@@ -589,6 +585,47 @@ async fn confirm_network_change(
     })
     .await
     .map_err(|_| AgentCommandError::ActionFailed)
+}
+
+fn proposal_confirmation_message(proposal: &AgentProposal) -> String {
+    let mut lines = vec![
+        "Confirm Chimera network change".to_owned(),
+        format!("risk: {}", action_risk_label(proposal.risk)),
+        "changes:".to_owned(),
+    ];
+    lines.extend(
+        proposal
+            .changes
+            .iter()
+            .map(|change| format!("- {}: {} -> {}", change.field, change.before, change.after)),
+    );
+    if !proposal.impacts.is_empty() {
+        lines.push("impacts:".to_owned());
+        lines.extend(
+            proposal
+                .impacts
+                .iter()
+                .map(|impact| format!("- {}", impact_label(*impact))),
+        );
+    }
+    lines.join("\n")
+}
+
+fn action_risk_label(risk: AgentActionRisk) -> &'static str {
+    match risk {
+        AgentActionRisk::TrafficChange => "traffic_change",
+        AgentActionRisk::HostNetworkChange => "host_network_change",
+    }
+}
+
+fn impact_label(impact: AgentImpact) -> &'static str {
+    match impact {
+        AgentImpact::ExistingConnectionsMayChange => "existing_connections_may_change",
+        AgentImpact::TrafficMayBypassProxy => "traffic_may_bypass_proxy",
+        AgentImpact::AllTrafficUsesProxy => "all_traffic_uses_proxy",
+        AgentImpact::RestoreRuleRouting => "restore_rule_routing",
+        AgentImpact::HostSystemProxyDisabled => "host_system_proxy_disabled",
+    }
 }
 
 fn proposal_digest(
@@ -619,15 +656,60 @@ mod tests {
 
     use super::{
         ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-        plan_routing_mode, proposal_digest, routing_transaction_error, verify_action,
+        plan_routing_mode, proposal_confirmation_message, proposal_digest,
+        routing_transaction_error, verify_action,
     };
     use crate::core::clash::transaction::TransactionOutcome;
     use crate::features::agent::model::{
-        AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot,
-        AgentCoreState, AgentHealth, AgentHostScope, AgentNetworkSnapshot, AgentPrivacyBoundary,
-        AgentProfileSnapshot, AgentProposal, AgentRoutingMode, AgentRunType, AgentServiceSnapshot,
-        AgentServiceState, AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
+        AgentActionRequest, AgentActionRisk, AgentAppliedState, AgentConnectorState,
+        AgentCoreSnapshot, AgentCoreState, AgentHealth, AgentHostScope, AgentImpact,
+        AgentNetworkSnapshot, AgentPrivacyBoundary, AgentProfileSnapshot, AgentProposal,
+        AgentRoutingMode, AgentRunType, AgentServiceSnapshot, AgentServiceState, AgentStateChange,
+        AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
     };
+
+    #[test]
+    fn confirmation_discloses_risk_all_changes_and_impacts() {
+        let proposal = AgentProposal {
+            id: "proposal".into(),
+            digest: "digest".into(),
+            action: AgentActionRequest::SetRoutingMode {
+                mode: AgentRoutingMode::Global,
+            },
+            risk: AgentActionRisk::TrafficChange,
+            impacts: vec![
+                AgentImpact::ExistingConnectionsMayChange,
+                AgentImpact::TrafficMayBypassProxy,
+            ],
+            changes: vec![
+                AgentStateChange {
+                    field: "routing_mode".into(),
+                    before: "rule".into(),
+                    after: "global".into(),
+                },
+                AgentStateChange {
+                    field: "telemetry_connector".into(),
+                    before: "connected".into(),
+                    after: "disconnected".into(),
+                },
+            ],
+            snapshot_revision: "revision".into(),
+            created_at: 0,
+            expires_at: 1,
+            requires_confirmation: true,
+        };
+
+        let message = proposal_confirmation_message(&proposal);
+        for expected in [
+            "risk: traffic_change",
+            "- routing_mode: rule -> global",
+            "- telemetry_connector: connected -> disconnected",
+            "- existing_connections_may_change",
+            "- traffic_may_bypass_proxy",
+        ] {
+            assert!(message.contains(expected), "missing {expected}: {message}");
+        }
+    }
 
     #[test]
     fn proposal_digest_binds_action_revision_and_expiry() {
