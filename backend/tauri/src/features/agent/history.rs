@@ -40,7 +40,7 @@ struct AgentAuditHistoryEntry {
     schema_version: u32,
     recorded_at: i64,
     proposal_id: String,
-    action: AgentActionKind,
+    action: String,
     snapshot_revision: String,
     outcome: String,
 }
@@ -78,7 +78,7 @@ pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
         schema_version: HISTORY_SCHEMA_VERSION,
         recorded_at: chrono::Utc::now().timestamp_millis(),
         proposal_id: proposal_reference(&proposal.id),
-        action: proposal.action.kind(),
+        action: action_code(proposal.action.kind()).to_owned(),
         snapshot_revision: proposal.snapshot_revision.clone(),
         outcome: outcome.to_owned(),
     });
@@ -91,6 +91,13 @@ pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
 
 pub(super) fn proposal_reference(proposal_id: &str) -> String {
     hex::encode(&Sha256::digest(proposal_id.as_bytes())[..16])
+}
+
+fn action_code(action: AgentActionKind) -> &'static str {
+    match action {
+        AgentActionKind::SetRoutingMode => "set_routing_mode",
+        AgentActionKind::DisableStaleSystemProxy => "disable_stale_system_proxy",
+    }
 }
 
 fn history_path() -> anyhow::Result<PathBuf> {
@@ -172,6 +179,7 @@ fn normalize_history_document(document: &mut AgentHistoryDocument) {
     document.audits.retain_mut(|entry| {
         if entry.schema_version != HISTORY_SCHEMA_VERSION
             || !is_valid_history_timestamp(entry.recorded_at)
+            || !is_action_code(&entry.action)
             || !is_lower_hex(&entry.snapshot_revision, 64)
             || !is_audit_outcome(&entry.outcome)
         {
@@ -212,6 +220,24 @@ fn normalize_diagnostic_entry(entry: &mut AgentDiagnosticHistoryEntry) -> bool {
     true
 }
 
+fn is_action_code(action: &str) -> bool {
+    matches!(
+        action,
+        "set_routing_mode"
+            | "set_tun_enabled"
+            | "set_system_proxy_enabled"
+            | "set_service_mode"
+            | "start_core"
+            | "restart_core"
+            | "reconnect_telemetry"
+            | "start_service"
+            | "stop_service"
+            | "restart_service"
+            | "repair_system_proxy_endpoint"
+            | "disable_stale_system_proxy"
+    )
+}
+
 fn is_audit_outcome(outcome: &str) -> bool {
     matches!(
         outcome,
@@ -228,6 +254,8 @@ fn is_audit_outcome(outcome: &str) -> bool {
             | "action_failed"
             | "partial_apply"
             | "verification_failed"
+            | "bridge_start_failed"
+            | "history_clear_failed"
     )
 }
 
@@ -295,7 +323,6 @@ mod tests {
         AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, normalize_history_document,
         proposal_reference, trim,
     };
-    use crate::features::agent::model::AgentActionKind;
 
     #[test]
     fn proposal_references_are_fixed_lower_hex_and_hide_raw_tokens() {
@@ -318,7 +345,7 @@ mod tests {
                     schema_version: 1,
                     recorded_at: 1,
                     proposal_id: "legacy-proposal-token-canary".into(),
-                    action: AgentActionKind::SetRoutingMode,
+                    action: "restart_core".into(),
                     snapshot_revision: valid_revision,
                     outcome: "verified".into(),
                 },
@@ -326,7 +353,7 @@ mod tests {
                     schema_version: 1,
                     recorded_at: 2,
                     proposal_id: "secret-canary".into(),
-                    action: AgentActionKind::SetRoutingMode,
+                    action: "restart_core".into(),
                     snapshot_revision: "connection-target-canary".into(),
                     outcome: "action_failed".into(),
                 },
