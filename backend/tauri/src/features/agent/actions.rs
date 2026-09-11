@@ -72,6 +72,43 @@ struct ActionPlan {
     preconditions: ActionPreconditions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentAuditOutcome {
+    Proposed,
+    Verified,
+    ActionNotAvailable,
+    ProposalNotFound,
+    ProposalExpired,
+    DigestMismatch,
+    StateChanged,
+    RateLimited,
+    LimitReached,
+    ConfirmationDeclined,
+    ActionFailed,
+    PartialApply,
+    VerificationFailed,
+}
+
+impl AgentAuditOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Proposed => "proposed",
+            Self::Verified => "verified",
+            Self::ActionNotAvailable => "action_not_available",
+            Self::ProposalNotFound => "proposal_not_found",
+            Self::ProposalExpired => "proposal_expired",
+            Self::DigestMismatch => "digest_mismatch",
+            Self::StateChanged => "state_changed",
+            Self::RateLimited => "rate_limited",
+            Self::LimitReached => "limit_reached",
+            Self::ConfirmationDeclined => "confirmation_declined",
+            Self::ActionFailed => "action_failed",
+            Self::PartialApply => "partial_apply",
+            Self::VerificationFailed => "verification_failed",
+        }
+    }
+}
+
 impl AgentFeatureState {
     pub(crate) async fn propose(
         &self,
@@ -108,7 +145,7 @@ impl AgentFeatureState {
             },
         )
         .await?;
-        audit_proposal(&proposal, "proposed");
+        audit_proposal(&proposal, AgentAuditOutcome::Proposed);
         Ok(proposal)
     }
 
@@ -124,8 +161,8 @@ impl AgentFeatureState {
         let result = execute_pending(&self.client, app, window, pending.clone(), digest).await;
         let outcome = result
             .as_ref()
-            .map(|_| "verified")
-            .unwrap_or_else(|error| error.audit_code());
+            .map(|_| AgentAuditOutcome::Verified)
+            .unwrap_or_else(|error| error.audit_outcome());
         audit_proposal(&pending.proposal, outcome);
         result
     }
@@ -187,19 +224,19 @@ impl AgentFeatureState {
 }
 
 impl AgentCommandError {
-    fn audit_code(&self) -> &'static str {
+    fn audit_outcome(&self) -> AgentAuditOutcome {
         match self {
-            Self::ActionNotAvailable => "action_not_available",
-            Self::ProposalNotFound => "proposal_not_found",
-            Self::ProposalExpired => "proposal_expired",
-            Self::ProposalDigestMismatch => "digest_mismatch",
-            Self::NetworkStateChanged => "state_changed",
-            Self::ProposalRateLimited => "rate_limited",
-            Self::ProposalLimitReached => "limit_reached",
-            Self::ConfirmationDeclined => "confirmation_declined",
-            Self::ActionFailed => "action_failed",
-            Self::PartialApply => "partial_apply",
-            Self::VerificationFailed => "verification_failed",
+            Self::ActionNotAvailable => AgentAuditOutcome::ActionNotAvailable,
+            Self::ProposalNotFound => AgentAuditOutcome::ProposalNotFound,
+            Self::ProposalExpired => AgentAuditOutcome::ProposalExpired,
+            Self::ProposalDigestMismatch => AgentAuditOutcome::DigestMismatch,
+            Self::NetworkStateChanged => AgentAuditOutcome::StateChanged,
+            Self::ProposalRateLimited => AgentAuditOutcome::RateLimited,
+            Self::ProposalLimitReached => AgentAuditOutcome::LimitReached,
+            Self::ConfirmationDeclined => AgentAuditOutcome::ConfirmationDeclined,
+            Self::ActionFailed => AgentAuditOutcome::ActionFailed,
+            Self::PartialApply => AgentAuditOutcome::PartialApply,
+            Self::VerificationFailed => AgentAuditOutcome::VerificationFailed,
         }
     }
 }
@@ -639,13 +676,13 @@ fn proposal_digest(
     hex::encode(sha2::Sha256::digest(material))
 }
 
-fn audit_proposal(proposal: &AgentProposal, outcome: &str) {
+fn audit_proposal(proposal: &AgentProposal, outcome: AgentAuditOutcome) {
     tracing::info!(
         target: "agent_audit",
         proposal_id = %proposal.id,
         action = ?proposal.action.kind(),
         snapshot_revision = %proposal.snapshot_revision,
-        outcome,
+        outcome = outcome.as_str(),
         "network action proposal"
     );
 }
@@ -655,8 +692,8 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{
-        ActionPreconditions, PendingProposal, ProposalStore, cleanup_store, enforce_store_limits,
-        plan_routing_mode, proposal_confirmation_message, proposal_digest,
+        ActionPreconditions, AgentAuditOutcome, PendingProposal, ProposalStore, cleanup_store,
+        enforce_store_limits, plan_routing_mode, proposal_confirmation_message, proposal_digest,
         routing_transaction_error, verify_action,
     };
     use crate::core::clash::transaction::TransactionOutcome;
@@ -667,6 +704,33 @@ mod tests {
         AgentRoutingMode, AgentRunType, AgentServiceSnapshot, AgentServiceState, AgentStateChange,
         AgentSystemProxySnapshot, AgentTelemetrySnapshot, AgentTunSnapshot,
     };
+
+    #[test]
+    fn audit_outcomes_preserve_stable_log_codes() {
+        for (outcome, expected) in [
+            (AgentAuditOutcome::Proposed, "proposed"),
+            (AgentAuditOutcome::Verified, "verified"),
+            (
+                AgentAuditOutcome::ActionNotAvailable,
+                "action_not_available",
+            ),
+            (AgentAuditOutcome::ProposalNotFound, "proposal_not_found"),
+            (AgentAuditOutcome::ProposalExpired, "proposal_expired"),
+            (AgentAuditOutcome::DigestMismatch, "digest_mismatch"),
+            (AgentAuditOutcome::StateChanged, "state_changed"),
+            (AgentAuditOutcome::RateLimited, "rate_limited"),
+            (AgentAuditOutcome::LimitReached, "limit_reached"),
+            (
+                AgentAuditOutcome::ConfirmationDeclined,
+                "confirmation_declined",
+            ),
+            (AgentAuditOutcome::ActionFailed, "action_failed"),
+            (AgentAuditOutcome::PartialApply, "partial_apply"),
+            (AgentAuditOutcome::VerificationFailed, "verification_failed"),
+        ] {
+            assert_eq!(outcome.as_str(), expected);
+        }
+    }
 
     #[test]
     fn confirmation_discloses_risk_all_changes_and_impacts() {
