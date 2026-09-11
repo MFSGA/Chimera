@@ -19,6 +19,7 @@ use crate::{
 use super::{
     collect_network_snapshot, core_probe,
     diagnostics::host_scope,
+    history,
     model::{
         AgentActionRequest, AgentActionResult, AgentActionRisk, AgentAppliedState,
         AgentCommandError, AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot,
@@ -146,6 +147,7 @@ impl AgentFeatureState {
         )
         .await?;
         audit_proposal(&proposal, AgentAuditOutcome::Proposed);
+        history::record_audit(&proposal, AgentAuditOutcome::Proposed.as_str()).await;
         Ok(proposal)
     }
 
@@ -164,6 +166,7 @@ impl AgentFeatureState {
             .map(|_| AgentAuditOutcome::Verified)
             .unwrap_or_else(|error| error.audit_outcome());
         audit_proposal(&pending.proposal, outcome);
+        history::record_audit(&pending.proposal, outcome.as_str()).await;
         result
     }
 
