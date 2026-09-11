@@ -168,6 +168,39 @@ describe('network assistant guided diagnosis', () => {
     );
   });
 
+  it('exposes the bounded read-only network probe and rejects loopback targets', async () => {
+    const input = await displayedElement(
+      '[data-slot="agent-network-probe-url"]',
+    );
+    await input.scrollIntoView();
+    await input.setValue('http://127.0.0.1/health');
+
+    const submit = await displayedElement(
+      '[data-slot="agent-network-probe-submit"]',
+    );
+    const enabled = await browser.execute(
+      (element) => !(element as HTMLButtonElement).disabled,
+      submit,
+    );
+    assert.equal(enabled, true);
+
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      submit,
+    );
+    await browser.waitUntil(
+      async () => (await $('body').getText()).includes('助手发生错误'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Loopback probe rejection did not surface in the Agent UI.',
+      },
+    );
+    assert.equal(
+      await $('[data-slot="agent-network-probe-result"]').isExisting(),
+      false,
+    );
+  });
+
   it('requires confirmation and shows the verified healthy result after execute', async () => {
     const repair = await displayedElement(
       '//button[contains(., "查看修复方案")]',

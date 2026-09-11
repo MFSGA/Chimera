@@ -20,6 +20,7 @@ import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 import { DiagnosisOverview } from './components/diagnosis-overview';
 import { buildAgentIssueUrl } from './components/issue-guidance';
+import { NetworkProbeCard } from './components/network-probe-card';
 import { ProposalDialog } from './components/proposal-dialog';
 import { TechnicalDetails } from './components/technical-details';
 import {
@@ -155,6 +156,18 @@ export function AgentPage() {
     }
   };
 
+  const probeNetwork = async (url: string) => {
+    try {
+      await agent.probeNetwork.mutateAsync({
+        url,
+        expected_status: null,
+        timeout_ms: null,
+      });
+    } catch {
+      Notice.error(m.agent_error_title());
+    }
+  };
+
   const reportIssue = async () => {
     let envInfos = 'Environment information unavailable.';
     try {
@@ -211,6 +224,11 @@ export function AgentPage() {
               onCopy={() => void copyContext()}
               onReport={() => void reportIssue()}
               onPropose={(action) => void propose(action)}
+            />
+            <NetworkProbeCard
+              loading={agent.probeNetwork.isPending}
+              result={agent.probeNetwork.data}
+              onProbe={(url) => void probeNetwork(url)}
             />
           </>
         )}
