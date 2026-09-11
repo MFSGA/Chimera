@@ -4,6 +4,7 @@ mod core_probe;
 mod diagnostics;
 #[cfg(feature = "e2e")]
 mod e2e;
+mod intent;
 mod model;
 mod network_probe;
 mod registry;
@@ -15,10 +16,11 @@ use crate::client::ChimeraClient;
 
 pub(crate) use actions::AgentFeatureState;
 pub(crate) use diagnostics::collect_network_snapshot;
+pub(crate) use intent::resolve_intent;
 pub(crate) use model::{
-    AgentActionRequest, AgentActionResult, AgentCommandError, AgentManifest,
-    AgentNetworkProbeRequest, AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProposal,
-    AgentToolError, AgentToolName, AgentToolResult,
+    AgentActionRequest, AgentActionResult, AgentCommandError, AgentIntentRequest,
+    AgentIntentResolution, AgentManifest, AgentNetworkProbeRequest, AgentNetworkProbeResult,
+    AgentNetworkSnapshot, AgentProposal, AgentToolError, AgentToolName, AgentToolResult,
 };
 pub(crate) use network_probe::execute_network_probe;
 pub(crate) use registry::{agent_manifest, execute_readonly_tool};

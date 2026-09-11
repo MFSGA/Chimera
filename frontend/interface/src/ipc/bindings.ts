@@ -315,6 +315,8 @@ export const commands = {
     typedError<AgentNetworkProbeResult, string>(
       __TAURI_INVOKE('agent_probe_network', { request }),
     ),
+  agentResolveIntent: (request: AgentIntentRequest) =>
+    __TAURI_INVOKE<AgentIntentResolution>('agent_resolve_intent', { request }),
   agentGetNetworkSnapshot: () =>
     __TAURI_INVOKE<AgentNetworkSnapshot>('agent_get_network_snapshot'),
   agentProposeNetworkAction: (action: AgentActionRequest) =>
@@ -414,6 +416,19 @@ export type AgentImpact =
   | 'all_traffic_uses_proxy'
   | 'restore_rule_routing'
   | 'host_system_proxy_disabled';
+
+export type AgentIntent =
+  | { intent: 'diagnose' }
+  | { intent: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { intent: 'disable_stale_system_proxy' };
+
+export type AgentIntentRequest = {
+  text: string;
+};
+
+export type AgentIntentResolution =
+  | { status: 'resolved'; intent: AgentIntent }
+  | { status: 'unsupported'; reason: AgentUnsupportedIntentReason };
 
 export type AgentManifest = {
   schema_version: number;
@@ -567,6 +582,9 @@ export type AgentTunSnapshot = {
   observed_active: AgentAppliedState;
   applied_consistency: AgentAppliedState;
 };
+
+export type AgentUnsupportedIntentReason =
+  'empty_input' | 'input_too_long' | 'no_matching_intent';
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 

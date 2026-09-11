@@ -65,6 +65,10 @@ export const useAgent = () => {
       unwrapResult(await commands.agentProbeNetwork(request)),
   });
 
+  const resolveIntent = useMutation({
+    mutationFn: async (text: string) => commands.agentResolveIntent({ text }),
+  });
+
   const propose = useMutation({
     mutationFn: async (action: AgentActionRequest) =>
       unwrapResult(await commands.agentProposeNetworkAction(action)),
@@ -97,6 +101,7 @@ export const useAgent = () => {
     snapshot,
     runTool,
     probeNetwork,
+    resolveIntent,
     propose,
     execute,
     cancel,

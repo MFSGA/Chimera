@@ -1,10 +1,11 @@
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
 use super::{
-    AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState, AgentManifest,
-    AgentNetworkProbeRequest, AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProposal,
-    AgentToolError, AgentToolName, AgentToolResult, agent_manifest, collect_network_snapshot,
-    execute_network_probe, execute_readonly_tool,
+    AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState,
+    AgentIntentRequest, AgentIntentResolution, AgentManifest, AgentNetworkProbeRequest,
+    AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProposal, AgentToolError, AgentToolName,
+    AgentToolResult, agent_manifest, collect_network_snapshot, execute_network_probe,
+    execute_readonly_tool, resolve_intent,
 };
 
 #[tauri::command]
@@ -28,6 +29,12 @@ pub(crate) async fn agent_probe_network(
     request: AgentNetworkProbeRequest,
 ) -> Result<AgentNetworkProbeResult, AgentToolError> {
     execute_network_probe(request).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn agent_resolve_intent(request: AgentIntentRequest) -> AgentIntentResolution {
+    resolve_intent(request)
 }
 
 #[tauri::command]

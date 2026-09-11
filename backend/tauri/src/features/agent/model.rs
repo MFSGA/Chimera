@@ -350,6 +350,39 @@ pub enum AgentActionRequest {
     DisableStaleSystemProxy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Type)]
+#[serde(deny_unknown_fields)]
+pub struct AgentIntentRequest {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(tag = "intent", rename_all = "snake_case")]
+pub enum AgentIntent {
+    Diagnose,
+    SetRoutingMode { mode: AgentRoutingMode },
+    DisableStaleSystemProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentUnsupportedIntentReason {
+    EmptyInput,
+    InputTooLong,
+    NoMatchingIntent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Type)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AgentIntentResolution {
+    Resolved {
+        intent: AgentIntent,
+    },
+    Unsupported {
+        reason: AgentUnsupportedIntentReason,
+    },
+}
+
 impl AgentActionRequest {
     pub(crate) fn kind(&self) -> AgentActionKind {
         match self {
