@@ -19,19 +19,18 @@ describe('main providers reference layout', () => {
     await browser.waitUntil(
       async () =>
         browser.execute(() => {
-          const transitions = Array.from(
-            document.querySelectorAll<HTMLElement>('.page-transition'),
+          const content = document.querySelector<HTMLElement>(
+            '[data-slot="providers-content"]',
           );
-          return transitions.some((element) => {
-            const style = getComputedStyle(element);
-            const rect = element.getBoundingClientRect();
-            return (
-              Number.parseFloat(style.opacity || '1') > 0.5 &&
-              rect.right > 0 &&
-              rect.left < window.innerWidth &&
-              element.querySelector('[data-slot="providers-content"]') !== null
-            );
-          });
+          if (!content) return false;
+
+          const rect = content.getBoundingClientRect();
+          return (
+            rect.right > 0 &&
+            rect.left < window.innerWidth &&
+            content.querySelectorAll('[data-slot="providers-group"]').length ===
+              2
+          );
         }),
       {
         timeout: 15_000,
@@ -40,29 +39,16 @@ describe('main providers reference layout', () => {
     );
 
     const state = await browser.execute(() => {
-      const transitions = Array.from(
-        document.querySelectorAll<HTMLElement>('.page-transition'),
+      const content = document.querySelector<HTMLElement>(
+        '[data-slot="providers-content"]',
       );
-      const activeTransition = transitions.find((element) => {
-        const style = getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return (
-          Number.parseFloat(style.opacity || '1') > 0.5 &&
-          rect.right > 0 &&
-          rect.left < window.innerWidth
-        );
-      });
-      const content =
-        activeTransition?.querySelector<HTMLElement>(
-          '[data-slot="providers-content"]',
-        ) ?? null;
       const groups = Array.from(
-        activeTransition?.querySelectorAll<HTMLElement>(
+        content?.querySelectorAll<HTMLElement>(
           '[data-slot="providers-group"]',
         ) ?? [],
       );
       const titles = Array.from(
-        activeTransition?.querySelectorAll<HTMLElement>(
+        content?.querySelectorAll<HTMLElement>(
           '[data-slot="providers-group-title"]',
         ) ?? [],
       );
