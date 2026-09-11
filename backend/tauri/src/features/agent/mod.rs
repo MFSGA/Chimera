@@ -4,6 +4,7 @@ mod core_probe;
 mod diagnostics;
 #[cfg(feature = "e2e")]
 mod e2e;
+mod history;
 mod intent;
 mod model;
 mod network_probe;
