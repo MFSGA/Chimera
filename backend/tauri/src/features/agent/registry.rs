@@ -19,36 +19,49 @@ const AGENT_TOOL_TIMEOUT_MS: u32 = 15_000;
 struct AgentToolDefinition {
     name: AgentToolName,
     description: &'static str,
+    timeout_ms: u32,
 }
 
-const AGENT_TOOLS: [AgentToolDefinition; 7] = [
+const AGENT_TOOLS: [AgentToolDefinition; 8] = [
     AgentToolDefinition {
         name: AgentToolName::SystemSnapshot,
         description: "Collect the complete privacy-safe Chimera network snapshot",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
     AgentToolDefinition {
         name: AgentToolName::NetworkDiagnose,
         description: "Collect health, findings, and probe failures from a fresh network snapshot",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
+    },
+    AgentToolDefinition {
+        name: AgentToolName::NetworkProbe,
+        description: "Probe one public HTTP or HTTPS endpoint without following redirects",
+        timeout_ms: 10_000,
     },
     AgentToolDefinition {
         name: AgentToolName::CoreStatus,
         description: "Collect the current core process, runtime, and routing summary",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
     AgentToolDefinition {
         name: AgentToolName::ProxyStatus,
         description: "Collect the desired and observed host system proxy summary",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
     AgentToolDefinition {
         name: AgentToolName::TunStatus,
         description: "Collect the desired and generated TUN state summary",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
     AgentToolDefinition {
         name: AgentToolName::ProfileSummary,
         description: "Collect profile counts and active-reference validity without names or URLs",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
     AgentToolDefinition {
         name: AgentToolName::ServiceStatus,
         description: "Collect the desired and observed service-mode summary",
+        timeout_ms: AGENT_TOOL_TIMEOUT_MS,
     },
 ];
 
@@ -63,7 +76,7 @@ pub(crate) fn agent_manifest() -> AgentManifest {
                 description: definition.description.to_owned(),
                 risk: AgentToolRisk::ReadOnly,
                 read_only: true,
-                timeout_ms: AGENT_TOOL_TIMEOUT_MS,
+                timeout_ms: definition.timeout_ms,
                 output_schema_version: AGENT_TOOL_OUTPUT_SCHEMA_VERSION,
             })
             .collect(),
@@ -74,6 +87,10 @@ pub(crate) async fn execute_readonly_tool(
     app: &AppHandle,
     tool: AgentToolName,
 ) -> Result<AgentToolResult, AgentToolError> {
+    if tool == AgentToolName::NetworkProbe {
+        return Err(AgentToolError::InvalidRequest);
+    }
+
     let snapshot = tokio::time::timeout(
         Duration::from_millis(u64::from(AGENT_TOOL_TIMEOUT_MS)),
         collect_network_snapshot(app),
@@ -109,6 +126,9 @@ fn project_tool(snapshot: AgentNetworkSnapshot, tool: AgentToolName) -> AgentToo
                     privacy,
                 },
             }
+        }
+        AgentToolName::NetworkProbe => {
+            unreachable!("network.probe requires a parameterized request")
         }
         AgentToolName::CoreStatus => AgentToolResult::CoreStatus {
             output: snapshot.core,
@@ -257,7 +277,7 @@ mod tests {
     fn manifest_is_closed_read_only_and_versioned() {
         let manifest = agent_manifest();
         assert_eq!(manifest.schema_version, AGENT_MANIFEST_SCHEMA_VERSION);
-        assert_eq!(manifest.tools.len(), 7);
+        assert_eq!(manifest.tools.len(), 8);
 
         let names = manifest
             .tools
@@ -265,6 +285,13 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<HashSet<_>>();
         assert_eq!(names.len(), manifest.tools.len());
+
+        let network_probe = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == AgentToolName::NetworkProbe)
+            .expect("network.probe should be discoverable");
+        assert_eq!(network_probe.timeout_ms, 10_000);
 
         for tool in manifest.tools {
             assert!(tool.read_only);

@@ -559,6 +559,7 @@ export type AgentToolManifest = {
 export type AgentToolName =
   | 'system.snapshot'
   | 'network.diagnose'
+  | 'network.probe'
   | 'core.status'
   | 'proxy.status'
   | 'tun.status'

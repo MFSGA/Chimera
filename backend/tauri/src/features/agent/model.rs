@@ -226,6 +226,8 @@ pub enum AgentToolName {
     SystemSnapshot,
     #[serde(rename = "network.diagnose")]
     NetworkDiagnose,
+    #[serde(rename = "network.probe")]
+    NetworkProbe,
     #[serde(rename = "core.status")]
     CoreStatus,
     #[serde(rename = "proxy.status")]
