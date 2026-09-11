@@ -676,10 +676,15 @@ fn proposal_digest(
     hex::encode(sha2::Sha256::digest(material))
 }
 
+fn proposal_audit_reference(proposal_id: &str) -> String {
+    hex::encode(&sha2::Sha256::digest(proposal_id.as_bytes())[..16])
+}
+
 fn audit_proposal(proposal: &AgentProposal, outcome: AgentAuditOutcome) {
+    let proposal_reference = proposal_audit_reference(&proposal.id);
     tracing::info!(
         target: "agent_audit",
-        proposal_id = %proposal.id,
+        proposal_id = %proposal_reference,
         action = ?proposal.action.kind(),
         snapshot_revision = %proposal.snapshot_revision,
         outcome = outcome.as_str(),
@@ -693,8 +698,8 @@ mod tests {
 
     use super::{
         ActionPreconditions, AgentAuditOutcome, PendingProposal, ProposalStore, cleanup_store,
-        enforce_store_limits, plan_routing_mode, proposal_confirmation_message, proposal_digest,
-        routing_transaction_error, verify_action,
+        enforce_store_limits, plan_routing_mode, proposal_audit_reference,
+        proposal_confirmation_message, proposal_digest, routing_transaction_error, verify_action,
     };
     use crate::core::clash::transaction::TransactionOutcome;
     use crate::features::agent::model::{
@@ -730,6 +735,21 @@ mod tests {
         ] {
             assert_eq!(outcome.as_str(), expected);
         }
+    }
+
+    #[test]
+    fn audit_reference_is_fixed_lower_hex_and_hides_raw_proposal_id() {
+        let proposal_id = "proposal-token-canary";
+        let reference = proposal_audit_reference(proposal_id);
+
+        assert_eq!(reference.len(), 32);
+        assert!(
+            reference
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        assert!(!reference.contains(proposal_id));
+        assert_eq!(reference, proposal_audit_reference(proposal_id));
     }
 
     #[test]
