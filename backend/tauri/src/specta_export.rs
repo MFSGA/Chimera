@@ -287,6 +287,7 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     #[cfg(feature = "agent")]
     let builder = build_builder![
         features::agent::commands::agent_get_manifest,
+        features::agent::commands::agent_execute_tool,
         features::agent::commands::agent_execute_readonly_tool,
         features::agent::commands::agent_probe_network,
         features::agent::commands::agent_resolve_intent,

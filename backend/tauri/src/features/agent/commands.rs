@@ -4,14 +4,23 @@ use super::{
     AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState,
     AgentIntentRequest, AgentIntentResolution, AgentManifest, AgentNetworkProbeRequest,
     AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProposal, AgentToolError, AgentToolName,
-    AgentToolResult, agent_manifest, collect_network_snapshot, execute_network_probe,
-    execute_readonly_tool, resolve_intent,
+    AgentToolRequest, AgentToolResult, agent_manifest, collect_network_snapshot,
+    execute_network_probe, execute_readonly_tool, execute_tool, resolve_intent,
 };
 
 #[tauri::command]
 #[specta::specta]
 pub(crate) fn agent_get_manifest() -> AgentManifest {
     agent_manifest()
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_execute_tool(
+    app: AppHandle,
+    request: AgentToolRequest,
+) -> Result<AgentToolResult, AgentToolError> {
+    execute_tool(&app, request).await
 }
 
 #[tauri::command]

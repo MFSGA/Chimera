@@ -3,10 +3,10 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 use super::{
-    collect_network_snapshot,
+    collect_network_snapshot, execute_network_probe,
     model::{
         AgentDiagnosticSummary, AgentManifest, AgentNetworkSnapshot, AgentToolError,
-        AgentToolManifest, AgentToolName, AgentToolResult, AgentToolRisk,
+        AgentToolManifest, AgentToolName, AgentToolRequest, AgentToolResult, AgentToolRisk,
     },
 };
 
@@ -81,6 +81,19 @@ pub(crate) fn agent_manifest() -> AgentManifest {
             })
             .collect(),
     }
+}
+
+pub(crate) async fn execute_tool(
+    app: &AppHandle,
+    request: AgentToolRequest,
+) -> Result<AgentToolResult, AgentToolError> {
+    if let AgentToolRequest::NetworkProbe { arguments } = request {
+        return Ok(AgentToolResult::NetworkProbe {
+            output: execute_network_probe(arguments).await?,
+        });
+    }
+
+    execute_readonly_tool(app, request.name()).await
 }
 
 pub(crate) async fn execute_readonly_tool(

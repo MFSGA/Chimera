@@ -4,7 +4,7 @@ import {
   type AgentActionRequest,
   type AgentNetworkProbeRequest,
   type AgentNetworkSnapshot,
-  type AgentToolName,
+  type AgentToolRequest,
 } from '../../ipc/bindings';
 import { unwrapResult } from '../../utils';
 
@@ -22,7 +22,7 @@ export type AgentExecuteInput = {
 
 const getSystemSnapshot = async (): Promise<AgentNetworkSnapshot> => {
   const result = unwrapResult(
-    await commands.agentExecuteReadonlyTool('system.snapshot'),
+    await commands.agentExecuteTool({ tool: 'system.snapshot' }),
   );
   if (result.tool !== 'system.snapshot') {
     throw new Error('agent_tool_result_mismatch');
@@ -56,13 +56,23 @@ export const useAgent = () => {
   });
 
   const runTool = useMutation({
-    mutationFn: async (tool: AgentToolName) =>
-      unwrapResult(await commands.agentExecuteReadonlyTool(tool)),
+    mutationFn: async (request: AgentToolRequest) =>
+      unwrapResult(await commands.agentExecuteTool(request)),
   });
 
   const probeNetwork = useMutation({
-    mutationFn: async (request: AgentNetworkProbeRequest) =>
-      unwrapResult(await commands.agentProbeNetwork(request)),
+    mutationFn: async (request: AgentNetworkProbeRequest) => {
+      const result = unwrapResult(
+        await commands.agentExecuteTool({
+          tool: 'network.probe',
+          arguments: request,
+        }),
+      );
+      if (result.tool !== 'network.probe') {
+        throw new Error('agent_tool_result_mismatch');
+      }
+      return result.output;
+    },
   });
 
   const resolveIntent = useMutation({

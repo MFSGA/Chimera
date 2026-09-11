@@ -288,6 +288,42 @@ pub struct AgentNetworkProbeResult {
     pub latency_ms: u64,
 }
 
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(tag = "tool")]
+pub enum AgentToolRequest {
+    #[serde(rename = "system.snapshot")]
+    SystemSnapshot,
+    #[serde(rename = "network.diagnose")]
+    NetworkDiagnose,
+    #[serde(rename = "network.probe")]
+    NetworkProbe { arguments: AgentNetworkProbeRequest },
+    #[serde(rename = "core.status")]
+    CoreStatus,
+    #[serde(rename = "proxy.status")]
+    ProxyStatus,
+    #[serde(rename = "tun.status")]
+    TunStatus,
+    #[serde(rename = "profile.summary")]
+    ProfileSummary,
+    #[serde(rename = "service.status")]
+    ServiceStatus,
+}
+
+impl AgentToolRequest {
+    pub(crate) fn name(&self) -> AgentToolName {
+        match self {
+            Self::SystemSnapshot => AgentToolName::SystemSnapshot,
+            Self::NetworkDiagnose => AgentToolName::NetworkDiagnose,
+            Self::NetworkProbe { .. } => AgentToolName::NetworkProbe,
+            Self::CoreStatus => AgentToolName::CoreStatus,
+            Self::ProxyStatus => AgentToolName::ProxyStatus,
+            Self::TunStatus => AgentToolName::TunStatus,
+            Self::ProfileSummary => AgentToolName::ProfileSummary,
+            Self::ServiceStatus => AgentToolName::ServiceStatus,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(tag = "tool")]
 pub enum AgentToolResult {
@@ -295,6 +331,8 @@ pub enum AgentToolResult {
     SystemSnapshot { output: Box<AgentNetworkSnapshot> },
     #[serde(rename = "network.diagnose")]
     NetworkDiagnose { output: AgentDiagnosticSummary },
+    #[serde(rename = "network.probe")]
+    NetworkProbe { output: AgentNetworkProbeResult },
     #[serde(rename = "core.status")]
     CoreStatus { output: AgentCoreSnapshot },
     #[serde(rename = "proxy.status")]

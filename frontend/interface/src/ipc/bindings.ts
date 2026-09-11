@@ -307,6 +307,10 @@ export const commands = {
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
   agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
+  agentExecuteTool: (request: AgentToolRequest) =>
+    typedError<AgentToolResult, string>(
+      __TAURI_INVOKE('agent_execute_tool', { request }),
+    ),
   agentExecuteReadonlyTool: (tool: AgentToolName) =>
     typedError<AgentToolResult, string>(
       __TAURI_INVOKE('agent_execute_readonly_tool', { tool }),
@@ -566,9 +570,20 @@ export type AgentToolName =
   | 'profile.summary'
   | 'service.status';
 
+export type AgentToolRequest =
+  | { tool: 'system.snapshot' }
+  | { tool: 'network.diagnose' }
+  | { tool: 'network.probe'; arguments: AgentNetworkProbeRequest }
+  | { tool: 'core.status' }
+  | { tool: 'proxy.status' }
+  | { tool: 'tun.status' }
+  | { tool: 'profile.summary' }
+  | { tool: 'service.status' };
+
 export type AgentToolResult =
   | { tool: 'system.snapshot'; output: AgentNetworkSnapshot }
   | { tool: 'network.diagnose'; output: AgentDiagnosticSummary }
+  | { tool: 'network.probe'; output: AgentNetworkProbeResult }
   | { tool: 'core.status'; output: AgentCoreSnapshot }
   | { tool: 'proxy.status'; output: AgentSystemProxySnapshot }
   | { tool: 'tun.status'; output: AgentTunSnapshot }
