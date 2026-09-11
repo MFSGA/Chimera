@@ -1,4 +1,6 @@
 import {
+  collectEnvs,
+  openThat,
   useAgent,
   type AgentActionRequest,
   type AgentProposal,
@@ -15,10 +17,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
+import { formatEnvInfos } from '@/utils';
 import { DiagnosisOverview } from './components/diagnosis-overview';
+import { buildAgentIssueUrl } from './components/issue-guidance';
 import { ProposalDialog } from './components/proposal-dialog';
 import { TechnicalDetails } from './components/technical-details';
-import { serializePrivacySafeSnapshot } from './model/privacy-safe-context';
+import {
+  projectPrivacySafeIssueSnapshot,
+  serializePrivacySafeSnapshot,
+} from './model/privacy-safe-context';
 
 function AgentHeader({
   hasSnapshot,
@@ -148,6 +155,31 @@ export function AgentPage() {
     }
   };
 
+  const reportIssue = async () => {
+    let envInfos = 'Environment information unavailable.';
+    try {
+      envInfos = formatEnvInfos(await collectEnvs())
+        .split('\n')
+        .map((value) => `> ${value}`)
+        .join('\n');
+    } catch {
+      // Environment collection is best effort; never attach the raw failure.
+    }
+
+    try {
+      await openThat(
+        buildAgentIssueUrl({
+          actual:
+            'Chimera Agent diagnostics or suggested repairs did not resolve this problem.',
+          envInfos,
+          snapshot: projectPrivacySafeIssueSnapshot(snapshot),
+        }),
+      );
+    } catch {
+      Notice.error(m.agent_error_title());
+    }
+  };
+
   return (
     <AppContentScrollArea
       className="h-full overflow-hidden"
@@ -177,6 +209,7 @@ export function AgentPage() {
               snapshot={snapshot}
               pending={agent.propose.isPending}
               onCopy={() => void copyContext()}
+              onReport={() => void reportIssue()}
               onPropose={(action) => void propose(action)}
             />
           </>

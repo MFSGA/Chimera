@@ -8,6 +8,18 @@ export interface PrivacySafeSnapshot {
   };
 }
 
+export interface PrivacySafeIssueSource extends PrivacySafeSnapshot {
+  schema_version: number;
+  health: string;
+  findings: Array<{ code: string }>;
+  probe_failures: Array<{ code: string }>;
+}
+
+export type PrivacySafeIssueSnapshot = Pick<
+  PrivacySafeIssueSource,
+  'schema_version' | 'health' | 'findings' | 'probe_failures'
+>;
+
 /** Fail closed before rendering or copying the complete diagnostic snapshot. */
 export const isPrivacySafeSnapshot = (snapshot: PrivacySafeSnapshot): boolean =>
   snapshot.privacy.contains_raw_logs === false &&
@@ -21,3 +33,16 @@ export const serializePrivacySafeSnapshot = (
   snapshot: PrivacySafeSnapshot,
 ): string | null =>
   isPrivacySafeSnapshot(snapshot) ? JSON.stringify(snapshot, null, 2) : null;
+
+/** Project a narrow issue-report payload only after the complete snapshot passes the privacy gate. */
+export const projectPrivacySafeIssueSnapshot = (
+  snapshot: PrivacySafeIssueSource | null | undefined,
+): PrivacySafeIssueSnapshot | null => {
+  if (!snapshot || !isPrivacySafeSnapshot(snapshot)) return null;
+  return {
+    schema_version: snapshot.schema_version,
+    health: snapshot.health,
+    findings: snapshot.findings,
+    probe_failures: snapshot.probe_failures,
+  };
+};

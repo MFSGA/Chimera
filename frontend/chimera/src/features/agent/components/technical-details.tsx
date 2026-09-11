@@ -2,7 +2,11 @@ import type {
   AgentActionRequest,
   AgentNetworkSnapshot,
 } from '@chimera/interface';
-import { ContentCopyRounded, ExpandMoreRounded } from '@mui/icons-material';
+import {
+  BugReportRounded,
+  ContentCopyRounded,
+  ExpandMoreRounded,
+} from '@mui/icons-material';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
@@ -15,11 +19,13 @@ export function TechnicalDetails({
   pending,
   onPropose,
   onCopy,
+  onReport,
 }: {
   snapshot: AgentNetworkSnapshot;
   pending: boolean;
   onPropose: (action: AgentActionRequest) => void;
   onCopy: () => void;
+  onReport: () => void;
 }) {
   return (
     <Card variant="outline">
@@ -42,7 +48,11 @@ export function TechnicalDetails({
               onPropose={onPropose}
             />
 
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button variant="stroked" onClick={onReport}>
+                <BugReportRounded />
+                {m.header_help_action_issues()}
+              </Button>
               <Button variant="stroked" onClick={onCopy}>
                 <ContentCopyRounded />
                 {m.agent_copy_context()}
