@@ -271,6 +271,21 @@ pub struct AgentDiagnosticSummary {
     pub privacy: AgentPrivacyBoundary,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, Type)]
+pub struct AgentNetworkProbeRequest {
+    pub url: String,
+    pub expected_status: Option<u16>,
+    pub timeout_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub struct AgentNetworkProbeResult {
+    pub status: u16,
+    pub expected_status: Option<u16>,
+    pub matches_expected_status: Option<bool>,
+    pub latency_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Type)]
 #[serde(tag = "tool")]
 pub enum AgentToolResult {
@@ -290,10 +305,20 @@ pub enum AgentToolResult {
     ServiceStatus { output: AgentServiceSnapshot },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AgentToolError {
+    #[error("agent_tool_invalid_request")]
+    InvalidRequest,
+    #[error("agent_tool_invalid_target")]
+    InvalidTarget,
+    #[error("agent_tool_target_blocked")]
+    TargetBlocked,
+    #[error("agent_tool_resolution_failed")]
+    ResolutionFailed,
     #[error("agent_tool_timed_out")]
     TimedOut,
+    #[error("agent_tool_execution_failed")]
+    ExecutionFailed,
 }
 
 impl Serialize for AgentToolError {

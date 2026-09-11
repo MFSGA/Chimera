@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   commands,
   type AgentActionRequest,
+  type AgentNetworkProbeRequest,
   type AgentNetworkSnapshot,
   type AgentToolName,
 } from '../../ipc/bindings';
@@ -59,6 +60,11 @@ export const useAgent = () => {
       unwrapResult(await commands.agentExecuteReadonlyTool(tool)),
   });
 
+  const probeNetwork = useMutation({
+    mutationFn: async (request: AgentNetworkProbeRequest) =>
+      unwrapResult(await commands.agentProbeNetwork(request)),
+  });
+
   const propose = useMutation({
     mutationFn: async (action: AgentActionRequest) =>
       unwrapResult(await commands.agentProposeNetworkAction(action)),
@@ -90,6 +96,7 @@ export const useAgent = () => {
     manifest,
     snapshot,
     runTool,
+    probeNetwork,
     propose,
     execute,
     cancel,

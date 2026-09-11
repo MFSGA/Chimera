@@ -5,6 +5,7 @@ mod diagnostics;
 #[cfg(feature = "e2e")]
 mod e2e;
 mod model;
+mod network_probe;
 mod registry;
 
 use tauri::Manager;
@@ -15,9 +16,11 @@ use crate::client::ChimeraClient;
 pub(crate) use actions::AgentFeatureState;
 pub(crate) use diagnostics::collect_network_snapshot;
 pub(crate) use model::{
-    AgentActionRequest, AgentActionResult, AgentCommandError, AgentManifest, AgentNetworkSnapshot,
-    AgentProposal, AgentToolError, AgentToolName, AgentToolResult,
+    AgentActionRequest, AgentActionResult, AgentCommandError, AgentManifest,
+    AgentNetworkProbeRequest, AgentNetworkProbeResult, AgentNetworkSnapshot, AgentProposal,
+    AgentToolError, AgentToolName, AgentToolResult,
 };
+pub(crate) use network_probe::execute_network_probe;
 pub(crate) use registry::{agent_manifest, execute_readonly_tool};
 
 pub(crate) fn setup<R: tauri::Runtime, M: Manager<R>>(manager: &M) {

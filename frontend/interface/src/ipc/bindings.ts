@@ -311,6 +311,10 @@ export const commands = {
     typedError<AgentToolResult, string>(
       __TAURI_INVOKE('agent_execute_readonly_tool', { tool }),
     ),
+  agentProbeNetwork: (request: AgentNetworkProbeRequest) =>
+    typedError<AgentNetworkProbeResult, string>(
+      __TAURI_INVOKE('agent_probe_network', { request }),
+    ),
   agentGetNetworkSnapshot: () =>
     __TAURI_INVOKE<AgentNetworkSnapshot>('agent_get_network_snapshot'),
   agentProposeNetworkAction: (action: AgentActionRequest) =>
@@ -414,6 +418,19 @@ export type AgentImpact =
 export type AgentManifest = {
   schema_version: number;
   tools: AgentToolManifest[];
+};
+
+export type AgentNetworkProbeRequest = {
+  url: string;
+  expected_status: number | null;
+  timeout_ms: number | null;
+};
+
+export type AgentNetworkProbeResult = {
+  status: number;
+  expected_status: number | null;
+  matches_expected_status: boolean | null;
+  latency_ms: number;
 };
 
 export type AgentNetworkSnapshot = {
