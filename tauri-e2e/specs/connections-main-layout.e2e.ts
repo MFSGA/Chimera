@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { displayedElement, focusElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/connections';
@@ -16,11 +17,25 @@ describe('main connections reference layout', () => {
   });
 
   it('keeps the ref empty-state, toolbar, and context-menu structure', async () => {
-    const toolbar = await $('[data-slot="connections-toolbar"]');
-    await toolbar.waitForDisplayed({ timeout: 15_000 });
+    const search = await displayedElement(
+      '[data-slot="connections-toolbar"] input',
+    );
+    await focusElement(search);
+    await browser.keys('__chimera_e2e_no_matching_connection__');
 
-    const empty = await $('[data-slot="connections-no-connections"]');
-    await empty.waitForDisplayed({ timeout: 15_000 });
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const empty = document.querySelector<HTMLElement>(
+            '[data-slot="connections-no-connections"]',
+          );
+          return Boolean(empty?.innerText.trim());
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The filtered Connections empty state did not render.',
+      },
+    );
 
     const state = await browser.execute(() => {
       const layout = document.querySelector<HTMLElement>(
