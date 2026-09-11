@@ -11,10 +11,7 @@ use tokio::sync::Mutex;
 
 use crate::utils::dirs::app_data_dir;
 
-use super::model::{
-    AgentActionKind, AgentFindingCode, AgentHealth, AgentProbeCode, AgentProposal, AgentServiceState,
-    AgentCoreState,
-};
+use super::model::{AgentActionKind, AgentProposal};
 
 const HISTORY_FILE: &str = "agent-history.json";
 const HISTORY_SCHEMA_VERSION: u32 = 1;
@@ -68,11 +65,11 @@ struct AgentDiagnosticHistoryEntry {
     schema_version: u32,
     captured_at: i64,
     revision: String,
-    health: AgentHealth,
-    core_state: AgentCoreState,
-    service_state: AgentServiceState,
-    finding_codes: Vec<AgentFindingCode>,
-    probe_failure_codes: Vec<AgentProbeCode>,
+    health: String,
+    core_state: String,
+    service_state: String,
+    finding_codes: Vec<String>,
+    probe_failure_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,17 +206,7 @@ fn quarantine_corrupt_document(path: &Path) -> anyhow::Result<()> {
 }
 
 fn normalize_history_document(document: &mut AgentHistoryDocument) {
-    document.diagnostics.retain_mut(|entry| {
-        if entry.schema_version != HISTORY_SCHEMA_VERSION
-            || !is_valid_history_timestamp(entry.captured_at)
-            || !is_lower_hex(&entry.revision, 64)
-        {
-            return false;
-        }
-        deduplicate_codes(&mut entry.finding_codes);
-        deduplicate_codes(&mut entry.probe_failure_codes);
-        true
-    });
+    document.diagnostics.retain_mut(normalize_diagnostic_entry);
     document.audits.retain_mut(|entry| {
         if entry.schema_version != HISTORY_SCHEMA_VERSION
             || !is_valid_history_timestamp(entry.recorded_at)
@@ -236,6 +223,59 @@ fn normalize_history_document(document: &mut AgentHistoryDocument) {
     trim(&mut document.audits, MAX_AUDIT_HISTORY);
 }
 
+fn normalize_diagnostic_entry(entry: &mut AgentDiagnosticHistoryEntry) -> bool {
+    if entry.schema_version != HISTORY_SCHEMA_VERSION
+        || !is_valid_history_timestamp(entry.captured_at)
+        || !is_lower_hex(&entry.revision, 64)
+        || !matches!(
+            entry.health.as_str(),
+            "healthy" | "warning" | "critical" | "degraded"
+        )
+        || !matches!(entry.core_state.as_str(), "running" | "stopped" | "unknown")
+        || !matches!(
+            entry.service_state.as_str(),
+            "not_installed" | "stopped" | "running" | "unknown"
+        )
+        || !entry.finding_codes.iter().all(|code| is_finding_code(code))
+        || !entry
+            .probe_failure_codes
+            .iter()
+            .all(|code| is_probe_failure_code(code))
+    {
+        return false;
+    }
+    deduplicate_codes(&mut entry.finding_codes);
+    deduplicate_codes(&mut entry.probe_failure_codes);
+    true
+}
+
+fn is_finding_code(code: &str) -> bool {
+    matches!(
+        code,
+        "weak_controller_secret"
+            | "system_proxy_without_running_core"
+            | "system_proxy_endpoint_mismatch"
+            | "runtime_config_missing"
+            | "active_profile_missing"
+            | "service_mode_inconsistent"
+            | "clash_connector_disconnected"
+            | "tun_runtime_mismatch"
+            | "recent_core_errors"
+    )
+}
+
+fn is_probe_failure_code(code: &str) -> bool {
+    matches!(
+        code,
+        "core_status_unavailable"
+            | "core_config_unavailable"
+            | "system_proxy_unavailable"
+            | "service_status_unavailable"
+            | "service_status_timeout"
+            | "telemetry_unavailable"
+    )
+}
+
 fn is_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
         && value
@@ -247,13 +287,13 @@ fn is_valid_history_timestamp(timestamp: i64) -> bool {
     timestamp >= 0 && chrono::DateTime::from_timestamp_millis(timestamp).is_some()
 }
 
-fn deduplicate_codes<T: Copy + PartialEq>(codes: &mut Vec<T>) {
+fn deduplicate_codes<T: Clone + PartialEq>(codes: &mut Vec<T>) {
     let mut seen = Vec::with_capacity(codes.len());
     codes.retain(|code| {
         if seen.contains(code) {
             false
         } else {
-            seen.push(*code);
+            seen.push(code.clone());
             true
         }
     });
