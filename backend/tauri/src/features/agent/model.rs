@@ -254,6 +254,7 @@ pub struct AgentToolManifest {
     pub risk: AgentToolRisk,
     pub read_only: bool,
     pub timeout_ms: u32,
+    pub input_schema_version: u16,
     pub output_schema_version: u16,
 }
 

@@ -12,6 +12,7 @@ use super::{
 
 const AGENT_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const AGENT_TOOL_VERSION: u16 = 1;
+const AGENT_TOOL_INPUT_SCHEMA_VERSION: u16 = 1;
 const AGENT_TOOL_OUTPUT_SCHEMA_VERSION: u16 = 1;
 const AGENT_TOOL_TIMEOUT_MS: u32 = 15_000;
 
@@ -77,6 +78,7 @@ pub(crate) fn agent_manifest() -> AgentManifest {
                 risk: AgentToolRisk::ReadOnly,
                 read_only: true,
                 timeout_ms: definition.timeout_ms,
+                input_schema_version: AGENT_TOOL_INPUT_SCHEMA_VERSION,
                 output_schema_version: AGENT_TOOL_OUTPUT_SCHEMA_VERSION,
             })
             .collect(),
@@ -166,8 +168,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        AGENT_MANIFEST_SCHEMA_VERSION, AGENT_TOOL_OUTPUT_SCHEMA_VERSION, agent_manifest,
-        project_tool,
+        AGENT_MANIFEST_SCHEMA_VERSION, AGENT_TOOL_INPUT_SCHEMA_VERSION,
+        AGENT_TOOL_OUTPUT_SCHEMA_VERSION, agent_manifest, project_tool,
     };
     use crate::features::agent::model::{
         AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
@@ -311,6 +313,7 @@ mod tests {
             assert_eq!(tool.risk, AgentToolRisk::ReadOnly);
             assert!(tool.version > 0);
             assert!(tool.timeout_ms > 0);
+            assert_eq!(tool.input_schema_version, AGENT_TOOL_INPUT_SCHEMA_VERSION);
             assert_eq!(tool.output_schema_version, AGENT_TOOL_OUTPUT_SCHEMA_VERSION);
             assert!(!tool.description.trim().is_empty());
         }

@@ -557,6 +557,7 @@ export type AgentToolManifest = {
   risk: AgentToolRisk;
   read_only: boolean;
   timeout_ms: number;
+  input_schema_version: number;
   output_schema_version: number;
 };
 
