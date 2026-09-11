@@ -21,44 +21,6 @@ const MAX_HISTORY_FILE_BYTES: u64 = 1024 * 1024;
 
 static HISTORY_GATE: Mutex<()> = Mutex::const_new(());
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum AgentAuditOutcome {
-    Proposed,
-    Verified,
-    ActionNotAvailable,
-    ProposalNotFound,
-    ProposalExpired,
-    DigestMismatch,
-    StateChanged,
-    RateLimited,
-    LimitReached,
-    ConfirmationDeclined,
-    ActionFailed,
-    PartialApply,
-    VerificationFailed,
-}
-
-impl AgentAuditOutcome {
-    pub(super) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Proposed => "proposed",
-            Self::Verified => "verified",
-            Self::ActionNotAvailable => "action_not_available",
-            Self::ProposalNotFound => "proposal_not_found",
-            Self::ProposalExpired => "proposal_expired",
-            Self::DigestMismatch => "digest_mismatch",
-            Self::StateChanged => "state_changed",
-            Self::RateLimited => "rate_limited",
-            Self::LimitReached => "limit_reached",
-            Self::ConfirmationDeclined => "confirmation_declined",
-            Self::ActionFailed => "action_failed",
-            Self::PartialApply => "partial_apply",
-            Self::VerificationFailed => "verification_failed",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentDiagnosticHistoryEntry {
@@ -80,7 +42,7 @@ struct AgentAuditHistoryEntry {
     proposal_id: String,
     action: AgentActionKind,
     snapshot_revision: String,
-    outcome: AgentAuditOutcome,
+    outcome: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -90,9 +52,9 @@ struct AgentHistoryDocument {
     audits: VecDeque<AgentAuditHistoryEntry>,
 }
 
-pub(super) async fn record_audit(proposal: &AgentProposal, outcome: AgentAuditOutcome) {
-    if !is_lower_hex(&proposal.snapshot_revision, 64) {
-        tracing::warn!(target: "agent_audit", "discarding audit with invalid snapshot revision");
+pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
+    if !is_lower_hex(&proposal.snapshot_revision, 64) || !is_audit_outcome(outcome) {
+        tracing::warn!(target: "agent_audit", "discarding invalid agent audit history entry");
         return;
     }
 
@@ -118,7 +80,7 @@ pub(super) async fn record_audit(proposal: &AgentProposal, outcome: AgentAuditOu
         proposal_id: proposal_reference(&proposal.id),
         action: proposal.action.kind(),
         snapshot_revision: proposal.snapshot_revision.clone(),
-        outcome,
+        outcome: outcome.to_owned(),
     });
     trim(&mut document.audits, MAX_AUDIT_HISTORY);
 
@@ -211,6 +173,7 @@ fn normalize_history_document(document: &mut AgentHistoryDocument) {
         if entry.schema_version != HISTORY_SCHEMA_VERSION
             || !is_valid_history_timestamp(entry.recorded_at)
             || !is_lower_hex(&entry.snapshot_revision, 64)
+            || !is_audit_outcome(&entry.outcome)
         {
             return false;
         }
@@ -247,6 +210,25 @@ fn normalize_diagnostic_entry(entry: &mut AgentDiagnosticHistoryEntry) -> bool {
     deduplicate_codes(&mut entry.finding_codes);
     deduplicate_codes(&mut entry.probe_failure_codes);
     true
+}
+
+fn is_audit_outcome(outcome: &str) -> bool {
+    matches!(
+        outcome,
+        "proposed"
+            | "verified"
+            | "action_not_available"
+            | "proposal_not_found"
+            | "proposal_expired"
+            | "digest_mismatch"
+            | "state_changed"
+            | "rate_limited"
+            | "limit_reached"
+            | "confirmation_declined"
+            | "action_failed"
+            | "partial_apply"
+            | "verification_failed"
+    )
 }
 
 fn is_finding_code(code: &str) -> bool {
@@ -310,8 +292,8 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{
-        AgentAuditHistoryEntry, AgentAuditOutcome, AgentHistoryDocument, is_lower_hex,
-        normalize_history_document, proposal_reference, trim,
+        AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, normalize_history_document,
+        proposal_reference, trim,
     };
     use crate::features::agent::model::AgentActionKind;
 
@@ -338,7 +320,7 @@ mod tests {
                     proposal_id: "legacy-proposal-token-canary".into(),
                     action: AgentActionKind::SetRoutingMode,
                     snapshot_revision: valid_revision,
-                    outcome: AgentAuditOutcome::Verified,
+                    outcome: "verified".into(),
                 },
                 AgentAuditHistoryEntry {
                     schema_version: 1,
@@ -346,7 +328,7 @@ mod tests {
                     proposal_id: "secret-canary".into(),
                     action: AgentActionKind::SetRoutingMode,
                     snapshot_revision: "connection-target-canary".into(),
-                    outcome: AgentAuditOutcome::ActionFailed,
+                    outcome: "action_failed".into(),
                 },
             ]),
         };
