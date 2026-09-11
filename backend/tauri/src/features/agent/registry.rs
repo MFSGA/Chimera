@@ -85,6 +85,17 @@ pub(crate) fn agent_manifest() -> AgentManifest {
     }
 }
 
+fn tool_definition(tool: AgentToolName) -> &'static AgentToolDefinition {
+    AGENT_TOOLS
+        .iter()
+        .find(|definition| definition.name == tool)
+        .expect("registered agent tool definition must exist")
+}
+
+fn tool_timeout(tool: AgentToolName) -> Duration {
+    Duration::from_millis(u64::from(tool_definition(tool).timeout_ms))
+}
+
 pub(crate) async fn execute_tool(
     app: &AppHandle,
     request: AgentToolRequest,
@@ -106,12 +117,9 @@ pub(crate) async fn execute_readonly_tool(
         return Err(AgentToolError::InvalidRequest);
     }
 
-    let snapshot = tokio::time::timeout(
-        Duration::from_millis(u64::from(AGENT_TOOL_TIMEOUT_MS)),
-        collect_network_snapshot(app),
-    )
-    .await
-    .map_err(|_| AgentToolError::TimedOut)?;
+    let snapshot = tokio::time::timeout(tool_timeout(tool), collect_network_snapshot(app))
+        .await
+        .map_err(|_| AgentToolError::TimedOut)?;
 
     Ok(project_tool(snapshot, tool))
 }
@@ -169,7 +177,7 @@ mod tests {
 
     use super::{
         AGENT_MANIFEST_SCHEMA_VERSION, AGENT_TOOL_INPUT_SCHEMA_VERSION,
-        AGENT_TOOL_OUTPUT_SCHEMA_VERSION, agent_manifest, project_tool,
+        AGENT_TOOL_OUTPUT_SCHEMA_VERSION, agent_manifest, project_tool, tool_timeout,
     };
     use crate::features::agent::model::{
         AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState, AgentFinding,
@@ -308,11 +316,15 @@ mod tests {
             .expect("network.probe should be discoverable");
         assert_eq!(network_probe.timeout_ms, 10_000);
 
-        for tool in manifest.tools {
+        for tool in &manifest.tools {
             assert!(tool.read_only);
             assert_eq!(tool.risk, AgentToolRisk::ReadOnly);
             assert!(tool.version > 0);
             assert!(tool.timeout_ms > 0);
+            assert_eq!(
+                tool_timeout(tool.name).as_millis(),
+                u128::from(tool.timeout_ms)
+            );
             assert_eq!(tool.input_schema_version, AGENT_TOOL_INPUT_SCHEMA_VERSION);
             assert_eq!(tool.output_schema_version, AGENT_TOOL_OUTPUT_SCHEMA_VERSION);
             assert!(!tool.description.trim().is_empty());
