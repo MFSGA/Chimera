@@ -23,7 +23,8 @@ use super::{
     model::{
         AgentActionRequest, AgentActionResult, AgentActionRisk, AgentAppliedState,
         AgentCommandError, AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot,
-        AgentProposal, AgentResult, AgentRoutingMode, AgentStateChange,
+        AgentProposal, AgentResult, AgentRoutingMode, AgentRunType, AgentServiceState,
+        AgentStateChange,
     },
 };
 
@@ -357,6 +358,9 @@ fn plan_routing_mode(
 }
 
 fn plan_tun_enabled(snapshot: &AgentNetworkSnapshot, target: bool) -> AgentResult<ActionPlan> {
+    if target && !tun_enable_preconditions_satisfied(snapshot) {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
     let tun = &snapshot.tun;
     let generated_before = tun
         .generated_runtime_enabled
@@ -399,6 +403,18 @@ fn plan_tun_enabled(snapshot: &AgentNetworkSnapshot, target: bool) -> AgentResul
             core_state_changed_at: snapshot.core.state_changed_at,
         },
     })
+}
+
+fn tun_enable_preconditions_satisfied(snapshot: &AgentNetworkSnapshot) -> bool {
+    if snapshot.os_family != "windows" {
+        return true;
+    }
+    snapshot.core.state == AgentCoreState::Running
+        && snapshot.core.run_type == AgentRunType::Service
+        && snapshot.service.desired_enabled
+        && snapshot.service.state == AgentServiceState::Running
+        && snapshot.service.ipc_connected
+        && snapshot.service.runtime_compatible == Some(true)
 }
 
 fn plan_system_proxy_enabled(
@@ -674,7 +690,7 @@ async fn set_tun_enabled(
             Err(AgentCommandError::PartialApply)
         };
     }
-    if tun_enabled_is_applied(client, target) {
+    if tun_enabled_is_applied(client, target).await {
         return Ok(());
     }
     if restore_tun_enabled(client, desired_before).await {
@@ -695,15 +711,18 @@ async fn persist_tun_enabled(client: &ChimeraClient, enabled: bool) -> AgentResu
 }
 
 async fn restore_tun_enabled(client: &ChimeraClient, enabled: bool) -> bool {
-    persist_tun_enabled(client, enabled).await.is_ok() && tun_enabled_is_applied(client, enabled)
+    persist_tun_enabled(client, enabled).await.is_ok()
+        && tun_enabled_is_applied(client, enabled).await
 }
 
-fn tun_enabled_is_applied(client: &ChimeraClient, enabled: bool) -> bool {
+async fn tun_enabled_is_applied(client: &ChimeraClient, enabled: bool) -> bool {
     let desired = client
         .get_clash_config()
         .map(|config| config.enable_tun_mode)
         .ok();
-    desired == Some(enabled) && generated_tun_enabled() == Some(enabled)
+    desired == Some(enabled)
+        && generated_tun_enabled() == Some(enabled)
+        && core_probe::observed_tun_enabled().await == Ok(enabled)
 }
 
 fn generated_tun_enabled() -> Option<bool> {
@@ -871,6 +890,7 @@ fn verify_action(snapshot: &AgentNetworkSnapshot, action: &AgentActionRequest) -
         AgentActionRequest::SetTunEnabled { enabled } => {
             snapshot.tun.desired_enabled == *enabled
                 && snapshot.tun.generated_runtime_enabled == Some(*enabled)
+                && snapshot.tun.applied_consistency == AgentAppliedState::Consistent
         }
         AgentActionRequest::SetSystemProxyEnabled { enabled } => {
             snapshot.system_proxy.desired_enabled == *enabled
@@ -1127,6 +1147,25 @@ mod tests {
     }
 
     #[test]
+    fn windows_tun_enable_requires_ready_service_host_but_disable_does_not() {
+        let mut snapshot = snapshot();
+        snapshot.os_family = "windows".into();
+        assert!(plan_tun_enabled(&snapshot, true).is_err());
+
+        snapshot.core.run_type = AgentRunType::Service;
+        snapshot.service.desired_enabled = true;
+        snapshot.service.state = AgentServiceState::Running;
+        snapshot.service.ipc_connected = true;
+        snapshot.service.runtime_compatible = Some(true);
+        assert!(plan_tun_enabled(&snapshot, true).is_ok());
+
+        snapshot.tun.desired_enabled = true;
+        snapshot.tun.generated_runtime_enabled = Some(true);
+        snapshot.service.state = AgentServiceState::Stopped;
+        assert!(plan_tun_enabled(&snapshot, false).is_ok());
+    }
+
+    #[test]
     fn system_proxy_enable_requires_running_core_but_disable_does_not() {
         let mut snapshot = snapshot();
         snapshot.core.state = AgentCoreState::Stopped;
@@ -1154,6 +1193,9 @@ mod tests {
         assert!(!verify_action(&snapshot, &tun_action));
         snapshot.tun.desired_enabled = true;
         snapshot.tun.generated_runtime_enabled = Some(true);
+        assert!(!verify_action(&snapshot, &tun_action));
+        snapshot.tun.observed_active = AgentAppliedState::Consistent;
+        snapshot.tun.applied_consistency = AgentAppliedState::Consistent;
         assert!(verify_action(&snapshot, &tun_action));
 
         let proxy_action = AgentActionRequest::SetSystemProxyEnabled { enabled: true };
