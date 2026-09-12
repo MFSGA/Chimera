@@ -96,6 +96,8 @@ pub(super) fn proposal_reference(proposal_id: &str) -> String {
 fn action_code(action: AgentActionKind) -> &'static str {
     match action {
         AgentActionKind::SetRoutingMode => "set_routing_mode",
+        AgentActionKind::SetTunEnabled => "set_tun_enabled",
+        AgentActionKind::SetSystemProxyEnabled => "set_system_proxy_enabled",
         AgentActionKind::DisableStaleSystemProxy => "disable_stale_system_proxy",
     }
 }

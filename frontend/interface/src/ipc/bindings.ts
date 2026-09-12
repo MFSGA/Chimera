@@ -349,10 +349,16 @@ export const events = {
 };
 
 /* Types */
-export type AgentActionKind = 'set_routing_mode' | 'disable_stale_system_proxy';
+export type AgentActionKind =
+  | 'set_routing_mode'
+  | 'set_tun_enabled'
+  | 'set_system_proxy_enabled'
+  | 'disable_stale_system_proxy';
 
 export type AgentActionRequest =
   | { action: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { action: 'set_tun_enabled'; enabled: boolean }
+  | { action: 'set_system_proxy_enabled'; enabled: boolean }
   | { action: 'disable_stale_system_proxy' };
 
 export type AgentActionResult = {
@@ -419,11 +425,16 @@ export type AgentImpact =
   | 'traffic_may_bypass_proxy'
   | 'all_traffic_uses_proxy'
   | 'restore_rule_routing'
-  | 'host_system_proxy_disabled';
+  | 'host_system_proxy_enabled'
+  | 'host_system_proxy_disabled'
+  | 'host_tun_enabled'
+  | 'host_tun_disabled';
 
 export type AgentIntent =
   | { intent: 'diagnose' }
   | { intent: 'set_routing_mode'; mode: AgentRoutingMode }
+  | { intent: 'set_tun_enabled'; enabled: boolean }
+  | { intent: 'set_system_proxy_enabled'; enabled: boolean }
   | { intent: 'disable_stale_system_proxy' };
 
 export type AgentIntentRequest = {

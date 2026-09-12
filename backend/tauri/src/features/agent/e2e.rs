@@ -14,6 +14,7 @@ const FIXTURE_STATE_CHANGED_AT: i64 = 1_788_623_990_000;
 const FIXTURE_PORT: u16 = 7890;
 
 static STALE_PROXY_REPAIRED: AtomicBool = AtomicBool::new(false);
+static TUN_ENABLED: AtomicBool = AtomicBool::new(false);
 
 pub(super) fn fixture_enabled() -> bool {
     std::env::var(FIXTURE_ENV).as_deref() == Ok(STALE_PROXY_FIXTURE)
@@ -24,19 +25,31 @@ pub(super) fn collect_network_snapshot() -> Option<AgentNetworkSnapshot> {
 }
 
 pub(super) fn mark_stale_proxy_repaired() {
+    set_system_proxy_enabled(false);
+}
+
+pub(super) fn set_system_proxy_enabled(enabled: bool) {
     if fixture_enabled() {
-        STALE_PROXY_REPAIRED.store(true, Ordering::SeqCst);
+        STALE_PROXY_REPAIRED.store(!enabled, Ordering::SeqCst);
+    }
+}
+
+pub(super) fn set_tun_enabled(enabled: bool) {
+    if fixture_enabled() {
+        TUN_ENABLED.store(enabled, Ordering::SeqCst);
     }
 }
 
 fn snapshot() -> AgentNetworkSnapshot {
     let repaired = STALE_PROXY_REPAIRED.load(Ordering::SeqCst);
+    let tun_enabled = TUN_ENABLED.load(Ordering::SeqCst);
     AgentNetworkSnapshot {
         schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
-        revision: if repaired {
-            "agent-e2e-healthy"
-        } else {
-            "agent-e2e-stale-proxy"
+        revision: match (repaired, tun_enabled) {
+            (false, false) => "agent-e2e-stale-proxy",
+            (false, true) => "agent-e2e-stale-proxy-tun",
+            (true, false) => "agent-e2e-healthy",
+            (true, true) => "agent-e2e-healthy-tun",
         }
         .into(),
         captured_at: chrono::Utc::now().timestamp_millis(),
@@ -50,7 +63,7 @@ fn snapshot() -> AgentNetworkSnapshot {
         core: core_snapshot(),
         service: service_snapshot(),
         system_proxy: proxy_snapshot(repaired),
-        tun: tun_snapshot(),
+        tun: tun_snapshot(tun_enabled),
         profiles: profile_snapshot(),
         telemetry: telemetry_snapshot(),
         findings: findings(repaired),
@@ -92,10 +105,10 @@ fn proxy_snapshot(repaired: bool) -> AgentSystemProxySnapshot {
     }
 }
 
-fn tun_snapshot() -> AgentTunSnapshot {
+fn tun_snapshot(enabled: bool) -> AgentTunSnapshot {
     AgentTunSnapshot {
-        desired_enabled: false,
-        generated_runtime_enabled: Some(false),
+        desired_enabled: enabled,
+        generated_runtime_enabled: Some(enabled),
         observed_active: AgentAppliedState::Consistent,
         applied_consistency: AgentAppliedState::Consistent,
     }

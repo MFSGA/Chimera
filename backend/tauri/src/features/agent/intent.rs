@@ -57,6 +57,34 @@ fn resolve_closed_intent(text: &str) -> Option<AgentIntent> {
             },
         ),
         (
+            &["开启tun", "打开tun", "启用tun", "enabletun", "turnontun"],
+            AgentIntent::SetTunEnabled { enabled: true },
+        ),
+        (
+            &["关闭tun", "禁用tun", "停用tun", "disabletun", "turnofftun"],
+            AgentIntent::SetTunEnabled { enabled: false },
+        ),
+        (
+            &[
+                "开启系统代理",
+                "打开系统代理",
+                "启用系统代理",
+                "enablesystemproxy",
+                "turnonsystemproxy",
+            ],
+            AgentIntent::SetSystemProxyEnabled { enabled: true },
+        ),
+        (
+            &[
+                "关闭系统代理",
+                "禁用系统代理",
+                "停用系统代理",
+                "disablesystemproxy",
+                "turnoffsystemproxy",
+            ],
+            AgentIntent::SetSystemProxyEnabled { enabled: false },
+        ),
+        (
             &["关闭残留代理", "清理残留代理", "disablestaleproxy"],
             AgentIntent::DisableStaleSystemProxy,
         ),
@@ -116,11 +144,23 @@ mod tests {
                 intent: AgentIntent::DisableStaleSystemProxy,
             }
         );
+        assert_eq!(
+            resolve("帮我开启 TUN"),
+            AgentIntentResolution::Resolved {
+                intent: AgentIntent::SetTunEnabled { enabled: true },
+            }
+        );
+        assert_eq!(
+            resolve("关闭系统代理"),
+            AgentIntentResolution::Resolved {
+                intent: AgentIntent::SetSystemProxyEnabled { enabled: false },
+            }
+        );
     }
 
     #[test]
     fn unsupported_or_future_capabilities_fail_closed() {
-        for text in ["", "开启 TUN", "启动核心", "打开系统代理"] {
+        for text in ["", "启动核心", "重启服务", "修改配置文件"] {
             let expected = if text.is_empty() {
                 AgentUnsupportedIntentReason::EmptyInput
             } else {

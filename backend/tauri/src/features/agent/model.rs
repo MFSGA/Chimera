@@ -381,6 +381,8 @@ impl Type for AgentToolError {
 #[serde(rename_all = "snake_case")]
 pub enum AgentActionKind {
     SetRoutingMode,
+    SetTunEnabled,
+    SetSystemProxyEnabled,
     DisableStaleSystemProxy,
 }
 
@@ -388,6 +390,8 @@ pub enum AgentActionKind {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum AgentActionRequest {
     SetRoutingMode { mode: AgentRoutingMode },
+    SetTunEnabled { enabled: bool },
+    SetSystemProxyEnabled { enabled: bool },
     DisableStaleSystemProxy,
 }
 
@@ -402,6 +406,8 @@ pub struct AgentIntentRequest {
 pub enum AgentIntent {
     Diagnose,
     SetRoutingMode { mode: AgentRoutingMode },
+    SetTunEnabled { enabled: bool },
+    SetSystemProxyEnabled { enabled: bool },
     DisableStaleSystemProxy,
 }
 
@@ -428,6 +434,8 @@ impl AgentActionRequest {
     pub(crate) fn kind(&self) -> AgentActionKind {
         match self {
             Self::SetRoutingMode { .. } => AgentActionKind::SetRoutingMode,
+            Self::SetTunEnabled { .. } => AgentActionKind::SetTunEnabled,
+            Self::SetSystemProxyEnabled { .. } => AgentActionKind::SetSystemProxyEnabled,
             Self::DisableStaleSystemProxy => AgentActionKind::DisableStaleSystemProxy,
         }
     }
@@ -447,7 +455,10 @@ pub enum AgentImpact {
     TrafficMayBypassProxy,
     AllTrafficUsesProxy,
     RestoreRuleRouting,
+    HostSystemProxyEnabled,
     HostSystemProxyDisabled,
+    HostTunEnabled,
+    HostTunDisabled,
 }
 
 #[derive(Debug, Clone, Serialize, Type)]

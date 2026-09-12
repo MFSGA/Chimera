@@ -39,6 +39,21 @@ enum ActionPreconditions {
         before: AgentRoutingMode,
         core_state_changed_at: i64,
     },
+    SetTunEnabled {
+        desired_before: bool,
+        generated_before: bool,
+        core_state: AgentCoreState,
+        core_state_changed_at: i64,
+    },
+    SetSystemProxyEnabled {
+        desired_before: bool,
+        observed_before: bool,
+        observed_host_scope: AgentHostScope,
+        observed_port: Option<u16>,
+        core_state: AgentCoreState,
+        core_state_changed_at: i64,
+        expected_port: u16,
+    },
     DisableStaleSystemProxy {
         core_state_changed_at: i64,
         expected_port: u16,
@@ -304,6 +319,10 @@ fn plan_action(
 ) -> AgentResult<ActionPlan> {
     match action {
         AgentActionRequest::SetRoutingMode { mode } => plan_routing_mode(snapshot, *mode),
+        AgentActionRequest::SetTunEnabled { enabled } => plan_tun_enabled(snapshot, *enabled),
+        AgentActionRequest::SetSystemProxyEnabled { enabled } => {
+            plan_system_proxy_enabled(snapshot, *enabled)
+        }
         AgentActionRequest::DisableStaleSystemProxy => plan_stale_proxy(snapshot),
     }
 }
@@ -333,6 +352,108 @@ fn plan_routing_mode(
         preconditions: ActionPreconditions::SetRoutingMode {
             before: current,
             core_state_changed_at: snapshot.core.state_changed_at,
+        },
+    })
+}
+
+fn plan_tun_enabled(snapshot: &AgentNetworkSnapshot, target: bool) -> AgentResult<ActionPlan> {
+    let tun = &snapshot.tun;
+    let generated_before = tun
+        .generated_runtime_enabled
+        .ok_or(AgentCommandError::ActionNotAvailable)?;
+    if tun.desired_enabled == target && generated_before == target {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+
+    let mut changes = Vec::with_capacity(2);
+    if tun.desired_enabled != target {
+        changes.push(AgentStateChange {
+            field: "tun_desired".into(),
+            before: enabled_label(tun.desired_enabled).into(),
+            after: enabled_label(target).into(),
+        });
+    }
+    if generated_before != target {
+        changes.push(AgentStateChange {
+            field: "tun_runtime".into(),
+            before: enabled_label(generated_before).into(),
+            after: enabled_label(target).into(),
+        });
+    }
+
+    Ok(ActionPlan {
+        risk: AgentActionRisk::HostNetworkChange,
+        impacts: vec![
+            AgentImpact::ExistingConnectionsMayChange,
+            if target {
+                AgentImpact::HostTunEnabled
+            } else {
+                AgentImpact::HostTunDisabled
+            },
+        ],
+        changes,
+        preconditions: ActionPreconditions::SetTunEnabled {
+            desired_before: tun.desired_enabled,
+            generated_before,
+            core_state: snapshot.core.state,
+            core_state_changed_at: snapshot.core.state_changed_at,
+        },
+    })
+}
+
+fn plan_system_proxy_enabled(
+    snapshot: &AgentNetworkSnapshot,
+    target: bool,
+) -> AgentResult<ActionPlan> {
+    let proxy = &snapshot.system_proxy;
+    let observed_before = proxy
+        .observed_enabled
+        .ok_or(AgentCommandError::ActionNotAvailable)?;
+    if target && snapshot.core.state != AgentCoreState::Running {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+    if observed_before && proxy.matches_expected_endpoint != Some(true) {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+    let already_applied = proxy.desired_enabled == target
+        && observed_before == target
+        && (!target || proxy.matches_expected_endpoint == Some(true));
+    if already_applied {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+
+    let mut changes = Vec::with_capacity(2);
+    if proxy.desired_enabled != target {
+        changes.push(AgentStateChange {
+            field: "system_proxy_desired".into(),
+            before: enabled_label(proxy.desired_enabled).into(),
+            after: enabled_label(target).into(),
+        });
+    }
+    if observed_before != target {
+        changes.push(AgentStateChange {
+            field: "system_proxy_observed".into(),
+            before: enabled_label(observed_before).into(),
+            after: enabled_label(target).into(),
+        });
+    }
+
+    Ok(ActionPlan {
+        risk: AgentActionRisk::HostNetworkChange,
+        impacts: vec![if target {
+            AgentImpact::HostSystemProxyEnabled
+        } else {
+            AgentImpact::HostSystemProxyDisabled
+        }],
+        changes,
+        preconditions: ActionPreconditions::SetSystemProxyEnabled {
+            desired_before: proxy.desired_enabled,
+            observed_before,
+            observed_host_scope: proxy.observed_host_scope,
+            observed_port: proxy.observed_port,
+            core_state: snapshot.core.state,
+            core_state_changed_at: snapshot.core.state_changed_at,
+            expected_port: proxy.expected_mixed_port,
         },
     })
 }
@@ -375,6 +496,34 @@ fn validate_preconditions(
                 && current.core.routing_mode == Some(*before)
                 && current.core.observed_routing_mode == Some(*before)
         }
+        ActionPreconditions::SetTunEnabled {
+            desired_before,
+            generated_before,
+            core_state,
+            core_state_changed_at,
+        } => {
+            current.core.state == *core_state
+                && current.core.state_changed_at == *core_state_changed_at
+                && current.tun.desired_enabled == *desired_before
+                && current.tun.generated_runtime_enabled == Some(*generated_before)
+        }
+        ActionPreconditions::SetSystemProxyEnabled {
+            desired_before,
+            observed_before,
+            observed_host_scope,
+            observed_port,
+            core_state,
+            core_state_changed_at,
+            expected_port,
+        } => {
+            current.core.state == *core_state
+                && current.core.state_changed_at == *core_state_changed_at
+                && current.system_proxy.desired_enabled == *desired_before
+                && current.system_proxy.observed_enabled == Some(*observed_before)
+                && current.system_proxy.observed_host_scope == *observed_host_scope
+                && current.system_proxy.observed_port == *observed_port
+                && current.system_proxy.expected_mixed_port == *expected_port
+        }
         ActionPreconditions::DisableStaleSystemProxy {
             core_state_changed_at,
             expected_port,
@@ -403,6 +552,10 @@ fn routing_impacts(mode: AgentRoutingMode) -> Vec<AgentImpact> {
     impacts
 }
 
+fn enabled_label(enabled: bool) -> &'static str {
+    if enabled { "enabled" } else { "disabled" }
+}
+
 async fn execute_action(
     client: &ChimeraClient,
     snapshot: &AgentNetworkSnapshot,
@@ -414,6 +567,18 @@ async fn execute_action(
             AgentActionRequest::SetRoutingMode { mode },
             ActionPreconditions::SetRoutingMode { before, .. },
         ) => set_routing_mode(client, *before, *mode).await,
+        (
+            AgentActionRequest::SetTunEnabled { enabled },
+            ActionPreconditions::SetTunEnabled { desired_before, .. },
+        ) => set_tun_enabled(client, *desired_before, *enabled).await,
+        (
+            AgentActionRequest::SetSystemProxyEnabled { enabled },
+            ActionPreconditions::SetSystemProxyEnabled {
+                desired_before,
+                expected_port,
+                ..
+            },
+        ) => set_system_proxy_enabled(client, *desired_before, *expected_port, *enabled).await,
         (
             AgentActionRequest::DisableStaleSystemProxy,
             ActionPreconditions::DisableStaleSystemProxy {
@@ -489,6 +654,114 @@ async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
         .and_then(serde_yaml::Value::as_str)
         .and_then(AgentRoutingMode::parse);
     configured == Some(mode) && core_probe::observed_routing_mode().await == Ok(mode)
+}
+
+async fn set_tun_enabled(
+    client: &ChimeraClient,
+    desired_before: bool,
+    target: bool,
+) -> AgentResult<()> {
+    #[cfg(feature = "e2e")]
+    if super::e2e::fixture_enabled() {
+        super::e2e::set_tun_enabled(target);
+        return Ok(());
+    }
+
+    if persist_tun_enabled(client, target).await.is_err() {
+        return if restore_tun_enabled(client, desired_before).await {
+            Err(AgentCommandError::ActionFailed)
+        } else {
+            Err(AgentCommandError::PartialApply)
+        };
+    }
+    if tun_enabled_is_applied(client, target) {
+        return Ok(());
+    }
+    if restore_tun_enabled(client, desired_before).await {
+        Err(AgentCommandError::VerificationFailed)
+    } else {
+        Err(AgentCommandError::PartialApply)
+    }
+}
+
+async fn persist_tun_enabled(client: &ChimeraClient, enabled: bool) -> AgentResult<()> {
+    client
+        .patch_verge(IVerge {
+            enable_tun_mode: Some(enabled),
+            ..Default::default()
+        })
+        .await
+        .map_err(|_| AgentCommandError::ActionFailed)
+}
+
+async fn restore_tun_enabled(client: &ChimeraClient, enabled: bool) -> bool {
+    persist_tun_enabled(client, enabled).await.is_ok() && tun_enabled_is_applied(client, enabled)
+}
+
+fn tun_enabled_is_applied(client: &ChimeraClient, enabled: bool) -> bool {
+    let desired = client
+        .get_clash_config()
+        .map(|config| config.enable_tun_mode)
+        .ok();
+    desired == Some(enabled) && generated_tun_enabled() == Some(enabled)
+}
+
+fn generated_tun_enabled() -> Option<bool> {
+    crate::config::core::Config::runtime()
+        .latest()
+        .config
+        .as_ref()
+        .and_then(|config| config.get("tun"))
+        .and_then(serde_yaml::Value::as_mapping)
+        .and_then(|tun| tun.get("enable"))
+        .and_then(serde_yaml::Value::as_bool)
+}
+
+async fn set_system_proxy_enabled(
+    client: &ChimeraClient,
+    desired_before: bool,
+    expected_port: u16,
+    target: bool,
+) -> AgentResult<()> {
+    #[cfg(feature = "e2e")]
+    if super::e2e::fixture_enabled() {
+        super::e2e::set_system_proxy_enabled(target);
+        return Ok(());
+    }
+
+    let original = read_system_proxy().await?;
+    if persist_system_proxy_desired(client, target).await.is_err() {
+        return if rollback_system_proxy(client, original, desired_before).await {
+            Err(AgentCommandError::ActionFailed)
+        } else {
+            Err(AgentCommandError::PartialApply)
+        };
+    }
+    if system_proxy_is_applied(client, target, expected_port).await {
+        return Ok(());
+    }
+    if rollback_system_proxy(client, original, desired_before).await {
+        Err(AgentCommandError::VerificationFailed)
+    } else {
+        Err(AgentCommandError::PartialApply)
+    }
+}
+
+async fn system_proxy_is_applied(
+    client: &ChimeraClient,
+    enabled: bool,
+    expected_port: u16,
+) -> bool {
+    let desired = client
+        .get_app_config()
+        .map(|config| config.enable_system_proxy)
+        .ok();
+    let observed = read_system_proxy().await.ok();
+    desired == Some(enabled)
+        && observed.is_some_and(|proxy| {
+            proxy.enable == enabled
+                && (!enabled || is_expected_enabled_proxy(&proxy, expected_port))
+        })
 }
 
 async fn disable_stale_system_proxy(
@@ -595,6 +868,15 @@ fn verify_action(snapshot: &AgentNetworkSnapshot, action: &AgentActionRequest) -
                 && snapshot.core.observed_routing_mode == Some(*mode)
                 && snapshot.core.applied_consistency == AgentAppliedState::Consistent
         }
+        AgentActionRequest::SetTunEnabled { enabled } => {
+            snapshot.tun.desired_enabled == *enabled
+                && snapshot.tun.generated_runtime_enabled == Some(*enabled)
+        }
+        AgentActionRequest::SetSystemProxyEnabled { enabled } => {
+            snapshot.system_proxy.desired_enabled == *enabled
+                && snapshot.system_proxy.observed_enabled == Some(*enabled)
+                && (!*enabled || snapshot.system_proxy.matches_expected_endpoint == Some(true))
+        }
         AgentActionRequest::DisableStaleSystemProxy => {
             snapshot.system_proxy.observed_enabled == Some(false)
                 && !snapshot.system_proxy.desired_enabled
@@ -664,7 +946,10 @@ fn impact_label(impact: AgentImpact) -> &'static str {
         AgentImpact::TrafficMayBypassProxy => "traffic_may_bypass_proxy",
         AgentImpact::AllTrafficUsesProxy => "all_traffic_uses_proxy",
         AgentImpact::RestoreRuleRouting => "restore_rule_routing",
+        AgentImpact::HostSystemProxyEnabled => "host_system_proxy_enabled",
         AgentImpact::HostSystemProxyDisabled => "host_system_proxy_disabled",
+        AgentImpact::HostTunEnabled => "host_tun_enabled",
+        AgentImpact::HostTunDisabled => "host_tun_disabled",
     }
 }
 
@@ -701,8 +986,9 @@ mod tests {
 
     use super::{
         ActionPreconditions, AgentAuditOutcome, PendingProposal, ProposalStore, cleanup_store,
-        enforce_store_limits, plan_routing_mode, proposal_audit_reference,
-        proposal_confirmation_message, proposal_digest, routing_transaction_error, verify_action,
+        enforce_store_limits, plan_routing_mode, plan_system_proxy_enabled, plan_tun_enabled,
+        proposal_audit_reference, proposal_confirmation_message, proposal_digest,
+        routing_transaction_error, verify_action,
     };
     use crate::core::clash::transaction::TransactionOutcome;
     use crate::features::agent::model::{
@@ -815,6 +1101,68 @@ mod tests {
         assert!(plan_routing_mode(&snapshot, AgentRoutingMode::Global).is_err());
         snapshot.core.observed_routing_mode = Some(AgentRoutingMode::Rule);
         assert!(plan_routing_mode(&snapshot, AgentRoutingMode::Global).is_ok());
+    }
+
+    #[test]
+    fn tun_plan_requires_known_generated_state_and_discloses_host_change() {
+        let mut snapshot = snapshot();
+        snapshot.tun.generated_runtime_enabled = None;
+        assert!(plan_tun_enabled(&snapshot, true).is_err());
+
+        snapshot.tun.generated_runtime_enabled = Some(false);
+        let plan = plan_tun_enabled(&snapshot, true).expect("TUN enable should be available");
+        assert_eq!(plan.risk, AgentActionRisk::HostNetworkChange);
+        assert_eq!(
+            plan.impacts,
+            vec![
+                AgentImpact::ExistingConnectionsMayChange,
+                AgentImpact::HostTunEnabled,
+            ]
+        );
+        assert_eq!(plan.changes.len(), 2);
+        assert_eq!(plan.changes[0].field, "tun_desired");
+        assert_eq!(plan.changes[0].before, "disabled");
+        assert_eq!(plan.changes[0].after, "enabled");
+        assert_eq!(plan.changes[1].field, "tun_runtime");
+    }
+
+    #[test]
+    fn system_proxy_enable_requires_running_core_but_disable_does_not() {
+        let mut snapshot = snapshot();
+        snapshot.core.state = AgentCoreState::Stopped;
+        assert!(plan_system_proxy_enabled(&snapshot, true).is_err());
+
+        snapshot.system_proxy.desired_enabled = true;
+        snapshot.system_proxy.observed_enabled = Some(true);
+        snapshot.system_proxy.matches_expected_endpoint = Some(true);
+        let plan = plan_system_proxy_enabled(&snapshot, false)
+            .expect("system proxy disable should be available while core is stopped");
+        assert_eq!(plan.risk, AgentActionRisk::HostNetworkChange);
+        assert_eq!(plan.impacts, vec![AgentImpact::HostSystemProxyDisabled]);
+
+        snapshot.core.state = AgentCoreState::Running;
+        snapshot.system_proxy.desired_enabled = false;
+        snapshot.system_proxy.matches_expected_endpoint = Some(false);
+        assert!(plan_system_proxy_enabled(&snapshot, true).is_err());
+        assert!(plan_system_proxy_enabled(&snapshot, false).is_err());
+    }
+
+    #[test]
+    fn new_action_verification_requires_desired_and_observed_state() {
+        let mut snapshot = snapshot();
+        let tun_action = AgentActionRequest::SetTunEnabled { enabled: true };
+        assert!(!verify_action(&snapshot, &tun_action));
+        snapshot.tun.desired_enabled = true;
+        snapshot.tun.generated_runtime_enabled = Some(true);
+        assert!(verify_action(&snapshot, &tun_action));
+
+        let proxy_action = AgentActionRequest::SetSystemProxyEnabled { enabled: true };
+        snapshot.system_proxy.desired_enabled = true;
+        snapshot.system_proxy.observed_enabled = Some(true);
+        snapshot.system_proxy.matches_expected_endpoint = Some(false);
+        assert!(!verify_action(&snapshot, &proxy_action));
+        snapshot.system_proxy.matches_expected_endpoint = Some(true);
+        assert!(verify_action(&snapshot, &proxy_action));
     }
 
     #[test]
