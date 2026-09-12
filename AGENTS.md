@@ -87,3 +87,10 @@
 - Treat `ref/` as a read-only implementation baseline by default; exclude its dependencies and build output from broad searches. Do not modify or synchronize the reference checkout as a side effect of an application change.
 - Keep migration records and normative guides versionable; do not leave the project's governing documents only in ignored local files. Keep personal evidence, caches, raw logs, and credentials ignored.
 - Preserve unrelated worktree changes. A request to align a feature is not permission for an unrelated rewrite, legacy UI removal, or destructive data migration.
+
+## Test authoring and review
+
+- Before adding, changing, or reviewing tests, read and follow [the testing standard](docs/testing/README.md). For Tauri E2E, also read its [dependency source notes](docs/testing/upstream-evidence.md) and use the [test contract template](docs/testing/test-contract-template.md).
+- The testing standard's MUST / MUST NOT rules are review requirements for new or changed tests. Existing tests are not automatically compliant examples. Record any bounded exception with its evidence, coverage limitation, and removal condition in the test contract; do not silently weaken assertions.
+- Test-tool behavior must be checked against the versions in `pnpm-lock.yaml` and `backend/Cargo.lock`, using the testing dependencies' upstream documentation and source. Product `ref/` is not the source of truth for WebDriver, runner, assertion, or lifecycle behavior.
+- Report the exact suites and checks executed, skipped or unverified coverage, and failures. A smoke run, page refresh, successful IPC return, or retry pass must not be presented as full E2E, cold-start persistence, real network success, or a clean first-run pass.

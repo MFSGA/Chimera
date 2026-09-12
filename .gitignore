@@ -39,6 +39,8 @@ release.sh
 /docs/*
 !/docs/ref-alignment-guide.md
 !/docs/tauri-e2e-minimal-architecture.md
+!/docs/testing/
+!/docs/testing/**
 # new rust-analyzer
 target/
 ref/
