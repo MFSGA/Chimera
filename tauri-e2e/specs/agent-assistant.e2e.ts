@@ -208,8 +208,8 @@ describe('network assistant guided diagnosis', () => {
     );
     await browser.waitUntil(
       async () => {
-        const enable = await $('[data-slot="agent-tun-enable"]');
-        const disable = await $('[data-slot="agent-tun-disable"]');
+        const enable = await $('[data-slot="agent-tun-enable"]').getElement();
+        const disable = await $('[data-slot="agent-tun-disable"]').getElement();
         return !(await enabledState(enable)) && (await enabledState(disable));
       },
       { timeout: 15_000, timeoutMsg: 'TUN enable was not verified in the UI.' },
@@ -233,8 +233,10 @@ describe('network assistant guided diagnosis', () => {
     );
     await browser.waitUntil(
       async () => {
-        const enable = await $('[data-slot="agent-tun-enable"]');
-        const disableButton = await $('[data-slot="agent-tun-disable"]');
+        const enable = await $('[data-slot="agent-tun-enable"]').getElement();
+        const disableButton = await $(
+          '[data-slot="agent-tun-disable"]',
+        ).getElement();
         return (
           (await enabledState(enable)) && !(await enabledState(disableButton))
         );
