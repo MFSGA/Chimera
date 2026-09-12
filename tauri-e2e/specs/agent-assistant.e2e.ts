@@ -168,6 +168,84 @@ describe('network assistant guided diagnosis', () => {
     );
   });
 
+  it('guards system proxy enable and safely toggles TUN through confirmation', async () => {
+    const proxyEnable = await displayedElement(
+      '[data-slot="agent-system-proxy-enable"]',
+    );
+    const proxyDisable = await displayedElement(
+      '[data-slot="agent-system-proxy-disable"]',
+    );
+    const tunEnable = await displayedElement('[data-slot="agent-tun-enable"]');
+    const tunDisable = await displayedElement(
+      '[data-slot="agent-tun-disable"]',
+    );
+
+    const enabledState = async (element: WebdriverIO.Element) =>
+      browser.execute(
+        (target) => !(target as HTMLButtonElement).disabled,
+        element,
+      );
+
+    assert.equal(await enabledState(proxyEnable), false);
+    assert.equal(await enabledState(proxyDisable), true);
+    assert.equal(await enabledState(tunEnable), true);
+    assert.equal(await enabledState(tunDisable), false);
+
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      tunEnable,
+    );
+    await browser.waitUntil(
+      async () => (await $('body').getText()).includes('确认网络变更'),
+      { timeout: 15_000, timeoutMsg: 'TUN proposal dialog did not render.' },
+    );
+    assert.match(await $('body').getText(), /TUN: 已启用/);
+
+    let confirm = await displayedElement('//button[contains(., "确认并执行")]');
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      confirm,
+    );
+    await browser.waitUntil(
+      async () => {
+        const enable = await $('[data-slot="agent-tun-enable"]');
+        const disable = await $('[data-slot="agent-tun-disable"]');
+        return !(await enabledState(enable)) && (await enabledState(disable));
+      },
+      { timeout: 15_000, timeoutMsg: 'TUN enable was not verified in the UI.' },
+    );
+
+    const disable = await displayedElement('[data-slot="agent-tun-disable"]');
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      disable,
+    );
+    await browser.waitUntil(
+      async () => (await $('body').getText()).includes('确认网络变更'),
+      { timeout: 15_000, timeoutMsg: 'TUN disable proposal did not render.' },
+    );
+    assert.match(await $('body').getText(), /TUN: 已禁用/);
+
+    confirm = await displayedElement('//button[contains(., "确认并执行")]');
+    await browser.execute(
+      (element) => (element as HTMLElement).click(),
+      confirm,
+    );
+    await browser.waitUntil(
+      async () => {
+        const enable = await $('[data-slot="agent-tun-enable"]');
+        const disableButton = await $('[data-slot="agent-tun-disable"]');
+        return (
+          (await enabledState(enable)) && !(await enabledState(disableButton))
+        );
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'TUN disable was not verified in the UI.',
+      },
+    );
+  });
+
   it('exposes the bounded read-only network probe and rejects loopback targets', async () => {
     const input = await displayedElement(
       '[data-slot="agent-network-probe-url"]',
