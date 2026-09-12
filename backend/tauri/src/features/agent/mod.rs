@@ -9,6 +9,7 @@ mod intent;
 mod model;
 mod network_probe;
 mod registry;
+mod tun_host_probe;
 
 use tauri::Manager;
 use tokio::sync::Mutex;

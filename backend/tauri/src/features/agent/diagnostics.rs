@@ -94,15 +94,21 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
             }
         }
     };
+    let mut observed_tun_enabled = None;
+    let mut observed_tun_device = None;
     if core.state == AgentCoreState::Running {
-        match core_probe::observed_routing_mode().await {
-            Ok(mode) => {
-                core.observed_routing_mode = Some(mode);
-                core.applied_consistency = if core.routing_mode == Some(mode) {
-                    AgentAppliedState::Consistent
-                } else {
-                    AgentAppliedState::Stale
+        match core_probe::observed_core_config().await {
+            Ok(observed) => {
+                core.observed_routing_mode = observed.routing_mode;
+                core.applied_consistency = match (core.routing_mode, observed.routing_mode) {
+                    (Some(expected), Some(actual)) if expected == actual => {
+                        AgentAppliedState::Consistent
+                    }
+                    (Some(_), Some(_)) => AgentAppliedState::Stale,
+                    _ => AgentAppliedState::Unknown,
                 };
+                observed_tun_enabled = observed.tun_enabled;
+                observed_tun_device = observed.tun_device;
             }
             Err(()) => failures.push(AgentProbeFailure {
                 code: AgentProbeCode::CoreConfigUnavailable,
@@ -116,12 +122,16 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         system_proxy,
         &mut failures,
     );
-    let tun = AgentTunSnapshot {
-        desired_enabled: verge.enable_tun_mode.unwrap_or(false),
+    let desired_tun_enabled = verge.enable_tun_mode.unwrap_or(false);
+    let observed_host_active =
+        super::tun_host_probe::adapter_present(observed_tun_device.as_deref());
+    let tun = summarize_tun(
+        desired_tun_enabled,
         generated_runtime_enabled,
-        observed_active: AgentAppliedState::Unknown,
-        applied_consistency: AgentAppliedState::Unknown,
-    };
+        observed_tun_enabled,
+        observed_host_active,
+        core.state,
+    );
     let profiles = summarize_profiles(&profiles);
     let telemetry = summarize_telemetry(app, &mut failures);
     let findings = derive_findings(
@@ -167,6 +177,46 @@ fn generated_tun_enabled(config: Option<&serde_yaml::Mapping>) -> Option<bool> {
         .and_then(serde_yaml::Value::as_mapping)
         .and_then(|tun| tun.get("enable"))
         .and_then(serde_yaml::Value::as_bool)
+}
+
+fn summarize_tun(
+    desired_enabled: bool,
+    generated_runtime_enabled: Option<bool>,
+    observed_enabled: Option<bool>,
+    observed_host_active: Option<bool>,
+    core_state: AgentCoreState,
+) -> AgentTunSnapshot {
+    let observed_active = match observed_host_active {
+        Some(observed) if observed == desired_enabled => AgentAppliedState::Consistent,
+        Some(_) => AgentAppliedState::Stale,
+        None => AgentAppliedState::Unknown,
+    };
+    let core_consistency = if core_state != AgentCoreState::Running {
+        AgentAppliedState::Unknown
+    } else {
+        match (generated_runtime_enabled, observed_enabled) {
+            (Some(generated), Some(observed))
+                if desired_enabled == generated && generated == observed =>
+            {
+                AgentAppliedState::Consistent
+            }
+            (Some(_), Some(_)) => AgentAppliedState::Stale,
+            _ => AgentAppliedState::Unknown,
+        }
+    };
+    let applied_consistency =
+        if cfg!(target_os = "windows") && core_consistency == AgentAppliedState::Consistent {
+            observed_active
+        } else {
+            core_consistency
+        };
+
+    AgentTunSnapshot {
+        desired_enabled,
+        generated_runtime_enabled,
+        observed_active,
+        applied_consistency,
+    }
 }
 
 fn map_core_state(state: &CoreState) -> AgentCoreState {
@@ -419,7 +469,8 @@ fn derive_findings(
     );
     push_finding(
         &mut findings,
-        tun.desired_enabled && tun.generated_runtime_enabled == Some(false),
+        tun.generated_runtime_enabled != Some(tun.desired_enabled)
+            || tun.applied_consistency == AgentAppliedState::Stale,
         AgentFindingCode::TunRuntimeMismatch,
         AgentFindingSeverity::Critical,
         None,
@@ -480,7 +531,7 @@ fn snapshot_revision(
     tun: &AgentTunSnapshot,
 ) -> String {
     let material = format!(
-        "{}:{:?}:{:?}:{}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{}:{:?}",
+        "{}:{:?}:{:?}:{}:{:?}:{:?}:{}:{:?}:{:?}:{:?}:{}:{:?}:{:?}:{:?}",
         NETWORK_SNAPSHOT_SCHEMA_VERSION,
         core.state,
         core.run_type,
@@ -493,6 +544,8 @@ fn snapshot_revision(
         proxy.observed_port,
         tun.desired_enabled,
         tun.generated_runtime_enabled,
+        tun.observed_active,
+        tun.applied_consistency,
     );
     hex::encode(Sha256::digest(material.as_bytes()))
 }
@@ -500,11 +553,12 @@ fn snapshot_revision(
 #[cfg(test)]
 mod tests {
     use super::{
-        host_scope, stale_proxy_recommended_action, summarize_system_proxy,
+        host_scope, stale_proxy_recommended_action, summarize_system_proxy, summarize_tun,
         system_proxy_without_running_core,
     };
     use crate::features::agent::model::{
-        AgentActionRequest, AgentCoreState, AgentHostScope, AgentSystemProxySnapshot,
+        AgentActionRequest, AgentAppliedState, AgentCoreState, AgentHostScope,
+        AgentSystemProxySnapshot,
     };
     use sysproxy::Sysproxy;
 
@@ -564,5 +618,52 @@ mod tests {
         assert!(!serialized.contains("subscription-token.canary"));
         assert_eq!(summary.observed_host_scope, AgentHostScope::NonLoopback);
         assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn tun_summary_requires_core_and_host_observation_for_consistency() {
+        let consistent = summarize_tun(
+            true,
+            Some(true),
+            Some(true),
+            Some(true),
+            AgentCoreState::Running,
+        );
+        assert_eq!(consistent.observed_active, AgentAppliedState::Consistent);
+        assert_eq!(
+            consistent.applied_consistency,
+            AgentAppliedState::Consistent
+        );
+
+        let core_stale = summarize_tun(
+            true,
+            Some(true),
+            Some(false),
+            Some(true),
+            AgentCoreState::Running,
+        );
+        assert_eq!(core_stale.observed_active, AgentAppliedState::Consistent);
+        assert_eq!(core_stale.applied_consistency, AgentAppliedState::Stale);
+
+        let host_stale = summarize_tun(
+            true,
+            Some(true),
+            Some(true),
+            Some(false),
+            AgentCoreState::Running,
+        );
+        assert_eq!(host_stale.observed_active, AgentAppliedState::Stale);
+        if cfg!(target_os = "windows") {
+            assert_eq!(host_stale.applied_consistency, AgentAppliedState::Stale);
+        } else {
+            assert_eq!(
+                host_stale.applied_consistency,
+                AgentAppliedState::Consistent
+            );
+        }
+
+        let stopped = summarize_tun(true, Some(true), None, None, AgentCoreState::Stopped);
+        assert_eq!(stopped.observed_active, AgentAppliedState::Unknown);
+        assert_eq!(stopped.applied_consistency, AgentAppliedState::Unknown);
     }
 }

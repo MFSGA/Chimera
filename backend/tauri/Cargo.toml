@@ -200,6 +200,10 @@ tauri-plugin-global-shortcut = "2.3.2"
 deelevate = "0.2.0"
 winreg = { version = "0.56", features = ["transactions"] }
 windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
   "Win32_System_LibraryLoader",
   "Win32_System_SystemInformation",
   "Win32_UI_WindowsAndMessaging",
