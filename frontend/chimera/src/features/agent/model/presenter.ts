@@ -60,7 +60,11 @@ const impactMessages: Record<AgentImpact, () => string> = {
   traffic_may_bypass_proxy: m.agent_impact_traffic_may_bypass_proxy,
   all_traffic_uses_proxy: m.agent_impact_all_traffic_uses_proxy,
   restore_rule_routing: m.agent_impact_restore_rule_routing,
+  host_system_proxy_enabled: () =>
+    `${m.agent_system_proxy_title()}: ${m.agent_enabled()}`,
   host_system_proxy_disabled: m.agent_impact_host_system_proxy_disabled,
+  host_tun_enabled: () => `${m.agent_tun_title()}: ${m.agent_enabled()}`,
+  host_tun_disabled: () => `${m.agent_tun_title()}: ${m.agent_disabled()}`,
 };
 
 const severityMessages: Record<AgentFindingSeverity, () => string> = {
@@ -96,6 +100,12 @@ export const presentRoutingMode = (mode: AgentRoutingMode | null) =>
 export const presentAgentAction = (action: AgentActionRequest) => {
   if (action.action === 'disable_stale_system_proxy') {
     return m.agent_disable_stale_proxy();
+  }
+  if (action.action === 'set_tun_enabled') {
+    return `${m.agent_tun_title()}: ${presentBoolean(action.enabled)}`;
+  }
+  if (action.action === 'set_system_proxy_enabled') {
+    return `${m.agent_system_proxy_title()}: ${presentBoolean(action.enabled)}`;
   }
   return `${m.agent_set_mode()}: ${presentRoutingMode(action.mode)}`;
 };
