@@ -167,9 +167,8 @@ fn write_document_blocking(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
 fn quarantine_corrupt_document(path: &Path) -> anyhow::Result<()> {
     let timestamp = chrono::Utc::now().timestamp_millis();
     let suffix = nanoid::nanoid!(8);
-    let quarantined = path.with_file_name(format!(
-        "agent-history.corrupt-{timestamp}-{suffix}.json"
-    ));
+    let quarantined =
+        path.with_file_name(format!("agent-history.corrupt-{timestamp}-{suffix}.json"));
     std::fs::rename(path, quarantined)?;
     Ok(())
 }
