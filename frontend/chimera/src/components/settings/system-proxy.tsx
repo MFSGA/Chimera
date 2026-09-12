@@ -63,11 +63,12 @@ export const SystemProxyButton = (
 export const TunModeButton = (
   props: Omit<ButtonProps, 'children' | 'loading'>,
 ) => {
-  const { execute, isPending, isActive } = useTunModeAction();
+  const { execute, isPending, isActive, blocked } = useTunModeAction();
 
   return (
     <ProxyButton
       {...props}
+      disabled={blocked}
       loading={isPending}
       onClick={execute}
       isActive={isActive}

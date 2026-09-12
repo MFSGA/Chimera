@@ -33,10 +33,22 @@ export function ActionPanel({
   const proxyDisabledApplied =
     !snapshot.system_proxy.desired_enabled && proxyObserved === false;
   const tunGenerated = snapshot.tun.generated_runtime_enabled;
+  const tunEnableReady =
+    snapshot.os_family !== 'windows' ||
+    (snapshot.core.state === 'running' &&
+      snapshot.core.run_type === 'service' &&
+      snapshot.service.desired_enabled &&
+      snapshot.service.state === 'running' &&
+      snapshot.service.ipc_connected &&
+      snapshot.service.runtime_compatible === true);
   const tunEnabledApplied =
-    snapshot.tun.desired_enabled && tunGenerated === true;
+    snapshot.tun.desired_enabled &&
+    tunGenerated === true &&
+    snapshot.tun.applied_consistency === 'consistent';
   const tunDisabledApplied =
-    !snapshot.tun.desired_enabled && tunGenerated === false;
+    !snapshot.tun.desired_enabled &&
+    tunGenerated === false &&
+    snapshot.tun.applied_consistency === 'consistent';
 
   return (
     <Card variant="outline">
@@ -127,7 +139,12 @@ export function ActionPanel({
             <div className="flex flex-wrap gap-2">
               <Button
                 data-slot="agent-tun-enable"
-                disabled={pending || tunGenerated === null || tunEnabledApplied}
+                disabled={
+                  pending ||
+                  !tunEnableReady ||
+                  tunGenerated === null ||
+                  tunEnabledApplied
+                }
                 variant="stroked"
                 onClick={() =>
                   onPropose({ action: 'set_tun_enabled', enabled: true })

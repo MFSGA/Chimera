@@ -21,7 +21,16 @@ export default function SystemServiceSwitch() {
 
   const { query } = useSystemService();
 
-  const disabled = query.data?.status === 'not_installed';
+  const notInstalled = query.data?.status === 'not_installed';
+  const compatKind = query.data?.compat.kind;
+  const compatBlocked =
+    compatKind === 'incompatible' || compatKind === 'unparsable';
+  const disabled = notInstalled || (compatBlocked && !serviceMode.value);
+  const hint = compatBlocked
+    ? m.agent_finding_service_mode_inconsistent()
+    : notInstalled
+      ? m.settings_system_proxy_service_mode_disabled_tooltip()
+      : null;
 
   const handleServiceMode = useLockFn(async () => {
     try {
@@ -61,11 +70,9 @@ export default function SystemServiceSwitch() {
           </div>
         </TooltipTrigger>
 
-        {disabled && (
+        {hint && (
           <TooltipContent>
-            <span>
-              {m.settings_system_proxy_service_mode_disabled_tooltip()}
-            </span>
+            <span>{hint}</span>
           </TooltipContent>
         )}
       </Tooltip>

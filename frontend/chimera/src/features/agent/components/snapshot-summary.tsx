@@ -60,23 +60,32 @@ const serviceRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
   },
 ];
 
-const tunRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
-  {
-    label: m.agent_desired(),
-    value: presentBoolean(snapshot.tun.desired_enabled),
-  },
-  {
-    label: m.agent_observed(),
-    value:
-      snapshot.tun.generated_runtime_enabled === null
-        ? m.agent_unknown()
-        : presentBoolean(snapshot.tun.generated_runtime_enabled),
-  },
-  {
-    label: m.agent_core_state(),
-    value: m.agent_unknown(),
-  },
-];
+const tunRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => {
+  const hostObserved =
+    snapshot.tun.observed_active === 'unknown'
+      ? null
+      : snapshot.tun.observed_active === 'consistent'
+        ? snapshot.tun.desired_enabled
+        : !snapshot.tun.desired_enabled;
+
+  return [
+    {
+      label: m.agent_desired(),
+      value: presentBoolean(snapshot.tun.desired_enabled),
+    },
+    {
+      label: m.agent_core_title(),
+      value:
+        snapshot.tun.generated_runtime_enabled === null
+          ? m.agent_unknown()
+          : presentBoolean(snapshot.tun.generated_runtime_enabled),
+    },
+    {
+      label: m.agent_observed(),
+      value: presentBoolean(hostObserved),
+    },
+  ];
+};
 
 const profileRows = (snapshot: AgentNetworkSnapshot): AgentStatusRow[] => [
   { label: 'Total', value: snapshot.profiles.total_count },

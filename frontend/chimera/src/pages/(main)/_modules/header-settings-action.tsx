@@ -115,6 +115,7 @@ const ProxySettings = () => {
         <DropdownMenuCheckboxItem
           className="group relative"
           checked={tunMode.isActive}
+          disabled={tunMode.blocked}
           onCheckedChange={() => void tunMode.execute()}
           data-loading={String(tunMode.isPending)}
         >

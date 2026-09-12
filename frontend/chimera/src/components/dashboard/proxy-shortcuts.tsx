@@ -143,7 +143,7 @@ export const ProxyShortcuts = () => {
             <PaperSwitchButton
               checked={tunMode.isActive}
               onClick={handleTunMode}
-              disabled={tunMode.isPending}
+              disabled={tunMode.isPending || tunMode.blocked}
             >
               <div className="flex flex-col gap-2">
                 <SettingsEthernet />
