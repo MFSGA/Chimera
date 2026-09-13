@@ -108,17 +108,6 @@ async fn converge_core_to_service_host_locked(
     Ok(())
 }
 
-/// Converge the running core onto the Service host after an explicit daemon
-/// start/restart. The same serialized path is used on every platform; Windows
-/// TUN additionally requires this convergence before enabling the tunnel.
-pub(crate) async fn ensure_service_host_ready(
-    client: &crate::client::ChimeraClient,
-    ready_timeout: std::time::Duration,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    converge_core_to_service_host_locked(client, ready_timeout, false).await
-}
-
 /// On Windows, TUN must run from the privileged Service host. This performs a
 /// synchronous, fail-closed preflight before the TUN desired state is committed:
 /// the daemon must be compatible and owned by this runtime, and the currently
@@ -195,13 +184,6 @@ async fn ensure_local_host_after_service_stop_locked(
         anyhow::bail!("core did not recover to the local host after Service stop");
     }
     Ok(())
-}
-
-pub(crate) async fn ensure_local_host_after_service_stop(
-    client: &crate::client::ChimeraClient,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    ensure_local_host_after_service_stop_locked(client).await
 }
 
 /// Execute an explicit daemon start under the same transition lock used by the
