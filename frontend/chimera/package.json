@@ -86,7 +86,7 @@
     "shiki": "4.4.3",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "unplugin-icons": "23.0.1",
+    "unplugin-icons": "24.0.0",
     "validator": "13.15.35",
     "vite": "8.2.2",
     "vite-plugin-html": "3.2.2",
