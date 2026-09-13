@@ -23,7 +23,7 @@
     "@radix-ui/react-use-controllable-state": "1.2.6",
     "@tailwindcss/postcss": "4.3.3",
     "@tanstack/react-table": "9.2.4",
-    "@tanstack/react-virtual": "3.14.11",
+    "@tanstack/react-virtual": "3.14.12",
     "@tauri-apps/api": "2.11.1",
     "@tauri-apps/plugin-dialog": "2.7.3",
     "@tauri-apps/plugin-fs": "2.5.2",
