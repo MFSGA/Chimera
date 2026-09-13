@@ -9,7 +9,6 @@ import {
 } from '@material/material-color-utilities';
 import { ThemeProvider } from '@mui/material/styles';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { useLocalStorage } from '@uidotdev/usehooks';
 import { isEqual, kebabCase } from 'lodash-es';
 import {
   createContext,
@@ -20,6 +19,7 @@ import {
   useMemo,
   useState,
 } from 'react';
+import { useLocalStorage } from '@/hooks/use-local-storage';
 import { insertStyle } from '@/utils/styled';
 
 const appWindow = getCurrentWebviewWindow();

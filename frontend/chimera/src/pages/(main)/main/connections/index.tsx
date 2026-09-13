@@ -45,7 +45,6 @@ import {
   type Updater,
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useLocalStorage } from '@uidotdev/usehooks';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import dayjs from 'dayjs';
@@ -65,6 +64,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { useLocalStorage } from '@/hooks/use-local-storage';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { containsSearchTerm } from '@/utils';

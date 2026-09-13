@@ -29,7 +29,6 @@
     "@tauri-apps/plugin-notification": "2.4.0",
     "@tauri-apps/plugin-process": "2.3.1",
     "@tauri-apps/plugin-updater": "2.11.0",
-    "@uidotdev/usehooks": "2.4.1",
     "ahooks": "3.10.0",
     "change-case": "5.4.4",
     "class-variance-authority": "0.7.1",
