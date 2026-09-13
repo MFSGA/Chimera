@@ -96,6 +96,8 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     };
     let mut observed_tun_enabled = None;
     let mut observed_tun_device = None;
+    let mut observed_tun_auto_route = None;
+    let mut observed_tun_route_addresses = Vec::new();
     if core.state == AgentCoreState::Running {
         match core_probe::observed_core_config().await {
             Ok(observed) => {
@@ -109,6 +111,8 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
                 };
                 observed_tun_enabled = observed.tun_enabled;
                 observed_tun_device = observed.tun_device;
+                observed_tun_auto_route = observed.tun_auto_route;
+                observed_tun_route_addresses = observed.tun_route_addresses;
             }
             Err(()) => failures.push(AgentProbeFailure {
                 code: AgentProbeCode::CoreConfigUnavailable,
@@ -123,8 +127,11 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         &mut failures,
     );
     let desired_tun_enabled = verge.enable_tun_mode.unwrap_or(false);
-    let observed_host_active =
-        super::tun_host_probe::adapter_present(observed_tun_device.as_deref());
+    let observed_host_active = super::tun_host_probe::active(
+        observed_tun_device.as_deref(),
+        observed_tun_auto_route,
+        &observed_tun_route_addresses,
+    );
     let tun = summarize_tun(
         desired_tun_enabled,
         generated_runtime_enabled,
@@ -204,12 +211,14 @@ fn summarize_tun(
             _ => AgentAppliedState::Unknown,
         }
     };
-    let applied_consistency =
-        if cfg!(target_os = "windows") && core_consistency == AgentAppliedState::Consistent {
-            observed_active
-        } else {
-            core_consistency
-        };
+    let applied_consistency = if cfg!(target_os = "windows")
+        && desired_enabled
+        && core_consistency == AgentAppliedState::Consistent
+    {
+        observed_active
+    } else {
+        core_consistency
+    };
 
     AgentTunSnapshot {
         desired_enabled,
@@ -661,6 +670,22 @@ mod tests {
                 AgentAppliedState::Consistent
             );
         }
+
+        let disabled_with_residual_host = summarize_tun(
+            false,
+            Some(false),
+            Some(false),
+            Some(true),
+            AgentCoreState::Running,
+        );
+        assert_eq!(
+            disabled_with_residual_host.observed_active,
+            AgentAppliedState::Stale
+        );
+        assert_eq!(
+            disabled_with_residual_host.applied_consistency,
+            AgentAppliedState::Consistent
+        );
 
         let stopped = summarize_tun(true, Some(true), None, None, AgentCoreState::Stopped);
         assert_eq!(stopped.observed_active, AgentAppliedState::Unknown);

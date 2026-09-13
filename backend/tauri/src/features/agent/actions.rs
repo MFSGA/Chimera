@@ -365,11 +365,14 @@ fn plan_tun_enabled(snapshot: &AgentNetworkSnapshot, target: bool) -> AgentResul
     let generated_before = tun
         .generated_runtime_enabled
         .ok_or(AgentCommandError::ActionNotAvailable)?;
-    if tun.desired_enabled == target && generated_before == target {
+    if tun.desired_enabled == target
+        && generated_before == target
+        && tun.applied_consistency == AgentAppliedState::Consistent
+    {
         return Err(AgentCommandError::ActionNotAvailable);
     }
 
-    let mut changes = Vec::with_capacity(2);
+    let mut changes = Vec::with_capacity(3);
     if tun.desired_enabled != target {
         changes.push(AgentStateChange {
             field: "tun_desired".into(),
@@ -382,6 +385,13 @@ fn plan_tun_enabled(snapshot: &AgentNetworkSnapshot, target: bool) -> AgentResul
             field: "tun_runtime".into(),
             before: enabled_label(generated_before).into(),
             after: enabled_label(target).into(),
+        });
+    }
+    if tun.applied_consistency != AgentAppliedState::Consistent {
+        changes.push(AgentStateChange {
+            field: "tun_applied".into(),
+            before: applied_state_label(tun.applied_consistency).into(),
+            after: "consistent".into(),
         });
     }
 
@@ -572,6 +582,14 @@ fn enabled_label(enabled: bool) -> &'static str {
     if enabled { "enabled" } else { "disabled" }
 }
 
+fn applied_state_label(state: AgentAppliedState) -> &'static str {
+    match state {
+        AgentAppliedState::Consistent => "consistent",
+        AgentAppliedState::Stale => "stale",
+        AgentAppliedState::Unknown => "unknown",
+    }
+}
+
 async fn execute_action(
     client: &ChimeraClient,
     snapshot: &AgentNetworkSnapshot,
@@ -720,9 +738,25 @@ async fn tun_enabled_is_applied(client: &ChimeraClient, enabled: bool) -> bool {
         .get_clash_config()
         .map(|config| config.enable_tun_mode)
         .ok();
-    desired == Some(enabled)
-        && generated_tun_enabled() == Some(enabled)
-        && core_probe::observed_tun_enabled().await == Ok(enabled)
+    if desired != Some(enabled) || generated_tun_enabled() != Some(enabled) {
+        return false;
+    }
+
+    let Ok(observed) = core_probe::observed_core_config().await else {
+        return false;
+    };
+    if observed.tun_enabled != Some(enabled) {
+        return false;
+    }
+    if !enabled || !cfg!(target_os = "windows") {
+        return true;
+    }
+
+    super::tun_host_probe::active(
+        observed.tun_device.as_deref(),
+        observed.tun_auto_route,
+        &observed.tun_route_addresses,
+    ) == Some(true)
 }
 
 fn generated_tun_enabled() -> Option<bool> {
@@ -1139,11 +1173,32 @@ mod tests {
                 AgentImpact::HostTunEnabled,
             ]
         );
-        assert_eq!(plan.changes.len(), 2);
+        assert_eq!(plan.changes.len(), 3);
         assert_eq!(plan.changes[0].field, "tun_desired");
         assert_eq!(plan.changes[0].before, "disabled");
         assert_eq!(plan.changes[0].after, "enabled");
         assert_eq!(plan.changes[1].field, "tun_runtime");
+        assert_eq!(plan.changes[2].field, "tun_applied");
+        assert_eq!(plan.changes[2].before, "unknown");
+        assert_eq!(plan.changes[2].after, "consistent");
+    }
+
+    #[test]
+    fn tun_plan_allows_reconcile_retry_when_config_is_already_enabled_but_stale() {
+        let mut snapshot = snapshot();
+        snapshot.tun.desired_enabled = true;
+        snapshot.tun.generated_runtime_enabled = Some(true);
+        snapshot.tun.applied_consistency = AgentAppliedState::Stale;
+
+        let plan = plan_tun_enabled(&snapshot, true)
+            .expect("stale applied TUN should allow a reconcile retry");
+        assert_eq!(plan.changes.len(), 1);
+        assert_eq!(plan.changes[0].field, "tun_applied");
+        assert_eq!(plan.changes[0].before, "stale");
+        assert_eq!(plan.changes[0].after, "consistent");
+
+        snapshot.tun.applied_consistency = AgentAppliedState::Consistent;
+        assert!(plan_tun_enabled(&snapshot, true).is_err());
     }
 
     #[test]
