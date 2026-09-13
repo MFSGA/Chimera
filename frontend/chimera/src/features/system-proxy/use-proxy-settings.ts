@@ -1,8 +1,4 @@
-import {
-  useCoreStatus,
-  useSetting,
-  useSystemService,
-} from '@chimera/interface';
+import { useSetting, useSystemService } from '@chimera/interface';
 import { useLockFn } from 'ahooks';
 import { useState } from 'react';
 import { OS } from '@/consts';
@@ -37,19 +33,17 @@ export const useTunModeAction = () => {
   const action = useProxySetting('enable_tun_mode');
   const serviceMode = useSetting('enable_service_mode');
   const service = useSystemService();
-  const core = useCoreStatus();
   const enabling = !action.isActive;
   const serviceReady =
     serviceMode.value === true &&
     service.query.data?.status === 'running' &&
-    service.query.data.compat.kind === 'compatible' &&
-    core.data?.type === 'service';
+    service.query.data.compat.kind === 'compatible';
   const blocked = OS === 'windows' && enabling && !serviceReady;
 
   const execute = useLockFn(async () => {
     if (blocked) {
       throw new Error(
-        'TUN on Windows requires a compatible running Chimera Service, Service Mode enabled, and the core running on the service host.',
+        'TUN on Windows requires Service Mode and a compatible running Chimera Service. The backend will verify and converge the core onto the service host.',
       );
     }
     await action.execute();

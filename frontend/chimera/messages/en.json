@@ -583,7 +583,7 @@
   "agent_finding_active_profile_missing": "There is no valid active profile, so Chimera may not have usable proxy rules or node configuration.",
   "agent_finding_service_mode_inconsistent": "Service mode is enabled, but the background service is disconnected or incompatible with the current runtime.",
   "agent_finding_clash_connector_disconnected": "The core is running, but the live status connection is unavailable. Diagnostics may not include the latest connection state.",
-  "agent_finding_tun_runtime_mismatch": "TUN is enabled in settings but disabled in the generated runtime configuration. Traffic expected to enter TUN may bypass it.",
+  "agent_finding_tun_runtime_mismatch": "TUN desired state, generated runtime, running core state, or Windows host networking is inconsistent. Traffic expected to enter TUN may bypass it until the mismatch is resolved.",
   "agent_finding_recent_core_errors": "The core reported recent errors. If the network is behaving unexpectedly, the logs may contain more detail.",
   "agent_probe_system_proxy_unavailable": "The operating system proxy status could not be read.",
   "agent_probe_service_status_unavailable": "The service status could not be read.",

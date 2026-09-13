@@ -583,7 +583,7 @@
   "agent_finding_active_profile_missing": "目前沒有有效的作用中設定檔，Chimera 可能缺少可用的代理規則或節點設定。",
   "agent_finding_service_mode_inconsistent": "已啟用服務模式，但背景服務沒有成功連線，或與目前執行環境不相容。",
   "agent_finding_clash_connector_disconnected": "核心正在執行，但即時狀態連線無法使用。診斷結果可能缺少最新的連線狀態。",
-  "agent_finding_tun_runtime_mismatch": "設定中已啟用 TUN，但產生的執行設定沒有啟用它。原本應進入 TUN 的流量可能繞過代理。",
+  "agent_finding_tun_runtime_mismatch": "TUN 的期望狀態、產生的執行設定、核心實際狀態或 Windows 主機網路狀態不一致。在差異解決前，原本應進入 TUN 的流量可能繞過代理。",
   "agent_finding_recent_core_errors": "核心近期出現過錯誤。如果網路表現異常，可以在日誌中查看更多細節。",
   "agent_probe_system_proxy_unavailable": "無法讀取作業系統代理狀態。",
   "agent_probe_service_status_unavailable": "無法讀取服務狀態。",
