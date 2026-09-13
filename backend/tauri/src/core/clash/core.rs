@@ -661,22 +661,23 @@ impl CoreManager {
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
-        let (config, transform_output) = match Config::generate_runtime_input_with(clash).await {
-            Ok(output) => output,
-            Err(error) => {
-                if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
-                    self.runtime_lifecycle
-                        .publish_transform_failure(RuntimeTransformFailure {
-                            attempt_revision: revision,
-                            transform_uid: transform.transform_uid.clone(),
-                            scope_uid: transform.scope_uid.clone(),
-                            script_type: transform.script_type,
-                            message: transform.message(),
-                        });
+        let (config, transform_output) =
+            match Config::generate_runtime_input_with(clash, target_core).await {
+                Ok(output) => output,
+                Err(error) => {
+                    if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
+                        self.runtime_lifecycle
+                            .publish_transform_failure(RuntimeTransformFailure {
+                                attempt_revision: revision,
+                                transform_uid: transform.transform_uid.clone(),
+                                scope_uid: transform.scope_uid.clone(),
+                                script_type: transform.script_type,
+                                message: transform.message(),
+                            });
+                    }
+                    return Err(RuntimeRestartError::Prepare(error));
                 }
-                return Err(RuntimeRestartError::Prepare(error));
-            }
-        };
+            };
         self.runtime_lifecycle.clear_transform_failure();
         let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
         let candidate = paths

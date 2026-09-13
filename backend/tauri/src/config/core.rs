@@ -47,8 +47,9 @@ impl Config {
     /// Generate the runtime mapping and transform output from one typed Clash snapshot.
     pub async fn generate_runtime_input_with(
         clash: &ClashConfig,
+        core: crate::config::chimera::ClashCore,
     ) -> Result<(Mapping, PostProcessingOutput)> {
-        let (config, _exists_keys, postprocessing_output) = enhance::enhance(clash).await?;
+        let (config, _exists_keys, postprocessing_output) = enhance::enhance(clash, core).await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
@@ -59,11 +60,11 @@ impl Config {
 
     /// Legacy compatibility entry point for callers that do not own typed config snapshots yet.
     pub async fn generate_runtime_input() -> Result<(Mapping, PostProcessingOutput)> {
-        let clash = crate::bridge::clash::clash_config_from_legacy(
-            &Self::verge().latest(),
-            &Self::clash().latest().0,
-        )?;
-        Self::generate_runtime_input_with(&clash).await
+        let verge = Self::verge().latest().clone();
+        let core = verge.clash_core.unwrap_or_default();
+        let clash =
+            crate::bridge::clash::clash_config_from_legacy(&verge, &Self::clash().latest().0)?;
+        Self::generate_runtime_input_with(&clash, core).await
     }
 
     /// Generate the runtime mapping once and retain the exact draft used by the product pipeline.

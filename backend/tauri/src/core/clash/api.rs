@@ -9,6 +9,25 @@ use specta::Type;
 use tauri::http::HeaderMap;
 use tracing::instrument;
 
+/// TUN runtime projection returned by the running core's `GET /configs` endpoint.
+///
+/// Keep the field names aligned with upstream `clash_api::RuntimeTun`. This is
+/// intentionally limited to the fields Chimera currently consumes; serde
+/// ignores additional runtime fields until their shared callers need them.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct RuntimeTun {
+    pub enable: bool,
+    pub device: String,
+    pub auto_route: bool,
+    pub auto_detect_interface: bool,
+    pub strict_route: bool,
+    pub route_address: Vec<String>,
+    pub route_exclude_address: Vec<String>,
+    pub inet4_route_address: Vec<String>,
+    pub inet6_route_address: Vec<String>,
+}
+
 /// Runtime state returned by the running core's `GET /configs` endpoint.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
 pub struct ClashRuntimeConfig {
@@ -32,6 +51,8 @@ pub struct ClashRuntimeConfig {
     #[serde(rename = "external-controller")]
     pub external_controller: Option<String>,
     pub secret: Option<String>,
+    #[specta(skip)]
+    pub tun: Option<RuntimeTun>,
 }
 
 /// A newtype wrapper for query parameters
@@ -328,4 +349,37 @@ pub async fn get_group_delay(group: String, url: Option<String>) -> Result<HashM
         .json()
         .await?;
     Ok(resp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClashRuntimeConfig;
+
+    #[test]
+    fn runtime_tun_deserializes_mihomo_kebab_case_fields() {
+        let config: ClashRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "mode": "rule",
+            "tun": {
+                "enable": true,
+                "device": "Meta",
+                "auto-route": true,
+                "auto-detect-interface": true,
+                "strict-route": false,
+                "route-address": ["0.0.0.0/1"],
+                "route-exclude-address": ["192.168.0.0/16"],
+                "inet4-route-address": ["128.0.0.0/1"],
+                "inet6-route-address": ["::/1", "8000::/1"]
+            }
+        }))
+        .expect("runtime config should deserialize");
+
+        let tun = config.tun.expect("TUN runtime projection");
+        assert!(tun.enable);
+        assert_eq!(tun.device, "Meta");
+        assert!(tun.auto_route);
+        assert!(tun.auto_detect_interface);
+        assert_eq!(tun.route_address, vec!["0.0.0.0/1"]);
+        assert_eq!(tun.inet4_route_address, vec!["128.0.0.0/1"]);
+        assert_eq!(tun.inet6_route_address, vec!["::/1", "8000::/1"]);
+    }
 }

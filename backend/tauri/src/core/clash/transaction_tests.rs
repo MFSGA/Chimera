@@ -26,6 +26,7 @@ fn initial_config() -> ClashRuntimeConfig {
         tproxy_port: None,
         external_controller: Some("127.0.0.1:9090".to_string()),
         secret: None,
+        tun: None,
     }
 }
 

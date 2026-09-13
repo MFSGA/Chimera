@@ -6,6 +6,7 @@ use serde_yaml::Mapping;
 
 use crate::{
     config::{
+        chimera::ClashCore,
         core::Config,
         profile::item::{Profile, ProfileMetaGetter},
     },
@@ -31,7 +32,10 @@ pub(crate) use chain::TransformFailureError;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果
-pub async fn enhance(clash: &ClashConfig) -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
+pub async fn enhance(
+    clash: &ClashConfig,
+    core: ClashCore,
+) -> Result<(Mapping, Vec<String>, PostProcessingOutput)> {
     // config.yaml 的配置
     let clash_config = { Config::clash().latest().0.clone() };
 
@@ -117,7 +121,7 @@ pub async fn enhance(clash: &ClashConfig) -> Result<(Mapping, Vec<String>, PostP
             config.insert(key.to_owned(), value.clone());
         });
 
-    config = tun::use_tun(config, clash);
+    config = tun::use_tun(config, tun::params_for(clash, core));
 
     Ok((config, exists_keys, postprocessing_output))
 }
