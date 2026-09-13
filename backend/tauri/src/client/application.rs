@@ -356,6 +356,18 @@ fn plan_verge_patch(
     })
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn validate_windows_service_mode_tun_transition(
+    service_mode: Option<bool>,
+    current_tun: bool,
+    target_tun: Option<bool>,
+) -> Result<()> {
+    if service_mode == Some(false) && target_tun.unwrap_or(current_tun) {
+        anyhow::bail!("disable TUN before disabling Service Mode on Windows");
+    }
+    Ok(())
+}
+
 async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPlan) -> Result<()> {
     let ipc_state = crate::core::service::ipc::get_ipc_state();
 
@@ -500,6 +512,27 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     let mut split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
     let application_patch = split.application.clone().unwrap_or_default();
     let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
+
+    #[cfg(target_os = "windows")]
+    validate_windows_service_mode_tun_transition(
+        plan.service_mode,
+        client.get_clash_config()?.enable_tun_mode,
+        split
+            .clash_config
+            .as_ref()
+            .and_then(|patch| patch.enable_tun_mode),
+    )?;
+
+    if split
+        .clash_config
+        .as_ref()
+        .and_then(|patch| patch.enable_tun_mode)
+        == Some(true)
+    {
+        crate::core::service::ensure_tun_host_ready(client)
+            .await
+            .context("Windows TUN service preflight failed")?;
+    }
 
     let application_pair = if let Some(app_patch) = split.application.as_ref() {
         let snapshot = client.inner.application.get().await?;
@@ -714,6 +747,18 @@ mod tests {
         assert!(message.contains("non-reversible runtime or OS side effects"));
         assert!(message.contains("requires reconciliation"));
         assert!(message.contains("tray refresh failed"));
+    }
+
+    #[test]
+    fn windows_service_mode_cannot_be_disabled_while_tun_remains_enabled() {
+        assert!(validate_windows_service_mode_tun_transition(Some(false), true, None).is_err());
+        assert!(
+            validate_windows_service_mode_tun_transition(Some(false), false, Some(true)).is_err()
+        );
+        assert!(
+            validate_windows_service_mode_tun_transition(Some(false), true, Some(false)).is_ok()
+        );
+        assert!(validate_windows_service_mode_tun_transition(Some(true), true, None).is_ok());
     }
 
     #[test]

@@ -715,6 +715,19 @@ pub mod service {
     use super::{ChimeraClient, Result, State};
     use crate::core::service;
 
+    fn ensure_service_can_stop_for_tun(client: &ChimeraClient) -> Result {
+        #[cfg(target_os = "windows")]
+        if client.get_clash_config()?.enable_tun_mode {
+            return Err(anyhow::anyhow!(
+                "disable TUN before stopping or uninstalling Chimera Service on Windows"
+            )
+            .into());
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = client;
+        Ok(())
+    }
+
     /// Additive status projection that preserves the service wire fields while
     /// exposing the app-side compatibility decision to frontend consumers.
     #[derive(serde::Serialize, specta::Type)]
@@ -747,51 +760,29 @@ pub mod service {
     }
     #[tauri::command]
     #[specta::specta]
-    pub async fn uninstall_service() -> Result {
-        service::control::uninstall_service().await?;
+    pub async fn uninstall_service(client: State<'_, ChimeraClient>) -> Result {
+        ensure_service_can_stop_for_tun(&client)?;
+        service::uninstall_service_and_converge(&client).await?;
         Ok(())
     }
     #[tauri::command]
     #[specta::specta]
     pub async fn start_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::start_service((*client).clone()).await;
-        let enabled_service = *crate::config::core::Config::verge()
-            .latest()
-            .enable_service_mode
-            .as_ref()
-            .unwrap_or(&false);
-        if enabled_service && let Err(err) = client.rebuild_running_config().await {
-            log::error!(target: "app", "{err}");
-        }
-        Ok(result?)
+        service::start_service_and_converge(&client, std::time::Duration::from_secs(8)).await?;
+        Ok(())
     }
     #[tauri::command]
     #[specta::specta]
     pub async fn stop_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::stop_service().await;
-        let enabled_service = *crate::config::core::Config::verge()
-            .latest()
-            .enable_service_mode
-            .as_ref()
-            .unwrap_or(&false);
-        if enabled_service && let Err(err) = client.rebuild_running_config().await {
-            log::error!(target: "app", "{err}");
-        }
-        Ok(result?)
+        ensure_service_can_stop_for_tun(&client)?;
+        service::stop_service_and_converge(&client).await?;
+        Ok(())
     }
     #[tauri::command]
     #[specta::specta]
     pub async fn restart_service(client: State<'_, ChimeraClient>) -> Result {
-        let result = service::control::restart_service((*client).clone()).await;
-        let enabled_service = *crate::config::core::Config::verge()
-            .latest()
-            .enable_service_mode
-            .as_ref()
-            .unwrap_or(&false);
-        if enabled_service && let Err(err) = client.rebuild_running_config().await {
-            log::error!(target: "app", "{err}");
-        }
-        Ok(result?)
+        service::restart_service_and_converge(&client, std::time::Duration::from_secs(8)).await?;
+        Ok(())
     }
 }
 

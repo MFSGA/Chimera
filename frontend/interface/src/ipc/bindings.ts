@@ -1453,8 +1453,8 @@ export type RemoteProfileOptions_Serialize = {
 export type RemoteProfile_Deserialize = {
   /**  subscription url */
   url: string;
-  option: RemoteProfileOptions_Deserialize;
-  chain: string[];
+  option?: RemoteProfileOptions_Deserialize;
+  chain?: string[];
   /**  subscription user info */
   extra?: SubscriptionInfo;
 } & ProfileShared;
