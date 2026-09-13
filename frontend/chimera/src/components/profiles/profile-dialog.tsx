@@ -5,8 +5,8 @@ import {
   useProfileContent,
 } from '@chimera/interface';
 import { BaseDialog } from '@chimera/ui';
-import { Divider, InputAdornment } from '@mui/material';
-import { useAsyncEffect } from 'ahooks';
+import { Divider, InputAdornment, MenuItem, TextField } from '@mui/material';
+import { useAsyncEffect, useLatest } from 'ahooks';
 import { type editor } from 'monaco-editor';
 import {
   createContext,
@@ -18,13 +18,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import {
-  Controller,
-  SelectElement,
-  TextFieldElement,
-  useForm,
-} from 'react-hook-form-mui';
-import { useLatest } from 'react-use';
+import { Controller, useForm } from 'react-hook-form';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -209,82 +203,148 @@ export const ProfileDialog = ({
     () => (
       <div className="flex flex-col gap-4 pt-2 pb-2">
         {!isEdit && (
-          <SelectElement
-            label={m.profile_type_label()}
+          <Controller
             name="type"
             control={control}
-            {...commonProps}
-            size="small"
-            required
-            options={[
-              {
-                id: 'remote',
-                label: m.profile_remote_label(),
-              },
-              {
-                id: 'local',
-                label: m.profile_local_label(),
-              },
-            ]}
+            rules={{ required: 'This field is required' }}
+            render={({ field, fieldState }) => (
+              <TextField
+                {...commonProps}
+                select
+                size="small"
+                required
+                label={m.profile_type_label()}
+                name={field.name}
+                value={field.value ?? ''}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                inputRef={field.ref}
+                error={!!fieldState.error}
+                helperText={fieldState.error?.message}
+              >
+                <MenuItem value="remote">{m.profile_remote_label()}</MenuItem>
+                <MenuItem value="local">{m.profile_local_label()}</MenuItem>
+              </TextField>
+            )}
           />
         )}
 
-        <TextFieldElement
-          label={m.profile_form_name_label()}
+        <Controller
           name="name"
           control={control}
-          size="small"
-          fullWidth
-          required
+          rules={{ required: 'This field is required' }}
+          render={({ field, fieldState }) => (
+            <TextField
+              size="small"
+              fullWidth
+              required
+              label={m.profile_form_name_label()}
+              name={field.name}
+              value={field.value ?? ''}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              inputRef={field.ref}
+              error={!!fieldState.error}
+              helperText={fieldState.error?.message}
+            />
+          )}
         />
 
-        <TextFieldElement
-          label={m.profile_form_desc_label()}
+        <Controller
           name="desc"
           control={control}
-          {...commonProps}
-          size="small"
-          multiline
+          render={({ field, fieldState }) => (
+            <TextField
+              {...commonProps}
+              size="small"
+              multiline
+              label={m.profile_form_desc_label()}
+              name={field.name}
+              value={field.value ?? ''}
+              onChange={field.onChange}
+              onBlur={field.onBlur}
+              inputRef={field.ref}
+              error={!!fieldState.error}
+              helperText={fieldState.error?.message}
+            />
+          )}
         />
 
         {isRemote && (
           <>
-            <TextFieldElement
-              label={m.profile_subscription_url_label()}
+            <Controller
               name="url"
               control={control}
-              {...commonProps}
-              size="small"
-              multiline
-              required
+              rules={{ required: 'This field is required' }}
+              render={({ field, fieldState }) => (
+                <TextField
+                  {...commonProps}
+                  size="small"
+                  multiline
+                  required
+                  label={m.profile_subscription_url_label()}
+                  name={field.name}
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  inputRef={field.ref}
+                  error={!!fieldState.error}
+                  helperText={fieldState.error?.message}
+                />
+              )}
             />
 
-            <TextFieldElement
-              label={m.profile_user_agent_label()}
+            <Controller
               name="option.user_agent"
               control={control}
-              {...commonProps}
-              size="small"
-              placeholder={`clash-chimera/vdemo`}
+              render={({ field, fieldState }) => (
+                <TextField
+                  {...commonProps}
+                  size="small"
+                  label={m.profile_user_agent_label()}
+                  name={field.name}
+                  value={field.value ?? ''}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  inputRef={field.ref}
+                  error={!!fieldState.error}
+                  helperText={fieldState.error?.message}
+                  placeholder="clash-chimera/vdemo"
+                />
+              )}
             />
 
-            <TextFieldElement
-              label={m.profile_update_interval_label()}
+            <Controller
               name="option.update_interval_minutes"
               control={control}
-              {...commonProps}
-              size="small"
-              type="number"
-              slotProps={{
-                htmlInput: { min: 0 },
-                input: {
-                  endAdornment: (
-                    <InputAdornment position="end">
-                      {m.profile_minutes_unit()}
-                    </InputAdornment>
-                  ),
-                },
-              }}
+              render={({ field, fieldState }) => (
+                <TextField
+                  {...commonProps}
+                  size="small"
+                  type="number"
+                  label={m.profile_update_interval_label()}
+                  name={field.name}
+                  value={field.value ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    field.onChange(value === '' ? null : Number(value));
+                  }}
+                  onBlur={field.onBlur}
+                  inputRef={field.ref}
+                  error={!!fieldState.error}
+                  helperText={fieldState.error?.message}
+                  slotProps={{
+                    htmlInput: { min: 0 },
+                    input: {
+                      endAdornment: (
+                        <InputAdornment position="end">
+                          {m.profile_minutes_unit()}
+                        </InputAdornment>
+                      ),
+                    },
+                  }}
+                />
+              )}
             />
           </>
         )}

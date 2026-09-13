@@ -1,10 +1,15 @@
 import { BaseCard, Expand, MenuItem, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
-import { Button, List, ListItem, ListItemText } from '@mui/material';
+import {
+  Button,
+  InputAdornment,
+  List,
+  ListItem,
+  ListItemText,
+  TextField,
+} from '@mui/material';
 import { useAtom } from 'jotai';
-import { MuiColorInput } from 'mui-color-input';
 import { useEffect, useState } from 'react';
-import { isHexColor } from 'validator';
 import { useLanguage } from '@/components/providers/language-provider';
 import {
   DEFAULT_COLOR,
@@ -19,6 +24,21 @@ import { languageOptions } from '@/utils/language';
 
 const commonSx = {
   width: 128,
+};
+
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{3}(?:[0-9a-f]{3})?$/i;
+
+const isHexColor = (value: string | null | undefined) =>
+  typeof value === 'string' && HEX_COLOR_PATTERN.test(value);
+
+const toColorInputValue = (value: string | null | undefined) => {
+  if (typeof value !== 'string') return DEFAULT_COLOR;
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
+  if (/^#[0-9a-f]{3}$/i.test(value)) {
+    const [r, g, b] = value.slice(1);
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return DEFAULT_COLOR;
 };
 
 const LanguageSwitch = () => {
@@ -69,18 +89,36 @@ const ThemeColor = () => {
       <ListItem sx={{ pl: 0, pr: 0 }}>
         <ListItemText primary={m.settings_user_interface_theme_color_label()} />
 
-        <MuiColorInput
+        <TextField
           size="small"
           sx={commonSx}
           value={value ?? DEFAULT_COLOR}
-          isAlphaHidden
-          format="hex"
+          error={!isHexColor(value ?? DEFAULT_COLOR)}
           onBlur={() => {
             if (!isHexColor(value ?? DEFAULT_COLOR)) {
               setValue(themeColor);
             }
           }}
-          onChange={(color: string) => setValue(color)}
+          onChange={(event) => setValue(event.target.value)}
+          slotProps={{
+            htmlInput: {
+              'aria-label': m.settings_user_interface_theme_color_label(),
+              maxLength: 7,
+            },
+            input: {
+              endAdornment: (
+                <InputAdornment position="end">
+                  <input
+                    type="color"
+                    aria-label={m.settings_user_interface_theme_color_label()}
+                    className="size-6 cursor-pointer border-0 bg-transparent p-0"
+                    value={toColorInputValue(value)}
+                    onChange={(event) => setValue(event.target.value)}
+                  />
+                </InputAdornment>
+              ),
+            },
+          }}
         />
       </ListItem>
 

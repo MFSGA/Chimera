@@ -11,12 +11,8 @@ import { SwitchProps } from '@mui/material/Switch';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { ChangeEvent, useState } from 'react';
-import ReactFastMarquee from 'react-fast-marquee';
+import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
-
-const Marquee = ((
-  ReactFastMarquee as unknown as { default?: typeof ReactFastMarquee }
-).default ?? ReactFastMarquee) as typeof ReactFastMarquee;
 
 export interface LabelSwitchProps extends SwitchProps {
   label: string;
@@ -154,7 +150,7 @@ export const ClashFieldItem = ({
               {label}
             </Typography>
 
-            <Marquee speed={36}>
+            <TextMarquee speed={36} pauseDuration={0}>
               <Box sx={{ display: 'flex', gap: 1, paddingRight: 16 }}>
                 <span>{m.common_enabled()}: </span>
 
@@ -162,7 +158,7 @@ export const ClashFieldItem = ({
                   return <span key={index}>{item}</span>;
                 })}
               </Box>
-            </Marquee>
+            </TextMarquee>
           </Box>
 
           <ArrowForwardIos sx={{ width: 16, height: 16 }} />

@@ -1,7 +1,8 @@
 import { useIsAppImage } from '@chimera/interface';
-import Masonry from '@mui/lab/Masonry';
+import { useMediaQuery } from '@mui/material';
+import { useTheme } from '@mui/material/styles';
 import { useAtomValue } from 'jotai';
-import { useWindowSize } from 'react-use';
+import { Children, type ReactNode } from 'react';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import SettingChimeraMisc from './setting-chimera-misc';
 import SettingChimeraPath from './setting-chimera-path';
@@ -19,46 +20,61 @@ import SettingSystemProxy from './setting-system-proxy';
 import SettingSystemService from './setting-system-service';
 import SettingSystemTools from './setting-system-tools';
 
+const SettingColumns = ({
+  children,
+  twoColumns,
+}: {
+  children: ReactNode;
+  twoColumns: boolean;
+}) => {
+  const items = Children.toArray(children);
+  const columns = twoColumns
+    ? [
+        items.filter((_, index) => index % 2 === 0),
+        items.filter((_, index) => index % 2 === 1),
+      ]
+    : [items];
+
+  return (
+    <div className="flex w-full items-start gap-6">
+      {columns.map((column, index) => (
+        <div
+          className="flex min-w-0 flex-1 flex-col gap-6"
+          key={index === 0 ? 'primary' : 'secondary'}
+        >
+          {column}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export const SettingPage = () => {
   const isAppImage = useIsAppImage();
   const isDrawerOnlyIcon = useAtomValue(atomIsDrawerOnlyIcon);
-  const { width } = useWindowSize();
+  const theme = useTheme();
+  const isMdUp = useMediaQuery(theme.breakpoints.up('md'));
+  const isWideLayout = useMediaQuery('(min-width:1001px)');
+  const twoColumns = isMdUp && (isDrawerOnlyIcon || isWideLayout);
 
   return (
-    <Masonry
-      className="w-full"
-      columns={{
-        xs: 1,
-        sm: 1,
-        md: isDrawerOnlyIcon ? 2 : width > 1000 ? 2 : 1,
-        lg: 2,
-        xl: 2,
-      }}
-      spacing={3}
-      sequential
-    >
-      {/* 1 */}
+    <SettingColumns twoColumns={twoColumns}>
       <SettingSystemProxy />
-      {/* 3 */}
       <SettingChimerauUI />
-      {/* 6 */}
       <SettingClashBase />
       <SettingClashPort />
       <SettingClashExternal />
       <SettingClashWeb />
       <SettingClashField />
-      {/* 4 */}
       <SettingClashCore />
       <SettingSystemBehavior />
-      {/* 5 */}
       {!isAppImage.data && <SettingSystemService />}
       <SettingSystemTools />
       <SettingChimeraTasks />
       <SettingChimeraMisc />
       <SettingChimeraPath />
-      {/* 2 */}
       <SettingChimeraVersion />
-    </Masonry>
+    </SettingColumns>
   );
 };
 

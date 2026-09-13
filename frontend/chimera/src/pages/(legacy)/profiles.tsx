@@ -18,13 +18,13 @@ import {
   Fab,
   Grid,
   IconButton,
+  useMediaQuery,
 } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
 import { useAtom } from 'jotai';
 import { AnimatePresence, motion } from 'motion/react';
 import { useMemo, useState, useTransition } from 'react';
-import { useWindowSize } from 'react-use';
 import ContentDisplay from '@/components/base/content-display';
 import {
   atomChainsSelected,
@@ -129,7 +129,7 @@ function ProfilePage() {
   };
 
   const [runtimeConfigViewerOpen, setRuntimeConfigViewerOpen] = useState(false);
-  const { width } = useWindowSize();
+  const isNarrowLayout = useMediaQuery('(max-width:1000px)');
   const [globalUpdatePending, startGlobalUpdate] = useTransition();
 
   const handleGlobalProfileUpdate = useLockFn(async () => {
@@ -240,7 +240,7 @@ function ProfilePage() {
             size={{
               xs: 12,
               sm: 12,
-              md: hasSide && width <= 1000 ? 12 : 6,
+              md: hasSide && isNarrowLayout ? 12 : 6,
               lg: 4,
               xl: 3,
             }}

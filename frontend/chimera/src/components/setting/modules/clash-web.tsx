@@ -10,11 +10,7 @@ import Paper, { PaperProps } from '@mui/material/Paper';
 import { styled } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import { ReactElement, ReactNode } from 'react';
-import ReactFastMarquee from 'react-fast-marquee';
-
-const Marquee = ((
-  ReactFastMarquee as unknown as { default?: typeof ReactFastMarquee }
-).default ?? ReactFastMarquee) as typeof ReactFastMarquee;
+import TextMarquee from '@/components/ui/text-marquee';
 
 type WebUrlLabels = {
   [label: string]: string | number | undefined | null;
@@ -105,11 +101,11 @@ export const ClashWebItem = ({
 }: ClashWebItemProps) => {
   return (
     <Item>
-      <Marquee>
+      <TextMarquee speed={50} pauseDuration={0}>
         <Typography variant="subtitle1" sx={{ marginRight: 16 }}>
           {label}
         </Typography>
-      </Marquee>
+      </TextMarquee>
 
       <Box
         sx={{
