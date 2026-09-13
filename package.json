@@ -33,6 +33,7 @@
     "prepare": "husky",
     "check": "tsx scripts/check.ts",
     "check:service-runtime": "tsx scripts/check-service-runtime.ts",
+    "smoke:tun:windows": "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ./scripts/windows-tun-smoke.ps1",
     "lint:frontend-boundaries": "tsx scripts/check-frontend-boundaries.ts",
     "publish": "tsx scripts/publish.ts",
     "dev:diff": "run-p -r web:devtools tauri:diff",

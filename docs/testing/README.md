@@ -191,6 +191,25 @@ pnpm --filter @chimera/tauri-e2e test:runtime
 
 MUST 记录测试二进制的路径、构建来源和时间/哈希，确保对应本次产品代码。若使用 `CHIMERA_E2E_BINARY` 覆盖路径，也必须验证对应的 e2e 特性和前端产物。不要拿旧二进制通过当作当前代码通过。工具或平台缺失时如实记录未运行及原因；静态检查通过不得写成桌面测试通过。
 
+### Windows TUN 真机只读验收
+
+仓库提供 `scripts/windows-tun-smoke.ps1`，用于已经完成 Service 安装、Service Mode/Core 启动和 TUN 开启后的**只读**宿主验收。它不会安装/启动/停止 Service，也不会修改适配器、路由或 TUN 配置。
+
+```powershell
+# 完整验收：Service/Core/TUN/adapter/route + 一次公网连通性探测
+pnpm smoke:tun:windows
+
+# 仅验证本机状态，不发起公网请求
+pnpm smoke:tun:windows -SkipTraffic
+
+# 公网目标不适用时指定自己的只读探测地址
+pnpm smoke:tun:windows -ProbeUrl https://example.invalid/health
+```
+
+脚本从 Service `status --json` 获取实际运行配置路径，验证 v1 Service 兼容性和 config-root ownership；随后只向 loopback controller 发送带现有 secret 的 `GET /configs`，并按 Agent Windows TUN host probe 的同类规则检查精确 adapter 名称和 route capture。默认 auto-route 证明要求 IPv4/IPv6 默认路由或完整 `/1` 拆分路由；显式 route-address 则要求全部规范化后的目标路由存在。输出为结构化 JSON，任一必须项失败时 exit code 为非零，且不会输出 controller secret。
+
+公网 probe 只证明 route 生效后的基础连通性，**不能单独证明每个数据包实际经过 TUN**；需要包级证据时仍应使用专属 runner/VM 和可控目标。真实 lifecycle 验收应至少在 TUN 开启后运行一次 verifier，再执行 Service restart，并在 restart 后再次运行 verifier，确认 Core/TUN/adapter/route 均重新收敛。
+
 ## 7. 当前能力与待补齐项
 
 以下是 2026-09-13 的静态核对，不是实际运行通过证明。
