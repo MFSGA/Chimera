@@ -168,7 +168,7 @@ describe('network assistant guided diagnosis', () => {
     );
   });
 
-  it('guards system proxy enable and safely toggles TUN through confirmation', async () => {
+  it('guards system proxy and respects platform TUN readiness', async () => {
     const proxyEnable = await displayedElement(
       '[data-slot="agent-system-proxy-enable"]',
     );
@@ -188,8 +188,13 @@ describe('network assistant guided diagnosis', () => {
 
     assert.equal(await enabledState(proxyEnable), false);
     assert.equal(await enabledState(proxyDisable), true);
-    assert.equal(await enabledState(tunEnable), true);
+    const tunEnableExpected = process.platform !== 'win32';
+    assert.equal(await enabledState(tunEnable), tunEnableExpected);
     assert.equal(await enabledState(tunDisable), false);
+
+    // The stale-proxy fixture has no running Service-backed core on Windows,
+    // so TUN enablement must remain unavailable until that prerequisite is met.
+    if (!tunEnableExpected) return;
 
     await browser.execute(
       (element) => (element as HTMLElement).click(),
