@@ -269,9 +269,15 @@ importers:
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
-      d3:
-        specifier: 7.9.0
-        version: 7.9.0
+      d3-array:
+        specifier: 3.2.4
+        version: 3.2.4
+      d3-scale:
+        specifier: 4.0.2
+        version: 4.0.2
+      d3-shape:
+        specifier: 3.2.0
+        version: 3.2.0
       dayjs:
         specifier: 1.11.23
         version: 1.11.23
@@ -351,6 +357,15 @@ importers:
       '@types/d3':
         specifier: 7.4.3
         version: 7.4.3
+      '@types/d3-array':
+        specifier: 3.2.2
+        version: 3.2.2
+      '@types/d3-scale':
+        specifier: 4.0.9
+        version: 4.0.9
+      '@types/d3-shape':
+        specifier: 3.1.8
+        version: 3.1.8
       '@types/json-schema':
         specifier: 7.0.15
         version: 7.0.15
