@@ -14,13 +14,14 @@
  * 1. SVG translateX 实现水平滚动（线性缓动，恒定速度）
  * 2. D3 easeCubicInOut 实现 yMax 插值（非线性缓动，自然感）
  * 3. 二者解耦，互不影响
- * 4. 使用 motion animate 进行高性能动画驱动
+ * 4. 使用 requestAnimationFrame 驱动动画
  */
 
 import { cn } from '@chimera/ui';
-import * as d3 from 'd3';
+import { deviation, max, mean } from 'd3-array';
+import { scaleLinear } from 'd3-scale';
+import { area, curveCatmullRom, line } from 'd3-shape';
 import { cloneDeep } from 'lodash-es';
-import { animate } from 'motion';
 import { useEffect, useRef, type ComponentPropsWithoutRef } from 'react';
 
 /**
@@ -38,6 +39,14 @@ const STABLE_TOP_FACTOR = 2 / 3;
 /** 波动序列时，图表占用 SVG 高度的比例 */
 const ACTIVE_TOP_FACTOR = 0.35;
 
+/**
+ * D3 easeCubicInOut 的轻量实现，避免为了单个缓动函数引入额外运行时。
+ */
+const easeCubicInOut = (t: number) => {
+  const x = Math.min(Math.max(t, 0), 1);
+  return x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+};
+
 export const Sparkline = ({
   data,
   animationDuration = 1,
@@ -52,14 +61,48 @@ export const Sparkline = ({
   const prevDataRef = useRef<number[] | null>(null);
   // 最近一次滚动到左侧之外的点值，用于保持 x=0 处的曲线连续
   const leftGuardRef = useRef<number | null>(null);
-  const animRef = useRef<ReturnType<typeof animate> | null>(null);
+  const animRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!svgRef.current || !gRef.current) {
       return;
     }
 
-    const g = d3.select(gRef.current);
+    const g = {
+      attr(name: string, value: string | number) {
+        gRef.current?.setAttribute(name, String(value));
+        return g;
+      },
+      select(selector: string) {
+        const node = gRef.current?.querySelector<SVGPathElement>(selector);
+        return {
+          attr(name: string, value: string | number) {
+            node?.setAttribute(name, String(value));
+            return this;
+          },
+        };
+      },
+      selectAll(_selector: string) {
+        return {
+          remove() {
+            gRef.current?.replaceChildren();
+          },
+        };
+      },
+      append(tag: string) {
+        const node = document.createElementNS(
+          'http://www.w3.org/2000/svg',
+          tag,
+        );
+        gRef.current?.appendChild(node);
+        return {
+          attr(name: string, value: string | number) {
+            node.setAttribute(name, String(value));
+            return this;
+          },
+        };
+      },
+    };
     const { width, height } = svgRef.current.getBoundingClientRect();
 
     if (!width || !height) {
@@ -74,9 +117,9 @@ export const Sparkline = ({
       xRange: [number, number],
       yMax: number,
     ) => {
-      const mean = d3.mean(points) ?? 0;
-      const std = d3.deviation(points) ?? 0;
-      const cv = mean > 0 ? std / mean : 0;
+      const meanValue = mean(points) ?? 0;
+      const std = deviation(points) ?? 0;
+      const cv = meanValue > 0 ? std / meanValue : 0;
       // 稳定序列只占底部 1/3，波动序列占满
       const topFactor =
         yMax === 0
@@ -85,28 +128,24 @@ export const Sparkline = ({
             ? STABLE_TOP_FACTOR
             : ACTIVE_TOP_FACTOR;
 
-      const x = d3
-        .scaleLinear()
+      const x = scaleLinear()
         .domain([0, points.length - 1])
         .range(xRange);
-      const y = d3
-        .scaleLinear()
+      const y = scaleLinear()
         .domain([0, yMax])
         .range([height, height * topFactor]);
 
       // Catmull-Rom 样条（alpha=0.5）生成平滑曲线
-      const lineGen = d3
-        .line<number>()
+      const lineGen = line<number>()
         .x((_, i) => x(i))
         .y((d) => y(d))
-        .curve(d3.curveCatmullRom.alpha(0.5));
+        .curve(curveCatmullRom.alpha(0.5));
 
-      const areaGen = d3
-        .area<number>()
+      const areaGen = area<number>()
         .x((_, i) => x(i))
         .y0(height)
         .y1((d) => y(d))
-        .curve(d3.curveCatmullRom.alpha(0.5));
+        .curve(curveCatmullRom.alpha(0.5));
 
       return {
         line: lineGen(points) ?? '',
@@ -156,8 +195,10 @@ export const Sparkline = ({
     prevDataRef.current = cloneDeep(data);
 
     // 停止正在进行的动画
-    animRef.current?.stop();
-    animRef.current = null;
+    if (animRef.current !== null) {
+      cancelAnimationFrame(animRef.current);
+      animRef.current = null;
+    }
 
     // 短数据序列（<2 点）直接渲染，无动画
     if (data.length < 2) {
@@ -169,7 +210,7 @@ export const Sparkline = ({
 
     if (!prevData || prevData.length !== data.length) {
       // 初次渲染或数据长度变化：直接绘制，无动画
-      const yMax = Math.max(d3.max(data) ?? 0, 1);
+      const yMax = Math.max(max(data) ?? 0, 1);
       const step = width / (data.length - 1);
       const { line, area } = buildPaths(
         data,
@@ -194,8 +235,8 @@ export const Sparkline = ({
     // N+1 个点 = 旧数据首点（即将滑出）+ 完整新数据集
     const stepWidth = width / (data.length - 1);
     const extPoints = [...prevData, data[data.length - 1]];
-    const fromYMax = Math.max(d3.max(extPoints) ?? 0, 1);
-    const toYMax = Math.max(d3.max(data) ?? 0, 1);
+    const fromYMax = Math.max(max(extPoints) ?? 0, 1);
+    const toYMax = Math.max(max(data) ?? 0, 1);
     const yMaxChanges = Math.abs(fromYMax - toYMax) > 1;
 
     const leftGuard = leftGuardRef.current ?? undefined;
@@ -215,58 +256,64 @@ export const Sparkline = ({
 
     let cancelled = false;
 
-    // 使用 motion animate 驱动动画
-    const anim = animate(0, 1, {
-      duration: animationDuration,
-      ease: 'linear',
-      onUpdate(t) {
-        // X 轴：线性平移（恒定速度滑动）
-        g.attr('transform', `translate(${-stepWidth * t},0)`);
+    // 使用 requestAnimationFrame 驱动动画，避免为单个组件引入 animation runtime
+    const start = performance.now();
+    const duration = Math.max(animationDuration * 1000, 1);
 
-        // Y 轴：使用缓动函数插值 yMax
-        if (yMaxChanges) {
-          const easedT = d3.easeCubicInOut(t);
-          const currentYMax = fromYMax + (toYMax - fromYMax) * easedT;
-          const { line, area } = buildPaths(
-            extPoints,
-            [0, width + stepWidth],
-            currentYMax,
-            stepWidth,
-            leftGuard,
-          );
+    const frame = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
 
-          g.select('.area').attr('d', area);
-          g.select('.line').attr('d', line);
-        }
-      },
-      onComplete() {
-        if (cancelled) {
-          return;
-        }
+      // X 轴：线性平移（恒定速度滑动）
+      g.attr('transform', `translate(${-stepWidth * t},0)`);
 
-        // 保存滑出的点作为下一个周期的左护点
-        leftGuardRef.current = prevData[0];
-
-        // 动画完成后切换到 N 点路径（无缝切换，因为 N+1 路径 t=1 和 N 路径重合）
+      // Y 轴：使用缓动函数插值 yMax
+      if (yMaxChanges) {
+        const easedT = easeCubicInOut(t);
+        const currentYMax = fromYMax + (toYMax - fromYMax) * easedT;
         const { line, area } = buildPaths(
-          data,
-          [0, width],
-          toYMax,
+          extPoints,
+          [0, width + stepWidth],
+          currentYMax,
           stepWidth,
-          prevData[0],
+          leftGuard,
         );
 
-        g.attr('transform', 'translate(0,0)');
         g.select('.area').attr('d', area);
         g.select('.line').attr('d', line);
-      },
-    });
+      }
 
-    animRef.current = anim;
+      if (t < 1 && !cancelled) {
+        animRef.current = requestAnimationFrame(frame);
+        return;
+      }
+
+      if (cancelled) {
+        return;
+      }
+
+      // 保存滑出的点作为下一个周期的左护点
+      leftGuardRef.current = prevData[0];
+
+      const { line, area } = buildPaths(
+        data,
+        [0, width],
+        toYMax,
+        stepWidth,
+        prevData[0],
+      );
+
+      g.attr('transform', 'translate(0,0)');
+      g.select('.area').attr('d', area);
+      g.select('.line').attr('d', line);
+    };
+
+    animRef.current = requestAnimationFrame(frame);
 
     return () => {
       cancelled = true;
-      anim.stop();
+      if (animRef.current !== null) {
+        cancelAnimationFrame(animRef.current);
+      }
     };
   }, [data, animationDuration]);
 
