@@ -1,3 +1,185 @@
+## [0.23.4] - 2026-09-15 04:38:02
+
+### ✅ Testing
+
+- **e2e:** Align TUN readiness expectation by @MFSGA
+
+- **e2e:** Cover agent network toggles by @MFSGA
+
+- **e2e:** Stabilize connections empty state by @MFSGA
+
+- **e2e:** Fix providers route readiness by @MFSGA
+
+- **e2e:** Wait for active providers route by @MFSGA
+
+- **e2e:** Scope providers layout to active route by @MFSGA
+
+- **e2e:** Use keyboard settings interactions by @MFSGA
+
+- **e2e:** Stabilize settings route readiness by @MFSGA
+
+- **e2e:** Stabilize settings main lifecycle by @MFSGA
+
+- **e2e:** Recover stale main route sessions by @MFSGA
+
+- **e2e:** Stabilize main route isolation by @MFSGA
+
+- **e2e:** Reset window state between specs by @MFSGA
+
+- **e2e:** Isolate Chimera settings layout by @MFSGA
+
+- **e2e:** Isolate debug settings window state by @MFSGA
+
+- **e2e:** Isolate custom css editor window by @MFSGA
+
+- **e2e:** Isolate main window restore state by @MFSGA
+
+- **e2e:** Select active profile edit trigger by @MFSGA
+
+- **e2e:** Stabilize main navigation selectors by @MFSGA
+
+- **tun:** Add Windows host smoke verifier by @MFSGA
+
+### ✨ Features
+
+- **agent:** Observe applied TUN runtime state by @MFSGA
+
+- **agent:** Expose network toggle actions by @MFSGA
+
+- **agent:** Add TUN and system proxy actions by @MFSGA
+
+- **agent:** Persist proposal audit outcomes by @MFSGA
+
+- **agent:** Register audit history module by @MFSGA
+
+- **agent:** Add persistent audit history store by @MFSGA
+
+- **agent:** Hash proposal audit identifiers by @MFSGA
+
+- **agent:** Disclose proposal confirmation details by @MFSGA
+
+- **agent:** Version tool input schemas by @MFSGA
+
+- **agent:** Unify readonly tool dispatch by @MFSGA
+
+- **agent:** Register safe network probe by @MFSGA
+
+- **agent:** Add closed intent resolver by @MFSGA
+
+- **agent:** Parameterize safe network probe by @MFSGA
+
+- **agent:** Expose safe network probe by @MFSGA
+
+- **agent:** Add safe network probe by @MFSGA
+
+- **agent:** Add privacy-safe issue guidance by @MFSGA
+
+- **agent:** Guard diagnostic context copying by @MFSGA
+
+- **runtime:** Align TUN config with selected core by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **agent:** Verify applied TUN host state by @MFSGA
+
+- **agent:** Gate and verify TUN actions by @MFSGA
+
+- **agent:** Preserve evolution history action codes by @MFSGA
+
+- **deps:** Update rust crate windows-core to 0.100 (#367) by @MFSGA in [#367](https://github.com/MFSGA/Chimera/pull/367)
+
+- **deps:** Update rust crate serde_with to v3.23.0 (#365) by @MFSGA in [#365](https://github.com/MFSGA/Chimera/pull/365)
+
+- **deps:** Update dependency monaco-editor to v0.56.0 (#374) by @MFSGA in [#374](https://github.com/MFSGA/Chimera/pull/374)
+
+- **deps:** Update rust crate rquickjs to 0.13.0 (#364) by @MFSGA in [#364](https://github.com/MFSGA/Chimera/pull/364)
+
+- **deps:** Update rust crate ractor to 0.16 (#375) by @MFSGA in [#375](https://github.com/MFSGA/Chimera/pull/375)
+
+- **deps:** Update rust crate convert_case to 0.12.0 (#363) by @MFSGA in [#363](https://github.com/MFSGA/Chimera/pull/363)
+
+- **deps:** Refresh syn lock reference by @MFSGA
+
+- **deps:** Update dependency zod to v4.5.4 (#362) by @MFSGA in [#362](https://github.com/MFSGA/Chimera/pull/362)
+
+- **deps:** Update dependency motion to v13 (#369) by @MFSGA in [#369](https://github.com/MFSGA/Chimera/pull/369)
+
+- **deps:** Update rust crate struct-patch to 0.14 (#366) by @MFSGA in [#366](https://github.com/MFSGA/Chimera/pull/366)
+
+- **deps:** Update tauri packages (#358) by @MFSGA in [#358](https://github.com/MFSGA/Chimera/pull/358)
+
+- **deps:** Update dependency @tanstack/react-virtual to v3.14.11 (#357) by @MFSGA in [#357](https://github.com/MFSGA/Chimera/pull/357)
+
+- **deps:** Update dependency react-error-boundary to v6.1.5 (#325) by @MFSGA in [#325](https://github.com/MFSGA/Chimera/pull/325)
+
+- **deps:** Update dependency ahooks to v3.10.0 (#350) by @MFSGA in [#350](https://github.com/MFSGA/Chimera/pull/350)
+
+- **deps:** Update dependency less to v4.9.1 (#338) by @MFSGA in [#338](https://github.com/MFSGA/Chimera/pull/338)
+
+- **deps:** Update dependency @tanstack/react-table to v9 (#342) by @MFSGA in [#342](https://github.com/MFSGA/Chimera/pull/342)
+
+- **deps:** Update dependency virtua to v0.51.1 (#339) by @MFSGA in [#339](https://github.com/MFSGA/Chimera/pull/339)
+
+- **deps:** Update dependency @inlang/paraglide-js to v2.25.0 (#337) by @MFSGA in [#337](https://github.com/MFSGA/Chimera/pull/337)
+
+- **deps:** Update radix-ui-primitives monorepo (#326) by @MFSGA in [#326](https://github.com/MFSGA/Chimera/pull/326)
+
+- **deps:** Update material-ui monorepo by @renovate-bot in [#280](https://github.com/MFSGA/Chimera/pull/280)
+
+- **deps:** Update dependency @tanstack/react-query to v5.102.8 by @renovate-bot in [#289](https://github.com/MFSGA/Chimera/pull/289)
+
+- **e2e:** Resolve chainable element type mismatch by @MFSGA
+
+- **main:** Stabilize routed table views by @MFSGA
+
+- **renovate:** Skip unsupported artifact status writes by @MFSGA
+
+- **renovate:** Initialize runtime submodule by @MFSGA
+
+- **renovate:** Avoid minimum release age status writes by @MFSGA
+
+- **router:** Narrow boundary errors by @MFSGA
+
+- **service:** Serialize core host convergence by @MFSGA
+
+- **tooling:** Use npm registry for lix packages by @MFSGA
+
+- **ui:** Forward native button disabled state by @MFSGA
+
+- **ui:** Explain TUN service readiness requirement by @MFSGA
+
+- **ui:** Guard TUN toggle by service readiness by @MFSGA
+
+### 💅 Styling
+
+- **agent:** Format audit history quarantine path by @MFSGA
+
+### 📚 Documentation
+
+- **testing:** Add E2E testing standard by @MFSGA
+
+### 🔨 Refactor
+
+- **agent:** Decouple audit history persistence codes by @MFSGA
+
+- **agent:** Keep history persistence model private by @MFSGA
+
+- **agent:** Type proposal audit outcomes by @MFSGA
+
+- **agent:** Drive timeouts from tool registry by @MFSGA
+
+- **legacy:** Replace rules and connections ui stack by @MFSGA
+
+- **legacy-ui:** Replace local storage hook dependency by @MFSGA
+
+- **legacy-ui:** Reduce frontend dependencies by @MFSGA
+
+- **service:** Remove obsolete host wrappers by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.23.3...v0.23.4
+
 ## [0.23.3] - 2026-09-08 07:17:49
 
 ### ✅ Testing
