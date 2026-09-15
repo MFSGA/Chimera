@@ -1,3 +1,4 @@
+import '@/services/monaco';
 import MonacoEditor from '@monaco-editor/react';
 import { createFileRoute } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -6,7 +7,6 @@ import { useExperimentalThemeContext } from '@/components/providers/theme-provid
 import useCustomCss from '@/hooks/use-custom-css';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { loadMonaco } from '@/services/monaco';
 import { registerCssDataSlotCompletion } from '@/utils/monaco-css';
 import { message } from '@/utils/notification';
 import ActionButton from '../_modules/action-button';
@@ -77,10 +77,7 @@ function RouteComponent() {
           language="less"
           value={editorValue}
           theme={themeMode === 'light' ? 'vs' : 'vs-dark'}
-          beforeMount={(monaco) => {
-            void loadMonaco();
-            registerCssDataSlotCompletion(monaco);
-          }}
+          beforeMount={registerCssDataSlotCompletion}
           onChange={(value) => setEditorValue(value ?? '')}
           options={{
             minimap: { enabled: false },

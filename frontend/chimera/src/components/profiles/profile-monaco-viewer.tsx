@@ -1,3 +1,5 @@
+import { OS } from '@/consts';
+import '@/services/monaco';
 import { openThat } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import MonacoEditor from '@monaco-editor/react';
@@ -9,8 +11,6 @@ import * as monaco from 'monaco-editor';
 import { configureMonacoYaml } from 'monaco-yaml';
 import { nanoid } from 'nanoid';
 import { useCallback, useMemo, useRef } from 'react';
-import { OS } from '@/consts';
-import { loadMonaco } from '@/services/monaco';
 // schema
 import { themeMode } from '@/store';
 
@@ -34,8 +34,6 @@ export interface ProfileMonacoViewRef {
 let initd = false;
 
 export const beforeEditorMount = () => {
-  void loadMonaco();
-
   if (initd) return;
 
   monaco.typescript.javascriptDefaults.setCompilerOptions({
