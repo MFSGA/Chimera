@@ -8,12 +8,15 @@ authors.workspace = true
 [features]
 default = ["default-meta"]
 default-meta = []
+snapshot-persistence = ["dep:rmp-serde", "dep:zstd"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-specta = { version = "^2.0.0-rc.25", features = ["derive", "serde_json"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
+specta = { version = "^2.0.0-rc.25", features = ["derive", "serde_json", "indexmap", "url"] }
 struct-patch = "0.14"
-serde_with = "=3.23.0"
+serde_with = { version = "=3.23.0", features = ["indexmap_2", "json"] }
 strum = { version = "0.28", features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -25,6 +28,15 @@ language-tags = { version = "0.3.2", features = ["serde"] }
 sys-locale = "0.3"
 csscolorparser = { version = "0.8.3", features = ["serde"] }
 chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", features = ["specta"] }
+indexmap = { version = "2.0", features = ["serde"] }
+json-patch = "4.2"
+rmp-serde = { version = "1.3.1", optional = true }
+similar = "3.2"
+slab = { version = "0.4.12", features = ["serde"] }
+time = { version = "0.3", features = ["serde", "serde-well-known"] }
+url = { version = "2.5.8", features = ["serde"] }
+zstd = { version = "0.14.0", optional = true }
 
 [dev-dependencies]
-serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
+ciborium = "0.2.2"
+rmp-serde = "1.3.1"
