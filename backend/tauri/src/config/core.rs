@@ -49,7 +49,16 @@ impl Config {
         clash: &ClashConfig,
         core: crate::config::chimera::ClashCore,
     ) -> Result<(Mapping, PostProcessingOutput)> {
-        let (config, _exists_keys, postprocessing_output) = enhance::enhance(clash, core).await?;
+        // Standard cores use the ref-aligned executor. Chimera Client keeps
+        // the compatibility path until its custom TUN contract is represented
+        // by the shared runtime domain.
+        let (config, postprocessing_output) =
+            if core == crate::config::chimera::ClashCore::ChimeraClient {
+                let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
+                (config, output)
+            } else {
+                enhance::build_from_legacy(clash, core).await?
+            };
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
