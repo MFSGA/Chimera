@@ -173,7 +173,13 @@ pub async fn build_from_legacy(
     clash: &ClashConfig,
     core: LegacyClashCore,
 ) -> Result<(serde_yaml::Mapping, crate::enhance::PostProcessingOutput)> {
-    build_from_legacy_with_inspection(clash, core)
+    let client_info = Config::clash().latest().get_client_info();
+    let resolved_ports = ResolvedPortBindings {
+        mixed_port: client_info.port,
+        external_controller: Some(client_info.server),
+        ..ResolvedPortBindings::default()
+    };
+    build_from_legacy_with_inspection(clash, core, resolved_ports)
         .await
         .map(|(mapping, _exists_keys, output, _inspection)| (mapping, output))
 }
@@ -181,6 +187,7 @@ pub async fn build_from_legacy(
 pub(crate) async fn build_from_legacy_with_inspection(
     clash: &ClashConfig,
     core: LegacyClashCore,
+    resolved_ports: ResolvedPortBindings,
 ) -> Result<(
     serde_yaml::Mapping,
     Vec<String>,
@@ -199,16 +206,11 @@ pub(crate) async fn build_from_legacy_with_inspection(
         .enable_builtin_enhanced
         .unwrap_or(true);
 
-    let client_info = Config::clash().latest().get_client_info();
     let input = RuntimeBuildInput {
         profiles: profiles.clone(),
         clash: clash.clone(),
         app,
-        resolved_ports: ResolvedPortBindings {
-            mixed_port: client_info.port,
-            external_controller: Some(client_info.server),
-            ..ResolvedPortBindings::default()
-        },
+        resolved_ports,
     };
     let profiles_dir = dirs::app_profiles_dir()?;
 

@@ -259,3 +259,35 @@
 - 收敛条件：所有构造调用方迁移到 `from_data` 后移除兼容构造器，并在 typed
   ClashConfig 与 actor-backed lifecycle 完成后复核 `RuntimeSnapshotData` 的
   字段所有权和名称。
+
+## DIFF-010：会话端口解析与 executor 输入（第九阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/client/ports.rs` 的
+  `PortsFingerprint`、`SessionPortResolver` 与 `ResolvedPortBindings` 装配
+- Chimera 路径和符号：`backend/tauri/src/client/ports.rs`、
+  `client/mod.rs`、`config/core.rs`、`enhance/runtime_builder.rs`、
+  `core/clash/core.rs`
+- 类别：临时迁移
+- 差异及必要性：Chimera 现在按 ref 的 session fingerprint 缓存 mixed、HTTP、
+  SOCKS 和 external-controller 的具体端口，并将解析后的
+  `ResolvedPortBindings` 传给标准核心 runtime builder；配置只改变 host 时保留
+  已选端口，配置策略改变时才重新探测，避免运行中的核心把自己的监听端口误判为
+  冲突。`service/profile_file::SelfProxyPortSource` 在 Chimera 尚无对应 service
+  模块，因此暂未复制该 trait 实现，保留 `cached_ports` 作为等价只读边界。
+- 兼容边界：旧的 `generate_runtime_output_with` 与公开
+  `build_from_legacy` 仍从现有 legacy client info 构造 fallback bindings；
+  `ChimeraClient` 专用 Enhance 路径保持原有自定义 TUN 合同，未改变持久化格式、
+  legacy UI、agent 或 E2E 入口。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：标准核心启动、重启和
+  runtime 快照现在共享同一组具体端口；主界面、legacy UI 与 agent 继续通过同一
+  application API 读取状态，系统代理和配置文件副作用保持不变。
+- 实际验证结果：`cargo fmt --manifest-path backend/Cargo.toml --all`；
+  `cargo check --manifest-path backend/Cargo.toml -p chimera`；
+  `cargo test --manifest-path backend/tauri/Cargo.toml client::ports --
+  --test-threads=1`，5 passed；`pnpm typecheck`；
+  `pnpm lint:frontend-boundaries`；`git diff --check`。
+- 收敛条件：补齐 Chimera 对应的 service/profile-file 端口读取接口后，将
+  `SessionPortResolver` 接入 fetcher 的 `SelfProxyPortSource`；标准与
+  `ChimeraClient` runtime builder 均迁移到 typed ClashConfig 后，删除 legacy
+  fallback bindings，并补充真实核心重启/端口占用 E2E 验证。

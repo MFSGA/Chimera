@@ -65,6 +65,20 @@ impl Config {
         clash: &ClashConfig,
         core: crate::config::chimera::ClashCore,
     ) -> Result<RuntimeInputOutput> {
+        let client_info = Config::clash().latest().get_client_info();
+        let resolved_ports = chimera_config::runtime::executor::ResolvedPortBindings {
+            mixed_port: client_info.port,
+            external_controller: Some(client_info.server),
+            ..Default::default()
+        };
+        Self::generate_runtime_output_with_ports(clash, core, resolved_ports).await
+    }
+
+    pub(crate) async fn generate_runtime_output_with_ports(
+        clash: &ClashConfig,
+        core: crate::config::chimera::ClashCore,
+        resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
+    ) -> Result<RuntimeInputOutput> {
         // Standard cores use the ref-aligned executor. Chimera Client keeps
         // the compatibility path until its custom TUN contract is represented
         // by the shared runtime domain.
@@ -74,7 +88,7 @@ impl Config {
             let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
             (config, exists_keys, output, None)
         } else {
-            match enhance::build_from_legacy_with_inspection(clash, core).await {
+            match enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await {
                 Ok((config, exists_keys, output, inspection)) => {
                     (config, exists_keys, output, Some(inspection))
                 }
