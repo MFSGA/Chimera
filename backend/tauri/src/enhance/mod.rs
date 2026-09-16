@@ -16,10 +16,13 @@ use crate::{
     },
 };
 
+mod artifact_bridge;
 /// 1
 mod chain;
+mod content_source;
 /// 3
 mod field;
+mod runtime_builder;
 /// 4
 mod script;
 /// 5
@@ -29,6 +32,9 @@ mod utils;
 
 pub use chain::PostProcessingOutput;
 pub(crate) use chain::TransformFailureError;
+pub use content_source::FsProfileContentSource;
+pub use runtime_builder::{RuntimeBuildInput, RuntimeBuilder, build_from_legacy};
+pub use script::adapter::EnhanceScriptRunner;
 
 /// Enhance mode
 /// 返回最终配置、该配置包含的键、和script执行的结果

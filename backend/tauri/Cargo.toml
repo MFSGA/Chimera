@@ -86,6 +86,7 @@ percent-encoding = "2.3.1"
 
 # todo: use another crate.
 serde_yaml = { version = "0.9" }
+serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
 mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
 rquickjs = "0.13.0"
 sha2 = "0.11"

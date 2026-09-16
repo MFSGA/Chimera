@@ -1057,6 +1057,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "serde_yaml_ng",
  "sha2 0.11.0",
  "smol-cancellation-token",
  "specta",
