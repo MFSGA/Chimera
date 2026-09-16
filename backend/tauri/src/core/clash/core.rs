@@ -665,10 +665,11 @@ impl CoreManager {
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
-        let (config, transform_output, inspection) =
+        let (config, exists_keys, transform_output, inspection) =
             match Config::generate_runtime_output_with(clash, target_core).await {
                 Ok(output) => (
                     output.config,
+                    output.exists_keys,
                     output.postprocessing_output,
                     output.inspection,
                 ),
@@ -709,20 +710,24 @@ impl CoreManager {
             CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
         })?;
         let snapshot = Arc::new(match inspection {
-            Some(inspection) => RuntimeSnapshot::new_with_transform_output_and_inspection(
+            Some(inspection) => {
+                RuntimeSnapshot::new_with_transform_output_and_inspection_and_exists_keys(
+                    revision,
+                    target_core,
+                    promoted_bytes,
+                    config,
+                    transform_output,
+                    inspection,
+                    exists_keys,
+                )
+            }
+            None => RuntimeSnapshot::new_with_transform_output_and_exists_keys(
                 revision,
                 target_core,
                 promoted_bytes,
                 config,
                 transform_output,
-                inspection,
-            ),
-            None => RuntimeSnapshot::new_with_transform_output(
-                revision,
-                target_core,
-                promoted_bytes,
-                config,
-                transform_output,
+                exists_keys,
             ),
         });
         self.runtime_lifecycle.publish_promoted(snapshot.clone());

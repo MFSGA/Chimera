@@ -151,6 +151,7 @@ pub struct RuntimeSnapshot {
     pub target_core: ClashCore,
     pub product_sha256: [u8; 32],
     pub config: Mapping,
+    pub exists_keys: Vec<String>,
     pub transform_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
     pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
@@ -180,6 +181,24 @@ impl RuntimeSnapshot {
         config: Mapping,
         transform_output: PostProcessingOutput,
     ) -> Self {
+        Self::new_with_transform_output_and_exists_keys(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            transform_output,
+            Vec::new(),
+        )
+    }
+
+    pub(crate) fn new_with_transform_output_and_exists_keys(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        exists_keys: Vec<String>,
+    ) -> Self {
         let product_sha256 = Sha256::digest(&product_bytes).into();
         Self {
             inspection_id: nanoid::nanoid!(),
@@ -187,6 +206,7 @@ impl RuntimeSnapshot {
             target_core,
             product_sha256,
             config,
+            exists_keys,
             transform_output,
             product_bytes: product_bytes.into(),
             inspection: Arc::new(super::runtime_inspection::RuntimeInspectionData::bare()),
@@ -201,6 +221,26 @@ impl RuntimeSnapshot {
         transform_output: PostProcessingOutput,
         inspection: super::runtime_inspection::RuntimeInspectionData,
     ) -> Self {
+        Self::new_with_transform_output_and_inspection_and_exists_keys(
+            revision,
+            target_core,
+            product_bytes,
+            config,
+            transform_output,
+            inspection,
+            Vec::new(),
+        )
+    }
+
+    pub(crate) fn new_with_transform_output_and_inspection_and_exists_keys(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        inspection: super::runtime_inspection::RuntimeInspectionData,
+        exists_keys: Vec<String>,
+    ) -> Self {
         let product_sha256 = Sha256::digest(&product_bytes).into();
         Self {
             inspection_id: nanoid::nanoid!(),
@@ -208,6 +248,7 @@ impl RuntimeSnapshot {
             target_core,
             product_sha256,
             config,
+            exists_keys,
             transform_output,
             product_bytes: product_bytes.into(),
             inspection: Arc::new(inspection),
@@ -999,6 +1040,20 @@ mod tests {
         assert_eq!(snapshot.clash_info().server, "127.0.0.1:55736");
         assert_eq!(snapshot.clash_info().port, 7890);
         assert_eq!(snapshot.clash_info().secret.as_deref(), Some("chimera"));
+    }
+
+    #[test]
+    fn runtime_snapshot_preserves_executor_applied_fields() {
+        let snapshot = RuntimeSnapshot::new_with_transform_output_and_exists_keys(
+            RuntimeRevision(1),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+            PostProcessingOutput::default(),
+            vec!["mode".into(), "rules".into()],
+        );
+
+        assert_eq!(snapshot.exists_keys, ["mode", "rules"]);
     }
 
     #[test]

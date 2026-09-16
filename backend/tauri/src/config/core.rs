@@ -16,6 +16,7 @@ use crate::{
 
 pub(crate) struct RuntimeInputOutput {
     pub(crate) config: Mapping,
+    pub(crate) exists_keys: Vec<String>,
     pub(crate) postprocessing_output: PostProcessingOutput,
     pub(crate) inspection: Option<crate::client::runtime_inspection::RuntimeInspectionData>,
 }
@@ -67,14 +68,16 @@ impl Config {
         // Standard cores use the ref-aligned executor. Chimera Client keeps
         // the compatibility path until its custom TUN contract is represented
         // by the shared runtime domain.
-        let (config, postprocessing_output, inspection) = if core
+        let (config, exists_keys, postprocessing_output, inspection) = if core
             == crate::config::chimera::ClashCore::ChimeraClient
         {
-            let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
-            (config, output, None)
+            let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
+            (config, exists_keys, output, None)
         } else {
             match enhance::build_from_legacy_with_inspection(clash, core).await {
-                Ok((config, output, inspection)) => (config, output, Some(inspection)),
+                Ok((config, exists_keys, output, inspection)) => {
+                    (config, exists_keys, output, Some(inspection))
+                }
                 Err(error) => {
                     // Keep existing user profiles startable while the ref
                     // domain is still a partial migration. The fallback
@@ -83,8 +86,8 @@ impl Config {
                         target: "app",
                         "ref runtime build failed for {core}; falling back to legacy enhance: {error:#}"
                     );
-                    let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
-                    (config, output, None)
+                    let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
+                    (config, exists_keys, output, None)
                 }
             }
         };
@@ -95,6 +98,7 @@ impl Config {
 
         Ok(RuntimeInputOutput {
             config,
+            exists_keys,
             postprocessing_output,
             inspection,
         })

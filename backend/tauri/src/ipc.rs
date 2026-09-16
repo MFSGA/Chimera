@@ -349,6 +349,12 @@ pub async fn inspect_runtime(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_runtime_exists(client: State<'_, ChimeraClient>) -> Result<Vec<String>> {
+    Ok(client.runtime_exists().await)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn inspect_runtime_node(
     client: State<'_, ChimeraClient>,
     snapshot_id: String,

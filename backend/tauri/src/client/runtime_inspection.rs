@@ -140,6 +140,14 @@ impl RuntimeSnapshot {
 }
 
 impl ChimeraClient {
+    pub(crate) async fn runtime_exists(&self) -> Vec<String> {
+        self.inner
+            .core
+            .promoted_runtime_snapshot()
+            .map(|snapshot| snapshot.exists_keys.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) async fn inspect_runtime(&self) -> Option<RuntimeInspection> {
         self.inner
             .core

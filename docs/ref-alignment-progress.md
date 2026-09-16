@@ -149,3 +149,28 @@
   `core/actor_v2` 的最小完整迁移、接入真实 service/local host 和超时恢复测试后，
   删除 `core_bridge.rs` shim，并将 `ClientSetupArgs` 切换为 actor-backed
   `CoreLifecycleClient`；当前仍是目录和端口层的部分迁移。
+
+## DIFF-006：Runtime exists_keys 读模型（第五阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/enhance/artifact_bridge.rs` 的
+  `RuntimeArtifact.applied_fields` → `RuntimeSnapshot.exists_keys`，以及
+  `ipc::get_runtime_exists`、`specta_export` 注册
+- Chimera 路径和符号：`backend/tauri/src/enhance/artifact_bridge.rs`、
+  `enhance/runtime_builder.rs`、`config/core.rs`、
+  `core/clash/core.rs`、`client/runtime.rs`、`client/runtime_inspection.rs`、
+  `ipc.rs` 和生成的 `frontend/interface/src/ipc/bindings.ts`
+- 类别：兼容扩展
+- 差异及必要性：标准 executor 的 `applied_fields` 现在按执行顺序保留为
+  `RuntimeSnapshot.exists_keys`，并提供只读 `get_runtime_exists` IPC；旧
+  Enhance 路径也将原有 `use_keys` 结果继续带入快照，未改变配置文件或核心
+  启动行为。
+- 兼容边界：尚未发布 RuntimeSnapshot 时返回空数组；旧构造器为保持已有测试和
+  调用合同，默认使用空集合，只有实际构建入口注入对应键集合。
+- 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
+  `cargo test --manifest-path backend/tauri/Cargo.toml
+  typescript_bindings_are_fresh -- --test-threads=1` 通过；`pnpm typecheck`
+  通过；新增 RuntimeSnapshot applied-fields 单测。
+- 收敛条件：当 RuntimeSnapshot 完成 ref `from_data` 统一构造并覆盖所有
+  Chimera Client/legacy/fallback 路径后，移除空集合兼容构造器，并补充真实
+  reconcile 后 `get_runtime_exists` 的 E2E 验证。
