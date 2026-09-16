@@ -46,6 +46,9 @@
   变换、内置脚本、字段白名单、Guard、TUN 默认值和产物日志；旧的
   `PostProcessingOutput` 由适配器生成。Chimera Client 仍保留旧 Enhance
   路径，因为其自定义 TUN 合同尚未进入共享 executor，避免回归。
+- 失败回退：若 legacy Profile 转换或 ref executor 构建失败，入口会记录
+  warning 并回退到旧 Enhance，保证已有用户配置仍可启动；该回退是可观测的
+  临时兼容边界，不代表两条实现长期并存。
 - 兼容边界：`config/profile/ref_adapter.rs` 将现有 legacy profile 文档转换
   为 ref 领域模型；多选配置转换为兼容 composition，不改写用户文件。
   脚本通过现有 JavaScript/Lua runner 适配到 ref 的 `ScriptRunner` trait。

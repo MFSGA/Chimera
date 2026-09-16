@@ -52,13 +52,27 @@ impl Config {
         // Standard cores use the ref-aligned executor. Chimera Client keeps
         // the compatibility path until its custom TUN contract is represented
         // by the shared runtime domain.
-        let (config, postprocessing_output) =
-            if core == crate::config::chimera::ClashCore::ChimeraClient {
-                let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
-                (config, output)
-            } else {
-                enhance::build_from_legacy(clash, core).await?
-            };
+        let (config, postprocessing_output) = if core
+            == crate::config::chimera::ClashCore::ChimeraClient
+        {
+            let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
+            (config, output)
+        } else {
+            match enhance::build_from_legacy(clash, core).await {
+                Ok(output) => output,
+                Err(error) => {
+                    // Keep existing user profiles startable while the ref
+                    // domain is still a partial migration. The fallback
+                    // is intentionally narrow and observable in logs.
+                    log::warn!(
+                        target: "app",
+                        "ref runtime build failed for {core}; falling back to legacy enhance: {error:#}"
+                    );
+                    let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
+                    (config, output)
+                }
+            }
+        };
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
