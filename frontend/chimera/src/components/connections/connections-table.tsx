@@ -437,7 +437,7 @@ export default function ConnectionsTable({
                 <tr
                   key={row.id}
                   data-index={virtualRow.index}
-                  ref={(node) => rowVirtualizer.measureElement(node)}
+                  ref={rowVirtualizer.measureElement}
                   className="hover:bg-primary/5 active:bg-primary/10 cursor-pointer transition-colors"
                   style={{
                     height: `${virtualRow.size}px`,

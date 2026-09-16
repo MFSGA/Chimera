@@ -291,3 +291,26 @@
   `SessionPortResolver` 接入 fetcher 的 `SelfProxyPortSource`；标准与
   `ChimeraClient` runtime builder 均迁移到 typed ClashConfig 后，删除 legacy
   fallback bindings，并补充真实核心重启/端口占用 E2E 验证。
+
+## DIFF-011：Legacy Connections 虚拟行测量回调死循环（缺陷修复）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`frontend/nyanpasu/src/pages/(main)/main/connections/index.tsx`
+  的虚拟行 `ref`；Chimera 路径和符号：
+  `frontend/chimera/src/components/connections/connections-table.tsx` 的
+  `ConnectionsTable`
+- 类别：有意偏差（上游缺陷修复）
+- 差异及必要性：ref 的内联 `ref={(node) => rowVirtualizer.measureElement(node)}`
+  在当前 React 19 与 `@tanstack/react-virtual` 版本下会在每次渲染时创建新回调。
+  React 重新绑定该回调时触发虚拟器测量，测量又派发状态更新，最终形成
+  `ref` 重绑 → `measureElement` → 更新 → 重渲染的 Maximum update depth 循环。
+  Chimera 改为直接传递虚拟器实例的稳定 `measureElement` 方法，保留 ref 的
+  测量语义并阻断回调身份抖动。
+- 复现证据：legacy 连接页面控制台堆栈指向
+  `connections-table.tsx:440`、`Virtualizer.measureElement` 和
+  `Maximum update depth exceeded`。
+- 实际验证结果：`pnpm typecheck`、`pnpm lint:frontend-boundaries`、目标文件
+  Prettier 检查和 `git diff --check` 均通过；尚未在本机运行桌面 E2E。
+- 收敛、移除或重新评估条件：当 React/virtualizer 升级或 ref 连接表实现发生
+  变化时，重新验证该差异；若上游改为稳定方法引用且回归测试覆盖，则可重新
+  评估是否恢复完全一致。
