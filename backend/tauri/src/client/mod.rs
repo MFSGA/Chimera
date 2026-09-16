@@ -6,6 +6,7 @@
 mod application;
 mod clash_config;
 mod core_bridge;
+pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
@@ -20,18 +21,20 @@ use std::{
     sync::{Arc, Mutex as StdMutex},
 };
 
+#[allow(unused_imports)]
+pub(crate) use self::core_lifecycle::LegacyCoreBridge;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
     clash_config::ClashConfigClient,
-    core_bridge::CoreLifecyclePort,
+    core_lifecycle::CoreLifecyclePort,
     event_sink::UiEventSink,
     profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
     system_dns::SystemDnsCache,
 };
 pub(crate) use self::{
-    core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
+    core_lifecycle::RuntimeTransformDiagnostics,
     event_sink::LegacyUiEventSink,
     profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
@@ -98,7 +101,7 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_bridge::LegacyRunningConfigBridge),
+        Arc::new(core_lifecycle::LegacyRunningConfigBridge),
     )
     .await?;
 
@@ -210,7 +213,7 @@ mod tests {
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
 
-    use super::core_bridge::{CoreLifecycleLease, CoreStatusSnapshot};
+    use super::core_lifecycle::{CoreLifecycleLease, CoreStatusSnapshot};
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{

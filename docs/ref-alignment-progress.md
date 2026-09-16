@@ -122,3 +122,30 @@
   共享 executor 并完成真实 runtime/E2E 验证后，删除 `RuntimeInspectionData::bare`
   兼容分支，补充端到端快照更新/过期检查；当前仍是部分迁移，不能宣称已完全
   等同 ref。
+
+## DIFF-005：CoreLifecycle 目录边界（第四阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}`，
+  以及 `CoreLifecycleClient` 的端口/适配器分层
+- Chimera 路径和符号：新增
+  `backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs}`；
+  原 `backend/tauri/src/client/core_bridge.rs` 保留为兼容 re-export shim，
+  `client/mod.rs`、`client/clash_config.rs` 和 `setup.rs` 已改用新目录入口
+- 类别：临时迁移
+- 差异及必要性：将现有 CoreManager 生命周期端口、运行配置端口、运行时诊断
+  DTO 和 legacy adapter 按 ref 的 core-lifecycle 目录归位，保持现有行为与旧
+  UI/API 合同不变；本阶段只做所有权和导入路径迁移，没有引入 actor 或改变
+  核心启动、停止、切换和系统设置副作用。
+- 兼容边界：`core_bridge.rs` 只保留 re-export，避免分批迁移期间破坏旧调用方；
+  新的 `core_lifecycle` 仍委托 legacy `CoreManager`，尚未具备 ref 的
+  `workflow.rs`、actor mailbox、超时不确定状态和 service host facade。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
+  `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
+- 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --
+  --test-threads=1`，17 passed。
+- 收敛、移除或重新评估条件：完成 ref `core_lifecycle/workflow.rs` 与
+  `core/actor_v2` 的最小完整迁移、接入真实 service/local host 和超时恢复测试后，
+  删除 `core_bridge.rs` shim，并将 `ClientSetupArgs` 切换为 actor-backed
+  `CoreLifecycleClient`；当前仍是目录和端口层的部分迁移。

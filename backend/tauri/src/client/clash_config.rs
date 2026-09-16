@@ -36,10 +36,10 @@ use crate::{
     },
 };
 
-use super::{ChimeraClient, core_bridge::RunningConfigPort};
+use super::{ChimeraClient, core_lifecycle::RunningConfigPort};
 
 #[cfg(test)]
-use super::core_bridge::LegacyRunningConfigBridge;
+use super::core_lifecycle::LegacyRunningConfigBridge;
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
