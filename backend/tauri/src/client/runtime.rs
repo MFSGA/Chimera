@@ -146,12 +146,14 @@ impl RuntimeRevisionAllocator {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
+    pub(crate) inspection_id: String,
     pub revision: RuntimeRevision,
     pub target_core: ClashCore,
     pub product_sha256: [u8; 32],
     pub config: Mapping,
     pub transform_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
+    pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
 }
 
 impl RuntimeSnapshot {
@@ -180,12 +182,35 @@ impl RuntimeSnapshot {
     ) -> Self {
         let product_sha256 = Sha256::digest(&product_bytes).into();
         Self {
+            inspection_id: nanoid::nanoid!(),
             revision,
             target_core,
             product_sha256,
             config,
             transform_output,
             product_bytes: product_bytes.into(),
+            inspection: Arc::new(super::runtime_inspection::RuntimeInspectionData::bare()),
+        }
+    }
+
+    pub(crate) fn new_with_transform_output_and_inspection(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Vec<u8>,
+        config: Mapping,
+        transform_output: PostProcessingOutput,
+        inspection: super::runtime_inspection::RuntimeInspectionData,
+    ) -> Self {
+        let product_sha256 = Sha256::digest(&product_bytes).into();
+        Self {
+            inspection_id: nanoid::nanoid!(),
+            revision,
+            target_core,
+            product_sha256,
+            config,
+            transform_output,
+            product_bytes: product_bytes.into(),
+            inspection: Arc::new(inspection),
         }
     }
 

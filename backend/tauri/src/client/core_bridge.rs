@@ -5,10 +5,12 @@ use chimera_config::clash::config::ClashConfig;
 use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
+use std::sync::Arc;
 
 use super::ChimeraClient;
 
 use crate::{
+    client::runtime::RuntimeSnapshot,
     config::{
         chimera::ClashCore,
         profile::item_type::{ProfileUid, ScriptType},
@@ -92,6 +94,10 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         Ok(None)
     }
 
+    fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        None
+    }
+
     async fn on_profile_change(&self, break_when: bool);
 }
 
@@ -164,6 +170,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             }))
     }
 
+    fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        CoreManager::global().promoted_runtime_snapshot()
+    }
+
     async fn on_profile_change(&self, break_when: bool) {
         let _ = ConnectionInterruptionService::on_profile_change(break_when).await;
     }
@@ -195,6 +205,10 @@ impl ChimeraClient {
         &self,
     ) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         self.inner.core.runtime_transform_diagnostics()
+    }
+
+    pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        self.inner.core.promoted_runtime_snapshot()
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {

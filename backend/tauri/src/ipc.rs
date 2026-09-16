@@ -9,7 +9,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::{
-    client::{ChimeraClient, MutationOutcome, RuntimeTransformDiagnostics},
+    client::{
+        ChimeraClient, MutationOutcome, RuntimeInspection, RuntimeInspectionContent,
+        RuntimeTransformDiagnostics,
+    },
     config::{
         chimera::{self, IVerge},
         clash::ClashInfo,
@@ -334,6 +337,24 @@ pub fn get_runtime_transform_diagnostics(
     client: State<'_, ChimeraClient>,
 ) -> Result<Option<RuntimeTransformDiagnostics>> {
     Ok(client.runtime_transform_diagnostics()?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn inspect_runtime(
+    client: State<'_, ChimeraClient>,
+) -> Result<Option<RuntimeInspection>> {
+    Ok(client.inspect_runtime().await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn inspect_runtime_node(
+    client: State<'_, ChimeraClient>,
+    snapshot_id: String,
+    node_id: u32,
+) -> Result<RuntimeInspectionContent> {
+    Ok(client.inspect_runtime_node(&snapshot_id, node_id).await?)
 }
 
 #[tauri::command]

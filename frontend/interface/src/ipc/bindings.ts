@@ -21,6 +21,21 @@ export const commands = {
       } | null,
       string
     >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
+  inspectRuntime: () =>
+    typedError<
+      {
+        snapshot_id: string;
+        revision: string;
+        target_core: string;
+        root_id: number;
+        nodes: RuntimeInspectionNode[];
+      } | null,
+      string
+    >(__TAURI_INVOKE('inspect_runtime')),
+  inspectRuntimeNode: (snapshotId: string, nodeId: number) =>
+    typedError<RuntimeInspectionContent, string>(
+      __TAURI_INVOKE('inspect_runtime_node', { snapshotId, nodeId }),
+    ),
   flushSystemDnsCache: () =>
     typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
   /**  later: check in the frontend */
@@ -630,6 +645,10 @@ export type BuildInfo = {
   llvm_version: string;
 };
 
+/**  Built-in post-processing steps applied to the selected config. */
+export type BuiltinStepKind =
+  'guard_overrides' | 'whitelist_field_filter' | 'finalizing';
+
 export type ClashConnectionsConnectorEvent =
   | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
   | { kind: 'update'; data: ClashConnectionsInfo };
@@ -771,6 +790,26 @@ export type ConfigDefinition_Serialize = {
   source: ProfileSource_Serialize;
   transforms: string[];
 };
+
+/**  Why a config pipeline is being executed. */
+export type ConfigExecutionRole =
+  /**  The final config selected by `Profiles.current`. */
+  | { kind: 'selected' }
+  /**  Built as the base member of a composition. */
+  | {
+      kind: 'composition_base';
+      data: {
+        composition_id: ProfileId;
+      };
+    }
+  /**  Built as a proxies contributor of a composition. */
+  | {
+      kind: 'composition_contributor';
+      data: {
+        composition_id: ProfileId;
+        contributor_index: number;
+      };
+    };
 
 export type CoreInfos = {
   type: CoreType | null;
@@ -1135,6 +1174,70 @@ export type MutationOutcome<T> =
   | { status: 'applied'; value: T }
   | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
 
+/**  The pipeline operator that produced a snapshot node. */
+export type OperatorTag =
+  | {
+      kind: 'file_config_root';
+      data: {
+        profile_id: ProfileId;
+        role: ConfigExecutionRole;
+      };
+    }
+  /**  `base: None` is the clean seed (`proxies: []`). */
+  | {
+      kind: 'composition_root';
+      data: {
+        profile_id: ProfileId;
+        base: ProfileId | null;
+      };
+    }
+  | {
+      kind: 'extend_proxies_step';
+      data: {
+        composition_id: ProfileId;
+        contributor_profile_id: ProfileId;
+        contributor_index: number;
+      };
+    }
+  | {
+      kind: 'scoped_transform';
+      data: {
+        host_profile_id: ProfileId;
+        role: ConfigExecutionRole;
+        transform_profile_id: ProfileId;
+        transform_kind: TransformKind;
+        step_index: number;
+      };
+    }
+  /**  `selected_profile_id: None` = bare 模式（current 为空，spec §2 目标 6）。 */
+  | {
+      kind: 'global_transform';
+      data: {
+        selected_profile_id: ProfileId | null;
+        transform_profile_id: ProfileId;
+        transform_kind: TransformKind;
+        step_index: number;
+      };
+    }
+  | {
+      kind: 'builtin_step';
+      data: {
+        selected_profile_id: ProfileId | null;
+        step: BuiltinStepKind;
+      };
+    }
+  /**  current = None 的裸配置管线根（spec §8.2）。 */
+  | { kind: 'bare_root' }
+  /**  内建增强脚本步骤；`name` 为展示性字段，`node_key()` 丢弃。 */
+  | {
+      kind: 'builtin_transform';
+      data: {
+        selected_profile_id: ProfileId | null;
+        name: string;
+        step_index: number;
+      };
+    };
+
 export type PatchClashCoreConfig =
   PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
 
@@ -1220,6 +1323,9 @@ export type ProfileDefinition_Serialize = {
   type: 'config';
   config: ConfigDefinition_Serialize;
 };
+
+/**  Stable profile identifier. It is also the key used by [`Profiles::items`]. */
+export type ProfileId = string;
 
 export type ProfileMetadataPatch =
   ProfileMetadataPatch_Serialize | ProfileMetadataPatch_Deserialize;
@@ -1483,6 +1589,34 @@ export type RuntimeInfos = {
   nyanpasu_data_dir: string;
 };
 
+export type RuntimeInspection = {
+  snapshot_id: string;
+  revision: string;
+  target_core: string;
+  root_id: number;
+  nodes: RuntimeInspectionNode[];
+};
+
+export type RuntimeInspectionContent = {
+  yaml: string;
+  diff: RuntimeInspectionDiff | null;
+  logs: StepLogEntry[];
+};
+
+export type RuntimeInspectionDiff = {
+  parent_id: number;
+  hunks: SnapshotDiffHunk[];
+};
+
+export type RuntimeInspectionNode = {
+  id: number;
+  tag: OperatorTag;
+  next: number[];
+  has_logs: boolean;
+  /**  None means unchanged or no comparison baseline (including independent roots). */
+  changed_fields: string[] | null;
+};
+
 export type RuntimeTransformDiagnostics = {
   revision: number;
   output: PostProcessingOutput;
@@ -1500,6 +1634,8 @@ export type RuntimeTransformFailureDiagnostics = {
 export type ScriptProfile = {
   script_type?: ScriptType;
 } & ProfileShared;
+
+export type ScriptRuntime = 'javascript' | 'lua';
 
 export type ScriptType = 'javascript' | 'lua';
 
@@ -1523,11 +1659,28 @@ export type ServiceStatusInfo = {
   compat: ServiceCompat;
 };
 
+export type SnapshotDiffHunk = {
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  /**  Unified diff lines, including their space, plus, or minus prefix. */
+  lines: string[];
+};
+
 export type StatusResBody = {
   version: string;
   core_infos: CoreInfos;
   runtime_infos: RuntimeInfos;
 };
+
+export type StepLogEntry = {
+  level: StepLogLevel;
+  message: string;
+};
+
+/**  1:1 with the legacy `LogSpan` wire shape (enhance/utils.rs:18-25). */
+export type StepLogLevel = 'log' | 'info' | 'warn' | 'error';
 
 export type StorageEntry = {
   key: string;
@@ -1551,6 +1704,9 @@ export type SubscriptionInfo = {
   total: number;
   expire: number;
 };
+
+export type TransformKind =
+  { type: 'overlay' } | { type: 'script'; runtime: ScriptRuntime };
 
 export type TunStack = 'system' | 'gvisor' | 'mixed';
 

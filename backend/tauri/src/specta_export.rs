@@ -195,6 +195,8 @@ macro_rules! build_builder {
                 crate::ipc::get_sys_proxy,
                 crate::ipc::get_profiles,
                 crate::ipc::get_runtime_transform_diagnostics,
+                crate::ipc::inspect_runtime,
+                crate::ipc::inspect_runtime_node,
                 crate::ipc::flush_system_dns_cache,
                 crate::ipc::get_pending_deep_links,
                 crate::ipc::claim_pending_deep_link,

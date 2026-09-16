@@ -508,6 +508,10 @@ impl CoreManager {
             .map(|snapshot| (snapshot.revision.get(), snapshot.transform_output.clone()))
     }
 
+    pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        self.runtime_lifecycle.snapshot().promoted
+    }
+
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
         self.runtime_lifecycle.snapshot().last_transform_failure
     }
@@ -661,9 +665,13 @@ impl CoreManager {
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
-        let (config, transform_output) =
-            match Config::generate_runtime_input_with(clash, target_core).await {
-                Ok(output) => output,
+        let (config, transform_output, inspection) =
+            match Config::generate_runtime_output_with(clash, target_core).await {
+                Ok(output) => (
+                    output.config,
+                    output.postprocessing_output,
+                    output.inspection,
+                ),
                 Err(error) => {
                     if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
                         self.runtime_lifecycle
@@ -700,13 +708,23 @@ impl CoreManager {
             }
             CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
         })?;
-        let snapshot = Arc::new(RuntimeSnapshot::new_with_transform_output(
-            revision,
-            target_core,
-            promoted_bytes,
-            config,
-            transform_output,
-        ));
+        let snapshot = Arc::new(match inspection {
+            Some(inspection) => RuntimeSnapshot::new_with_transform_output_and_inspection(
+                revision,
+                target_core,
+                promoted_bytes,
+                config,
+                transform_output,
+                inspection,
+            ),
+            None => RuntimeSnapshot::new_with_transform_output(
+                revision,
+                target_core,
+                promoted_bytes,
+                config,
+                transform_output,
+            ),
+        });
         self.runtime_lifecycle.publish_promoted(snapshot.clone());
 
         self.run_core_from_product_inner(paths.product(), target_core, run_type)

@@ -14,6 +14,12 @@ use crate::{
     enhance::{self, PostProcessingOutput},
 };
 
+pub(crate) struct RuntimeInputOutput {
+    pub(crate) config: Mapping,
+    pub(crate) postprocessing_output: PostProcessingOutput,
+    pub(crate) inspection: Option<crate::client::runtime_inspection::RuntimeInspectionData>,
+}
+
 /// whole config
 pub struct Config {
     profiles_config: ManagedState<Profiles>,
@@ -49,17 +55,26 @@ impl Config {
         clash: &ClashConfig,
         core: crate::config::chimera::ClashCore,
     ) -> Result<(Mapping, PostProcessingOutput)> {
+        Self::generate_runtime_output_with(clash, core)
+            .await
+            .map(|output| (output.config, output.postprocessing_output))
+    }
+
+    pub(crate) async fn generate_runtime_output_with(
+        clash: &ClashConfig,
+        core: crate::config::chimera::ClashCore,
+    ) -> Result<RuntimeInputOutput> {
         // Standard cores use the ref-aligned executor. Chimera Client keeps
         // the compatibility path until its custom TUN contract is represented
         // by the shared runtime domain.
-        let (config, postprocessing_output) = if core
+        let (config, postprocessing_output, inspection) = if core
             == crate::config::chimera::ClashCore::ChimeraClient
         {
             let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
-            (config, output)
+            (config, output, None)
         } else {
-            match enhance::build_from_legacy(clash, core).await {
-                Ok(output) => output,
+            match enhance::build_from_legacy_with_inspection(clash, core).await {
+                Ok((config, output, inspection)) => (config, output, Some(inspection)),
                 Err(error) => {
                     // Keep existing user profiles startable while the ref
                     // domain is still a partial migration. The fallback
@@ -69,7 +84,7 @@ impl Config {
                         "ref runtime build failed for {core}; falling back to legacy enhance: {error:#}"
                     );
                     let (config, _exists_keys, output) = enhance::enhance(clash, core).await?;
-                    (config, output)
+                    (config, output, None)
                 }
             }
         };
@@ -78,7 +93,11 @@ impl Config {
             config: Some(config.clone()),
         };
 
-        Ok((config, postprocessing_output))
+        Ok(RuntimeInputOutput {
+            config,
+            postprocessing_output,
+            inspection,
+        })
     }
 
     /// Legacy compatibility entry point for callers that do not own typed config snapshots yet.

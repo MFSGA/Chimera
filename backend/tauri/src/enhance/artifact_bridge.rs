@@ -10,10 +10,13 @@ use chimera_config::{
     },
 };
 
-use crate::enhance::{
-    PostProcessingOutput,
-    chain::{LogSpan, Logs},
-    runtime_builder::builtin_transforms_for,
+use crate::{
+    client::runtime_inspection::RuntimeInspectionData,
+    enhance::{
+        PostProcessingOutput,
+        chain::{LogSpan, Logs},
+        runtime_builder::builtin_transforms_for,
+    },
 };
 
 fn span(level: StepLogLevel) -> LogSpan {
@@ -95,7 +98,28 @@ pub(crate) fn artifact_to_legacy_output(
     core: ClashCore,
     builtin_enabled: bool,
 ) -> Result<(serde_yaml::Mapping, PostProcessingOutput)> {
-    let value = serde_yaml::to_value(artifact.final_config.to_json())
+    let (mapping, output, _) =
+        artifact_to_legacy_output_with_inspection(artifact, profiles, core, builtin_enabled)?;
+    Ok((mapping, output))
+}
+
+pub(crate) fn artifact_to_legacy_output_with_inspection(
+    artifact: RuntimeArtifact,
+    profiles: &Profiles,
+    core: ClashCore,
+    builtin_enabled: bool,
+) -> Result<(
+    serde_yaml::Mapping,
+    PostProcessingOutput,
+    RuntimeInspectionData,
+)> {
+    let RuntimeArtifact {
+        final_config,
+        graph,
+        step_logs,
+        ..
+    } = artifact;
+    let value = serde_yaml::to_value(final_config.to_json())
         .context("failed to serialize final runtime config")?;
     let mapping = value
         .as_mapping()
@@ -109,8 +133,6 @@ pub(crate) fn artifact_to_legacy_output(
     } else {
         Vec::new()
     };
-    Ok((
-        mapping,
-        map_postprocessing(&artifact.step_logs, profiles, &builtin_names),
-    ))
+    let output = map_postprocessing(&step_logs, profiles, &builtin_names);
+    Ok((mapping, output, RuntimeInspectionData { graph, step_logs }))
 }
