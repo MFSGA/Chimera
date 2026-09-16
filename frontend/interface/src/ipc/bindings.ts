@@ -21,6 +21,8 @@ export const commands = {
       } | null,
       string
     >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
+  getRuntimeExists: () =>
+    typedError<string[], string>(__TAURI_INVOKE('get_runtime_exists')),
   inspectRuntime: () =>
     typedError<
       {

@@ -175,7 +175,7 @@ pub async fn build_from_legacy(
 ) -> Result<(serde_yaml::Mapping, crate::enhance::PostProcessingOutput)> {
     build_from_legacy_with_inspection(clash, core)
         .await
-        .map(|(mapping, output, _inspection)| (mapping, output))
+        .map(|(mapping, _exists_keys, output, _inspection)| (mapping, output))
 }
 
 pub(crate) async fn build_from_legacy_with_inspection(
@@ -183,6 +183,7 @@ pub(crate) async fn build_from_legacy_with_inspection(
     core: LegacyClashCore,
 ) -> Result<(
     serde_yaml::Mapping,
+    Vec<String>,
     crate::enhance::PostProcessingOutput,
     crate::client::runtime_inspection::RuntimeInspectionData,
 )> {

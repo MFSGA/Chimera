@@ -98,7 +98,7 @@ pub(crate) fn artifact_to_legacy_output(
     core: ClashCore,
     builtin_enabled: bool,
 ) -> Result<(serde_yaml::Mapping, PostProcessingOutput)> {
-    let (mapping, output, _) =
+    let (mapping, _, output, _) =
         artifact_to_legacy_output_with_inspection(artifact, profiles, core, builtin_enabled)?;
     Ok((mapping, output))
 }
@@ -110,6 +110,7 @@ pub(crate) fn artifact_to_legacy_output_with_inspection(
     builtin_enabled: bool,
 ) -> Result<(
     serde_yaml::Mapping,
+    Vec<String>,
     PostProcessingOutput,
     RuntimeInspectionData,
 )> {
@@ -117,6 +118,7 @@ pub(crate) fn artifact_to_legacy_output_with_inspection(
         final_config,
         graph,
         step_logs,
+        applied_fields,
         ..
     } = artifact;
     let value = serde_yaml::to_value(final_config.to_json())
@@ -134,5 +136,11 @@ pub(crate) fn artifact_to_legacy_output_with_inspection(
         Vec::new()
     };
     let output = map_postprocessing(&step_logs, profiles, &builtin_names);
-    Ok((mapping, output, RuntimeInspectionData { graph, step_logs }))
+    let exists_keys = applied_fields.into_iter().collect();
+    Ok((
+        mapping,
+        exists_keys,
+        output,
+        RuntimeInspectionData { graph, step_logs },
+    ))
 }
