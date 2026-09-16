@@ -184,7 +184,7 @@
 - Chimera 路径和符号：`backend/tauri/src/ipc.rs`、
   `backend/tauri/src/specta_export.rs`、
   `frontend/interface/src/ipc/bindings.ts`，并复用
-  `client::RuntimeSnapshot::{config,exists_keys,transform_output}`
+  `client::RuntimeSnapshot::{config,exists_keys,postprocessing_output}`
 - 类别：兼容扩展
 - 差异及必要性：runtime 配置 YAML/JSON、已应用字段和后处理输出现在都从
   已提升的 `RuntimeSnapshot` 读取，与 ref 的发布态读模型一致；未发布快照时
@@ -230,3 +230,32 @@
 - 收敛条件：core lifecycle actor 与 workflow 接管生产装配并完成主/legacy
   UI 事件覆盖验证后，再将 `TauriUiEventSink` 接入 composition root，移除
   `LegacyUiEventSink` 的全局兼容实现。
+
+## DIFF-009：RuntimeSnapshotData 统一构造（第八阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/client/runtime.rs` 的
+  `RuntimeSnapshotData` 与 `RuntimeSnapshot::from_data`
+- Chimera 路径和符号：`backend/tauri/src/client/runtime.rs`、
+  `backend/tauri/src/core/clash/core.rs`、`backend/tauri/src/ipc.rs`
+- 类别：临时迁移
+- 差异及必要性：RuntimeSnapshot 现在由单一 `from_data` 负责计算产品摘要、
+  生成 inspection id 和组装配置/已应用字段/后处理输出/诊断图；标准核心
+  的生产提升路径已直接使用该构造，旧的多参数构造器暂保留为 legacy 与
+  单测兼容包装。后处理字段名称同步为 ref 的 `postprocessing_output`，并
+  保留 `RUNTIME_CONFIG_FILE`，增加 ref 兼容的 `RUNTIME_CONFIG` 别名。
+- 兼容边界：Chimera 的并发 `RuntimeRevisionAllocator`、Applied/Promoted
+  双快照和事务恢复状态仍保留；`new_with_transform_output*` 仅是过渡入口，
+  不再持有独立组装逻辑。legacy/fallback 仍通过 `RuntimeInspectionData::bare`
+  提供稳定根节点，不伪造中间步骤。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：统一构造只影响共享
+  runtime 发布态读模型；现有生成文件、核心启动/回滚、持久化和系统代理
+  副作用保持不变，IPC 继续读取同一 `postprocessing_output` 字段。
+- 实际验证结果：`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`；
+  `cargo test --manifest-path backend/tauri/Cargo.toml client::runtime --
+  --test-threads=1`，21 passed；`cargo check --manifest-path backend/Cargo.toml
+  -p chimera`；`pnpm typecheck`；`pnpm lint:frontend-boundaries`；`git diff --check`
+  均通过。
+- 收敛条件：所有构造调用方迁移到 `from_data` 后移除兼容构造器，并在 typed
+  ClashConfig 与 actor-backed lifecycle 完成后复核 `RuntimeSnapshotData` 的
+  字段所有权和名称。
