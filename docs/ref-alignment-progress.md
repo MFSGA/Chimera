@@ -174,3 +174,33 @@
 - 收敛条件：当 RuntimeSnapshot 完成 ref `from_data` 统一构造并覆盖所有
   Chimera Client/legacy/fallback 路径后，移除空集合兼容构造器，并补充真实
   reconcile 后 `get_runtime_exists` 的 E2E 验证。
+
+## DIFF-007：Runtime 只读配置与后处理投影（第六阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/ipc.rs` 的
+  `get_runtime_config`、`get_runtime_yaml`、`get_runtime_exists`、
+  `get_postprocessing_output`，以及 `specta_export` 中对应命令注册
+- Chimera 路径和符号：`backend/tauri/src/ipc.rs`、
+  `backend/tauri/src/specta_export.rs`、
+  `frontend/interface/src/ipc/bindings.ts`，并复用
+  `client::RuntimeSnapshot::{config,exists_keys,transform_output}`
+- 类别：兼容扩展
+- 差异及必要性：runtime 配置 YAML/JSON、已应用字段和后处理输出现在都从
+  已提升的 `RuntimeSnapshot` 读取，与 ref 的发布态读模型一致；未发布快照时
+  配置返回 `None`、YAML 返回错误、字段和后处理输出返回默认值。配置 JSON
+  暂以 `Any<serde_json::Value>` 暴露，待 ClashConfig 完成统一 typed contract
+  后再替换为对应类型。
+- 兼容边界：`get_runtime_yaml` 不再读取 legacy draft，而只导出最近一次已发布
+  运行配置；该行为避免把未执行的草稿误报为当前 runtime，且所有新增命令均为
+  只读，不改变配置、代理、TUN 或系统代理状态。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：新增共享 IPC/API 与
+  Specta 绑定，主界面、legacy UI 和 agent 可复用同一发布态数据；现有 UI
+  流程、持久化格式、核心生命周期和系统设置副作用保持不变。
+- 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
+  `cargo test --manifest-path backend/tauri/Cargo.toml
+  typescript_bindings_are_fresh -- --test-threads=1`，1 passed；`pnpm typecheck`
+  通过；`pnpm lint:frontend-boundaries` 通过；`git diff --check` 通过。
+- 收敛条件：完成 typed ClashConfig 合同并覆盖 Chimera Client、legacy 和
+  fallback 的统一 RuntimeSnapshot 构造后，移除 `Any<serde_json::Value>` 与
+  默认值兼容分支，并补充真实 runtime 导出/后处理输出的 E2E 验证。

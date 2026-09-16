@@ -21,6 +21,10 @@ export const commands = {
       } | null,
       string
     >(__TAURI_INVOKE('get_runtime_transform_diagnostics')),
+  getRuntimeConfig: () =>
+    typedError<any | null, string>(__TAURI_INVOKE('get_runtime_config')),
+  getRuntimeYaml: () =>
+    typedError<string, string>(__TAURI_INVOKE('get_runtime_yaml')),
   getRuntimeExists: () =>
     typedError<string[], string>(__TAURI_INVOKE('get_runtime_exists')),
   inspectRuntime: () =>
@@ -37,6 +41,10 @@ export const commands = {
   inspectRuntimeNode: (snapshotId: string, nodeId: number) =>
     typedError<RuntimeInspectionContent, string>(
       __TAURI_INVOKE('inspect_runtime_node', { snapshotId, nodeId }),
+    ),
+  getPostprocessingOutput: () =>
+    typedError<PostProcessingOutput, string>(
+      __TAURI_INVOKE('get_postprocessing_output'),
     ),
   flushSystemDnsCache: () =>
     typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
@@ -184,8 +192,6 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('change_clash_core', { clashCore }),
     ),
-  getRuntimeYaml: () =>
-    typedError<string, string>(__TAURI_INVOKE('get_runtime_yaml')),
   getCoreStatus: () =>
     typedError<[CoreState, number, RunType], string>(
       __TAURI_INVOKE('get_core_status'),

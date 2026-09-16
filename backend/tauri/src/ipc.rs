@@ -16,7 +16,6 @@ use crate::{
     config::{
         chimera::{self, IVerge},
         clash::ClashInfo,
-        core::Config,
         profile::{
             builder::ProfileBuilder,
             item::{
@@ -40,6 +39,7 @@ use crate::{
         storage::{Storage, StorageOperationError, WebStorage},
         updater::{self, ManifestVersionLatest},
     },
+    enhance::PostProcessingOutput,
     feat,
     utils::{candy, collect::EnvInfo, dirs, help, resolve},
 };
@@ -351,6 +351,17 @@ pub async fn inspect_runtime(
 #[specta::specta]
 pub async fn get_runtime_exists(client: State<'_, ChimeraClient>) -> Result<Vec<String>> {
     Ok(client.runtime_exists().await)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_postprocessing_output(
+    client: State<'_, ChimeraClient>,
+) -> Result<PostProcessingOutput> {
+    Ok(client
+        .promoted_runtime_snapshot()
+        .map(|snapshot| snapshot.transform_output.clone())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -1280,11 +1291,29 @@ pub fn create_legacy_window(app_handle: AppHandle) -> Result<()> {
 
 #[tauri::command]
 #[specta::specta]
-pub fn get_runtime_yaml() -> Result<String> {
-    let runtime = Config::runtime();
-    let runtime = runtime.latest();
-    let config = runtime.config.as_ref();
-    Ok(config
+pub async fn get_runtime_config(
+    client: State<'_, ChimeraClient>,
+) -> Result<Option<Any<serde_json::Value>>> {
+    let state = client.promoted_runtime_snapshot();
+    match state.as_ref() {
+        Some(state) => {
+            let yaml_value = serde_yaml::to_value(&state.config)?;
+            let json_value = serde_json::to_value(&yaml_value).map_err(anyhow::Error::from)?;
+            let wrapped: Any<serde_json::Value> =
+                serde_json::from_value(json_value).map_err(anyhow::Error::from)?;
+            Ok(Some(wrapped))
+        }
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_runtime_yaml(client: State<'_, ChimeraClient>) -> Result<String> {
+    let state = client.promoted_runtime_snapshot();
+    Ok(state
+        .as_ref()
+        .map(|state| &state.config)
         .ok_or(anyhow!("failed to parse config to yaml file"))
         .and_then(|config| {
             serde_yaml::to_string(config).context("failed to convert config to yaml")
