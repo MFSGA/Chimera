@@ -31,8 +31,8 @@ use tracing::instrument;
 use crate::{
     client::runtime::{
         CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate, RuntimeSnapshot,
-        RuntimeTransactionSnapshot, RuntimeTransformFailure, capture_runtime_transaction,
-        check_and_promote_candidate, restore_failed_apply,
+        RuntimeSnapshotData, RuntimeTransactionSnapshot, RuntimeTransformFailure,
+        capture_runtime_transaction, check_and_promote_candidate, restore_failed_apply,
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{clash::api, logger::Logger},
@@ -502,10 +502,12 @@ impl CoreManager {
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
-        self.runtime_lifecycle
-            .snapshot()
-            .applied
-            .map(|snapshot| (snapshot.revision.get(), snapshot.transform_output.clone()))
+        self.runtime_lifecycle.snapshot().applied.map(|snapshot| {
+            (
+                snapshot.revision.get(),
+                snapshot.postprocessing_output.clone(),
+            )
+        })
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
@@ -709,27 +711,19 @@ impl CoreManager {
             }
             CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
         })?;
-        let snapshot = Arc::new(match inspection {
-            Some(inspection) => {
-                RuntimeSnapshot::new_with_transform_output_and_inspection_and_exists_keys(
-                    revision,
-                    target_core,
-                    promoted_bytes,
-                    config,
-                    transform_output,
-                    inspection,
-                    exists_keys,
-                )
-            }
-            None => RuntimeSnapshot::new_with_transform_output_and_exists_keys(
-                revision,
-                target_core,
-                promoted_bytes,
+        let snapshot = Arc::new(RuntimeSnapshot::from_data(
+            revision,
+            target_core,
+            promoted_bytes.into(),
+            RuntimeSnapshotData {
                 config,
-                transform_output,
                 exists_keys,
-            ),
-        });
+                postprocessing_output: transform_output,
+                inspection: Arc::new(inspection.unwrap_or_else(
+                    crate::client::runtime_inspection::RuntimeInspectionData::bare,
+                )),
+            },
+        ));
         self.runtime_lifecycle.publish_promoted(snapshot.clone());
 
         self.run_core_from_product_inner(paths.product(), target_core, run_type)

@@ -105,6 +105,8 @@ pub enum DegradationPhase {
 
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";
+/// Ref-compatible name for the generated runtime product.
+pub const RUNTIME_CONFIG: &str = RUNTIME_CONFIG_FILE;
 const CANDIDATE_DIR: &str = ".candidates";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -145,6 +147,14 @@ impl RuntimeRevisionAllocator {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct RuntimeSnapshotData {
+    pub config: Mapping,
+    pub exists_keys: Vec<String>,
+    pub postprocessing_output: PostProcessingOutput,
+    pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     pub(crate) inspection_id: String,
     pub revision: RuntimeRevision,
@@ -152,12 +162,32 @@ pub struct RuntimeSnapshot {
     pub product_sha256: [u8; 32],
     pub config: Mapping,
     pub exists_keys: Vec<String>,
-    pub transform_output: PostProcessingOutput,
+    pub postprocessing_output: PostProcessingOutput,
     product_bytes: Arc<[u8]>,
     pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
 }
 
 impl RuntimeSnapshot {
+    pub(crate) fn from_data(
+        revision: RuntimeRevision,
+        target_core: ClashCore,
+        product_bytes: Arc<[u8]>,
+        data: RuntimeSnapshotData,
+    ) -> Self {
+        let product_sha256 = Sha256::digest(&product_bytes).into();
+        Self {
+            inspection_id: nanoid::nanoid!(),
+            revision,
+            target_core,
+            product_sha256,
+            config: data.config,
+            exists_keys: data.exists_keys,
+            postprocessing_output: data.postprocessing_output,
+            product_bytes,
+            inspection: data.inspection,
+        }
+    }
+
     #[cfg(test)]
     pub fn new(
         revision: RuntimeRevision,
@@ -199,18 +229,17 @@ impl RuntimeSnapshot {
         transform_output: PostProcessingOutput,
         exists_keys: Vec<String>,
     ) -> Self {
-        let product_sha256 = Sha256::digest(&product_bytes).into();
-        Self {
-            inspection_id: nanoid::nanoid!(),
+        Self::from_data(
             revision,
             target_core,
-            product_sha256,
-            config,
-            exists_keys,
-            transform_output,
-            product_bytes: product_bytes.into(),
-            inspection: Arc::new(super::runtime_inspection::RuntimeInspectionData::bare()),
-        }
+            product_bytes.into(),
+            RuntimeSnapshotData {
+                config,
+                exists_keys,
+                postprocessing_output: transform_output,
+                inspection: Arc::new(super::runtime_inspection::RuntimeInspectionData::bare()),
+            },
+        )
     }
 
     pub(crate) fn new_with_transform_output_and_inspection(
@@ -241,18 +270,17 @@ impl RuntimeSnapshot {
         inspection: super::runtime_inspection::RuntimeInspectionData,
         exists_keys: Vec<String>,
     ) -> Self {
-        let product_sha256 = Sha256::digest(&product_bytes).into();
-        Self {
-            inspection_id: nanoid::nanoid!(),
+        Self::from_data(
             revision,
             target_core,
-            product_sha256,
-            config,
-            exists_keys,
-            transform_output,
-            product_bytes: product_bytes.into(),
-            inspection: Arc::new(inspection),
-        }
+            product_bytes.into(),
+            RuntimeSnapshotData {
+                config,
+                exists_keys,
+                postprocessing_output: transform_output,
+                inspection: Arc::new(inspection),
+            },
+        )
     }
 
     pub fn product_bytes(&self) -> &[u8] {
@@ -942,7 +970,7 @@ mod tests {
         assert_eq!(restored.promoted.unwrap().revision, old.revision);
         let applied = restored.applied.unwrap();
         assert_eq!(applied.revision, old.revision);
-        assert_eq!(applied.transform_output, old_output);
+        assert_eq!(applied.postprocessing_output, old_output);
         assert!(
             restored.last_transform_failure.is_none(),
             "rollback must not resurrect a transform failure cleared by the newer attempt"

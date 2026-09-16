@@ -360,7 +360,7 @@ pub async fn get_postprocessing_output(
 ) -> Result<PostProcessingOutput> {
     Ok(client
         .promoted_runtime_snapshot()
-        .map(|snapshot| snapshot.transform_output.clone())
+        .map(|snapshot| snapshot.postprocessing_output.clone())
         .unwrap_or_default())
 }
 
