@@ -11,6 +11,7 @@ pub(crate) mod ports;
 mod profiles;
 pub mod rebuild;
 pub mod runtime;
+pub(crate) mod runtime_inspection;
 mod session_state;
 mod system_dns;
 
@@ -33,6 +34,7 @@ pub(crate) use self::{
     core_bridge::{LegacyCoreBridge, RuntimeTransformDiagnostics},
     event_sink::LegacyUiEventSink,
     profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
+    runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
 };
 

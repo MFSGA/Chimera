@@ -24,7 +24,8 @@ use crate::{
         profile::ref_adapter::to_runtime_profiles,
     },
     enhance::{
-        EnhanceScriptRunner, FsProfileContentSource, artifact_bridge::artifact_to_legacy_output,
+        EnhanceScriptRunner, FsProfileContentSource,
+        artifact_bridge::artifact_to_legacy_output_with_inspection,
     },
     utils::dirs,
 };
@@ -172,6 +173,19 @@ pub async fn build_from_legacy(
     clash: &ClashConfig,
     core: LegacyClashCore,
 ) -> Result<(serde_yaml::Mapping, crate::enhance::PostProcessingOutput)> {
+    build_from_legacy_with_inspection(clash, core)
+        .await
+        .map(|(mapping, output, _inspection)| (mapping, output))
+}
+
+pub(crate) async fn build_from_legacy_with_inspection(
+    clash: &ClashConfig,
+    core: LegacyClashCore,
+) -> Result<(
+    serde_yaml::Mapping,
+    crate::enhance::PostProcessingOutput,
+    crate::client::runtime_inspection::RuntimeInspectionData,
+)> {
     if core == LegacyClashCore::ChimeraClient {
         bail!("Chimera Client runtime still uses its compatibility builder");
     }
@@ -202,7 +216,7 @@ pub async fn build_from_legacy(
         let scripts = EnhanceScriptRunner::new()?;
         let artifact = RuntimeBuilder::build(&input, &content, &scripts)
             .map_err(|error| anyhow::anyhow!(error))?;
-        artifact_to_legacy_output(
+        artifact_to_legacy_output_with_inspection(
             artifact,
             &input.profiles,
             input.app.core,

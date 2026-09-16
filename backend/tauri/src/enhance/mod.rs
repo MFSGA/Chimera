@@ -33,6 +33,7 @@ mod utils;
 pub use chain::PostProcessingOutput;
 pub(crate) use chain::TransformFailureError;
 pub use content_source::FsProfileContentSource;
+pub(crate) use runtime_builder::build_from_legacy_with_inspection;
 pub use runtime_builder::{RuntimeBuildInput, RuntimeBuilder, build_from_legacy};
 pub use script::adapter::EnhanceScriptRunner;
 

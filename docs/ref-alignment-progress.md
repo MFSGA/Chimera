@@ -87,3 +87,38 @@
   通过。
 - 收敛条件：为新增字段接入对应主界面设置、legacy 兼容投影、agent 读取和
   真实托盘/PAC/hotkey 行为测试后，再评估是否可以删除旧字段或适配器。
+
+## DIFF-004：RuntimeInspection 只读诊断投影（第三阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/client/runtime_inspection.rs`、
+  `client/runtime.rs` 的 `RuntimeSnapshot.inspection`、
+  `ipc::inspect_runtime`、`ipc::inspect_runtime_node` 及
+  `specta_export` 命令注册
+- Chimera 路径和符号：对应的 `backend/tauri/src/client/*`、
+  `backend/tauri/src/core/clash/core.rs`、
+  `backend/tauri/src/config/core.rs`、
+  `backend/tauri/src/enhance/{runtime_builder,artifact_bridge}.rs`、
+  `backend/tauri/src/ipc.rs` 和
+  `frontend/interface/src/ipc/bindings.ts`
+- 类别：临时迁移
+- 差异及必要性：标准核心现在将 ref executor 产出的
+  `ConfigSnapshotsGraph`、步骤日志和快照 ID 一并保存到已提升的
+  `RuntimeSnapshot`，通过两个只读 IPC 投影节点摘要、YAML、父节点 diff 和
+  日志；生成的 TypeScript binding 已按既有 Specta 流程更新。该能力只读取
+  已发布快照，不修改代理、TUN、系统设置或用户配置。
+- 兼容边界：Chimera Client 和 ref executor 构建失败的 legacy/fallback 路径
+  继续使用安全的 `BareRoot` 空图，因此这些路径暂时只能显示最终产物的根节点，
+  不会伪造未生成的中间节点；待其迁移到共享 executor 后再移除该兼容值。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：新增 IPC/API 可供主界面、
+  legacy UI 或 agent 复用；本批未改变既有 UI 流程、持久化格式、核心启动和
+  系统代理行为。
+- 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera runtime_inspection
+  -- --test-threads=1`，4 passed；`cargo test --manifest-path
+  backend/tauri/Cargo.toml typescript_bindings_are_fresh --
+  --test-threads=1` 通过；`pnpm typecheck` 通过。
+- 收敛、移除或重新评估条件：将 Chimera Client、legacy/fallback 构建接入
+  共享 executor 并完成真实 runtime/E2E 验证后，删除 `RuntimeInspectionData::bare`
+  兼容分支，补充端到端快照更新/过期检查；当前仍是部分迁移，不能宣称已完全
+  等同 ref。
