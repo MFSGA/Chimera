@@ -204,3 +204,29 @@
 - 收敛条件：完成 typed ClashConfig 合同并覆盖 Chimera Client、legacy 和
   fallback 的统一 RuntimeSnapshot 构造后，移除 `Any<serde_json::Value>` 与
   默认值兼容分支，并补充真实 runtime 导出/后处理输出的 E2E 验证。
+
+## DIFF-008：Client UI 事件 sink 合同（第七阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`backend/tauri/src/client/event_sink.rs` 的
+  `UiEventSink`、`TauriUiEventSink`、`NoopUiEventSink`
+- Chimera 路径和符号：`backend/tauri/src/client/event_sink.rs`、
+  `backend/tauri/src/client/mod.rs`，复用现有 `core::handle::{Handle, Message,
+  StateChanged}`
+- 类别：临时迁移
+- 差异及必要性：事件 sink 现在提供 ref 的统一 `state_changed`、提示消息、
+  托盘更新、配置/Profiles/Proxies 刷新方法，并保留 Chimera 的
+  `RuntimeTransformDiagnostics` 通知扩展；新增 Tauri-owned sink 和无运行时
+  测试替身，供后续 actor-backed lifecycle 装配使用。
+- 兼容边界：当前生产 composition 仍注入 `LegacyUiEventSink`，默认方法继续
+  通过全局 `Handle` 广播，以保持主界面与 legacy UI 的现有事件可见范围；
+  `TauriUiEventSink` 暂未替换该装配，避免在生命周期迁移完成前缩小事件接收面。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：仅扩展共享 UI 副作用
+  端口和测试能力，不改变持久化、runtime 产物、核心进程或系统代理行为。
+- 实际验证结果：`cargo fmt --manifest-path backend/Cargo.toml --all`；
+  `cargo check --manifest-path backend/Cargo.toml -p chimera`；新增事件映射
+  单测通过；`pnpm typecheck` 与 `pnpm lint:frontend-boundaries`（未受本批
+  Rust-only 变更影响，上一批已通过）。
+- 收敛条件：core lifecycle actor 与 workflow 接管生产装配并完成主/legacy
+  UI 事件覆盖验证后，再将 `TauriUiEventSink` 接入 composition root，移除
+  `LegacyUiEventSink` 的全局兼容实现。
