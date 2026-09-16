@@ -29,10 +29,14 @@ use specta::Type;
 use tracing::instrument;
 
 use crate::{
-    client::runtime::{
-        CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate, RuntimeSnapshot,
-        RuntimeSnapshotData, RuntimeTransactionSnapshot, RuntimeTransformFailure,
-        capture_runtime_transaction, check_and_promote_candidate, restore_failed_apply,
+    client::{
+        SessionPortResolver,
+        runtime::{
+            CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
+            RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransactionSnapshot,
+            RuntimeTransformFailure, capture_runtime_transaction, check_and_promote_candidate,
+            restore_failed_apply,
+        },
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{clash::api, logger::Logger},
@@ -482,6 +486,7 @@ pub struct CoreManager {
     /// Single mutex domain for run/restart, stop, check, recover, and core changes.
     run_lock: RuntimeRebuildGate,
     runtime_lifecycle: RuntimeLifecycle,
+    port_resolver: SessionPortResolver,
 }
 
 impl CoreManager {
@@ -491,6 +496,7 @@ impl CoreManager {
             instance: Mutex::new(None),
             run_lock: RuntimeRebuildGate::default(),
             runtime_lifecycle: RuntimeLifecycle::default(),
+            port_resolver: SessionPortResolver::default(),
         })
     }
 
@@ -663,12 +669,19 @@ impl CoreManager {
             .prepare_external_controller_port()
             .map_err(RuntimeRestartError::Prepare)?;
 
+        let resolved_ports = self
+            .port_resolver
+            .resolve(clash)
+            .map_err(RuntimeRestartError::Prepare)?;
+
         let revision = self
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
         let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with(clash, target_core).await {
+            match Config::generate_runtime_output_with_ports(clash, target_core, resolved_ports)
+                .await
+            {
                 Ok(output) => (
                     output.config,
                     output.exists_keys,

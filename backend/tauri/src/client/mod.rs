@@ -37,6 +37,7 @@ use self::{
 pub(crate) use self::{
     core_lifecycle::RuntimeTransformDiagnostics,
     event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
+    ports::SessionPortResolver,
     profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
