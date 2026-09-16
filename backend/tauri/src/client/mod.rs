@@ -33,9 +33,10 @@ use self::{
     session_state::SessionStateClient,
     system_dns::SystemDnsCache,
 };
+#[allow(unused_imports)]
 pub(crate) use self::{
     core_lifecycle::RuntimeTransformDiagnostics,
-    event_sink::LegacyUiEventSink,
+    event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
     profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
