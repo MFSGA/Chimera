@@ -1,3 +1,49 @@
+## [0.24.0] - 2026-09-16 10:06:41
+
+### ⚡ Performance Improvements
+
+- **sparkline:** Reduce chart runtime dependencies by @MFSGA
+
+### ✨ Features
+
+- **ipc:** Align runtime read projections by @MFSGA
+
+- **runtime:** Expose applied runtime keys by @MFSGA
+
+- **runtime:** Expose ref-aligned runtime inspection by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency @inlang/paraglide-js to v2.25.2 by @renovate-bot
+
+- **legacy-ui:** Stabilize connections row measurement by @MFSGA
+
+- **runtime:** Fall back safely for legacy profiles by @MFSGA
+
+### 📚 Documentation
+
+- **ref:** Record profile runtime migration by @MFSGA
+
+### 🔨 Refactor
+
+- **client:** Align UI event sink contract by @MFSGA
+
+- **client:** Align core lifecycle directory boundary by @MFSGA
+
+- **config:** Align application and clash contracts by @MFSGA
+
+- **config:** Add ref-aligned profile runtime domains by @MFSGA
+
+- **runtime:** Align session port resolution by @MFSGA
+
+- **runtime:** Align snapshot construction by @MFSGA
+
+- **runtime:** Route standard cores through ref executor by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.23.4...v0.24.0
+
 ## [0.23.4] - 2026-09-15 04:38:02
 
 ### ✅ Testing
