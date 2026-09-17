@@ -2,14 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "default:automergeMinor",
-    "default:prHourlyLimitNone",
-    "default:preserveSemverRanges",
-    "default:rebaseStalePrs",
+    ":configMigration",
+    "security:minimumReleaseAgeNpm",
+    ":maintainLockFilesWeekly",
+    ":automergeMinor",
+    ":preserveSemverRanges",
+    ":rebaseStalePrs",
     "group:monorepos"
   ],
   "cloneSubmodules": true,
   "cloneSubmodulesFilter": ["backend/chimera-runtime"],
+  "dependencyDashboard": false,
+  "ignorePaths": ["ref/**", "backend/chimera-runtime/**"],
+  "platformAutomerge": false,
   "statusCheckWhen": {
     "artifactError": "never",
     "minimumReleaseAge": "never"
@@ -74,5 +79,6 @@
       "matchPackageNames": ["/vitest/", "/cypress/", "/wdio/"]
     }
   ],
-  "prConcurrentLimit": 30
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2
 }
