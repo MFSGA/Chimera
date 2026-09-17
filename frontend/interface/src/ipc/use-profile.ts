@@ -7,6 +7,7 @@ import {
   type ProfileDefinition_Deserialize,
   type ProfileMetadataPatch_Deserialize,
   type ProfileResponse,
+  type RemoteProfileImportMode,
   type RemoteProfileOptionsBuilder,
   type RemoteProfileOptionsPatch_Deserialize,
 } from './bindings';
@@ -27,6 +28,7 @@ export type CreateParams =
         url: URLImportParams[0];
         name?: URLImportParams[1];
         option: URLImportParams[2];
+        mode?: RemoteProfileImportMode;
       };
     }
   | {
@@ -118,7 +120,17 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const create = useMutation({
     mutationFn: async ({ type, data }: CreateParams) => {
       if (type === 'url') {
-        const { url, name, option } = data;
+        const { url, name, option, mode } = data;
+        if (mode) {
+          return unwrapResult(
+            await commands.importProfileWithMode(
+              url,
+              name ?? null,
+              option,
+              mode,
+            ),
+          );
+        }
         return unwrapResult(
           await commands.importProfile(url, name ?? null, option),
         );

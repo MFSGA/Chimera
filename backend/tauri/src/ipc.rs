@@ -23,8 +23,8 @@ use crate::{
                 local::{LocalProfile, LocalProfileBuilder},
                 merge::MergeProfile,
                 remote::{
-                    RemoteProfile, RemoteProfileBuilder, RemoteProfileOptions,
-                    RemoteProfileOptionsBuilder, SubscriptionInfo,
+                    RemoteProfile, RemoteProfileBuilder, RemoteProfileImportMode,
+                    RemoteProfileOptions, RemoteProfileOptionsBuilder, SubscriptionInfo,
                 },
                 script::{ScriptProfile, ScriptProfileBuilder},
                 shared::ProfileSharedBuilder,
@@ -41,6 +41,7 @@ use crate::{
     },
     enhance::PostProcessingOutput,
     feat,
+    network_probe::{NetworkProbeRequest, NetworkProbeResult},
     utils::{candy, collect::EnvInfo, dirs, help, resolve},
 };
 
@@ -383,6 +384,14 @@ pub async fn flush_system_dns_cache(client: State<'_, ChimeraClient>) -> Result 
 
 #[tauri::command]
 #[specta::specta]
+pub async fn probe_network(request: NetworkProbeRequest) -> StdResult<NetworkProbeResult, String> {
+    crate::network_probe::execute_user_target(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_sys_proxy() -> Result<GetSysProxyResponse> {
     let current = (Sysproxy::get_system_proxy()).context("failed to get system proxy")?;
     let server = format!("{}:{}", current.host, current.port);
@@ -432,6 +441,28 @@ pub async fn import_profile(
     name: Option<String>,
     option: Option<RemoteProfileOptionsBuilder>,
 ) -> Result<MutationOutcome<ProfileUid>> {
+    import_profile_inner(&client, url, name, option, RemoteProfileImportMode::Default).await
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn import_profile_with_mode(
+    client: State<'_, ChimeraClient>,
+    url: String,
+    name: Option<String>,
+    option: Option<RemoteProfileOptionsBuilder>,
+    mode: RemoteProfileImportMode,
+) -> Result<MutationOutcome<ProfileUid>> {
+    import_profile_inner(&client, url, name, option, mode).await
+}
+
+async fn import_profile_inner(
+    client: &ChimeraClient,
+    url: String,
+    name: Option<String>,
+    option: Option<RemoteProfileOptionsBuilder>,
+    mode: RemoteProfileImportMode,
+) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
     let mut builder = RemoteProfileBuilder::default();
     let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
@@ -444,7 +475,7 @@ pub async fn import_profile(
         builder.option(option.clone());
     }
     let prepared = builder
-        .build_prepared()
+        .build_prepared_with_mode(mode)
         .await
         .context("failed to build a remote profile")?;
     let (profile, content) = prepared.into_parts();

@@ -48,6 +48,10 @@ export const commands = {
     ),
   flushSystemDnsCache: () =>
     typedError<null, string>(__TAURI_INVOKE('flush_system_dns_cache')),
+  probeNetwork: (request: NetworkProbeRequest) =>
+    typedError<NetworkProbeResult, string>(
+      __TAURI_INVOKE('probe_network', { request }),
+    ),
   /**  later: check in the frontend */
   getPendingDeepLinks: () =>
     typedError<PendingDeepLinkEntry[], string>(
@@ -71,6 +75,22 @@ export const commands = {
   ) =>
     typedError<MutationOutcome<string>, string>(
       __TAURI_INVOKE('import_profile', { url, name, option }),
+    ),
+  importProfileWithMode: (
+    url: string,
+    name: string | null,
+    option: {
+      /**  see issue #13. must set the builder attr for build the user_agent for client */
+      user_agent: string | null;
+      with_proxy: boolean | null;
+      self_proxy: boolean | null;
+      /**  subscription update interval in minutes */
+      update_interval_minutes: number | null;
+    } | null,
+    mode: RemoteProfileImportMode,
+  ) =>
+    typedError<MutationOutcome<string>, string>(
+      __TAURI_INVOKE('import_profile_with_mode', { url, name, option, mode }),
     ),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
@@ -1182,6 +1202,19 @@ export type MutationOutcome<T> =
   | { status: 'applied'; value: T }
   | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
 
+export type NetworkProbeRequest = {
+  url: string;
+  expected_status: number | null;
+  timeout_ms: number | null;
+};
+
+export type NetworkProbeResult = {
+  status: number;
+  expected_status: number | null;
+  matches_expected_status: boolean | null;
+  latency_ms: number;
+};
+
 /**  The pipeline operator that produced a snapshot node. */
 export type OperatorTag =
   | {
@@ -1509,6 +1542,8 @@ export type RemoteProfileBuilder = {
   /**  subscription user info */
   extra: SubscriptionInfo | null;
 } & ProfileSharedBuilder;
+
+export type RemoteProfileImportMode = 'default' | 'direct';
 
 export type RemoteProfileOptions =
   RemoteProfileOptions_Serialize | RemoteProfileOptions_Deserialize;

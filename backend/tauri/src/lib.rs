@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod ipc;
+mod network_probe;
 
 mod bridge;
 mod client;

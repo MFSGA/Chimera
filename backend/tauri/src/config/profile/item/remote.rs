@@ -27,6 +27,13 @@ use backon::Retryable;
 
 const PROFILE_TYPE: ProfileItemType = ProfileItemType::Remote;
 
+#[derive(Debug, Clone, Copy, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteProfileImportMode {
+    Default,
+    Direct,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedSubscriptionUpdate {
     data: Mapping,
@@ -197,6 +204,14 @@ impl RemoteProfileBuilder {
     pub async fn build_prepared(
         &mut self,
     ) -> Result<PreparedRemoteProfile, RemoteProfileBuilderError> {
+        self.build_prepared_with_mode(RemoteProfileImportMode::Default)
+            .await
+    }
+
+    pub async fn build_prepared_with_mode(
+        &mut self,
+        mode: RemoteProfileImportMode,
+    ) -> Result<PreparedRemoteProfile, RemoteProfileBuilderError> {
         self.validate()?;
         if self.shared.get_uid().is_none() {
             self.shared
@@ -207,7 +222,8 @@ impl RemoteProfileBuilder {
             .option
             .build()
             .map_err(|e| RemoteProfileBuilderError::Validation(e.to_string()))?;
-        let mut subscription = subscribe_url(&url, &options).await?;
+        let fetch_options = fetch_options_for_mode(&options, mode);
+        let mut subscription = subscribe_url(&url, &fetch_options).await?;
 
         let extra = subscription.info;
 
@@ -263,6 +279,20 @@ impl RemoteProfileBuilder {
         }
 
         Ok(())
+    }
+}
+
+fn fetch_options_for_mode(
+    options: &RemoteProfileOptions,
+    mode: RemoteProfileImportMode,
+) -> RemoteProfileOptions {
+    match mode {
+        RemoteProfileImportMode::Default => options.clone(),
+        RemoteProfileImportMode::Direct => RemoteProfileOptions {
+            with_proxy: false,
+            self_proxy: false,
+            ..options.clone()
+        },
     }
 }
 
@@ -480,6 +510,30 @@ mod tests {
         assert!(content.contains("mode: global"));
         assert_eq!(profile.extra, next);
         assert!(profile.shared.updated > 7);
+    }
+
+    #[test]
+    fn direct_import_mode_only_overrides_fetch_proxy_flags() {
+        let options = RemoteProfileOptions {
+            with_proxy: true,
+            self_proxy: true,
+            ..RemoteProfileOptions::default()
+        };
+
+        let default_options = fetch_options_for_mode(&options, RemoteProfileImportMode::Default);
+        assert!(default_options.with_proxy);
+        assert!(default_options.self_proxy);
+
+        let direct_options = fetch_options_for_mode(&options, RemoteProfileImportMode::Direct);
+        assert!(!direct_options.with_proxy);
+        assert!(!direct_options.self_proxy);
+        assert_eq!(direct_options.user_agent, options.user_agent);
+        assert_eq!(
+            direct_options.update_interval_minutes,
+            options.update_interval_minutes
+        );
+        assert!(options.with_proxy);
+        assert!(options.self_proxy);
     }
 }
 
