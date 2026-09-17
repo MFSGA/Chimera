@@ -314,3 +314,41 @@
 - 收敛、移除或重新评估条件：当 React/virtualizer 升级或 ref 连接表实现发生
   变化时，重新验证该差异；若上游改为稳定方法引用且回归测试覆盖，则可重新
   评估是否恢复完全一致。
+
+## DIFF-012：Legacy 尽力导入订阅向导（第十阶段）
+
+- ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
+- ref 路径和符号：`frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/profile-quick-import.tsx` 的 `ProfileQuickImport`
+- Chimera 路径和符号：`frontend/chimera/src/components/profiles/quick-import.tsx` 的 `QuickImport`；
+  `frontend/chimera/src/components/profiles/best-effort-subscription-import.tsx` 的
+  `BestEffortSubscriptionImport`；legacy 路由
+  `/(legacy)/subscription-onboarding`
+- 类别：legacy UI / E2E / 临时迁移
+- 差异及必要性：ref 没有对应的尽力导入向导。本轮保留原有 QuickImport 的默认行为，
+  仅增加受控输入和导入回调适配；新增独立 legacy 页面，将默认导入、网络环境准备、
+  地址可达性、稳定性和直连重试分别展示为持久区域，并保留失败恢复和成功后系统代理
+  决策。旧 `/providers` 路由不再承载该页面。
+- 共通业务入口及适配边界：配置写入复用 `useProfile().create` 和 `useSetting`；网络
+  检测通过共享 `probe_network` application IPC；该 IPC 使用用户主动输入策略，允许
+  合法的局域网订阅地址，而 agent 的 `network.probe` 保留严格的私网/特殊地址阻断并
+  复用同一执行器；没有新增独立配置、持久化或内核实现。订阅导入通过
+  `RemoteProfileImportMode` 显式区分 `default` 与 `direct`，后者只对本次抓取强制
+  关闭代理，不改变最终保存的 Profile 选项。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：仅新增 legacy UI 入口及页面状态；
+  现有主界面/legacy Profiles 流程、订阅数据格式、核心和 agent 既有入口保持不变。
+  独立 E2E 已覆盖页面装配、五个持久区域、本地确定性 fallback 主路径、成功后的代理选择、
+  直连失败和重试恢复；仍不证明公网上的真实网络质量、系统代理或 TUN 的主机副作用。
+- 实际验证结果：`pnpm typecheck`、`pnpm lint:frontend-boundaries`、目标 oxlint、
+  `git diff --check`、E2E suite 注册测试、`pnpm --filter chimera-ui build`、
+  `cargo test ... network_probe`（5 passed）、`cargo test ... remote::tests`（2 passed）、
+  binding freshness（1 passed）、`pnpm e2e:tauri:build` 和独立 legacy 桌面 E2E（3 passed）
+  通过。对应 E2E 二进制为
+  `backend/target/e2e/debug/chimera.exe`（SHA-256
+  `CEFEEF4C5E2AB16E4C320315D5D26C80C4E3258F092824F2CDE7C4658032C5FF`）。Profiles 全套
+  E2E 在既有 `profile-transform-chain-ui.e2e.ts` 断言处失败（实际为
+  `applied`、期望 `committed_degraded`），未归因于本向导。
+- 收敛、移除或重新评估条件：当前 application API 已区分导入模式并共享网络探测；
+  下一步需要验证 `default` 是否应按产品定义自动使用当前系统/Chimera 代理，而不是
+  继承 legacy 默认选项。随后补充代理/TUN 状态回读、真实网络和恢复测试，再重新评估
+  当前 3 次探测、3000ms 波动阈值及失败恢复语义。当前仍是功能可用但对齐未完成的
+  部分迁移。
