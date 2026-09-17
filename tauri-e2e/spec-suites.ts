@@ -19,6 +19,7 @@ export const baseE2eSuites = {
     './specs/profiles-detail-main.e2e.ts',
     './specs/profiles-layout.e2e.ts',
     './specs/profiles-main-layout.e2e.ts',
+    './specs/subscription-onboarding-legacy.e2e.ts',
   ],
   settings: [
     './specs/application-typed-state.e2e.ts',
