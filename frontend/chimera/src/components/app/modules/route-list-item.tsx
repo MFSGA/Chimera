@@ -16,6 +16,7 @@ const labelMap: Record<string, () => string> = {
   logs: m.navbar_label_logs,
   settings: m.navbar_label_settings,
   providers: m.navbar_label_providers,
+  'subscription-onboarding': m.navbar_label_subscription_onboarding,
 };
 
 export const RouteListItem = ({

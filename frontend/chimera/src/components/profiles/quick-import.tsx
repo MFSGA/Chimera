@@ -18,31 +18,56 @@ import { Notice } from '@/components/base';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 
-export const QuickImport = () => {
+export type QuickImportProps = {
+  value?: string;
+  onChange?: (value: string) => void;
+  onImport?: (url: string) => Promise<void>;
+  loading?: boolean;
+  disabled?: boolean;
+};
+
+export const QuickImport = ({
+  value: controlledValue,
+  onChange,
+  onImport,
+  loading: controlledLoading,
+  disabled,
+}: QuickImportProps = {}) => {
   const [url, setUrl] = useState('');
 
   const [loading, setLoading] = useState(false);
 
   const { create } = useProfile();
 
+  const isControlled = controlledValue !== undefined;
+  const inputValue = controlledValue ?? url;
+  const isLoading = controlledLoading ?? loading;
+
+  const updateUrl = (value: string) => {
+    if (!isControlled) {
+      setUrl(value);
+    }
+    onChange?.(value);
+  };
+
   const onCopyLink = async () => {
     const text = await readText().catch(() => '');
 
     if (text) {
-      setUrl(text);
+      updateUrl(text);
     }
   };
 
   const endAdornment = () => {
-    if (loading) {
+    if (isLoading) {
       return <CircularProgress size={20} />;
     }
 
-    if (url) {
+    if (inputValue) {
       return (
         <>
           <Tooltip title={m.common_clear()}>
-            <IconButton size="small" onClick={() => setUrl('')}>
+            <IconButton size="small" onClick={() => updateUrl('')}>
               <ClearRounded fontSize="inherit" />
             </IconButton>
           </Tooltip>
@@ -66,18 +91,27 @@ export const QuickImport = () => {
   };
 
   const handleImport = async () => {
+    if (!inputValue || isLoading || disabled) {
+      return;
+    }
+
+    if (onImport) {
+      await onImport(inputValue);
+      return;
+    }
+
     try {
       setLoading(true);
 
       await create.mutateAsync({
         type: 'url',
         data: {
-          url,
+          url: inputValue,
           option: null,
         },
       });
       Notice.success(m.profile_quick_import_success_message());
-      setUrl('');
+      updateUrl('');
     } catch (error) {
       Notice.error(`Failed to import profile: ${formatError(error)}`, 3000);
     } finally {
@@ -98,14 +132,18 @@ export const QuickImport = () => {
 
   return (
     <TextField
+      data-slot="quick-import-input"
       hiddenLabel
       fullWidth
       autoComplete="off"
       spellCheck="false"
-      value={url}
+      value={inputValue}
       placeholder={m.profile_import_remote_url_label()}
-      onChange={(e) => setUrl(e.target.value)}
-      onKeyDown={(e) => url !== '' && e.key === 'Enter' && handleImport()}
+      disabled={disabled || isLoading}
+      onChange={(e) => updateUrl(e.target.value)}
+      onKeyDown={(e) =>
+        inputValue !== '' && e.key === 'Enter' && void handleImport()
+      }
       sx={{ input: { py: 1, px: 2 } }}
       slotProps={{
         input: inputProps,

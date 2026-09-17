@@ -21,6 +21,7 @@ import { Route as legacyProvidersRouteImport } from './pages/(legacy)/providers'
 import { Route as legacyProxiesRouteImport } from './pages/(legacy)/proxies'
 import { Route as legacyRulesRouteImport } from './pages/(legacy)/rules'
 import { Route as legacySettingsRouteImport } from './pages/(legacy)/settings'
+import { Route as legacySubscriptionOnboardingRouteImport } from './pages/(legacy)/subscription-onboarding'
 import { Route as mainMainIndexRouteImport } from './pages/(main)/main/index'
 import { Route as mainMainAssistantRouteRouteImport } from './pages/(main)/main/assistant/route'
 import { Route as mainMainConnectionsRouteRouteImport } from './pages/(main)/main/connections/route'
@@ -114,6 +115,12 @@ const legacySettingsRoute = legacySettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => legacyRouteRoute,
 } as any)
+const legacySubscriptionOnboardingRoute =
+  legacySubscriptionOnboardingRouteImport.update({
+    id: '/subscription-onboarding',
+    path: '/subscription-onboarding',
+    getParentRoute: () => legacyRouteRoute,
+  } as any)
 const mainMainIndexRoute = mainMainIndexRouteImport.update({
   id: '/main/',
   path: '/main/',
@@ -311,6 +318,7 @@ export interface FileRoutesByFullPath {
   '/proxies': typeof legacyProxiesRoute
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
+  '/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
   '/': typeof legacyIndexRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main/connections': typeof mainMainConnectionsRouteRouteWithChildren
@@ -357,6 +365,7 @@ export interface FileRoutesByTo {
   '/proxies': typeof legacyProxiesRoute
   '/rules': typeof legacyRulesRoute
   '/settings': typeof legacySettingsRoute
+  '/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
   '/': typeof legacyIndexRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main': typeof mainMainIndexRoute
@@ -397,6 +406,7 @@ export interface FileRoutesById {
   '/(legacy)/proxies': typeof legacyProxiesRoute
   '/(legacy)/rules': typeof legacyRulesRoute
   '/(legacy)/settings': typeof legacySettingsRoute
+  '/(legacy)/subscription-onboarding': typeof legacySubscriptionOnboardingRoute
   '/(legacy)/': typeof legacyIndexRoute
   '/(main)/main/assistant': typeof mainMainAssistantRouteRoute
   '/(main)/main/connections': typeof mainMainConnectionsRouteRouteWithChildren
@@ -445,6 +455,7 @@ export interface FileRouteTypes {
     | '/proxies'
     | '/rules'
     | '/settings'
+    | '/subscription-onboarding'
     | '/'
     | '/main/assistant'
     | '/main/connections'
@@ -491,6 +502,7 @@ export interface FileRouteTypes {
     | '/proxies'
     | '/rules'
     | '/settings'
+    | '/subscription-onboarding'
     | '/'
     | '/main/assistant'
     | '/main'
@@ -530,6 +542,7 @@ export interface FileRouteTypes {
     | '/(legacy)/proxies'
     | '/(legacy)/rules'
     | '/(legacy)/settings'
+    | '/(legacy)/subscription-onboarding'
     | '/(legacy)/'
     | '/(main)/main/assistant'
     | '/(main)/main/connections'
@@ -657,6 +670,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof legacySettingsRouteImport
+      parentRoute: typeof legacyRouteRoute
+    }
+    '/(legacy)/subscription-onboarding': {
+      id: '/(legacy)/subscription-onboarding'
+      path: '/subscription-onboarding'
+      fullPath: '/subscription-onboarding'
+      preLoaderRoute: typeof legacySubscriptionOnboardingRouteImport
       parentRoute: typeof legacyRouteRoute
     }
     '/(main)/main/': {
@@ -909,6 +929,7 @@ interface legacyRouteRouteChildren {
   legacyProxiesRoute: typeof legacyProxiesRoute
   legacyRulesRoute: typeof legacyRulesRoute
   legacySettingsRoute: typeof legacySettingsRoute
+  legacySubscriptionOnboardingRoute: typeof legacySubscriptionOnboardingRoute
   legacyIndexRoute: typeof legacyIndexRoute
 }
 
@@ -921,6 +942,7 @@ const legacyRouteRouteChildren: legacyRouteRouteChildren = {
   legacyProxiesRoute: legacyProxiesRoute,
   legacyRulesRoute: legacyRulesRoute,
   legacySettingsRoute: legacySettingsRoute,
+  legacySubscriptionOnboardingRoute: legacySubscriptionOnboardingRoute,
   legacyIndexRoute: legacyIndexRoute,
 }
 

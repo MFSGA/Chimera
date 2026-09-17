@@ -1,5 +1,6 @@
 import {
   Apps,
+  CloudDownload,
   Dashboard,
   DesignServices,
   GridView,
@@ -19,6 +20,7 @@ const routes: { [key: string]: SvgIconComponent } = {
   logs: Terminal,
   settings: Settings,
   providers: Apps,
+  'subscription-onboarding': CloudDownload,
 };
 
 export const getRoutes = () => {
