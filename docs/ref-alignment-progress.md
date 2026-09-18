@@ -4,6 +4,26 @@
 `f7dbce2997c633e484f54788035e770b3ee99773`。参考工作区存在预先的
 `?? NUL`，不属于该提交，也未被复制或修改。
 
+## 当前 P0 收敛状态（2026-09-18）
+
+- 所有支持的 Clash core（含 Chimera Client）已统一通过
+  `chimera-config::runtime::executor` 生成 runtime；Chimera Client 的 legacy
+  TUN/DNS 合同已显式编码为 `TunFlavor::ChimeraClient`，生产路径不再回退到旧
+  `enhance()`。
+- 旧 `enhance()` 入口已从编译图移除，未使用的 `build_from_legacy` 与
+  `artifact_to_legacy_output` 兼容 wrapper 已删除；生产 runtime 生成只有一条
+  shared executor 业务实现。
+- `CoreManager::global()` 已从 `backend/tauri/src` 清零。生产 composition root
+  创建 `LegacyCoreBridge`，由 bridge 显式持有一个 `Arc<CoreManager>`；Clash HTTP
+  API、WebSocket endpoint、Agent probe、启动初始化与 crash recovery 均不再通过
+  singleton service locator 取 core manager。
+- 生产 `RuntimeInputOutput` 现在强制携带 `RuntimeInspectionData`；共享 executor
+  生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
+- 尚未完成的主要 ref 差异仍是 `core_lifecycle/workflow.rs` + `core/actor_v2`
+  的 actor-owned lifecycle/service-host/uncertain-outcome 模型，以及 legacy typed
+  config/profile 持久化边界的进一步收敛。因此 P0 的“单一 runtime 业务实现”和
+  “移除 CoreManager singleton 访问”已完成，但完整 actor_v2 对齐仍是后续工作。
+
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
 - ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
@@ -41,14 +61,15 @@
   `content_source.rs`、`artifact_bridge.rs`、`script/adapter.rs`，以及
   `Config::generate_runtime_input_with`
 - 类别：临时迁移
-- 差异及必要性：标准 Clash 核心（Premium、Rust、Mihomo 及 Alpha）现在
-  通过共享 `RuntimePipelineInputs` 和 `execute` 完成 Profile 合成、全局
-  变换、内置脚本、字段白名单、Guard、TUN 默认值和产物日志；旧的
-  `PostProcessingOutput` 由适配器生成。Chimera Client 仍保留旧 Enhance
-  路径，因为其自定义 TUN 合同尚未进入共享 executor，避免回归。
-- 失败回退：若 legacy Profile 转换或 ref executor 构建失败，入口会记录
-  warning 并回退到旧 Enhance，保证已有用户配置仍可启动；该回退是可观测的
-  临时兼容边界，不代表两条实现长期并存。
+- 差异及必要性：所有 Clash 核心（Premium、Rust、Mihomo、Alpha 与
+  Chimera Client）现在都通过共享 `RuntimePipelineInputs` 和 `execute` 完成
+  Profile 合成、全局变换、内置脚本、字段白名单、Guard、TUN 默认值和产物日志；
+  `PostProcessingOutput` 由适配器生成。Chimera Client 的 legacy TUN/DNS
+  合同由 `TunFlavor::ChimeraClient` 显式表示，并通过 executor 单测锁定用户值
+  不被默认值覆盖的行为。
+- 失败语义：共享 executor 构建失败会直接向调用方返回错误；生产入口不再静默
+  回退到旧 Enhance。旧 `enhance()` 入口已退出编译图，避免两个 runtime 业务实现
+  长期并存。
 - 兼容边界：`config/profile/ref_adapter.rs` 将现有 legacy profile 文档转换
   为 ref 领域模型；多选配置转换为兼容 composition，不改写用户文件。
   脚本通过现有 JavaScript/Lua runner 适配到 ref 的 `ScriptRunner` trait。
@@ -61,10 +82,10 @@
   backend/Cargo.toml -p chimera enhance -- --test-threads=1`，39 passed；
   `cargo test --manifest-path backend/Cargo.toml -p chimera-config --
   --test-threads=1`，135 passed；workspace `cargo check` 通过。
-- 收敛、移除或重新评估条件：为 Chimera Client 实现共享 executor 所需的
-  自定义 TUN/运行时合同，并在主界面、legacy UI 和 agent 的真实启动路径
-  完成验证后，移除旧 Enhance 分支及 legacy profile adapter。当前仍是部分
-  迁移，不能宣称已经完全等同 ref。
+- 当前收敛状态：Chimera Client 自定义 TUN/运行时合同和旧 Enhance 分支已经
+  收敛到 shared executor；`legacy profile -> ref domain` adapter 仍保留，因此该项
+  在 profile 持久化层仍是部分迁移。真实桌面 TUN/service lifecycle 仍需专属 E2E/
+  host smoke 验证，不能仅凭单元测试宣称完整等同 ref。
 
 ## DIFF-003：应用/Clash 共享配置合同补齐（第二阶段）
 
@@ -107,9 +128,9 @@
   `RuntimeSnapshot`，通过两个只读 IPC 投影节点摘要、YAML、父节点 diff 和
   日志；生成的 TypeScript binding 已按既有 Specta 流程更新。该能力只读取
   已发布快照，不修改代理、TUN、系统设置或用户配置。
-- 兼容边界：Chimera Client 和 ref executor 构建失败的 legacy/fallback 路径
-  继续使用安全的 `BareRoot` 空图，因此这些路径暂时只能显示最终产物的根节点，
-  不会伪造未生成的中间节点；待其迁移到共享 executor 后再移除该兼容值。
+- 兼容边界：生产 runtime 生成现已始终携带 shared executor 产生的 inspection；
+  `RuntimeInspectionData::bare()` 仅保留在测试/兼容构造路径，不再作为生产
+  Chimera Client 或 executor 失败的 fallback。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：新增 IPC/API 可供主界面、
   legacy UI 或 agent 复用；本批未改变既有 UI 流程、持久化格式、核心启动和
   系统代理行为。
@@ -118,10 +139,9 @@
   -- --test-threads=1`，4 passed；`cargo test --manifest-path
   backend/tauri/Cargo.toml typescript_bindings_are_fresh --
   --test-threads=1` 通过；`pnpm typecheck` 通过。
-- 收敛、移除或重新评估条件：将 Chimera Client、legacy/fallback 构建接入
-  共享 executor 并完成真实 runtime/E2E 验证后，删除 `RuntimeInspectionData::bare`
-  兼容分支，补充端到端快照更新/过期检查；当前仍是部分迁移，不能宣称已完全
-  等同 ref。
+- 收敛、移除或重新评估条件：生产构建已全部接入共享 executor，下一步只需
+  在兼容测试构造器不再需要时删除 `RuntimeInspectionData::bare`，并补充真实
+  runtime/E2E 的快照更新、过期检查与 core restart 验证。
 
 ## DIFF-005：CoreLifecycle 目录边界（第四阶段）
 
@@ -138,17 +158,20 @@
   UI/API 合同不变；本阶段只做所有权和导入路径迁移，没有引入 actor 或改变
   核心启动、停止、切换和系统设置副作用。
 - 兼容边界：`core_bridge.rs` 只保留 re-export，避免分批迁移期间破坏旧调用方；
-  新的 `core_lifecycle` 仍委托 legacy `CoreManager`，尚未具备 ref 的
-  `workflow.rs`、actor mailbox、超时不确定状态和 service host facade。
+  `LegacyCoreBridge` 现在在 composition root 中创建并显式持有唯一的
+  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期仍由 legacy
+  `CoreManager` 实现，尚未具备 ref 的 `workflow.rs`、actor mailbox、超时不确定
+  状态和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --
   --test-threads=1`，17 passed。
-- 收敛、移除或重新评估条件：完成 ref `core_lifecycle/workflow.rs` 与
-  `core/actor_v2` 的最小完整迁移、接入真实 service/local host 和超时恢复测试后，
-  删除 `core_bridge.rs` shim，并将 `ClientSetupArgs` 切换为 actor-backed
-  `CoreLifecycleClient`；当前仍是目录和端口层的部分迁移。
+- 收敛、移除或重新评估条件：singleton service-locator 已清除；下一阶段是完成
+  ref `core_lifecycle/workflow.rs` 与 `core/actor_v2` 的最小完整迁移、接入真实
+  service/local host 和超时恢复测试，然后删除 `core_bridge.rs` shim，并将
+  `ClientSetupArgs` 切换为 actor-backed `CoreLifecycleClient`。当前仍是 lifecycle
+  ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 
@@ -161,19 +184,19 @@
   `core/clash/core.rs`、`client/runtime.rs`、`client/runtime_inspection.rs`、
   `ipc.rs` 和生成的 `frontend/interface/src/ipc/bindings.ts`
 - 类别：兼容扩展
-- 差异及必要性：标准 executor 的 `applied_fields` 现在按执行顺序保留为
-  `RuntimeSnapshot.exists_keys`，并提供只读 `get_runtime_exists` IPC；旧
-  Enhance 路径也将原有 `use_keys` 结果继续带入快照，未改变配置文件或核心
-  启动行为。
+- 差异及必要性：shared executor 的 `applied_fields` 现在按执行顺序保留为
+  `RuntimeSnapshot.exists_keys`，并提供只读 `get_runtime_exists` IPC；所有生产
+  runtime 生成路径都使用同一 executor 结果，不再需要旧 Enhance 的 `use_keys`
+  兼容分支。
 - 兼容边界：尚未发布 RuntimeSnapshot 时返回空数组；旧构造器为保持已有测试和
   调用合同，默认使用空集合，只有实际构建入口注入对应键集合。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/tauri/Cargo.toml
   typescript_bindings_are_fresh -- --test-threads=1` 通过；`pnpm typecheck`
   通过；新增 RuntimeSnapshot applied-fields 单测。
-- 收敛条件：当 RuntimeSnapshot 完成 ref `from_data` 统一构造并覆盖所有
-  Chimera Client/legacy/fallback 路径后，移除空集合兼容构造器，并补充真实
-  reconcile 后 `get_runtime_exists` 的 E2E 验证。
+- 收敛条件：生产 RuntimeSnapshot 已统一由 executor 数据构造；待测试/兼容
+  调用方不再需要旧构造器时移除空集合默认值，并补充真实 reconcile 后
+  `get_runtime_exists` 的 E2E 验证。
 
 ## DIFF-007：Runtime 只读配置与后处理投影（第六阶段）
 
@@ -201,9 +224,9 @@
   `cargo test --manifest-path backend/tauri/Cargo.toml
   typescript_bindings_are_fresh -- --test-threads=1`，1 passed；`pnpm typecheck`
   通过；`pnpm lint:frontend-boundaries` 通过；`git diff --check` 通过。
-- 收敛条件：完成 typed ClashConfig 合同并覆盖 Chimera Client、legacy 和
-  fallback 的统一 RuntimeSnapshot 构造后，移除 `Any<serde_json::Value>` 与
-  默认值兼容分支，并补充真实 runtime 导出/后处理输出的 E2E 验证。
+- 收敛条件：生产 RuntimeSnapshot 已覆盖所有 core；后续在 ClashConfig typed
+  contract 完成后移除 `Any<serde_json::Value>` 与默认值兼容分支，并补充真实
+  runtime 导出/后处理输出的 E2E 验证。
 
 ## DIFF-008：Client UI 事件 sink 合同（第七阶段）
 
@@ -240,14 +263,14 @@
   `backend/tauri/src/core/clash/core.rs`、`backend/tauri/src/ipc.rs`
 - 类别：临时迁移
 - 差异及必要性：RuntimeSnapshot 现在由单一 `from_data` 负责计算产品摘要、
-  生成 inspection id 和组装配置/已应用字段/后处理输出/诊断图；标准核心
-  的生产提升路径已直接使用该构造，旧的多参数构造器暂保留为 legacy 与
-  单测兼容包装。后处理字段名称同步为 ref 的 `postprocessing_output`，并
+  生成 inspection id 和组装配置/已应用字段/后处理输出/诊断图；所有 core 的
+  生产提升路径都直接使用该构造，旧的多参数构造器暂保留为测试与兼容包装。
+  后处理字段名称同步为 ref 的 `postprocessing_output`，并
   保留 `RUNTIME_CONFIG_FILE`，增加 ref 兼容的 `RUNTIME_CONFIG` 别名。
 - 兼容边界：Chimera 的并发 `RuntimeRevisionAllocator`、Applied/Promoted
-  双快照和事务恢复状态仍保留；`new_with_transform_output*` 仅是过渡入口，
-  不再持有独立组装逻辑。legacy/fallback 仍通过 `RuntimeInspectionData::bare`
-  提供稳定根节点，不伪造中间步骤。
+  双快照和事务恢复状态仍保留；`new_with_transform_output*` 仅是测试/过渡入口，
+  不再持有独立组装逻辑。生产 `RuntimeInputOutput` 已强制携带真实
+  `RuntimeInspectionData`；`bare()` 只服务兼容构造和单测。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：统一构造只影响共享
   runtime 发布态读模型；现有生成文件、核心启动/回滚、持久化和系统代理
   副作用保持不变，IPC 继续读取同一 `postprocessing_output` 字段。
@@ -275,10 +298,10 @@
   已选端口，配置策略改变时才重新探测，避免运行中的核心把自己的监听端口误判为
   冲突。`service/profile_file::SelfProxyPortSource` 在 Chimera 尚无对应 service
   模块，因此暂未复制该 trait 实现，保留 `cached_ports` 作为等价只读边界。
-- 兼容边界：旧的 `generate_runtime_output_with` 与公开
-  `build_from_legacy` 仍从现有 legacy client info 构造 fallback bindings；
-  `ChimeraClient` 专用 Enhance 路径保持原有自定义 TUN 合同，未改变持久化格式、
-  legacy UI、agent 或 E2E 入口。
+- 兼容边界：`generate_runtime_output_with` 仍可从现有 legacy client info
+  构造默认 bindings，供尚未持有 session resolver 的兼容调用方使用；公开的
+  `build_from_legacy` wrapper 已删除。Chimera Client 与其他 core 共用同一
+  RuntimeBuilder，仅在 `TunFlavor::ChimeraClient` 中保留其产品特有 TUN/DNS 合同。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：标准核心启动、重启和
   runtime 快照现在共享同一组具体端口；主界面、legacy UI 与 agent 继续通过同一
   application API 读取状态，系统代理和配置文件副作用保持不变。
@@ -288,9 +311,9 @@
   --test-threads=1`，5 passed；`pnpm typecheck`；
   `pnpm lint:frontend-boundaries`；`git diff --check`。
 - 收敛条件：补齐 Chimera 对应的 service/profile-file 端口读取接口后，将
-  `SessionPortResolver` 接入 fetcher 的 `SelfProxyPortSource`；标准与
-  `ChimeraClient` runtime builder 均迁移到 typed ClashConfig 后，删除 legacy
-  fallback bindings，并补充真实核心重启/端口占用 E2E 验证。
+  `SessionPortResolver` 接入 fetcher 的 `SelfProxyPortSource`；所有 core 已共用
+  RuntimeBuilder，后续重点是删除仍依赖 legacy client-info 的默认 bindings 入口，
+  并补充真实核心重启/端口占用 E2E 验证。
 
 ## DIFF-011：Legacy Connections 虚拟行测量回调死循环（缺陷修复）
 
