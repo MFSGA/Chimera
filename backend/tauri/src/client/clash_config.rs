@@ -39,7 +39,19 @@ use crate::{
 use super::{ChimeraClient, core_lifecycle::RunningConfigPort};
 
 #[cfg(test)]
-use super::core_lifecycle::LegacyRunningConfigBridge;
+struct TestRunningConfigBridge;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl RunningConfigPort for TestRunningConfigBridge {
+    async fn read(&self) -> anyhow::Result<crate::core::clash::api::ClashRuntimeConfig> {
+        Ok(crate::core::clash::api::ClashRuntimeConfig::default())
+    }
+
+    async fn patch(&self, _patch: &Mapping) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -77,7 +89,7 @@ impl ClashConfigClient {
             ClashConfigStateBackend::Static {
                 state: parking_lot::RwLock::new(ClashConfig::default()),
             },
-            Arc::new(LegacyRunningConfigBridge),
+            Arc::new(TestRunningConfigBridge),
         ))
     }
 
@@ -680,7 +692,7 @@ mod tests {
             path,
             ClashConfig::default(),
             bridge,
-            Arc::new(LegacyRunningConfigBridge),
+            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();
