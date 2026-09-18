@@ -58,7 +58,7 @@ impl ChimeraClient {
         lease.stop().await
     }
 
-    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease> {
+    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease<'_>> {
         Ok(CoreUpdateLease {
             lease: self.inner.core.begin().await?,
         })

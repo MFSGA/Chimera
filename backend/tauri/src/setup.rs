@@ -34,7 +34,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
         bridges,
-        core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge),
+        core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new()),
         profiles: Arc::new(LegacyProfilesReadPort),
         profile_files: Arc::new(LegacyProfileFsPort),
         profile_writes: Arc::new(LegacyProfilesWritePort),
