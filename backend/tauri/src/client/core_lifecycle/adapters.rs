@@ -36,6 +36,16 @@ impl RunningConfigPort for LegacyRunningConfigBridge {
 
 pub(crate) struct LegacyCoreBridge;
 
+impl LegacyCoreBridge {
+    /// Compatibility boundary for the staged lifecycle migration.
+    ///
+    /// New lifecycle implementations can replace this adapter without
+    /// changing client callers.
+    fn manager(&self) -> &'static CoreManager {
+        CoreManager::global()
+    }
+}
+
 struct LegacyCoreLifecycleLease {
     lease: CoreManagerLifecycleLease<'static>,
 }
@@ -70,12 +80,12 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
 impl CoreLifecyclePort for LegacyCoreBridge {
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
         Ok(Box::new(LegacyCoreLifecycleLease {
-            lease: CoreManager::global().begin_lifecycle().await,
+            lease: self.manager().begin_lifecycle().await,
         }))
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        let (state, state_changed_at, run_type) = CoreManager::global().status().await;
+        let (state, state_changed_at, run_type) = self.manager().status().await;
         Ok(CoreStatusSnapshot {
             state: state.into_owned(),
             state_changed_at,
@@ -84,7 +94,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        let core = CoreManager::global();
+        let core = self.manager();
         let failure =
             core.runtime_transform_failure()
                 .map(|failure| RuntimeTransformFailureDiagnostics {
@@ -104,7 +114,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        CoreManager::global().promoted_runtime_snapshot()
+        self.manager().promoted_runtime_snapshot()
     }
 
     async fn on_profile_change(&self, break_when: bool) {
