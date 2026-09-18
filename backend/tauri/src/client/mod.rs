@@ -87,6 +87,7 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
+    core: Arc<dyn CoreLifecyclePort>,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
         utf8_path(paths.application_config_path())?,
@@ -104,7 +105,7 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_lifecycle::LegacyRunningConfigBridge),
+        Arc::new(core_lifecycle::LegacyRunningConfigBridge::new(core)),
     )
     .await?;
 
@@ -141,7 +142,11 @@ impl ChimeraClient {
             system_dns,
             ui_sink,
         } = args;
-        let typed = tauri::async_runtime::block_on(new_typed_config_clients(&paths, &bridges))?;
+        let typed = tauri::async_runtime::block_on(new_typed_config_clients(
+            &paths,
+            &bridges,
+            core.clone(),
+        ))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
             core,

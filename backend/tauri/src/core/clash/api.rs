@@ -283,10 +283,6 @@ impl ApiClient {
     }
 }
 
-fn legacy_api_client() -> Result<ApiClient> {
-    ApiClient::new(super::core::CoreManager::global().effective_clash_info())
-}
-
 /// 缩短clash的日志
 #[instrument]
 pub fn parse_log(log: String) -> String {
@@ -343,64 +339,9 @@ pub struct ConnectionsRes {
     pub connections: Vec<ConnectionItem>,
 }
 
-/// GET /configs
-#[instrument]
-pub async fn get_configs() -> Result<ClashRuntimeConfig> {
-    legacy_api_client()?.get_configs().await
-}
-
-/// GET /proxies
-/// 获取代理列表
-#[instrument]
-pub async fn get_proxies() -> Result<ProxiesRes> {
-    legacy_api_client()?.get_proxies().await
-}
-
-/// GET /connections
-/// Read active connections with just the fields needed by connection interruption logic.
-#[instrument]
-pub async fn get_connections() -> Result<ConnectionsRes> {
-    legacy_api_client()?.get_connections().await
-}
-
-/// DELETE /connections
-/// Close all connections or a specific connection by ID
-#[instrument]
-pub async fn delete_connections(id: Option<&str>) -> Result<()> {
-    legacy_api_client()?.delete_connections(id).await
-}
-
-/// PUT /proxies/{group}
-/// 选择代理
-/// group: 代理分组名称
-/// name: 代理名称
-#[instrument]
-pub async fn update_proxy(group: &str, name: &str) -> Result<()> {
-    legacy_api_client()?.update_proxy(group, name).await
-}
-
-/// PATCH /configs
-#[instrument]
-pub async fn patch_configs(config: &Mapping) -> Result<()> {
-    legacy_api_client()?.patch_configs(config).await
-}
-
 #[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
 pub struct DelayRes {
     delay: u64,
-}
-
-/// GET /proxies/{name}/delay
-/// 获取代理延迟
-#[instrument]
-pub async fn get_proxy_delay(name: String, test_url: Option<String>) -> Result<DelayRes> {
-    legacy_api_client()?.get_proxy_delay(name, test_url).await
-}
-
-/// GET /group/:name/delay
-#[instrument]
-pub async fn get_group_delay(group: String, url: Option<String>) -> Result<HashMap<String, u32>> {
-    legacy_api_client()?.get_group_delay(group, url).await
 }
 
 #[cfg(test)]

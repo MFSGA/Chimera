@@ -21,16 +21,28 @@ use crate::{
     },
 };
 
-pub(crate) struct LegacyRunningConfigBridge;
+pub(crate) struct LegacyRunningConfigBridge {
+    core: Arc<dyn CoreLifecyclePort>,
+}
+
+impl LegacyRunningConfigBridge {
+    pub(crate) fn new(core: Arc<dyn CoreLifecyclePort>) -> Self {
+        Self { core }
+    }
+
+    fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+        crate::core::clash::api::ApiClient::new(self.core.effective_clash_info())
+    }
+}
 
 #[async_trait]
 impl RunningConfigPort for LegacyRunningConfigBridge {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig> {
-        crate::core::clash::api::get_configs().await
+        self.api_client()?.get_configs().await
     }
 
     async fn patch(&self, patch: &Mapping) -> anyhow::Result<()> {
-        crate::core::clash::api::patch_configs(patch).await
+        self.api_client()?.patch_configs(patch).await
     }
 }
 
