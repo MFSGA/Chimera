@@ -169,9 +169,7 @@ impl RuntimeBuilder {
     }
 }
 
-/// Build the ref pipeline from the existing persisted Chimera state. The
-/// Chimera Client core remains on the legacy path until its custom TUN
-/// contract is represented in the shared executor.
+/// Build the ref pipeline from the existing persisted Chimera state.
 pub async fn build_from_legacy(
     clash: &ClashConfig,
     core: LegacyClashCore,
@@ -324,6 +322,13 @@ mod tests {
             TunFlavor::Standard {
                 stack: TunStack::Gvisor
             }
+        );
+        assert_eq!(
+            derive_tun_flavor(
+                chimera_config::application::ClashCore::ChimeraClient,
+                TunStack::System
+            ),
+            TunFlavor::ChimeraClient
         );
     }
 

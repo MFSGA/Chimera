@@ -213,9 +213,14 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
                 append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
             }
             TunFlavor::ChimeraClient => {
-                // Keep the shared pipeline aware of this core while leaving
-                // custom platform routing fields to the adapter boundary.
-                append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
+                append_default(&mut tun, "device-id", string_value("dev://utun1989"));
+                append_default(&mut tun, "route-all", ConfigValue::Bool(true));
+                append_default(&mut tun, "dns-hijack", ConfigValue::Bool(true));
+                append_default(
+                    &mut tun,
+                    "so-mark",
+                    ConfigValue::Number(serde_json::Number::from(7777)),
+                );
             }
             TunFlavor::Standard { stack } => {
                 append_default(&mut tun, "stack", string_value(stack.as_ref()));
@@ -228,26 +233,48 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
 
     let mut next = obj_insert(config, "tun", ConfigValue::Object(Arc::new(tun)));
     if params.enable {
-        next = apply_tun_dns(&next, params.windows_fake_ip_filter);
+        next = apply_tun_dns(&next, params.windows_fake_ip_filter, params.flavor);
     }
     next
 }
 
-fn apply_tun_dns(config: &ConfigValue, windows_fake_ip_filter: bool) -> ConfigValue {
+fn apply_tun_dns(
+    config: &ConfigValue,
+    windows_fake_ip_filter: bool,
+    flavor: TunFlavor,
+) -> ConfigValue {
     let mut dns = object_of(obj_get(config, "dns"));
     dns.insert(Arc::from("enable"), ConfigValue::Bool(true));
     append_default(&mut dns, "enhanced-mode", string_value("fake-ip"));
-    append_default(&mut dns, "fake-ip-range", string_value("198.18.0.1/16"));
-    append_default(
-        &mut dns,
-        "nameserver",
-        string_list(&["114.114.114.114", "223.5.5.5", "8.8.8.8"]),
-    );
-    append_default(
-        &mut dns,
-        "fallback",
-        ConfigValue::Array(Arc::from(Vec::<ConfigValue>::new())),
-    );
+    if flavor == TunFlavor::ChimeraClient {
+        append_default(
+            &mut dns,
+            "nameserver",
+            string_list(&[
+                "https://dns.alidns.com/dns-query",
+                "114.114.114.114",
+                "223.5.5.5",
+                "8.8.8.8",
+            ]),
+        );
+        append_default(
+            &mut dns,
+            "default-nameserver",
+            string_list(&["114.114.114.114", "1.1.1.1", "8.8.8.8"]),
+        );
+    } else {
+        append_default(&mut dns, "fake-ip-range", string_value("198.18.0.1/16"));
+        append_default(
+            &mut dns,
+            "nameserver",
+            string_list(&["114.114.114.114", "223.5.5.5", "8.8.8.8"]),
+        );
+        append_default(
+            &mut dns,
+            "fallback",
+            ConfigValue::Array(Arc::from(Vec::<ConfigValue>::new())),
+        );
+    }
     if windows_fake_ip_filter {
         append_default(
             &mut dns,
