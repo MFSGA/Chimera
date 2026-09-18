@@ -31,6 +31,10 @@ impl ChimeraClient {
         self.inner.core.runtime_transform_diagnostics()
     }
 
+    pub(crate) fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
+        self.inner.core.effective_clash_info()
+    }
+
     pub(crate) fn promoted_runtime_snapshot(
         &self,
     ) -> Option<Arc<crate::client::runtime::RuntimeSnapshot>> {

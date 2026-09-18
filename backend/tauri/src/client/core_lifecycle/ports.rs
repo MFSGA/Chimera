@@ -77,5 +77,11 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         None
     }
 
+    fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
+    }
+
     async fn on_profile_change(&self, break_when: bool);
 }
