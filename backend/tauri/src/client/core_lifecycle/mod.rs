@@ -21,6 +21,10 @@ pub(crate) use ports::{
 };
 
 impl ChimeraClient {
+    pub(crate) fn init_core(&self) -> anyhow::Result<()> {
+        self.inner.core.init()
+    }
+
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.inner.core.status().await
     }

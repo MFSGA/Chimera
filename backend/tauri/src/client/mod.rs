@@ -282,6 +282,10 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
             self.events.lock().unwrap().push("begin");
             Ok(Box::new(RecordingLease {

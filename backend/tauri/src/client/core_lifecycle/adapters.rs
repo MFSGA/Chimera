@@ -78,6 +78,10 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
+    fn init(&self) -> anyhow::Result<()> {
+        self.manager().init()
+    }
+
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
         Ok(Box::new(LegacyCoreLifecycleLease {
             lease: self.manager().begin_lifecycle().await,
