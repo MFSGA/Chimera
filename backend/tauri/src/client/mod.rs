@@ -6,7 +6,6 @@
 mod application;
 mod clash_api;
 mod clash_config;
-mod core_bridge;
 pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
