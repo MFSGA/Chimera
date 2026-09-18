@@ -481,12 +481,17 @@ impl CoreLifecycleLease<'_> {
 }
 
 #[derive(Debug)]
-pub struct CoreManager {
-    instance: Mutex<Option<Arc<Instance>>>,
+struct CoreLifecycleState {
     /// Single mutex domain for run/restart, stop, check, recover, and core changes.
     run_lock: RuntimeRebuildGate,
     runtime_lifecycle: RuntimeLifecycle,
     port_resolver: SessionPortResolver,
+}
+
+#[derive(Debug)]
+pub struct CoreManager {
+    instance: Mutex<Option<Arc<Instance>>>,
+    lifecycle: CoreLifecycleState,
 }
 
 impl CoreManager {
@@ -494,45 +499,55 @@ impl CoreManager {
         static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
         CORE_MANAGER.get_or_init(|| CoreManager {
             instance: Mutex::new(None),
-            run_lock: RuntimeRebuildGate::default(),
-            runtime_lifecycle: RuntimeLifecycle::default(),
-            port_resolver: SessionPortResolver::default(),
+            lifecycle: CoreLifecycleState {
+                run_lock: RuntimeRebuildGate::default(),
+                runtime_lifecycle: RuntimeLifecycle::default(),
+                port_resolver: SessionPortResolver::default(),
+            },
         })
     }
 
     pub(crate) async fn begin_lifecycle(&self) -> CoreLifecycleLease<'_> {
         CoreLifecycleLease {
             manager: self,
-            _guard: self.run_lock.lock().await,
+            _guard: self.lifecycle.run_lock.lock().await,
         }
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
-        self.runtime_lifecycle.snapshot().applied.map(|snapshot| {
-            (
-                snapshot.revision.get(),
-                snapshot.postprocessing_output.clone(),
-            )
-        })
+        self.lifecycle
+            .runtime_lifecycle
+            .snapshot()
+            .applied
+            .map(|snapshot| {
+                (
+                    snapshot.revision.get(),
+                    snapshot.postprocessing_output.clone(),
+                )
+            })
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        self.runtime_lifecycle.snapshot().promoted
+        self.lifecycle.runtime_lifecycle.snapshot().promoted
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
-        self.runtime_lifecycle.snapshot().last_transform_failure
+        self.lifecycle
+            .runtime_lifecycle
+            .snapshot()
+            .last_transform_failure
     }
 
     pub(crate) fn applied_clash_info(&self) -> Option<ClashInfo> {
-        self.runtime_lifecycle
+        self.lifecycle
+            .runtime_lifecycle
             .snapshot()
             .applied
             .map(|snapshot| snapshot.clash_info())
     }
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
-        if self.run_lock.is_locked() {
+        if self.lifecycle.run_lock.is_locked() {
             return Config::clash().latest().get_client_info();
         }
 
@@ -670,11 +685,13 @@ impl CoreManager {
             .map_err(RuntimeRestartError::Prepare)?;
 
         let resolved_ports = self
+            .lifecycle
             .port_resolver
             .resolve(clash)
             .map_err(RuntimeRestartError::Prepare)?;
 
         let revision = self
+            .lifecycle
             .runtime_lifecycle
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
@@ -690,19 +707,20 @@ impl CoreManager {
                 ),
                 Err(error) => {
                     if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
-                        self.runtime_lifecycle
-                            .publish_transform_failure(RuntimeTransformFailure {
+                        self.lifecycle.runtime_lifecycle.publish_transform_failure(
+                            RuntimeTransformFailure {
                                 attempt_revision: revision,
                                 transform_uid: transform.transform_uid.clone(),
                                 scope_uid: transform.scope_uid.clone(),
                                 script_type: transform.script_type,
                                 message: transform.message(),
-                            });
+                            },
+                        );
                     }
                     return Err(RuntimeRestartError::Prepare(error));
                 }
             };
-        self.runtime_lifecycle.clear_transform_failure();
+        self.lifecycle.runtime_lifecycle.clear_transform_failure();
         let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
         let candidate = paths
             .create_candidate(&bytes)
@@ -737,12 +755,15 @@ impl CoreManager {
                 )),
             },
         ));
-        self.runtime_lifecycle.publish_promoted(snapshot.clone());
+        self.lifecycle
+            .runtime_lifecycle
+            .publish_promoted(snapshot.clone());
 
         self.run_core_from_product_inner(paths.product(), target_core, run_type)
             .await
             .map_err(RuntimeRestartError::Start)?;
-        self.runtime_lifecycle
+        self.lifecycle
+            .runtime_lifecycle
             .publish_applied(snapshot)
             .map_err(RuntimeRestartError::Promote)?;
         Config::runtime().apply();
@@ -760,7 +781,7 @@ impl CoreManager {
         *Config::clash().data() = previous_clash;
         restore_failed_apply(
             paths,
-            &self.runtime_lifecycle,
+            &self.lifecycle.runtime_lifecycle,
             transaction,
             |had_product| async move {
                 if had_product {
@@ -802,7 +823,7 @@ impl CoreManager {
         {
             log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
         }
-        let transaction = capture_runtime_transaction(&paths, &self.runtime_lifecycle)
+        let transaction = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
             .await
             .map_err(RuntimeRestartError::Prepare)?;
         let recovery_target = transaction
@@ -851,7 +872,7 @@ impl CoreManager {
 
     /// 重启内核
     pub async fn recover_core(&'static self) -> Result<()> {
-        let _guard = self.run_lock.lock().await;
+        let _guard = self.lifecycle.run_lock.lock().await;
         if let Err(err) = self.rebuild_and_run_locked(Self::selected_core()).await {
             log::error!(target: "app", "failed to recover clash core");
             log::error!(target: "app", "{err:?}");
