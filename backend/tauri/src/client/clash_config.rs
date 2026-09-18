@@ -360,7 +360,7 @@ impl ClashConfigClient {
 
         let finalize = async {
             apply_clash_runtime_change(owner, &plan).await?;
-            run_clash_patch_side_effects(&plan);
+            run_clash_patch_side_effects(owner, &plan);
             Config::runtime().draft().patch_config(&overrides);
             Config::runtime().apply();
             Config::clash().data().save_config()?;
@@ -615,13 +615,13 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     }
 }
 
-fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
+fn run_clash_patch_side_effects(client: &ChimeraClient, plan: &ClashPatchPlan) {
     if plan.mixed_port.is_some() {
         log_err!(sysopt::Sysopt::global().init_sysproxy());
     }
 
     if plan.mode_changed {
-        crate::feat::update_proxies_buff(None);
+        crate::feat::update_proxies_buff(client.clone(), None);
         log::debug!("systray mode changed, update proxies buff");
         log_err!(handle::Handle::update_systray_part());
     }

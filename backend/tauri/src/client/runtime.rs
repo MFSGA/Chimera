@@ -1132,7 +1132,7 @@ impl ChimeraClient {
             return Err(error);
         }
         self.inner.ui_sink.refresh_clash();
-        crate::feat::update_proxies_buff(None);
+        crate::feat::update_proxies_buff(self.clone(), None);
         Ok(())
     }
 }

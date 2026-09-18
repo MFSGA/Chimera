@@ -59,14 +59,14 @@ pub struct Proxies {
 }
 
 /// todo: fetch proxies and ProvidersProxiesRes
-async fn fetch_proxies() -> Result<api::ProxiesRes> {
-    api::get_proxies().await
+async fn fetch_proxies(api: &api::ApiClient) -> Result<api::ProxiesRes> {
+    api.get_proxies().await
 }
 
 impl Proxies {
-    #[instrument]
-    pub async fn fetch() -> Result<Self> {
-        let inner_proxies = fetch_proxies
+    #[instrument(skip(api))]
+    pub async fn fetch(api: &api::ApiClient) -> Result<Self> {
+        let inner_proxies = (|| fetch_proxies(api))
             .retry(*CLASH_API_DEFAULT_BACKOFF_STRATEGY)
             .await?;
         let inner_proxies = inner_proxies.proxies;
@@ -209,14 +209,14 @@ impl ProxiesGuard {
 }
 
 pub trait ProxiesGuardExt {
-    async fn update(&self) -> Result<()>;
-    async fn select_proxy(&self, group: &str, name: &str) -> Result<()>;
+    async fn update(&self, api: &api::ApiClient) -> Result<()>;
+    async fn select_proxy(&self, api: &api::ApiClient, group: &str, name: &str) -> Result<()>;
 }
 
 type ProxiesGuardSingleton = &'static Arc<RwLock<ProxiesGuard>>;
 impl ProxiesGuardExt for ProxiesGuardSingleton {
-    async fn update(&self) -> Result<()> {
-        let proxies = Proxies::fetch().await?;
+    async fn update(&self, api: &api::ApiClient) -> Result<()> {
+        let proxies = Proxies::fetch(api).await?;
         let buf = serde_json::to_string(&proxies)?;
         let checksum = adler::adler32(buf.as_bytes())?;
         {
@@ -230,9 +230,9 @@ impl ProxiesGuardExt for ProxiesGuardSingleton {
         Ok(())
     }
 
-    async fn select_proxy(&self, group: &str, name: &str) -> Result<()> {
-        api::update_proxy(group, name).await?;
-        self.update().await?;
+    async fn select_proxy(&self, api: &api::ApiClient, group: &str, name: &str) -> Result<()> {
+        api.update_proxy(group, name).await?;
+        self.update(api).await?;
         Ok(())
     }
 }
