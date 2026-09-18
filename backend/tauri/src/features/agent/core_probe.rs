@@ -1,8 +1,8 @@
 use std::{net::SocketAddr, time::Duration};
 
-use crate::core::clash::{
-    api::{self, ClashRuntimeConfig},
-    core::CoreManager,
+use crate::{
+    client::ChimeraClient,
+    core::clash::api::{self, ClashRuntimeConfig},
 };
 
 use super::model::AgentRoutingMode;
@@ -21,8 +21,8 @@ pub(super) struct ObservedCoreConfig {
 /// Reads the small runtime projection Agent needs through the shared Clash API.
 /// The loopback guard keeps the controller credential on-host even if the
 /// effective controller endpoint is unexpectedly changed.
-pub(super) async fn observed_core_config() -> Result<ObservedCoreConfig, ()> {
-    let info = CoreManager::global().effective_clash_info();
+pub(super) async fn observed_core_config(client: &ChimeraClient) -> Result<ObservedCoreConfig, ()> {
+    let info = client.clash_info();
     loopback_controller_url(&info.server)?;
     let config = tokio::time::timeout(CORE_PROBE_TIMEOUT, api::get_configs())
         .await
@@ -31,8 +31,8 @@ pub(super) async fn observed_core_config() -> Result<ObservedCoreConfig, ()> {
     Ok(project_core_config(config))
 }
 
-pub(super) async fn observed_routing_mode() -> Result<AgentRoutingMode, ()> {
-    observed_core_config().await?.routing_mode.ok_or(())
+pub(super) async fn observed_routing_mode(client: &ChimeraClient) -> Result<AgentRoutingMode, ()> {
+    observed_core_config(client).await?.routing_mode.ok_or(())
 }
 
 fn project_core_config(config: ClashRuntimeConfig) -> ObservedCoreConfig {

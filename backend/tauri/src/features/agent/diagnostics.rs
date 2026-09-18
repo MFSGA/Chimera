@@ -99,7 +99,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     let mut observed_tun_auto_route = None;
     let mut observed_tun_route_addresses = Vec::new();
     if core.state == AgentCoreState::Running {
-        match core_probe::observed_core_config().await {
+        match core_probe::observed_core_config(&client).await {
             Ok(observed) => {
                 core.observed_routing_mode = observed.routing_mode;
                 core.applied_consistency = match (core.routing_mode, observed.routing_mode) {
