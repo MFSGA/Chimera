@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use backon::ExponentialBuilder;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -34,7 +36,12 @@ pub async fn restart_ws_connector<R: Runtime>(manager: &impl Manager<R>) -> anyh
 }
 
 pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
-    let ws_connector = ws::ClashConnectionsConnector::new();
+    let client = manager
+        .state::<crate::client::ChimeraClient>()
+        .inner()
+        .clone();
+    let endpoint: ws::ClashEndpointResolver = Arc::new(move || client.clash_info());
+    let ws_connector = ws::ClashConnectionsConnector::new(endpoint);
     manager.manage(ws_connector.clone());
     let app_handle = manager.app_handle().clone();
 
