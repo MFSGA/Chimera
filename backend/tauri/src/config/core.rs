@@ -79,32 +79,12 @@ impl Config {
         core: crate::config::chimera::ClashCore,
         resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
     ) -> Result<RuntimeInputOutput> {
-        // Standard cores use the ref-aligned executor. Chimera Client keeps
-        // the compatibility path until its custom TUN contract is represented
-        // by the shared runtime domain.
-        let (config, exists_keys, postprocessing_output, inspection) = if core
-            == crate::config::chimera::ClashCore::ChimeraClient
-        {
-            let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
-            (config, exists_keys, output, None)
-        } else {
-            match enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await {
-                Ok((config, exists_keys, output, inspection)) => {
-                    (config, exists_keys, output, Some(inspection))
-                }
-                Err(error) => {
-                    // Keep existing user profiles startable while the ref
-                    // domain is still a partial migration. The fallback
-                    // is intentionally narrow and observable in logs.
-                    log::warn!(
-                        target: "app",
-                        "ref runtime build failed for {core}; falling back to legacy enhance: {error:#}"
-                    );
-                    let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
-                    (config, exists_keys, output, None)
-                }
-            }
-        };
+        // All supported cores use the shared ref-aligned executor. Runtime
+        // generation has one business implementation; failures are surfaced
+        // instead of silently switching to the legacy enhancer.
+        let (config, exists_keys, postprocessing_output, inspection) =
+            enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await?;
+        let inspection = Some(inspection);
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
