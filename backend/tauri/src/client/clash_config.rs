@@ -405,8 +405,10 @@ impl ClashConfigClient {
         }
 
         if plan.mode_changed {
+            let api = owner.clash_api_client()?;
             log_err!(
                 crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                    &api,
                     plan.break_on_mode_change,
                 )
                 .await,

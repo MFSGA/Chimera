@@ -954,8 +954,9 @@ pub async fn select_proxy(
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
     ProxiesGuard::global().select_proxy(&group, &name).await?;
     handle::Handle::mutate_proxies();
+    let api = client.clash_api_client()?;
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-        break_when, &group,
+        &api, break_when, &group,
     )
     .await;
     Ok(())

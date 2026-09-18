@@ -126,7 +126,14 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     async fn on_profile_change(&self, break_when: bool) {
-        let _ = ConnectionInterruptionService::on_profile_change(break_when).await;
+        let result =
+            match crate::core::clash::api::ApiClient::new(self.manager().effective_clash_info()) {
+                Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
+                Err(error) => Err(error),
+            };
+        if let Err(error) = result {
+            tracing::warn!(%error, "failed to interrupt connections after profile change");
+        }
     }
 }
 
