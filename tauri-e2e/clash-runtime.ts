@@ -17,17 +17,24 @@ export async function readClashInfo(): Promise<ClashInfo> {
 }
 
 export async function readClashRuntimeConfig<T>(): Promise<T> {
-  const info = await readClashInfo();
-  const url = `http://${info.server}/configs`;
   const deadline = Date.now() + 30_000;
   let lastError: unknown;
+  let lastUrl = '<unknown>';
 
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(url, {
+      const info = await readClashInfo();
+      lastUrl = `http://${info.server}/configs`;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+
+      const response = await fetch(lastUrl, {
         headers: info.secret
           ? { Authorization: `Bearer ${info.secret}` }
           : undefined,
+        signal: AbortSignal.timeout(Math.min(5_000, remaining)),
       });
       if (!response.ok) {
         throw new Error(`Clash config query failed: ${response.status}`);
@@ -35,11 +42,16 @@ export async function readClashRuntimeConfig<T>(): Promise<T> {
       return (await response.json()) as T;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(500, remaining)),
+        );
+      }
     }
   }
 
-  throw new Error(`Clash runtime was not ready at ${url}`, {
+  throw new Error(`Clash runtime was not ready at ${lastUrl}`, {
     cause: lastError,
   });
 }
