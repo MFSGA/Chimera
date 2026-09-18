@@ -117,6 +117,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.manager().promoted_runtime_snapshot()
     }
 
+    fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
+        self.manager().effective_clash_info()
+    }
+
     async fn on_profile_change(&self, break_when: bool) {
         let _ = ConnectionInterruptionService::on_profile_change(break_when).await;
     }

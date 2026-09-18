@@ -433,7 +433,7 @@ impl ChimeraClient {
     }
 
     pub(crate) fn clash_info(&self) -> ClashInfo {
-        crate::core::clash::core::CoreManager::global().effective_clash_info()
+        self.inner.core.effective_clash_info()
     }
 
     pub(crate) async fn patch_clash(&self, patch: Mapping) -> Result<()> {
