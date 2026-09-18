@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chimera_config::{
     application::ChimeraAppConfig,
     clash::config::{ClashConfig, tun_stack::TunStack},
@@ -115,6 +115,9 @@ pub fn derive_tun_flavor(
     if core == chimera_config::application::ClashCore::ClashRs {
         return TunFlavor::ClashRs;
     }
+    if core == chimera_config::application::ClashCore::ChimeraClient {
+        return TunFlavor::ChimeraClient;
+    }
     let stack = if core == chimera_config::application::ClashCore::ClashPremium
         && stack == TunStack::Mixed
     {
@@ -194,10 +197,6 @@ pub(crate) async fn build_from_legacy_with_inspection(
     crate::enhance::PostProcessingOutput,
     crate::client::runtime_inspection::RuntimeInspectionData,
 )> {
-    if core == LegacyClashCore::ChimeraClient {
-        bail!("Chimera Client runtime still uses its compatibility builder");
-    }
-
     let profiles = Arc::new(to_runtime_profiles(&Config::profiles().latest())?);
     let mut app = ChimeraAppConfig::default();
     app.core = map_core(core);
