@@ -1,9 +1,6 @@
 use std::{net::SocketAddr, time::Duration};
 
-use crate::{
-    client::ChimeraClient,
-    core::clash::api::{self, ClashRuntimeConfig},
-};
+use crate::{client::ChimeraClient, core::clash::api::ClashRuntimeConfig};
 
 use super::model::AgentRoutingMode;
 
@@ -24,7 +21,8 @@ pub(super) struct ObservedCoreConfig {
 pub(super) async fn observed_core_config(client: &ChimeraClient) -> Result<ObservedCoreConfig, ()> {
     let info = client.clash_info();
     loopback_controller_url(&info.server)?;
-    let config = tokio::time::timeout(CORE_PROBE_TIMEOUT, api::get_configs())
+    let api = client.clash_api_client().map_err(|_| ())?;
+    let config = tokio::time::timeout(CORE_PROBE_TIMEOUT, api.get_configs())
         .await
         .map_err(|_| ())?
         .map_err(|_| ())?;
