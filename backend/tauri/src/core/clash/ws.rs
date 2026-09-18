@@ -18,6 +18,9 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
 };
 
+pub(crate) type ClashEndpointResolver =
+    Arc<dyn Fn() -> crate::config::clash::ClashInfo + Send + Sync>;
+
 const MAX_CONNECTIONS_HISTORY: usize = 32;
 const MAX_MEMORY_HISTORY: usize = 32;
 const MAX_TRAFFIC_HISTORY: usize = 32;
@@ -463,6 +466,7 @@ impl ClashConnectionsConnectorShared {
 
 struct ClashConnectionsActorState {
     shared: Arc<ClashConnectionsConnectorShared>,
+    endpoint: ClashEndpointResolver,
     connections_handler: Option<JoinHandle<()>>,
     logs_handler: Option<JoinHandle<()>>,
     traffic_handler: Option<JoinHandle<()>>,
@@ -534,7 +538,7 @@ impl ClashConnectionsActor {
                 .dispatch_state_changed(ClashConnectionsConnectorState::Connecting);
         }
 
-        let endpoint = ClashConnectionsConnector::endpoint(kind.path())
+        let endpoint = ClashConnectionsConnector::endpoint((state.endpoint)(), kind.path())
             .with_context(|| format!("failed to create {} endpoint", kind.path()))?;
         log::debug!(
             "connecting to clash {} ws server: {endpoint:?}",
@@ -609,15 +613,16 @@ impl ClashConnectionsActor {
 impl Actor for ClashConnectionsActor {
     type Msg = ClashConnectionsActorMessage;
     type State = ClashConnectionsActorState;
-    type Arguments = Arc<ClashConnectionsConnectorShared>;
+    type Arguments = (Arc<ClashConnectionsConnectorShared>, ClashEndpointResolver);
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        shared: Self::Arguments,
+        (shared, endpoint): Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(ClashConnectionsActorState {
             shared,
+            endpoint,
             connections_handler: None,
             logs_handler: None,
             traffic_handler: None,
@@ -699,13 +704,13 @@ impl Deref for ClashConnectionsConnector {
 }
 
 impl ClashConnectionsConnector {
-    pub fn new() -> Self {
+    pub(crate) fn new(endpoint: ClashEndpointResolver) -> Self {
         let shared = Arc::new(ClashConnectionsConnectorShared::new());
         let actor_ref = tauri::async_runtime::block_on(async {
             Actor::spawn(
                 Some("clash-ws-connector".to_string()),
                 ClashConnectionsActor,
-                shared.clone(),
+                (shared.clone(), endpoint),
             )
             .await
             .context("failed to spawn clash websocket actor")
@@ -718,11 +723,8 @@ impl ClashConnectionsConnector {
         }
     }
 
-    pub fn endpoint(path: &str) -> anyhow::Result<Request> {
-        let (server, secret) = {
-            let info = super::core::CoreManager::global().effective_clash_info();
-            (info.server, info.secret)
-        };
+    fn endpoint(info: crate::config::clash::ClashInfo, path: &str) -> anyhow::Result<Request> {
+        let (server, secret) = (info.server, info.secret);
         let token = urlencoding::encode(secret.as_deref().unwrap_or_default());
         let url = format!("ws://{server}/{path}?token={token}");
         let mut request = url
@@ -887,9 +889,15 @@ mod tests {
     async fn actor_stop_sets_disconnected() {
         let shared = Arc::new(ClashConnectionsConnectorShared::new());
         shared.dispatch_state_changed(ClashConnectionsConnectorState::Connected);
-        let (actor_ref, handle) = Actor::spawn(None, ClashConnectionsActor, shared.clone())
-            .await
-            .expect("actor should start");
+        let endpoint: ClashEndpointResolver = Arc::new(|| crate::config::clash::ClashInfo {
+            port: 9090,
+            server: "127.0.0.1:9090".into(),
+            secret: None,
+        });
+        let (actor_ref, handle) =
+            Actor::spawn(None, ClashConnectionsActor, (shared.clone(), endpoint))
+                .await
+                .expect("actor should start");
 
         actor_ref
             .call(
