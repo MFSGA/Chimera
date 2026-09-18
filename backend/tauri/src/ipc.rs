@@ -904,7 +904,7 @@ pub async fn patch_clash_config(
     if let Err(error) = outcome.into_result() {
         return Err(IpcError::from(error));
     }
-    feat::update_proxies_buff(None);
+    feat::update_proxies_buff((*client).clone(), None);
     Ok(())
 }
 
@@ -923,13 +923,15 @@ pub async fn patch_clash_core_config(
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
-    feat::update_proxies_buff(None);
+    feat::update_proxies_buff((*client).clone(), None);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
+pub async fn get_proxies(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::core::clash::proxies::Proxies> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     {
         let guard = ProxiesGuard::global().read();
@@ -937,7 +939,8 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
             return Ok(guard.inner().clone());
         }
     }
-    match ProxiesGuard::global().update().await {
+    let api = client.clash_api_client()?;
+    match ProxiesGuard::global().update(&api).await {
         Ok(_) => Ok(ProxiesGuard::global().read().inner().clone()),
         Err(err) => Err(err.into()),
     }
@@ -952,9 +955,11 @@ pub async fn select_proxy(
 ) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
-    ProxiesGuard::global().select_proxy(&group, &name).await?;
-    handle::Handle::mutate_proxies();
     let api = client.clash_api_client()?;
+    ProxiesGuard::global()
+        .select_proxy(&api, &group, &name)
+        .await?;
+    handle::Handle::mutate_proxies();
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
         &api, break_when, &group,
     )
