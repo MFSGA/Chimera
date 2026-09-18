@@ -92,17 +92,6 @@ pub(crate) fn map_postprocessing(
     output
 }
 
-pub(crate) fn artifact_to_legacy_output(
-    artifact: RuntimeArtifact,
-    profiles: &Profiles,
-    core: ClashCore,
-    builtin_enabled: bool,
-) -> Result<(serde_yaml::Mapping, PostProcessingOutput)> {
-    let (mapping, _, output, _) =
-        artifact_to_legacy_output_with_inspection(artifact, profiles, core, builtin_enabled)?;
-    Ok((mapping, output))
-}
-
 pub(crate) fn artifact_to_legacy_output_with_inspection(
     artifact: RuntimeArtifact,
     profiles: &Profiles,
