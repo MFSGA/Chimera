@@ -15,7 +15,7 @@ use crate::{
         chimera::{ClashCore, WindowState, WindowType},
         core::Config,
     },
-    core::{clash::core::CoreManager, handle, sysopt, tray},
+    core::{handle, sysopt, tray},
     log_err,
     utils::init,
     window::{AppWindow, WindowConfig},
@@ -258,7 +258,7 @@ pub fn resolve_setup(app: &mut App) {
     log_err!(Config::init_config());
 
     log::trace!("launch core");
-    log_err!(CoreManager::global().init());
+    log_err!(client.init_core());
 
     log::trace!("init storage");
     log_err!(crate::core::storage::setup(app));
