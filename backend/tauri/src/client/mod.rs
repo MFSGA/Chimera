@@ -4,6 +4,7 @@
 //! staged migration from legacy globals and Chimera-specific core support.
 
 mod application;
+mod clash_api;
 mod clash_config;
 mod core_bridge;
 pub(crate) mod core_lifecycle;
