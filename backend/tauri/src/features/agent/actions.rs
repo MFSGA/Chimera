@@ -635,14 +635,14 @@ async fn set_routing_mode(
         return Err(error);
     }
 
-    if routing_mode_is_applied_with_timeout(target).await {
+    if routing_mode_is_applied_with_timeout(client, target).await {
         return Ok(());
     }
 
     let restored = matches!(
         apply_routing_mode_transaction(client, before).await,
         Ok(TransactionOutcome::Committed)
-    ) && routing_mode_is_applied_with_timeout(before).await;
+    ) && routing_mode_is_applied_with_timeout(client, before).await;
 
     if restored {
         Err(AgentCommandError::VerificationFailed)
@@ -673,13 +673,16 @@ async fn apply_routing_mode_transaction(
     Ok(feat::patch_running_clash_overrides(client, overrides).await)
 }
 
-async fn routing_mode_is_applied_with_timeout(mode: AgentRoutingMode) -> bool {
-    tokio::time::timeout(CORE_ACTION_TIMEOUT, routing_mode_is_applied(mode))
+async fn routing_mode_is_applied_with_timeout(
+    client: &ChimeraClient,
+    mode: AgentRoutingMode,
+) -> bool {
+    tokio::time::timeout(CORE_ACTION_TIMEOUT, routing_mode_is_applied(client, mode))
         .await
         .unwrap_or(false)
 }
 
-async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
+async fn routing_mode_is_applied(client: &ChimeraClient, mode: AgentRoutingMode) -> bool {
     let configured = crate::config::core::Config::runtime()
         .latest()
         .config
@@ -687,7 +690,7 @@ async fn routing_mode_is_applied(mode: AgentRoutingMode) -> bool {
         .and_then(|config| config.get("mode"))
         .and_then(serde_yaml::Value::as_str)
         .and_then(AgentRoutingMode::parse);
-    configured == Some(mode) && core_probe::observed_routing_mode().await == Ok(mode)
+    configured == Some(mode) && core_probe::observed_routing_mode(client).await == Ok(mode)
 }
 
 async fn set_tun_enabled(
@@ -742,7 +745,7 @@ async fn tun_enabled_is_applied(client: &ChimeraClient, enabled: bool) -> bool {
         return false;
     }
 
-    let Ok(observed) = core_probe::observed_core_config().await else {
+    let Ok(observed) = core_probe::observed_core_config(client).await else {
         return false;
     };
     if observed.tun_enabled != Some(enabled) {
