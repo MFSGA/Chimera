@@ -212,6 +212,11 @@ fn apply_tun(config: &ConfigValue, params: &TunParams) -> ConfigValue {
                 append_default(&mut tun, "device-id", string_value("dev://utun1989"));
                 append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
             }
+            TunFlavor::ChimeraClient => {
+                // Keep the shared pipeline aware of this core while leaving
+                // custom platform routing fields to the adapter boundary.
+                append_default(&mut tun, "auto-route", ConfigValue::Bool(true));
+            }
             TunFlavor::Standard { stack } => {
                 append_default(&mut tun, "stack", string_value(stack.as_ref()));
                 append_default(&mut tun, "dns-hijack", string_list(&["any:53"]));
