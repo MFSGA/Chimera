@@ -18,7 +18,7 @@ pub(crate) struct RuntimeInputOutput {
     pub(crate) config: Mapping,
     pub(crate) exists_keys: Vec<String>,
     pub(crate) postprocessing_output: PostProcessingOutput,
-    pub(crate) inspection: Option<crate::client::runtime_inspection::RuntimeInspectionData>,
+    pub(crate) inspection: crate::client::runtime_inspection::RuntimeInspectionData,
 }
 
 /// whole config
@@ -84,7 +84,6 @@ impl Config {
         // instead of silently switching to the legacy enhancer.
         let (config, exists_keys, postprocessing_output, inspection) =
             enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await?;
-        let inspection = Some(inspection);
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
