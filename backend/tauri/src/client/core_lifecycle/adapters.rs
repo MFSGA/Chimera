@@ -46,24 +46,32 @@ impl RunningConfigPort for LegacyRunningConfigBridge {
     }
 }
 
-pub(crate) struct LegacyCoreBridge;
+pub(crate) struct LegacyCoreBridge {
+    manager: Arc<CoreManager>,
+}
 
 impl LegacyCoreBridge {
+    pub(crate) fn new() -> Self {
+        Self {
+            manager: Arc::new(CoreManager::new()),
+        }
+    }
+
     /// Compatibility boundary for the staged lifecycle migration.
     ///
     /// New lifecycle implementations can replace this adapter without
     /// changing client callers.
-    fn manager(&self) -> &'static CoreManager {
-        CoreManager::global()
+    fn manager(&self) -> &Arc<CoreManager> {
+        &self.manager
     }
 }
 
-struct LegacyCoreLifecycleLease {
-    lease: CoreManagerLifecycleLease<'static>,
+struct LegacyCoreLifecycleLease<'a> {
+    lease: CoreManagerLifecycleLease<'a>,
 }
 
 #[async_trait]
-impl CoreLifecycleLease for LegacyCoreLifecycleLease {
+impl CoreLifecycleLease for LegacyCoreLifecycleLease<'_> {
     async fn rebuild_running_config(
         &mut self,
         clash: ClashConfig,
@@ -94,7 +102,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.manager().init()
     }
 
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
         Ok(Box::new(LegacyCoreLifecycleLease {
             lease: self.manager().begin_lifecycle().await,
         }))
@@ -149,11 +157,11 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 }
 
-pub(crate) struct CoreUpdateLease {
-    pub(crate) lease: Box<dyn CoreLifecycleLease>,
+pub(crate) struct CoreUpdateLease<'a> {
+    pub(crate) lease: Box<dyn CoreLifecycleLease + 'a>,
 }
 
-impl CoreUpdateLease {
+impl CoreUpdateLease<'_> {
     pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop().await
     }

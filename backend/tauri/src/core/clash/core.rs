@@ -22,7 +22,6 @@ use chimera_utils::{
     },
     runtime::spawn,
 };
-use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -497,9 +496,8 @@ pub struct CoreManager {
 }
 
 impl CoreManager {
-    pub fn global() -> &'static CoreManager {
-        static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
-        CORE_MANAGER.get_or_init(|| CoreManager {
+    pub(crate) fn new() -> Self {
+        Self {
             instance: Mutex::new(None),
             lifecycle: CoreLifecycleState {
                 run_lock: RuntimeRebuildGate::default(),
@@ -507,7 +505,7 @@ impl CoreManager {
                 port_resolver: SessionPortResolver::default(),
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             },
-        })
+        }
     }
 
     pub(crate) async fn begin_lifecycle(&self) -> CoreLifecycleLease<'_> {
@@ -890,18 +888,20 @@ impl CoreManager {
         }
     }
 
-    pub fn init(&'static self) -> Result<()> {
+    pub fn init(self: &Arc<Self>) -> Result<()> {
         let recovery_notify = self.lifecycle.recovery_notify.clone();
+        let recovery_manager = self.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 recovery_notify.notified().await;
                 tracing::info!("Trying to recover core.");
-                let _ = self.recover_core().await;
+                let _ = recovery_manager.recover_core().await;
             }
         });
+        let startup_manager = self.clone();
         tauri::async_runtime::spawn(async move {
             // 启动clash
-            log_err!(self.run_core().await);
+            log_err!(startup_manager.run_core().await);
         });
 
         Ok(())

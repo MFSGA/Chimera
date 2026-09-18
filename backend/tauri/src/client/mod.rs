@@ -292,7 +292,7 @@ mod tests {
             Ok(())
         }
 
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             self.events.lock().unwrap().push("begin");
             Ok(Box::new(RecordingLease {
                 events: self.events.clone(),
