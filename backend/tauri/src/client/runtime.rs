@@ -1113,20 +1113,7 @@ mod tests {
 
 impl ChimeraClient {
     pub(crate) async fn rebuild_running_config(&self) -> anyhow::Result<()> {
-        let result = async {
-            let mut lease = self.inner.core.begin().await?;
-            let clash = self.get_clash_config()?;
-            let app = self.get_app_config()?;
-            let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
-            let run_type = crate::core::RunType::classify(
-                app.enable_service_mode,
-                crate::core::service::ipc::get_ipc_state(),
-            );
-            lease
-                .rebuild_running_config(clash, target_core, run_type)
-                .await
-        }
-        .await;
+        let result = self.inner.core_lifecycle.reconcile().await;
         if let Err(error) = result {
             self.inner.ui_sink.refresh_runtime_transform_diagnostics();
             return Err(error);

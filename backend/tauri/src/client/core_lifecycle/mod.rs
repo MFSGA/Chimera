@@ -12,7 +12,10 @@ use std::{sync::Arc, time::Duration};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
-use super::{ChimeraClient, application::ApplicationClient, runtime::RuntimePaths};
+use super::{
+    ChimeraClient, application::ApplicationClient, clash_config::ClashConfigClient,
+    runtime::RuntimePaths,
+};
 use workflow::{Command, CoreLifecycleWorkflow};
 
 #[allow(unused_imports)]
@@ -98,11 +101,13 @@ impl CoreLifecycleClient {
     pub(super) async fn spawn(
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
+        clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> anyhow::Result<Self> {
         Self::spawn_with_installer(
             core,
             application,
+            clash,
             runtime_paths,
             Arc::new(FsBinaryInstaller),
         )
@@ -112,11 +117,13 @@ impl CoreLifecycleClient {
     async fn spawn_with_installer(
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
+        clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
         installer: Arc<dyn ports::BinaryInstaller>,
     ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
-        let workflow = CoreLifecycleWorkflow::new(application, core, installer, runtime_paths);
+        let workflow =
+            CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths);
         let (actor_ref, _handle) = Actor::spawn(None, CoreLifecycleActor, workflow).await?;
         if let Some(recovery_notify) = recovery_notify {
             let recovery_actor = actor_ref.clone();
@@ -138,11 +145,13 @@ impl CoreLifecycleClient {
     pub(super) fn direct(
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
+        clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> Self {
         Self(Arc::new(CoreLifecycleClientInner::Direct {
             workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
                 application,
+                clash,
                 core,
                 Arc::new(FsBinaryInstaller),
                 runtime_paths,
@@ -178,6 +187,10 @@ impl CoreLifecycleClient {
         core: crate::config::chimera::ClashCore,
     ) -> anyhow::Result<()> {
         self.execute(Command::SelectCore(core)).await
+    }
+
+    pub(super) async fn reconcile(&self) -> anyhow::Result<()> {
+        self.execute(Command::Reconcile).await
     }
 
     pub(super) async fn replace_core_binary(
@@ -286,6 +299,7 @@ mod tests {
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
             Ok(())
         }
 
@@ -353,6 +367,7 @@ mod tests {
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             }),
             ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
         )
         .await
@@ -380,6 +395,7 @@ mod tests {
                 recovery_notify: recovery_notify.clone(),
             }),
             ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
         )
         .await
@@ -399,6 +415,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reconcile_runs_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client.reconcile().await.unwrap();
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+    }
+
+    #[tokio::test]
     async fn replace_binary_runs_inside_lifecycle_mailbox() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
@@ -409,6 +445,7 @@ mod tests {
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             }),
             application,
+            ClashConfigClient::legacy().unwrap(),
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             Arc::new(RecordingInstaller {
                 events: events.clone(),
