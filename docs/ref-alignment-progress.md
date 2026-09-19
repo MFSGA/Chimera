@@ -149,33 +149,37 @@
 - ref 路径和符号：`backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}`，
   以及 `CoreLifecycleClient` 的端口/适配器分层
 - Chimera 路径和符号：新增
-  `backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs}`；
+  `backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}`；
   `client/mod.rs`、`client/clash_config.rs` 和 `setup.rs` 已改用新目录入口。
   原 `backend/tauri/src/client/core_bridge.rs` 已退出模块图，仅因当前工具无安全
   删除接口而暂留源码树，不再提供运行时或编译期兼容入口
 - 类别：临时迁移
 - 差异及必要性：将现有 CoreManager 生命周期端口、运行配置端口、运行时诊断
-  DTO 和 legacy adapter 按 ref 的 core-lifecycle 目录归位，保持现有行为与旧
-  UI/API 合同不变；本阶段只做所有权和导入路径迁移，没有引入 actor 或改变
-  核心启动、停止、切换和系统设置副作用。
+  DTO 和 legacy adapter 按 ref 的 core-lifecycle 目录归位，并新增
+  `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`
+  已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
+  执行；旧 UI/API 合同及底层 CoreManager 行为保持不变。
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。core updater 在同一
   lifecycle lease 内停止/重启时也已显式携带停止前的 target core 与 `RunType`，
-  不再由 restart adapter 隐式读取 legacy selected-core/default run-type。生命周期仍由
-  legacy `CoreManager` 实现，尚未具备 ref 的 `workflow.rs`、actor mailbox、超时不确定
-  状态和 service host facade。
+  不再由 restart adapter 隐式读取 legacy selected-core/default run-type。生命周期执行
+  仍由 legacy `CoreManager` 实现；mailbox 目前只接管 stop/select，updater 的跨
+  stop→replace→restart lease 仍直接使用 port，尚未具备 ref 的 operation id、调用超时后
+  uncertain outcome、完整 command queue/dirty coalescing 和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
-  `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --
-  --test-threads=1`，17 passed；`cargo fmt --manifest-path backend/Cargo.toml --all --
-  --check` 与 `git diff --check` 通过。
-- 收敛、移除或重新评估条件：singleton service-locator 已清除；下一阶段是完成
-  ref `core_lifecycle/workflow.rs` 与 `core/actor_v2` 的最小完整迁移、接入真实
-  service/local host 和超时恢复测试，然后将 `ClientSetupArgs` 切换为
-  actor-backed `CoreLifecycleClient`。当前仍是 lifecycle
-  ownership 的部分迁移，而不是 singleton 访问问题。
+  `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
+  --test-threads=1`，17 passed；新增
+  `client::core_lifecycle::tests::mailbox_serializes_lifecycle_mutations`，1 passed；
+  `cargo fmt --manifest-path backend/Cargo.toml --package chimera` 与 `git diff --check`
+  通过。
+- 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
+  `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`。下一阶段是把 updater
+  replace-binary/reconcile/recover 等 mutation 继续搬入 mailbox，随后迁移 ref
+  `core/actor_v2` 的 host facade、operation-id/uncertain 状态和 service/local host
+  恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 

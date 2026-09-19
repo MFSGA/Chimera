@@ -27,7 +27,7 @@ pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
     clash_config::ClashConfigClient,
-    core_lifecycle::CoreLifecyclePort,
+    core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
     event_sink::UiEventSink,
     profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
@@ -119,6 +119,7 @@ struct ChimeraClientInner {
     application: ApplicationClient,
     session_state: SessionStateClient,
     clash_config: ClashConfigClient,
+    core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
@@ -146,8 +147,11 @@ impl ChimeraClient {
             &bridges,
             core.clone(),
         ))?;
+        let core_lifecycle =
+            tauri::async_runtime::block_on(CoreLifecycleClient::spawn(core.clone()))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
@@ -174,8 +178,10 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
+        let core_lifecycle = CoreLifecycleClient::direct(core.clone());
         Self::with_parts_and_typed_config(
             typed,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
@@ -187,6 +193,7 @@ impl ChimeraClient {
 
     fn with_parts_and_typed_config(
         typed: TypedConfigClients,
+        core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
         profiles: Arc<dyn ProfilesReadPort>,
         profile_files: Arc<dyn ProfileFsPort>,
@@ -198,6 +205,7 @@ impl ChimeraClient {
             application: typed.application,
             session_state: typed.session_state,
             clash_config: typed.clash_config,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
