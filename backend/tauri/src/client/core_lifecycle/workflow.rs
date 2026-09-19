@@ -14,6 +14,8 @@ pub(super) enum Command {
     RecoverCore,
     Reconcile,
     ReplaceCoreBinary(PreparedCoreBinary),
+    StartService,
+    RestartService,
     StopService,
 }
 
@@ -63,6 +65,8 @@ impl CoreLifecycleWorkflow {
                 lease.change_core(core).await
             }
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
+            Command::StartService => self.start_service(false).await,
+            Command::RestartService => self.start_service(true).await,
             Command::StopService => self.stop_service().await,
         }
     }
@@ -79,6 +83,42 @@ impl CoreLifecycleWorkflow {
         lease
             .rebuild_running_config(clash, target_core, run_type)
             .await
+    }
+
+    async fn start_service(&self, restart: bool) -> anyhow::Result<()> {
+        use chimera_ipc::api::status::CoreState;
+
+        let mut transition = self.service.begin_transition().await?;
+        if restart {
+            transition.restart_daemon().await?;
+        } else {
+            transition.start_daemon().await?;
+        }
+
+        if !self.application.get_typed().enable_service_mode {
+            return Ok(());
+        }
+
+        transition
+            .confirm_ready(std::time::Duration::from_secs(8))
+            .await?;
+        let before = self.core.status().await?;
+        if !matches!(before.state, CoreState::Running)
+            || before.run_type != crate::core::RunType::Service
+        {
+            self.reconcile().await?;
+        }
+
+        transition
+            .confirm_ready(std::time::Duration::from_secs(5))
+            .await?;
+        let after = self.core.status().await?;
+        anyhow::ensure!(
+            matches!(after.state, CoreState::Running)
+                && after.run_type == crate::core::RunType::Service,
+            "core did not reach the Chimera Service host"
+        );
+        Ok(())
     }
 
     async fn stop_service(&self) -> anyhow::Result<()> {
