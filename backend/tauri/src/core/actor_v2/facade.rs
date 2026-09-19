@@ -4,10 +4,19 @@
 //! It centralizes ownership of the legacy `CoreManager` and its lifecycle
 //! lock without pretending that Chimera already has ref's submit/wait protocol.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    panic::AssertUnwindSafe,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::Context;
 use chimera_config::clash::config::ClashConfig;
+use futures::FutureExt;
 
 use super::endpoint::CoreStatusSnapshot;
 use crate::{
@@ -26,17 +35,122 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
+    outcome_uncertain: Arc<AtomicBool>,
 }
 
 pub(crate) struct ServiceTransition {
     _guard: tokio::sync::MutexGuard<'static, ()>,
+    outcome_uncertain: Arc<AtomicBool>,
+}
+
+struct MutationReplyGuard {
+    outcome_uncertain: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl MutationReplyGuard {
+    fn new(outcome_uncertain: Arc<AtomicBool>) -> Self {
+        Self {
+            outcome_uncertain,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for MutationReplyGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.outcome_uncertain.store(true, Ordering::Release);
+        }
+    }
+}
+
+enum MutationResult {
+    Completed(Result<(), String>),
+    Uncertain(String),
+}
+
+async fn run_detached_mutation<F>(
+    outcome_uncertain: Arc<AtomicBool>,
+    operation: &'static str,
+    future: F,
+) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    if outcome_uncertain.load(Ordering::Acquire) {
+        anyhow::bail!(
+            "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+        );
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = match AssertUnwindSafe(future).catch_unwind().await {
+            Ok(result) => MutationResult::Completed(result.map_err(|error| error.to_string())),
+            Err(_) => MutationResult::Uncertain(format!("{operation} panicked after admission")),
+        };
+        let _ = tx.send(result);
+    });
+
+    let mut reply_guard = MutationReplyGuard::new(outcome_uncertain.clone());
+    let result = rx.await.map_err(|_| {
+        anyhow::anyhow!("{operation} reply was lost after admission; outcome is uncertain")
+    })?;
+    reply_guard.disarm();
+
+    match result {
+        MutationResult::Completed(Ok(())) => Ok(()),
+        MutationResult::Completed(Err(error)) => Err(anyhow::anyhow!(error)),
+        MutationResult::Uncertain(error) => {
+            outcome_uncertain.store(true, Ordering::Release);
+            Err(anyhow::anyhow!(error))
+        }
+    }
+}
+
+async fn run_in_place_mutation<F>(
+    outcome_uncertain: Arc<AtomicBool>,
+    operation: &'static str,
+    future: F,
+) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>>,
+{
+    if outcome_uncertain.load(Ordering::Acquire) {
+        anyhow::bail!(
+            "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+        );
+    }
+
+    let mut reply_guard = MutationReplyGuard::new(outcome_uncertain.clone());
+    let result = AssertUnwindSafe(future).catch_unwind().await;
+    reply_guard.disarm();
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            outcome_uncertain.store(true, Ordering::Release);
+            Err(anyhow::anyhow!(
+                "{operation} panicked; outcome is uncertain"
+            ))
+        }
+    }
 }
 
 impl CoreFacade {
     pub(crate) fn new_local() -> Self {
         Self {
             manager: Arc::new(CoreManager::new()),
+            outcome_uncertain: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub(crate) fn outcome_uncertain(&self) -> bool {
+        self.outcome_uncertain.load(Ordering::Acquire)
     }
 
     pub(crate) async fn reconcile(
@@ -45,20 +159,40 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
-        let lease = self.manager.begin_lifecycle().await;
-        lease
-            .rebuild_running_config_with(clash, target_core, run_type)
-            .await
+        let manager = self.manager.clone();
+        run_detached_mutation(
+            self.outcome_uncertain.clone(),
+            "core reconcile",
+            async move {
+                let lease = manager.begin_lifecycle().await;
+                lease
+                    .rebuild_running_config_with(clash, target_core, run_type)
+                    .await
+            },
+        )
+        .await
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
-        let lease = self.manager.begin_lifecycle().await;
-        lease.stop_core().await
+        let manager = self.manager.clone();
+        run_detached_mutation(self.outcome_uncertain.clone(), "core stop", async move {
+            let lease = manager.begin_lifecycle().await;
+            lease.stop_core().await
+        })
+        .await
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
-        let lease = self.manager.begin_lifecycle().await;
-        lease.change_core(clash_core).await
+        let manager = self.manager.clone();
+        run_detached_mutation(
+            self.outcome_uncertain.clone(),
+            "core selection",
+            async move {
+                let lease = manager.begin_lifecycle().await;
+                lease.change_core(clash_core).await
+            },
+        )
+        .await
     }
 
     pub(crate) async fn status(&self) -> CoreStatusSnapshot {
@@ -96,10 +230,16 @@ impl CoreFacade {
         crate::core::service::control::status().await
     }
 
-    pub(crate) async fn begin_service_transition(&self) -> ServiceTransition {
-        ServiceTransition {
-            _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
+    pub(crate) async fn begin_service_transition(&self) -> anyhow::Result<ServiceTransition> {
+        if self.outcome_uncertain() {
+            anyhow::bail!(
+                "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+            );
         }
+        Ok(ServiceTransition {
+            _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
+            outcome_uncertain: self.outcome_uncertain.clone(),
+        })
     }
 
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
@@ -113,29 +253,131 @@ impl CoreFacade {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn detached_mutation_reply_loss_latches_uncertain() {
+        let uncertain = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let waiter = {
+            let uncertain = uncertain.clone();
+            let started = started.clone();
+            let release = release.clone();
+            tokio::spawn(async move {
+                run_detached_mutation(uncertain, "test mutation", async move {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(())
+                })
+                .await
+            })
+        };
+
+        started.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        assert!(uncertain.load(Ordering::Acquire));
+        release.notify_one();
+    }
+
+    #[tokio::test]
+    async fn detached_mutation_panic_latches_uncertain() {
+        let uncertain = Arc::new(AtomicBool::new(false));
+        let error = run_detached_mutation(uncertain.clone(), "test mutation", async {
+            panic!("injected lower mutation panic");
+            #[allow(unreachable_code)]
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("panicked after admission"));
+        assert!(uncertain.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn terminal_mutation_error_does_not_latch_uncertain() {
+        let uncertain = Arc::new(AtomicBool::new(false));
+        let error = run_detached_mutation(uncertain.clone(), "test mutation", async {
+            anyhow::bail!("expected terminal failure")
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("expected terminal failure"));
+        assert!(!uncertain.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn in_place_mutation_cancellation_latches_uncertain() {
+        let uncertain = Arc::new(AtomicBool::new(false));
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let waiter = {
+            let uncertain = uncertain.clone();
+            let started = started.clone();
+            let release = release.clone();
+            tokio::spawn(async move {
+                run_in_place_mutation(uncertain, "test service mutation", async move {
+                    started.notify_one();
+                    release.notified().await;
+                    Ok(())
+                })
+                .await
+            })
+        };
+
+        started.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        assert!(uncertain.load(Ordering::Acquire));
+    }
+}
+
 impl ServiceTransition {
     pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::install_service_daemon().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service install", async {
+            crate::core::service::control::install_service_daemon().await
+        })
+        .await
     }
 
     pub(crate) async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::uninstall_service().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
+            crate::core::service::control::uninstall_service().await
+        })
+        .await
     }
 
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::update_service().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service update", async {
+            crate::core::service::control::update_service().await
+        })
+        .await
     }
 
     pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::start_service_daemon().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service start", async {
+            crate::core::service::control::start_service_daemon().await
+        })
+        .await
     }
 
     pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::restart_service_daemon().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service restart", async {
+            crate::core::service::control::restart_service_daemon().await
+        })
+        .await
     }
 
     pub(crate) async fn stop_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::stop_service().await
+        run_in_place_mutation(self.outcome_uncertain.clone(), "service stop", async {
+            crate::core::service::control::stop_service().await
+        })
+        .await
     }
 
     pub(crate) async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {

@@ -60,6 +60,10 @@ impl CoreLifecycleWorkflow {
         self.service.probe().await
     }
 
+    pub(super) fn outcome_uncertain(&self) -> bool {
+        self.core.outcome_uncertain()
+    }
+
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,

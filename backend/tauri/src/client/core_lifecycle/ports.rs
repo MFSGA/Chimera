@@ -95,6 +95,9 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
+    fn outcome_uncertain(&self) -> bool {
+        false
+    }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         Ok(None)

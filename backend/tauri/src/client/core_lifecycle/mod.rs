@@ -160,6 +160,7 @@ enum Message {
         workflow: CoreLifecycleWorkflow,
         result: anyhow::Result<()>,
         workflow_panicked: bool,
+        lower_outcome_uncertain: bool,
         service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
         retry_reconcile_on_failure: bool,
         recover: bool,
@@ -438,6 +439,7 @@ impl CoreLifecycleActorState {
                     tracing::error!("binary installation progress observer panicked");
                 }
             }
+            let lower_outcome_uncertain = workflow.outcome_uncertain();
             let service_probe = if service_mutation && !workflow_panicked {
                 Some(
                     workflow
@@ -453,6 +455,7 @@ impl CoreLifecycleActorState {
                 workflow,
                 result,
                 workflow_panicked,
+                lower_outcome_uncertain,
                 service_probe,
                 retry_reconcile_on_failure,
                 recover,
@@ -547,6 +550,7 @@ impl Actor for CoreLifecycleActor {
                 workflow,
                 result,
                 workflow_panicked,
+                lower_outcome_uncertain,
                 service_probe,
                 retry_reconcile_on_failure,
                 recover,
@@ -562,7 +566,7 @@ impl Actor for CoreLifecycleActor {
                 debug_assert_eq!(active.shutdown, shutdown);
                 let _ = active.task.await;
                 state.workflow = Some(workflow);
-                state.uncertain |= workflow_panicked;
+                state.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
                 match service_probe {
                     Some(Ok(info)) => state.publish_service_status(info),
@@ -1096,6 +1100,11 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct LowerUncertainCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        uncertain: AtomicBool,
+    }
+
     struct BlockingCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         stop_started: Arc<tokio::sync::Notify>,
@@ -1242,6 +1251,48 @@ mod tests {
 
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
             None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for LowerUncertainCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("lower-rebuild");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("lower-stop");
+            self.uncertain.store(true, AtomicOrdering::Release);
+            anyhow::bail!("lower mutation reply lost")
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("lower-select");
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        fn outcome_uncertain(&self) -> bool {
+            self.uncertain.load(AtomicOrdering::Acquire)
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
@@ -1739,6 +1790,34 @@ mod tests {
                 .as_deref()
                 .is_some_and(|error| error.contains("previous core lifecycle operation"))
         );
+    }
+
+    #[tokio::test]
+    async fn lower_outcome_uncertain_latches_actor_and_blocks_follow_up_mutations() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(LowerUncertainCore {
+                events: events.clone(),
+                uncertain: AtomicBool::new(false),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let error = client.stop_core().await.unwrap_err();
+        assert!(error.to_string().contains("lower mutation reply lost"));
+        assert!(client.status().uncertain);
+
+        let error = client.select_core(ClashCore::Mihomo).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("previous core lifecycle operation has an uncertain outcome")
+        );
+        assert_eq!(events.lock().unwrap().as_slice(), ["lower-stop"]);
     }
 
     #[tokio::test]
