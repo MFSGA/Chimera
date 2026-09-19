@@ -158,15 +158,16 @@
   DTO 和 legacy adapter 按 ref 的 core-lifecycle 目录归位，并新增
   `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`/
   `Reconcile` 已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
-  执行；core crash recovery 的 `Notify` 也已接入 mailbox，不再由 `CoreManager::init`
-  启动独立恢复循环。core updater 现在只负责下载/解压并提交 ref-shaped
+  执行；应用启动也只投递 `StartupReconcile`，不再由 `CoreManager::init`/`run_core`
+  在 actor 外启动核心。core crash recovery 的 `Notify` 同样已接入 mailbox。core updater
+  现在只负责下载/解压并提交 ref-shaped
   `PreparedCoreBinary`，stop/install/restart 由 lifecycle actor 统一执行。旧 UI/API
   合同保持不变。
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
-  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/reconcile/replace-binary，
-  以及显式 `StopService` host transition。
+  legacy `CoreManager` 实现；mailbox 目前接管 startup/stop/select/recover/reconcile/
+  replace-binary，以及全部显式 Service lifecycle mutation。
   recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
   handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
   `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
@@ -196,8 +197,8 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，15 passed（mailbox
-  mutation serialization、crash recovery signal admission、reconcile admission、
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，16 passed（mailbox
+  mutation serialization、startup reconcile admission、crash recovery signal admission、reconcile admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
@@ -211,8 +212,9 @@
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
-  以及显式 Service install/update/start/restart/stop/uninstall transition 已具备；启动时的
-  service auto-update 也不再绕过 actor。下一阶段继续
+  以及显式 Service install/update/start/restart/stop/uninstall transition 已具备；应用启动
+  core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
+  `CoreManager::run_core` 和无参 lifecycle rebuild convenience API 已删除。下一阶段继续
   向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
