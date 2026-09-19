@@ -147,10 +147,12 @@
 
 - ref commit：`f7dbce2997c633e484f54788035e770b3ee99773`
 - ref 路径和符号：`backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}`，
-  以及 `CoreLifecycleClient` 的端口/适配器分层
+  `backend/tauri/src/core/actor_v2/{endpoint.rs,facade.rs}`，以及 `CoreLifecycleClient`/
+  `CoreFacade` 的应用编排与 lower host 分层
 - Chimera 路径和符号：新增
-  `backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}`；
-  `client/mod.rs`、`client/clash_config.rs` 和 `setup.rs` 已改用新目录入口。
+  `backend/tauri/src/client/core_lifecycle/{mod.rs,ports.rs,adapters.rs,workflow.rs}` 与
+  `backend/tauri/src/core/actor_v2/{mod.rs,endpoint.rs,facade.rs}`；`client/mod.rs`、
+  `client/clash_config.rs` 和 `setup.rs` 已改用新目录入口。
   原 `backend/tauri/src/client/core_bridge.rs` 已退出模块图，仅因当前工具无安全
   删除接口而暂留源码树，不再提供运行时或编译期兼容入口
 - 类别：临时迁移
@@ -165,10 +167,13 @@
   现在只负责下载/解压并提交 ref-shaped
   `PreparedCoreBinary`，stop/install/restart 由 lifecycle actor 统一执行。旧 UI/API
   合同保持不变。
-- 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
-  composition root 中创建并显式持有唯一的
-  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
-  legacy `CoreManager` 实现，但 workflow 已不再持有任何 core lifecycle lease：
+- 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；composition root 现在显式创建
+  `core::actor_v2::CoreFacade`，该 facade 独占唯一 `Arc<CoreManager>`；`LegacyCoreBridge`
+  只持有 `Arc<CoreFacade>` 并负责 client port/diagnostics DTO 适配，client/setup 已无
+  `CoreManager` concrete ownership，仓库内也已无 `CoreManager::global()` 调用。
+  `actor_v2::endpoint::CoreStatusSnapshot` 现在是 lower canonical status projection，并由
+  client port 直接复用。生命周期执行底层仍由 legacy `CoreManager` 实现，但 workflow
+  已不再持有任何 core lifecycle lease：
   reconcile/stop/select 通过 facade-style `CoreLifecyclePort` 方法执行，lease acquisition
   被封装在 legacy adapter 内；updater 的 stop→install→reconcile 原子性由 actor-owned
   single active task + pending queue 保证，不再跨文件安装持有 `CoreManager` mutex。
@@ -242,9 +247,10 @@
   cached/watch `ServiceHostStatus`、外部只读 cached projection 与专用幂等 shutdown 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
-  convenience API 已删除。下一阶段继续迁移 `core/actor_v2` lower host facade、lower
+  convenience API 已删除。`core/actor_v2::CoreFacade` 的 ownership/status/lifecycle-lock
+  边界已落地；下一阶段继续迁移 ref 的 endpoint submit/wait operation protocol、lower
   reply-lost/outcome-uncertain 与 ServiceActor restart-budget/exhausted policy。当前仍是
-  lower host ownership 的部分迁移，而不是 singleton 或 workflow lease 问题。
+  lower host protocol 的部分迁移，而不是 singleton、manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 

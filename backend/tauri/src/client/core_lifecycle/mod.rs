@@ -1,8 +1,8 @@
 //! Client-owned core lifecycle boundary.
 //!
 //! The directory mirrors ref's `client/core_lifecycle` ownership boundary.
-//! Chimera currently routes execution to the legacy CoreManager adapter while
-//! lifecycle mutation admission is serialized through a client-owned mailbox.
+//! Lifecycle mutation admission is serialized through a client-owned actor;
+//! lower host ownership is delegated to `core::actor_v2::CoreFacade`.
 
 pub(crate) mod adapters;
 pub(crate) mod ports;

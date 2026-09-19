@@ -25,9 +25,9 @@ pub(super) enum Command {
 
 /// Serialized lifecycle command workflow.
 ///
-/// The lower-level port remains the compatibility boundary for the legacy
-/// CoreManager while command admission moves toward REF's actor-owned
-/// core-lifecycle model.
+/// The lower-level port remains the compatibility boundary for Chimera's
+/// staged `core::actor_v2::CoreFacade` while command admission follows REF's
+/// actor-owned core-lifecycle model.
 pub(super) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
