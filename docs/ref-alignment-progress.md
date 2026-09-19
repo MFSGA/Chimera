@@ -160,14 +160,17 @@
   核心启动、停止、切换和系统设置副作用。
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
-  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期仍由 legacy
-  `CoreManager` 实现，尚未具备 ref 的 `workflow.rs`、actor mailbox、超时不确定
+  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。core updater 在同一
+  lifecycle lease 内停止/重启时也已显式携带停止前的 target core 与 `RunType`，
+  不再由 restart adapter 隐式读取 legacy selected-core/default run-type。生命周期仍由
+  legacy `CoreManager` 实现，尚未具备 ref 的 `workflow.rs`、actor mailbox、超时不确定
   状态和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --
-  --test-threads=1`，17 passed。
+  --test-threads=1`，17 passed；`cargo fmt --manifest-path backend/Cargo.toml --all --
+  --check` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除；下一阶段是完成
   ref `core_lifecycle/workflow.rs` 与 `core/actor_v2` 的最小完整迁移、接入真实
   service/local host 和超时恢复测试，然后将 `ClientSetupArgs` 切换为

@@ -269,7 +269,12 @@ mod tests {
             Ok(())
         }
 
-        async fn run_core_from(&mut self, _config_path: &std::path::Path) -> anyhow::Result<()> {
+        async fn run_core_from(
+            &mut self,
+            _config_path: &std::path::Path,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("run-from");
             Ok(())
         }
@@ -849,7 +854,11 @@ mod tests {
         let mut lease = client.begin_core_update().await.unwrap();
         lease.stop().await.unwrap();
         lease
-            .run_core_from(std::path::Path::new("runtime.yaml"))
+            .run_core_from(
+                std::path::Path::new("runtime.yaml"),
+                ClashCore::Mihomo,
+                RunType::Normal,
+            )
             .await
             .unwrap();
         drop(lease);
