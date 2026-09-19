@@ -196,7 +196,10 @@ impl Actor for CoreLifecycleActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Execute { id, command, reply } => {
-                let retry_reconcile_on_failure = matches!(&command, Command::StopService);
+                let retry_reconcile_on_failure = matches!(
+                    &command,
+                    Command::StartService | Command::RestartService | Command::StopService
+                );
                 let result = state.execute_operation(id, command).await;
                 if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
                     state.mark_runtime_dirty(&myself);
@@ -459,6 +462,14 @@ impl CoreLifecycleClient {
         self.execute(Command::ReplaceCoreBinary(artifact)).await
     }
 
+    pub(super) async fn start_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::StartService).await
+    }
+
+    pub(super) async fn restart_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::RestartService).await
+    }
+
     pub(super) async fn stop_service(&self) -> anyhow::Result<()> {
         self.execute(Command::StopService).await
     }
@@ -512,6 +523,14 @@ impl ChimeraClient {
             .core_lifecycle
             .replace_core_binary(artifact)
             .await
+    }
+
+    pub(crate) async fn start_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.start_service().await
+    }
+
+    pub(crate) async fn restart_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.restart_service().await
     }
 
     pub(crate) async fn stop_service(&self) -> anyhow::Result<()> {
@@ -572,6 +591,16 @@ mod tests {
         local: Arc<AtomicBool>,
     }
 
+    struct ServiceStartCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        service: Arc<AtomicBool>,
+    }
+
+    struct ServiceStartLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        service: Arc<AtomicBool>,
+    }
+
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -586,8 +615,23 @@ mod tests {
 
     #[async_trait]
     impl ServiceTransitionLease for RecordingServiceTransition {
+        async fn start_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-start");
+            Ok(())
+        }
+
+        async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-restart");
+            Ok(())
+        }
+
         async fn stop_daemon(&mut self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("service-stop");
+            Ok(())
+        }
+
+        async fn confirm_ready(&mut self, _timeout: Duration) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-ready");
             Ok(())
         }
 
@@ -847,6 +891,73 @@ mod tests {
                     RunType::Normal
                 } else {
                     RunType::Service
+                },
+            })
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecycleLease for ServiceStartLease {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-service");
+            self.service.store(true, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+
+        async fn run_core_from(
+            &mut self,
+            _config_path: &std::path::Path,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ServiceStartCore {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+            Ok(Box::new(ServiceStartLease {
+                events: self.events.clone(),
+                service: self.service.clone(),
+            }))
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Running,
+                state_changed_at: 0,
+                run_type: if self.service.load(AtomicOrdering::Relaxed) {
+                    RunType::Service
+                } else {
+                    RunType::Normal
                 },
             })
         }
@@ -1213,6 +1324,84 @@ mod tests {
         client.reconcile().await.unwrap();
 
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+    }
+
+    #[tokio::test]
+    async fn start_service_converges_core_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(AtomicBool::new(false));
+        let mut app_state = chimera_config::application::ChimeraAppConfig::default();
+        app_state.enable_service_mode = true;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(ServiceStartCore {
+                events: events.clone(),
+                service: service.clone(),
+            }),
+            ApplicationClient::static_state(app_state),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.start_service().await.unwrap();
+
+        assert!(service.load(AtomicOrdering::Relaxed));
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "service-begin",
+                "service-start",
+                "service-ready",
+                "rebuild-service",
+                "service-ready"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_service_converges_core_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(AtomicBool::new(false));
+        let mut app_state = chimera_config::application::ChimeraAppConfig::default();
+        app_state.enable_service_mode = true;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(ServiceStartCore {
+                events: events.clone(),
+                service: service.clone(),
+            }),
+            ApplicationClient::static_state(app_state),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.restart_service().await.unwrap();
+
+        assert!(service.load(AtomicOrdering::Relaxed));
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "service-begin",
+                "service-restart",
+                "service-ready",
+                "rebuild-service",
+                "service-ready"
+            ]
+        );
     }
 
     #[tokio::test]

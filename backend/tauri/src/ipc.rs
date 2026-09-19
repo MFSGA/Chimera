@@ -837,7 +837,8 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn start_service(client: State<'_, ChimeraClient>) -> Result {
-        service::start_service_and_converge(&client, std::time::Duration::from_secs(8)).await?;
+        client.start_service().await?;
+        service::ipc::ensure_health_check((*client).clone());
         Ok(())
     }
     #[tauri::command]
@@ -850,7 +851,8 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn restart_service(client: State<'_, ChimeraClient>) -> Result {
-        service::restart_service_and_converge(&client, std::time::Duration::from_secs(8)).await?;
+        client.restart_service().await?;
+        service::ipc::ensure_health_check((*client).clone());
         Ok(())
     }
 }

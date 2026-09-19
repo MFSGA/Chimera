@@ -215,6 +215,12 @@ pub(crate) fn request_reconcile(client: &ChimeraClient) {
     on_ipc_state_changed(get_ipc_state(), client);
 }
 
+pub(crate) fn ensure_health_check(client: ChimeraClient) {
+    if !HEALTH_CHECK_RUNNING.load(Ordering::Acquire) {
+        spawn_health_check(client);
+    }
+}
+
 pub(super) fn spawn_health_check(client: ChimeraClient) {
     KILL_FLAG.store(false, Ordering::Relaxed);
     std::thread::spawn(move || {

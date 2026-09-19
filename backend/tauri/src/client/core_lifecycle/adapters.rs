@@ -101,8 +101,21 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 
 #[async_trait]
 impl ServiceTransitionLease for LegacyServiceTransition {
+    async fn start_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::start_service_daemon().await
+    }
+
+    async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::restart_service_daemon().await
+    }
+
     async fn stop_daemon(&mut self) -> anyhow::Result<()> {
         crate::core::service::control::stop_service().await
+    }
+
+    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()> {
+        crate::core::service::ipc::wait_until_ready(timeout).await?;
+        Ok(())
     }
 
     async fn confirm_stopped(&mut self) -> anyhow::Result<()> {

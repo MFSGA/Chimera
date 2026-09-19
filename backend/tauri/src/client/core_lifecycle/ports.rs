@@ -39,7 +39,10 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
 
 #[async_trait]
 pub(crate) trait ServiceTransitionLease: Send {
+    async fn start_daemon(&mut self) -> anyhow::Result<()>;
+    async fn restart_daemon(&mut self) -> anyhow::Result<()>;
     async fn stop_daemon(&mut self) -> anyhow::Result<()>;
+    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()>;
     async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
 }
 

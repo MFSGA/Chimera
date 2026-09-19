@@ -186,38 +186,6 @@ async fn ensure_local_host_after_service_stop_locked(
     Ok(())
 }
 
-/// Execute an explicit daemon start under the same transition lock used by the
-/// health loop, then converge the core to the Service host when Service Mode is
-/// desired. This prevents a health observation from interleaving a second host
-/// switch with the explicit command.
-pub(crate) async fn start_service_and_converge(
-    client: &crate::client::ChimeraClient,
-    ready_timeout: std::time::Duration,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::start_service(client.clone()).await?;
-    if client.get_app_config()?.enable_service_mode {
-        converge_core_to_service_host_locked(client, ready_timeout, false).await?;
-    }
-    Ok(())
-}
-
-/// Restarting the daemon is allowed while TUN is enabled, but the whole restart
-/// and Service-host restoration must be one serialized transition. Otherwise a
-/// transient Disconnected health event can race the restart and launch a local
-/// core with a still-enabled Windows TUN configuration.
-pub(crate) async fn restart_service_and_converge(
-    client: &crate::client::ChimeraClient,
-    ready_timeout: std::time::Duration,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::restart_service(client.clone()).await?;
-    if client.get_app_config()?.enable_service_mode {
-        converge_core_to_service_host_locked(client, ready_timeout, false).await?;
-    }
-    Ok(())
-}
-
 pub(crate) async fn uninstall_service_and_converge(
     client: &crate::client::ChimeraClient,
 ) -> anyhow::Result<()> {
@@ -250,7 +218,7 @@ pub async fn init_service(client: crate::client::ChimeraClient) {
         // owned by another runtime. The health loop remains fail-closed, but it
         // can observe a later service update/reinstall and reconnect without an
         // app restart.
-        ipc::spawn_health_check(client);
+        ipc::ensure_health_check(client);
         while !ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
