@@ -149,56 +149,6 @@ pub(crate) async fn ensure_tun_host_ready(
     }
 }
 
-/// After an explicit Service stop, converge the core back to the local host.
-/// The stop command has already completed at this point, so a failed status
-/// probe is treated as an error rather than guessing that the daemon is gone.
-async fn ensure_local_host_after_service_stop_locked(
-    client: &crate::client::ChimeraClient,
-) -> anyhow::Result<()> {
-    use crate::core::RunType;
-
-    let observation = ipc::refresh_state_now()
-        .await
-        .context("failed to verify Chimera Service after stop")?;
-    if observation.status == chimera_ipc::types::ServiceStatus::Running {
-        anyhow::bail!("Chimera Service still reports running after stop");
-    }
-    ipc::mark_disconnected_now();
-
-    let before = client
-        .core_status()
-        .await
-        .context("failed to inspect the core after Service stop")?;
-    if (!matches!(before.state, CoreState::Running) || before.run_type == RunType::Service)
-        && let Err(error) = client.rebuild_running_config().await
-    {
-        ipc::request_reconcile(client);
-        return Err(error).context("failed to restore the core to the local host");
-    }
-
-    let after = client
-        .core_status()
-        .await
-        .context("failed to verify the local core after Service stop")?;
-    if !matches!(after.state, CoreState::Running) || after.run_type == RunType::Service {
-        anyhow::bail!("core did not recover to the local host after Service stop");
-    }
-    Ok(())
-}
-
-pub(crate) async fn uninstall_service_and_converge(
-    client: &crate::client::ChimeraClient,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::uninstall_service().await?;
-    if client.get_app_config()?.enable_service_mode {
-        ensure_local_host_after_service_stop_locked(client).await?;
-    } else {
-        ipc::mark_disconnected_now();
-    }
-    Ok(())
-}
-
 pub async fn init_service(client: crate::client::ChimeraClient) {
     let enable_service = {
         *Config::verge()

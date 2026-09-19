@@ -198,7 +198,10 @@ impl Actor for CoreLifecycleActor {
             Message::Execute { id, command, reply } => {
                 let retry_reconcile_on_failure = matches!(
                     &command,
-                    Command::StartService | Command::RestartService | Command::StopService
+                    Command::StartService
+                        | Command::RestartService
+                        | Command::StopService
+                        | Command::UninstallService
                 );
                 let result = state.execute_operation(id, command).await;
                 if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
@@ -462,6 +465,14 @@ impl CoreLifecycleClient {
         self.execute(Command::ReplaceCoreBinary(artifact)).await
     }
 
+    pub(super) async fn install_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::InstallService).await
+    }
+
+    pub(super) async fn uninstall_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::UninstallService).await
+    }
+
     pub(super) async fn start_service(&self) -> anyhow::Result<()> {
         self.execute(Command::StartService).await
     }
@@ -523,6 +534,14 @@ impl ChimeraClient {
             .core_lifecycle
             .replace_core_binary(artifact)
             .await
+    }
+
+    pub(crate) async fn install_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.install_service().await
+    }
+
+    pub(crate) async fn uninstall_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.uninstall_service().await
     }
 
     pub(crate) async fn start_service(&self) -> anyhow::Result<()> {
@@ -615,6 +634,16 @@ mod tests {
 
     #[async_trait]
     impl ServiceTransitionLease for RecordingServiceTransition {
+        async fn install_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-install");
+            Ok(())
+        }
+
+        async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-uninstall");
+            Ok(())
+        }
+
         async fn start_daemon(&mut self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("service-start");
             Ok(())
@@ -1324,6 +1353,73 @@ mod tests {
         client.reconcile().await.unwrap();
 
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+    }
+
+    #[tokio::test]
+    async fn install_service_runs_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.install_service().await.unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["service-begin", "service-install"]
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_service_hands_core_back_to_local_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let local = Arc::new(AtomicBool::new(false));
+        let mut app_state = chimera_config::application::ChimeraAppConfig::default();
+        app_state.enable_service_mode = true;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(ServiceHandoffCore {
+                events: events.clone(),
+                local: local.clone(),
+            }),
+            ApplicationClient::static_state(app_state),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.uninstall_service().await.unwrap();
+
+        assert!(local.load(AtomicOrdering::Relaxed));
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "service-begin",
+                "service-uninstall",
+                "service-confirm",
+                "rebuild-local"
+            ]
+        );
     }
 
     #[tokio::test]
