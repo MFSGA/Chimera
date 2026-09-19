@@ -232,13 +232,18 @@
   transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
   health-loop 仍负责实际周期 probe，但成功 observation/失败状态会 cast 回 lifecycle actor
   更新同一 watch，不再形成 UI/Agent 的第二套探测路径；启动期内部兼容性检查仍直接经 legacy
-  control probe。当前 `restart_attempts` 固定为 0，也尚未实现 ref 的 exhausted/restart-budget
-  policy，这部分继续留给后续独立 ServiceActor/host facade 迁移。
+  control probe。health loop 仅在 Connected→Disconnected 边沿提交 `ServiceEndpointDown`；
+  lower `CoreFacade` 会重新 probe，只有明确 `Stopped` 才允许 auto-restart，probe 失败、Running、
+  Incompatible/NotInstalled 都 fail-closed。当前 restart budget 为 3：成功 admission 递增
+  `restart_attempts`，预算耗尽后 latch `ServicePhase::Exhausted`；普通 probe/health observation
+  不会冲掉 exhausted latch，显式 install/update/start/restart 会 re-arm budget。这与 ref 的
+  endpoint-down/restart-budget/exhausted 基本语义一致，剩余差异主要是尚未拆成独立
+  `ServiceActor` 与 ref 的 bounded per-command timeout/endpoint handle protocol。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，21 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，22 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→typed reconcile→finished 顺序、caller timeout 不取消已
@@ -247,8 +252,9 @@
   shutdown drain actor-owned pending queue 后等待 active 再 final stop、pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
-  UninstallService 在卸载后确认停止并恢复 Local host）；`core::actor_v2::facade::tests`，
-  4 passed（detached reply-loss、lower panic、terminal error 不误 latch、Service in-place cancellation）；
+  UninstallService 在卸载后确认停止并恢复 Local host、endpoint-down restart budget/exhausted latch）；
+  `core::actor_v2::facade::tests`，5 passed（detached reply-loss、lower panic、terminal error 不误 latch、
+  Service in-place cancellation、仅明确 Stopped daemon 消耗 restart budget）；
   `core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
@@ -262,10 +268,11 @@
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
-  ownership/status/lifecycle-lock/transition 与 fail-closed outcome-uncertain guard 已落地；
-  下一阶段继续迁移 ref 的 endpoint submit/wait operation registry（使 reply-loss 可按 id
-  恢复终态而不是强制重启）与 ServiceActor restart-budget/exhausted policy。当前仍是
-  lower host protocol 的部分迁移，而不是 singleton、manager ownership 或 workflow lease 问题。
+  ownership/status/lifecycle-lock/transition、fail-closed outcome-uncertain guard，以及 endpoint-down
+  restart-budget/exhausted latch 已落地；下一阶段继续迁移 ref 的 endpoint submit/wait operation
+  registry（使 reply-loss 可按 id 恢复终态而不是强制重启）与独立 ServiceActor 的 bounded
+  command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 

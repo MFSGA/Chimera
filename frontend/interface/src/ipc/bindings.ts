@@ -1714,6 +1714,7 @@ export type ServicePhase =
   | 'ready'
   | 'incompatible'
   | 'restarting'
+  | 'exhausted'
   | 'uninstalling'
   | 'unknown';
 

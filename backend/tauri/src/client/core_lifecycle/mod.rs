@@ -60,6 +60,7 @@ pub(crate) enum ServicePhase {
     Ready,
     Incompatible,
     Restarting,
+    Exhausted,
     Uninstalling,
     Unknown,
 }
@@ -96,7 +97,9 @@ impl ServiceHostStatus {
         let compat = crate::core::service::compat::ServiceCompat::classify(&info);
         let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
         let phase = match info.status {
-            ServiceStatus::Running if compat.allows_service_backend() => ServicePhase::Ready,
+            ServiceStatus::Running if compat.allows_service_backend() && runtime_owned => {
+                ServicePhase::Ready
+            }
             ServiceStatus::Running => ServicePhase::Incompatible,
             ServiceStatus::Stopped => ServicePhase::DaemonStopped,
             ServiceStatus::NotInstalled => ServicePhase::NotInstalled,
@@ -111,6 +114,17 @@ impl ServiceHostStatus {
             runtime_owned,
             restart_attempts: 0,
         }
+    }
+
+    fn with_restart_policy(
+        mut self,
+        policy: crate::core::actor_v2::facade::ServiceRestartPolicySnapshot,
+    ) -> Self {
+        self.restart_attempts = policy.attempts;
+        if policy.exhausted {
+            self.phase = ServicePhase::Exhausted;
+        }
+        self
     }
 
     fn probe_failed(previous: &Self) -> Self {
@@ -161,6 +175,7 @@ enum Message {
         result: anyhow::Result<()>,
         workflow_panicked: bool,
         lower_outcome_uncertain: bool,
+        service_restart_policy: crate::core::actor_v2::facade::ServiceRestartPolicySnapshot,
         service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
         retry_reconcile_on_failure: bool,
         recover: bool,
@@ -243,8 +258,22 @@ impl CoreLifecycleActorState {
     }
 
     fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        let previous = self.service_status.borrow().clone();
+        let mut status = ServiceHostStatus::from_probe(info);
+        status.restart_attempts = previous.restart_attempts;
+        if previous.phase == ServicePhase::Exhausted {
+            status.phase = ServicePhase::Exhausted;
+        }
+        self.service_status.send_replace(status);
+    }
+
+    fn publish_service_status_with_policy(
+        &self,
+        info: chimera_ipc::types::StatusInfo<'static>,
+        policy: crate::core::actor_v2::facade::ServiceRestartPolicySnapshot,
+    ) {
         self.service_status
-            .send_replace(ServiceHostStatus::from_probe(info));
+            .send_replace(ServiceHostStatus::from_probe(info).with_restart_policy(policy));
     }
 
     fn publish_service_phase(&self, phase: ServicePhase) {
@@ -263,8 +292,11 @@ impl CoreLifecycleActorState {
 
     fn publish_service_probe_failure(&self) {
         let previous = self.service_status.borrow().clone();
-        self.service_status
-            .send_replace(ServiceHostStatus::probe_failed(&previous));
+        let mut status = ServiceHostStatus::probe_failed(&previous);
+        if previous.phase == ServicePhase::Exhausted {
+            status.phase = ServicePhase::Exhausted;
+        }
+        self.service_status.send_replace(status);
     }
 
     async fn refresh_service_status(&self) -> anyhow::Result<ServiceHostStatus> {
@@ -272,9 +304,10 @@ impl CoreLifecycleActorState {
             .workflow
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("core lifecycle workflow is busy"))?;
+        let policy = workflow.service_restart_policy();
         match workflow.probe_service().await {
             Ok(info) => {
-                let status = ServiceHostStatus::from_probe(info);
+                let status = ServiceHostStatus::from_probe(info).with_restart_policy(policy);
                 self.service_status.send_replace(status.clone());
                 Ok(status)
             }
@@ -396,6 +429,7 @@ impl CoreLifecycleActorState {
                 | Command::StartService
                 | Command::RestartService
                 | Command::StopService
+                | Command::ServiceEndpointDown
         );
         let retry_reconcile_on_failure = matches!(
             &request.command,
@@ -440,6 +474,7 @@ impl CoreLifecycleActorState {
                 }
             }
             let lower_outcome_uncertain = workflow.outcome_uncertain();
+            let service_restart_policy = workflow.service_restart_policy();
             let service_probe = if service_mutation && !workflow_panicked {
                 Some(
                     workflow
@@ -456,6 +491,7 @@ impl CoreLifecycleActorState {
                 result,
                 workflow_panicked,
                 lower_outcome_uncertain,
+                service_restart_policy,
                 service_probe,
                 retry_reconcile_on_failure,
                 recover,
@@ -551,6 +587,7 @@ impl Actor for CoreLifecycleActor {
                 result,
                 workflow_panicked,
                 lower_outcome_uncertain,
+                service_restart_policy,
                 service_probe,
                 retry_reconcile_on_failure,
                 recover,
@@ -569,7 +606,9 @@ impl Actor for CoreLifecycleActor {
                 state.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
                 match service_probe {
-                    Some(Ok(info)) => state.publish_service_status(info),
+                    Some(Ok(info)) => {
+                        state.publish_service_status_with_policy(info, service_restart_policy)
+                    }
                     Some(Err(error)) => {
                         tracing::debug!(%error, "failed to refresh service status after mutation");
                         state.publish_service_probe_failure();
@@ -873,6 +912,25 @@ impl CoreLifecycleClient {
         }
     }
 
+    pub(super) fn request_service_endpoint_down(&self) {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                actor_ref, next_id, ..
+            } => {
+                let id = next_id.fetch_add(1, Ordering::Relaxed);
+                let request = Request {
+                    command: Command::ServiceEndpointDown,
+                    response: Response { id, reply: None },
+                };
+                if actor_ref.cast(Message::Request(request)).is_err() {
+                    tracing::warn!("failed to enqueue service endpoint-down recovery");
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {}
+        }
+    }
+
     pub(super) fn request_runtime_rebuild(&self) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
@@ -1011,6 +1069,10 @@ impl ChimeraClient {
         self.inner.core_lifecycle.status()
     }
 
+    pub(crate) fn request_service_endpoint_down(&self) {
+        self.inner.core_lifecycle.request_service_endpoint_down();
+    }
+
     pub(crate) fn request_runtime_rebuild(&self) {
         self.inner.core_lifecycle.request_runtime_rebuild();
     }
@@ -1081,7 +1143,7 @@ impl ChimeraClient {
 mod tests {
     use std::sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering},
     };
 
     use async_trait::async_trait;
@@ -1123,6 +1185,12 @@ mod tests {
 
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct RestartBudgetService {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        attempts: AtomicU8,
+        exhausted: AtomicBool,
     }
 
     struct RecordingServiceTransition {
@@ -1190,6 +1258,44 @@ mod tests {
 
         async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
             self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for RestartBudgetService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.0.0"),
+                status: chimera_ipc::types::ServiceStatus::Stopped,
+                server: None,
+            })
+        }
+
+        async fn report_endpoint_down(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("endpoint-down");
+            let attempts = self.attempts.load(AtomicOrdering::Acquire);
+            if attempts >= 3 {
+                self.exhausted.store(true, AtomicOrdering::Release);
+            } else {
+                self.attempts
+                    .store(attempts.saturating_add(1), AtomicOrdering::Release);
+            }
+            Ok(())
+        }
+
+        fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+            crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+                attempts: self.attempts.load(AtomicOrdering::Acquire),
+                exhausted: self.exhausted.load(AtomicOrdering::Acquire),
+            }
+        }
+
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
             Ok(Box::new(RecordingServiceTransition {
                 events: self.events.clone(),
             }))
@@ -2029,6 +2135,85 @@ mod tests {
         assert_eq!(status.status, chimera_ipc::types::ServiceStatus::Stopped);
         assert!(!status.runtime_owned);
         assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn endpoint_down_restart_budget_latches_exhausted_in_cached_status() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let service = Arc::new(RestartBudgetService {
+            events: events.clone(),
+            attempts: AtomicU8::new(0),
+            exhausted: AtomicBool::new(false),
+        });
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: Arc::new(Mutex::new(Vec::new())),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            service,
+        )
+        .await
+        .unwrap();
+
+        for expected_attempts in 1..=3 {
+            client.request_service_endpoint_down();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let status = client.service_status();
+                    if status.restart_attempts == expected_attempts {
+                        assert_eq!(status.phase, ServicePhase::DaemonStopped);
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("endpoint-down recovery should publish the restart attempt");
+        }
+
+        client.request_service_endpoint_down();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let status = client.service_status();
+                if status.phase == ServicePhase::Exhausted {
+                    assert_eq!(status.restart_attempts, 3);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("spent restart budget should latch exhausted");
+
+        client.observe_service_status(chimera_ipc::types::StatusInfo {
+            name: std::borrow::Cow::Borrowed("chimera-service"),
+            version: std::borrow::Cow::Borrowed("1.0.0"),
+            status: chimera_ipc::types::ServiceStatus::Stopped,
+            server: None,
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let status = client.service_status();
+        assert_eq!(status.phase, ServicePhase::Exhausted);
+        assert_eq!(status.restart_attempts, 3);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "endpoint-down",
+                "service-probe",
+                "endpoint-down",
+                "service-probe",
+                "endpoint-down",
+                "service-probe",
+                "endpoint-down",
+                "service-probe"
+            ]
+        );
     }
 
     #[tokio::test]

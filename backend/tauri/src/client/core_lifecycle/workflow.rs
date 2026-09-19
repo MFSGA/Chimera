@@ -21,6 +21,7 @@ pub(super) enum Command {
     StartService,
     RestartService,
     StopService,
+    ServiceEndpointDown,
 }
 
 /// Serialized lifecycle command workflow.
@@ -64,6 +65,12 @@ impl CoreLifecycleWorkflow {
         self.core.outcome_uncertain()
     }
 
+    pub(super) fn service_restart_policy(
+        &self,
+    ) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+        self.service.restart_policy()
+    }
+
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
@@ -76,6 +83,7 @@ impl CoreLifecycleWorkflow {
             Command::StartService => self.start_service(false).await,
             Command::RestartService => self.start_service(true).await,
             Command::StopService => self.stop_service().await,
+            Command::ServiceEndpointDown => self.service.report_endpoint_down().await,
         }
     }
 
