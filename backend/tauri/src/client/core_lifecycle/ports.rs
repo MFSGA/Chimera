@@ -2,11 +2,12 @@
 
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
-use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
+
+pub(crate) use crate::core::actor_v2::CoreStatusSnapshot;
 
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -64,13 +65,6 @@ pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
 pub(crate) trait RunningConfigPort: Send + Sync {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig>;
     async fn patch(&self, patch: &Mapping) -> anyhow::Result<()>;
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CoreStatusSnapshot {
-    pub(crate) state: CoreState,
-    pub(crate) state_changed_at: i64,
-    pub(crate) run_type: RunType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
