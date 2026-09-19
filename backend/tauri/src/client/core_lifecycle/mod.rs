@@ -8,7 +8,13 @@ pub(crate) mod adapters;
 pub(crate) mod ports;
 mod workflow;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
@@ -17,6 +23,24 @@ use super::{
     runtime::RuntimePaths,
 };
 use workflow::{Command, CoreLifecycleWorkflow};
+
+const CALL_WAIT: Duration = Duration::from_secs(180);
+const COMPLETED_LIMIT: usize = 32;
+
+type OperationId = u64;
+
+#[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
+pub(crate) struct CoreLifecycleStatus {
+    pub(crate) active: Option<OperationId>,
+    pub(crate) queued: Vec<OperationId>,
+    pub(crate) completed: Vec<CoreLifecycleOperationResult>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct CoreLifecycleOperationResult {
+    pub(crate) id: OperationId,
+    pub(crate) error: Option<String>,
+}
 
 #[allow(unused_imports)]
 pub(crate) use adapters::{FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge};
@@ -28,6 +52,7 @@ pub(crate) use ports::{
 
 enum Message {
     Execute {
+        id: OperationId,
         command: Command,
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
@@ -36,17 +61,30 @@ enum Message {
 
 struct CoreLifecycleActor;
 
+struct CoreLifecycleActorState {
+    workflow: CoreLifecycleWorkflow,
+    status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+}
+
+struct CoreLifecycleActorArgs {
+    workflow: CoreLifecycleWorkflow,
+    status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+}
+
 impl Actor for CoreLifecycleActor {
     type Msg = Message;
-    type State = CoreLifecycleWorkflow;
-    type Arguments = CoreLifecycleWorkflow;
+    type State = CoreLifecycleActorState;
+    type Arguments = CoreLifecycleActorArgs;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        workflow: Self::Arguments,
+        args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(workflow)
+        Ok(CoreLifecycleActorState {
+            workflow: args.workflow,
+            status: args.status,
+        })
     }
 
     async fn handle(
@@ -56,21 +94,37 @@ impl Actor for CoreLifecycleActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::Execute { command, reply } => {
+            Message::Execute { id, command, reply } => {
+                {
+                    let mut status = state.status.lock();
+                    status.queued.retain(|queued| *queued != id);
+                    status.active = Some(id);
+                }
                 let progress = match &command {
                     Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
                     _ => None,
                 };
-                let result = state.execute(command).await;
+                let result = state.workflow.execute(command).await;
                 if let Some(progress) = progress {
                     let error = result.as_ref().err().map(ToString::to_string);
                     progress.finished(error.as_deref());
+                }
+                {
+                    let mut status = state.status.lock();
+                    status.active = None;
+                    if status.completed.len() == COMPLETED_LIMIT {
+                        status.completed.remove(0);
+                    }
+                    status.completed.push(CoreLifecycleOperationResult {
+                        id,
+                        error: result.as_ref().err().map(ToString::to_string),
+                    });
                 }
                 let _ = reply.send(result);
             }
             Message::RecoverCore => {
                 tracing::info!("trying to recover core through lifecycle actor");
-                if let Err(error) = state.execute(Command::RecoverCore).await {
+                if let Err(error) = state.workflow.execute(Command::RecoverCore).await {
                     tracing::error!(%error, "failed to recover core; scheduling retry");
                     let actor = myself.clone();
                     tokio::spawn(async move {
@@ -87,6 +141,8 @@ impl Actor for CoreLifecycleActor {
 enum CoreLifecycleClientInner {
     Actor {
         actor_ref: ActorRef<Message>,
+        next_id: AtomicU64,
+        status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     },
     #[cfg(test)]
     Direct {
@@ -124,7 +180,16 @@ impl CoreLifecycleClient {
         let recovery_notify = core.recovery_notify();
         let workflow =
             CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths);
-        let (actor_ref, _handle) = Actor::spawn(None, CoreLifecycleActor, workflow).await?;
+        let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
+        let (actor_ref, _handle) = Actor::spawn(
+            None,
+            CoreLifecycleActor,
+            CoreLifecycleActorArgs {
+                workflow,
+                status: status.clone(),
+            },
+        )
+        .await?;
         if let Some(recovery_notify) = recovery_notify {
             let recovery_actor = actor_ref.clone();
             tauri::async_runtime::spawn(async move {
@@ -138,6 +203,8 @@ impl CoreLifecycleClient {
         }
         Ok(Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
+            next_id: AtomicU64::new(1),
+            status,
         })))
     }
 
@@ -160,21 +227,57 @@ impl CoreLifecycleClient {
     }
 
     async fn execute(&self, command: Command) -> anyhow::Result<()> {
+        self.execute_with_timeout(command, CALL_WAIT).await
+    }
+
+    async fn execute_with_timeout(
+        &self,
+        command: Command,
+        timeout: Duration,
+    ) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            CoreLifecycleClientInner::Actor { actor_ref } => {
+            CoreLifecycleClientInner::Actor {
+                actor_ref,
+                next_id,
+                status,
+            } => {
+                let id = next_id.fetch_add(1, Ordering::Relaxed);
+                status.lock().queued.push(id);
                 match actor_ref
-                    .call(|reply| Message::Execute { command, reply }, None)
-                    .await?
+                    .call(
+                        |reply| Message::Execute { id, command, reply },
+                        Some(timeout),
+                    )
+                    .await
                 {
-                    CallResult::Success(result) => result,
-                    CallResult::SenderError => anyhow::bail!("core lifecycle actor reply dropped"),
-                    CallResult::Timeout => anyhow::bail!("core lifecycle actor call timed out"),
+                    Ok(CallResult::Success(result)) => result,
+                    Ok(CallResult::Timeout) => anyhow::bail!(
+                        "core lifecycle operation {id} timed out; it may still be queued or running"
+                    ),
+                    Ok(CallResult::SenderError) => {
+                        status.lock().queued.retain(|queued| *queued != id);
+                        anyhow::bail!(
+                            "core lifecycle actor reply dropped for operation {id}; outcome is unknown"
+                        )
+                    }
+                    Err(error) => {
+                        status.lock().queued.retain(|queued| *queued != id);
+                        Err(error.into())
+                    }
                 }
             }
             #[cfg(test)]
             CoreLifecycleClientInner::Direct { workflow } => {
                 workflow.lock().await.execute(command).await
             }
+        }
+    }
+
+    pub(super) fn status(&self) -> CoreLifecycleStatus {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { status, .. } => status.lock().clone(),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => CoreLifecycleStatus::default(),
         }
     }
 
@@ -208,6 +311,10 @@ impl ChimeraClient {
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.inner.core.status().await
+    }
+
+    pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
+        self.inner.core_lifecycle.status()
     }
 
     pub(crate) fn runtime_transform_diagnostics(
@@ -382,6 +489,51 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
+        );
+    }
+
+    #[tokio::test]
+    async fn timed_out_wait_does_not_cancel_admitted_operation() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let error = client
+            .execute_with_timeout(Command::StopCore, Duration::from_millis(1))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("operation 1 timed out"));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if client.status().completed.iter().any(|entry| entry.id == 1) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("timed-out lifecycle operation should still settle");
+
+        let status = client.status();
+        let completed = status
+            .completed
+            .iter()
+            .find(|entry| entry.id == 1)
+            .expect("operation should be recorded");
+        assert!(completed.error.is_none());
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["stop-start", "stop-end"]
         );
     }
 

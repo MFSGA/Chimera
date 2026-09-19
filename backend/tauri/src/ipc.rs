@@ -995,6 +995,14 @@ pub async fn get_core_status(
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_core_lifecycle_status(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::client::core_lifecycle::CoreLifecycleStatus> {
+    Ok(client.core_lifecycle_status())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn url_delay_test(url: &str, expected_status: u16) -> Result<Option<u64>> {
     Ok(crate::utils::net::url_delay_test(url, expected_status).await)
 }

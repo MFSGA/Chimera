@@ -169,22 +169,27 @@
   recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
   handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
   `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
-  `CoreUpdateLease` active API 已删除。尚未具备 ref 的 operation id、调用超时后
-  uncertain outcome、完整 command queue/dirty coalescing 和 service host facade。
+  `CoreUpdateLease` active API 已删除。mailbox RPC 现在为每次 mutation 分配
+  operation id，默认最多等待 180 秒；caller 等待超时不会取消已 admission 的操作，
+  actor 会继续执行并把结果写入 bounded completed history（32 条）。新增只读
+  `get_core_lifecycle_status` IPC 暴露 active/queued/completed，供超时后按 operation id
+  检查结果。尚未具备 ref 的 uncertain workflow 状态、完整 command queue/dirty
+  coalescing 和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，4 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，5 passed（mailbox
   mutation serialization、crash recovery signal admission、reconcile admission、
-  replace-binary 的 stop→install→restart→finished 顺序）；
-  `cargo fmt --manifest-path backend/Cargo.toml --package chimera` 与 `git diff --check`
-  通过。
+  replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
+  admission operation）；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
+  `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
+  chimera` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
-  updater binary replacement 已迁入 mailbox。下一阶段是补 ref 的 runtime-dirty
-  coalescing/operation-id/uncertain outcome，再迁移
-  `core/actor_v2` 的 host facade、operation-id/uncertain 状态和 service/local host
+  updater binary replacement 已迁入 mailbox，operation-id/status/有界等待语义已具备。
+  下一阶段是补 ref 的 runtime-dirty coalescing 与 uncertain workflow 状态，再迁移
+  `core/actor_v2` 的 host facade 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
