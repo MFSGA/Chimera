@@ -4,8 +4,9 @@
 //! It centralizes ownership of the legacy `CoreManager` and its lifecycle
 //! lock without pretending that Chimera already has ref's submit/wait protocol.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
+use anyhow::Context;
 use chimera_config::clash::config::ClashConfig;
 
 use super::endpoint::CoreStatusSnapshot;
@@ -25,6 +26,10 @@ use crate::{
 #[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
+}
+
+pub(crate) struct ServiceTransition {
+    _guard: tokio::sync::MutexGuard<'static, ()>,
 }
 
 impl CoreFacade {
@@ -85,6 +90,18 @@ impl CoreFacade {
         self.manager.effective_clash_info()
     }
 
+    pub(crate) async fn probe_service(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        crate::core::service::control::status().await
+    }
+
+    pub(crate) async fn begin_service_transition(&self) -> ServiceTransition {
+        ServiceTransition {
+            _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
+        }
+    }
+
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
         let result = match ApiClient::new(self.effective_clash_info()) {
             Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
@@ -93,5 +110,47 @@ impl CoreFacade {
         if let Err(error) = result {
             tracing::warn!(%error, "failed to interrupt connections after profile change");
         }
+    }
+}
+
+impl ServiceTransition {
+    pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::install_service_daemon().await
+    }
+
+    pub(crate) async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::uninstall_service().await
+    }
+
+    pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::update_service().await
+    }
+
+    pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::start_service_daemon().await
+    }
+
+    pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::restart_service_daemon().await
+    }
+
+    pub(crate) async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::stop_service().await
+    }
+
+    pub(crate) async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {
+        crate::core::service::ipc::wait_until_ready(timeout).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+        let observation = crate::core::service::ipc::refresh_state_now()
+            .await
+            .context("failed to verify Chimera Service after stop")?;
+        if observation.status == chimera_ipc::types::ServiceStatus::Running {
+            anyhow::bail!("Chimera Service still reports running after stop");
+        }
+        crate::core::service::ipc::mark_disconnected_now();
+        Ok(())
     }
 }

@@ -685,11 +685,31 @@ enum CoreLifecycleClientInner {
 pub(super) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
 impl CoreLifecycleClient {
+    #[cfg(test)]
     pub(super) async fn spawn(
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_with_service(
+            core,
+            application,
+            clash,
+            runtime_paths,
+            Arc::new(LegacyServiceBridge::new(Arc::new(
+                crate::core::actor_v2::CoreFacade::new_local(),
+            ))),
+        )
+        .await
+    }
+
+    pub(super) async fn spawn_with_service(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+        runtime_paths: RuntimePaths,
+        service: Arc<dyn ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
         let client = Self::spawn_with_installer(
             core,
@@ -697,7 +717,7 @@ impl CoreLifecycleClient {
             clash,
             runtime_paths,
             Arc::new(FsBinaryInstaller),
-            Arc::new(LegacyServiceBridge),
+            service,
         )
         .await?;
         #[cfg(not(test))]
@@ -766,7 +786,9 @@ impl CoreLifecycleClient {
                 core,
                 Arc::new(FsBinaryInstaller),
                 runtime_paths,
-                Arc::new(LegacyServiceBridge),
+                Arc::new(LegacyServiceBridge::new(Arc::new(
+                    crate::core::actor_v2::CoreFacade::new_local(),
+                ))),
             )),
             service_status: service_status_rx,
         }))
