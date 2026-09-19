@@ -28,6 +28,7 @@ use workflow::{Command, CoreLifecycleWorkflow};
 
 const CALL_WAIT: Duration = Duration::from_secs(180);
 const DIRTY_WINDOW: Duration = Duration::from_millis(500);
+const MAX_PENDING: usize = 32;
 const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
@@ -341,7 +342,33 @@ impl CoreLifecycleClient {
                 status,
             } => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                status.lock().queued.push(id);
+                let rejection = {
+                    let mut lifecycle = status.lock();
+                    let error = if lifecycle.uncertain {
+                        Some(
+                            "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+                                .to_string(),
+                        )
+                    } else if lifecycle.queued.len() >= MAX_PENDING {
+                        Some("core lifecycle queue is full".to_string())
+                    } else {
+                        lifecycle.queued.push(id);
+                        None
+                    };
+                    if let Some(error) = error.as_ref() {
+                        if lifecycle.completed.len() == COMPLETED_LIMIT {
+                            lifecycle.completed.remove(0);
+                        }
+                        lifecycle.completed.push(CoreLifecycleOperationResult {
+                            id,
+                            error: Some(error.clone()),
+                        });
+                    }
+                    error
+                };
+                if let Some(error) = rejection {
+                    anyhow::bail!(error);
+                }
                 match actor_ref
                     .call(
                         |reply| Message::Execute { id, command, reply },
@@ -494,6 +521,18 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct BlockingCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        stop_started: Arc<tokio::sync::Notify>,
+        release_stop: Arc<tokio::sync::Notify>,
+    }
+
+    struct BlockingLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        stop_started: Arc<tokio::sync::Notify>,
+        release_stop: Arc<tokio::sync::Notify>,
+    }
+
     struct RecordingInstaller {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -621,6 +660,72 @@ mod tests {
     }
 
     #[async_trait]
+    impl CoreLifecycleLease for BlockingLease {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn run_core_from(
+            &mut self,
+            _config_path: &std::path::Path,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("blocking-stop");
+            self.stop_started.notify_one();
+            self.release_stop.notified().await;
+            Ok(())
+        }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("queued-select");
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for BlockingCore {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+            Ok(Box::new(BlockingLease {
+                events: self.events.clone(),
+                stop_started: self.stop_started.clone(),
+                release_stop: self.release_stop.clone(),
+            }))
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
         fn init(&self) -> anyhow::Result<()> {
             Ok(())
@@ -677,6 +782,82 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
         );
+    }
+
+    #[tokio::test]
+    async fn pending_queue_rejects_requests_above_bound() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop_started = Arc::new(tokio::sync::Notify::new());
+        let release_stop = Arc::new(tokio::sync::Notify::new());
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(BlockingCore {
+                events: events.clone(),
+                stop_started: stop_started.clone(),
+                release_stop: release_stop.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let stop_client = client.clone();
+        let stop = tokio::spawn(async move { stop_client.stop_core().await });
+        tokio::time::timeout(Duration::from_secs(1), stop_started.notified())
+            .await
+            .expect("stop should enter the lifecycle actor");
+
+        let mut queued = Vec::new();
+        for _ in 0..MAX_PENDING {
+            let queued_client = client.clone();
+            queued.push(tokio::spawn(async move {
+                queued_client.select_core(ClashCore::Mihomo).await
+            }));
+        }
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if client.status().queued.len() == MAX_PENDING {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("pending lifecycle queue should fill");
+
+        let error = client.select_core(ClashCore::Mihomo).await.unwrap_err();
+        assert!(error.to_string().contains("core lifecycle queue is full"));
+        assert!(
+            client
+                .status()
+                .completed
+                .iter()
+                .any(|entry| entry.error.as_deref() == Some("core lifecycle queue is full"))
+        );
+
+        release_stop.notify_one();
+        stop.await.unwrap().unwrap();
+        for task in queued {
+            task.await.unwrap().unwrap();
+        }
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "blocking-stop")
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "queued-select")
+                .count(),
+            MAX_PENDING
+        );
+        assert!(client.status().queued.is_empty());
     }
 
     #[tokio::test]
