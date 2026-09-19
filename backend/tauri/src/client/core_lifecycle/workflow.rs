@@ -10,6 +10,7 @@ use crate::config::chimera::ClashCore;
 
 pub(super) enum Command {
     Shutdown,
+    #[cfg(test)]
     StopCore,
     SelectCore(ClashCore),
     RecoverCore,
@@ -74,7 +75,9 @@ impl CoreLifecycleWorkflow {
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
-            Command::Shutdown | Command::StopCore => self.core.stop().await,
+            Command::Shutdown => self.core.stop().await,
+            #[cfg(test)]
+            Command::StopCore => self.core.stop().await,
             Command::SelectCore(core) => self.core.change_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService => self.install_service().await,
