@@ -25,6 +25,7 @@ use super::{
 use workflow::{Command, CoreLifecycleWorkflow};
 
 const CALL_WAIT: Duration = Duration::from_secs(180);
+const DIRTY_WINDOW: Duration = Duration::from_millis(500);
 const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
@@ -57,18 +58,59 @@ enum Message {
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
     RecoverCore,
+    RuntimeDirty,
+    DirtyTick,
 }
 
 struct CoreLifecycleActor;
 
 struct CoreLifecycleActorState {
     workflow: CoreLifecycleWorkflow,
+    next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+    dirty: bool,
+    dirty_tick_scheduled: bool,
 }
 
 struct CoreLifecycleActorArgs {
     workflow: CoreLifecycleWorkflow,
+    next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+}
+
+impl CoreLifecycleActorState {
+    fn allocate_operation_id(&self) -> OperationId {
+        self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    async fn execute_operation(&mut self, id: OperationId, command: Command) -> anyhow::Result<()> {
+        {
+            let mut status = self.status.lock();
+            status.queued.retain(|queued| *queued != id);
+            status.active = Some(id);
+        }
+        let progress = match &command {
+            Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
+            _ => None,
+        };
+        let result = self.workflow.execute(command).await;
+        if let Some(progress) = progress {
+            let error = result.as_ref().err().map(ToString::to_string);
+            progress.finished(error.as_deref());
+        }
+        {
+            let mut status = self.status.lock();
+            status.active = None;
+            if status.completed.len() == COMPLETED_LIMIT {
+                status.completed.remove(0);
+            }
+            status.completed.push(CoreLifecycleOperationResult {
+                id,
+                error: result.as_ref().err().map(ToString::to_string),
+            });
+        }
+        result
+    }
 }
 
 impl Actor for CoreLifecycleActor {
@@ -83,7 +125,10 @@ impl Actor for CoreLifecycleActor {
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CoreLifecycleActorState {
             workflow: args.workflow,
+            next_id: args.next_id,
             status: args.status,
+            dirty: false,
+            dirty_tick_scheduled: false,
         })
     }
 
@@ -95,42 +140,39 @@ impl Actor for CoreLifecycleActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Execute { id, command, reply } => {
-                {
-                    let mut status = state.status.lock();
-                    status.queued.retain(|queued| *queued != id);
-                    status.active = Some(id);
-                }
-                let progress = match &command {
-                    Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
-                    _ => None,
-                };
-                let result = state.workflow.execute(command).await;
-                if let Some(progress) = progress {
-                    let error = result.as_ref().err().map(ToString::to_string);
-                    progress.finished(error.as_deref());
-                }
-                {
-                    let mut status = state.status.lock();
-                    status.active = None;
-                    if status.completed.len() == COMPLETED_LIMIT {
-                        status.completed.remove(0);
-                    }
-                    status.completed.push(CoreLifecycleOperationResult {
-                        id,
-                        error: result.as_ref().err().map(ToString::to_string),
-                    });
-                }
-                let _ = reply.send(result);
+                let _ = reply.send(state.execute_operation(id, command).await);
             }
             Message::RecoverCore => {
                 tracing::info!("trying to recover core through lifecycle actor");
-                if let Err(error) = state.workflow.execute(Command::RecoverCore).await {
+                let id = state.allocate_operation_id();
+                if let Err(error) = state.execute_operation(id, Command::RecoverCore).await {
                     tracing::error!(%error, "failed to recover core; scheduling retry");
                     let actor = myself.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(Duration::from_secs(5)).await;
                         let _ = actor.cast(Message::RecoverCore);
                     });
+                }
+            }
+            Message::RuntimeDirty => {
+                state.dirty = true;
+                if !state.dirty_tick_scheduled {
+                    state.dirty_tick_scheduled = true;
+                    let actor = myself.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(DIRTY_WINDOW).await;
+                        let _ = actor.cast(Message::DirtyTick);
+                    });
+                }
+            }
+            Message::DirtyTick => {
+                state.dirty_tick_scheduled = false;
+                if state.dirty {
+                    state.dirty = false;
+                    let id = state.allocate_operation_id();
+                    if let Err(error) = state.execute_operation(id, Command::Reconcile).await {
+                        tracing::warn!(%error, id, "coalesced background runtime rebuild failed");
+                    }
                 }
             }
         }
@@ -141,7 +183,7 @@ impl Actor for CoreLifecycleActor {
 enum CoreLifecycleClientInner {
     Actor {
         actor_ref: ActorRef<Message>,
-        next_id: AtomicU64,
+        next_id: Arc<AtomicU64>,
         status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     },
     #[cfg(test)]
@@ -181,11 +223,13 @@ impl CoreLifecycleClient {
         let workflow =
             CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths);
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
+        let next_id = Arc::new(AtomicU64::new(1));
         let (actor_ref, _handle) = Actor::spawn(
             None,
             CoreLifecycleActor,
             CoreLifecycleActorArgs {
                 workflow,
+                next_id: next_id.clone(),
                 status: status.clone(),
             },
         )
@@ -203,7 +247,7 @@ impl CoreLifecycleClient {
         }
         Ok(Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
-            next_id: AtomicU64::new(1),
+            next_id,
             status,
         })))
     }
@@ -281,6 +325,18 @@ impl CoreLifecycleClient {
         }
     }
 
+    pub(super) fn request_runtime_rebuild(&self) {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                if actor_ref.cast(Message::RuntimeDirty).is_err() {
+                    tracing::warn!("failed to enqueue background runtime rebuild");
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {}
+        }
+    }
+
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -315,6 +371,10 @@ impl ChimeraClient {
 
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
         self.inner.core_lifecycle.status()
+    }
+
+    pub(crate) fn request_runtime_rebuild(&self) {
+        self.inner.core_lifecycle.request_runtime_rebuild();
     }
 
     pub(crate) fn runtime_transform_diagnostics(
@@ -490,6 +550,84 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
         );
+    }
+
+    #[tokio::test]
+    async fn burst_runtime_dirty_requests_coalesce_into_one_reconcile() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        for _ in 0..20 {
+            client.request_runtime_rebuild();
+        }
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().contains(&"rebuild") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("coalesced runtime rebuild should execute");
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(50)).await;
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+        assert_eq!(client.status().completed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn runtime_dirty_after_window_schedules_a_later_reconcile() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client.request_runtime_rebuild();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().len() == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("first runtime rebuild should execute");
+
+        client.request_runtime_rebuild();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().len() == 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("later runtime rebuild should execute");
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild", "rebuild"]);
+        assert_eq!(client.status().completed.len(), 2);
     }
 
     #[tokio::test]

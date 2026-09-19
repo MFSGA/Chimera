@@ -10,7 +10,6 @@ pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
-pub mod rebuild;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;

@@ -173,22 +173,26 @@
   operation id，默认最多等待 180 秒；caller 等待超时不会取消已 admission 的操作，
   actor 会继续执行并把结果写入 bounded completed history（32 条）。新增只读
   `get_core_lifecycle_status` IPC 暴露 active/queued/completed，供超时后按 operation id
-  检查结果。尚未具备 ref 的 uncertain workflow 状态、完整 command queue/dirty
-  coalescing 和 service host facade。
+  检查结果。actor 还内置 500ms runtime-dirty 窗口：同一窗口内的后台 rebuild 请求只
+  admission 一次 `Reconcile`，窗口后的新 dirty 会再次触发；Service IPC health-loop
+  已改为该 best-effort dirty producer。旧 `client/rebuild.rs` coordinator 已退出模块图，
+  避免 actor 外保留第二套 rebuild 协调层。尚未具备 ref 的 uncertain workflow 状态、
+  完整显式 pending queue 和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，5 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，7 passed（mailbox
   mutation serialization、crash recovery signal admission、reconcile admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
-  admission operation）；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
+  admission operation、dirty burst coalescing、后续窗口再次 reconcile）；
+  `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
-  updater binary replacement 已迁入 mailbox，operation-id/status/有界等待语义已具备。
-  下一阶段是补 ref 的 runtime-dirty coalescing 与 uncertain workflow 状态，再迁移
+  updater binary replacement 已迁入 mailbox，operation-id/status/有界等待以及
+  runtime-dirty coalescing 已具备。下一阶段是补 ref 的 uncertain workflow 状态，再迁移
   `core/actor_v2` 的 host facade 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 

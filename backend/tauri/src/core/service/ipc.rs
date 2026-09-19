@@ -6,7 +6,7 @@ use chimera_utils::runtime::block_on;
 use serde::Serialize;
 use tracing::instrument;
 
-use crate::{client::ChimeraClient, core::RunType, log_err};
+use crate::{client::ChimeraClient, core::RunType};
 
 use super::compat::ServiceCompat;
 
@@ -200,8 +200,8 @@ fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient) {
             };
 
             if should_rebuild_for_ipc_event(state, current_state, status.run_type) {
-                tracing::info!("Restarting core due to IPC state change");
-                log_err!(client.rebuild_running_config().await);
+                tracing::info!("Marking runtime dirty due to IPC state change");
+                client.request_runtime_rebuild();
             }
         })
     });
