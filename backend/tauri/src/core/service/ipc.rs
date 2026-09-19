@@ -298,10 +298,12 @@ async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
                 IpcState::Connected => dispatch_connected(client),
                 IpcState::Disconnected => dispatch_disconnected(client),
             }
+            client.observe_service_status(info);
             next_warned
         }
         Err(e) => {
             tracing::error!("IPC health check failed: {}", e);
+            client.observe_service_probe_failure();
             dispatch_disconnected(client);
             let (_, next_warned) = next_ineligible_warning_state(warned, false);
             next_warned

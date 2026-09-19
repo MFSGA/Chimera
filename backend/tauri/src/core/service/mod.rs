@@ -61,11 +61,6 @@ pub fn is_service_runtime_owned(status: &StatusInfo<'_>) -> bool {
     expected_config_dir == service_config_dir && expected_data_dir == service_data_dir
 }
 
-pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
-    compat::ServiceCompat::classify(status).allows_service_backend()
-        && is_service_runtime_owned(status)
-}
-
 async fn converge_core_to_service_host_locked(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,

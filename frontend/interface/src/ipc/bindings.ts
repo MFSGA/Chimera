@@ -1704,18 +1704,33 @@ export type ServiceCompat =
   | { kind: 'incompatible'; server_version: string; required_major: number }
   | { kind: 'unparsable'; server_version: string };
 
+export type ServicePhase =
+  | 'probing'
+  | 'not_installed'
+  | 'daemon_stopped'
+  | 'installing'
+  | 'starting_daemon'
+  | 'ready'
+  | 'incompatible'
+  | 'restarting'
+  | 'uninstalling'
+  | 'unknown';
+
 export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 
 /**
- *  Additive status projection that preserves the service wire fields while
- *  exposing the app-side compatibility decision to frontend consumers.
+ *  Cached service-host projection for UI consumers. It preserves the service
+ *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
  */
 export type ServiceStatusInfo = {
   name: string;
   version: string;
   status: ServiceStatus;
   server: StatusResBody | null;
+  phase: ServicePhase;
   compat: ServiceCompat;
+  runtime_owned: boolean;
+  restart_attempts: number;
 };
 
 export type SnapshotDiffHunk = {
