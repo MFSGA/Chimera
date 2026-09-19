@@ -7,9 +7,9 @@ use serde_yaml::Mapping;
 use std::sync::Arc;
 
 use super::ports::{
-    BinaryInstaller, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
-    RunningConfigPort, RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics,
-    ServiceLifecyclePort, ServiceTransitionLease,
+    BinaryInstaller, CoreBinaryUpdateLease, CoreLifecyclePort, CoreStatusSnapshot,
+    PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics,
+    RuntimeTransformFailureDiagnostics, ServiceLifecyclePort, ServiceTransitionLease,
 };
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -191,23 +191,12 @@ impl LegacyCoreBridge {
     }
 }
 
-struct LegacyCoreLifecycleLease<'a> {
+struct LegacyCoreBinaryUpdateLease<'a> {
     lease: CoreManagerLifecycleLease<'a>,
 }
 
 #[async_trait]
-impl CoreLifecycleLease for LegacyCoreLifecycleLease<'_> {
-    async fn rebuild_running_config(
-        &mut self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()> {
-        self.lease
-            .rebuild_running_config_with(clash, target_core, run_type)
-            .await
-    }
-
+impl CoreBinaryUpdateLease for LegacyCoreBinaryUpdateLease<'_> {
     async fn run_core_from(
         &mut self,
         config_path: &std::path::Path,
@@ -222,18 +211,36 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease<'_> {
     async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop_core().await
     }
-
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()> {
-        self.lease.change_core(clash_core).await
-    }
 }
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-        Ok(Box::new(LegacyCoreLifecycleLease {
+    async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
+        Ok(Box::new(LegacyCoreBinaryUpdateLease {
             lease: self.manager().begin_lifecycle().await,
         }))
+    }
+
+    async fn reconcile(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()> {
+        let lease = self.manager().begin_lifecycle().await;
+        lease
+            .rebuild_running_config_with(clash, target_core, run_type)
+            .await
+    }
+
+    async fn stop(&self) -> anyhow::Result<()> {
+        let lease = self.manager().begin_lifecycle().await;
+        lease.stop_core().await
+    }
+
+    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+        let lease = self.manager().begin_lifecycle().await;
+        lease.change_core(clash_core).await
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {

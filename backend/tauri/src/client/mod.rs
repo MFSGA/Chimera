@@ -238,7 +238,7 @@ mod tests {
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
 
-    use super::core_lifecycle::{CoreLifecycleLease, CoreStatusSnapshot};
+    use super::core_lifecycle::{CoreBinaryUpdateLease, CoreStatusSnapshot};
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
@@ -269,24 +269,10 @@ mod tests {
 
     struct RecordingLease {
         events: Arc<Mutex<Vec<&'static str>>>,
-        fail_rebuild: bool,
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for RecordingLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: chimera_config::clash::config::ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("rebuild");
-            if self.fail_rebuild {
-                anyhow::bail!("injected rebuild failure");
-            }
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for RecordingLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -301,21 +287,38 @@ mod tests {
             self.events.lock().unwrap().push("stop");
             Ok(())
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("change-core");
-            Ok(())
-        }
     }
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-            self.events.lock().unwrap().push("begin");
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
+            self.events.lock().unwrap().push("begin-binary-update");
             Ok(Box::new(RecordingLease {
                 events: self.events.clone(),
-                fail_rebuild: self.fail_rebuild,
             }))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: chimera_config::clash::config::ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
+            if self.fail_rebuild {
+                anyhow::bail!("injected rebuild failure");
+            }
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop");
+            Ok(())
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("change-core");
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -782,7 +785,6 @@ mod tests {
             events.lock().unwrap().as_slice(),
             [
                 "refresh-profiles",
-                "begin",
                 "rebuild",
                 "refresh-ui",
                 "profile-change"
@@ -853,27 +855,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn change_core_runs_through_the_injected_lifecycle_lease() {
+    async fn change_core_runs_through_the_injected_lifecycle_port() {
         let (client, events) = recording_client(false);
         client.change_core(ClashCore::Mihomo).await.unwrap();
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "change-core"]);
+        assert_eq!(events.lock().unwrap().as_slice(), ["change-core"]);
     }
 
     #[tokio::test]
-    async fn stop_core_runs_through_the_injected_lifecycle_lease() {
+    async fn stop_core_runs_through_the_injected_lifecycle_port() {
         let (client, events) = recording_client(false);
         client.stop_core().await.unwrap();
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+        assert_eq!(events.lock().unwrap().as_slice(), ["stop"]);
     }
 
     #[tokio::test]
     async fn runtime_rebuild_does_not_emit_profile_change_side_effects() {
         let (client, events) = recording_client(false);
         client.rebuild_running_config().await.unwrap();
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui"]
-        );
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild", "refresh-ui"]);
     }
 
     #[tokio::test]
@@ -883,7 +882,7 @@ mod tests {
         assert!(error.to_string().contains("injected rebuild failure"));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-diagnostics"]
+            ["rebuild", "refresh-diagnostics"]
         );
     }
 
@@ -902,7 +901,7 @@ mod tests {
         assert!(matches!(outcome, MutationOutcome::Applied { .. }));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui", "profile-change"]
+            ["rebuild", "refresh-ui", "profile-change"]
         );
     }
 
@@ -935,7 +934,7 @@ mod tests {
         assert!(degradation.message.contains("injected rebuild failure"));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-diagnostics"]
+            ["rebuild", "refresh-diagnostics"]
         );
     }
 

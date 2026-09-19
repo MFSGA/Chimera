@@ -133,7 +133,7 @@ pub(crate) use adapters::{
 };
 #[allow(unused_imports)]
 pub(crate) use ports::{
-    BinaryInstallProgress, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot,
+    BinaryInstallProgress, CoreBinaryUpdateLease, CoreLifecyclePort, CoreStatusSnapshot,
     PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics, ServiceLifecyclePort,
     ServiceTransitionLease,
 };
@@ -1100,20 +1100,14 @@ mod tests {
         local: Arc<AtomicBool>,
     }
 
-    struct ServiceHandoffLease {
-        events: Arc<Mutex<Vec<&'static str>>>,
-        local: Arc<AtomicBool>,
-    }
+    struct ServiceHandoffLease;
 
     struct ServiceStartCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         service: Arc<AtomicBool>,
     }
 
-    struct ServiceStartLease {
-        events: Arc<Mutex<Vec<&'static str>>>,
-        service: Arc<AtomicBool>,
-    }
+    struct ServiceStartLease;
 
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
@@ -1214,17 +1208,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for RecordingLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("rebuild");
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for RecordingLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -1241,25 +1225,10 @@ mod tests {
             self.events.lock().unwrap().push("stop-end");
             Ok(())
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("select");
-            Ok(())
-        }
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for PanicOnStopLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("rebuild-after-panic");
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for PanicOnStopLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -1273,19 +1242,34 @@ mod tests {
             self.events.lock().unwrap().push("panic-stop");
             panic!("injected lifecycle panic");
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("select-after-panic");
-            Ok(())
-        }
     }
 
     #[async_trait]
     impl CoreLifecyclePort for PanicOnStopCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
             Ok(Box::new(PanicOnStopLease {
                 events: self.events.clone(),
             }))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-after-panic");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("panic-stop");
+            panic!("injected lifecycle panic");
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("select-after-panic");
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -1304,16 +1288,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for BlockingLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for BlockingLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -1329,21 +1304,37 @@ mod tests {
             self.release_stop.notified().await;
             Ok(())
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("queued-select");
-            Ok(())
-        }
     }
 
     #[async_trait]
     impl CoreLifecyclePort for BlockingCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
             Ok(Box::new(BlockingLease {
                 events: self.events.clone(),
                 stop_started: self.stop_started.clone(),
                 release_stop: self.release_stop.clone(),
             }))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("blocking-stop");
+            self.stop_started.notify_one();
+            self.release_stop.notified().await;
+            Ok(())
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("queued-select");
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -1362,18 +1353,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for ServiceHandoffLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("rebuild-local");
-            self.local.store(true, AtomicOrdering::Relaxed);
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for ServiceHandoffLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -1386,19 +1366,31 @@ mod tests {
         async fn stop(&mut self) -> anyhow::Result<()> {
             Ok(())
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            Ok(())
-        }
     }
 
     #[async_trait]
     impl CoreLifecyclePort for ServiceHandoffCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-            Ok(Box::new(ServiceHandoffLease {
-                events: self.events.clone(),
-                local: self.local.clone(),
-            }))
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
+            Ok(Box::new(ServiceHandoffLease))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-local");
+            self.local.store(true, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -1421,18 +1413,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for ServiceStartLease {
-        async fn rebuild_running_config(
-            &mut self,
-            _clash: ClashConfig,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("rebuild-service");
-            self.service.store(true, AtomicOrdering::Relaxed);
-            Ok(())
-        }
-
+    impl CoreBinaryUpdateLease for ServiceStartLease {
         async fn run_core_from(
             &mut self,
             _config_path: &std::path::Path,
@@ -1445,19 +1426,31 @@ mod tests {
         async fn stop(&mut self) -> anyhow::Result<()> {
             Ok(())
         }
-
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
-            Ok(())
-        }
     }
 
     #[async_trait]
     impl CoreLifecyclePort for ServiceStartCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-            Ok(Box::new(ServiceStartLease {
-                events: self.events.clone(),
-                service: self.service.clone(),
-            }))
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
+            Ok(Box::new(ServiceStartLease))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-service");
+            self.service.store(true, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -1481,10 +1474,32 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
             Ok(Box::new(RecordingLease {
                 events: self.events.clone(),
             }))
+        }
+
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("stop-start");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            self.events.lock().unwrap().push("stop-end");
+            Ok(())
+        }
+
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("select");
+            Ok(())
         }
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
