@@ -165,7 +165,8 @@
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
-  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/reconcile/replace-binary。
+  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/reconcile/replace-binary，
+  以及显式 `StopService` host transition。
   recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
   handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
   `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
@@ -182,26 +183,31 @@
   lifecycle workflow panic；ref 中由 actor_v2/CoreFacade 下层 reply-lost 导致的
   outcome-uncertain 仍待迁移。mutation admission 现在把 queued operation 限制为 32；
   第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
-  这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型，
+  这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
+  `StopService` 已通过新 `ServiceLifecyclePort`/transition lease 进入 mailbox：legacy adapter
+  持有现有 `HOST_TRANSITION_LOCK`，daemon stop、停止确认、Service→Local reconcile 和最终
+  core 验证在同一 transition lease 生命周期内完成；失败会由 actor 标记 runtime dirty
+  进行后续 best-effort reconcile。start/restart/install/uninstall 仍走 legacy service path，
   因此完整 pending/active ownership 与 service host facade 仍待迁移。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，9 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，10 passed（mailbox
   mutation serialization、crash recovery signal admission、reconcile admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
-  panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow）；
+  panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
+  StopService 在同一 mailbox/host-transition lease 内把 core 从 Service handoff 回 Local）；
   `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
-  32 条 bounded admission、runtime-dirty coalescing，以及 workflow-panic uncertain
-  latch 已具备。下一阶段是迁移
-  `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
+  32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
+  以及 StopService 的 Service→Local handoff 已具备。下一阶段是迁移 start/restart 等
+  service commands，并继续向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）

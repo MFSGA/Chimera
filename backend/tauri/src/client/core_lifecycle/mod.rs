@@ -48,11 +48,14 @@ pub(crate) struct CoreLifecycleOperationResult {
 }
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge};
+pub(crate) use adapters::{
+    FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge,
+};
 #[allow(unused_imports)]
 pub(crate) use ports::{
     BinaryInstallProgress, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot,
-    PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics,
+    PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics, ServiceLifecyclePort,
+    ServiceTransitionLease,
 };
 
 enum Message {
@@ -86,6 +89,21 @@ struct CoreLifecycleActorArgs {
 impl CoreLifecycleActorState {
     fn allocate_operation_id(&self) -> OperationId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
+        if self.uncertain {
+            return;
+        }
+        self.dirty = true;
+        if !self.dirty_tick_scheduled {
+            self.dirty_tick_scheduled = true;
+            let actor = myself.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(DIRTY_WINDOW).await;
+                let _ = actor.cast(Message::DirtyTick);
+            });
+        }
     }
 
     async fn execute_operation(&mut self, id: OperationId, command: Command) -> anyhow::Result<()> {
@@ -178,7 +196,12 @@ impl Actor for CoreLifecycleActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Execute { id, command, reply } => {
-                let _ = reply.send(state.execute_operation(id, command).await);
+                let retry_reconcile_on_failure = matches!(&command, Command::StopService);
+                let result = state.execute_operation(id, command).await;
+                if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
+                    state.mark_runtime_dirty(&myself);
+                }
+                let _ = reply.send(result);
             }
             Message::RecoverCore => {
                 if state.uncertain {
@@ -207,15 +230,7 @@ impl Actor for CoreLifecycleActor {
                     );
                     return Ok(());
                 }
-                state.dirty = true;
-                if !state.dirty_tick_scheduled {
-                    state.dirty_tick_scheduled = true;
-                    let actor = myself.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(DIRTY_WINDOW).await;
-                        let _ = actor.cast(Message::DirtyTick);
-                    });
-                }
+                state.mark_runtime_dirty(&myself);
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
@@ -264,6 +279,7 @@ impl CoreLifecycleClient {
             clash,
             runtime_paths,
             Arc::new(FsBinaryInstaller),
+            Arc::new(LegacyServiceBridge),
         )
         .await
     }
@@ -274,10 +290,11 @@ impl CoreLifecycleClient {
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
         installer: Arc<dyn ports::BinaryInstaller>,
+        service: Arc<dyn ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
         let workflow =
-            CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths);
+            CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths, service);
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
         let next_id = Arc::new(AtomicU64::new(1));
         let (actor_ref, _handle) = Actor::spawn(
@@ -322,6 +339,7 @@ impl CoreLifecycleClient {
                 core,
                 Arc::new(FsBinaryInstaller),
                 runtime_paths,
+                Arc::new(LegacyServiceBridge),
             )),
         }))
     }
@@ -440,6 +458,10 @@ impl CoreLifecycleClient {
     ) -> anyhow::Result<()> {
         self.execute(Command::ReplaceCoreBinary(artifact)).await
     }
+
+    pub(super) async fn stop_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::StopService).await
+    }
 }
 
 impl ChimeraClient {
@@ -491,11 +513,18 @@ impl ChimeraClient {
             .replace_core_binary(artifact)
             .await
     }
+
+    pub(crate) async fn stop_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.stop_service().await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering as AtomicOrdering},
+    };
 
     use async_trait::async_trait;
     use chimera_config::clash::config::ClashConfig;
@@ -533,8 +562,49 @@ mod tests {
         release_stop: Arc<tokio::sync::Notify>,
     }
 
+    struct ServiceHandoffCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        local: Arc<AtomicBool>,
+    }
+
+    struct ServiceHandoffLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        local: Arc<AtomicBool>,
+    }
+
+    struct RecordingService {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct RecordingServiceTransition {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
     struct RecordingInstaller {
         events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl ServiceTransitionLease for RecordingServiceTransition {
+        async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-stop");
+            Ok(())
+        }
+
+        async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-confirm");
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl ServiceLifecyclePort for RecordingService {
+        async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+            self.events.lock().unwrap().push("service-begin");
+            Ok(Box::new(RecordingServiceTransition {
+                events: self.events.clone(),
+            }))
+        }
     }
 
     #[async_trait]
@@ -711,6 +781,73 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+            })
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecycleLease for ServiceHandoffLease {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-local");
+            self.local.store(true, AtomicOrdering::Relaxed);
+            Ok(())
+        }
+
+        async fn run_core_from(
+            &mut self,
+            _config_path: &std::path::Path,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ServiceHandoffCore {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+            Ok(Box::new(ServiceHandoffLease {
+                events: self.events.clone(),
+                local: self.local.clone(),
+            }))
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Running,
+                state_changed_at: 0,
+                run_type: if self.local.load(AtomicOrdering::Relaxed) {
+                    RunType::Normal
+                } else {
+                    RunType::Service
+                },
             })
         }
 
@@ -1079,6 +1216,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stop_service_hands_core_back_to_local_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let local = Arc::new(AtomicBool::new(false));
+        let mut app_state = chimera_config::application::ChimeraAppConfig::default();
+        app_state.enable_service_mode = true;
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(ServiceHandoffCore {
+                events: events.clone(),
+                local: local.clone(),
+            }),
+            ApplicationClient::static_state(app_state),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.stop_service().await.unwrap();
+
+        assert!(local.load(AtomicOrdering::Relaxed));
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "service-begin",
+                "service-stop",
+                "service-confirm",
+                "rebuild-local"
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn replace_binary_runs_inside_lifecycle_mailbox() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
@@ -1092,6 +1267,9 @@ mod tests {
             ClashConfigClient::legacy().unwrap(),
             RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
             Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
                 events: events.clone(),
             }),
         )

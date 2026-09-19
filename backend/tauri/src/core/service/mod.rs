@@ -25,7 +25,7 @@ static SERVICE_PATH: Lazy<PathBuf> = Lazy::new(|| {
 /// reconciliation. This is intentionally narrower than upstream's ServiceActor:
 /// Chimera only needs one transition owner here to keep the privileged Windows
 /// TUN host stable while the legacy service backend remains in place.
-pub(super) static HOST_TRANSITION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static HOST_TRANSITION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
@@ -214,19 +214,6 @@ pub(crate) async fn restart_service_and_converge(
     control::restart_service(client.clone()).await?;
     if client.get_app_config()?.enable_service_mode {
         converge_core_to_service_host_locked(client, ready_timeout, false).await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn stop_service_and_converge(
-    client: &crate::client::ChimeraClient,
-) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::stop_service().await?;
-    if client.get_app_config()?.enable_service_mode {
-        ensure_local_host_after_service_stop_locked(client).await?;
-    } else {
-        ipc::mark_disconnected_now();
     }
     Ok(())
 }

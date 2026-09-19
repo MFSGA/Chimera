@@ -4,7 +4,7 @@ use super::{
     super::{
         application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
     },
-    ports::{BinaryInstaller, CoreLifecyclePort, PreparedCoreBinary},
+    ports::{BinaryInstaller, CoreLifecyclePort, PreparedCoreBinary, ServiceLifecyclePort},
 };
 use crate::config::chimera::ClashCore;
 
@@ -14,6 +14,7 @@ pub(super) enum Command {
     RecoverCore,
     Reconcile,
     ReplaceCoreBinary(PreparedCoreBinary),
+    StopService,
 }
 
 /// Serialized lifecycle command workflow.
@@ -27,6 +28,7 @@ pub(super) struct CoreLifecycleWorkflow {
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     runtime_paths: RuntimePaths,
+    service: Arc<dyn ServiceLifecyclePort>,
 }
 
 impl CoreLifecycleWorkflow {
@@ -36,6 +38,7 @@ impl CoreLifecycleWorkflow {
         core: Arc<dyn CoreLifecyclePort>,
         installer: Arc<dyn BinaryInstaller>,
         runtime_paths: RuntimePaths,
+        service: Arc<dyn ServiceLifecyclePort>,
     ) -> Self {
         Self {
             application,
@@ -43,6 +46,7 @@ impl CoreLifecycleWorkflow {
             core,
             installer,
             runtime_paths,
+            service,
         }
     }
 
@@ -59,6 +63,7 @@ impl CoreLifecycleWorkflow {
                 lease.change_core(core).await
             }
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
+            Command::StopService => self.stop_service().await,
         }
     }
 
@@ -74,6 +79,33 @@ impl CoreLifecycleWorkflow {
         lease
             .rebuild_running_config(clash, target_core, run_type)
             .await
+    }
+
+    async fn stop_service(&self) -> anyhow::Result<()> {
+        use chimera_ipc::api::status::CoreState;
+
+        let mut transition = self.service.begin_transition().await?;
+        transition.stop_daemon().await?;
+        transition.confirm_stopped().await?;
+
+        if !self.application.get_typed().enable_service_mode {
+            return Ok(());
+        }
+
+        let before = self.core.status().await?;
+        if !matches!(before.state, CoreState::Running)
+            || before.run_type == crate::core::RunType::Service
+        {
+            self.reconcile().await?;
+        }
+
+        let after = self.core.status().await?;
+        anyhow::ensure!(
+            matches!(after.state, CoreState::Running)
+                && after.run_type != crate::core::RunType::Service,
+            "core did not recover to the local host after Service stop"
+        );
+        Ok(())
     }
 
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {
