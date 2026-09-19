@@ -1,4 +1,4 @@
-use std::{net::IpAddr, time::Duration};
+use std::net::IpAddr;
 
 use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
 use sha2::{Digest, Sha256};
@@ -6,7 +6,10 @@ use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    client::ChimeraClient,
+    client::{
+        ChimeraClient,
+        core_lifecycle::{ServiceHostStatus, ServicePhase},
+    },
     config::{core::Config, profile::item::Profile},
     core::{
         clash::{
@@ -59,11 +62,10 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .unwrap_or(true);
 
     let client = app.state::<ChimeraClient>();
+    let service_status = client.service_status();
     let core_status = client.core_status();
-    let service_status = tokio::time::timeout(Duration::from_secs(2), client.probe_service());
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
-    let (core_status, service_status, system_proxy) =
-        tokio::join!(core_status, service_status, system_proxy);
+    let (core_status, system_proxy) = tokio::join!(core_status, system_proxy);
 
     let mut failures = Vec::new();
     let mut core = match core_status {
@@ -119,7 +121,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
             }),
         }
     }
-    let service = summarize_service(&verge, service_status, &mut failures);
+    let service = summarize_service(&verge, &service_status, &mut failures);
     let system_proxy = summarize_system_proxy(
         verge.enable_system_proxy.unwrap_or(false),
         expected_mixed_port,
@@ -245,45 +247,33 @@ fn map_run_type(run_type: RunType) -> AgentRunType {
 
 fn summarize_service(
     verge: &crate::config::chimera::IVerge,
-    result: Result<anyhow::Result<chimera_ipc::types::StatusInfo<'_>>, tokio::time::error::Elapsed>,
+    status: &ServiceHostStatus,
     failures: &mut Vec<AgentProbeFailure>,
 ) -> AgentServiceSnapshot {
     let desired_enabled = verge.enable_service_mode.unwrap_or(false);
     let ipc_connected = service::ipc::get_ipc_state().is_connected();
-    match result {
-        Ok(Ok(status)) => AgentServiceSnapshot {
+    if matches!(status.phase, ServicePhase::Probing | ServicePhase::Unknown) {
+        failures.push(AgentProbeFailure {
+            code: AgentProbeCode::ServiceStatusUnavailable,
+        });
+        return AgentServiceSnapshot {
             desired_enabled,
-            state: match status.status {
-                ServiceStatus::NotInstalled => AgentServiceState::NotInstalled,
-                ServiceStatus::Stopped => AgentServiceState::Stopped,
-                ServiceStatus::Running => AgentServiceState::Running,
-            },
+            state: AgentServiceState::Unknown,
             ipc_connected,
-            runtime_compatible: matches!(status.status, ServiceStatus::Running)
-                .then(|| service::is_service_runtime_compatible(&status)),
+            runtime_compatible: None,
+        };
+    }
+
+    AgentServiceSnapshot {
+        desired_enabled,
+        state: match status.status {
+            ServiceStatus::NotInstalled => AgentServiceState::NotInstalled,
+            ServiceStatus::Stopped => AgentServiceState::Stopped,
+            ServiceStatus::Running => AgentServiceState::Running,
         },
-        Ok(Err(_)) => {
-            failures.push(AgentProbeFailure {
-                code: AgentProbeCode::ServiceStatusUnavailable,
-            });
-            AgentServiceSnapshot {
-                desired_enabled,
-                state: AgentServiceState::Unknown,
-                ipc_connected,
-                runtime_compatible: None,
-            }
-        }
-        Err(_) => {
-            failures.push(AgentProbeFailure {
-                code: AgentProbeCode::ServiceStatusTimeout,
-            });
-            AgentServiceSnapshot {
-                desired_enabled,
-                state: AgentServiceState::Unknown,
-                ipc_connected,
-                runtime_compatible: None,
-            }
-        }
+        ipc_connected,
+        runtime_compatible: matches!(status.status, ServiceStatus::Running)
+            .then(|| status.compat.allows_service_backend() && status.runtime_owned),
     }
 }
 

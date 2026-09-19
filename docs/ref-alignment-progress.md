@@ -189,24 +189,29 @@
   第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
   这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
-  `UninstallService` 已通过
-  新 `ServiceLifecyclePort`/transition lease 进入 mailbox；只读 `ProbeService` 也通过
-  lifecycle actor 串行读取同一 Service host 状态，IPC `status_service` 与 Agent diagnostics
-  不再直接访问 `service::control::status()`。legacy adapter 持有现有
+  `UninstallService` 已通过新 `ServiceLifecyclePort`/transition lease 进入 mailbox。
+  lifecycle actor 现在还持有 ref-shaped `watch::Receiver<ServiceHostStatus>` projection：
+  `phase`/`compat`/daemon wire fields 与 `restart_attempts` 由 actor 统一发布，Chimera 额外保留
+  `runtime_owned`，防止“协议兼容但属于其他 runtime”的 daemon 被误判成可用 host。生产启动
+  从 `Probing` 做一次初始 refresh；显式 Service mutation 完成后重新 probe 稳定态，
+  install/start/restart/uninstall 期间分别发布 transient phase。IPC `status_service` 与 Agent
+  diagnostics 现在只读 cached projection，不再为每次读取主动 probe daemon。legacy adapter 持有现有
   `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
   Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
   验证。uninstall 保留 Chimera 既有 UX：先卸载 daemon，再确认停止并在需要时自动
   handoff 到 Local；这与 ref 要求“先离开 Service host 再 uninstall”的顺序仍有差异。
   transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
-  health-loop 与启动期内部兼容性检查仍直接经 legacy control probe 观察 daemon；这些属于
-  host adapter 内部监控，尚未迁为 ref 的 cached/watch `ServiceHostStatus` facade。
+  health-loop 仍负责实际周期 probe，但成功 observation/失败状态会 cast 回 lifecycle actor
+  更新同一 watch，不再形成 UI/Agent 的第二套探测路径；启动期内部兼容性检查仍直接经 legacy
+  control probe。当前 `restart_attempts` 固定为 0，也尚未实现 ref 的 exhausted/restart-budget
+  policy，这部分继续留给后续独立 ServiceActor/host facade 迁移。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，17 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，18 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
-  read-only Service probe mailbox admission、
+  read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
@@ -220,12 +225,13 @@
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
-  以及显式 Service install/update/start/restart/stop/uninstall transition 与外部只读
-  Service probe 已具备；应用启动
+  以及显式 Service install/update/start/restart/stop/uninstall transition、actor-owned
+  cached/watch `ServiceHostStatus` 与外部只读 cached projection 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API 和无参 lifecycle rebuild convenience API 已删除。
-  下一阶段继续向 `core/actor_v2` 的 host facade/outcome-uncertain 与 cached/watch host status
-  迁移。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
+  下一阶段继续向 `core/actor_v2` 的 lower host facade/outcome-uncertain 与 ServiceActor
+  restart-budget/exhausted policy 迁移。当前仍是 lifecycle ownership 的部分迁移，而不是
+  singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 

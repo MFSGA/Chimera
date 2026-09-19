@@ -47,6 +47,84 @@ pub(crate) struct CoreLifecycleOperationResult {
     pub(crate) error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ServicePhase {
+    Probing,
+    NotInstalled,
+    DaemonStopped,
+    Installing,
+    StartingDaemon,
+    Ready,
+    Incompatible,
+    Restarting,
+    Uninstalling,
+    Unknown,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct ServiceHostStatus {
+    pub(crate) name: std::borrow::Cow<'static, str>,
+    pub(crate) version: std::borrow::Cow<'static, str>,
+    pub(crate) status: chimera_ipc::types::ServiceStatus,
+    pub(crate) server: Option<chimera_ipc::api::status::StatusResBody<'static>>,
+    pub(crate) phase: ServicePhase,
+    pub(crate) compat: crate::core::service::compat::ServiceCompat,
+    pub(crate) runtime_owned: bool,
+    pub(crate) restart_attempts: u8,
+}
+
+impl ServiceHostStatus {
+    fn probing() -> Self {
+        Self {
+            name: std::borrow::Cow::Borrowed("chimera-service"),
+            version: std::borrow::Cow::Borrowed(""),
+            status: chimera_ipc::types::ServiceStatus::NotInstalled,
+            server: None,
+            phase: ServicePhase::Probing,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: false,
+            restart_attempts: 0,
+        }
+    }
+
+    fn from_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Self {
+        use chimera_ipc::types::ServiceStatus;
+
+        let compat = crate::core::service::compat::ServiceCompat::classify(&info);
+        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+        let phase = match info.status {
+            ServiceStatus::Running if compat.allows_service_backend() => ServicePhase::Ready,
+            ServiceStatus::Running => ServicePhase::Incompatible,
+            ServiceStatus::Stopped => ServicePhase::DaemonStopped,
+            ServiceStatus::NotInstalled => ServicePhase::NotInstalled,
+        };
+        Self {
+            name: info.name,
+            version: info.version,
+            status: info.status,
+            server: info.server,
+            phase,
+            compat,
+            runtime_owned,
+            restart_attempts: 0,
+        }
+    }
+
+    fn probe_failed(previous: &Self) -> Self {
+        Self {
+            name: previous.name.clone(),
+            version: previous.version.clone(),
+            status: previous.status,
+            server: previous.server.clone(),
+            phase: ServicePhase::Unknown,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: false,
+            restart_attempts: previous.restart_attempts,
+        }
+    }
+}
+
 #[allow(unused_imports)]
 pub(crate) use adapters::{
     FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge, LegacyServiceBridge,
@@ -64,9 +142,16 @@ enum Message {
         command: Command,
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
+    #[cfg(test)]
     ProbeService {
-        reply: RpcReplyPort<anyhow::Result<chimera_ipc::types::StatusInfo<'static>>>,
+        reply: RpcReplyPort<anyhow::Result<ServiceHostStatus>>,
     },
+    ObserveService {
+        info: chimera_ipc::types::StatusInfo<'static>,
+    },
+    ServiceProbeFailed,
+    #[cfg(not(test))]
+    RefreshServiceStatus,
     RecoverCore,
     StartupReconcile,
     RuntimeDirty,
@@ -79,6 +164,7 @@ struct CoreLifecycleActorState {
     workflow: CoreLifecycleWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+    service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
     uncertain: bool,
     dirty: bool,
     dirty_tick_scheduled: bool,
@@ -88,11 +174,51 @@ struct CoreLifecycleActorArgs {
     workflow: CoreLifecycleWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+    service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
 }
 
 impl CoreLifecycleActorState {
     fn allocate_operation_id(&self) -> OperationId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        self.service_status
+            .send_replace(ServiceHostStatus::from_probe(info));
+    }
+
+    fn publish_service_phase(&self, phase: ServicePhase) {
+        let current = self.service_status.borrow().clone();
+        self.service_status.send_replace(ServiceHostStatus {
+            name: current.name,
+            version: current.version,
+            status: current.status,
+            server: current.server,
+            phase,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: current.runtime_owned,
+            restart_attempts: current.restart_attempts,
+        });
+    }
+
+    fn publish_service_probe_failure(&self) {
+        let previous = self.service_status.borrow().clone();
+        self.service_status
+            .send_replace(ServiceHostStatus::probe_failed(&previous));
+    }
+
+    async fn refresh_service_status(&self) -> anyhow::Result<ServiceHostStatus> {
+        match self.workflow.probe_service().await {
+            Ok(info) => {
+                let status = ServiceHostStatus::from_probe(info);
+                self.service_status.send_replace(status.clone());
+                Ok(status)
+            }
+            Err(error) => {
+                self.publish_service_probe_failure();
+                Err(error)
+            }
+        }
     }
 
     fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
@@ -186,6 +312,7 @@ impl Actor for CoreLifecycleActor {
             workflow: args.workflow,
             next_id: args.next_id,
             status: args.status,
+            service_status: args.service_status,
             uncertain: false,
             dirty: false,
             dirty_tick_scheduled: false,
@@ -199,10 +326,42 @@ impl Actor for CoreLifecycleActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            #[cfg(test)]
             Message::ProbeService { reply } => {
-                let _ = reply.send(state.workflow.probe_service().await);
+                let _ = reply.send(state.refresh_service_status().await);
+            }
+            Message::ObserveService { info } => {
+                state.publish_service_status(info);
+            }
+            Message::ServiceProbeFailed => {
+                state.publish_service_probe_failure();
+            }
+            #[cfg(not(test))]
+            Message::RefreshServiceStatus => {
+                if let Err(error) = state.refresh_service_status().await {
+                    tracing::debug!(%error, "failed to refresh cached service status");
+                }
             }
             Message::Execute { id, command, reply } => {
+                let service_phase = match &command {
+                    Command::InstallService => Some(ServicePhase::Installing),
+                    Command::StartService => Some(ServicePhase::StartingDaemon),
+                    Command::RestartService => Some(ServicePhase::Restarting),
+                    Command::UninstallService => Some(ServicePhase::Uninstalling),
+                    _ => None,
+                };
+                let service_mutation = matches!(
+                    &command,
+                    Command::InstallService
+                        | Command::UninstallService
+                        | Command::UpdateService
+                        | Command::StartService
+                        | Command::RestartService
+                        | Command::StopService
+                );
+                if let Some(phase) = service_phase {
+                    state.publish_service_phase(phase);
+                }
                 let retry_reconcile_on_failure = matches!(
                     &command,
                     Command::StartService
@@ -212,6 +371,9 @@ impl Actor for CoreLifecycleActor {
                         | Command::UpdateService
                 );
                 let result = state.execute_operation(id, command).await;
+                if service_mutation && let Err(error) = state.refresh_service_status().await {
+                    tracing::debug!(%error, "failed to refresh service status after mutation");
+                }
                 if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
                     state.mark_runtime_dirty(&myself);
                 }
@@ -282,10 +444,12 @@ enum CoreLifecycleClientInner {
         actor_ref: ActorRef<Message>,
         next_id: Arc<AtomicU64>,
         status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+        service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
     },
     #[cfg(test)]
     Direct {
         workflow: tokio::sync::Mutex<CoreLifecycleWorkflow>,
+        service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
     },
 }
 
@@ -299,7 +463,7 @@ impl CoreLifecycleClient {
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> anyhow::Result<Self> {
-        Self::spawn_with_installer(
+        let client = Self::spawn_with_installer(
             core,
             application,
             clash,
@@ -307,7 +471,10 @@ impl CoreLifecycleClient {
             Arc::new(FsBinaryInstaller),
             Arc::new(LegacyServiceBridge),
         )
-        .await
+        .await?;
+        #[cfg(not(test))]
+        client.request_service_status_refresh();
+        Ok(client)
     }
 
     async fn spawn_with_installer(
@@ -323,6 +490,8 @@ impl CoreLifecycleClient {
             CoreLifecycleWorkflow::new(application, clash, core, installer, runtime_paths, service);
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
         let next_id = Arc::new(AtomicU64::new(1));
+        let (service_status_tx, service_status_rx) =
+            tokio::sync::watch::channel(ServiceHostStatus::probing());
         let (actor_ref, _handle) = Actor::spawn(
             None,
             CoreLifecycleActor,
@@ -330,6 +499,7 @@ impl CoreLifecycleClient {
                 workflow,
                 next_id: next_id.clone(),
                 status: status.clone(),
+                service_status: service_status_tx,
             },
         )
         .await?;
@@ -348,6 +518,7 @@ impl CoreLifecycleClient {
             actor_ref,
             next_id,
             status,
+            service_status: service_status_rx,
         })))
     }
 
@@ -358,6 +529,8 @@ impl CoreLifecycleClient {
         clash: ClashConfigClient,
         runtime_paths: RuntimePaths,
     ) -> Self {
+        let (_service_status_tx, service_status_rx) =
+            tokio::sync::watch::channel(ServiceHostStatus::probing());
         Self(Arc::new(CoreLifecycleClientInner::Direct {
             workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
                 application,
@@ -367,6 +540,7 @@ impl CoreLifecycleClient {
                 runtime_paths,
                 Arc::new(LegacyServiceBridge),
             )),
+            service_status: service_status_rx,
         }))
     }
 
@@ -384,6 +558,7 @@ impl CoreLifecycleClient {
                 actor_ref,
                 next_id,
                 status,
+                ..
             } => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
                 let rejection = {
@@ -437,7 +612,7 @@ impl CoreLifecycleClient {
                 }
             }
             #[cfg(test)]
-            CoreLifecycleClientInner::Direct { workflow } => {
+            CoreLifecycleClientInner::Direct { workflow, .. } => {
                 workflow.lock().await.execute(command).await
             }
         }
@@ -463,6 +638,15 @@ impl CoreLifecycleClient {
         }
     }
 
+    #[cfg(not(test))]
+    pub(super) fn request_service_status_refresh(&self) {
+        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+            && actor_ref.cast(Message::RefreshServiceStatus).is_err()
+        {
+            tracing::debug!("failed to enqueue service status refresh");
+        }
+    }
+
     pub(super) fn request_runtime_rebuild(&self) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
@@ -475,9 +659,8 @@ impl CoreLifecycleClient {
         }
     }
 
-    pub(super) async fn probe_service(
-        &self,
-    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+    #[cfg(test)]
+    pub(super) async fn probe_service(&self) -> anyhow::Result<ServiceHostStatus> {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => match actor_ref
                 .call(|reply| Message::ProbeService { reply }, None)
@@ -489,9 +672,40 @@ impl CoreLifecycleClient {
                 Err(error) => Err(error.into()),
             },
             #[cfg(test)]
-            CoreLifecycleClientInner::Direct { workflow } => {
-                workflow.lock().await.probe_service().await
+            CoreLifecycleClientInner::Direct { workflow, .. } => workflow
+                .lock()
+                .await
+                .probe_service()
+                .await
+                .map(ServiceHostStatus::from_probe),
+        }
+    }
+
+    pub(super) fn service_status(&self) -> ServiceHostStatus {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { service_status, .. } => {
+                service_status.borrow().clone()
             }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { service_status, .. } => {
+                service_status.borrow().clone()
+            }
+        }
+    }
+
+    pub(super) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+            && actor_ref.cast(Message::ObserveService { info }).is_err()
+        {
+            tracing::debug!("failed to publish service status observation");
+        }
+    }
+
+    pub(super) fn observe_service_probe_failure(&self) {
+        if let CoreLifecycleClientInner::Actor { actor_ref, .. } = self.0.as_ref()
+            && actor_ref.cast(Message::ServiceProbeFailed).is_err()
+        {
+            tracing::debug!("failed to publish service probe failure");
         }
     }
 
@@ -551,10 +765,16 @@ impl ChimeraClient {
         self.inner.core.status().await
     }
 
-    pub(crate) async fn probe_service(
-        &self,
-    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        self.inner.core_lifecycle.probe_service().await
+    pub(crate) fn service_status(&self) -> ServiceHostStatus {
+        self.inner.core_lifecycle.service_status()
+    }
+
+    pub(crate) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        self.inner.core_lifecycle.observe_service_status(info);
+    }
+
+    pub(crate) fn observe_service_probe_failure(&self) {
+        self.inner.core_lifecycle.observe_service_probe_failure();
     }
 
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
@@ -1445,10 +1665,70 @@ mod tests {
         .unwrap();
 
         let status = client.probe_service().await.unwrap();
+        let cached = client.service_status();
 
         assert_eq!(status.status, chimera_ipc::types::ServiceStatus::Stopped);
+        assert_eq!(status.phase, ServicePhase::DaemonStopped);
         assert_eq!(status.name.as_ref(), "chimera-service");
+        assert_eq!(cached.phase, ServicePhase::DaemonStopped);
         assert_eq!(events.lock().unwrap().as_slice(), ["service-probe"]);
+    }
+
+    #[tokio::test]
+    async fn health_observation_updates_cached_service_status_without_reprobe() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(client.service_status().phase, ServicePhase::Probing);
+        client.observe_service_status(chimera_ipc::types::StatusInfo {
+            name: std::borrow::Cow::Borrowed("chimera-service"),
+            version: std::borrow::Cow::Borrowed("1.0.0"),
+            status: chimera_ipc::types::ServiceStatus::Stopped,
+            server: None,
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if client.service_status().phase == ServicePhase::DaemonStopped {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("health observation should update cached service status");
+        assert!(events.lock().unwrap().is_empty());
+
+        client.observe_service_probe_failure();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if client.service_status().phase == ServicePhase::Unknown {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("probe failure should publish unknown service phase");
+        let status = client.service_status();
+        assert_eq!(status.status, chimera_ipc::types::ServiceStatus::Stopped);
+        assert!(!status.runtime_owned);
+        assert!(events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -1476,7 +1756,7 @@ mod tests {
 
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["service-begin", "service-update"]
+            ["service-begin", "service-update", "service-probe"]
         );
     }
 
@@ -1505,7 +1785,7 @@ mod tests {
 
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["service-begin", "service-install"]
+            ["service-begin", "service-install", "service-probe"]
         );
     }
 
@@ -1542,7 +1822,8 @@ mod tests {
                 "service-begin",
                 "service-uninstall",
                 "service-confirm",
-                "rebuild-local"
+                "rebuild-local",
+                "service-probe"
             ]
         );
     }
@@ -1581,7 +1862,8 @@ mod tests {
                 "service-start",
                 "service-ready",
                 "rebuild-service",
-                "service-ready"
+                "service-ready",
+                "service-probe"
             ]
         );
     }
@@ -1620,7 +1902,8 @@ mod tests {
                 "service-restart",
                 "service-ready",
                 "rebuild-service",
-                "service-ready"
+                "service-ready",
+                "service-probe"
             ]
         );
     }
@@ -1658,7 +1941,8 @@ mod tests {
                 "service-begin",
                 "service-stop",
                 "service-confirm",
-                "rebuild-local"
+                "rebuild-local",
+                "service-probe"
             ]
         );
     }
