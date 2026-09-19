@@ -9,6 +9,7 @@ pub(crate) mod ports;
 mod workflow;
 
 use std::{
+    panic::AssertUnwindSafe,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -16,6 +17,7 @@ use std::{
     time::Duration,
 };
 
+use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
 use super::{
@@ -34,6 +36,7 @@ type OperationId = u64;
 pub(crate) struct CoreLifecycleStatus {
     pub(crate) active: Option<OperationId>,
     pub(crate) queued: Vec<OperationId>,
+    pub(crate) uncertain: bool,
     pub(crate) completed: Vec<CoreLifecycleOperationResult>,
 }
 
@@ -68,6 +71,7 @@ struct CoreLifecycleActorState {
     workflow: CoreLifecycleWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
+    uncertain: bool,
     dirty: bool,
     dirty_tick_scheduled: bool,
 }
@@ -84,6 +88,22 @@ impl CoreLifecycleActorState {
     }
 
     async fn execute_operation(&mut self, id: OperationId, command: Command) -> anyhow::Result<()> {
+        if self.uncertain {
+            let error = anyhow::anyhow!(
+                "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+            );
+            let mut status = self.status.lock();
+            status.queued.retain(|queued| *queued != id);
+            if status.completed.len() == COMPLETED_LIMIT {
+                status.completed.remove(0);
+            }
+            status.completed.push(CoreLifecycleOperationResult {
+                id,
+                error: Some(error.to_string()),
+            });
+            return Err(error);
+        }
+
         {
             let mut status = self.status.lock();
             status.queued.retain(|queued| *queued != id);
@@ -93,14 +113,30 @@ impl CoreLifecycleActorState {
             Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
             _ => None,
         };
-        let result = self.workflow.execute(command).await;
+        let result = match AssertUnwindSafe(self.workflow.execute(command))
+            .catch_unwind()
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                self.uncertain = true;
+                Err(anyhow::anyhow!(
+                    "core lifecycle workflow panicked; execution state is uncertain"
+                ))
+            }
+        };
         if let Some(progress) = progress {
             let error = result.as_ref().err().map(ToString::to_string);
-            progress.finished(error.as_deref());
+            if std::panic::catch_unwind(AssertUnwindSafe(|| progress.finished(error.as_deref())))
+                .is_err()
+            {
+                tracing::error!("binary installation progress observer panicked");
+            }
         }
         {
             let mut status = self.status.lock();
             status.active = None;
+            status.uncertain = self.uncertain;
             if status.completed.len() == COMPLETED_LIMIT {
                 status.completed.remove(0);
             }
@@ -127,6 +163,7 @@ impl Actor for CoreLifecycleActor {
             workflow: args.workflow,
             next_id: args.next_id,
             status: args.status,
+            uncertain: false,
             dirty: false,
             dirty_tick_scheduled: false,
         })
@@ -143,18 +180,32 @@ impl Actor for CoreLifecycleActor {
                 let _ = reply.send(state.execute_operation(id, command).await);
             }
             Message::RecoverCore => {
+                if state.uncertain {
+                    tracing::warn!(
+                        "ignoring crash recovery because lifecycle outcome is uncertain"
+                    );
+                    return Ok(());
+                }
                 tracing::info!("trying to recover core through lifecycle actor");
                 let id = state.allocate_operation_id();
                 if let Err(error) = state.execute_operation(id, Command::RecoverCore).await {
-                    tracing::error!(%error, "failed to recover core; scheduling retry");
-                    let actor = myself.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        let _ = actor.cast(Message::RecoverCore);
-                    });
+                    if !state.uncertain {
+                        tracing::error!(%error, "failed to recover core; scheduling retry");
+                        let actor = myself.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            let _ = actor.cast(Message::RecoverCore);
+                        });
+                    }
                 }
             }
             Message::RuntimeDirty => {
+                if state.uncertain {
+                    tracing::debug!(
+                        "ignoring runtime dirty signal because lifecycle outcome is uncertain"
+                    );
+                    return Ok(());
+                }
                 state.dirty = true;
                 if !state.dirty_tick_scheduled {
                     state.dirty_tick_scheduled = true;
@@ -167,6 +218,10 @@ impl Actor for CoreLifecycleActor {
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
+                if state.uncertain {
+                    state.dirty = false;
+                    return Ok(());
+                }
                 if state.dirty {
                     state.dirty = false;
                     let id = state.allocate_operation_id();
@@ -431,6 +486,14 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct PanicOnStopCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    struct PanicOnStopLease {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
     struct RecordingInstaller {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -491,6 +554,70 @@ mod tests {
             self.events.lock().unwrap().push("select");
             Ok(())
         }
+    }
+
+    #[async_trait]
+    impl CoreLifecycleLease for PanicOnStopLease {
+        async fn rebuild_running_config(
+            &mut self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("rebuild-after-panic");
+            Ok(())
+        }
+
+        async fn run_core_from(
+            &mut self,
+            _config_path: &std::path::Path,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("panic-stop");
+            panic!("injected lifecycle panic");
+        }
+
+        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("select-after-panic");
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for PanicOnStopCore {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
+            Ok(Box::new(PanicOnStopLease {
+                events: self.events.clone(),
+            }))
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("recover-after-panic");
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
     }
 
     #[async_trait]
@@ -628,6 +755,52 @@ mod tests {
 
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild", "rebuild"]);
         assert_eq!(client.status().completed.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn workflow_panic_latches_uncertain_and_blocks_follow_up_mutations() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(PanicOnStopCore {
+                events: events.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let error = client.stop_core().await.unwrap_err();
+        assert!(error.to_string().contains("execution state is uncertain"));
+        assert!(client.status().uncertain);
+
+        client.request_runtime_rebuild();
+        tokio::time::sleep(DIRTY_WINDOW + Duration::from_millis(50)).await;
+
+        let error = client.select_core(ClashCore::Mihomo).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("previous core lifecycle operation has an uncertain outcome")
+        );
+        assert_eq!(events.lock().unwrap().as_slice(), ["panic-stop"]);
+
+        let status = client.status();
+        assert!(status.uncertain);
+        assert_eq!(status.completed.len(), 2);
+        assert!(
+            status.completed[0]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("execution state is uncertain"))
+        );
+        assert!(
+            status.completed[1]
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("previous core lifecycle operation"))
+        );
     }
 
     #[tokio::test]
