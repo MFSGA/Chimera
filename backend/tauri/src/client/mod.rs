@@ -152,6 +152,7 @@ impl ChimeraClient {
         let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
             core.clone(),
             typed.application.clone(),
+            typed.clash_config.clone(),
             runtime_paths,
         ))?;
         Ok(Self::with_parts_and_typed_config(
@@ -186,6 +187,7 @@ impl ChimeraClient {
         let core_lifecycle = CoreLifecycleClient::direct(
             core.clone(),
             typed.application.clone(),
+            typed.clash_config.clone(),
             runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
         );
         Self::with_parts_and_typed_config(

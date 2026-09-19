@@ -156,8 +156,8 @@
 - 类别：临时迁移
 - 差异及必要性：将现有 CoreManager 生命周期端口、运行配置端口、运行时诊断
   DTO 和 legacy adapter 按 ref 的 core-lifecycle 目录归位，并新增
-  `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`
-  已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
+  `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`/
+  `Reconcile` 已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
   执行；core crash recovery 的 `Notify` 也已接入 mailbox，不再由 `CoreManager::init`
   启动独立恢复循环。core updater 现在只负责下载/解压并提交 ref-shaped
   `PreparedCoreBinary`，stop/install/restart 由 lifecycle actor 统一执行。旧 UI/API
@@ -165,7 +165,7 @@
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
-  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/replace-binary。
+  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/reconcile/replace-binary。
   recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
   handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
   `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
@@ -175,15 +175,15 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，3 passed（mailbox
-  mutation serialization、crash recovery signal admission、replace-binary 的
-  stop→install→restart→finished 顺序）；
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，4 passed（mailbox
+  mutation serialization、crash recovery signal admission、reconcile admission、
+  replace-binary 的 stop→install→restart→finished 顺序）；
   `cargo fmt --manifest-path backend/Cargo.toml --package chimera` 与 `git diff --check`
   通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
-  `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，updater binary
-  replacement 已迁入 mailbox。下一阶段是把 reconcile/runtime-dirty 等 mutation
-  继续搬入 mailbox，随后迁移 ref
+  `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
+  updater binary replacement 已迁入 mailbox。下一阶段是补 ref 的 runtime-dirty
+  coalescing/operation-id/uncertain outcome，再迁移
   `core/actor_v2` 的 host facade、operation-id/uncertain 状态和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 

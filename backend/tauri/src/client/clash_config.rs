@@ -55,9 +55,10 @@ impl RunningConfigPort for TestRunningConfigBridge {
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub(crate) struct ClashConfigClient {
     state: Arc<ClashConfigStateBackend>,
-    runtime_patch: RuntimePatchCoordinator,
+    runtime_patch: Arc<RuntimePatchCoordinator>,
     running_config: Arc<dyn RunningConfigPort>,
 }
 
@@ -146,7 +147,7 @@ impl ClashConfigClient {
     ) -> Self {
         Self {
             state: Arc::new(state),
-            runtime_patch: RuntimePatchCoordinator::default(),
+            runtime_patch: Arc::new(RuntimePatchCoordinator::default()),
             running_config,
         }
     }
