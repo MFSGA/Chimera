@@ -867,11 +867,6 @@ mod tests {
             })
         }
 
-        async fn recover(&self) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("recover-after-panic");
-            Ok(())
-        }
-
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
             None
         }
@@ -928,10 +923,6 @@ mod tests {
                 state_changed_at: 0,
                 run_type: RunType::Normal,
             })
-        }
-
-        async fn recover(&self) -> anyhow::Result<()> {
-            Ok(())
         }
 
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
@@ -993,10 +984,6 @@ mod tests {
             })
         }
 
-        async fn recover(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
             None
         }
@@ -1056,10 +1043,6 @@ mod tests {
             })
         }
 
-        async fn recover(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
             None
         }
@@ -1081,11 +1064,6 @@ mod tests {
                 state_changed_at: 0,
                 run_type: RunType::Normal,
             })
-        }
-
-        async fn recover(&self) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("recover");
-            Ok(())
         }
 
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
@@ -1386,7 +1364,7 @@ mod tests {
         recovery_notify.notify_one();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if events.lock().unwrap().contains(&"recover") {
+                if events.lock().unwrap().contains(&"rebuild") {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;

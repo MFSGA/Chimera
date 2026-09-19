@@ -245,10 +245,6 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         })
     }
 
-    async fn recover(&self) -> anyhow::Result<()> {
-        self.manager().recover_core_once().await
-    }
-
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
         Some(self.manager().recovery_notify())
     }

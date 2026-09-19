@@ -568,13 +568,6 @@ impl CoreManager {
         }
     }
 
-    fn selected_core() -> ClashCore {
-        Config::verge()
-            .latest()
-            .clash_core
-            .unwrap_or(ClashCore::Mihomo)
-    }
-
     fn committed_core() -> ClashCore {
         Config::verge()
             .data()
@@ -860,13 +853,6 @@ impl CoreManager {
 
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
         self.lifecycle.recovery_notify.clone()
-    }
-
-    /// Perform one recovery attempt after an unexpected process termination.
-    /// Retry scheduling belongs to the client-owned lifecycle actor.
-    pub(crate) async fn recover_core_once(&self) -> Result<()> {
-        let _guard = self.lifecycle.run_lock.lock().await;
-        self.rebuild_and_run_locked(Self::selected_core()).await
     }
 
     async fn stop_core_with_lease(&self, _lease: &CoreLifecycleLease<'_>) -> Result<()> {
