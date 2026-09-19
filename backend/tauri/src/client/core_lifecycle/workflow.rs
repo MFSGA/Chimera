@@ -63,8 +63,7 @@ impl CoreLifecycleWorkflow {
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
-            Command::RecoverCore => self.core.recover().await,
-            Command::Reconcile => self.reconcile().await,
+            Command::RecoverCore | Command::Reconcile => self.reconcile().await,
             Command::StopCore => {
                 let mut lease = self.core.begin().await?;
                 lease.stop().await

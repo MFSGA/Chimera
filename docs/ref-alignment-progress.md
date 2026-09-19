@@ -159,7 +159,9 @@
   `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`/
   `Reconcile` 已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
   执行；应用启动也只投递 `StartupReconcile`，不再由 `CoreManager::init`/`run_core`
-  在 actor 外启动核心。core crash recovery 的 `Notify` 同样已接入 mailbox。core updater
+  在 actor 外启动核心。core crash recovery 的 `Notify` 同样已接入 mailbox，并直接复用
+  typed `Reconcile` workflow；旧 `CoreLifecyclePort::recover`/`CoreManager::recover_core_once`
+  以及 legacy `RunType::default()` recovery 分支已删除。core updater
   现在只负责下载/解压并提交 ref-shaped
   `PreparedCoreBinary`，stop/install/restart 由 lifecycle actor 统一执行。旧 UI/API
   合同保持不变。
@@ -168,8 +170,9 @@
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
   legacy `CoreManager` 实现；mailbox 目前接管 startup/stop/select/recover/reconcile/
   replace-binary，以及全部显式 Service lifecycle mutation。
-  recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
-  handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
+  recover 每次执行一次同源 typed reconcile，失败后由 actor 延迟 5 秒重新投递，因此不会
+  在一次 handler 中永久占住生命周期，也不再维护第二套 legacy recovery 构建逻辑。
+  binary replacement 使用显式注入的 `RuntimePaths`、
   `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
   `CoreUpdateLease` active API 已删除。mailbox RPC 现在为每次 mutation 分配
   operation id，默认最多等待 180 秒；caller 等待超时不会取消已 admission 的操作，
@@ -202,7 +205,7 @@
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
   --test-threads=1`，16 passed；`client::core_lifecycle::tests`，17 passed（mailbox
-  mutation serialization、startup reconcile admission、crash recovery signal admission、reconcile admission、
+  mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe mailbox admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
@@ -220,9 +223,9 @@
   以及显式 Service install/update/start/restart/stop/uninstall transition 与外部只读
   Service probe 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
-  `CoreManager::run_core` 和无参 lifecycle rebuild convenience API 已删除。下一阶段继续
-  向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
-  恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
+  `CoreManager::run_core`、旧 recovery API 和无参 lifecycle rebuild convenience API 已删除。
+  下一阶段继续向 `core/actor_v2` 的 host facade/outcome-uncertain 与 cached/watch host status
+  迁移。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 
