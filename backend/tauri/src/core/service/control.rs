@@ -1,10 +1,12 @@
-use std::ffi::OsString;
+use std::{ffi::OsString, time::Duration};
 
 use runas::Command as RunasCommand;
 
 use crate::utils::dirs::{app_config_dir, app_data_dir, app_install_dir};
 
 use super::SERVICE_PATH;
+
+const SERVICE_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -149,9 +151,17 @@ pub async fn restart_service_daemon() -> anyhow::Result<()> {
 pub async fn status<'a>() -> anyhow::Result<chimera_ipc::types::StatusInfo<'a>> {
     let mut cmd = tokio::process::Command::new(SERVICE_PATH.as_path());
     cmd.args(["status", "--json"]);
+    cmd.kill_on_drop(true);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = cmd.output().await?;
+    let output = tokio::time::timeout(SERVICE_STATUS_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "query service status timed out after {} seconds",
+                SERVICE_STATUS_TIMEOUT.as_secs()
+            )
+        })??;
     if !output.status.success() {
         return Err(format_exit_failure("query service status", output.status));
     }
