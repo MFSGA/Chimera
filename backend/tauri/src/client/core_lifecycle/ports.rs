@@ -90,19 +90,7 @@ pub struct RuntimeTransformDiagnostics {
 }
 
 #[async_trait]
-pub(crate) trait CoreBinaryUpdateLease: Send {
-    async fn run_core_from(
-        &mut self,
-        config_path: &std::path::Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()>;
-    async fn stop(&mut self) -> anyhow::Result<()>;
-}
-
-#[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
-    async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>>;
     async fn reconcile(
         &self,
         clash: ClashConfig,

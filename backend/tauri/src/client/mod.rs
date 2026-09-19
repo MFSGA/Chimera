@@ -238,7 +238,7 @@ mod tests {
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
 
-    use super::core_lifecycle::{CoreBinaryUpdateLease, CoreStatusSnapshot};
+    use super::core_lifecycle::CoreStatusSnapshot;
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
@@ -267,37 +267,8 @@ mod tests {
         fail_rebuild: bool,
     }
 
-    struct RecordingLease {
-        events: Arc<Mutex<Vec<&'static str>>>,
-    }
-
-    #[async_trait]
-    impl CoreBinaryUpdateLease for RecordingLease {
-        async fn run_core_from(
-            &mut self,
-            _config_path: &std::path::Path,
-            _target_core: ClashCore,
-            _run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("run-from");
-            Ok(())
-        }
-
-        async fn stop(&mut self) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("stop");
-            Ok(())
-        }
-    }
-
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
-        async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
-            self.events.lock().unwrap().push("begin-binary-update");
-            Ok(Box::new(RecordingLease {
-                events: self.events.clone(),
-            }))
-        }
-
         async fn reconcile(
             &self,
             _clash: chimera_config::clash::config::ClashConfig,

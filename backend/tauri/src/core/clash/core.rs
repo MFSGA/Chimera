@@ -455,17 +455,6 @@ impl CoreLifecycleLease<'_> {
             .await
     }
 
-    pub(crate) async fn run_core_from(
-        &self,
-        config_path: &Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> Result<()> {
-        self.manager
-            .run_core_from_product_inner(config_path, target_core, run_type)
-            .await
-    }
-
     pub(crate) async fn stop_core(&self) -> Result<()> {
         self.manager.stop_core_with_lease(self).await
     }

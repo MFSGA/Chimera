@@ -7,9 +7,9 @@ use serde_yaml::Mapping;
 use std::sync::Arc;
 
 use super::ports::{
-    BinaryInstaller, CoreBinaryUpdateLease, CoreLifecyclePort, CoreStatusSnapshot,
-    PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics,
-    RuntimeTransformFailureDiagnostics, ServiceLifecyclePort, ServiceTransitionLease,
+    BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary, RunningConfigPort,
+    RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics, ServiceLifecyclePort,
+    ServiceTransitionLease,
 };
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -17,7 +17,7 @@ use crate::{
     core::{
         clash::{
             api::ClashRuntimeConfig,
-            core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
+            core::{CoreManager, RunType},
         },
         connection_interruption::ConnectionInterruptionService,
     },
@@ -191,36 +191,8 @@ impl LegacyCoreBridge {
     }
 }
 
-struct LegacyCoreBinaryUpdateLease<'a> {
-    lease: CoreManagerLifecycleLease<'a>,
-}
-
-#[async_trait]
-impl CoreBinaryUpdateLease for LegacyCoreBinaryUpdateLease<'_> {
-    async fn run_core_from(
-        &mut self,
-        config_path: &std::path::Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()> {
-        self.lease
-            .run_core_from(config_path, target_core, run_type)
-            .await
-    }
-
-    async fn stop(&mut self) -> anyhow::Result<()> {
-        self.lease.stop_core().await
-    }
-}
-
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
-    async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>> {
-        Ok(Box::new(LegacyCoreBinaryUpdateLease {
-            lease: self.manager().begin_lifecycle().await,
-        }))
-    }
-
     async fn reconcile(
         &self,
         clash: ClashConfig,

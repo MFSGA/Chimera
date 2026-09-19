@@ -168,17 +168,18 @@
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
   `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
-  legacy `CoreManager` 实现，但 workflow 已不再获取通用 `CoreLifecycleLease`：普通
+  legacy `CoreManager` 实现，但 workflow 已不再持有任何 core lifecycle lease：
   reconcile/stop/select 通过 facade-style `CoreLifecyclePort` 方法执行，lease acquisition
-  被封装在 legacy adapter 内；只为 updater 的 stop→install→restart 原子窗口保留窄化的
-  `CoreBinaryUpdateLease`（仅 stop/run-from）。mailbox 目前接管 startup/stop/select/recover/reconcile/
+  被封装在 legacy adapter 内；updater 的 stop→install→reconcile 原子性由 actor-owned
+  single active task + pending queue 保证，不再跨文件安装持有 `CoreManager` mutex。
+  mailbox 目前接管 startup/stop/select/recover/reconcile/
   replace-binary，以及全部显式 Service lifecycle mutation。
   recover 每次执行一次同源 typed reconcile，失败后由 actor 延迟 5 秒重新投递，因此不会
   在一次 handler 中永久占住生命周期，也不再维护第二套 legacy recovery 构建逻辑。
-  binary replacement 使用显式注入的 `RuntimePaths`、
-  `BinaryInstaller`、`CoreBinaryUpdateLease` 和进度回调；staging `TempDir` 由 `Arc` 保活到
-  安装/重启结束，旧的 `CoreUpdateLease` active API 与 client-facing 通用 lifecycle lease
-  已删除。mailbox RPC 现在为每次 mutation 分配
+  binary replacement 使用显式注入的 `BinaryInstaller` 和进度回调；staging `TempDir`
+  由 `Arc` 保活到安装/reconcile 结束。安装当前选中 core 时执行 stop→install→reconcile，
+  与 ref `ReplaceCoreBinary` 的安装后 reconcile 语义一致；旧的 `CoreUpdateLease`、
+  `CoreBinaryUpdateLease` 与 client-facing 通用 lifecycle lease 均已删除。mailbox RPC 现在为每次 mutation 分配
   operation id，默认最多等待 180 秒；caller 等待超时不会取消已 admission 的操作，
   actor 会继续执行并把结果写入 bounded completed history（32 条）。新增只读
   `get_core_lifecycle_status` IPC 暴露 active/queued/completed，供超时后按 operation id
@@ -223,7 +224,7 @@
   --test-threads=1`，16 passed；`client::core_lifecycle::tests`，20 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
-  replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
+  replace-binary 的 stop→install→typed reconcile→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、幂等 shutdown 只 stop 一次且阻断后续 mutation、
   shutdown drain actor-owned pending queue 后等待 active 再 final stop、pending queue 超过 32 条时拒绝 overflow、
@@ -240,10 +241,10 @@
   以及显式 Service install/update/start/restart/stop/uninstall transition、actor-owned
   cached/watch `ServiceHostStatus`、外部只读 cached projection 与专用幂等 shutdown 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
-  `CoreManager::run_core`、旧 recovery API 和无参 lifecycle rebuild convenience API 已删除。
-  下一阶段继续把 updater 专用 `CoreBinaryUpdateLease` 下沉进 `core/actor_v2` lower host
-  facade，并迁移 lower reply-lost/outcome-uncertain 与 ServiceActor restart-budget/exhausted
-  policy。当前仍是 lower host ownership 的部分迁移，而不是 singleton 或 workflow lease 问题。
+  `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
+  convenience API 已删除。下一阶段继续迁移 `core/actor_v2` lower host facade、lower
+  reply-lost/outcome-uncertain 与 ServiceActor restart-budget/exhausted policy。当前仍是
+  lower host ownership 的部分迁移，而不是 singleton 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
 
