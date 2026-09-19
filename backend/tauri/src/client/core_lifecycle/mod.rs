@@ -65,6 +65,7 @@ enum Message {
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
     RecoverCore,
+    StartupReconcile,
     RuntimeDirty,
     DirtyTick,
 }
@@ -209,6 +210,18 @@ impl Actor for CoreLifecycleActor {
                     state.mark_runtime_dirty(&myself);
                 }
                 let _ = reply.send(result);
+            }
+            Message::StartupReconcile => {
+                if state.uncertain {
+                    tracing::warn!(
+                        "ignoring startup reconcile because lifecycle outcome is uncertain"
+                    );
+                    return Ok(());
+                }
+                let id = state.allocate_operation_id();
+                if let Err(error) = state.execute_operation(id, Command::Reconcile).await {
+                    tracing::error!(%error, id, "startup core reconcile failed");
+                }
             }
             Message::RecoverCore => {
                 if state.uncertain {
@@ -432,6 +445,18 @@ impl CoreLifecycleClient {
         }
     }
 
+    pub(super) fn request_startup_reconcile(&self) -> anyhow::Result<()> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => actor_ref
+                .cast(Message::StartupReconcile)
+                .map_err(|error| anyhow::anyhow!("failed to enqueue startup reconcile: {error}")),
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {
+                anyhow::bail!("startup reconcile requires the lifecycle actor")
+            }
+        }
+    }
+
     pub(super) fn request_runtime_rebuild(&self) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
@@ -493,7 +518,7 @@ impl CoreLifecycleClient {
 
 impl ChimeraClient {
     pub(crate) fn init_core(&self) -> anyhow::Result<()> {
-        self.inner.core.init()
+        self.inner.core_lifecycle.request_startup_reconcile()
     }
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -786,10 +811,6 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for PanicOnStopCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             Ok(Box::new(PanicOnStopLease {
                 events: self.events.clone(),
@@ -851,10 +872,6 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for BlockingCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             Ok(Box::new(BlockingLease {
                 events: self.events.clone(),
@@ -915,10 +932,6 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for ServiceHandoffCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             Ok(Box::new(ServiceHandoffLease {
                 events: self.events.clone(),
@@ -982,10 +995,6 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for ServiceStartCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             Ok(Box::new(ServiceStartLease {
                 events: self.events.clone(),
@@ -1018,10 +1027,6 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
         async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             Ok(Box::new(RecordingLease {
                 events: self.events.clone(),
@@ -1347,6 +1352,35 @@ mod tests {
         })
         .await
         .expect("recovery signal should be admitted by the lifecycle actor");
+    }
+
+    #[tokio::test]
+    async fn startup_reconcile_enters_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client.request_startup_reconcile().unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().contains(&"rebuild") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("startup reconcile should be admitted by the lifecycle actor");
     }
 
     #[tokio::test]

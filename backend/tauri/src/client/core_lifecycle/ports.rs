@@ -108,7 +108,6 @@ pub(crate) trait CoreLifecycleLease: Send {
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
-    fn init(&self) -> anyhow::Result<()>;
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     async fn recover(&self) -> anyhow::Result<()>;
