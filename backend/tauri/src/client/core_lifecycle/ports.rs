@@ -37,6 +37,17 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
     async fn install(&self, artifact: &PreparedCoreBinary) -> anyhow::Result<()>;
 }
 
+#[async_trait]
+pub(crate) trait ServiceTransitionLease: Send {
+    async fn stop_daemon(&mut self) -> anyhow::Result<()>;
+    async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
+}
+
 /// Narrow boundary around the running core's `/configs` API.
 ///
 /// The legacy API remains behind this port while the ref core lifecycle is

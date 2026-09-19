@@ -53,11 +53,16 @@ enum ApplicationClientInner {
 impl ApplicationClient {
     #[cfg(test)]
     pub(crate) fn legacy() -> anyhow::Result<Self> {
-        Ok(Self {
+        Ok(Self::static_state(ChimeraAppConfig::default()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn static_state(state: ChimeraAppConfig) -> Self {
+        Self {
             inner: Arc::new(ApplicationClientInner::Static {
-                state: parking_lot::RwLock::new(ChimeraAppConfig::default()),
+                state: parking_lot::RwLock::new(state),
             }),
-        })
+        }
     }
 
     pub(super) async fn new(

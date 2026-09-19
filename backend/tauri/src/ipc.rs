@@ -844,7 +844,7 @@ pub mod service {
     #[specta::specta]
     pub async fn stop_service(client: State<'_, ChimeraClient>) -> Result {
         ensure_service_can_stop_for_tun(&client)?;
-        service::stop_service_and_converge(&client).await?;
+        client.stop_service().await?;
         Ok(())
     }
     #[tauri::command]

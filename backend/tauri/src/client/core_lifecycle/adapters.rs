@@ -1,5 +1,6 @@
 //! Legacy adapters retained behind the client core-lifecycle ports.
 
+use anyhow::Context;
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
 use serde_yaml::Mapping;
@@ -8,6 +9,7 @@ use std::sync::Arc;
 use super::ports::{
     BinaryInstaller, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
     RunningConfigPort, RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics,
+    ServiceLifecyclePort, ServiceTransitionLease,
 };
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -79,6 +81,39 @@ impl BinaryInstaller for FsBinaryInstaller {
                 Ok(())
             }
         }
+    }
+}
+
+pub(crate) struct LegacyServiceBridge;
+
+struct LegacyServiceTransition {
+    _guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+#[async_trait]
+impl ServiceLifecyclePort for LegacyServiceBridge {
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        Ok(Box::new(LegacyServiceTransition {
+            _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
+        }))
+    }
+}
+
+#[async_trait]
+impl ServiceTransitionLease for LegacyServiceTransition {
+    async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::stop_service().await
+    }
+
+    async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+        let observation = crate::core::service::ipc::refresh_state_now()
+            .await
+            .context("failed to verify Chimera Service after stop")?;
+        if observation.status == chimera_ipc::types::ServiceStatus::Running {
+            anyhow::bail!("Chimera Service still reports running after stop");
+        }
+        crate::core::service::ipc::mark_disconnected_now();
+        Ok(())
     }
 }
 
