@@ -64,6 +64,9 @@ enum Message {
         command: Command,
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
+    ProbeService {
+        reply: RpcReplyPort<anyhow::Result<chimera_ipc::types::StatusInfo<'static>>>,
+    },
     RecoverCore,
     StartupReconcile,
     RuntimeDirty,
@@ -196,6 +199,9 @@ impl Actor for CoreLifecycleActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::ProbeService { reply } => {
+                let _ = reply.send(state.workflow.probe_service().await);
+            }
             Message::Execute { id, command, reply } => {
                 let retry_reconcile_on_failure = matches!(
                     &command,
@@ -469,6 +475,26 @@ impl CoreLifecycleClient {
         }
     }
 
+    pub(super) async fn probe_service(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => match actor_ref
+                .call(|reply| Message::ProbeService { reply }, None)
+                .await
+            {
+                Ok(CallResult::Success(result)) => result,
+                Ok(CallResult::Timeout) => anyhow::bail!("service probe timed out"),
+                Ok(CallResult::SenderError) => anyhow::bail!("service probe reply dropped"),
+                Err(error) => Err(error.into()),
+            },
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { workflow } => {
+                workflow.lock().await.probe_service().await
+            }
+        }
+    }
+
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -523,6 +549,12 @@ impl ChimeraClient {
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.inner.core.status().await
+    }
+
+    pub(crate) async fn probe_service(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        self.inner.core_lifecycle.probe_service().await
     }
 
     pub(crate) fn core_lifecycle_status(&self) -> CoreLifecycleStatus {
@@ -711,6 +743,16 @@ mod tests {
 
     #[async_trait]
     impl ServiceLifecyclePort for RecordingService {
+        async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+            self.events.lock().unwrap().push("service-probe");
+            Ok(chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.0.0"),
+                status: chimera_ipc::types::ServiceStatus::Stopped,
+                server: None,
+            })
+        }
+
         async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
             self.events.lock().unwrap().push("service-begin");
             Ok(Box::new(RecordingServiceTransition {
@@ -1401,6 +1443,34 @@ mod tests {
         client.reconcile().await.unwrap();
 
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+    }
+
+    #[tokio::test]
+    async fn probe_service_reads_through_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        let status = client.probe_service().await.unwrap();
+
+        assert_eq!(status.status, chimera_ipc::types::ServiceStatus::Stopped);
+        assert_eq!(status.name.as_ref(), "chimera-service");
+        assert_eq!(events.lock().unwrap().as_slice(), ["service-probe"]);
     }
 
     #[tokio::test]

@@ -55,6 +55,12 @@ impl CoreLifecycleWorkflow {
         }
     }
 
+    pub(super) async fn probe_service(
+        &self,
+    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        self.service.probe().await
+    }
+
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore => self.core.recover().await,

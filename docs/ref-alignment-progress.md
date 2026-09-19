@@ -187,32 +187,38 @@
   这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
   `UninstallService` 已通过
-  新 `ServiceLifecyclePort`/transition lease 进入 mailbox：legacy adapter 持有现有
+  新 `ServiceLifecyclePort`/transition lease 进入 mailbox；只读 `ProbeService` 也通过
+  lifecycle actor 串行读取同一 Service host 状态，IPC `status_service` 与 Agent diagnostics
+  不再直接访问 `service::control::status()`。legacy adapter 持有现有
   `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
   Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
   验证。uninstall 保留 Chimera 既有 UX：先卸载 daemon，再确认停止并在需要时自动
   handoff 到 Local；这与 ref 要求“先离开 Service host 再 uninstall”的顺序仍有差异。
-  transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。
+  transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
+  health-loop 与启动期内部兼容性检查仍直接经 legacy control probe 观察 daemon；这些属于
+  host adapter 内部监控，尚未迁为 ref 的 cached/watch `ServiceHostStatus` facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，16 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，17 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal admission、reconcile admission、
+  read-only Service probe mailbox admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
-  `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
+  `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
-  以及显式 Service install/update/start/restart/stop/uninstall transition 已具备；应用启动
+  以及显式 Service install/update/start/restart/stop/uninstall transition 与外部只读
+  Service probe 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core` 和无参 lifecycle rebuild convenience API 已删除。下一阶段继续
   向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host

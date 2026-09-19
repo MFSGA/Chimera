@@ -810,8 +810,10 @@ pub mod service {
 
     #[tauri::command]
     #[specta::specta]
-    pub async fn status_service<'a>() -> Result<ServiceStatusInfo<'a>> {
-        let info = service::control::status().await?;
+    pub async fn status_service(
+        client: State<'_, ChimeraClient>,
+    ) -> Result<ServiceStatusInfo<'static>> {
+        let info = client.probe_service().await?;
         let compat = crate::core::service::compat::ServiceCompat::classify(&info);
         Ok(ServiceStatusInfo {
             name: info.name,

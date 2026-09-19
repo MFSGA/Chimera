@@ -60,7 +60,7 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
 
     let client = app.state::<ChimeraClient>();
     let core_status = client.core_status();
-    let service_status = tokio::time::timeout(Duration::from_secs(2), service::control::status());
+    let service_status = tokio::time::timeout(Duration::from_secs(2), client.probe_service());
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
     let (core_status, service_status, system_proxy) =
         tokio::join!(core_status, service_status, system_proxy);
