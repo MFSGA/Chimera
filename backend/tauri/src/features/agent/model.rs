@@ -154,7 +154,6 @@ pub enum AgentProbeCode {
     CoreConfigUnavailable,
     SystemProxyUnavailable,
     ServiceStatusUnavailable,
-    ServiceStatusTimeout,
     TelemetryUnavailable,
 }
 
