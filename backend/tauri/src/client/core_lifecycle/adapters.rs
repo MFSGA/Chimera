@@ -100,6 +100,14 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
         self.facade.probe_service().await
     }
 
+    async fn report_endpoint_down(&self) -> anyhow::Result<()> {
+        self.facade.report_service_endpoint_down().await
+    }
+
+    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+        self.facade.service_restart_policy()
+    }
+
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
             inner: self.facade.begin_service_transition().await?,

@@ -9,7 +9,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     time::Duration,
 };
@@ -32,15 +32,52 @@ use crate::{
     enhance::PostProcessingOutput,
 };
 
+const SERVICE_RESTART_BUDGET: u8 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceRestartDecision {
+    Ignore,
+    Restart { next_attempt: u8 },
+    Exhaust,
+}
+
+fn service_restart_decision(
+    status: chimera_ipc::types::ServiceStatus,
+    attempts: u8,
+    exhausted: bool,
+    budget: u8,
+) -> ServiceRestartDecision {
+    if exhausted || status != chimera_ipc::types::ServiceStatus::Stopped {
+        return ServiceRestartDecision::Ignore;
+    }
+    if attempts >= budget {
+        ServiceRestartDecision::Exhaust
+    } else {
+        ServiceRestartDecision::Restart {
+            next_attempt: attempts.saturating_add(1),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ServiceRestartPolicySnapshot {
+    pub(crate) attempts: u8,
+    pub(crate) exhausted: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     outcome_uncertain: Arc<AtomicBool>,
+    service_restart_attempts: Arc<AtomicU8>,
+    service_restart_exhausted: Arc<AtomicBool>,
 }
 
 pub(crate) struct ServiceTransition {
     _guard: tokio::sync::MutexGuard<'static, ()>,
     outcome_uncertain: Arc<AtomicBool>,
+    restart_attempts: Arc<AtomicU8>,
+    restart_exhausted: Arc<AtomicBool>,
 }
 
 struct MutationReplyGuard {
@@ -146,6 +183,8 @@ impl CoreFacade {
         Self {
             manager: Arc::new(CoreManager::new()),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
+            service_restart_attempts: Arc::new(AtomicU8::new(0)),
+            service_restart_exhausted: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -230,6 +269,69 @@ impl CoreFacade {
         crate::core::service::control::status().await
     }
 
+    pub(crate) fn service_restart_policy(&self) -> ServiceRestartPolicySnapshot {
+        ServiceRestartPolicySnapshot {
+            attempts: self.service_restart_attempts.load(Ordering::Acquire),
+            exhausted: self.service_restart_exhausted.load(Ordering::Acquire),
+        }
+    }
+
+    pub(crate) async fn report_service_endpoint_down(&self) -> anyhow::Result<()> {
+        if self.service_restart_exhausted.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let _guard = crate::core::service::HOST_TRANSITION_LOCK.lock().await;
+        let info = match tokio::time::timeout(
+            Duration::from_secs(5),
+            crate::core::service::control::status(),
+        )
+        .await
+        {
+            Ok(Ok(info)) => info,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "service endpoint-down probe failed; not restarting blindly");
+                return Ok(());
+            }
+            Err(_) => {
+                tracing::warn!("service endpoint-down probe timed out; not restarting blindly");
+                return Ok(());
+            }
+        };
+        if info.status != chimera_ipc::types::ServiceStatus::Stopped {
+            return Ok(());
+        }
+
+        let attempts = self.service_restart_attempts.load(Ordering::Acquire);
+        match service_restart_decision(
+            info.status,
+            attempts,
+            self.service_restart_exhausted.load(Ordering::Acquire),
+            SERVICE_RESTART_BUDGET,
+        ) {
+            ServiceRestartDecision::Ignore => return Ok(()),
+            ServiceRestartDecision::Exhaust => {
+                self.service_restart_exhausted
+                    .store(true, Ordering::Release);
+                return Ok(());
+            }
+            ServiceRestartDecision::Restart { next_attempt } => {
+                self.service_restart_attempts
+                    .store(next_attempt, Ordering::Release);
+            }
+        }
+        if let Err(error) = run_in_place_mutation(
+            self.outcome_uncertain.clone(),
+            "service auto-restart",
+            async { crate::core::service::control::start_service_daemon().await },
+        )
+        .await
+        {
+            tracing::warn!(%error, "service auto-restart failed");
+        }
+        Ok(())
+    }
+
     pub(crate) async fn begin_service_transition(&self) -> anyhow::Result<ServiceTransition> {
         if self.outcome_uncertain() {
             anyhow::bail!(
@@ -239,6 +341,8 @@ impl CoreFacade {
         Ok(ServiceTransition {
             _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
             outcome_uncertain: self.outcome_uncertain.clone(),
+            restart_attempts: self.service_restart_attempts.clone(),
+            restart_exhausted: self.service_restart_exhausted.clone(),
         })
     }
 
@@ -311,6 +415,36 @@ mod tests {
         assert!(!uncertain.load(Ordering::Acquire));
     }
 
+    #[test]
+    fn endpoint_down_restart_policy_only_restarts_explicitly_stopped_daemons() {
+        use chimera_ipc::types::ServiceStatus;
+
+        assert_eq!(
+            service_restart_decision(ServiceStatus::Running, 0, false, 3),
+            ServiceRestartDecision::Ignore
+        );
+        assert_eq!(
+            service_restart_decision(ServiceStatus::NotInstalled, 0, false, 3),
+            ServiceRestartDecision::Ignore
+        );
+        assert_eq!(
+            service_restart_decision(ServiceStatus::Stopped, 0, false, 3),
+            ServiceRestartDecision::Restart { next_attempt: 1 }
+        );
+        assert_eq!(
+            service_restart_decision(ServiceStatus::Stopped, 2, false, 3),
+            ServiceRestartDecision::Restart { next_attempt: 3 }
+        );
+        assert_eq!(
+            service_restart_decision(ServiceStatus::Stopped, 3, false, 3),
+            ServiceRestartDecision::Exhaust
+        );
+        assert_eq!(
+            service_restart_decision(ServiceStatus::Stopped, 1, true, 3),
+            ServiceRestartDecision::Ignore
+        );
+    }
+
     #[tokio::test]
     async fn in_place_mutation_cancellation_latches_uncertain() {
         let uncertain = Arc::new(AtomicBool::new(false));
@@ -338,7 +472,13 @@ mod tests {
 }
 
 impl ServiceTransition {
+    fn rearm_restart_policy(&self) {
+        self.restart_attempts.store(0, Ordering::Release);
+        self.restart_exhausted.store(false, Ordering::Release);
+    }
+
     pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
+        self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service install", async {
             crate::core::service::control::install_service_daemon().await
         })
@@ -353,6 +493,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
+        self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service update", async {
             crate::core::service::control::update_service().await
         })
@@ -360,6 +501,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
+        self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service start", async {
             crate::core::service::control::start_service_daemon().await
         })
@@ -367,6 +509,7 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+        self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service restart", async {
             crate::core::service::control::restart_service_daemon().await
         })
