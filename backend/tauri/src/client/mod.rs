@@ -147,8 +147,13 @@ impl ChimeraClient {
             &bridges,
             core.clone(),
         ))?;
-        let core_lifecycle =
-            tauri::async_runtime::block_on(CoreLifecycleClient::spawn(core.clone()))?;
+        let runtime_paths =
+            runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
+        let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
+            core.clone(),
+            typed.application.clone(),
+            runtime_paths,
+        ))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -178,7 +183,11 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
-        let core_lifecycle = CoreLifecycleClient::direct(core.clone());
+        let core_lifecycle = CoreLifecycleClient::direct(
+            core.clone(),
+            typed.application.clone(),
+            runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        );
         Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -863,26 +872,6 @@ mod tests {
         let (client, events) = recording_client(false);
         client.stop_core().await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
-    }
-
-    #[tokio::test]
-    async fn core_update_lease_keeps_stop_and_restart_on_one_lifecycle_lease() {
-        let (client, events) = recording_client(false);
-        let mut lease = client.begin_core_update().await.unwrap();
-        lease.stop().await.unwrap();
-        lease
-            .run_core_from(
-                std::path::Path::new("runtime.yaml"),
-                ClashCore::Mihomo,
-                RunType::Normal,
-            )
-            .await
-            .unwrap();
-        drop(lease);
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["begin", "stop", "run-from"]
-        );
     }
 
     #[tokio::test]

@@ -12,15 +12,15 @@ use std::{sync::Arc, time::Duration};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
-use super::ChimeraClient;
+use super::{ChimeraClient, application::ApplicationClient, runtime::RuntimePaths};
 use workflow::{Command, CoreLifecycleWorkflow};
 
 #[allow(unused_imports)]
-pub(crate) use adapters::{CoreUpdateLease, LegacyCoreBridge, LegacyRunningConfigBridge};
+pub(crate) use adapters::{FsBinaryInstaller, LegacyCoreBridge, LegacyRunningConfigBridge};
 #[allow(unused_imports)]
 pub(crate) use ports::{
-    CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, RunningConfigPort,
-    RuntimeTransformDiagnostics,
+    BinaryInstallProgress, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot,
+    PreparedCoreBinary, RunningConfigPort, RuntimeTransformDiagnostics,
 };
 
 enum Message {
@@ -36,14 +36,14 @@ struct CoreLifecycleActor;
 impl Actor for CoreLifecycleActor {
     type Msg = Message;
     type State = CoreLifecycleWorkflow;
-    type Arguments = Arc<dyn CoreLifecyclePort>;
+    type Arguments = CoreLifecycleWorkflow;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
-        core: Self::Arguments,
+        workflow: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(CoreLifecycleWorkflow::new(core))
+        Ok(workflow)
     }
 
     async fn handle(
@@ -54,7 +54,16 @@ impl Actor for CoreLifecycleActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Execute { command, reply } => {
-                let _ = reply.send(state.execute(command).await);
+                let progress = match &command {
+                    Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
+                    _ => None,
+                };
+                let result = state.execute(command).await;
+                if let Some(progress) = progress {
+                    let error = result.as_ref().err().map(ToString::to_string);
+                    progress.finished(error.as_deref());
+                }
+                let _ = reply.send(result);
             }
             Message::RecoverCore => {
                 tracing::info!("trying to recover core through lifecycle actor");
@@ -86,9 +95,29 @@ enum CoreLifecycleClientInner {
 pub(super) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
 impl CoreLifecycleClient {
-    pub(super) async fn spawn(core: Arc<dyn CoreLifecyclePort>) -> anyhow::Result<Self> {
+    pub(super) async fn spawn(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        runtime_paths: RuntimePaths,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_with_installer(
+            core,
+            application,
+            runtime_paths,
+            Arc::new(FsBinaryInstaller),
+        )
+        .await
+    }
+
+    async fn spawn_with_installer(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        runtime_paths: RuntimePaths,
+        installer: Arc<dyn ports::BinaryInstaller>,
+    ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
-        let (actor_ref, _handle) = Actor::spawn(None, CoreLifecycleActor, core).await?;
+        let workflow = CoreLifecycleWorkflow::new(application, core, installer, runtime_paths);
+        let (actor_ref, _handle) = Actor::spawn(None, CoreLifecycleActor, workflow).await?;
         if let Some(recovery_notify) = recovery_notify {
             let recovery_actor = actor_ref.clone();
             tauri::async_runtime::spawn(async move {
@@ -106,9 +135,18 @@ impl CoreLifecycleClient {
     }
 
     #[cfg(test)]
-    pub(super) fn direct(core: Arc<dyn CoreLifecyclePort>) -> Self {
+    pub(super) fn direct(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        runtime_paths: RuntimePaths,
+    ) -> Self {
         Self(Arc::new(CoreLifecycleClientInner::Direct {
-            workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(core)),
+            workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
+                application,
+                core,
+                Arc::new(FsBinaryInstaller),
+                runtime_paths,
+            )),
         }))
     }
 
@@ -140,6 +178,13 @@ impl CoreLifecycleClient {
         core: crate::config::chimera::ClashCore,
     ) -> anyhow::Result<()> {
         self.execute(Command::SelectCore(core)).await
+    }
+
+    pub(super) async fn replace_core_binary(
+        &self,
+        artifact: PreparedCoreBinary,
+    ) -> anyhow::Result<()> {
+        self.execute(Command::ReplaceCoreBinary(artifact)).await
     }
 }
 
@@ -175,10 +220,14 @@ impl ChimeraClient {
         self.inner.core_lifecycle.stop_core().await
     }
 
-    pub(crate) async fn begin_core_update(&self) -> anyhow::Result<CoreUpdateLease<'_>> {
-        Ok(CoreUpdateLease {
-            lease: self.inner.core.begin().await?,
-        })
+    pub(crate) async fn replace_core_binary(
+        &self,
+        artifact: PreparedCoreBinary,
+    ) -> anyhow::Result<()> {
+        self.inner
+            .core_lifecycle
+            .replace_core_binary(artifact)
+            .await
     }
 }
 
@@ -202,6 +251,33 @@ mod tests {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
 
+    struct RecordingInstaller {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    #[async_trait]
+    impl ports::BinaryInstaller for RecordingInstaller {
+        async fn install(&self, _artifact: &PreparedCoreBinary) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("install");
+            Ok(())
+        }
+    }
+
+    struct RecordingProgress {
+        events: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl BinaryInstallProgress for RecordingProgress {
+        fn restarting(&self) {
+            self.events.lock().unwrap().push("restarting");
+        }
+
+        fn finished(&self, error: Option<&str>) {
+            assert!(error.is_none());
+            self.events.lock().unwrap().push("finished");
+        }
+    }
+
     #[async_trait]
     impl CoreLifecycleLease for RecordingLease {
         async fn rebuild_running_config(
@@ -219,6 +295,7 @@ mod tests {
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("run");
             Ok(())
         }
 
@@ -270,10 +347,14 @@ mod tests {
     #[tokio::test]
     async fn mailbox_serializes_lifecycle_mutations() {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let client = CoreLifecycleClient::spawn(Arc::new(RecordingCore {
-            events: events.clone(),
-            recovery_notify: Arc::new(tokio::sync::Notify::new()),
-        }))
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
         .await
         .unwrap();
 
@@ -293,10 +374,14 @@ mod tests {
     async fn crash_recovery_signal_enters_lifecycle_mailbox() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let recovery_notify = Arc::new(tokio::sync::Notify::new());
-        let _client = CoreLifecycleClient::spawn(Arc::new(RecordingCore {
-            events: events.clone(),
-            recovery_notify: recovery_notify.clone(),
-        }))
+        let _client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: recovery_notify.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
         .await
         .unwrap();
 
@@ -311,5 +396,49 @@ mod tests {
         })
         .await
         .expect("recovery signal should be admitted by the lifecycle actor");
+    }
+
+    #[tokio::test]
+    async fn replace_binary_runs_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let application = ApplicationClient::legacy().unwrap();
+        let target = crate::bridge::verge::legacy_core_from_typed(application.get_typed().core);
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            application,
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let staging = Arc::new(tempfile::tempdir().unwrap());
+        let artifact = PreparedCoreBinary {
+            target,
+            source: staging.path().join("staged-core"),
+            destination: staging.path().join("installed-core"),
+            staging,
+            progress: Arc::new(RecordingProgress {
+                events: events.clone(),
+            }),
+        };
+
+        client.replace_core_binary(artifact).await.unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            [
+                "stop-start",
+                "stop-end",
+                "install",
+                "restarting",
+                "run",
+                "finished"
+            ]
+        );
     }
 }

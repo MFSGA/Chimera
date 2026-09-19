@@ -159,29 +159,31 @@
   `CoreLifecycleWorkflow` 与真实 ractor mailbox。生产 `StopCore`/`SelectCore`
   已通过 `CoreLifecycleClient` 串行 admission，再由 workflow 获取 lifecycle lease
   执行；core crash recovery 的 `Notify` 也已接入 mailbox，不再由 `CoreManager::init`
-  启动独立恢复循环。旧 UI/API 合同保持不变。
+  启动独立恢复循环。core updater 现在只负责下载/解压并提交 ref-shaped
+  `PreparedCoreBinary`，stop/install/restart 由 lifecycle actor 统一执行。旧 UI/API
+  合同保持不变。
 - 兼容边界：旧 `core_bridge.rs` shim 已退出模块图；`LegacyCoreBridge` 现在在
   composition root 中创建并显式持有唯一的
-  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。core updater 在同一
-  lifecycle lease 内停止/重启时也已显式携带停止前的 target core 与 `RunType`，
-  不再由 restart adapter 隐式读取 legacy selected-core/default run-type。生命周期执行
-  仍由 legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover，recover
-  每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次 handler
-  中永久占住生命周期。updater 的跨 stop→replace→restart lease 仍直接使用 port，尚未
-  具备 ref 的 operation id、调用超时后 uncertain outcome、完整 command queue/dirty
-  coalescing 和 service host facade。
+  `Arc<CoreManager>`，仓库内已无 `CoreManager::global()` 调用。生命周期执行仍由
+  legacy `CoreManager` 实现；mailbox 目前接管 stop/select/recover/replace-binary。
+  recover 每次只执行一次底层尝试，失败后由 actor 延迟 5 秒重新投递，因此不会在一次
+  handler 中永久占住生命周期。binary replacement 使用显式注入的 `RuntimePaths`、
+  `BinaryInstaller` 和进度回调；staging `TempDir` 由 `Arc` 保活到安装/重启结束，旧的
+  `CoreUpdateLease` active API 已删除。尚未具备 ref 的 operation id、调用超时后
+  uncertain outcome、完整 command queue/dirty coalescing 和 service host facade。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，17 passed；新增
-  `client::core_lifecycle::tests`，2 passed（mailbox mutation serialization 与 crash
-  recovery signal admission）；
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，3 passed（mailbox
+  mutation serialization、crash recovery signal admission、replace-binary 的
+  stop→install→restart→finished 顺序）；
   `cargo fmt --manifest-path backend/Cargo.toml --package chimera` 与 `git diff --check`
   通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
-  `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`。下一阶段是把 updater
-  replace-binary/reconcile 等 mutation 继续搬入 mailbox，随后迁移 ref
+  `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，updater binary
+  replacement 已迁入 mailbox。下一阶段是把 reconcile/runtime-dirty 等 mutation
+  继续搬入 mailbox，随后迁移 ref
   `core/actor_v2` 的 host facade、operation-id/uncertain 状态和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
