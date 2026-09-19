@@ -33,7 +33,6 @@ pub(super) struct CoreLifecycleWorkflow {
     clash: ClashConfigClient,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
-    runtime_paths: RuntimePaths,
     service: Arc<dyn ServiceLifecyclePort>,
 }
 
@@ -43,7 +42,7 @@ impl CoreLifecycleWorkflow {
         clash: ClashConfigClient,
         core: Arc<dyn CoreLifecyclePort>,
         installer: Arc<dyn BinaryInstaller>,
-        runtime_paths: RuntimePaths,
+        _runtime_paths: RuntimePaths,
         service: Arc<dyn ServiceLifecyclePort>,
     ) -> Self {
         Self {
@@ -51,7 +50,6 @@ impl CoreLifecycleWorkflow {
             clash,
             core,
             installer,
-            runtime_paths,
             service,
         }
     }
@@ -191,16 +189,11 @@ impl CoreLifecycleWorkflow {
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {
         let current_core =
             crate::bridge::verge::legacy_core_from_typed(self.application.get_typed().core);
-        let current_run_type = self.core.status().await?.run_type;
-
         if current_core == artifact.target {
-            let mut lease = self.core.begin_binary_update().await?;
-            lease.stop().await?;
+            self.core.stop().await?;
             self.installer.install(&artifact).await?;
             artifact.progress.restarting();
-            lease
-                .run_core_from(self.runtime_paths.product(), current_core, current_run_type)
-                .await
+            self.reconcile().await
         } else {
             self.installer.install(&artifact).await
         }
