@@ -5,11 +5,12 @@
 //! lock without pretending that Chimera already has ref's submit/wait protocol.
 
 use std::{
+    collections::{HashMap, VecDeque},
     future::Future,
     panic::AssertUnwindSafe,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -33,6 +34,8 @@ use crate::{
 };
 
 const SERVICE_RESTART_BUDGET: u8 = 3;
+const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
+const LOCAL_OPERATION_HISTORY: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceRestartDecision {
@@ -69,6 +72,7 @@ pub(crate) struct ServiceRestartPolicySnapshot {
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     outcome_uncertain: Arc<AtomicBool>,
+    local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
     service_restart_exhausted: Arc<AtomicBool>,
 }
@@ -106,47 +110,91 @@ impl Drop for MutationReplyGuard {
     }
 }
 
+type LocalOperationId = u64;
+
+#[derive(Debug, Clone)]
 enum MutationResult {
+    Running,
     Completed(Result<(), String>),
     Uncertain(String),
 }
 
-async fn run_detached_mutation<F>(
-    outcome_uncertain: Arc<AtomicBool>,
-    operation: &'static str,
-    future: F,
-) -> anyhow::Result<()>
-where
-    F: Future<Output = anyhow::Result<()>> + Send + 'static,
-{
-    if outcome_uncertain.load(Ordering::Acquire) {
-        anyhow::bail!(
-            "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
-        );
+impl MutationResult {
+    fn is_terminal(&self) -> bool {
+        !matches!(self, Self::Running)
+    }
+}
+
+#[derive(Debug, Default)]
+struct LocalOperationRegistryState {
+    records: HashMap<LocalOperationId, tokio::sync::watch::Receiver<MutationResult>>,
+    order: VecDeque<LocalOperationId>,
+}
+
+#[derive(Debug)]
+struct LocalOperationRegistry {
+    next_id: AtomicU64,
+    state: parking_lot::Mutex<LocalOperationRegistryState>,
+}
+
+impl LocalOperationRegistry {
+    fn new() -> Self {
+        Self {
+            next_id: AtomicU64::new(1),
+            state: parking_lot::Mutex::new(LocalOperationRegistryState::default()),
+        }
     }
 
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        let result = match AssertUnwindSafe(future).catch_unwind().await {
-            Ok(result) => MutationResult::Completed(result.map_err(|error| error.to_string())),
-            Err(_) => MutationResult::Uncertain(format!("{operation} panicked after admission")),
-        };
-        let _ = tx.send(result);
-    });
-
-    let mut reply_guard = MutationReplyGuard::new(outcome_uncertain.clone());
-    let result = rx.await.map_err(|_| {
-        anyhow::anyhow!("{operation} reply was lost after admission; outcome is uncertain")
-    })?;
-    reply_guard.disarm();
-
-    match result {
-        MutationResult::Completed(Ok(())) => Ok(()),
-        MutationResult::Completed(Err(error)) => Err(anyhow::anyhow!(error)),
-        MutationResult::Uncertain(error) => {
-            outcome_uncertain.store(true, Ordering::Release);
-            Err(anyhow::anyhow!(error))
+    fn submit<F>(&self, operation: &'static str, future: F) -> LocalOperationId
+    where
+        F: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = tokio::sync::watch::channel(MutationResult::Running);
+        {
+            let mut state = self.state.lock();
+            state.records.insert(id, rx);
+            state.order.push_back(id);
+            while state.records.len() > LOCAL_OPERATION_HISTORY {
+                let Some(position) = state.order.iter().position(|candidate| {
+                    state
+                        .records
+                        .get(candidate)
+                        .is_some_and(|receiver| receiver.borrow().is_terminal())
+                }) else {
+                    break;
+                };
+                if let Some(evicted) = state.order.remove(position) {
+                    state.records.remove(&evicted);
+                }
+            }
         }
+        tokio::spawn(async move {
+            let result = match AssertUnwindSafe(future).catch_unwind().await {
+                Ok(result) => MutationResult::Completed(result.map_err(|error| error.to_string())),
+                Err(_) => {
+                    MutationResult::Uncertain(format!("{operation} panicked after admission"))
+                }
+            };
+            let _ = tx.send(result);
+        });
+        id
+    }
+
+    async fn wait(&self, id: LocalOperationId, timeout: Duration) -> Option<MutationResult> {
+        let mut receiver = self.state.lock().records.get(&id)?.clone();
+        let wait = async move {
+            loop {
+                let current = receiver.borrow().clone();
+                if current.is_terminal() {
+                    return current;
+                }
+                if receiver.changed().await.is_err() {
+                    return receiver.borrow().clone();
+                }
+            }
+        };
+        tokio::time::timeout(timeout, wait).await.ok()
     }
 }
 
@@ -183,6 +231,7 @@ impl CoreFacade {
         Self {
             manager: Arc::new(CoreManager::new()),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
+            local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
         }
@@ -192,6 +241,32 @@ impl CoreFacade {
         self.outcome_uncertain.load(Ordering::Acquire)
     }
 
+    async fn run_local_mutation<F>(&self, operation: &'static str, future: F) -> anyhow::Result<()>
+    where
+        F: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        if self.outcome_uncertain() {
+            anyhow::bail!(
+                "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
+            );
+        }
+        let id = self.local_operations.submit(operation, future);
+        match self.local_operations.wait(id, LOCAL_OPERATION_WAIT).await {
+            Some(MutationResult::Completed(Ok(()))) => Ok(()),
+            Some(MutationResult::Completed(Err(error))) => Err(anyhow::anyhow!(error)),
+            Some(MutationResult::Uncertain(error)) => {
+                self.outcome_uncertain.store(true, Ordering::Release);
+                Err(anyhow::anyhow!(error))
+            }
+            Some(MutationResult::Running) | None => {
+                self.outcome_uncertain.store(true, Ordering::Release);
+                anyhow::bail!(
+                    "{operation} operation {id} did not reach a terminal state within the lower-host wait budget"
+                )
+            }
+        }
+    }
+
     pub(crate) async fn reconcile(
         &self,
         clash: ClashConfig,
@@ -199,22 +274,18 @@ impl CoreFacade {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         let manager = self.manager.clone();
-        run_detached_mutation(
-            self.outcome_uncertain.clone(),
-            "core reconcile",
-            async move {
-                let lease = manager.begin_lifecycle().await;
-                lease
-                    .rebuild_running_config_with(clash, target_core, run_type)
-                    .await
-            },
-        )
+        self.run_local_mutation("core reconcile", async move {
+            let lease = manager.begin_lifecycle().await;
+            lease
+                .rebuild_running_config_with(clash, target_core, run_type)
+                .await
+        })
         .await
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
         let manager = self.manager.clone();
-        run_detached_mutation(self.outcome_uncertain.clone(), "core stop", async move {
+        self.run_local_mutation("core stop", async move {
             let lease = manager.begin_lifecycle().await;
             lease.stop_core().await
         })
@@ -223,14 +294,10 @@ impl CoreFacade {
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let manager = self.manager.clone();
-        run_detached_mutation(
-            self.outcome_uncertain.clone(),
-            "core selection",
-            async move {
-                let lease = manager.begin_lifecycle().await;
-                lease.change_core(clash_core).await
-            },
-        )
+        self.run_local_mutation("core selection", async move {
+            let lease = manager.begin_lifecycle().await;
+            lease.change_core(clash_core).await
+        })
         .await
     }
 
@@ -362,57 +429,68 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn detached_mutation_reply_loss_latches_uncertain() {
-        let uncertain = Arc::new(AtomicBool::new(false));
+    async fn local_operation_survives_waiter_cancellation_and_remains_queryable() {
+        let facade = Arc::new(CoreFacade::new_local());
         let started = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let waiter = {
-            let uncertain = uncertain.clone();
+            let facade = facade.clone();
             let started = started.clone();
             let release = release.clone();
             tokio::spawn(async move {
-                run_detached_mutation(uncertain, "test mutation", async move {
-                    started.notify_one();
-                    release.notified().await;
-                    Ok(())
-                })
-                .await
+                facade
+                    .run_local_mutation("test mutation", async move {
+                        started.notify_one();
+                        release.notified().await;
+                        Ok(())
+                    })
+                    .await
             })
         };
 
         started.notified().await;
         waiter.abort();
         let _ = waiter.await;
-        assert!(uncertain.load(Ordering::Acquire));
+        assert!(!facade.outcome_uncertain());
         release.notify_one();
+
+        let result = facade
+            .local_operations
+            .wait(1, Duration::from_secs(1))
+            .await
+            .expect("admitted operation should remain in the lower registry");
+        assert!(matches!(result, MutationResult::Completed(Ok(()))));
+        assert!(!facade.outcome_uncertain());
     }
 
     #[tokio::test]
-    async fn detached_mutation_panic_latches_uncertain() {
-        let uncertain = Arc::new(AtomicBool::new(false));
-        let error = run_detached_mutation(uncertain.clone(), "test mutation", async {
-            panic!("injected lower mutation panic");
-            #[allow(unreachable_code)]
-            Ok(())
-        })
-        .await
-        .unwrap_err();
+    async fn local_operation_panic_latches_uncertain() {
+        let facade = CoreFacade::new_local();
+        let error = facade
+            .run_local_mutation("test mutation", async {
+                panic!("injected lower mutation panic");
+                #[allow(unreachable_code)]
+                Ok(())
+            })
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("panicked after admission"));
-        assert!(uncertain.load(Ordering::Acquire));
+        assert!(facade.outcome_uncertain());
     }
 
     #[tokio::test]
-    async fn terminal_mutation_error_does_not_latch_uncertain() {
-        let uncertain = Arc::new(AtomicBool::new(false));
-        let error = run_detached_mutation(uncertain.clone(), "test mutation", async {
-            anyhow::bail!("expected terminal failure")
-        })
-        .await
-        .unwrap_err();
+    async fn terminal_local_operation_error_does_not_latch_uncertain() {
+        let facade = CoreFacade::new_local();
+        let error = facade
+            .run_local_mutation("test mutation", async {
+                anyhow::bail!("expected terminal failure")
+            })
+            .await
+            .unwrap_err();
 
         assert!(error.to_string().contains("expected terminal failure"));
-        assert!(!uncertain.load(Ordering::Acquire));
+        assert!(!facade.outcome_uncertain());
     }
 
     #[test]
