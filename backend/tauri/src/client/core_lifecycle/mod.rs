@@ -38,6 +38,7 @@ pub(crate) struct CoreLifecycleStatus {
     pub(crate) active: Option<OperationId>,
     pub(crate) queued: Vec<OperationId>,
     pub(crate) uncertain: bool,
+    pub(crate) shutting_down: bool,
     pub(crate) completed: Vec<CoreLifecycleOperationResult>,
 }
 
@@ -166,6 +167,8 @@ struct CoreLifecycleActorState {
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
     uncertain: bool,
+    shutting_down: bool,
+    shutdown_result: Option<Option<String>>,
     dirty: bool,
     dirty_tick_scheduled: bool,
 }
@@ -222,7 +225,7 @@ impl CoreLifecycleActorState {
     }
 
     fn mark_runtime_dirty(&mut self, myself: &ActorRef<Message>) {
-        if self.uncertain {
+        if self.uncertain || self.shutting_down {
             return;
         }
         self.dirty = true;
@@ -237,7 +240,40 @@ impl CoreLifecycleActorState {
     }
 
     async fn execute_operation(&mut self, id: OperationId, command: Command) -> anyhow::Result<()> {
-        if self.uncertain {
+        let shutdown = matches!(&command, Command::Shutdown);
+        if shutdown {
+            if let Some(error) = self.shutdown_result.clone() {
+                let result = match error {
+                    Some(error) => Err(anyhow::anyhow!(error)),
+                    None => Ok(()),
+                };
+                let mut status = self.status.lock();
+                status.queued.retain(|queued| *queued != id);
+                if status.completed.len() == COMPLETED_LIMIT {
+                    status.completed.remove(0);
+                }
+                status.completed.push(CoreLifecycleOperationResult {
+                    id,
+                    error: result.as_ref().err().map(ToString::to_string),
+                });
+                return result;
+            }
+            self.shutting_down = true;
+            self.dirty = false;
+            self.status.lock().shutting_down = true;
+        } else if self.shutting_down {
+            let error = anyhow::anyhow!("core lifecycle is shutting down");
+            let mut status = self.status.lock();
+            status.queued.retain(|queued| *queued != id);
+            if status.completed.len() == COMPLETED_LIMIT {
+                status.completed.remove(0);
+            }
+            status.completed.push(CoreLifecycleOperationResult {
+                id,
+                error: Some(error.to_string()),
+            });
+            return Err(error);
+        } else if self.uncertain {
             let error = anyhow::anyhow!(
                 "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
             );
@@ -282,10 +318,14 @@ impl CoreLifecycleActorState {
                 tracing::error!("binary installation progress observer panicked");
             }
         }
+        if shutdown {
+            self.shutdown_result = Some(result.as_ref().err().map(ToString::to_string));
+        }
         {
             let mut status = self.status.lock();
             status.active = None;
             status.uncertain = self.uncertain;
+            status.shutting_down = self.shutting_down;
             if status.completed.len() == COMPLETED_LIMIT {
                 status.completed.remove(0);
             }
@@ -314,6 +354,8 @@ impl Actor for CoreLifecycleActor {
             status: args.status,
             service_status: args.service_status,
             uncertain: false,
+            shutting_down: false,
+            shutdown_result: None,
             dirty: false,
             dirty_tick_scheduled: false,
         })
@@ -380,9 +422,11 @@ impl Actor for CoreLifecycleActor {
                 let _ = reply.send(result);
             }
             Message::StartupReconcile => {
-                if state.uncertain {
+                if state.uncertain || state.shutting_down {
                     tracing::warn!(
-                        "ignoring startup reconcile because lifecycle outcome is uncertain"
+                        uncertain = state.uncertain,
+                        shutting_down = state.shutting_down,
+                        "ignoring startup reconcile because lifecycle is unavailable"
                     );
                     return Ok(());
                 }
@@ -392,9 +436,11 @@ impl Actor for CoreLifecycleActor {
                 }
             }
             Message::RecoverCore => {
-                if state.uncertain {
+                if state.uncertain || state.shutting_down {
                     tracing::warn!(
-                        "ignoring crash recovery because lifecycle outcome is uncertain"
+                        uncertain = state.uncertain,
+                        shutting_down = state.shutting_down,
+                        "ignoring crash recovery because lifecycle is unavailable"
                     );
                     return Ok(());
                 }
@@ -412,9 +458,11 @@ impl Actor for CoreLifecycleActor {
                 }
             }
             Message::RuntimeDirty => {
-                if state.uncertain {
+                if state.uncertain || state.shutting_down {
                     tracing::debug!(
-                        "ignoring runtime dirty signal because lifecycle outcome is uncertain"
+                        uncertain = state.uncertain,
+                        shutting_down = state.shutting_down,
+                        "ignoring runtime dirty signal because lifecycle is unavailable"
                     );
                     return Ok(());
                 }
@@ -422,7 +470,7 @@ impl Actor for CoreLifecycleActor {
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
-                if state.uncertain {
+                if state.uncertain || state.shutting_down {
                     state.dirty = false;
                     return Ok(());
                 }
@@ -561,9 +609,12 @@ impl CoreLifecycleClient {
                 ..
             } => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
+                let shutdown = matches!(&command, Command::Shutdown);
                 let rejection = {
                     let mut lifecycle = status.lock();
-                    let error = if lifecycle.uncertain {
+                    let error = if lifecycle.shutting_down && !shutdown {
+                        Some("core lifecycle is shutting down".to_string())
+                    } else if lifecycle.uncertain && !shutdown {
                         Some(
                             "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
                                 .to_string(),
@@ -709,6 +760,10 @@ impl CoreLifecycleClient {
         }
     }
 
+    pub(super) async fn shutdown(&self) -> anyhow::Result<()> {
+        self.execute(Command::Shutdown).await
+    }
+
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -802,6 +857,10 @@ impl ChimeraClient {
         clash_core: crate::config::chimera::ClashCore,
     ) -> anyhow::Result<()> {
         self.inner.core_lifecycle.select_core(clash_core).await
+    }
+
+    pub(crate) async fn shutdown_core(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.shutdown().await
     }
 
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
@@ -1317,6 +1376,38 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
+        );
+    }
+
+    #[tokio::test]
+    async fn shutdown_is_idempotent_and_blocks_follow_up_mutations() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        client.shutdown().await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let status = client.status();
+        assert!(status.shutting_down);
+        let error = client.select_core(ClashCore::Mihomo).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("core lifecycle is shutting down")
+        );
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["stop-start", "stop-end"]
         );
     }
 

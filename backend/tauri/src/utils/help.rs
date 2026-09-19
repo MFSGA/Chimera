@@ -185,7 +185,7 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
         if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
             log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
         }
-        client.stop_core().await
+        client.shutdown_core().await
     }));
     #[cfg(windows)]
     crate::shutdown_hook::set_ready_for_shutdown();

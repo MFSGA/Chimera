@@ -859,6 +859,7 @@ export type CoreLifecycleStatus = {
   active: number | null;
   queued: number[];
   uncertain: boolean;
+  shutting_down: boolean;
   completed: CoreLifecycleOperationResult[];
 };
 

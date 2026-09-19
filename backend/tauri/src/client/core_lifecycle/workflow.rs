@@ -9,6 +9,7 @@ use super::{
 use crate::config::chimera::ClashCore;
 
 pub(super) enum Command {
+    Shutdown,
     StopCore,
     SelectCore(ClashCore),
     RecoverCore,
@@ -64,7 +65,7 @@ impl CoreLifecycleWorkflow {
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
-            Command::StopCore => {
+            Command::Shutdown | Command::StopCore => {
                 let mut lease = self.core.begin().await?;
                 lease.stop().await
             }
