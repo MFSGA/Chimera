@@ -59,6 +59,7 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) paths: PathResolver,
     pub(crate) bridges: LegacyBridgeSet,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
+    pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
     pub(crate) profiles: Arc<dyn ProfilesReadPort>,
     pub(crate) profile_files: Arc<dyn ProfileFsPort>,
     pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
@@ -135,6 +136,7 @@ impl ChimeraClient {
             paths,
             bridges,
             core,
+            service,
             profiles,
             profile_files,
             profile_writes,
@@ -148,12 +150,14 @@ impl ChimeraClient {
         ))?;
         let runtime_paths =
             runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
-        let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
-            core.clone(),
-            typed.application.clone(),
-            typed.clash_config.clone(),
-            runtime_paths,
-        ))?;
+        let core_lifecycle =
+            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_service(
+                core.clone(),
+                typed.application.clone(),
+                typed.clash_config.clone(),
+                runtime_paths,
+                service,
+            ))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,

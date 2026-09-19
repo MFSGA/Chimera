@@ -172,7 +172,11 @@
   只持有 `Arc<CoreFacade>` 并负责 client port/diagnostics DTO 适配，client/setup 已无
   `CoreManager` concrete ownership，仓库内也已无 `CoreManager::global()` 调用。
   `actor_v2::endpoint::CoreStatusSnapshot` 现在是 lower canonical status projection，并由
-  client port 直接复用。生命周期执行底层仍由 legacy `CoreManager` 实现，但 workflow
+  client port 直接复用。composition root 同时用同一个 `Arc<CoreFacade>` 构造
+  `LegacyCoreBridge` 与 `LegacyServiceBridge`；Service probe、`HOST_TRANSITION_LOCK`、daemon
+  install/update/start/restart/stop/uninstall 及 ready/stopped confirmation 已下沉到
+  `core/actor_v2::facade::ServiceTransition`，client adapter 只保留 trait 适配。生命周期执行
+  底层仍由 legacy `CoreManager`/service control 实现，但 workflow
   已不再持有任何 core lifecycle lease：
   reconcile/stop/select 通过 facade-style `CoreLifecyclePort` 方法执行，lease acquisition
   被封装在 legacy adapter 内；updater 的 stop→install→reconcile 原子性由 actor-owned
@@ -206,7 +210,8 @@
   final stop；并发/重复 shutdown waiter 共享同一终态。该队列/active-task ownership 已与 ref
   的 lifecycle actor 形状对齐，剩余差异主要下沉到 lower core/service host facade。
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
-  `UninstallService` 已通过新 `ServiceLifecyclePort`/transition lease 进入 mailbox。
+  `UninstallService` 已通过 `ServiceLifecyclePort`/transition lease 进入 mailbox；该 port 的
+  production adapter 与 local-core port 现在共享同一个 lower `CoreFacade` owner。
   lifecycle actor 现在还持有 ref-shaped `watch::Receiver<ServiceHostStatus>` projection：
   `phase`/`compat`/daemon wire fields 与 `restart_attempts` 由 actor 统一发布，Chimera 额外保留
   `runtime_owned`，防止“协议兼容但属于其他 runtime”的 daemon 被误判成可用 host。生产启动
@@ -247,8 +252,9 @@
   cached/watch `ServiceHostStatus`、外部只读 cached projection 与专用幂等 shutdown 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
-  convenience API 已删除。`core/actor_v2::CoreFacade` 的 ownership/status/lifecycle-lock
-  边界已落地；下一阶段继续迁移 ref 的 endpoint submit/wait operation protocol、lower
+  convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
+  ownership/status/lifecycle-lock/transition 边界已落地；下一阶段继续迁移 ref 的 endpoint
+  submit/wait operation protocol、lower
   reply-lost/outcome-uncertain 与 ServiceActor restart-budget/exhausted policy。当前仍是
   lower host protocol 的部分迁移，而不是 singleton、manager ownership 或 workflow lease 问题。
 

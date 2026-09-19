@@ -36,6 +36,9 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         paths,
         bridges,
         core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
+            core_facade.clone(),
+        )),
+        service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
             core_facade,
         )),
         profiles: Arc::new(LegacyProfilesReadPort),

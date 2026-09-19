@@ -1,6 +1,5 @@
 //! Legacy adapters retained behind the client core-lifecycle ports.
 
-use anyhow::Context;
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
 use serde_yaml::Mapping;
@@ -81,21 +80,29 @@ impl BinaryInstaller for FsBinaryInstaller {
     }
 }
 
-pub(crate) struct LegacyServiceBridge;
+pub(crate) struct LegacyServiceBridge {
+    facade: Arc<CoreFacade>,
+}
+
+impl LegacyServiceBridge {
+    pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
+        Self { facade }
+    }
+}
 
 struct LegacyServiceTransition {
-    _guard: tokio::sync::MutexGuard<'static, ()>,
+    inner: crate::core::actor_v2::facade::ServiceTransition,
 }
 
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        crate::core::service::control::status().await
+        self.facade.probe_service().await
     }
 
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
-            _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,
+            inner: self.facade.begin_service_transition().await,
         }))
     }
 }
@@ -103,43 +110,35 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 #[async_trait]
 impl ServiceTransitionLease for LegacyServiceTransition {
     async fn install_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::install_service_daemon().await
+        self.inner.install_daemon().await
     }
 
     async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::uninstall_service().await
+        self.inner.uninstall_daemon().await
     }
 
     async fn update_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::update_service().await
+        self.inner.update_daemon().await
     }
 
     async fn start_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::start_service_daemon().await
+        self.inner.start_daemon().await
     }
 
     async fn restart_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::restart_service_daemon().await
+        self.inner.restart_daemon().await
     }
 
     async fn stop_daemon(&mut self) -> anyhow::Result<()> {
-        crate::core::service::control::stop_service().await
+        self.inner.stop_daemon().await
     }
 
     async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()> {
-        crate::core::service::ipc::wait_until_ready(timeout).await?;
-        Ok(())
+        self.inner.confirm_ready(timeout).await
     }
 
     async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
-        let observation = crate::core::service::ipc::refresh_state_now()
-            .await
-            .context("failed to verify Chimera Service after stop")?;
-        if observation.status == chimera_ipc::types::ServiceStatus::Running {
-            anyhow::bail!("Chimera Service still reports running after stop");
-        }
-        crate::core::service::ipc::mark_disconnected_now();
-        Ok(())
+        self.inner.confirm_stopped().await
     }
 }
 
