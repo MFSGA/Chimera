@@ -8,7 +8,7 @@ pub(crate) mod adapters;
 pub(crate) mod ports;
 mod workflow;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
@@ -28,6 +28,7 @@ enum Message {
         command: Command,
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
+    RecoverCore,
 }
 
 struct CoreLifecycleActor;
@@ -47,13 +48,24 @@ impl Actor for CoreLifecycleActor {
 
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Execute { command, reply } => {
                 let _ = reply.send(state.execute(command).await);
+            }
+            Message::RecoverCore => {
+                tracing::info!("trying to recover core through lifecycle actor");
+                if let Err(error) = state.execute(Command::RecoverCore).await {
+                    tracing::error!(%error, "failed to recover core; scheduling retry");
+                    let actor = myself.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let _ = actor.cast(Message::RecoverCore);
+                    });
+                }
             }
         }
         Ok(())
@@ -75,7 +87,19 @@ pub(super) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
 impl CoreLifecycleClient {
     pub(super) async fn spawn(core: Arc<dyn CoreLifecyclePort>) -> anyhow::Result<Self> {
+        let recovery_notify = core.recovery_notify();
         let (actor_ref, _handle) = Actor::spawn(None, CoreLifecycleActor, core).await?;
+        if let Some(recovery_notify) = recovery_notify {
+            let recovery_actor = actor_ref.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    recovery_notify.notified().await;
+                    if recovery_actor.cast(Message::RecoverCore).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
         Ok(Self(Arc::new(CoreLifecycleClientInner::Actor {
             actor_ref,
         })))
@@ -171,6 +195,7 @@ mod tests {
 
     struct RecordingCore {
         events: Arc<Mutex<Vec<&'static str>>>,
+        recovery_notify: Arc<tokio::sync::Notify>,
     }
 
     struct RecordingLease {
@@ -230,6 +255,15 @@ mod tests {
             })
         }
 
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("recover");
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            Some(self.recovery_notify.clone())
+        }
+
         async fn on_profile_change(&self, _break_when: bool) {}
     }
 
@@ -238,6 +272,7 @@ mod tests {
         let events = Arc::new(Mutex::new(Vec::new()));
         let client = CoreLifecycleClient::spawn(Arc::new(RecordingCore {
             events: events.clone(),
+            recovery_notify: Arc::new(tokio::sync::Notify::new()),
         }))
         .await
         .unwrap();
@@ -252,5 +287,29 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
         );
+    }
+
+    #[tokio::test]
+    async fn crash_recovery_signal_enters_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovery_notify = Arc::new(tokio::sync::Notify::new());
+        let _client = CoreLifecycleClient::spawn(Arc::new(RecordingCore {
+            events: events.clone(),
+            recovery_notify: recovery_notify.clone(),
+        }))
+        .await
+        .unwrap();
+
+        recovery_notify.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().contains(&"recover") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("recovery signal should be admitted by the lifecycle actor");
     }
 }

@@ -320,6 +320,15 @@ mod tests {
             })
         }
 
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("recover");
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
         async fn on_profile_change(&self, _break_when: bool) {
             self.events.lock().unwrap().push("profile-change");
         }

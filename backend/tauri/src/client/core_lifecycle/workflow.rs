@@ -7,6 +7,7 @@ use super::ports::CoreLifecyclePort;
 pub(super) enum Command {
     StopCore,
     SelectCore(ClashCore),
+    RecoverCore,
 }
 
 /// Serialized lifecycle command workflow.
@@ -24,10 +25,16 @@ impl CoreLifecycleWorkflow {
     }
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
-        let mut lease = self.core.begin().await?;
         match command {
-            Command::StopCore => lease.stop().await,
-            Command::SelectCore(core) => lease.change_core(core).await,
+            Command::RecoverCore => self.core.recover().await,
+            Command::StopCore => {
+                let mut lease = self.core.begin().await?;
+                lease.stop().await
+            }
+            Command::SelectCore(core) => {
+                let mut lease = self.core.begin().await?;
+                lease.change_core(core).await
+            }
         }
     }
 }

@@ -74,6 +74,8 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     fn init(&self) -> anyhow::Result<()>;
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn recover(&self) -> anyhow::Result<()>;
+    fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         Ok(None)

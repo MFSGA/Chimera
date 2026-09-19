@@ -871,32 +871,18 @@ impl CoreManager {
         todo!()
     }
 
-    /// Restart the core after an unexpected process termination.
-    pub async fn recover_core(&self) -> Result<()> {
-        loop {
-            let guard = self.lifecycle.run_lock.lock().await;
-            match self.rebuild_and_run_locked(Self::selected_core()).await {
-                Ok(()) => return Ok(()),
-                Err(err) => {
-                    log::error!(target: "app", "failed to recover clash core");
-                    log::error!(target: "app", "{err:?}");
-                    drop(guard);
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-            }
-        }
+    pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.lifecycle.recovery_notify.clone()
+    }
+
+    /// Perform one recovery attempt after an unexpected process termination.
+    /// Retry scheduling belongs to the client-owned lifecycle actor.
+    pub(crate) async fn recover_core_once(&self) -> Result<()> {
+        let _guard = self.lifecycle.run_lock.lock().await;
+        self.rebuild_and_run_locked(Self::selected_core()).await
     }
 
     pub fn init(self: &Arc<Self>) -> Result<()> {
-        let recovery_notify = self.lifecycle.recovery_notify.clone();
-        let recovery_manager = self.clone();
-        tauri::async_runtime::spawn(async move {
-            loop {
-                recovery_notify.notified().await;
-                tracing::info!("Trying to recover core.");
-                let _ = recovery_manager.recover_core().await;
-            }
-        });
         let startup_manager = self.clone();
         tauri::async_runtime::spawn(async move {
             // 启动clash
