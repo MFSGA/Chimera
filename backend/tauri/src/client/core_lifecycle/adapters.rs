@@ -92,6 +92,10 @@ struct LegacyServiceTransition {
 
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        crate::core::service::control::status().await
+    }
+
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
             _guard: crate::core::service::HOST_TRANSITION_LOCK.lock().await,

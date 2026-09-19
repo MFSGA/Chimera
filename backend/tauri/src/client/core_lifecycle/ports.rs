@@ -51,6 +51,7 @@ pub(crate) trait ServiceTransitionLease: Send {
 
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
 }
 
