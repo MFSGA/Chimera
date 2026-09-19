@@ -184,7 +184,8 @@
   outcome-uncertain 仍待迁移。mutation admission 现在把 queued operation 限制为 32；
   第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
   这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
-  `InstallService`/`StartService`/`RestartService`/`StopService`/`UninstallService` 已通过
+  `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
+  `UninstallService` 已通过
   新 `ServiceLifecyclePort`/transition lease 进入 mailbox：legacy adapter 持有现有
   `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
   Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
@@ -195,12 +196,12 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，14 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，15 passed（mailbox
   mutation serialization、crash recovery signal admission、reconcile admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
-  InstallService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
+  InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
   `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
@@ -210,7 +211,8 @@
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
-  以及显式 Service install/start/restart/stop/uninstall transition 已具备。下一阶段继续
+  以及显式 Service install/update/start/restart/stop/uninstall transition 已具备；启动时的
+  service auto-update 也不再绕过 actor。下一阶段继续
   向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 

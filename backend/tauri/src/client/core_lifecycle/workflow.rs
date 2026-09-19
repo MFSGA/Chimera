@@ -16,6 +16,7 @@ pub(super) enum Command {
     ReplaceCoreBinary(PreparedCoreBinary),
     InstallService,
     UninstallService,
+    UpdateService,
     StartService,
     RestartService,
     StopService,
@@ -69,6 +70,7 @@ impl CoreLifecycleWorkflow {
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService => self.install_service().await,
             Command::UninstallService => self.uninstall_service().await,
+            Command::UpdateService => self.update_service().await,
             Command::StartService => self.start_service(false).await,
             Command::RestartService => self.start_service(true).await,
             Command::StopService => self.stop_service().await,
@@ -119,6 +121,11 @@ impl CoreLifecycleWorkflow {
             "core did not recover to the local host after Service uninstall"
         );
         Ok(())
+    }
+
+    async fn update_service(&self) -> anyhow::Result<()> {
+        let mut transition = self.service.begin_transition().await?;
+        transition.update_daemon().await
     }
 
     async fn start_service(&self, restart: bool) -> anyhow::Result<()> {

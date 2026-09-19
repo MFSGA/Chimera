@@ -109,6 +109,10 @@ impl ServiceTransitionLease for LegacyServiceTransition {
         crate::core::service::control::uninstall_service().await
     }
 
+    async fn update_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::update_service().await
+    }
+
     async fn start_daemon(&mut self) -> anyhow::Result<()> {
         crate::core::service::control::start_service_daemon().await
     }
