@@ -541,7 +541,6 @@ export type AgentProbeCode =
   | 'core_config_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
-  | 'service_status_timeout'
   | 'telemetry_unavailable';
 
 export type AgentProbeFailure = {
