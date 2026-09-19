@@ -9,6 +9,7 @@ pub(crate) mod ports;
 mod workflow;
 
 use std::{
+    collections::VecDeque,
     panic::AssertUnwindSafe,
     sync::{
         Arc,
@@ -137,11 +138,33 @@ pub(crate) use ports::{
     ServiceTransitionLease,
 };
 
+struct Response {
+    id: OperationId,
+    reply: Option<RpcReplyPort<anyhow::Result<()>>>,
+}
+
+struct Request {
+    command: Command,
+    response: Response,
+}
+
+struct ActiveOperation {
+    response: Response,
+    task: tokio::task::JoinHandle<()>,
+    shutdown: bool,
+}
+
 enum Message {
-    Execute {
+    Request(Request),
+    Completed {
         id: OperationId,
-        command: Command,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        workflow: CoreLifecycleWorkflow,
+        result: anyhow::Result<()>,
+        workflow_panicked: bool,
+        service_probe: Option<Result<chimera_ipc::types::StatusInfo<'static>, String>>,
+        retry_reconcile_on_failure: bool,
+        recover: bool,
+        shutdown: bool,
     },
     #[cfg(test)]
     ProbeService {
@@ -162,13 +185,16 @@ enum Message {
 struct CoreLifecycleActor;
 
 struct CoreLifecycleActorState {
-    workflow: CoreLifecycleWorkflow,
+    workflow: Option<CoreLifecycleWorkflow>,
+    active: Option<ActiveOperation>,
+    pending: VecDeque<Request>,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
     service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
     uncertain: bool,
     shutting_down: bool,
     shutdown_result: Option<Option<String>>,
+    shutdown_waiters: Vec<Response>,
     dirty: bool,
     dirty_tick_scheduled: bool,
 }
@@ -183,6 +209,37 @@ struct CoreLifecycleActorArgs {
 impl CoreLifecycleActorState {
     fn allocate_operation_id(&self) -> OperationId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn publish(&self) {
+        let mut status = self.status.lock();
+        status.active = self.active.as_ref().map(|operation| operation.response.id);
+        status.queued = self
+            .pending
+            .iter()
+            .map(|request| request.response.id)
+            .chain(self.shutdown_waiters.iter().map(|response| response.id))
+            .collect();
+        status.uncertain = self.uncertain;
+        status.shutting_down = self.shutting_down;
+    }
+
+    fn settle(&self, response: Response, result: anyhow::Result<()>) {
+        {
+            let mut status = self.status.lock();
+            if status.completed.len() == COMPLETED_LIMIT {
+                status.completed.remove(0);
+            }
+            status.completed.push(CoreLifecycleOperationResult {
+                id: response.id,
+                error: result.as_ref().err().map(ToString::to_string),
+            });
+        }
+        if let Some(reply) = response.reply {
+            let _ = reply.send(result);
+        } else if let Err(error) = result {
+            tracing::warn!(%error, id = response.id, "background core lifecycle operation failed");
+        }
     }
 
     fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
@@ -211,7 +268,11 @@ impl CoreLifecycleActorState {
     }
 
     async fn refresh_service_status(&self) -> anyhow::Result<ServiceHostStatus> {
-        match self.workflow.probe_service().await {
+        let workflow = self
+            .workflow
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("core lifecycle workflow is busy"))?;
+        match workflow.probe_service().await {
             Ok(info) => {
                 let status = ServiceHostStatus::from_probe(info);
                 self.service_status.send_replace(status.clone());
@@ -239,102 +300,173 @@ impl CoreLifecycleActorState {
         }
     }
 
-    async fn execute_operation(&mut self, id: OperationId, command: Command) -> anyhow::Result<()> {
-        let shutdown = matches!(&command, Command::Shutdown);
-        if shutdown {
-            if let Some(error) = self.shutdown_result.clone() {
-                let result = match error {
-                    Some(error) => Err(anyhow::anyhow!(error)),
-                    None => Ok(()),
-                };
-                let mut status = self.status.lock();
-                status.queued.retain(|queued| *queued != id);
-                if status.completed.len() == COMPLETED_LIMIT {
-                    status.completed.remove(0);
-                }
-                status.completed.push(CoreLifecycleOperationResult {
-                    id,
-                    error: result.as_ref().err().map(ToString::to_string),
-                });
-                return result;
-            }
-            self.shutting_down = true;
-            self.dirty = false;
-            self.status.lock().shutting_down = true;
-        } else if self.shutting_down {
-            let error = anyhow::anyhow!("core lifecycle is shutting down");
-            let mut status = self.status.lock();
-            status.queued.retain(|queued| *queued != id);
-            if status.completed.len() == COMPLETED_LIMIT {
-                status.completed.remove(0);
-            }
-            status.completed.push(CoreLifecycleOperationResult {
-                id,
-                error: Some(error.to_string()),
-            });
-            return Err(error);
-        } else if self.uncertain {
-            let error = anyhow::anyhow!(
-                "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+    fn reject_pending_for_uncertain(&mut self) {
+        if !self.uncertain || self.shutting_down {
+            return;
+        }
+        self.dirty = false;
+        while let Some(request) = self.pending.pop_front() {
+            self.settle(
+                request.response,
+                Err(anyhow::anyhow!(
+                    "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+                )),
             );
-            let mut status = self.status.lock();
-            status.queued.retain(|queued| *queued != id);
-            if status.completed.len() == COMPLETED_LIMIT {
-                status.completed.remove(0);
-            }
-            status.completed.push(CoreLifecycleOperationResult {
-                id,
-                error: Some(error.to_string()),
-            });
-            return Err(error);
+        }
+    }
+
+    fn close(&mut self) {
+        self.shutting_down = true;
+        self.dirty = false;
+        while let Some(request) = self.pending.pop_front() {
+            self.settle(
+                request.response,
+                Err(anyhow::anyhow!("core lifecycle is shutting down")),
+            );
+        }
+        self.publish();
+    }
+
+    fn push_background(&mut self, command: Command) {
+        if self.pending.len() >= MAX_PENDING {
+            tracing::warn!("dropping background lifecycle operation because the queue is full");
+            return;
+        }
+        self.pending.push_back(Request {
+            command,
+            response: Response {
+                id: self.allocate_operation_id(),
+                reply: None,
+            },
+        });
+    }
+
+    fn drive(&mut self, myself: &ActorRef<Message>) {
+        if self.active.is_some() {
+            self.publish();
+            return;
         }
 
-        {
-            let mut status = self.status.lock();
-            status.queued.retain(|queued| *queued != id);
-            status.active = Some(id);
-        }
-        let progress = match &command {
+        self.reject_pending_for_uncertain();
+
+        let request = if self.shutting_down {
+            if self.shutdown_result.is_some() {
+                self.publish();
+                return;
+            }
+            let Some(response) = self.shutdown_waiters.pop() else {
+                self.publish();
+                return;
+            };
+            Request {
+                command: Command::Shutdown,
+                response,
+            }
+        } else if let Some(request) = self.pending.pop_front() {
+            request
+        } else {
+            self.publish();
+            return;
+        };
+
+        let Some(workflow) = self.workflow.take() else {
+            tracing::error!("core lifecycle workflow missing without an active operation");
+            self.settle(
+                request.response,
+                Err(anyhow::anyhow!("core lifecycle workflow unavailable")),
+            );
+            self.publish();
+            return;
+        };
+
+        let id = request.response.id;
+        let shutdown = matches!(&request.command, Command::Shutdown);
+        let service_phase = match &request.command {
+            Command::InstallService => Some(ServicePhase::Installing),
+            Command::StartService => Some(ServicePhase::StartingDaemon),
+            Command::RestartService => Some(ServicePhase::Restarting),
+            Command::UninstallService => Some(ServicePhase::Uninstalling),
+            _ => None,
+        };
+        let service_mutation = matches!(
+            &request.command,
+            Command::InstallService
+                | Command::UninstallService
+                | Command::UpdateService
+                | Command::StartService
+                | Command::RestartService
+                | Command::StopService
+        );
+        let retry_reconcile_on_failure = matches!(
+            &request.command,
+            Command::StartService
+                | Command::RestartService
+                | Command::StopService
+                | Command::UninstallService
+                | Command::UpdateService
+        );
+        let recover = matches!(&request.command, Command::RecoverCore);
+        let progress = match &request.command {
             Command::ReplaceCoreBinary(artifact) => Some(artifact.progress.clone()),
             _ => None,
         };
-        let result = match AssertUnwindSafe(self.workflow.execute(command))
-            .catch_unwind()
-            .await
-        {
-            Ok(result) => result,
-            Err(_) => {
-                self.uncertain = true;
-                Err(anyhow::anyhow!(
-                    "core lifecycle workflow panicked; execution state is uncertain"
-                ))
-            }
-        };
-        if let Some(progress) = progress {
-            let error = result.as_ref().err().map(ToString::to_string);
-            if std::panic::catch_unwind(AssertUnwindSafe(|| progress.finished(error.as_deref())))
-                .is_err()
+        if let Some(phase) = service_phase {
+            self.publish_service_phase(phase);
+        }
+
+        let command = request.command;
+        let actor = myself.clone();
+        let task = tokio::spawn(async move {
+            let (result, workflow_panicked) = match AssertUnwindSafe(workflow.execute(command))
+                .catch_unwind()
+                .await
             {
-                tracing::error!("binary installation progress observer panicked");
+                Ok(result) => (result, false),
+                Err(_) => (
+                    Err(anyhow::anyhow!(
+                        "core lifecycle workflow panicked; execution state is uncertain"
+                    )),
+                    true,
+                ),
+            };
+            if let Some(progress) = progress {
+                let error = result.as_ref().err().map(ToString::to_string);
+                if std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    progress.finished(error.as_deref())
+                }))
+                .is_err()
+                {
+                    tracing::error!("binary installation progress observer panicked");
+                }
             }
-        }
-        if shutdown {
-            self.shutdown_result = Some(result.as_ref().err().map(ToString::to_string));
-        }
-        {
-            let mut status = self.status.lock();
-            status.active = None;
-            status.uncertain = self.uncertain;
-            status.shutting_down = self.shutting_down;
-            if status.completed.len() == COMPLETED_LIMIT {
-                status.completed.remove(0);
-            }
-            status.completed.push(CoreLifecycleOperationResult {
+            let service_probe = if service_mutation && !workflow_panicked {
+                Some(
+                    workflow
+                        .probe_service()
+                        .await
+                        .map_err(|error| error.to_string()),
+                )
+            } else {
+                None
+            };
+            let _ = actor.cast(Message::Completed {
                 id,
-                error: result.as_ref().err().map(ToString::to_string),
+                workflow,
+                result,
+                workflow_panicked,
+                service_probe,
+                retry_reconcile_on_failure,
+                recover,
+                shutdown,
             });
-        }
-        result
+        });
+
+        self.active = Some(ActiveOperation {
+            response: request.response,
+            task,
+            shutdown,
+        });
+        self.publish();
     }
 }
 
@@ -349,13 +481,16 @@ impl Actor for CoreLifecycleActor {
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         Ok(CoreLifecycleActorState {
-            workflow: args.workflow,
+            workflow: Some(args.workflow),
+            active: None,
+            pending: VecDeque::new(),
             next_id: args.next_id,
             status: args.status,
             service_status: args.service_status,
             uncertain: false,
             shutting_down: false,
             shutdown_result: None,
+            shutdown_waiters: Vec::new(),
             dirty: false,
             dirty_tick_scheduled: false,
         })
@@ -368,6 +503,106 @@ impl Actor for CoreLifecycleActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::Request(request) => {
+                if matches!(&request.command, Command::Shutdown) {
+                    if let Some(error) = state.shutdown_result.clone() {
+                        let result = match error {
+                            Some(error) => Err(anyhow::anyhow!(error)),
+                            None => Ok(()),
+                        };
+                        state.settle(request.response, result);
+                    } else if state.shutdown_waiters.len() >= MAX_PENDING {
+                        state.settle(
+                            request.response,
+                            Err(anyhow::anyhow!("too many shutdown waiters")),
+                        );
+                    } else {
+                        state.shutdown_waiters.push(request.response);
+                        if !state.shutting_down {
+                            state.close();
+                        }
+                    }
+                } else if state.shutting_down {
+                    state.settle(
+                        request.response,
+                        Err(anyhow::anyhow!("core lifecycle is shutting down")),
+                    );
+                } else if state.uncertain {
+                    state.settle(
+                        request.response,
+                        Err(anyhow::anyhow!(
+                            "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
+                        )),
+                    );
+                } else if state.pending.len() >= MAX_PENDING {
+                    state.settle(
+                        request.response,
+                        Err(anyhow::anyhow!("core lifecycle queue is full")),
+                    );
+                } else {
+                    state.pending.push_back(request);
+                }
+            }
+            Message::Completed {
+                id,
+                workflow,
+                result,
+                workflow_panicked,
+                service_probe,
+                retry_reconcile_on_failure,
+                recover,
+                shutdown,
+            } => {
+                if state.active.as_ref().map(|operation| operation.response.id) != Some(id) {
+                    return Ok(());
+                }
+                let active = state
+                    .active
+                    .take()
+                    .expect("matched active lifecycle operation");
+                debug_assert_eq!(active.shutdown, shutdown);
+                let _ = active.task.await;
+                state.workflow = Some(workflow);
+                state.uncertain |= workflow_panicked;
+
+                match service_probe {
+                    Some(Ok(info)) => state.publish_service_status(info),
+                    Some(Err(error)) => {
+                        tracing::debug!(%error, "failed to refresh service status after mutation");
+                        state.publish_service_probe_failure();
+                    }
+                    None => {}
+                }
+
+                let failed = result.is_err();
+                if shutdown {
+                    let shutdown_error = result.as_ref().err().map(ToString::to_string);
+                    state.shutdown_result = Some(shutdown_error.clone());
+                    state.settle(active.response, result);
+                    for waiter in std::mem::take(&mut state.shutdown_waiters) {
+                        let waiter_result = match &shutdown_error {
+                            Some(error) => Err(anyhow::anyhow!(error.clone())),
+                            None => Ok(()),
+                        };
+                        state.settle(waiter, waiter_result);
+                    }
+                } else {
+                    state.settle(active.response, result);
+                }
+
+                if retry_reconcile_on_failure && failed && !state.uncertain && !state.shutting_down
+                {
+                    state.mark_runtime_dirty(&myself);
+                }
+                if recover && failed && !state.uncertain && !state.shutting_down {
+                    tracing::error!("failed to recover core; scheduling retry");
+                    let actor = myself.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                        let _ = actor.cast(Message::RecoverCore);
+                    });
+                }
+            }
             #[cfg(test)]
             Message::ProbeService { reply } => {
                 let _ = reply.send(state.refresh_service_status().await);
@@ -384,43 +619,6 @@ impl Actor for CoreLifecycleActor {
                     tracing::debug!(%error, "failed to refresh cached service status");
                 }
             }
-            Message::Execute { id, command, reply } => {
-                let service_phase = match &command {
-                    Command::InstallService => Some(ServicePhase::Installing),
-                    Command::StartService => Some(ServicePhase::StartingDaemon),
-                    Command::RestartService => Some(ServicePhase::Restarting),
-                    Command::UninstallService => Some(ServicePhase::Uninstalling),
-                    _ => None,
-                };
-                let service_mutation = matches!(
-                    &command,
-                    Command::InstallService
-                        | Command::UninstallService
-                        | Command::UpdateService
-                        | Command::StartService
-                        | Command::RestartService
-                        | Command::StopService
-                );
-                if let Some(phase) = service_phase {
-                    state.publish_service_phase(phase);
-                }
-                let retry_reconcile_on_failure = matches!(
-                    &command,
-                    Command::StartService
-                        | Command::RestartService
-                        | Command::StopService
-                        | Command::UninstallService
-                        | Command::UpdateService
-                );
-                let result = state.execute_operation(id, command).await;
-                if service_mutation && let Err(error) = state.refresh_service_status().await {
-                    tracing::debug!(%error, "failed to refresh service status after mutation");
-                }
-                if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
-                    state.mark_runtime_dirty(&myself);
-                }
-                let _ = reply.send(result);
-            }
             Message::StartupReconcile => {
                 if state.uncertain || state.shutting_down {
                     tracing::warn!(
@@ -428,11 +626,8 @@ impl Actor for CoreLifecycleActor {
                         shutting_down = state.shutting_down,
                         "ignoring startup reconcile because lifecycle is unavailable"
                     );
-                    return Ok(());
-                }
-                let id = state.allocate_operation_id();
-                if let Err(error) = state.execute_operation(id, Command::Reconcile).await {
-                    tracing::error!(%error, id, "startup core reconcile failed");
+                } else {
+                    state.push_background(Command::Reconcile);
                 }
             }
             Message::RecoverCore => {
@@ -442,19 +637,9 @@ impl Actor for CoreLifecycleActor {
                         shutting_down = state.shutting_down,
                         "ignoring crash recovery because lifecycle is unavailable"
                     );
-                    return Ok(());
-                }
-                tracing::info!("trying to recover core through lifecycle actor");
-                let id = state.allocate_operation_id();
-                if let Err(error) = state.execute_operation(id, Command::RecoverCore).await {
-                    if !state.uncertain {
-                        tracing::error!(%error, "failed to recover core; scheduling retry");
-                        let actor = myself.clone();
-                        tokio::spawn(async move {
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            let _ = actor.cast(Message::RecoverCore);
-                        });
-                    }
+                } else {
+                    tracing::info!("queueing core recovery through lifecycle actor");
+                    state.push_background(Command::RecoverCore);
                 }
             }
             Message::RuntimeDirty => {
@@ -464,25 +649,21 @@ impl Actor for CoreLifecycleActor {
                         shutting_down = state.shutting_down,
                         "ignoring runtime dirty signal because lifecycle is unavailable"
                     );
-                    return Ok(());
+                } else {
+                    state.mark_runtime_dirty(&myself);
                 }
-                state.mark_runtime_dirty(&myself);
             }
             Message::DirtyTick => {
                 state.dirty_tick_scheduled = false;
                 if state.uncertain || state.shutting_down {
                     state.dirty = false;
-                    return Ok(());
-                }
-                if state.dirty {
+                } else if state.dirty {
                     state.dirty = false;
-                    let id = state.allocate_operation_id();
-                    if let Err(error) = state.execute_operation(id, Command::Reconcile).await {
-                        tracing::warn!(%error, id, "coalesced background runtime rebuild failed");
-                    }
+                    state.push_background(Command::Reconcile);
                 }
             }
         }
+        state.drive(&myself);
         Ok(())
     }
 }
@@ -603,45 +784,20 @@ impl CoreLifecycleClient {
     ) -> anyhow::Result<()> {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor {
-                actor_ref,
-                next_id,
-                status,
-                ..
+                actor_ref, next_id, ..
             } => {
                 let id = next_id.fetch_add(1, Ordering::Relaxed);
-                let shutdown = matches!(&command, Command::Shutdown);
-                let rejection = {
-                    let mut lifecycle = status.lock();
-                    let error = if lifecycle.shutting_down && !shutdown {
-                        Some("core lifecycle is shutting down".to_string())
-                    } else if lifecycle.uncertain && !shutdown {
-                        Some(
-                            "previous core lifecycle operation has an uncertain outcome; restart the application before further mutations"
-                                .to_string(),
-                        )
-                    } else if lifecycle.queued.len() >= MAX_PENDING {
-                        Some("core lifecycle queue is full".to_string())
-                    } else {
-                        lifecycle.queued.push(id);
-                        None
-                    };
-                    if let Some(error) = error.as_ref() {
-                        if lifecycle.completed.len() == COMPLETED_LIMIT {
-                            lifecycle.completed.remove(0);
-                        }
-                        lifecycle.completed.push(CoreLifecycleOperationResult {
-                            id,
-                            error: Some(error.clone()),
-                        });
-                    }
-                    error
-                };
-                if let Some(error) = rejection {
-                    anyhow::bail!(error);
-                }
                 match actor_ref
                     .call(
-                        |reply| Message::Execute { id, command, reply },
+                        |reply| {
+                            Message::Request(Request {
+                                command,
+                                response: Response {
+                                    id,
+                                    reply: Some(reply),
+                                },
+                            })
+                        },
                         Some(timeout),
                     )
                     .await
@@ -650,16 +806,10 @@ impl CoreLifecycleClient {
                     Ok(CallResult::Timeout) => anyhow::bail!(
                         "core lifecycle operation {id} timed out; it may still be queued or running"
                     ),
-                    Ok(CallResult::SenderError) => {
-                        status.lock().queued.retain(|queued| *queued != id);
-                        anyhow::bail!(
-                            "core lifecycle actor reply dropped for operation {id}; outcome is unknown"
-                        )
-                    }
-                    Err(error) => {
-                        status.lock().queued.retain(|queued| *queued != id);
-                        Err(error.into())
-                    }
+                    Ok(CallResult::SenderError) => anyhow::bail!(
+                        "core lifecycle actor reply dropped for operation {id}; outcome is unknown"
+                    ),
+                    Err(error) => Err(error.into()),
                 }
             }
             #[cfg(test)]
@@ -1409,6 +1559,84 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end"]
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_pending_queue_before_final_stop() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop_started = Arc::new(tokio::sync::Notify::new());
+        let release_stop = Arc::new(tokio::sync::Notify::new());
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(BlockingCore {
+                events: events.clone(),
+                stop_started: stop_started.clone(),
+                release_stop: release_stop.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let active_client = client.clone();
+        let active = tokio::spawn(async move { active_client.stop_core().await });
+        tokio::time::timeout(Duration::from_secs(1), stop_started.notified())
+            .await
+            .expect("active stop should start");
+
+        let queued_a = {
+            let client = client.clone();
+            tokio::spawn(async move { client.select_core(ClashCore::Mihomo).await })
+        };
+        let queued_b = {
+            let client = client.clone();
+            tokio::spawn(async move { client.select_core(ClashCore::Mihomo).await })
+        };
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if client.status().queued.len() == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("two mutations should enter the actor-owned queue");
+
+        let shutdown_client = client.clone();
+        let shutdown = tokio::spawn(async move { shutdown_client.shutdown().await });
+        let error_a = queued_a.await.unwrap().unwrap_err();
+        let error_b = queued_b.await.unwrap().unwrap_err();
+        assert!(
+            error_a
+                .to_string()
+                .contains("core lifecycle is shutting down")
+        );
+        assert!(
+            error_b
+                .to_string()
+                .contains("core lifecycle is shutting down")
+        );
+        assert!(client.status().shutting_down);
+
+        release_stop.notify_one();
+        active.await.unwrap().unwrap();
+        tokio::time::timeout(Duration::from_secs(1), stop_started.notified())
+            .await
+            .expect("shutdown stop should start after the active operation settles");
+        release_stop.notify_one();
+        shutdown.await.unwrap().unwrap();
+
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == "blocking-stop")
+                .count(),
+            2
+        );
+        assert!(!events.iter().any(|event| *event == "queued-select"));
     }
 
     #[tokio::test]

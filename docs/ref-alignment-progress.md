@@ -188,11 +188,13 @@
   outcome-uncertain 仍待迁移。应用退出现在使用专用 `Shutdown` command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
   recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
-  `get_core_lifecycle_status` 同步暴露 `shutting_down`。mutation admission 现在把 queued operation 限制为 32；
-  第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
-  这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型：当前
-  ractor mailbox 中已先于 shutdown 排队的消息无法由 lifecycle state 主动清空，只能在
-  shutdown latch 之后逐条被拒绝；完整 close/drain/shutdown-waiter 语义仍待 lower actor 迁移。
+  `get_core_lifecycle_status` 同步暴露 `shutting_down`。mutation admission 现在由 actor-owned
+  `VecDeque<Request>` 管理，最多保留 32 个 pending；第 33 个请求由 actor 直接拒绝并写入
+  completed history。workflow ownership 每次只移动到一个 detached active task，RPC waiter
+  超时或丢弃不会取消已 admission 的执行，也不会释放第二个 lifecycle operation。shutdown
+  会在 actor 内 close/drain pending mutation、等待当前 active operation 终结，再运行唯一的
+  final stop；并发/重复 shutdown waiter 共享同一终态。该队列/active-task ownership 已与 ref
+  的 lifecycle actor 形状对齐，剩余差异主要下沉到 lower core/service host facade。
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
   `UninstallService` 已通过新 `ServiceLifecyclePort`/transition lease 进入 mailbox。
   lifecycle actor 现在还持有 ref-shaped `watch::Receiver<ServiceHostStatus>` projection：
@@ -214,13 +216,13 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，19 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，20 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、幂等 shutdown 只 stop 一次且阻断后续 mutation、
-  pending queue 超过 32 条时拒绝 overflow、
+  shutdown drain actor-owned pending queue 后等待 active 再 final stop、pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
@@ -229,8 +231,8 @@
   chimera` 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
-  updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
-  32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
+  updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、actor-owned
+  bounded pending queue + detached active task、runtime-dirty coalescing、workflow-panic uncertain latch，
   以及显式 Service install/update/start/restart/stop/uninstall transition、actor-owned
   cached/watch `ServiceHostStatus`、外部只读 cached projection 与专用幂等 shutdown 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
