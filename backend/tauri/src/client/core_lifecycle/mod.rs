@@ -997,6 +997,7 @@ impl CoreLifecycleClient {
         self.execute(Command::Shutdown).await
     }
 
+    #[cfg(test)]
     pub(super) async fn stop_core(&self) -> anyhow::Result<()> {
         self.execute(Command::StopCore).await
     }
@@ -1100,6 +1101,7 @@ impl ChimeraClient {
         self.inner.core_lifecycle.shutdown().await
     }
 
+    #[cfg(test)]
     pub(crate) async fn stop_core(&self) -> anyhow::Result<()> {
         self.inner.core_lifecycle.stop_core().await
     }
