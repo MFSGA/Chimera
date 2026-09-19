@@ -235,14 +235,19 @@
   handoff 到 Local；这与 ref 要求“先离开 Service host 再 uninstall”的顺序仍有差异。
   transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
   health-loop 仍负责实际周期 probe，但成功 observation/失败状态会 cast 回 lifecycle actor
-  更新同一 watch，不再形成 UI/Agent 的第二套探测路径；启动期内部兼容性检查仍直接经 legacy
-  control probe。health loop 仅在 Connected→Disconnected 边沿提交 `ServiceEndpointDown`；
+  更新同一 watch，不再形成 UI/Agent 的第二套探测路径。legacy `status --json` probe 现在统一使用
+  5 秒 timeout + `kill_on_drop(true)`，因此启动期兼容性检查、health-loop 与 endpoint-down re-probe
+  都有同一 fail-closed bound，不会留下孤儿 status 子进程。health loop 仅在
+  Connected→Disconnected 边沿提交 `ServiceEndpointDown`；
   lower `CoreFacade` 会重新 probe，只有明确 `Stopped` 才允许 auto-restart，probe 失败、Running、
   Incompatible/NotInstalled 都 fail-closed。当前 restart budget 为 3：成功 admission 递增
   `restart_attempts`，预算耗尽后 latch `ServicePhase::Exhausted`；普通 probe/health observation
   不会冲掉 exhausted latch，显式 install/update/start/restart 会 re-arm budget。这与 ref 的
   endpoint-down/restart-budget/exhausted 基本语义一致，剩余差异主要是尚未拆成独立
-  `ServiceActor` 与 ref 的 bounded per-command timeout/endpoint handle protocol。
+  `ServiceActor` 与 ref 的 bounded mutation-command/endpoint handle protocol。当前 daemon
+  mutation 仍经 `runas + spawn_blocking` 且必须在 `HOST_TRANSITION_LOCK` 生命周期内完成，不能
+  直接用 `timeout()` 提前 drop，否则 OS 命令可能继续运行而 transition lock 已释放；这部分需随
+  detached ServiceActor command ownership 一起迁移。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
