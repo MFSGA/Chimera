@@ -65,14 +65,8 @@ impl CoreLifecycleWorkflow {
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
-            Command::Shutdown | Command::StopCore => {
-                let mut lease = self.core.begin().await?;
-                lease.stop().await
-            }
-            Command::SelectCore(core) => {
-                let mut lease = self.core.begin().await?;
-                lease.change_core(core).await
-            }
+            Command::Shutdown | Command::StopCore => self.core.stop().await,
+            Command::SelectCore(core) => self.core.change_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService => self.install_service().await,
             Command::UninstallService => self.uninstall_service().await,
@@ -91,10 +85,7 @@ impl CoreLifecycleWorkflow {
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
-        let mut lease = self.core.begin().await?;
-        lease
-            .rebuild_running_config(clash, target_core, run_type)
-            .await
+        self.core.reconcile(clash, target_core, run_type).await
     }
 
     async fn install_service(&self) -> anyhow::Result<()> {
@@ -203,7 +194,7 @@ impl CoreLifecycleWorkflow {
         let current_run_type = self.core.status().await?.run_type;
 
         if current_core == artifact.target {
-            let mut lease = self.core.begin().await?;
+            let mut lease = self.core.begin_binary_update().await?;
             lease.stop().await?;
             self.installer.install(&artifact).await?;
             artifact.progress.restarting();

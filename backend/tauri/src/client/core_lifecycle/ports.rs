@@ -90,13 +90,7 @@ pub struct RuntimeTransformDiagnostics {
 }
 
 #[async_trait]
-pub(crate) trait CoreLifecycleLease: Send {
-    async fn rebuild_running_config(
-        &mut self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()>;
+pub(crate) trait CoreBinaryUpdateLease: Send {
     async fn run_core_from(
         &mut self,
         config_path: &std::path::Path,
@@ -104,12 +98,19 @@ pub(crate) trait CoreLifecycleLease: Send {
         run_type: RunType,
     ) -> anyhow::Result<()>;
     async fn stop(&mut self) -> anyhow::Result<()>;
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>>;
+    async fn begin_binary_update(&self) -> anyhow::Result<Box<dyn CoreBinaryUpdateLease + '_>>;
+    async fn reconcile(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()>;
+    async fn stop(&self) -> anyhow::Result<()>;
+    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
 
