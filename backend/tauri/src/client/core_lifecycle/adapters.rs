@@ -102,7 +102,7 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
-            inner: self.facade.begin_service_transition().await,
+            inner: self.facade.begin_service_transition().await?,
         }))
     }
 }
@@ -210,6 +210,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
         Some(self.facade().recovery_notify())
+    }
+
+    fn outcome_uncertain(&self) -> bool {
+        self.facade().outcome_uncertain()
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {

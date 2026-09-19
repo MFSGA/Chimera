@@ -196,10 +196,17 @@
   admission 一次 `Reconcile`，窗口后的新 dirty 会再次触发；Service IPC health-loop
   已改为该 best-effort dirty producer。旧 `client/rebuild.rs` coordinator 已退出模块图，
   避免 actor 外保留第二套 rebuild 协调层。workflow future panic 现在由 actor 捕获并
-  latch `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰底层
-  lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。当前 uncertain 只覆盖
-  lifecycle workflow panic；ref 中由 actor_v2/CoreFacade 下层 reply-lost 导致的
-  outcome-uncertain 仍待迁移。应用退出现在使用专用 `Shutdown` command，而不是普通
+  latch `uncertain=true`；lower `CoreFacade` 也新增 ref-shaped `outcome_uncertain` guard。
+  Local core mutation 在 admission 后由 detached lower task 持有 `CoreManager` lifecycle lock，
+  上层 waiter/caller 丢失不会取消已开始的 lower mutation，并会 latch uncertain；lower task
+  panic 同样 latch。Service daemon mutation 为保持 `HOST_TRANSITION_LOCK` 的完整生命周期仍
+  原地执行，但 waiter cancellation/panic 会通过同一 guard latch uncertain。普通 terminal
+  operation error 不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
+  lifecycle actor 的 `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰
+  底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 Chimera
+  尚无 `ControlEndpoint::submit` + `wait_operation(id)` registry，因此 lower reply 丢失后目前
+  保守要求重启应用，而不能按 operation id 重新查询终态。应用退出现在使用专用 `Shutdown`
+  command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
   recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
   `get_core_lifecycle_status` 同步暴露 `shutting_down`。mutation admission 现在由 actor-owned
@@ -231,16 +238,18 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，20 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，21 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→typed reconcile→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
-  panic latch uncertain 并阻断后续 mutation、幂等 shutdown 只 stop 一次且阻断后续 mutation、
+  panic 与 lower outcome-uncertain 均 latch 并阻断后续 mutation、幂等 shutdown 只 stop 一次且阻断后续 mutation、
   shutdown drain actor-owned pending queue 后等待 active 再 final stop、pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
-  UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
+  UninstallService 在卸载后确认停止并恢复 Local host）；`core::actor_v2::facade::tests`，
+  4 passed（detached reply-loss、lower panic、terminal error 不误 latch、Service in-place cancellation）；
+  `core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
@@ -253,9 +262,9 @@
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
-  ownership/status/lifecycle-lock/transition 边界已落地；下一阶段继续迁移 ref 的 endpoint
-  submit/wait operation protocol、lower
-  reply-lost/outcome-uncertain 与 ServiceActor restart-budget/exhausted policy。当前仍是
+  ownership/status/lifecycle-lock/transition 与 fail-closed outcome-uncertain guard 已落地；
+  下一阶段继续迁移 ref 的 endpoint submit/wait operation registry（使 reply-loss 可按 id
+  恢复终态而不是强制重启）与 ServiceActor restart-budget/exhausted policy。当前仍是
   lower host protocol 的部分迁移，而不是 singleton、manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
