@@ -59,7 +59,12 @@ pub(crate) trait CoreLifecycleLease: Send {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
-    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()>;
+    async fn run_core_from(
+        &mut self,
+        config_path: &std::path::Path,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()>;
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
 }
