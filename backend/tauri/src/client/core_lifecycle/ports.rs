@@ -41,6 +41,7 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
 pub(crate) trait ServiceTransitionLease: Send {
     async fn install_daemon(&mut self) -> anyhow::Result<()>;
     async fn uninstall_daemon(&mut self) -> anyhow::Result<()>;
+    async fn update_daemon(&mut self) -> anyhow::Result<()>;
     async fn start_daemon(&mut self) -> anyhow::Result<()>;
     async fn restart_daemon(&mut self) -> anyhow::Result<()>;
     async fn stop_daemon(&mut self) -> anyhow::Result<()>;

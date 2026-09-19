@@ -202,6 +202,7 @@ impl Actor for CoreLifecycleActor {
                         | Command::RestartService
                         | Command::StopService
                         | Command::UninstallService
+                        | Command::UpdateService
                 );
                 let result = state.execute_operation(id, command).await;
                 if retry_reconcile_on_failure && result.is_err() && !state.uncertain {
@@ -473,6 +474,10 @@ impl CoreLifecycleClient {
         self.execute(Command::UninstallService).await
     }
 
+    pub(super) async fn update_service(&self) -> anyhow::Result<()> {
+        self.execute(Command::UpdateService).await
+    }
+
     pub(super) async fn start_service(&self) -> anyhow::Result<()> {
         self.execute(Command::StartService).await
     }
@@ -542,6 +547,10 @@ impl ChimeraClient {
 
     pub(crate) async fn uninstall_service(&self) -> anyhow::Result<()> {
         self.inner.core_lifecycle.uninstall_service().await
+    }
+
+    pub(crate) async fn update_service(&self) -> anyhow::Result<()> {
+        self.inner.core_lifecycle.update_service().await
     }
 
     pub(crate) async fn start_service(&self) -> anyhow::Result<()> {
@@ -641,6 +650,11 @@ mod tests {
 
         async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("service-uninstall");
+            Ok(())
+        }
+
+        async fn update_daemon(&mut self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("service-update");
             Ok(())
         }
 
@@ -1353,6 +1367,35 @@ mod tests {
         client.reconcile().await.unwrap();
 
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild"]);
+    }
+
+    #[tokio::test]
+    async fn update_service_runs_inside_lifecycle_mailbox() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = CoreLifecycleClient::spawn_with_installer(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                recovery_notify: Arc::new(tokio::sync::Notify::new()),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingInstaller {
+                events: events.clone(),
+            }),
+            Arc::new(RecordingService {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+
+        client.update_service().await.unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["service-begin", "service-update"]
+        );
     }
 
     #[tokio::test]

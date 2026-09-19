@@ -140,7 +140,7 @@ pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
                             tracing::info!(
                                 "client service ver is newer than exist one, do service update"
                             );
-                            if let Err(e) = crate::core::service::control::update_service().await {
+                            if let Err(e) = client.update_service().await {
                                 log::error!(target: "app", "failed to update service: {e:?}");
                             }
                         }
