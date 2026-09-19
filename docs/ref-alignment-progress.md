@@ -185,9 +185,14 @@
   latch `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰底层
   lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。当前 uncertain 只覆盖
   lifecycle workflow panic；ref 中由 actor_v2/CoreFacade 下层 reply-lost 导致的
-  outcome-uncertain 仍待迁移。mutation admission 现在把 queued operation 限制为 32；
+  outcome-uncertain 仍待迁移。应用退出现在使用专用 `Shutdown` command，而不是普通
+  `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
+  recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
+  `get_core_lifecycle_status` 同步暴露 `shutting_down`。mutation admission 现在把 queued operation 限制为 32；
   第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
-  这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
+  这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型：当前
+  ractor mailbox 中已先于 shutdown 排队的消息无法由 lifecycle state 主动清空，只能在
+  shutdown latch 之后逐条被拒绝；完整 close/drain/shutdown-waiter 语义仍待 lower actor 迁移。
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
   `UninstallService` 已通过新 `ServiceLifecyclePort`/transition lease 进入 mailbox。
   lifecycle actor 现在还持有 ref-shaped `watch::Receiver<ServiceHostStatus>` projection：
@@ -209,12 +214,13 @@
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，18 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，19 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
-  panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
+  panic latch uncertain 并阻断后续 mutation、幂等 shutdown 只 stop 一次且阻断后续 mutation、
+  pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
@@ -226,7 +232,7 @@
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
   以及显式 Service install/update/start/restart/stop/uninstall transition、actor-owned
-  cached/watch `ServiceHostStatus` 与外部只读 cached projection 已具备；应用启动
+  cached/watch `ServiceHostStatus`、外部只读 cached projection 与专用幂等 shutdown 已具备；应用启动
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API 和无参 lifecycle rebuild convenience API 已删除。
   下一阶段继续向 `core/actor_v2` 的 lower host facade/outcome-uncertain 与 ServiceActor
