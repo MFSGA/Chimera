@@ -107,10 +107,8 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
     Ok(args)
 }
 
-pub async fn install_service(client: crate::client::ChimeraClient) -> anyhow::Result<()> {
-    run_service_command("install service", get_service_install_args().await?).await?;
-    super::ipc::ensure_health_check(client);
-    Ok(())
+pub async fn install_service_daemon() -> anyhow::Result<()> {
+    run_service_command("install service", get_service_install_args().await?).await
 }
 
 pub async fn update_service() -> anyhow::Result<()> {

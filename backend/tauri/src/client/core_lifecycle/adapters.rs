@@ -101,6 +101,14 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
 
 #[async_trait]
 impl ServiceTransitionLease for LegacyServiceTransition {
+    async fn install_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::install_service_daemon().await
+    }
+
+    async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+        crate::core::service::control::uninstall_service().await
+    }
+
     async fn start_daemon(&mut self) -> anyhow::Result<()> {
         crate::core::service::control::start_service_daemon().await
     }

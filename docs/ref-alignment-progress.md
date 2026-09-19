@@ -184,23 +184,25 @@
   outcome-uncertain 仍待迁移。mutation admission 现在把 queued operation 限制为 32；
   第 33 个及之后的请求会在进入 actor mailbox 前被拒绝并写入 completed history。
   这仍不同于 ref 的 actor-owned `VecDeque<Request>` + detached active-task 模型。
-  `StartService`/`RestartService`/`StopService` 已通过新 `ServiceLifecyclePort`/transition
-  lease 进入 mailbox：legacy adapter 持有现有 `HOST_TRANSITION_LOCK`；start/restart 会在
-  bounded readiness probe 后按配置收敛到 Service host 并再次验证，stop 会完成停止确认、
-  Service→Local reconcile 和最终 core 验证。transition 失败会由 actor 标记 runtime dirty
-  进行后续 best-effort reconcile。install/uninstall 仍走 legacy service path，因此完整
-  pending/active ownership 与 service host facade 仍待迁移。
+  `InstallService`/`StartService`/`RestartService`/`StopService`/`UninstallService` 已通过
+  新 `ServiceLifecyclePort`/transition lease 进入 mailbox：legacy adapter 持有现有
+  `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
+  Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
+  验证。uninstall 保留 Chimera 既有 UX：先卸载 daemon，再确认停止并在需要时自动
+  handoff 到 Local；这与 ref 要求“先离开 Service host 再 uninstall”的顺序仍有差异。
+  transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，12 passed（mailbox
+  --test-threads=1`，16 passed；`client::core_lifecycle::tests`，14 passed（mailbox
   mutation serialization、crash recovery signal admission、reconcile admission、
   replace-binary 的 stop→install→restart→finished 顺序、caller timeout 不取消已
   admission operation、dirty burst coalescing、后续窗口再次 reconcile、workflow
   panic latch uncertain 并阻断后续 mutation、pending queue 超过 32 条时拒绝 overflow、
-  StartService/RestartService 在同一 mailbox/host-transition lease 内收敛到 Service host、
-  StopService 把 core 从 Service handoff 回 Local）；`core::service` tests，12 passed；
+  InstallService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
+  lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
+  UninstallService 在卸载后确认停止并恢复 Local host）；`core::service` tests，12 passed；
   `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
@@ -208,9 +210,8 @@
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、
   32 条 bounded admission、runtime-dirty coalescing、workflow-panic uncertain latch，
-  以及 StartService/RestartService/StopService 的 host transition 已具备。下一阶段是迁移
-  install/uninstall service commands，并继续向 `core/actor_v2` 的 host facade/outcome-uncertain
-  和 service/local host
+  以及显式 Service install/start/restart/stop/uninstall transition 已具备。下一阶段继续
+  向 `core/actor_v2` 的 host facade/outcome-uncertain 和 service/local host
   恢复测试。当前仍是 lifecycle ownership 的部分迁移，而不是 singleton 访问问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）

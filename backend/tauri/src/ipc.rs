@@ -824,14 +824,15 @@ pub mod service {
     #[tauri::command]
     #[specta::specta]
     pub async fn install_service(client: State<'_, ChimeraClient>) -> Result {
-        service::control::install_service((*client).clone()).await?;
+        client.install_service().await?;
+        service::ipc::ensure_health_check((*client).clone());
         Ok(())
     }
     #[tauri::command]
     #[specta::specta]
     pub async fn uninstall_service(client: State<'_, ChimeraClient>) -> Result {
         ensure_service_can_stop_for_tun(&client)?;
-        service::uninstall_service_and_converge(&client).await?;
+        client.uninstall_service().await?;
         Ok(())
     }
     #[tauri::command]
