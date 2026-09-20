@@ -208,9 +208,11 @@
   operation error 不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
   lifecycle actor 的 `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰
   底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 local
-  `ControlEndpoint` 目前只承载 Chimera 的 `Reconcile/Stop/ChangeCore` command 与
-  `Running/Succeeded/Failed/Uncertain` 终态，还没有 ref 的 operation output、revision CAS、applied
-  identity 与 Service-host endpoint registry；lower operation id 也尚未透传到 app IPC。也就是说
+  `ControlEndpoint` 目前承载 Chimera 的 `Reconcile/Stop/ChangeCore` command、
+  `Running/Succeeded/Failed/Uncertain` phase 与 typed `OperationOutput`。`Stop` 返回 `Stopped`；
+  `Reconcile/ChangeCore` 成功后从 `RuntimeLifecycleState.applied` 返回实际 `revision + core`，不会从
+  desired config 猜 applied identity。尚未迁移的是 ref 的 expected-applied revision CAS、完整 applied
+  status projection 与 Service-host endpoint registry；lower operation id 也尚未透传到 app IPC。也就是说
   local reply-loss 已可在 endpoint 层恢复终态，但 app 层暂时不能拿 lower id 主动查询。应用退出现在使用专用 `Shutdown`
   command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
@@ -264,9 +266,9 @@
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host、endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，5 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
-  lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Service in-place cancellation、
-  仅明确 Stopped daemon 消耗 restart budget）；
+  `core::actor_v2` tests，6 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
+  Service in-place cancellation、仅明确 Stopped daemon 消耗 restart budget）；
   `core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
@@ -281,9 +283,10 @@
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
   ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
-  registry、fail-closed outcome-uncertain guard，以及 endpoint-down restart-budget/exhausted latch 已落地；
-  下一阶段继续补 ref 的 operation output/revision CAS/applied identity、把 lower operation id 透传到
-  app IPC，并迁移独立 ServiceActor 的 bounded command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  registry + typed terminal output/applied runtime identity、fail-closed outcome-uncertain guard，以及
+  endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续补 ref 的 expected-applied
+  revision CAS/applied status projection、把 lower operation id 透传到 app IPC，并迁移独立
+  ServiceActor 的 bounded command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）

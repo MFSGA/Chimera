@@ -53,9 +53,23 @@ pub(crate) enum OperationPhase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppliedRuntimeIdentity {
+    pub(crate) revision: u64,
+    pub(crate) core: ClashCore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OperationOutput {
+    Reconciled(AppliedRuntimeIdentity),
+    Stopped,
+    CoreChanged(AppliedRuntimeIdentity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OperationInfo {
     pub(crate) id: OperationId,
     pub(crate) phase: OperationPhase,
+    pub(crate) output: Option<OperationOutput>,
     pub(crate) error: Option<String>,
 }
 
@@ -64,14 +78,16 @@ impl OperationInfo {
         Self {
             id,
             phase: OperationPhase::Running,
+            output: None,
             error: None,
         }
     }
 
-    fn succeeded(id: OperationId) -> Self {
+    fn succeeded(id: OperationId, output: OperationOutput) -> Self {
         Self {
             id,
             phase: OperationPhase::Succeeded,
+            output: Some(output),
             error: None,
         }
     }
@@ -80,6 +96,7 @@ impl OperationInfo {
         Self {
             id,
             phase: OperationPhase::Failed,
+            output: None,
             error: Some(error),
         }
     }
@@ -88,6 +105,7 @@ impl OperationInfo {
         Self {
             id,
             phase: OperationPhase::Uncertain,
+            output: None,
             error: Some(error),
         }
     }
@@ -177,7 +195,7 @@ impl LocalEndpoint {
 
     fn spawn_operation<F>(&self, operation: &'static str, future: F) -> OperationInfo
     where
-        F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+        F: std::future::Future<Output = anyhow::Result<OperationOutput>> + Send + 'static,
     {
         let id = OperationId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let running = OperationInfo::running(id);
@@ -185,7 +203,7 @@ impl LocalEndpoint {
         self.insert_operation(id, rx);
         tokio::spawn(async move {
             let info = match AssertUnwindSafe(future).catch_unwind().await {
-                Ok(Ok(())) => OperationInfo::succeeded(id),
+                Ok(Ok(output)) => OperationInfo::succeeded(id, output),
                 Ok(Err(error)) => OperationInfo::failed(id, error.to_string()),
                 Err(_) => {
                     OperationInfo::uncertain(id, format!("{operation} panicked after admission"))
@@ -196,7 +214,10 @@ impl LocalEndpoint {
         running
     }
 
-    async fn execute(manager: Arc<CoreManager>, command: CoreCommand) -> anyhow::Result<()> {
+    async fn execute(
+        manager: Arc<CoreManager>,
+        command: CoreCommand,
+    ) -> anyhow::Result<OperationOutput> {
         let lease = manager.begin_lifecycle().await;
         match command {
             CoreCommand::Reconcile {
@@ -206,10 +227,29 @@ impl LocalEndpoint {
             } => {
                 lease
                     .rebuild_running_config_with(clash, target_core, run_type)
-                    .await
+                    .await?;
+                let (revision, core) = manager.applied_runtime_identity().ok_or_else(|| {
+                    anyhow::anyhow!("reconcile succeeded without an applied runtime identity")
+                })?;
+                Ok(OperationOutput::Reconciled(AppliedRuntimeIdentity {
+                    revision,
+                    core,
+                }))
             }
-            CoreCommand::Stop => lease.stop_core().await,
-            CoreCommand::ChangeCore(core) => lease.change_core(core).await,
+            CoreCommand::Stop => {
+                lease.stop_core().await?;
+                Ok(OperationOutput::Stopped)
+            }
+            CoreCommand::ChangeCore(core) => {
+                lease.change_core(core).await?;
+                let (revision, core) = manager.applied_runtime_identity().ok_or_else(|| {
+                    anyhow::anyhow!("core change succeeded without an applied runtime identity")
+                })?;
+                Ok(OperationOutput::CoreChanged(AppliedRuntimeIdentity {
+                    revision,
+                    core,
+                }))
+            }
         }
     }
 
@@ -286,7 +326,7 @@ mod tests {
             async move {
                 started.notify_one();
                 release.notified().await;
-                Ok(())
+                Ok(OperationOutput::Stopped)
             }
         });
 
@@ -308,6 +348,19 @@ mod tests {
             .await
             .expect("admitted operation should remain queryable");
         assert_eq!(terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(terminal.output, Some(OperationOutput::Stopped));
+    }
+
+    #[tokio::test]
+    async fn submitted_stop_persists_typed_terminal_output() {
+        let endpoint = LocalEndpoint::new();
+        let admitted = endpoint.submit(CoreCommand::Stop).await.unwrap();
+        let terminal = endpoint
+            .wait_operation(admitted.id, Duration::from_secs(1))
+            .await
+            .expect("stop operation should reach a terminal state");
+        assert_eq!(terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(terminal.output, Some(OperationOutput::Stopped));
     }
 
     #[tokio::test]
@@ -316,7 +369,7 @@ mod tests {
         let admitted = endpoint.spawn_operation("test mutation", async {
             panic!("injected lower mutation panic");
             #[allow(unreachable_code)]
-            Ok(())
+            Ok(OperationOutput::Stopped)
         });
 
         let terminal = endpoint
