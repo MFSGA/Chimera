@@ -350,7 +350,9 @@ export const commands = {
    */
   clearStorage: () => typedError<null, string>(__TAURI_INVOKE('clear_storage')),
   statusService: () =>
-    typedError<ServiceStatusInfo, string>(__TAURI_INVOKE('status_service')),
+    typedError<ServiceStatusInfo_Serialize, string>(
+      __TAURI_INVOKE('status_service'),
+    ),
   installService: () =>
     typedError<null, string>(__TAURI_INVOKE('install_service')),
   uninstallService: () =>
@@ -869,11 +871,29 @@ export type ConfigExecutionRole =
       };
     };
 
-export type CoreInfos = {
+export type ConfigRevisionInfo = {
+  epoch: number;
+  generation: number;
+  source_hash: string;
+  effective_hash: string;
+};
+
+export type CoreInfos = CoreInfos_Serialize | CoreInfos_Deserialize;
+
+export type CoreInfos_Deserialize = {
   type: CoreType | null;
   state: CoreState;
   state_changed_at: number;
   config_path: string | null;
+  revision?: ConfigRevisionInfo | null;
+};
+
+export type CoreInfos_Serialize = {
+  type: CoreType | null;
+  state: CoreState;
+  state_changed_at: number;
+  config_path: string | null;
+  revision?: ConfigRevisionInfo | null;
 };
 
 export type CoreLifecycleOperationResult = {
@@ -1791,11 +1811,33 @@ export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
  *  Cached service-host projection for UI consumers. It preserves the service
  *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
  */
-export type ServiceStatusInfo = {
+export type ServiceStatusInfo =
+  ServiceStatusInfo_Serialize | ServiceStatusInfo_Deserialize;
+
+/**
+ *  Cached service-host projection for UI consumers. It preserves the service
+ *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
+ */
+export type ServiceStatusInfo_Deserialize = {
   name: string;
   version: string;
   status: ServiceStatus;
-  server: StatusResBody | null;
+  server: StatusResBody_Deserialize | null;
+  phase: ServicePhase;
+  compat: ServiceCompat;
+  runtime_owned: boolean;
+  restart_attempts: number;
+};
+
+/**
+ *  Cached service-host projection for UI consumers. It preserves the service
+ *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
+ */
+export type ServiceStatusInfo_Serialize = {
+  name: string;
+  version: string;
+  status: ServiceStatus;
+  server: StatusResBody_Serialize | null;
   phase: ServicePhase;
   compat: ServiceCompat;
   runtime_owned: boolean;
@@ -1811,9 +1853,17 @@ export type SnapshotDiffHunk = {
   lines: string[];
 };
 
-export type StatusResBody = {
+export type StatusResBody = StatusResBody_Serialize | StatusResBody_Deserialize;
+
+export type StatusResBody_Deserialize = {
   version: string;
-  core_infos: CoreInfos;
+  core_infos: CoreInfos_Deserialize;
+  runtime_infos: RuntimeInfos;
+};
+
+export type StatusResBody_Serialize = {
+  version: string;
+  core_infos: CoreInfos_Serialize;
   runtime_infos: RuntimeInfos;
 };
 
