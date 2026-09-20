@@ -1,10 +1,11 @@
 //! Profile persistence ports used by the application client during the staged migration.
 
-use std::{io::Write, sync::Arc};
+use std::{any::Any, io::Write, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
+use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
 use super::{ChimeraClient, ChimeraClientInner, Degradation, DegradationPhase, MutationOutcome};
 
@@ -102,15 +103,182 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
     ) -> anyhow::Result<bool>;
 }
 
-pub(crate) struct LegacyProfilesReadPort;
-
 pub(crate) struct LegacyProfileFsPort;
 
-pub(crate) struct LegacyProfilesWritePort;
+type ErasedProfileMutation =
+    Box<dyn FnOnce(&mut Profiles) -> anyhow::Result<Box<dyn Any + Send>> + Send + 'static>;
 
-impl ProfilesReadPort for LegacyProfilesReadPort {
+struct ProfileMutationRequest {
+    mutation: ErasedProfileMutation,
+    reply: RpcReplyPort<anyhow::Result<Box<dyn Any + Send>>>,
+}
+
+enum ProfilesActorMessage {
+    Mutate(ProfileMutationRequest),
+}
+
+struct ProfilesActorState {
+    profiles: Profiles,
+    snapshot_tx: tokio::sync::watch::Sender<Profiles>,
+}
+
+struct ProfilesActor;
+
+impl ProfilesActorState {
+    fn publish_and_sync_legacy(&mut self, next: Profiles) {
+        self.profiles = next.clone();
+        self.snapshot_tx.send_replace(next.clone());
+
+        // Compatibility projection only. The actor is the sole writer; this
+        // mirror remains until the remaining legacy runtime/diagnostics reads
+        // have moved to the client snapshot.
+        let legacy = Config::profiles();
+        {
+            let mut draft = legacy.draft();
+            *draft = next;
+        }
+        legacy.apply();
+    }
+}
+
+impl Actor for ProfilesActor {
+    type Msg = ProfilesActorMessage;
+    type State = ProfilesActorState;
+    type Arguments = ProfilesActorState;
+
+    async fn pre_start(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        state: Self::Arguments,
+    ) -> Result<Self::State, ActorProcessingErr> {
+        Ok(state)
+    }
+
+    async fn handle(
+        &self,
+        _myself: ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ActorProcessingErr> {
+        match message {
+            ProfilesActorMessage::Mutate(request) => {
+                let mut next = state.profiles.clone();
+                let value = match (request.mutation)(&mut next) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let _ = request.reply.send(Err(error));
+                        return Ok(());
+                    }
+                };
+
+                let persisted = tokio::task::spawn_blocking({
+                    let next = next.clone();
+                    move || next.save_file()
+                })
+                .await;
+                match persisted {
+                    Ok(Ok(())) => {
+                        state.publish_and_sync_legacy(next);
+                        let _ = request.reply.send(Ok(value));
+                    }
+                    Ok(Err(error)) => {
+                        let _ = request.reply.send(Err(error));
+                    }
+                    Err(error) => {
+                        let _ = request.reply.send(Err(anyhow::anyhow!(
+                            "profile state persistence task failed: {error}"
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ProfilesClient {
+    inner: Arc<ProfilesClientInner>,
+}
+
+struct ProfilesClientInner {
+    actor_ref: ActorRef<ProfilesActorMessage>,
+    snapshot_rx: tokio::sync::watch::Receiver<Profiles>,
+}
+
+impl Drop for ProfilesClientInner {
+    fn drop(&mut self) {
+        self.actor_ref.stop(None);
+    }
+}
+
+impl ProfilesClient {
+    pub(crate) async fn spawn() -> anyhow::Result<Self> {
+        Self::spawn_from_profiles(Config::profiles().latest().clone()).await
+    }
+
+    async fn spawn_from_profiles(profiles: Profiles) -> anyhow::Result<Self> {
+        let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(profiles.clone());
+        let (actor_ref, _handle) = Actor::spawn(
+            None,
+            ProfilesActor,
+            ProfilesActorState {
+                profiles,
+                snapshot_tx,
+            },
+        )
+        .await
+        .context("failed to spawn profiles actor")?;
+        Ok(Self {
+            inner: Arc::new(ProfilesClientInner {
+                actor_ref,
+                snapshot_rx,
+            }),
+        })
+    }
+
+    #[cfg(all(test, feature = "e2e"))]
+    async fn spawn_with_profiles(profiles: Profiles) -> anyhow::Result<Self> {
+        Self::spawn_from_profiles(profiles).await
+    }
+
+    async fn mutate<T, F>(&self, mutation: F) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Profiles) -> anyhow::Result<T> + Send + 'static,
+    {
+        let erased: ErasedProfileMutation = Box::new(move |profiles| {
+            mutation(profiles).map(|value| Box::new(value) as Box<dyn Any + Send>)
+        });
+        let result = match self
+            .inner
+            .actor_ref
+            .call(
+                |reply| {
+                    ProfilesActorMessage::Mutate(ProfileMutationRequest {
+                        mutation: erased,
+                        reply,
+                    })
+                },
+                None,
+            )
+            .await
+        {
+            Ok(CallResult::Success(result)) => result?,
+            Ok(CallResult::SenderError) => anyhow::bail!("profiles actor reply dropped"),
+            Ok(CallResult::Timeout) => anyhow::bail!("profiles actor call timed out"),
+            Err(error) => return Err(error.into()),
+        };
+        result
+            .downcast::<T>()
+            .map(|value| *value)
+            .map_err(|_| anyhow::anyhow!("profiles actor returned an unexpected result type"))
+    }
+}
+
+impl ProfilesReadPort for ProfilesClient {
     fn snapshot(&self) -> anyhow::Result<Profiles> {
-        Ok(Config::profiles().latest().clone())
+        Ok(self.inner.snapshot_rx.borrow().clone())
     }
 }
 
@@ -167,40 +335,12 @@ impl ProfileFsPort for LegacyProfileFsPort {
     }
 }
 
-impl LegacyProfilesWritePort {
-    async fn persist<T, F>(update: F) -> anyhow::Result<T>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut Profiles) -> anyhow::Result<T> + Send + 'static,
-    {
-        tokio::task::spawn_blocking(move || {
-            let profiles = Config::profiles();
-            let result = {
-                let mut draft = profiles.draft();
-                update(&mut draft).and_then(|value| draft.save_file().map(|_| value))
-            };
-            match result {
-                Ok(value) => {
-                    profiles.apply();
-                    Ok(value)
-                }
-                Err(error) => {
-                    profiles.discard();
-                    Err(error)
-                }
-            }
-        })
-        .await
-        .context("profile state persistence task failed")?
-    }
-}
-
 #[async_trait]
-impl ProfilesWritePort for LegacyProfilesWritePort {
+impl ProfilesWritePort for ProfilesClient {
     async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
         let uid = profile.uid().to_string();
         let activatable = profile.kind().is_config();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             let activate = activatable && profiles.current.is_empty();
             profiles.append_item(profile)?;
             if activate {
@@ -213,7 +353,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
 
     async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
         let uid = uid.clone();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             let file = profiles.get_item(&uid)?.file().to_string();
             let affects_current = profiles.delete_item(&uid)?;
             Ok((file, affects_current))
@@ -223,7 +363,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
 
     async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
         let uid = uid.clone();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             let current = profiles
                 .items
                 .iter_mut()
@@ -250,7 +390,8 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         desc: Option<Option<String>>,
     ) -> anyhow::Result<()> {
         let uid = uid.clone();
-        Self::persist(move |profiles| profiles.patch_metadata(&uid, name, desc)).await
+        self.mutate(move |profiles| profiles.patch_metadata(&uid, name, desc))
+            .await
     }
 
     async fn patch_remote_options(
@@ -262,7 +403,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<()> {
         let uid = uid.clone();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             profiles.patch_remote_options(
                 &uid,
                 user_agent,
@@ -277,22 +418,25 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
     async fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()> {
         let active_id = active_id.clone();
         let over_id = over_id.clone();
-        Self::persist(move |profiles| profiles.reorder(&active_id, &over_id)).await
+        self.mutate(move |profiles| profiles.reorder(&active_id, &over_id))
+            .await
     }
 
     async fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()> {
         let list = list.to_vec();
-        Self::persist(move |profiles| profiles.reorder_by_list(&list)).await
+        self.mutate(move |profiles| profiles.reorder_by_list(&list))
+            .await
     }
 
     async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()> {
         let uid = uid.cloned();
-        Self::persist(move |profiles| profiles.activate(uid.as_deref())).await
+        self.mutate(move |profiles| profiles.activate(uid.as_deref()))
+            .await
     }
 
     async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()> {
         let fields = fields.to_vec();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             profiles.valid = fields;
             Ok(())
         })
@@ -306,12 +450,14 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
     ) -> anyhow::Result<bool> {
         let uid = uid.clone();
         let transforms = transforms.to_vec();
-        Self::persist(move |profiles| profiles.set_profile_transform_chain(&uid, transforms)).await
+        self.mutate(move |profiles| profiles.set_profile_transform_chain(&uid, transforms))
+            .await
     }
 
     async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
         let transforms = transforms.to_vec();
-        Self::persist(move |profiles| profiles.set_global_transform_chain(transforms)).await
+        self.mutate(move |profiles| profiles.set_global_transform_chain(transforms))
+            .await
     }
 
     async fn apply_remote_options(
@@ -320,7 +466,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         options: RemoteProfileOptionsBuilder,
     ) -> anyhow::Result<()> {
         let uid = uid.clone();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             let item = profiles
                 .items
                 .iter_mut()
@@ -341,7 +487,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         updated: RemoteProfile,
     ) -> anyhow::Result<bool> {
         let uid = uid.clone();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             let affects_current = profiles
                 .current
                 .iter()
@@ -365,7 +511,7 @@ impl ProfilesWritePort for LegacyProfilesWritePort {
         let uid = uid.clone();
         let file = file.to_string();
         let transforms = transforms.to_vec();
-        Self::persist(move |profiles| {
+        self.mutate(move |profiles| {
             profiles.replace_remote_definition_with_transforms(
                 &uid,
                 &file,
@@ -881,5 +1027,104 @@ impl ChimeraClient {
         self.rebuild_running_config().await?;
         self.inner.core.on_profile_change(break_when).await;
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "e2e"))]
+mod actor_tests {
+    use std::sync::Mutex;
+
+    use super::{ProfilesClient, ProfilesReadPort, ProfilesWritePort};
+    use crate::config::profile::profiles::Profiles;
+
+    static CONFIG_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    #[tokio::test]
+    async fn concurrent_mutations_are_serialized_without_lost_updates() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let client = ProfilesClient::spawn_with_profiles(Profiles::default())
+            .await
+            .expect("profiles actor should spawn");
+        let first = client.mutate(|profiles| {
+            profiles.valid.push("first".to_string());
+            Ok(())
+        });
+        let second = client.mutate(|profiles| {
+            profiles.valid.push("second".to_string());
+            Ok(())
+        });
+        let (first, second) = tokio::join!(first, second);
+        first.expect("first mutation should commit");
+        second.expect("second mutation should commit");
+
+        let snapshot = client.snapshot().expect("snapshot should be readable");
+        assert!(
+            snapshot
+                .valid
+                .ends_with(&["first".to_string(), "second".to_string()])
+        );
+        let persisted: Profiles = serde_yaml::from_str(
+            &std::fs::read_to_string(config_dir.path().join("profiles.yaml"))
+                .expect("profiles.yaml should be persisted"),
+        )
+        .expect("persisted profiles should decode");
+        assert_eq!(persisted.valid, snapshot.valid);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn actor_commits_to_disk_and_rejects_failed_mutation_without_state_change() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let client = ProfilesClient::spawn_with_profiles(Profiles::default())
+            .await
+            .expect("profiles actor should spawn");
+        client
+            .set_valid_fields(&["actor-valid".to_string()])
+            .await
+            .expect("valid fields commit should succeed");
+
+        let committed = client.snapshot().expect("snapshot should be readable");
+        assert_eq!(committed.valid, vec!["actor-valid".to_string()]);
+
+        let persisted: Profiles = serde_yaml::from_str(
+            &std::fs::read_to_string(config_dir.path().join("profiles.yaml"))
+                .expect("profiles.yaml should be persisted"),
+        )
+        .expect("persisted profiles should decode");
+        assert_eq!(persisted.valid, committed.valid);
+
+        let before_failure = std::fs::read_to_string(config_dir.path().join("profiles.yaml"))
+            .expect("persisted state before failure");
+        let error = client
+            .set_current(Some(&"missing-profile".to_string()))
+            .await
+            .expect_err("invalid activation must fail");
+        assert!(error.to_string().contains("failed to get the profile item"));
+
+        let after = client.snapshot().expect("snapshot should remain readable");
+        assert_eq!(after.valid, committed.valid);
+        assert!(after.current.is_empty());
+        assert_eq!(
+            std::fs::read_to_string(config_dir.path().join("profiles.yaml"))
+                .expect("persisted state after failure"),
+            before_failure
+        );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
     }
 }

@@ -8,8 +8,8 @@ use tauri::{Manager, Runtime};
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyProfileFsPort,
-        LegacyProfilesReadPort, LegacyProfilesWritePort, LegacyUiEventSink, OsSystemDnsCache,
+        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyProfileFsPort, LegacyUiEventSink,
+        OsSystemDnsCache, ProfilesClient,
     },
     utils::path::PathResolver,
 };
@@ -32,6 +32,10 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         crate::core::updater::UpdaterManager::new(),
     ));
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local());
+    let profiles = Arc::new(
+        tauri::async_runtime::block_on(ProfilesClient::spawn())
+            .context("failed to setup profiles actor")?,
+    );
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
         bridges,
@@ -41,9 +45,9 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
             core_facade,
         )),
-        profiles: Arc::new(LegacyProfilesReadPort),
+        profiles: profiles.clone(),
         profile_files: Arc::new(LegacyProfileFsPort),
-        profile_writes: Arc::new(LegacyProfilesWritePort),
+        profile_writes: profiles,
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
     })?;
