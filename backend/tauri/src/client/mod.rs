@@ -317,8 +317,11 @@ mod tests {
     }
 
     impl ProfilesReadPort for StaticProfilesRead {
-        fn snapshot(&self) -> anyhow::Result<Profiles> {
-            Ok(self.profiles.clone())
+        fn versioned_snapshot(&self) -> anyhow::Result<crate::client::profiles::ProfilesSnapshot> {
+            Ok(crate::client::profiles::ProfilesSnapshot::new(
+                1,
+                self.profiles.clone(),
+            ))
         }
     }
 

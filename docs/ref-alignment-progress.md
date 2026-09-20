@@ -19,10 +19,11 @@
   singleton service locator 取 core manager。
 - 生产 `RuntimeInputOutput` 现在强制携带 `RuntimeInspectionData`；共享 executor
   生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
-- 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor 的完整 endpoint-handle/status protocol，
-  以及 Profile shared-model/versioned actor protocol。Profile production writes、reads、remote refresh/import
-  已收敛到单一 `ProfilesClient`/actor owner；legacy `Config::profiles()`/`profiles_config` mirror 已删除，
-  Agent diagnostics 与 runtime reconcile/select-core 都消费 `ProfilesClient` actor snapshot。
+- 尚未完成的主要 ref 差异集中在 daemon lower-host wire parity、Profile shared-model/typed commit-error
+  protocol 与 materialization scheduler。Profile production writes、reads、remote refresh/import 已收敛到单一
+  `ProfilesClient`/actor owner；legacy `Config::profiles()`/`profiles_config` mirror 已删除。actor snapshot 现在是
+  `{revision, profiles}` 原子 versioned read：bootstrap revision 为 1，仅持久化成功后递增；Agent diagnostics
+  继续读取兼容 `Profiles` view，runtime reconcile/select-core admission 则显式读取 versioned snapshot 并记录 revision。
   因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
   访问”和“Profile 持久化单 writer + typed refresh/import workflow”已完成，完整 ref actor protocol 仍是后续工作。
 
@@ -60,8 +61,11 @@
   留下 materialized file/reservation。IPC `import_profile_inner` 不再自己构造 `RemoteProfileBuilder` 或调用
   `commit_new_profile`，而是委托 `ChimeraClient::import_remote_profile` → `ProfilesWritePort::import_remote`。
   启动期旧 `Config::init_config()`/`generate*` 预生成路径也已删除：runtime generation 只由 lifecycle actor 的
-  startup reconcile 驱动，不再在启动时先用 legacy global snapshot 重复生成一次。与 ref 的剩余差异主要是
-  materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
+  startup reconcile 驱动，不再在启动时先用 legacy global snapshot 重复生成一次。actor read contract 现在
+  使用 `ProfilesSnapshot { revision, profiles }`：revision 从 1 起，仅在 `save_file()` 成功且 snapshot publish 时
+  递增；持久化失败保持 revision 与已发布 snapshot 不变。runtime reconcile/select-core 在 admission 时读取同一
+  versioned snapshot，并把 revision 写入 tracing，避免裸 clone 无法关联 actor generation。与 ref 的剩余差异主要是
+  materialization scheduler/rebuild notifier、typed `CommitReport`/`ProfilesError` protocol 与 shared Profile model。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
   也不改变已持久化文件。生产读路径统一走 `ProfilesClient` snapshot；RuntimeBuilder、Agent diagnostics
@@ -69,18 +73,19 @@
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
-  --test-threads=1`，9 passed（并发 mutation 无 lost update；persist 成功后才 publish；duplicate refresh
-  拒绝；in-flight definition change 触发 stale fence；materialized file write failure 不提交 state；state
-  persist failure 回滚 materialized file；remote import 原子提交 file+profiles.yaml；prepare failure 不留下
-  profile/file；caller cancellation 不提交且释放 reservation）；`cargo test --manifest-path backend/Cargo.toml -p chimera
+  --test-threads=1`，11 passed（并发 mutation 无 lost update；persist 成功后才 publish；versioned snapshot
+  成功 commit revision 1→2；持久化失败 revision/snapshot 均不前进；duplicate refresh 拒绝；in-flight definition
+  change 触发 stale fence；materialized file write failure 不提交 state；state persist failure 回滚 materialized file；
+  remote import 原子提交 file+profiles.yaml；prepare failure 不留下 profile/file；caller cancellation 不提交且释放 reservation）；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera
   client::tests --lib -- --test-threads=1`，14 passed；`client::core_lifecycle::tests`，23 passed（新增
   injected Profiles snapshot marker，证明 reconcile 使用 actor snapshot 而不是 legacy global）；
   `core::actor_v2`，13 passed；`cargo check --manifest-path backend/Cargo.toml -p chimera`、
   `cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：`Config::profiles()`/`profiles_config` mirror 已删除，旧
-  `core::state::ManagedState` 也已退出 active module graph。下一阶段把 materialization/rebuild notification
-  与 versioned snapshot/error protocol 继续收进 actor。Tauri-local Profile 领域模型
+  `core::state::ManagedState` 也已退出 active module graph。versioned snapshot read protocol 已进入 actor；
+  下一阶段继续把 materialization/rebuild notification、typed commit/error protocol 收进 actor。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
 ## DIFF-002：标准核心切换到 ref RuntimeExecutor（第二阶段）

@@ -71,7 +71,13 @@ impl CoreLifecycleWorkflow {
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
             Command::SelectCore(core) => {
-                self.core.change_core(self.profiles.snapshot()?, core).await
+                let snapshot = self.profiles.versioned_snapshot()?;
+                tracing::debug!(
+                    profiles_revision = snapshot.revision(),
+                    ?core,
+                    "selecting core from profiles snapshot"
+                );
+                self.core.change_core(snapshot.into_profiles(), core).await
             }
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService => self.install_service().await,
@@ -92,9 +98,15 @@ impl CoreLifecycleWorkflow {
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
-        let profiles = self.profiles.snapshot()?;
+        let profiles = self.profiles.versioned_snapshot()?;
+        tracing::debug!(
+            profiles_revision = profiles.revision(),
+            ?target_core,
+            ?run_type,
+            "reconciling runtime from profiles snapshot"
+        );
         self.core
-            .reconcile(clash, profiles, target_core, run_type)
+            .reconcile(clash, profiles.into_profiles(), target_core, run_type)
             .await
     }
 
