@@ -45,22 +45,26 @@
   snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
   为 read/write 注入同一个 `ProfilesClient`；actor 外 `Config::profiles()` 仅剩 runtime builder / Agent
   reads。production persistence command 已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
-  current/valid/transforms/remote commit/definition replacement），不再使用 `Any`/downcast 或 erased
-  mutation closure；仅 e2e 测试保留 test-only mutation seam。与 ref 的剩余差异是 remote fetch/import、
-  materialization scheduler 和 rebuild notifier 尚未完全进入 actor protocol。
+  current/valid/transforms/remote refresh/definition replacement），不再使用 `Any`/downcast 或 erased
+  mutation closure；仅 e2e 测试保留 test-only mutation seam。remote refresh 也已按 ref 的两阶段
+  actor workflow 收口：actor 做 duplicate admission 与 definition fingerprint，detached fetch 期间释放
+  mailbox，`CommitRemoteRefresh` 回到 actor 后先验证 stale fence，再 materialize file→persist profile state；
+  state persist 失败会回滚 materialized file。与 ref 的剩余差异主要是 remote import、materialization
+  scheduler/rebuild notifier 尚未完全进入 actor protocol。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
   也不改变已持久化文件。legacy UI/RuntimeBuilder/Agent 通过同步 mirror 继续读取原合同。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
-  --test-threads=1`，2 passed（并发 mutation 无 lost update；persist 成功后才 publish，失败 mutation
-  不改变 snapshot/disk）；`cargo test --manifest-path backend/Cargo.toml -p chimera
-  client::tests --lib -- --test-threads=1`，16 passed；`cargo check --manifest-path
+  --test-threads=1`，6 passed（并发 mutation 无 lost update；persist 成功后才 publish；duplicate refresh
+  拒绝；in-flight definition change 触发 stale fence；materialized file write failure 不提交 state；state
+  persist failure 回滚 materialized file）；`cargo test --manifest-path backend/Cargo.toml -p chimera
+  client::tests --lib -- --test-threads=1`，14 passed；`cargo check --manifest-path
   backend/Cargo.toml -p chimera`、`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
-- 收敛、移除或重新评估条件：下一阶段把 remote refresh/import 的 fetch/commit 两阶段、
-  materialization/rebuild notification 改为 actor-owned workflow，并让 RuntimeBuilder/Agent
+- 收敛、移除或重新评估条件：下一阶段把 remote import、materialization/rebuild notification
+  改为 actor-owned workflow，并让 RuntimeBuilder/Agent
   直接消费 actor snapshot 后删除 legacy `Config::profiles()` mirror。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 

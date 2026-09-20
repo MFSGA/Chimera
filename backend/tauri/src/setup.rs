@@ -32,8 +32,9 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         crate::core::updater::UpdaterManager::new(),
     ));
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local());
+    let profile_files = Arc::new(LegacyProfileFsPort);
     let profiles = Arc::new(
-        tauri::async_runtime::block_on(ProfilesClient::spawn())
+        tauri::async_runtime::block_on(ProfilesClient::spawn(profile_files.clone()))
             .context("failed to setup profiles actor")?,
     );
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
@@ -46,7 +47,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
             core_facade,
         )),
         profiles: profiles.clone(),
-        profile_files: Arc::new(LegacyProfileFsPort),
+        profile_files,
         profile_writes: profiles,
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
