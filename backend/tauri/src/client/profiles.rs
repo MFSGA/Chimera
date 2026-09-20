@@ -53,11 +53,37 @@ impl ProfilesSnapshot {
 struct ProfilesCommit<T> {
     snapshot: ProfilesSnapshot,
     value: T,
+    affects_current: bool,
+    created: Option<ProfileUid>,
 }
 
 impl<T> ProfilesCommit<T> {
     fn new(snapshot: ProfilesSnapshot, value: T) -> Self {
-        Self { snapshot, value }
+        Self {
+            snapshot,
+            value,
+            affects_current: false,
+            created: None,
+        }
+    }
+
+    fn map<U>(self, map: impl FnOnce(T) -> U) -> ProfilesCommit<U> {
+        ProfilesCommit {
+            snapshot: self.snapshot,
+            value: map(self.value),
+            affects_current: self.affects_current,
+            created: self.created,
+        }
+    }
+
+    fn with_affects_current(mut self, affects_current: bool) -> Self {
+        self.affects_current = affects_current;
+        self
+    }
+
+    fn with_created(mut self, created: ProfileUid) -> Self {
+        self.created = Some(created);
+        self
     }
 
     fn into_value(self) -> T {
@@ -245,11 +271,11 @@ pub(crate) struct LegacyProfileFsPort;
 enum ProfilesActorMessage {
     Add {
         profile: Profile,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<ProfileUid>>>,
     },
     Delete {
         uid: ProfileUid,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(String, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<String>>>,
     },
     PatchProfile {
         uid: ProfileUid,
@@ -290,34 +316,34 @@ enum ProfilesActorMessage {
     SetProfileTransformChain {
         uid: ProfileUid,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     SetGlobalTransformChain {
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     RefreshRemote {
         uid: ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     CommitRemoteRefresh {
         uid: ProfileUid,
         expected_fingerprint: String,
         outcome: RemoteRefreshOutcome,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     ImportRemote {
         url: url::Url,
         name: Option<String>,
         option: Option<RemoteProfileOptionsBuilder>,
         mode: RemoteProfileImportMode,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<ProfileUid>>>,
     },
     CommitRemoteImport {
         prepared_file: PreparedProfileFile,
         outcome: RemoteImportOutcome,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<ProfileUid>>>,
     },
     ReplaceRemoteDefinition {
         uid: ProfileUid,
@@ -327,7 +353,7 @@ enum ProfilesActorMessage {
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     #[cfg(all(test, feature = "e2e"))]
     MutateForTest {
@@ -441,7 +467,7 @@ impl ProfilesActorState {
         mut prepared_file: PreparedProfileFile,
         profile: RemoteProfile,
         content: String,
-    ) -> ProfilesResult<ProfilesCommit<(ProfileUid, bool)>> {
+    ) -> ProfilesResult<ProfilesCommit<ProfileUid>> {
         let uid = profile.uid().to_string();
         let file = profile.shared.file.clone();
         self.profile_files.write_atomic(&file, &content).await?;
@@ -460,9 +486,14 @@ impl ProfilesActorState {
             })
             .await;
         match result {
-            Ok(value) => {
+            Ok(commit) => {
                 prepared_file.commit();
-                Ok(value)
+                let affects_current = commit.value.1;
+                let created = commit.value.0.clone();
+                Ok(commit
+                    .map(|(uid, _)| uid)
+                    .with_affects_current(affects_current)
+                    .with_created(created))
             }
             Err(error) => {
                 if let Err(cleanup_error) = self.profile_files.remove(&file).await {
@@ -481,7 +512,7 @@ impl ProfilesActorState {
         expected_fingerprint: String,
         previous_file: String,
         prepared: PreparedSubscriptionUpdate,
-    ) -> ProfilesResult<ProfilesCommit<bool>> {
+    ) -> ProfilesResult<ProfilesCommit<()>> {
         let current = self.remote_profile(&uid)?;
         let current_fingerprint = Self::remote_profile_fingerprint(&current)?;
         if current_fingerprint != expected_fingerprint {
@@ -506,7 +537,7 @@ impl ProfilesActorState {
             })
             .await;
         match result {
-            Ok(value) => Ok(value),
+            Ok(commit) => Ok(commit.map(|_| ()).with_affects_current(affects_current)),
             Err(error) => {
                 if let Err(restore_error) =
                     self.profile_files.write_atomic(&file, &previous_file).await
@@ -553,7 +584,15 @@ impl Actor for ProfilesActor {
                         }
                         Ok((uid, activate))
                     })
-                    .await;
+                    .await
+                    .map(|commit| {
+                        let affects_current = commit.value.1;
+                        let created = commit.value.0.clone();
+                        commit
+                            .map(|(uid, _)| uid)
+                            .with_affects_current(affects_current)
+                            .with_created(created)
+                    });
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::Delete { uid, reply } => {
@@ -563,7 +602,13 @@ impl Actor for ProfilesActor {
                         let affects_current = profiles.delete_item(&uid)?;
                         Ok((file, affects_current))
                     })
-                    .await;
+                    .await
+                    .map(|commit| {
+                        let affects_current = commit.value.1;
+                        commit
+                            .map(|(file, _)| file)
+                            .with_affects_current(affects_current)
+                    });
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::PatchProfile {
@@ -670,13 +715,21 @@ impl Actor for ProfilesActor {
             } => {
                 let result = state
                     .mutate(move |profiles| profiles.set_profile_transform_chain(&uid, transforms))
-                    .await;
+                    .await
+                    .map(|commit| {
+                        let affects_current = commit.value;
+                        commit.map(|_| ()).with_affects_current(affects_current)
+                    });
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::SetGlobalTransformChain { transforms, reply } => {
                 let result = state
                     .mutate(move |profiles| profiles.set_global_transform_chain(transforms))
-                    .await;
+                    .await
+                    .map(|commit| {
+                        let affects_current = commit.value;
+                        commit.map(|_| ()).with_affects_current(affects_current)
+                    });
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::RefreshRemote {
@@ -862,7 +915,11 @@ impl Actor for ProfilesActor {
                             transforms,
                         )
                     })
-                    .await;
+                    .await
+                    .map(|commit| {
+                        let affects_current = commit.value;
+                        commit.map(|_| ()).with_affects_current(affects_current)
+                    });
                 let _ = reply.send(result);
             }
             #[cfg(all(test, feature = "e2e"))]
@@ -1069,16 +1126,30 @@ impl ProfileFsPort for LegacyProfileFsPort {
 #[async_trait]
 impl ProfilesWritePort for ProfilesClient {
     async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
-        self.call_commit_value(|reply| ProfilesActorMessage::Add { profile, reply })
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::Add { profile, reply })
             .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok((commit.value, commit.affects_current))
     }
 
     async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-        self.call_commit_value(|reply| ProfilesActorMessage::Delete {
-            uid: uid.clone(),
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::Delete {
+                uid: uid.clone(),
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok((commit.value, commit.affects_current))
     }
 
     async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
@@ -1162,20 +1233,34 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        self.call_commit_value(|reply| ProfilesActorMessage::SetProfileTransformChain {
-            uid: uid.clone(),
-            transforms: transforms.to_vec(),
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::SetProfileTransformChain {
+                uid: uid.clone(),
+                transforms: transforms.to_vec(),
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok(commit.affects_current)
     }
 
     async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
-        self.call_commit_value(|reply| ProfilesActorMessage::SetGlobalTransformChain {
-            transforms: transforms.to_vec(),
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::SetGlobalTransformChain {
+                transforms: transforms.to_vec(),
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok(commit.affects_current)
     }
 
     async fn refresh_remote(
@@ -1183,12 +1268,19 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
     ) -> anyhow::Result<bool> {
-        self.call_commit_value(|reply| ProfilesActorMessage::RefreshRemote {
-            uid: uid.clone(),
-            options,
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::RefreshRemote {
+                uid: uid.clone(),
+                options,
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok(commit.affects_current)
     }
 
     async fn import_remote(
@@ -1198,14 +1290,21 @@ impl ProfilesWritePort for ProfilesClient {
         option: Option<RemoteProfileOptionsBuilder>,
         mode: RemoteProfileImportMode,
     ) -> anyhow::Result<(ProfileUid, bool)> {
-        self.call_commit_value(|reply| ProfilesActorMessage::ImportRemote {
-            url,
-            name,
-            option,
-            mode,
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::ImportRemote {
+                url,
+                name,
+                option,
+                mode,
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok((commit.value, commit.affects_current))
     }
 
     async fn replace_remote_definition(
@@ -1218,17 +1317,24 @@ impl ProfilesWritePort for ProfilesClient {
         subscription: Option<SubscriptionInfo>,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        self.call_commit_value(|reply| ProfilesActorMessage::ReplaceRemoteDefinition {
-            uid: uid.clone(),
-            file: file.to_string(),
-            updated_at,
-            url,
-            option,
-            subscription,
-            transforms: transforms.to_vec(),
-            reply,
-        })
-        .await
+        let commit = self
+            .call_commit(|reply| ProfilesActorMessage::ReplaceRemoteDefinition {
+                uid: uid.clone(),
+                file: file.to_string(),
+                updated_at,
+                url,
+                option,
+                subscription,
+                transforms: transforms.to_vec(),
+                reply,
+            })
+            .await
+            .map_err(anyhow::Error::new)?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok(commit.affects_current)
     }
 }
 
@@ -1873,6 +1979,60 @@ mod actor_tests {
             .expect("committed versioned snapshot should be readable");
         assert_eq!(committed.revision(), report.snapshot.revision());
         assert_eq!(committed.into_profiles().valid, vec!["mode".to_string()]);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn commit_metadata_tracks_created_and_affects_current() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir_all(config_dir.path().join("profiles"))
+            .expect("profiles dir should exist for managed reservations");
+
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            Arc::new(MemoryProfileFs::default()),
+            Arc::new(ImmediateFetcher),
+            Arc::new(ImmediateImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let imported = client
+            .call_commit(|reply| ProfilesActorMessage::ImportRemote {
+                url: url::Url::parse("https://example.com/metadata.yaml").unwrap(),
+                name: Some("Metadata profile".to_string()),
+                option: None,
+                mode: RemoteProfileImportMode::Direct,
+                reply,
+            })
+            .await
+            .expect("remote import should commit");
+        let uid = imported.value.clone();
+        assert_eq!(imported.snapshot.revision(), 2);
+        assert_eq!(imported.created.as_ref(), Some(&uid));
+        assert!(imported.affects_current);
+        assert_eq!(
+            client.versioned_snapshot().unwrap().revision(),
+            imported.snapshot.revision()
+        );
+
+        let deleted = client
+            .call_commit(|reply| ProfilesActorMessage::Delete {
+                uid: uid.clone(),
+                reply,
+            })
+            .await
+            .expect("current profile deletion should commit");
+        assert_eq!(deleted.snapshot.revision(), 3);
+        assert!(deleted.affects_current);
+        assert!(deleted.created.is_none());
 
         unsafe {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
