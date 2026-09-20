@@ -268,7 +268,12 @@
   原地执行。caller cancellation/actor-call timeout 会 latch shared `outcome_uncertain`，但已 admission
   的 OS command 仍由 actor handler 串行持有并跑完，不会因 waiter drop 取消；后续 core/service
   mutation 因 uncertain fail-closed。高层 `HOST_TRANSITION_LOCK` 仍覆盖 daemon command + core handoff
-  的跨 host transaction。剩余差异主要是内部每个 adapter leg 的 kill-safe bounded timeout，以及
+  的跨 host transaction。legacy daemon core wire（`/core/start|stop|status`）也已从
+  `CoreManager::Instance::Service` 的直接 shortcut-client 依赖抽成注入式
+  `core/service/core_host.rs::ServiceCoreHost`；`CoreManager`/service instance 只依赖该 adapter，
+  `LegacyServiceCoreHost` 独占现有 stop-before-start 与 one-shot stop/start race recovery。
+  这为后续 `ServiceEndpoint` 复用同一 wire adapter 提供单一边界，但尚未等同于 ref 的 daemon-side
+  submit/wait registry。剩余差异主要是内部每个 adapter leg 的 kill-safe bounded timeout，以及
   daemon core-control `ServiceEndpoint`/endpoint-handle routing；
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
@@ -294,7 +299,8 @@
   Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
   budget exhausted 后停启、显式 command re-arm budget）；
-  `core::service` tests，12 passed；
+  `core::clash::core::tests`，3 passed（显式 RunType 分类、restart recovery gate、Service instance
+  的 status/start/stop 全部委托注入 `ServiceCoreHost`）；`core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
@@ -310,8 +316,9 @@
   ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
-  status/watch ownership、endpoint-down restart-budget/exhausted latch，以及 lower operation history/id
-  app IPC projection 已落地；下一阶段继续把 daemon core-control `ServiceEndpoint`/endpoint handle
+  status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
+  app IPC projection，以及 legacy daemon core wire 的注入式 `ServiceCoreHost` adapter 已落地；
+  下一阶段继续把 daemon core-control `ServiceEndpoint`/endpoint handle
   收进 lower host protocol，并评估是否需要把 upper lifecycle operation id 与 lower operation id
   显式关联。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。

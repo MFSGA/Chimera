@@ -11,10 +11,7 @@ use std::{
 use anyhow::{Context, Result};
 use camino::Utf8PathBuf;
 use chimera_config::clash::config::ClashConfig;
-use chimera_ipc::{
-    api::{core::start::CoreStartReq, status::CoreState},
-    utils::get_current_ts,
-};
+use chimera_ipc::{api::status::CoreState, utils::get_current_ts};
 use chimera_utils::{
     core::{
         CommandEvent,
@@ -38,7 +35,11 @@ use crate::{
         },
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
-    core::{clash::api, logger::Logger},
+    core::{
+        clash::api,
+        logger::Logger,
+        service::core_host::{LegacyServiceCoreHost, ServiceCoreHost},
+    },
     enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
     utils::dirs,
@@ -128,6 +129,7 @@ enum Instance {
     Service {
         config_path: PathBuf,
         core_type: chimera_utils::core::CoreType,
+        host: Arc<dyn ServiceCoreHost>,
     },
 }
 
@@ -153,23 +155,16 @@ impl Instance {
                     stated_changed_at.load(Ordering::Relaxed),
                 )
             }
-            Instance::Service { .. } => {
-                let status = chimera_ipc::client::shortcuts::Client::service_default()
-                    .status()
-                    .await;
-                match status {
-                    Ok(info) => (
-                        Cow::Owned(match info.core_infos.state {
-                            chimera_ipc::api::status::CoreState::Running => CoreState::Running,
-                            chimera_ipc::api::status::CoreState::Stopped(_) => {
-                                CoreState::Stopped(None)
-                            }
-                        }),
-                        info.core_infos.state_changed_at,
-                    ),
-                    Err(_) => (Cow::Owned(CoreState::Stopped(None)), 0),
-                }
-            }
+            Instance::Service { host, .. } => match host.status().await {
+                Ok((state, changed_at)) => (
+                    Cow::Owned(match state {
+                        CoreState::Running => CoreState::Running,
+                        CoreState::Stopped(_) => CoreState::Stopped(None),
+                    }),
+                    changed_at,
+                ),
+                Err(_) => (Cow::Owned(CoreState::Stopped(None)), 0),
+            },
         }
     }
 
@@ -193,13 +188,13 @@ impl Instance {
                     }
                 })
             }
-            Instance::Service { .. } => {
-                let status = chimera_ipc::client::shortcuts::Client::service_default()
+            Instance::Service { host, .. } => {
+                let status = host
                     .status()
                     .await
-                    .map(|info| match info.core_infos.state {
-                        chimera_ipc::api::status::CoreState::Running => CoreState::Running,
-                        chimera_ipc::api::status::CoreState::Stopped(_) => CoreState::Stopped(None),
+                    .map(|(state, _)| match state {
+                        CoreState::Running => CoreState::Running,
+                        CoreState::Stopped(_) => CoreState::Stopped(None),
                     })
                     .unwrap_or(CoreState::Stopped(None));
                 Cow::Owned(status)
@@ -228,11 +223,7 @@ impl Instance {
                 stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
                 Ok(())
             }
-            Instance::Service { .. } => {
-                Ok(chimera_ipc::client::shortcuts::Client::service_default()
-                    .stop_core()
-                    .await?)
-            }
+            Instance::Service { host, .. } => host.stop().await,
         }
     }
 
@@ -241,6 +232,7 @@ impl Instance {
         clash_core: ClashCore,
         config_path: PathBuf,
         recovery_notify: Arc<tokio::sync::Notify>,
+        service_host: Arc<dyn ServiceCoreHost>,
     ) -> Result<Self> {
         let core_type: chimera_utils::core::CoreType = (&clash_core).into();
         let service_core_type: chimera_utils::core::CoreType = (&clash_core).into();
@@ -275,6 +267,7 @@ impl Instance {
             RunType::Service => Ok(Instance::Service {
                 config_path: config_path.into(),
                 core_type: service_core_type,
+                host: service_host,
             }),
             RunType::Elevated => {
                 todo!()
@@ -394,44 +387,8 @@ impl Instance {
             Instance::Service {
                 config_path,
                 core_type,
-            } => {
-                let client = chimera_ipc::client::shortcuts::Client::service_default();
-
-                // Windows services can survive across user logon/app restarts. In that case this
-                // fresh UI process has no local `Instance`, but the service may still be running a
-                // core with the previous generated config. Stop it before `start_core` so the new
-                // config path, controller port and selected core type are applied atomically.
-                if matches!(
-                    client.status().await.map(|info| info.core_infos.state),
-                    Ok(chimera_ipc::api::status::CoreState::Running)
-                ) {
-                    client.stop_core().await?;
-                }
-
-                let payload = CoreStartReq {
-                    config_file: Cow::Borrowed(config_path),
-                    core_type: Cow::Borrowed(core_type),
-                };
-                match client.start_core(&payload).await {
-                    Ok(_) => Ok(()),
-                    Err(err)
-                        if err
-                            .to_string()
-                            .to_ascii_lowercase()
-                            .contains("core is already running") =>
-                    {
-                        // The service status can change between `status` and `start_core`.
-                        // Retry through stop/start once so the UI never keeps a new
-                        // external-controller while the service keeps the old core.
-                        client.stop_core().await?;
-                        client
-                            .start_core(&payload)
-                            .await
-                            .map_err(|err| anyhow::anyhow!("failed to start core: {}", err))
-                    }
-                    Err(err) => Err(anyhow::anyhow!("failed to start core: {}", err)),
-                }
-            }
+                host,
+            } => host.start(config_path, core_type).await,
         }
     }
 }
@@ -477,10 +434,15 @@ struct CoreLifecycleState {
 pub struct CoreManager {
     instance: Mutex<Option<Arc<Instance>>>,
     lifecycle: CoreLifecycleState,
+    service_host: Arc<dyn ServiceCoreHost>,
 }
 
 impl CoreManager {
     pub(crate) fn new() -> Self {
+        Self::with_service_host(Arc::new(LegacyServiceCoreHost))
+    }
+
+    fn with_service_host(service_host: Arc<dyn ServiceCoreHost>) -> Self {
         Self {
             instance: Mutex::new(None),
             lifecycle: CoreLifecycleState {
@@ -489,6 +451,7 @@ impl CoreManager {
                 port_resolver: SessionPortResolver::default(),
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             },
+            service_host,
         }
     }
 
@@ -603,6 +566,7 @@ impl CoreManager {
             target_core,
             product.to_path_buf(),
             self.lifecycle.recovery_notify.clone(),
+            self.service_host.clone(),
         )?);
 
         #[cfg(target_os = "macos")]
@@ -924,8 +888,43 @@ pub fn find_binary_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{RunType, RuntimeRestartError};
-    use crate::core::service::ipc::IpcState;
+    use std::{path::PathBuf, sync::Arc};
+
+    use async_trait::async_trait;
+    use chimera_ipc::api::status::CoreState;
+
+    use super::{Instance, RunType, RuntimeRestartError};
+    use crate::{
+        config::chimera::ClashCore,
+        core::service::{core_host::ServiceCoreHost, ipc::IpcState},
+    };
+
+    #[derive(Debug, Default)]
+    struct RecordingServiceCoreHost {
+        calls: parking_lot::Mutex<Vec<&'static str>>,
+    }
+
+    #[async_trait]
+    impl ServiceCoreHost for RecordingServiceCoreHost {
+        async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
+            self.calls.lock().push("status");
+            Ok((CoreState::Running, 42))
+        }
+
+        async fn start(
+            &self,
+            _config_path: &std::path::Path,
+            _core_type: &chimera_utils::core::CoreType,
+        ) -> anyhow::Result<()> {
+            self.calls.lock().push("start");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.calls.lock().push("stop");
+            Ok(())
+        }
+    }
 
     #[test]
     fn run_type_classification_uses_only_explicit_inputs() {
@@ -959,6 +958,28 @@ mod tests {
                 recovery: "restart".to_string(),
             }
             .requires_recovery()
+        );
+    }
+
+    #[tokio::test]
+    async fn service_instance_delegates_to_injected_core_host() {
+        let host = Arc::new(RecordingServiceCoreHost::default());
+        let instance = Instance::Service {
+            config_path: PathBuf::from("runtime.yaml"),
+            core_type: (&ClashCore::Mihomo).into(),
+            host: host.clone(),
+        };
+
+        let (state, changed_at) = instance.status().await;
+        assert!(matches!(state.as_ref(), CoreState::Running));
+        assert_eq!(changed_at, 42);
+
+        instance.start().await.unwrap();
+        instance.stop().await.unwrap();
+
+        assert_eq!(
+            host.calls.lock().as_slice(),
+            ["status", "start", "status", "stop"]
         );
     }
 }
