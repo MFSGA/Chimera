@@ -1354,6 +1354,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                applied: None,
             })
         }
 
@@ -1392,6 +1393,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                applied: None,
             })
         }
 
@@ -1434,6 +1436,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                applied: None,
             })
         }
 
@@ -1474,6 +1477,7 @@ mod tests {
                 } else {
                     RunType::Service
                 },
+                applied: None,
             })
         }
 
@@ -1514,6 +1518,7 @@ mod tests {
                 } else {
                     RunType::Normal
                 },
+                applied: None,
             })
         }
 
@@ -1553,6 +1558,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                applied: None,
             })
         }
 
