@@ -408,11 +408,12 @@ impl CoreLifecycleLease<'_> {
     pub(crate) async fn rebuild_running_config_with(
         &self,
         clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
         target_core: ClashCore,
         run_type: RunType,
     ) -> Result<()> {
         self.manager
-            .rebuild_and_run_locked_with(target_core, &clash, run_type)
+            .rebuild_and_run_locked_with(target_core, &clash, &profiles, run_type)
             .await
     }
 
@@ -420,8 +421,14 @@ impl CoreLifecycleLease<'_> {
         self.manager.stop_core_with_lease(self).await
     }
 
-    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> Result<()> {
-        self.manager.change_core_with_lease(self, clash_core).await
+    pub(crate) async fn change_core(
+        &self,
+        profiles: crate::config::profile::profiles::Profiles,
+        clash_core: ClashCore,
+    ) -> Result<()> {
+        self.manager
+            .change_core_with_lease(self, profiles, clash_core)
+            .await
     }
 }
 
@@ -623,6 +630,7 @@ impl CoreManager {
         paths: &RuntimePaths,
         target_core: ClashCore,
         clash: &ClashConfig,
+        profiles: &crate::config::profile::profiles::Profiles,
         run_type: RunType,
     ) -> std::result::Result<(), RuntimeRestartError> {
         Config::clash().reload();
@@ -644,8 +652,13 @@ impl CoreManager {
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
         let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with_ports(clash, target_core, resolved_ports)
-                .await
+            match Config::generate_runtime_output_with_ports(
+                clash,
+                profiles,
+                target_core,
+                resolved_ports,
+            )
+            .await
             {
                 Ok(output) => (
                     output.config,
@@ -747,19 +760,11 @@ impl CoreManager {
         .await
     }
 
-    async fn rebuild_and_run_locked(&self, target_core: ClashCore) -> Result<()> {
-        let clash = crate::bridge::clash::clash_config_from_legacy(
-            &Config::verge().latest(),
-            &Config::clash().latest().0,
-        )?;
-        self.rebuild_and_run_locked_with(target_core, &clash, RunType::default())
-            .await
-    }
-
     async fn rebuild_and_run_locked_with(
         &self,
         target_core: ClashCore,
         clash: &ClashConfig,
+        profiles: &crate::config::profile::profiles::Profiles,
         run_type: RunType,
     ) -> Result<()> {
         let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
@@ -781,7 +786,7 @@ impl CoreManager {
         let previous_clash = Config::clash().data().clone();
 
         match self
-            .promote_and_start_locked(&paths, target_core, clash, run_type)
+            .promote_and_start_locked(&paths, target_core, clash, profiles, run_type)
             .await
         {
             Ok(()) => Ok(()),
@@ -840,10 +845,11 @@ impl CoreManager {
     }
 
     /// 切换核心
-    #[instrument(skip(self, _lease))]
+    #[instrument(skip(self, _lease, profiles))]
     async fn change_core_with_lease(
         &self,
         _lease: &CoreLifecycleLease<'_>,
+        profiles: crate::config::profile::profiles::Profiles,
         clash_core: ClashCore,
     ) -> Result<()> {
         log::debug!(target: "app", "change core to `{clash_core}`");
@@ -852,7 +858,14 @@ impl CoreManager {
         // 清掉旧日志
         Logger::global().clear_log();
 
-        match self.rebuild_and_run_locked(clash_core).await {
+        let clash = crate::bridge::clash::clash_config_from_legacy(
+            &Config::verge().latest(),
+            &Config::clash().latest().0,
+        )?;
+        match self
+            .rebuild_and_run_locked_with(clash_core, &clash, &profiles, RunType::default())
+            .await
+        {
             Ok(_) => {
                 tracing::info!("change core success");
                 Config::verge().apply();

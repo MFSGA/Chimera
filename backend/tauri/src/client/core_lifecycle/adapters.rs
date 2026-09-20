@@ -206,18 +206,25 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     async fn reconcile(
         &self,
         clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
-        self.facade().reconcile(clash, target_core, run_type).await
+        self.facade()
+            .reconcile(clash, profiles, target_core, run_type)
+            .await
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
         self.facade().stop().await
     }
 
-    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
-        self.facade().change_core(clash_core).await
+    async fn change_core(
+        &self,
+        profiles: crate::config::profile::profiles::Profiles,
+        clash_core: ClashCore,
+    ) -> anyhow::Result<()> {
+        self.facade().change_core(profiles, clash_core).await
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {

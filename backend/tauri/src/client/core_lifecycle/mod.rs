@@ -23,7 +23,7 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 
 use super::{
     ChimeraClient, application::ApplicationClient, clash_config::ClashConfigClient,
-    runtime::RuntimePaths,
+    profiles::ProfilesReadPort, runtime::RuntimePaths,
 };
 use crate::core::actor_v2::service_actor::ServiceHostStatus;
 #[cfg(test)]
@@ -501,6 +501,16 @@ enum CoreLifecycleClientInner {
 #[derive(Clone)]
 pub(super) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
+#[cfg(test)]
+struct TestProfilesReadPort;
+
+#[cfg(test)]
+impl ProfilesReadPort for TestProfilesReadPort {
+    fn snapshot(&self) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
+        Ok(crate::config::core::Config::profiles().latest().clone())
+    }
+}
+
 impl CoreLifecycleClient {
     #[cfg(test)]
     pub(super) async fn spawn(
@@ -513,6 +523,7 @@ impl CoreLifecycleClient {
             core,
             application,
             clash,
+            Arc::new(TestProfilesReadPort),
             runtime_paths,
             Arc::new(LegacyServiceBridge::new(Arc::new(
                 crate::core::actor_v2::CoreFacade::new_local(),
@@ -525,13 +536,15 @@ impl CoreLifecycleClient {
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
         clash: ClashConfigClient,
+        profiles: Arc<dyn ProfilesReadPort>,
         runtime_paths: RuntimePaths,
         service: Arc<dyn ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
-        Self::spawn_with_installer(
+        Self::spawn_with_installer_and_profiles(
             core,
             application,
             clash,
+            profiles,
             runtime_paths,
             Arc::new(FsBinaryInstaller),
             service,
@@ -539,10 +552,32 @@ impl CoreLifecycleClient {
         .await
     }
 
+    #[cfg(test)]
     async fn spawn_with_installer(
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
         clash: ClashConfigClient,
+        runtime_paths: RuntimePaths,
+        installer: Arc<dyn ports::BinaryInstaller>,
+        service: Arc<dyn ServiceLifecyclePort>,
+    ) -> anyhow::Result<Self> {
+        Self::spawn_with_installer_and_profiles(
+            core,
+            application,
+            clash,
+            Arc::new(TestProfilesReadPort),
+            runtime_paths,
+            installer,
+            service,
+        )
+        .await
+    }
+
+    async fn spawn_with_installer_and_profiles(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+        profiles: Arc<dyn ProfilesReadPort>,
         runtime_paths: RuntimePaths,
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ServiceLifecyclePort>,
@@ -553,6 +588,7 @@ impl CoreLifecycleClient {
             application,
             clash,
             core,
+            profiles,
             installer,
             runtime_paths,
             service.clone(),
@@ -594,6 +630,7 @@ impl CoreLifecycleClient {
         core: Arc<dyn CoreLifecyclePort>,
         application: ApplicationClient,
         clash: ClashConfigClient,
+        profiles: Arc<dyn ProfilesReadPort>,
         runtime_paths: RuntimePaths,
     ) -> Self {
         let (_service_status_tx, service_status_rx) =
@@ -606,6 +643,7 @@ impl CoreLifecycleClient {
                 application,
                 clash,
                 core,
+                profiles,
                 Arc::new(FsBinaryInstaller),
                 runtime_paths,
                 service.clone(),
@@ -951,6 +989,20 @@ mod tests {
         service: Arc<AtomicBool>,
     }
 
+    struct SnapshotProfilesReadPort {
+        profiles: crate::config::profile::profiles::Profiles,
+    }
+
+    impl ProfilesReadPort for SnapshotProfilesReadPort {
+        fn snapshot(&self) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
+            Ok(self.profiles.clone())
+        }
+    }
+
+    struct SnapshotRecordingCore {
+        seen_valid: Arc<Mutex<Vec<String>>>,
+    }
+
     struct RecordingService {
         events: Arc<Mutex<Vec<&'static str>>>,
         status_tx: tokio::sync::watch::Sender<ServiceHostStatus>,
@@ -1137,6 +1189,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1149,7 +1202,11 @@ mod tests {
             panic!("injected lifecycle panic");
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("select-after-panic");
             Ok(())
         }
@@ -1175,6 +1232,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1188,7 +1246,11 @@ mod tests {
             anyhow::bail!("lower mutation reply lost")
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("lower-select");
             Ok(())
         }
@@ -1218,6 +1280,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1231,7 +1294,11 @@ mod tests {
             Ok(())
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("queued-select");
             Ok(())
         }
@@ -1257,6 +1324,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1269,7 +1337,11 @@ mod tests {
             Ok(())
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
 
@@ -1298,6 +1370,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1310,7 +1383,11 @@ mod tests {
             Ok(())
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
 
@@ -1335,10 +1412,53 @@ mod tests {
     }
 
     #[async_trait]
+    impl CoreLifecyclePort for SnapshotRecordingCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            profiles: crate::config::profile::profiles::Profiles,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            *self.seen_valid.lock().unwrap() = profiles.valid;
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(
+            &self,
+            profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
+            *self.seen_valid.lock().unwrap() = profiles.valid;
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+                applied: None,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
         async fn reconcile(
             &self,
             _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -1353,7 +1473,11 @@ mod tests {
             Ok(())
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("select");
             Ok(())
         }
@@ -1372,6 +1496,29 @@ mod tests {
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[tokio::test]
+    async fn reconcile_uses_injected_profiles_snapshot_instead_of_legacy_global() {
+        let seen_valid = Arc::new(Mutex::new(Vec::new()));
+        let mut profiles = crate::config::profile::profiles::Profiles::default();
+        profiles.valid = vec!["actor-snapshot-marker".to_string()];
+        let client = CoreLifecycleClient::direct(
+            Arc::new(SnapshotRecordingCore {
+                seen_valid: seen_valid.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            Arc::new(SnapshotProfilesReadPort { profiles }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        );
+
+        client.reconcile().await.unwrap();
+
+        assert_eq!(
+            seen_valid.lock().unwrap().as_slice(),
+            ["actor-snapshot-marker"]
+        );
     }
 
     #[tokio::test]

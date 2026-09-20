@@ -171,6 +171,7 @@ impl RuntimeBuilder {
 
 pub(crate) async fn build_from_legacy_with_inspection(
     clash: &ClashConfig,
+    profiles: &crate::config::profile::profiles::Profiles,
     core: LegacyClashCore,
     resolved_ports: ResolvedPortBindings,
 ) -> Result<(
@@ -179,7 +180,7 @@ pub(crate) async fn build_from_legacy_with_inspection(
     crate::enhance::PostProcessingOutput,
     crate::client::runtime_inspection::RuntimeInspectionData,
 )> {
-    let profiles = Arc::new(to_runtime_profiles(&Config::profiles().latest())?);
+    let profiles = Arc::new(to_runtime_profiles(profiles)?);
     let mut app = ChimeraAppConfig::default();
     app.core = map_core(core);
     app.enable_builtin_enhanced = Config::verge()
