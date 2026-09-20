@@ -817,6 +817,19 @@ impl ChimeraClient {
         self.inner.core_lifecycle.status()
     }
 
+    pub(crate) fn lower_core_operation(
+        &self,
+        id: u64,
+    ) -> Option<crate::core::actor_v2::endpoint::OperationInfo> {
+        self.inner.core.lower_operation_info(id)
+    }
+
+    pub(crate) fn lower_core_operations(
+        &self,
+    ) -> Vec<crate::core::actor_v2::endpoint::OperationInfo> {
+        self.inner.core.lower_operation_history()
+    }
+
     pub(crate) fn request_service_endpoint_down(&self) {
         self.inner.core_lifecycle.request_service_endpoint_down();
     }

@@ -87,6 +87,15 @@ impl CoreFacade {
         self.outcome_uncertain.load(Ordering::Acquire)
     }
 
+    pub(crate) fn operation_info(&self, id: u64) -> Option<super::endpoint::OperationInfo> {
+        self.endpoint
+            .operation_info(super::endpoint::OperationId::from_raw(id))
+    }
+
+    pub(crate) fn operation_history(&self) -> Vec<super::endpoint::OperationInfo> {
+        self.endpoint.operation_history()
+    }
+
     async fn service_client(&self) -> anyhow::Result<&ServiceClient> {
         let outcome_uncertain = self.outcome_uncertain.clone();
         let restart_attempts = self.service_restart_attempts.clone();

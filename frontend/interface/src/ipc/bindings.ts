@@ -220,6 +220,20 @@ export const commands = {
     typedError<CoreLifecycleStatus, string>(
       __TAURI_INVOKE('get_core_lifecycle_status'),
     ),
+  getLowerCoreOperation: (id: number) =>
+    typedError<
+      {
+        id: OperationId;
+        phase: OperationPhase;
+        output: OperationOutput_Serialize | null;
+        error: string | null;
+      } | null,
+      string
+    >(__TAURI_INVOKE('get_lower_core_operation', { id })),
+  getLowerCoreOperations: () =>
+    typedError<OperationInfo_Serialize[], string>(
+      __TAURI_INVOKE('get_lower_core_operations'),
+    ),
   urlDelayTest: (url: string, expectedStatus: number) =>
     typedError<number | null, string>(
       __TAURI_INVOKE('url_delay_test', { url, expectedStatus }),
@@ -659,6 +673,19 @@ export type AgentTunSnapshot = {
 
 export type AgentUnsupportedIntentReason =
   'empty_input' | 'input_too_long' | 'no_matching_intent';
+
+export type AppliedRuntimeIdentity =
+  AppliedRuntimeIdentity_Serialize | AppliedRuntimeIdentity_Deserialize;
+
+export type AppliedRuntimeIdentity_Deserialize = {
+  revision: number;
+  core: ClashCore_Deserialize;
+};
+
+export type AppliedRuntimeIdentity_Serialize = {
+  revision: number;
+  core: ClashCore_Serialize;
+};
 
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
@@ -1230,6 +1257,47 @@ export type NetworkProbeResult = {
   matches_expected_status: boolean | null;
   latency_ms: number;
 };
+
+export type OperationId = number;
+
+export type OperationInfo = OperationInfo_Serialize | OperationInfo_Deserialize;
+
+export type OperationInfo_Deserialize = {
+  id: OperationId;
+  phase: OperationPhase;
+  output: OperationOutput_Deserialize | null;
+  error: string | null;
+};
+
+export type OperationInfo_Serialize = {
+  id: OperationId;
+  phase: OperationPhase;
+  output: OperationOutput_Serialize | null;
+  error: string | null;
+};
+
+export type OperationOutput =
+  OperationOutput_Serialize | OperationOutput_Deserialize;
+
+export type OperationOutput_Deserialize =
+  | ({ reconciled: AppliedRuntimeIdentity_Deserialize } & {
+      core_changed?: never;
+    })
+  | 'stopped'
+  | ({ core_changed: AppliedRuntimeIdentity_Deserialize } & {
+      reconciled?: never;
+    });
+
+export type OperationOutput_Serialize =
+  | ({ reconciled: AppliedRuntimeIdentity_Serialize } & {
+      core_changed?: never;
+    })
+  | 'stopped'
+  | ({ core_changed: AppliedRuntimeIdentity_Serialize } & {
+      reconciled?: never;
+    });
+
+export type OperationPhase = 'running' | 'succeeded' | 'failed' | 'uncertain';
 
 /**  The pipeline operator that produced a snapshot node. */
 export type OperatorTag =

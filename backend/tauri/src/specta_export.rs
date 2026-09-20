@@ -234,6 +234,8 @@ macro_rules! build_builder {
                 crate::ipc::change_clash_core,
                 crate::ipc::get_core_status,
                 crate::ipc::get_core_lifecycle_status,
+                crate::ipc::get_lower_core_operation,
+                crate::ipc::get_lower_core_operations,
                 crate::ipc::url_delay_test,
                 crate::ipc::get_ipsb_asn,
                 crate::ipc::uwp::invoke_uwp_tool,

@@ -232,6 +232,17 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().outcome_uncertain()
     }
 
+    fn lower_operation_info(
+        &self,
+        id: u64,
+    ) -> Option<crate::core::actor_v2::endpoint::OperationInfo> {
+        self.facade().operation_info(id)
+    }
+
+    fn lower_operation_history(&self) -> Vec<crate::core::actor_v2::endpoint::OperationInfo> {
+        self.facade().operation_history()
+    }
+
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         let core = self.facade();
         let failure =

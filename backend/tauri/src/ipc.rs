@@ -1013,6 +1013,23 @@ pub fn get_core_lifecycle_status(
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_lower_core_operation(
+    client: State<'_, ChimeraClient>,
+    id: u64,
+) -> Result<Option<crate::core::actor_v2::endpoint::OperationInfo>> {
+    Ok(client.lower_core_operation(id))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_lower_core_operations(
+    client: State<'_, ChimeraClient>,
+) -> Result<Vec<crate::core::actor_v2::endpoint::OperationInfo>> {
+    Ok(client.lower_core_operations())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn url_delay_test(url: &str, expected_status: u16) -> Result<Option<u64>> {
     Ok(crate::utils::net::url_delay_test(url, expected_status).await)
 }
