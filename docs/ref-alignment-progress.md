@@ -254,11 +254,16 @@
   Incompatible/NotInstalled 都 fail-closed。当前 restart budget 为 3：成功 admission 递增
   `restart_attempts`，预算耗尽后 latch `ServicePhase::Exhausted`；普通 probe/health observation
   不会冲掉 exhausted latch，显式 install/update/start/restart 会 re-arm budget。这与 ref 的
-  endpoint-down/restart-budget/exhausted 基本语义一致，剩余差异主要是尚未拆成独立
-  `ServiceActor` 与 ref 的 bounded mutation-command/endpoint handle protocol。当前 daemon
-  mutation 仍经 `runas + spawn_blocking` 且必须在 `HOST_TRANSITION_LOCK` 生命周期内完成，不能
-  直接用 `timeout()` 提前 drop，否则 OS 命令可能继续运行而 transition lock 已释放；这部分需随
-  detached ServiceActor command ownership 一起迁移。
+  endpoint-down/restart-budget/exhausted 基本语义一致。daemon OS mutation 现在已下沉到独立
+  `core/actor_v2/service_actor.rs` mailbox；`CoreFacade` 通过 lazy `ServiceClient` 复用同一 actor，
+  install/update/start/restart/stop/uninstall 与 endpoint-down auto-restart 不再由 facade future
+  原地执行。caller cancellation/actor-call timeout 会 latch shared `outcome_uncertain`，但已 admission
+  的 OS command 仍由 actor handler 串行持有并跑完，不会因 waiter drop 取消；后续 core/service
+  mutation 因 uncertain fail-closed。高层 `HOST_TRANSITION_LOCK` 仍覆盖 daemon command + core handoff
+  的跨 host transaction。剩余差异主要是 ref 的 actor-owned status/watch projection、内部每个 adapter
+  leg 的 kill-safe bounded timeout，以及 daemon core-control `ServiceEndpoint`/endpoint-handle routing；
+  当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
+  caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
@@ -274,11 +279,12 @@
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
   endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，9 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  `core::actor_v2` tests，10 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
   lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
   Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、
-  Service uninstall fail-closed ownership guard、Service in-place cancellation、仅明确 Stopped daemon
-  消耗 restart budget）；
+  Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
+  command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
+  budget exhausted 后停启、显式 command re-arm budget）；
   `core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
@@ -294,9 +300,10 @@
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
   ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
-  expected-applied revision CAS、fail-closed outcome-uncertain guard，以及 endpoint-down restart-budget/
-  exhausted latch 已落地；下一阶段继续把 lower operation id/terminal status 透传到 app IPC，并迁移独立
-  ServiceActor 的 bounded command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command ownership，
+  以及 endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续把 lower operation id/terminal
+  status 透传到 app IPC，并把 ServiceActor status/watch 与 daemon core-control endpoint handle 收进 lower
+  host protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
