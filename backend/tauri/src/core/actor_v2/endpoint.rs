@@ -466,11 +466,12 @@ impl ControlEndpoint for LocalEndpoint {
 
 /// Staged Service-host endpoint.
 ///
-/// Pure daemon lifecycle operations (stop/recover/status/API binding) go
-/// directly through the daemon v2 transport, while app-side runtime
-/// materialization for reconcile/change-core remains delegated to the local
-/// transaction owner until that preparation path is split from CoreManager.
-/// Both paths share the same app-side operation registry/ids.
+/// All Service-host command admission is owned here. Pure daemon lifecycle
+/// operations (stop/recover/status/API binding) go directly through the daemon
+/// v2 transport. Reconcile/change-core still reuse the single CoreManager
+/// transaction owner for app-side runtime materialization and rollback, but no
+/// longer delegate admission to LocalEndpoint. Both endpoints share one app-side
+/// operation registry/id namespace.
 #[derive(Debug)]
 pub(crate) struct ServiceEndpoint {
     inner: Arc<LocalEndpoint>,
@@ -520,9 +521,19 @@ impl ControlEndpoint for ServiceEndpoint {
                     run_type == RunType::Service,
                     "service endpoint rejected a non-service reconcile"
                 );
-                self.inner.submit(command).await
+                let manager = self.inner.manager.clone();
+                let operation = command.name();
+                Ok(self.inner.spawn_operation(operation, async move {
+                    LocalEndpoint::execute(manager, command).await
+                }))
             }
-            command @ CoreCommand::ChangeCore { .. } => self.inner.submit(command).await,
+            command @ CoreCommand::ChangeCore { .. } => {
+                let manager = self.inner.manager.clone();
+                let operation = command.name();
+                Ok(self.inner.spawn_operation(operation, async move {
+                    LocalEndpoint::execute(manager, command).await
+                }))
+            }
         }
     }
 
