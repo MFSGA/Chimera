@@ -29,7 +29,7 @@ use crate::{
                 script::{ScriptProfile, ScriptProfileBuilder},
                 shared::ProfileSharedBuilder,
             },
-            item_type::{ProfileItemType, ProfileUid, ScriptType},
+            item_type::{ProfileUid, ScriptType},
         },
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
@@ -464,23 +464,8 @@ async fn import_profile_inner(
     mode: RemoteProfileImportMode,
 ) -> Result<MutationOutcome<ProfileUid>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
-    let mut builder = RemoteProfileBuilder::default();
-    let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
-    builder.assign_managed_identity(uid);
-    builder.url(url);
-    if let Some(name) = name {
-        builder.set_name(name);
-    }
-    if let Some(option) = option {
-        builder.option(option.clone());
-    }
-    let prepared = builder
-        .build_prepared_with_mode(mode)
-        .await
-        .context("failed to build a remote profile")?;
-    let (profile, content) = prepared.into_parts();
     Ok(client
-        .commit_new_profile(profile.into(), prepared_file, Some(content))
+        .import_remote_profile(url, name, option, mode)
         .await?)
 }
 

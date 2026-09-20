@@ -1,10 +1,11 @@
 //! Profile persistence ports used by the application client during the staged migration.
 
-use std::{collections::HashSet, io::Write, sync::Arc};
+use std::{collections::HashSet, io::Write, panic::AssertUnwindSafe, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
+use futures::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
 use super::{ChimeraClient, Degradation, DegradationPhase, MutationOutcome};
@@ -16,8 +17,9 @@ use crate::config::{
         item::{
             Profile, ProfileKindGetter, ProfileMetaGetter,
             remote::{
-                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
-                RemoteProfileOptionsBuilder, SubscriptionInfo,
+                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileBuilder,
+                RemoteProfileImportMode, RemoteProfileOptions, RemoteProfileOptionsBuilder,
+                SubscriptionInfo,
             },
             shared::{PreparedProfileFile, ProfileSharedBuilder},
             utils::generate_uid,
@@ -50,6 +52,47 @@ pub(crate) struct LegacySubscriptionFetcher;
 impl SubscriptionFetcher for LegacySubscriptionFetcher {
     async fn fetch(&self, profile: RemoteProfile) -> anyhow::Result<PreparedSubscriptionUpdate> {
         profile.prepare_subscription_update(None).await
+    }
+}
+
+#[async_trait]
+pub(crate) trait RemoteProfileImporter: Send + Sync {
+    async fn prepare(
+        &self,
+        uid: ProfileUid,
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+    ) -> anyhow::Result<(RemoteProfile, String)>;
+}
+
+pub(crate) struct LegacyRemoteProfileImporter;
+
+#[async_trait]
+impl RemoteProfileImporter for LegacyRemoteProfileImporter {
+    async fn prepare(
+        &self,
+        uid: ProfileUid,
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+    ) -> anyhow::Result<(RemoteProfile, String)> {
+        let mut builder = RemoteProfileBuilder::default();
+        builder.assign_managed_identity(uid);
+        builder.url(url);
+        if let Some(name) = name {
+            builder.set_name(name);
+        }
+        if let Some(option) = option {
+            builder.option(option);
+        }
+        builder
+            .build_prepared_with_mode(mode)
+            .await
+            .map(|prepared| prepared.into_parts())
+            .context("failed to build a remote profile")
     }
 }
 
@@ -98,6 +141,14 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
         uid: &ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
     ) -> anyhow::Result<bool>;
+
+    async fn import_remote(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+    ) -> anyhow::Result<(ProfileUid, bool)>;
 
     async fn replace_remote_definition(
         &self,
@@ -178,6 +229,18 @@ enum ProfilesActorMessage {
         outcome: RemoteRefreshOutcome,
         reply: RpcReplyPort<anyhow::Result<bool>>,
     },
+    ImportRemote {
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+    },
+    CommitRemoteImport {
+        prepared_file: PreparedProfileFile,
+        outcome: RemoteImportOutcome,
+        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+    },
     ReplaceRemoteDefinition {
         uid: ProfileUid,
         file: String,
@@ -203,11 +266,20 @@ enum RemoteRefreshOutcome {
     Failed(String),
 }
 
+enum RemoteImportOutcome {
+    Succeeded {
+        profile: RemoteProfile,
+        content: String,
+    },
+    Failed(String),
+}
+
 struct ProfilesActorState {
     profiles: Profiles,
     snapshot_tx: tokio::sync::watch::Sender<Profiles>,
     profile_files: Arc<dyn ProfileFsPort>,
     fetcher: Arc<dyn SubscriptionFetcher>,
+    importer: Arc<dyn RemoteProfileImporter>,
     pending_refreshes: HashSet<ProfileUid>,
 }
 
@@ -266,6 +338,65 @@ impl ProfilesActorState {
         item.as_remote()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
+    }
+
+    fn reserve_remote_identity(&self) -> anyhow::Result<(ProfileUid, PreparedProfileFile)> {
+        for uid in std::iter::repeat_with(|| generate_uid(&ProfileItemType::Remote))
+            .take(PROFILE_IDENTITY_ATTEMPTS)
+        {
+            let file = ProfileSharedBuilder::default_file_name(&ProfileItemType::Remote, &uid);
+            let collides_with_state = self
+                .profiles
+                .items
+                .iter()
+                .any(|profile| profile.uid() == uid || profile.file() == file);
+            if collides_with_state {
+                continue;
+            }
+            if let Some(prepared) = PreparedProfileFile::reserve(&file)? {
+                return Ok((uid, prepared));
+            }
+        }
+        anyhow::bail!("failed to reserve a unique managed profile identity")
+    }
+
+    async fn commit_remote_import(
+        &mut self,
+        mut prepared_file: PreparedProfileFile,
+        profile: RemoteProfile,
+        content: String,
+    ) -> anyhow::Result<(ProfileUid, bool)> {
+        let uid = profile.uid().to_string();
+        let file = profile.shared.file.clone();
+        self.profile_files.write_atomic(&file, &content).await?;
+        prepared_file.mark_materialized();
+
+        let activatable = profile.kind().is_config();
+        let uid_for_state = uid.clone();
+        let result = self
+            .mutate(move |profiles| {
+                let activate = activatable && profiles.current.is_empty();
+                profiles.append_item(profile.into())?;
+                if activate {
+                    profiles.current = vec![uid_for_state.clone()];
+                }
+                Ok((uid_for_state, activate))
+            })
+            .await;
+        match result {
+            Ok(value) => {
+                prepared_file.commit();
+                Ok(value)
+            }
+            Err(error) => {
+                if let Err(cleanup_error) = self.profile_files.remove(&file).await {
+                    return Err(error.context(format!(
+                        "failed to remove materialized profile after import commit failure: {cleanup_error:#}"
+                    )));
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn commit_remote_refresh(
@@ -571,6 +702,61 @@ impl Actor for ProfilesActor {
                 };
                 let _ = reply.send(result);
             }
+            ProfilesActorMessage::ImportRemote {
+                url,
+                name,
+                option,
+                mode,
+                reply,
+            } => {
+                let (uid, prepared_file) = match state.reserve_remote_identity() {
+                    Ok(reserved) => reserved,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return Ok(());
+                    }
+                };
+                let importer = state.importer.clone();
+                let actor = myself.clone();
+                tokio::spawn(async move {
+                    let outcome =
+                        match AssertUnwindSafe(importer.prepare(uid, url, name, option, mode))
+                            .catch_unwind()
+                            .await
+                        {
+                            Ok(Ok((profile, content))) => {
+                                RemoteImportOutcome::Succeeded { profile, content }
+                            }
+                            Ok(Err(error)) => RemoteImportOutcome::Failed(error.to_string()),
+                            Err(_) => RemoteImportOutcome::Failed(
+                                "remote profile import task panicked".to_string(),
+                            ),
+                        };
+                    let _ = actor.cast(ProfilesActorMessage::CommitRemoteImport {
+                        prepared_file,
+                        outcome,
+                        reply,
+                    });
+                });
+            }
+            ProfilesActorMessage::CommitRemoteImport {
+                prepared_file,
+                outcome,
+                reply,
+            } => {
+                if reply.is_closed() {
+                    return Ok(());
+                }
+                let result = match outcome {
+                    RemoteImportOutcome::Succeeded { profile, content } => {
+                        state
+                            .commit_remote_import(prepared_file, profile, content)
+                            .await
+                    }
+                    RemoteImportOutcome::Failed(message) => Err(anyhow::anyhow!(message)),
+                };
+                let _ = reply.send(result);
+            }
             ProfilesActorMessage::ReplaceRemoteDefinition {
                 uid,
                 file,
@@ -628,6 +814,7 @@ impl ProfilesClient {
             Config::profiles().latest().clone(),
             profile_files,
             Arc::new(LegacySubscriptionFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
     }
@@ -636,6 +823,7 @@ impl ProfilesClient {
         profiles: Profiles,
         profile_files: Arc<dyn ProfileFsPort>,
         fetcher: Arc<dyn SubscriptionFetcher>,
+        importer: Arc<dyn RemoteProfileImporter>,
     ) -> anyhow::Result<Self> {
         let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(profiles.clone());
         let (actor_ref, _handle) = Actor::spawn(
@@ -646,6 +834,7 @@ impl ProfilesClient {
                 snapshot_tx,
                 profile_files,
                 fetcher,
+                importer,
                 pending_refreshes: HashSet::new(),
             },
         )
@@ -665,6 +854,7 @@ impl ProfilesClient {
             profiles,
             Arc::new(LegacyProfileFsPort),
             Arc::new(LegacySubscriptionFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
     }
@@ -881,6 +1071,23 @@ impl ProfilesWritePort for ProfilesClient {
         .await
     }
 
+    async fn import_remote(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+    ) -> anyhow::Result<(ProfileUid, bool)> {
+        self.call(|reply| ProfilesActorMessage::ImportRemote {
+            url,
+            name,
+            option,
+            mode,
+            reply,
+        })
+        .await
+    }
+
     async fn replace_remote_definition(
         &self,
         uid: &ProfileUid,
@@ -951,6 +1158,29 @@ impl ChimeraClient {
         }
         let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
         serde_yaml::to_string(&data).context("failed to convert yaml to string")
+    }
+
+    pub(crate) async fn import_remote_profile(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        option: Option<RemoteProfileOptionsBuilder>,
+        mode: RemoteProfileImportMode,
+    ) -> anyhow::Result<MutationOutcome<ProfileUid>> {
+        let (uid, activate) = self
+            .inner
+            .profile_writes
+            .import_remote(url, name, option, mode)
+            .await?;
+        self.inner.ui_sink.refresh_profiles();
+        let mut outcome = MutationOutcome::from_parts(uid, Vec::new());
+        if activate {
+            let runtime = self
+                .after_profile_runtime_commit("remote profile import")
+                .await;
+            outcome = outcome.extend_degradations(runtime.degradations().to_vec());
+        }
+        Ok(outcome)
     }
 
     pub(crate) async fn commit_new_profile(
@@ -1299,16 +1529,19 @@ mod actor_tests {
     };
 
     use super::{
-        ProfileFsPort, ProfilesClient, ProfilesReadPort, ProfilesWritePort, SubscriptionFetcher,
+        LegacyRemoteProfileImporter, ProfileFsPort, ProfilesClient, ProfilesReadPort,
+        ProfilesWritePort, RemoteProfileImporter, SubscriptionFetcher,
     };
     use crate::config::profile::{
         item::{
             Profile,
             remote::{
-                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions, SubscriptionInfo,
+                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileImportMode,
+                RemoteProfileOptions, RemoteProfileOptionsBuilder, SubscriptionInfo,
             },
             shared::ProfileShared,
         },
+        item_type::ProfileUid,
         profiles::Profiles,
     };
 
@@ -1389,6 +1622,66 @@ mod actor_tests {
 
     struct ImmediateFetcher;
 
+    struct ImmediateImporter;
+
+    #[async_trait::async_trait]
+    impl RemoteProfileImporter for ImmediateImporter {
+        async fn prepare(
+            &self,
+            uid: ProfileUid,
+            url: url::Url,
+            name: Option<String>,
+            _option: Option<RemoteProfileOptionsBuilder>,
+            _mode: RemoteProfileImportMode,
+        ) -> anyhow::Result<(RemoteProfile, String)> {
+            let mut profile = remote_profile();
+            profile.shared.uid = uid.clone();
+            profile.shared.file = format!("{uid}.yaml");
+            profile.shared.name = name.unwrap_or_else(|| "Imported".to_string());
+            profile.url = url;
+            Ok((profile, "mode: direct\n".to_string()))
+        }
+    }
+
+    struct FailingImporter;
+
+    #[async_trait::async_trait]
+    impl RemoteProfileImporter for FailingImporter {
+        async fn prepare(
+            &self,
+            _uid: ProfileUid,
+            _url: url::Url,
+            _name: Option<String>,
+            _option: Option<RemoteProfileOptionsBuilder>,
+            _mode: RemoteProfileImportMode,
+        ) -> anyhow::Result<(RemoteProfile, String)> {
+            anyhow::bail!("injected remote import failure")
+        }
+    }
+
+    struct BlockingImporter {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl RemoteProfileImporter for BlockingImporter {
+        async fn prepare(
+            &self,
+            uid: ProfileUid,
+            url: url::Url,
+            name: Option<String>,
+            option: Option<RemoteProfileOptionsBuilder>,
+            mode: RemoteProfileImportMode,
+        ) -> anyhow::Result<(RemoteProfile, String)> {
+            self.started.notify_one();
+            self.release.notified().await;
+            ImmediateImporter
+                .prepare(uid, url, name, option, mode)
+                .await
+        }
+    }
+
     #[async_trait::async_trait]
     impl SubscriptionFetcher for ImmediateFetcher {
         async fn fetch(
@@ -1445,6 +1738,7 @@ mod actor_tests {
                 started: started.clone(),
                 release: release.clone(),
             }),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
         .expect("profiles actor should spawn");
@@ -1494,6 +1788,7 @@ mod actor_tests {
                 started: started.clone(),
                 release: release.clone(),
             }),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
         .expect("profiles actor should spawn");
@@ -1551,6 +1846,7 @@ mod actor_tests {
             profiles_with_remote(),
             fs,
             Arc::new(ImmediateFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
         .expect("profiles actor should spawn");
@@ -1599,6 +1895,7 @@ mod actor_tests {
             profiles_with_remote(),
             fs.clone(),
             Arc::new(ImmediateFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
         )
         .await
         .expect("profiles actor should spawn");
@@ -1713,6 +2010,185 @@ mod actor_tests {
                 .expect("persisted state after failure"),
             before_failure
         );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_import_commits_file_and_profile_state_atomically() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir_all(config_dir.path().join("profiles"))
+            .expect("profiles dir should exist for managed reservations");
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            fs.clone(),
+            Arc::new(ImmediateFetcher),
+            Arc::new(ImmediateImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let (uid, activated) = client
+            .import_remote(
+                url::Url::parse("https://example.com/import.yaml").unwrap(),
+                Some("Imported profile".to_string()),
+                None,
+                RemoteProfileImportMode::Direct,
+            )
+            .await
+            .expect("remote import should commit");
+
+        assert!(activated, "first config profile should become current");
+        let snapshot = client.snapshot().expect("snapshot should be readable");
+        assert_eq!(snapshot.current, vec![uid.clone()]);
+        let imported = snapshot
+            .get_item(&uid)
+            .expect("imported profile should exist")
+            .as_remote()
+            .expect("imported profile should remain remote");
+        assert_eq!(imported.shared.name, "Imported profile");
+        assert_eq!(imported.shared.file, format!("{uid}.yaml"));
+        assert_eq!(
+            fs.files
+                .lock()
+                .unwrap()
+                .get(&format!("{uid}.yaml"))
+                .map(String::as_str),
+            Some("mode: direct\n")
+        );
+        let persisted: Profiles = serde_yaml::from_str(
+            &std::fs::read_to_string(config_dir.path().join("profiles.yaml"))
+                .expect("profiles.yaml should be persisted"),
+        )
+        .expect("persisted profiles should decode");
+        assert_eq!(persisted.current, snapshot.current);
+        assert!(persisted.get_item(&uid).is_ok());
+        assert!(
+            std::fs::read_dir(config_dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".reserve"))
+        );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_import_prepare_failure_leaves_no_file_or_profile_state() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir_all(config_dir.path().join("profiles"))
+            .expect("profiles dir should exist for managed reservations");
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            fs.clone(),
+            Arc::new(ImmediateFetcher),
+            Arc::new(FailingImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let error = client
+            .import_remote(
+                url::Url::parse("https://example.com/fail.yaml").unwrap(),
+                None,
+                None,
+                RemoteProfileImportMode::Default,
+            )
+            .await
+            .expect_err("failed preparation must not commit");
+        assert!(error.to_string().contains("injected remote import failure"));
+        assert!(client.snapshot().unwrap().items.is_empty());
+        assert!(fs.files.lock().unwrap().is_empty());
+        assert!(fs.writes.lock().unwrap().is_empty());
+        assert!(
+            std::fs::read_dir(config_dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().ends_with(".reserve"))
+        );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_remote_import_drops_reservation_without_committing() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir_all(config_dir.path().join("profiles"))
+            .expect("profiles dir should exist for managed reservations");
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            fs.clone(),
+            Arc::new(ImmediateFetcher),
+            Arc::new(BlockingImporter {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let waiter = {
+            let client = client.clone();
+            tokio::spawn(async move {
+                client
+                    .import_remote(
+                        url::Url::parse("https://example.com/cancel.yaml").unwrap(),
+                        None,
+                        None,
+                        RemoteProfileImportMode::Default,
+                    )
+                    .await
+            })
+        };
+        started.notified().await;
+        waiter.abort();
+        let _ = waiter.await;
+        release.notify_one();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let no_reservations = std::fs::read_dir(config_dir.path())
+                    .unwrap()
+                    .filter_map(Result::ok)
+                    .all(|entry| !entry.file_name().to_string_lossy().ends_with(".reserve"));
+                if no_reservations {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("cancelled import reservation should be cleaned");
+
+        assert!(client.snapshot().unwrap().items.is_empty());
+        assert!(fs.files.lock().unwrap().is_empty());
+        assert!(fs.writes.lock().unwrap().is_empty());
 
         unsafe {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");

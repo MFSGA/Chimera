@@ -418,6 +418,15 @@ mod tests {
             }
             Ok(false)
         }
+        async fn import_remote(
+            &self,
+            _url: url::Url,
+            _name: Option<String>,
+            _option: Option<RemoteProfileOptionsBuilder>,
+            _mode: crate::config::profile::item::remote::RemoteProfileImportMode,
+        ) -> anyhow::Result<(ProfileUid, bool)> {
+            Ok(("r-import".to_string(), false))
+        }
         async fn replace_remote_definition(
             &self,
             _uid: &ProfileUid,
