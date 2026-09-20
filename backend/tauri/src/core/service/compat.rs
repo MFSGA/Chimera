@@ -76,6 +76,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 config_path: None,
+                revision: None,
             },
             runtime_infos: RuntimeInfos {
                 service_data_dir: Cow::Owned(PathBuf::new()),

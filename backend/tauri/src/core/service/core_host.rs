@@ -16,8 +16,9 @@ use chimera_ipc::{
     api::{
         core::v2::{
             CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
+            payload_digest,
         },
-        status::CoreState,
+        status::{CoreInfos, CoreState, RevisionIdInfo},
     },
     client::{ClientError, shortcuts::Client},
 };
@@ -56,6 +57,22 @@ fn submit_error(error: ClientError<'_>) -> anyhow::Error {
         uncertain(format!(
             "service core operation admission reply was lost; outcome is uncertain: {error}"
         ))
+    }
+}
+
+fn expected_applied_from_status(info: &CoreInfos) -> anyhow::Result<Option<RevisionIdInfo>> {
+    match info.state {
+        CoreState::Running => info
+            .revision
+            .as_ref()
+            .map(|revision| revision.id())
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "service core is running without a v2 applied revision; refusing an unconditional reconcile"
+                )
+            }),
+        CoreState::Stopped(_) => Ok(None),
     }
 }
 
@@ -136,14 +153,35 @@ impl ServiceCoreHost for IpcServiceCoreHost {
         config_path: &Path,
         core_type: &chimera_utils::core::CoreType,
     ) -> anyhow::Result<()> {
+        let config = tokio::fs::read_to_string(config_path)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "failed to read promoted service config {}: {error}",
+                    config_path.display()
+                )
+            })?;
+        let digest = payload_digest(config.as_bytes());
+        let status = Client::service_default()
+            .core_status_v2()
+            .await
+            .map_err(anyhow::Error::from)?;
+        let expected_applied = expected_applied_from_status(&status)?;
+
         let output = submit_and_wait(CoreCommandInfo::Reconcile {
             core_type: Cow::Owned(core_type.clone()),
-            config_file: Cow::Owned(config_path.to_path_buf()),
+            config: Cow::Owned(config),
+            expected_digest: Some(Cow::Owned(digest.clone())),
+            expected_applied,
         })
         .await?;
+        let OperationOutputInfo::Reconciled(outcome) = output else {
+            anyhow::bail!("service reconcile returned an unexpected terminal output: {output:?}");
+        };
         anyhow::ensure!(
-            matches!(output, OperationOutputInfo::Reconciled),
-            "service reconcile returned an unexpected terminal output: {output:?}"
+            outcome.revision.source_hash == digest,
+            "service reconcile applied a different config digest: expected {digest}, got {}",
+            outcome.revision.source_hash
         );
         Ok(())
     }
@@ -173,6 +211,50 @@ mod tests {
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         );
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn stopped_service_reconcile_is_unconditional() {
+        let info = CoreInfos {
+            r#type: None,
+            state: CoreState::Stopped(None),
+            state_changed_at: 0,
+            config_path: None,
+            revision: None,
+        };
+        assert_eq!(expected_applied_from_status(&info).unwrap(), None);
+    }
+
+    #[test]
+    fn running_service_reconcile_uses_daemon_revision_cas() {
+        let revision = chimera_ipc::api::status::ConfigRevisionInfo {
+            epoch: 4,
+            generation: 2,
+            source_hash: "source".to_string(),
+            effective_hash: "effective".to_string(),
+        };
+        let expected = revision.id();
+        let info = CoreInfos {
+            r#type: None,
+            state: CoreState::Running,
+            state_changed_at: 0,
+            config_path: None,
+            revision: Some(revision),
+        };
+        assert_eq!(expected_applied_from_status(&info).unwrap(), Some(expected));
+    }
+
+    #[test]
+    fn running_service_without_revision_fails_closed() {
+        let info = CoreInfos {
+            r#type: None,
+            state: CoreState::Running,
+            state_changed_at: 0,
+            config_path: None,
+            revision: None,
+        };
+        let error = expected_applied_from_status(&info).unwrap_err();
+        assert!(error.to_string().contains("without a v2 applied revision"));
     }
 
     #[test]
