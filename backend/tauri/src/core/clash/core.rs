@@ -516,6 +516,14 @@ impl CoreManager {
         self.lifecycle.runtime_lifecycle.snapshot().promoted
     }
 
+    pub(crate) fn applied_runtime_identity(&self) -> Option<(u64, ClashCore)> {
+        self.lifecycle
+            .runtime_lifecycle
+            .snapshot()
+            .applied
+            .map(|snapshot| (snapshot.revision.get(), snapshot.target_core))
+    }
+
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
         self.lifecycle
             .runtime_lifecycle
