@@ -28,6 +28,14 @@ use crate::{
 
 const OPERATION_HISTORY: usize = 64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecutionHost {
+    Local,
+    Service,
+}
+
+pub(crate) type EndpointHandle = Arc<dyn ControlEndpoint>;
+
 #[derive(Debug, Clone)]
 pub(crate) struct CoreStatusSnapshot {
     pub(crate) state: CoreState,
@@ -164,6 +172,8 @@ impl CoreCommand {
 
 #[async_trait]
 pub(crate) trait ControlEndpoint: Send + Sync {
+    fn host(&self) -> ExecutionHost;
+
     /// Admit a mutation. The returned operation survives cancellation of the
     /// caller waiting on this method's result.
     async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo>;
@@ -335,6 +345,10 @@ impl LocalEndpoint {
 
 #[async_trait]
 impl ControlEndpoint for LocalEndpoint {
+    fn host(&self) -> ExecutionHost {
+        ExecutionHost::Local
+    }
+
     async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo> {
         let manager = self.manager.clone();
         let operation = command.name();
@@ -370,6 +384,45 @@ impl ControlEndpoint for LocalEndpoint {
             run_type,
             applied,
         })
+    }
+}
+
+/// Compatibility service endpoint while Chimera still speaks the legacy
+/// daemon `/core/start|stop|status` wire. It shares the local transaction
+/// owner and operation registry so revision/recovery state remains singular.
+#[derive(Debug)]
+pub(crate) struct ServiceEndpoint {
+    inner: Arc<LocalEndpoint>,
+}
+
+impl ServiceEndpoint {
+    pub(crate) fn new(inner: Arc<LocalEndpoint>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait]
+impl ControlEndpoint for ServiceEndpoint {
+    fn host(&self) -> ExecutionHost {
+        ExecutionHost::Service
+    }
+
+    async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo> {
+        if matches!(
+            &command,
+            CoreCommand::Reconcile { run_type, .. } if *run_type != RunType::Service
+        ) {
+            anyhow::bail!("service endpoint rejected a non-service reconcile");
+        }
+        self.inner.submit(command).await
+    }
+
+    async fn wait_operation(&self, id: OperationId, timeout: Duration) -> Option<OperationInfo> {
+        self.inner.wait_operation(id, timeout).await
+    }
+
+    async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        self.inner.status().await
     }
 }
 
@@ -436,6 +489,23 @@ mod tests {
             .expect("admitted operation should remain queryable");
         assert_eq!(terminal.phase, OperationPhase::Succeeded);
         assert_eq!(terminal.output, Some(OperationOutput::Stopped));
+    }
+
+    #[tokio::test]
+    async fn service_endpoint_has_distinct_host_identity_and_shared_registry() {
+        let local = Arc::new(LocalEndpoint::new());
+        let service = ServiceEndpoint::new(local.clone());
+
+        assert_eq!(local.host(), ExecutionHost::Local);
+        assert_eq!(service.host(), ExecutionHost::Service);
+
+        let admitted = service.submit(CoreCommand::Stop).await.unwrap();
+        let terminal = service
+            .wait_operation(admitted.id, Duration::from_secs(1))
+            .await
+            .expect("service endpoint stop should reach a terminal state");
+        assert_eq!(terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(local.operation_info(admitted.id), Some(terminal));
     }
 
     #[tokio::test]

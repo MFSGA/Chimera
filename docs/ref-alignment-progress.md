@@ -272,9 +272,13 @@
   `CoreManager::Instance::Service` 的直接 shortcut-client 依赖抽成注入式
   `core/service/core_host.rs::ServiceCoreHost`；`CoreManager`/service instance 只依赖该 adapter，
   `LegacyServiceCoreHost` 独占现有 stop-before-start 与 one-shot stop/start race recovery。
-  这为后续 `ServiceEndpoint` 复用同一 wire adapter 提供单一边界，但尚未等同于 ref 的 daemon-side
-  submit/wait registry。剩余差异主要是内部每个 adapter leg 的 kill-safe bounded timeout，以及
-  daemon core-control `ServiceEndpoint`/endpoint-handle routing；
+  在此之上，`core/actor_v2/endpoint.rs` 现在也有 ref-shaped `ExecutionHost`、`EndpointHandle`
+  与 staged `ServiceEndpoint`：Local/Service handle 共享同一个 `CoreManager` transaction owner 和
+  operation registry，因此不会复制 revision/recovery 状态；`CoreFacade` 的 reconcile 按 desired
+  `RunType` 选 endpoint，stop/change-core 按 authoritative current `RunType` 选 endpoint，Service
+  endpoint 会拒绝非-Service reconcile。当前 `ServiceEndpoint` 仍是 legacy-wire compatibility
+  endpoint，真正的 daemon-side `/core/v2/submit + wait_operation` registry 尚未存在。剩余差异主要是
+  内部每个 adapter leg 的 kill-safe bounded timeout，以及 daemon wire 自身的 v2 operation registry；
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
@@ -292,10 +296,11 @@
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
   endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，11 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  `core::actor_v2` tests，13 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
   lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
   Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、
-  operation history 保持 admission 顺序且按 id 查询返回同一终态、
+  operation history 保持 admission 顺序且按 id 查询返回同一终态、Local/Service endpoint 拥有不同
+  host identity 且共享同一 registry、facade 按 RunType 选择显式 endpoint handle、
   Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
   budget exhausted 后停启、显式 command re-arm budget）；
@@ -317,10 +322,11 @@
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
-  app IPC projection，以及 legacy daemon core wire 的注入式 `ServiceCoreHost` adapter 已落地；
-  下一阶段继续把 daemon core-control `ServiceEndpoint`/endpoint handle
-  收进 lower host protocol，并评估是否需要把 upper lifecycle operation id 与 lower operation id
-  显式关联。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  app IPC projection、legacy daemon core wire 的注入式 `ServiceCoreHost` adapter，以及显式
+  Local/Service `EndpointHandle` routing 已落地。下一阶段剩余的是把 daemon wire 自身升级到 ref 的
+  submit/wait operation registry、处理 adapter leg 的 kill-safe bound，并评估是否需要把 upper
+  lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon wire protocol 的部分迁移，
+  而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
