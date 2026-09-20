@@ -69,7 +69,10 @@
   add/delete/patch/reorder/current/valid/transforms/remote refresh/import/definition replacement 成功回复都携带与
   watch publish 完全相同的 committed snapshot generation；原先散落在 `(value, bool)`/裸 `bool` 中的 runtime
   影响判断已移入 `affects_current`，add/import 的 server-generated uid 同时写入 `created`。`ProfilesWritePort`
-  作为兼容边界再解包成既有 tuple/bool 返回，因此 UI/IPC 合同不变，并在 debug trace 中记录 commit revision。
+  现在也直接返回 `ProfilesCommit<T>`，不再在 client persistence 边界解包回 tuple/bool；`ChimeraClient`
+  统一通过 `after_profile_commit()` 根据 `affects_current` 决定是否触发 runtime reconcile，并保留 committed
+  snapshot generation 供后续 transaction/materialization metadata 扩展。UI/IPC 的既有返回合同仍由更外层
+  `MutationOutcome`/command adapter 维持不变，并在 debug trace 中记录 commit revision。
   actor RPC error 也已从裸 `anyhow` 收敛为 typed
   `ProfilesError::{ProfileNotFound, NotARemoteProfile, InvalidReorderList, Domain, Persist,
   RefreshFailed, ImportFailed, Rpc}`：常见缺失/remote-only/reorder admission、持久化失败、远程 refresh/import
