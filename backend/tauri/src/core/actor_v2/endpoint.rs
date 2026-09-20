@@ -42,6 +42,35 @@ pub(crate) enum ExecutionHost {
 
 pub(crate) type EndpointHandle = Arc<dyn ControlEndpoint>;
 
+#[derive(Debug)]
+pub(crate) struct EndpointRegistry {
+    local: Arc<LocalEndpoint>,
+    service: Arc<ServiceEndpoint>,
+}
+
+impl EndpointRegistry {
+    pub(crate) fn new() -> Self {
+        let local = Arc::new(LocalEndpoint::new());
+        let service = Arc::new(ServiceEndpoint::new(local.clone()));
+        Self { local, service }
+    }
+
+    pub(crate) fn local(&self) -> Arc<LocalEndpoint> {
+        self.local.clone()
+    }
+
+    pub(crate) fn service(&self) -> Arc<ServiceEndpoint> {
+        self.service.clone()
+    }
+
+    pub(crate) fn endpoint(&self, host: ExecutionHost) -> EndpointHandle {
+        match host {
+            ExecutionHost::Local => self.local.clone(),
+            ExecutionHost::Service => self.service.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CoreStatusSnapshot {
     pub(crate) state: CoreState,
