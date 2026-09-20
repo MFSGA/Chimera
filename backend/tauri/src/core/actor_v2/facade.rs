@@ -41,6 +41,34 @@ enum ServiceRestartDecision {
     Exhaust,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceUninstallPlan {
+    AlreadyAbsent,
+    Uninstall,
+    StopThenUninstall,
+}
+
+fn service_uninstall_plan(
+    status: chimera_ipc::types::ServiceStatus,
+    core_state: Option<&chimera_ipc::api::status::CoreState>,
+) -> anyhow::Result<ServiceUninstallPlan> {
+    use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
+
+    match status {
+        ServiceStatus::NotInstalled => Ok(ServiceUninstallPlan::AlreadyAbsent),
+        ServiceStatus::Stopped => Ok(ServiceUninstallPlan::Uninstall),
+        ServiceStatus::Running => match core_state {
+            Some(CoreState::Stopped(_)) => Ok(ServiceUninstallPlan::StopThenUninstall),
+            Some(CoreState::Running) => anyhow::bail!(
+                "the service daemon still owns a running core; hand off to Local before uninstall"
+            ),
+            None => anyhow::bail!(
+                "the service daemon is running but core ownership cannot be determined; stop it before uninstall"
+            ),
+        },
+    }
+}
+
 fn service_restart_decision(
     status: chimera_ipc::types::ServiceStatus,
     attempts: u8,
@@ -361,6 +389,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn uninstall_guard_requires_proof_that_service_owns_no_running_core() {
+        use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
+
+        assert_eq!(
+            service_uninstall_plan(ServiceStatus::NotInstalled, None).unwrap(),
+            ServiceUninstallPlan::AlreadyAbsent
+        );
+        assert_eq!(
+            service_uninstall_plan(ServiceStatus::Stopped, None).unwrap(),
+            ServiceUninstallPlan::Uninstall
+        );
+        assert_eq!(
+            service_uninstall_plan(ServiceStatus::Running, Some(&CoreState::Stopped(None)))
+                .unwrap(),
+            ServiceUninstallPlan::StopThenUninstall
+        );
+        assert!(service_uninstall_plan(ServiceStatus::Running, Some(&CoreState::Running)).is_err());
+        assert!(service_uninstall_plan(ServiceStatus::Running, None).is_err());
+    }
+
     #[tokio::test]
     async fn in_place_mutation_cancellation_latches_uncertain() {
         let uncertain = Arc::new(AtomicBool::new(false));
@@ -402,10 +451,31 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
-            crate::core::service::control::uninstall_service().await
-        })
-        .await
+        let info = crate::core::service::control::status()
+            .await
+            .context("failed to determine service core ownership before uninstall")?;
+        let core_state = info.server.as_ref().map(|server| &server.core_infos.state);
+        match service_uninstall_plan(info.status, core_state)? {
+            ServiceUninstallPlan::AlreadyAbsent => Ok(()),
+            ServiceUninstallPlan::Uninstall => {
+                run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
+                    crate::core::service::control::uninstall_service().await
+                })
+                .await
+            }
+            ServiceUninstallPlan::StopThenUninstall => {
+                run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
+                    crate::core::service::control::stop_service().await?;
+                    let stopped = crate::core::service::control::status().await?;
+                    anyhow::ensure!(
+                        stopped.status != chimera_ipc::types::ServiceStatus::Running,
+                        "service daemon did not prove it stopped; uninstall was refused"
+                    );
+                    crate::core::service::control::uninstall_service().await
+                })
+                .await
+            }
+        }
     }
 
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
