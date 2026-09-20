@@ -239,8 +239,10 @@
   diagnostics 现在只读 cached projection，不再为每次读取主动 probe daemon。legacy adapter 持有现有
   `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
   Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
-  验证。uninstall 保留 Chimera 既有 UX：先卸载 daemon，再确认停止并在需要时自动
-  handoff 到 Local；这与 ref 要求“先离开 Service host 再 uninstall”的顺序仍有差异。
+  验证。uninstall 在当前 core 明确为 Running+Service 时也已按 ref 顺序收敛：先
+  stop daemon + confirm stopped，再 typed reconcile 到 Local 并验证，最后才 uninstall；
+  Local/Stopped 情况保持既有 UX。剩余差异是尚未由独立 ServiceActor 在 uninstall 内部
+  fail-closed 自检“daemon 是否仍可能持有 core”。
   transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
   health-loop 仍负责实际周期 probe，但成功 observation/失败状态会 cast 回 lifecycle actor
   更新同一 watch，不再形成 UI/Agent 的第二套探测路径。legacy `status --json` probe 现在统一使用
@@ -269,7 +271,8 @@
   shutdown drain actor-owned pending queue 后等待 active 再 final stop、pending queue 超过 32 条时拒绝 overflow、
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
-  UninstallService 在卸载后确认停止并恢复 Local host、endpoint-down restart budget/exhausted latch）；
+  UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
+  endpoint-down restart budget/exhausted latch）；
   `core::actor_v2` tests，8 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
   lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
   Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、

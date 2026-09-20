@@ -2313,9 +2313,11 @@ mod tests {
             events.lock().unwrap().as_slice(),
             [
                 "service-begin",
-                "service-uninstall",
+                "service-stop",
                 "service-confirm",
                 "rebuild-local",
+                "service-uninstall",
+                "service-confirm",
                 "service-probe"
             ]
         );
