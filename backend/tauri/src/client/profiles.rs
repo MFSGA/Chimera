@@ -49,6 +49,22 @@ impl ProfilesSnapshot {
     }
 }
 
+#[derive(Clone)]
+struct ProfilesCommit<T> {
+    snapshot: ProfilesSnapshot,
+    value: T,
+}
+
+impl<T> ProfilesCommit<T> {
+    fn new(snapshot: ProfilesSnapshot, value: T) -> Self {
+        Self { snapshot, value }
+    }
+
+    fn into_value(self) -> T {
+        self.value
+    }
+}
+
 pub(crate) trait ProfilesReadPort: Send + Sync {
     fn versioned_snapshot(&self) -> anyhow::Result<ProfilesSnapshot>;
 
@@ -191,22 +207,22 @@ pub(crate) struct LegacyProfileFsPort;
 enum ProfilesActorMessage {
     Add {
         profile: Profile,
-        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     Delete {
         uid: ProfileUid,
-        reply: RpcReplyPort<anyhow::Result<(String, bool)>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(String, bool)>>>,
     },
     PatchProfile {
         uid: ProfileUid,
         profile: ProfileBuilder,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     PatchMetadata {
         uid: ProfileUid,
         name: Option<String>,
         desc: Option<Option<String>>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     PatchRemoteOptions {
         uid: ProfileUid,
@@ -214,56 +230,56 @@ enum ProfilesActorMessage {
         with_proxy: Option<bool>,
         self_proxy: Option<bool>,
         update_interval_minutes: Option<u64>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     Reorder {
         active_id: ProfileUid,
         over_id: ProfileUid,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     ReorderByList {
         list: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     SetCurrent {
         uid: Option<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     SetValidFields {
         fields: Vec<String>,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
     },
     SetProfileTransformChain {
         uid: ProfileUid,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<bool>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
     },
     SetGlobalTransformChain {
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<bool>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
     },
     RefreshRemote {
         uid: ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
-        reply: RpcReplyPort<anyhow::Result<bool>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
     },
     CommitRemoteRefresh {
         uid: ProfileUid,
         expected_fingerprint: String,
         outcome: RemoteRefreshOutcome,
-        reply: RpcReplyPort<anyhow::Result<bool>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
     },
     ImportRemote {
         url: url::Url,
         name: Option<String>,
         option: Option<RemoteProfileOptionsBuilder>,
         mode: RemoteProfileImportMode,
-        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     CommitRemoteImport {
         prepared_file: PreparedProfileFile,
         outcome: RemoteImportOutcome,
-        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     ReplaceRemoteDefinition {
         uid: ProfileUid,
@@ -273,7 +289,7 @@ enum ProfilesActorMessage {
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<bool>>,
+        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
     },
     #[cfg(all(test, feature = "e2e"))]
     MutateForTest {
@@ -311,17 +327,18 @@ struct ProfilesActorState {
 struct ProfilesActor;
 
 impl ProfilesActorState {
-    fn publish(&mut self, next: Profiles) {
+    fn publish(&mut self, next: Profiles) -> ProfilesSnapshot {
         self.revision = self.revision.saturating_add(1);
         self.profiles = next.clone();
-        self.snapshot_tx
-            .send_replace(ProfilesSnapshot::new(self.revision, next));
+        let snapshot = ProfilesSnapshot::new(self.revision, next);
+        self.snapshot_tx.send_replace(snapshot.clone());
+        snapshot
     }
 
     async fn mutate<T>(
         &mut self,
         mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
-    ) -> anyhow::Result<T>
+    ) -> anyhow::Result<ProfilesCommit<T>>
     where
         T: Send,
     {
@@ -334,8 +351,8 @@ impl ProfilesActorState {
         .await
         .context("profile state persistence task failed")?;
         persisted?;
-        self.publish(next);
-        Ok(value)
+        let snapshot = self.publish(next);
+        Ok(ProfilesCommit::new(snapshot, value))
     }
 
     fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
@@ -382,7 +399,7 @@ impl ProfilesActorState {
         mut prepared_file: PreparedProfileFile,
         profile: RemoteProfile,
         content: String,
-    ) -> anyhow::Result<(ProfileUid, bool)> {
+    ) -> anyhow::Result<ProfilesCommit<(ProfileUid, bool)>> {
         let uid = profile.uid().to_string();
         let file = profile.shared.file.clone();
         self.profile_files.write_atomic(&file, &content).await?;
@@ -422,7 +439,7 @@ impl ProfilesActorState {
         expected_fingerprint: String,
         previous_file: String,
         prepared: PreparedSubscriptionUpdate,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<ProfilesCommit<bool>> {
         let current = self.remote_profile(&uid)?;
         let current_fingerprint = Self::remote_profile_fingerprint(&current)?;
         anyhow::ensure!(
@@ -801,7 +818,7 @@ impl Actor for ProfilesActor {
             }
             #[cfg(all(test, feature = "e2e"))]
             ProfilesActorMessage::MutateForTest { mutation, reply } => {
-                let result = state.mutate(mutation).await;
+                let result = state.mutate(mutation).await.map(ProfilesCommit::into_value);
                 let _ = reply.send(result);
             }
         }
@@ -893,6 +910,31 @@ impl ProfilesClient {
         }
     }
 
+    async fn call_commit<T>(
+        &self,
+        make: impl FnOnce(RpcReplyPort<anyhow::Result<ProfilesCommit<T>>>) -> ProfilesActorMessage,
+    ) -> anyhow::Result<ProfilesCommit<T>>
+    where
+        T: Send + 'static,
+    {
+        self.call(make).await
+    }
+
+    async fn call_commit_value<T>(
+        &self,
+        make: impl FnOnce(RpcReplyPort<anyhow::Result<ProfilesCommit<T>>>) -> ProfilesActorMessage,
+    ) -> anyhow::Result<T>
+    where
+        T: Send + 'static,
+    {
+        let commit = self.call_commit(make).await?;
+        tracing::debug!(
+            profiles_revision = commit.snapshot.revision(),
+            "profiles actor commit completed"
+        );
+        Ok(commit.into_value())
+    }
+
     #[cfg(all(test, feature = "e2e"))]
     async fn mutate_for_test(
         &self,
@@ -968,12 +1010,12 @@ impl ProfileFsPort for LegacyProfileFsPort {
 #[async_trait]
 impl ProfilesWritePort for ProfilesClient {
     async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
-        self.call(|reply| ProfilesActorMessage::Add { profile, reply })
+        self.call_commit_value(|reply| ProfilesActorMessage::Add { profile, reply })
             .await
     }
 
     async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-        self.call(|reply| ProfilesActorMessage::Delete {
+        self.call_commit_value(|reply| ProfilesActorMessage::Delete {
             uid: uid.clone(),
             reply,
         })
@@ -981,7 +1023,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::PatchProfile {
+        self.call_commit_value(|reply| ProfilesActorMessage::PatchProfile {
             uid: uid.clone(),
             profile,
             reply,
@@ -995,7 +1037,7 @@ impl ProfilesWritePort for ProfilesClient {
         name: Option<String>,
         desc: Option<Option<String>>,
     ) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::PatchMetadata {
+        self.call_commit_value(|reply| ProfilesActorMessage::PatchMetadata {
             uid: uid.clone(),
             name,
             desc,
@@ -1012,7 +1054,7 @@ impl ProfilesWritePort for ProfilesClient {
         self_proxy: Option<bool>,
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::PatchRemoteOptions {
+        self.call_commit_value(|reply| ProfilesActorMessage::PatchRemoteOptions {
             uid: uid.clone(),
             user_agent,
             with_proxy,
@@ -1024,7 +1066,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::Reorder {
+        self.call_commit_value(|reply| ProfilesActorMessage::Reorder {
             active_id: active_id.clone(),
             over_id: over_id.clone(),
             reply,
@@ -1033,7 +1075,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::ReorderByList {
+        self.call_commit_value(|reply| ProfilesActorMessage::ReorderByList {
             list: list.to_vec(),
             reply,
         })
@@ -1041,7 +1083,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::SetCurrent {
+        self.call_commit_value(|reply| ProfilesActorMessage::SetCurrent {
             uid: uid.cloned(),
             reply,
         })
@@ -1049,7 +1091,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::SetValidFields {
+        self.call_commit_value(|reply| ProfilesActorMessage::SetValidFields {
             fields: fields.to_vec(),
             reply,
         })
@@ -1061,7 +1103,7 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        self.call(|reply| ProfilesActorMessage::SetProfileTransformChain {
+        self.call_commit_value(|reply| ProfilesActorMessage::SetProfileTransformChain {
             uid: uid.clone(),
             transforms: transforms.to_vec(),
             reply,
@@ -1070,7 +1112,7 @@ impl ProfilesWritePort for ProfilesClient {
     }
 
     async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
-        self.call(|reply| ProfilesActorMessage::SetGlobalTransformChain {
+        self.call_commit_value(|reply| ProfilesActorMessage::SetGlobalTransformChain {
             transforms: transforms.to_vec(),
             reply,
         })
@@ -1082,7 +1124,7 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
     ) -> anyhow::Result<bool> {
-        self.call(|reply| ProfilesActorMessage::RefreshRemote {
+        self.call_commit_value(|reply| ProfilesActorMessage::RefreshRemote {
             uid: uid.clone(),
             options,
             reply,
@@ -1097,7 +1139,7 @@ impl ProfilesWritePort for ProfilesClient {
         option: Option<RemoteProfileOptionsBuilder>,
         mode: RemoteProfileImportMode,
     ) -> anyhow::Result<(ProfileUid, bool)> {
-        self.call(|reply| ProfilesActorMessage::ImportRemote {
+        self.call_commit_value(|reply| ProfilesActorMessage::ImportRemote {
             url,
             name,
             option,
@@ -1117,7 +1159,7 @@ impl ProfilesWritePort for ProfilesClient {
         subscription: Option<SubscriptionInfo>,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        self.call(|reply| ProfilesActorMessage::ReplaceRemoteDefinition {
+        self.call_commit_value(|reply| ProfilesActorMessage::ReplaceRemoteDefinition {
             uid: uid.clone(),
             file: file.to_string(),
             updated_at,
@@ -1757,15 +1799,19 @@ mod actor_tests {
             .expect("initial versioned snapshot should be readable");
         assert_eq!(initial.revision(), 1);
 
-        client
-            .set_valid_fields(&["mode".to_string()])
+        let report = client
+            .call_commit(|reply| super::ProfilesActorMessage::SetValidFields {
+                fields: vec!["mode".to_string()],
+                reply,
+            })
             .await
             .expect("profile state commit should succeed");
+        assert_eq!(report.snapshot.revision(), 2);
 
         let committed = client
             .versioned_snapshot()
             .expect("committed versioned snapshot should be readable");
-        assert_eq!(committed.revision(), 2);
+        assert_eq!(committed.revision(), report.snapshot.revision());
         assert_eq!(committed.into_profiles().valid, vec!["mode".to_string()]);
 
         unsafe {
