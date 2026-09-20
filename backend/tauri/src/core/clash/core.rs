@@ -649,14 +649,13 @@ impl CoreManager {
             .context("failed to check runtime candidate")
     }
 
-    async fn promote_and_start_locked(
+    async fn prepare_promoted_runtime_locked(
         &self,
         paths: &RuntimePaths,
         target_core: ClashCore,
         clash: &ClashConfig,
         profiles: &crate::config::profile::profiles::Profiles,
-        run_type: RunType,
-    ) -> std::result::Result<(), RuntimeRestartError> {
+    ) -> std::result::Result<Arc<RuntimeSnapshot>, RuntimeRestartError> {
         Config::clash().reload();
         log::debug!(target: "app", "reloaded clash config from file");
         Config::clash()
@@ -741,7 +740,20 @@ impl CoreManager {
         self.lifecycle
             .runtime_lifecycle
             .publish_promoted(snapshot.clone());
+        Ok(snapshot)
+    }
 
+    async fn promote_and_start_locked(
+        &self,
+        paths: &RuntimePaths,
+        target_core: ClashCore,
+        clash: &ClashConfig,
+        profiles: &crate::config::profile::profiles::Profiles,
+        run_type: RunType,
+    ) -> std::result::Result<(), RuntimeRestartError> {
+        let snapshot = self
+            .prepare_promoted_runtime_locked(paths, target_core, clash, profiles)
+            .await?;
         self.run_core_from_product_inner(paths.product(), target_core, run_type)
             .await
             .map_err(RuntimeRestartError::Start)?;
