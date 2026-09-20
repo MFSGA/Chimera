@@ -1,6 +1,6 @@
 //! Profile persistence ports used by the application client during the staged migration.
 
-use std::{any::Any, io::Write, sync::Arc};
+use std::{io::Write, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
@@ -105,16 +105,85 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
 
 pub(crate) struct LegacyProfileFsPort;
 
-type ErasedProfileMutation =
-    Box<dyn FnOnce(&mut Profiles) -> anyhow::Result<Box<dyn Any + Send>> + Send + 'static>;
-
-struct ProfileMutationRequest {
-    mutation: ErasedProfileMutation,
-    reply: RpcReplyPort<anyhow::Result<Box<dyn Any + Send>>>,
-}
-
 enum ProfilesActorMessage {
-    Mutate(ProfileMutationRequest),
+    Add {
+        profile: Profile,
+        reply: RpcReplyPort<anyhow::Result<(ProfileUid, bool)>>,
+    },
+    Delete {
+        uid: ProfileUid,
+        reply: RpcReplyPort<anyhow::Result<(String, bool)>>,
+    },
+    PatchProfile {
+        uid: ProfileUid,
+        profile: ProfileBuilder,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    PatchMetadata {
+        uid: ProfileUid,
+        name: Option<String>,
+        desc: Option<Option<String>>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    PatchRemoteOptions {
+        uid: ProfileUid,
+        user_agent: Option<Option<String>>,
+        with_proxy: Option<bool>,
+        self_proxy: Option<bool>,
+        update_interval_minutes: Option<u64>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    Reorder {
+        active_id: ProfileUid,
+        over_id: ProfileUid,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    ReorderByList {
+        list: Vec<ProfileUid>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    SetCurrent {
+        uid: Option<ProfileUid>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    SetValidFields {
+        fields: Vec<String>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    SetProfileTransformChain {
+        uid: ProfileUid,
+        transforms: Vec<ProfileUid>,
+        reply: RpcReplyPort<anyhow::Result<bool>>,
+    },
+    SetGlobalTransformChain {
+        transforms: Vec<ProfileUid>,
+        reply: RpcReplyPort<anyhow::Result<bool>>,
+    },
+    ApplyRemoteOptions {
+        uid: ProfileUid,
+        options: RemoteProfileOptionsBuilder,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
+    CommitRefreshed {
+        uid: ProfileUid,
+        updated: RemoteProfile,
+        reply: RpcReplyPort<anyhow::Result<bool>>,
+    },
+    ReplaceRemoteDefinition {
+        uid: ProfileUid,
+        file: String,
+        updated_at: Option<usize>,
+        url: url::Url,
+        option: Option<RemoteProfileOptions>,
+        subscription: Option<SubscriptionInfo>,
+        transforms: Vec<ProfileUid>,
+        reply: RpcReplyPort<anyhow::Result<bool>>,
+    },
+    #[cfg(all(test, feature = "e2e"))]
+    MutateForTest {
+        mutation: Box<dyn FnOnce(&mut Profiles) -> anyhow::Result<()> + Send + 'static>,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
 }
 
 struct ProfilesActorState {
@@ -139,6 +208,26 @@ impl ProfilesActorState {
         }
         legacy.apply();
     }
+
+    async fn mutate<T>(
+        &mut self,
+        mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T>
+    where
+        T: Send,
+    {
+        let mut next = self.profiles.clone();
+        let value = mutation(&mut next)?;
+        let persisted = tokio::task::spawn_blocking({
+            let next = next.clone();
+            move || next.save_file()
+        })
+        .await
+        .context("profile state persistence task failed")?;
+        persisted?;
+        self.publish_and_sync_legacy(next);
+        Ok(value)
+    }
 }
 
 impl Actor for ProfilesActor {
@@ -161,35 +250,211 @@ impl Actor for ProfilesActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            ProfilesActorMessage::Mutate(request) => {
-                let mut next = state.profiles.clone();
-                let value = match (request.mutation)(&mut next) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        let _ = request.reply.send(Err(error));
-                        return Ok(());
-                    }
-                };
-
-                let persisted = tokio::task::spawn_blocking({
-                    let next = next.clone();
-                    move || next.save_file()
-                })
-                .await;
-                match persisted {
-                    Ok(Ok(())) => {
-                        state.publish_and_sync_legacy(next);
-                        let _ = request.reply.send(Ok(value));
-                    }
-                    Ok(Err(error)) => {
-                        let _ = request.reply.send(Err(error));
-                    }
-                    Err(error) => {
-                        let _ = request.reply.send(Err(anyhow::anyhow!(
-                            "profile state persistence task failed: {error}"
-                        )));
-                    }
-                }
+            ProfilesActorMessage::Add { profile, reply } => {
+                let uid = profile.uid().to_string();
+                let activatable = profile.kind().is_config();
+                let result = state
+                    .mutate(move |profiles| {
+                        let activate = activatable && profiles.current.is_empty();
+                        profiles.append_item(profile)?;
+                        if activate {
+                            profiles.current = vec![uid.clone()];
+                        }
+                        Ok((uid, activate))
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::Delete { uid, reply } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        let file = profiles.get_item(&uid)?.file().to_string();
+                        let affects_current = profiles.delete_item(&uid)?;
+                        Ok((file, affects_current))
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::PatchProfile {
+                uid,
+                profile,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        let current = profiles
+                            .items
+                            .iter_mut()
+                            .find(|item| item.uid() == uid)
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("failed to get the profile item `uid:{uid}`")
+                            })?;
+                        match (current, profile) {
+                            (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
+                                .patch_profile(item)
+                                .context("failed to patch remote profile")?,
+                            (Profile::Local(item), ProfileBuilder::Local(builder)) => {
+                                item.apply(builder)
+                            }
+                            (Profile::Merge(item), ProfileBuilder::Merge(builder)) => {
+                                item.apply(builder)
+                            }
+                            (Profile::Script(item), ProfileBuilder::Script(builder)) => {
+                                item.apply(builder)
+                            }
+                            _ => anyhow::bail!("profile type mismatch"),
+                        }
+                        Ok(())
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::PatchMetadata {
+                uid,
+                name,
+                desc,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| profiles.patch_metadata(&uid, name, desc))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::PatchRemoteOptions {
+                uid,
+                user_agent,
+                with_proxy,
+                self_proxy,
+                update_interval_minutes,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        profiles.patch_remote_options(
+                            &uid,
+                            user_agent,
+                            with_proxy,
+                            self_proxy,
+                            update_interval_minutes,
+                        )
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::Reorder {
+                active_id,
+                over_id,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| profiles.reorder(&active_id, &over_id))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::ReorderByList { list, reply } => {
+                let result = state
+                    .mutate(move |profiles| profiles.reorder_by_list(&list))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetCurrent { uid, reply } => {
+                let result = state
+                    .mutate(move |profiles| profiles.activate(uid.as_deref()))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetValidFields { fields, reply } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        profiles.valid = fields;
+                        Ok(())
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetProfileTransformChain {
+                uid,
+                transforms,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| profiles.set_profile_transform_chain(&uid, transforms))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetGlobalTransformChain { transforms, reply } => {
+                let result = state
+                    .mutate(move |profiles| profiles.set_global_transform_chain(transforms))
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::ApplyRemoteOptions {
+                uid,
+                options,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        let item = profiles
+                            .items
+                            .iter_mut()
+                            .find(|item| item.uid() == uid)
+                            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` not found"))?;
+                        let Profile::Remote(profile) = item else {
+                            anyhow::bail!("profile `{uid}` is not remote");
+                        };
+                        profile.option.apply(options);
+                        Ok(())
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::CommitRefreshed {
+                uid,
+                updated,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        let affects_current = profiles
+                            .current
+                            .iter()
+                            .any(|current_uid| current_uid == &uid);
+                        profiles.replace_item(&uid, updated.into())?;
+                        Ok(affects_current)
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::ReplaceRemoteDefinition {
+                uid,
+                file,
+                updated_at,
+                url,
+                option,
+                subscription,
+                transforms,
+                reply,
+            } => {
+                let result = state
+                    .mutate(move |profiles| {
+                        profiles.replace_remote_definition_with_transforms(
+                            &uid,
+                            &file,
+                            updated_at,
+                            url,
+                            option,
+                            subscription,
+                            transforms,
+                        )
+                    })
+                    .await;
+                let _ = reply.send(result);
+            }
+            #[cfg(all(test, feature = "e2e"))]
+            ProfilesActorMessage::MutateForTest { mutation, reply } => {
+                let result = state.mutate(mutation).await;
+                let _ = reply.send(result);
             }
         }
         Ok(())
@@ -242,37 +507,31 @@ impl ProfilesClient {
         Self::spawn_from_profiles(profiles).await
     }
 
-    async fn mutate<T, F>(&self, mutation: F) -> anyhow::Result<T>
+    async fn call<T>(
+        &self,
+        make: impl FnOnce(RpcReplyPort<anyhow::Result<T>>) -> ProfilesActorMessage,
+    ) -> anyhow::Result<T>
     where
         T: Send + 'static,
-        F: FnOnce(&mut Profiles) -> anyhow::Result<T> + Send + 'static,
     {
-        let erased: ErasedProfileMutation = Box::new(move |profiles| {
-            mutation(profiles).map(|value| Box::new(value) as Box<dyn Any + Send>)
-        });
-        let result = match self
-            .inner
-            .actor_ref
-            .call(
-                |reply| {
-                    ProfilesActorMessage::Mutate(ProfileMutationRequest {
-                        mutation: erased,
-                        reply,
-                    })
-                },
-                None,
-            )
-            .await
-        {
-            Ok(CallResult::Success(result)) => result?,
+        match self.inner.actor_ref.call(make, None).await {
+            Ok(CallResult::Success(result)) => result,
             Ok(CallResult::SenderError) => anyhow::bail!("profiles actor reply dropped"),
             Ok(CallResult::Timeout) => anyhow::bail!("profiles actor call timed out"),
-            Err(error) => return Err(error.into()),
-        };
-        result
-            .downcast::<T>()
-            .map(|value| *value)
-            .map_err(|_| anyhow::anyhow!("profiles actor returned an unexpected result type"))
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    #[cfg(all(test, feature = "e2e"))]
+    async fn mutate_for_test(
+        &self,
+        mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<()> + Send + 'static,
+    ) -> anyhow::Result<()> {
+        self.call(|reply| ProfilesActorMessage::MutateForTest {
+            mutation: Box::new(mutation),
+            reply,
+        })
+        .await
     }
 }
 
@@ -338,47 +597,23 @@ impl ProfileFsPort for LegacyProfileFsPort {
 #[async_trait]
 impl ProfilesWritePort for ProfilesClient {
     async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
-        let uid = profile.uid().to_string();
-        let activatable = profile.kind().is_config();
-        self.mutate(move |profiles| {
-            let activate = activatable && profiles.current.is_empty();
-            profiles.append_item(profile)?;
-            if activate {
-                profiles.current = vec![uid.clone()];
-            }
-            Ok((uid, activate))
-        })
-        .await
+        self.call(|reply| ProfilesActorMessage::Add { profile, reply })
+            .await
     }
 
     async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| {
-            let file = profiles.get_item(&uid)?.file().to_string();
-            let affects_current = profiles.delete_item(&uid)?;
-            Ok((file, affects_current))
+        self.call(|reply| ProfilesActorMessage::Delete {
+            uid: uid.clone(),
+            reply,
         })
         .await
     }
 
     async fn patch_profile(&self, uid: &ProfileUid, profile: ProfileBuilder) -> anyhow::Result<()> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| {
-            let current = profiles
-                .items
-                .iter_mut()
-                .find(|item| item.uid() == uid)
-                .ok_or_else(|| anyhow::anyhow!("failed to get the profile item `uid:{uid}`"))?;
-            match (current, profile) {
-                (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
-                    .patch_profile(item)
-                    .context("failed to patch remote profile")?,
-                (Profile::Local(item), ProfileBuilder::Local(builder)) => item.apply(builder),
-                (Profile::Merge(item), ProfileBuilder::Merge(builder)) => item.apply(builder),
-                (Profile::Script(item), ProfileBuilder::Script(builder)) => item.apply(builder),
-                _ => anyhow::bail!("profile type mismatch"),
-            }
-            Ok(())
+        self.call(|reply| ProfilesActorMessage::PatchProfile {
+            uid: uid.clone(),
+            profile,
+            reply,
         })
         .await
     }
@@ -389,9 +624,13 @@ impl ProfilesWritePort for ProfilesClient {
         name: Option<String>,
         desc: Option<Option<String>>,
     ) -> anyhow::Result<()> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| profiles.patch_metadata(&uid, name, desc))
-            .await
+        self.call(|reply| ProfilesActorMessage::PatchMetadata {
+            uid: uid.clone(),
+            name,
+            desc,
+            reply,
+        })
+        .await
     }
 
     async fn patch_remote_options(
@@ -402,43 +641,46 @@ impl ProfilesWritePort for ProfilesClient {
         self_proxy: Option<bool>,
         update_interval_minutes: Option<u64>,
     ) -> anyhow::Result<()> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| {
-            profiles.patch_remote_options(
-                &uid,
-                user_agent,
-                with_proxy,
-                self_proxy,
-                update_interval_minutes,
-            )
+        self.call(|reply| ProfilesActorMessage::PatchRemoteOptions {
+            uid: uid.clone(),
+            user_agent,
+            with_proxy,
+            self_proxy,
+            update_interval_minutes,
+            reply,
         })
         .await
     }
 
     async fn reorder(&self, active_id: &ProfileUid, over_id: &ProfileUid) -> anyhow::Result<()> {
-        let active_id = active_id.clone();
-        let over_id = over_id.clone();
-        self.mutate(move |profiles| profiles.reorder(&active_id, &over_id))
-            .await
+        self.call(|reply| ProfilesActorMessage::Reorder {
+            active_id: active_id.clone(),
+            over_id: over_id.clone(),
+            reply,
+        })
+        .await
     }
 
     async fn reorder_by_list(&self, list: &[ProfileUid]) -> anyhow::Result<()> {
-        let list = list.to_vec();
-        self.mutate(move |profiles| profiles.reorder_by_list(&list))
-            .await
+        self.call(|reply| ProfilesActorMessage::ReorderByList {
+            list: list.to_vec(),
+            reply,
+        })
+        .await
     }
 
     async fn set_current(&self, uid: Option<&ProfileUid>) -> anyhow::Result<()> {
-        let uid = uid.cloned();
-        self.mutate(move |profiles| profiles.activate(uid.as_deref()))
-            .await
+        self.call(|reply| ProfilesActorMessage::SetCurrent {
+            uid: uid.cloned(),
+            reply,
+        })
+        .await
     }
 
     async fn set_valid_fields(&self, fields: &[String]) -> anyhow::Result<()> {
-        let fields = fields.to_vec();
-        self.mutate(move |profiles| {
-            profiles.valid = fields;
-            Ok(())
+        self.call(|reply| ProfilesActorMessage::SetValidFields {
+            fields: fields.to_vec(),
+            reply,
         })
         .await
     }
@@ -448,16 +690,20 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        let uid = uid.clone();
-        let transforms = transforms.to_vec();
-        self.mutate(move |profiles| profiles.set_profile_transform_chain(&uid, transforms))
-            .await
+        self.call(|reply| ProfilesActorMessage::SetProfileTransformChain {
+            uid: uid.clone(),
+            transforms: transforms.to_vec(),
+            reply,
+        })
+        .await
     }
 
     async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool> {
-        let transforms = transforms.to_vec();
-        self.mutate(move |profiles| profiles.set_global_transform_chain(transforms))
-            .await
+        self.call(|reply| ProfilesActorMessage::SetGlobalTransformChain {
+            transforms: transforms.to_vec(),
+            reply,
+        })
+        .await
     }
 
     async fn apply_remote_options(
@@ -465,18 +711,10 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         options: RemoteProfileOptionsBuilder,
     ) -> anyhow::Result<()> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| {
-            let item = profiles
-                .items
-                .iter_mut()
-                .find(|item| item.uid() == uid)
-                .ok_or_else(|| anyhow::anyhow!("profile `{uid}` not found"))?;
-            let Profile::Remote(profile) = item else {
-                anyhow::bail!("profile `{uid}` is not remote");
-            };
-            profile.option.apply(options);
-            Ok(())
+        self.call(|reply| ProfilesActorMessage::ApplyRemoteOptions {
+            uid: uid.clone(),
+            options,
+            reply,
         })
         .await
     }
@@ -486,14 +724,10 @@ impl ProfilesWritePort for ProfilesClient {
         uid: &ProfileUid,
         updated: RemoteProfile,
     ) -> anyhow::Result<bool> {
-        let uid = uid.clone();
-        self.mutate(move |profiles| {
-            let affects_current = profiles
-                .current
-                .iter()
-                .any(|current_uid| current_uid == &uid);
-            profiles.replace_item(&uid, updated.into())?;
-            Ok(affects_current)
+        self.call(|reply| ProfilesActorMessage::CommitRefreshed {
+            uid: uid.clone(),
+            updated,
+            reply,
         })
         .await
     }
@@ -508,19 +742,15 @@ impl ProfilesWritePort for ProfilesClient {
         subscription: Option<SubscriptionInfo>,
         transforms: &[ProfileUid],
     ) -> anyhow::Result<bool> {
-        let uid = uid.clone();
-        let file = file.to_string();
-        let transforms = transforms.to_vec();
-        self.mutate(move |profiles| {
-            profiles.replace_remote_definition_with_transforms(
-                &uid,
-                &file,
-                updated_at,
-                url,
-                option,
-                subscription,
-                transforms,
-            )
+        self.call(|reply| ProfilesActorMessage::ReplaceRemoteDefinition {
+            uid: uid.clone(),
+            file: file.to_string(),
+            updated_at,
+            url,
+            option,
+            subscription,
+            transforms: transforms.to_vec(),
+            reply,
         })
         .await
     }
@@ -1050,11 +1280,11 @@ mod actor_tests {
         let client = ProfilesClient::spawn_with_profiles(Profiles::default())
             .await
             .expect("profiles actor should spawn");
-        let first = client.mutate(|profiles| {
+        let first = client.mutate_for_test(|profiles| {
             profiles.valid.push("first".to_string());
             Ok(())
         });
-        let second = client.mutate(|profiles| {
+        let second = client.mutate_for_test(|profiles| {
             profiles.valid.push("second".to_string());
             Ok(())
         });

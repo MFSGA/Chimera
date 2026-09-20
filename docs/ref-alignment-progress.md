@@ -44,8 +44,10 @@
   `ProfilesWritePort` mutation 在 actor mailbox 内 clone→mutate→persist，只有落盘成功才 publish
   snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
   为 read/write 注入同一个 `ProfilesClient`；actor 外 `Config::profiles()` 仅剩 runtime builder / Agent
-  reads。当前 actor command 仍是 erased mutation closure，而 ref 已采用 typed
-  `ProfilesActorMessage` 并将 refresh/import/materialization scheduler 纳入 actor protocol；这些继续迁移。
+  reads。production persistence command 已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
+  current/valid/transforms/remote commit/definition replacement），不再使用 `Any`/downcast 或 erased
+  mutation closure；仅 e2e 测试保留 test-only mutation seam。与 ref 的剩余差异是 remote fetch/import、
+  materialization scheduler 和 rebuild notifier 尚未完全进入 actor protocol。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
   也不改变已持久化文件。legacy UI/RuntimeBuilder/Agent 通过同步 mirror 继续读取原合同。
@@ -57,8 +59,8 @@
   client::tests --lib -- --test-threads=1`，16 passed；`cargo check --manifest-path
   backend/Cargo.toml -p chimera`、`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
-- 收敛、移除或重新评估条件：下一阶段把 remote refresh/import/definition replacement、
-  materialization/rebuild notification 改为 typed `ProfilesActorMessage`，并让 RuntimeBuilder/Agent
+- 收敛、移除或重新评估条件：下一阶段把 remote refresh/import 的 fetch/commit 两阶段、
+  materialization/rebuild notification 改为 actor-owned workflow，并让 RuntimeBuilder/Agent
   直接消费 actor snapshot 后删除 legacy `Config::profiles()` mirror。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
