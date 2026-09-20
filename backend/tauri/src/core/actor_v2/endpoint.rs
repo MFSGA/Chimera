@@ -36,16 +36,22 @@ pub(crate) struct CoreStatusSnapshot {
     pub(crate) applied: Option<AppliedRuntimeIdentity>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, specta::Type)]
+#[serde(transparent)]
 pub(crate) struct OperationId(u64);
 
 impl OperationId {
+    pub(crate) fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
+
     pub(crate) fn get(self) -> u64 {
         self.0
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum OperationPhase {
     Running,
     Succeeded,
@@ -53,20 +59,21 @@ pub(crate) enum OperationPhase {
     Uncertain,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct AppliedRuntimeIdentity {
     pub(crate) revision: u64,
     pub(crate) core: ClashCore,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum OperationOutput {
     Reconciled(AppliedRuntimeIdentity),
     Stopped,
     CoreChanged(AppliedRuntimeIdentity),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub(crate) struct OperationInfo {
     pub(crate) id: OperationId,
     pub(crate) phase: OperationPhase,
@@ -211,6 +218,28 @@ impl LocalEndpoint {
                 operations.records.remove(&evicted);
             }
         }
+    }
+
+    pub(crate) fn operation_info(&self, id: OperationId) -> Option<OperationInfo> {
+        self.operations
+            .lock()
+            .records
+            .get(&id)
+            .map(|receiver| receiver.borrow().clone())
+    }
+
+    pub(crate) fn operation_history(&self) -> Vec<OperationInfo> {
+        let operations = self.operations.lock();
+        operations
+            .order
+            .iter()
+            .filter_map(|id| {
+                operations
+                    .records
+                    .get(id)
+                    .map(|receiver| receiver.borrow().clone())
+            })
+            .collect()
     }
 
     fn spawn_operation<F>(&self, operation: &'static str, future: F) -> OperationInfo
@@ -419,6 +448,35 @@ mod tests {
             .expect("stop operation should reach a terminal state");
         assert_eq!(terminal.phase, OperationPhase::Succeeded);
         assert_eq!(terminal.output, Some(OperationOutput::Stopped));
+    }
+
+    #[tokio::test]
+    async fn operation_history_preserves_admission_order_and_id_lookup() {
+        let endpoint = LocalEndpoint::new();
+        let first = endpoint.spawn_operation("first", async { Ok(OperationOutput::Stopped) });
+        let second = endpoint.spawn_operation("second", async { Ok(OperationOutput::Stopped) });
+
+        let first_terminal = endpoint
+            .wait_operation(first.id, Duration::from_secs(1))
+            .await
+            .expect("first operation should complete");
+        let second_terminal = endpoint
+            .wait_operation(second.id, Duration::from_secs(1))
+            .await
+            .expect("second operation should complete");
+
+        assert_eq!(
+            endpoint.operation_info(first.id),
+            Some(first_terminal.clone())
+        );
+        assert_eq!(
+            endpoint.operation_info(second.id),
+            Some(second_terminal.clone())
+        );
+        assert_eq!(
+            endpoint.operation_history(),
+            vec![first_terminal, second_terminal]
+        );
     }
 
     #[tokio::test]

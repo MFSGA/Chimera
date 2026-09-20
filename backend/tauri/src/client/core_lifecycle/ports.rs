@@ -108,6 +108,17 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         false
     }
 
+    fn lower_operation_info(
+        &self,
+        _id: u64,
+    ) -> Option<crate::core::actor_v2::endpoint::OperationInfo> {
+        None
+    }
+
+    fn lower_operation_history(&self) -> Vec<crate::core::actor_v2::endpoint::OperationInfo> {
+        Vec::new()
+    }
+
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         Ok(None)
     }

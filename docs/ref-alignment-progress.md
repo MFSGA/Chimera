@@ -202,10 +202,11 @@
   `OperationId`，写入 bounded terminal registry（最多保留 64 条），再由 detached lower task 持有
   `CoreManager` lifecycle lock；waiter/caller 被取消不会取消已开始的 mutation，也不会仅因为 reply
   丢失就 latch uncertain，后续仍可按 id 重新读取 `OperationInfo` 终态。lower task panic，或 lower
-  wait budget 到期而 operation 仍未终态时才 latch uncertain。Service daemon mutation 为保持
-  `HOST_TRANSITION_LOCK` 的完整生命周期仍
-  原地执行，但 waiter cancellation/panic 会通过同一 guard latch uncertain。普通 terminal
-  operation error 不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
+  wait budget 到期而 operation 仍未终态时才 latch uncertain。Service daemon mutation 已由
+  独立 `ServiceActor` mailbox 持有；`HOST_TRANSITION_LOCK` 只继续覆盖跨 daemon/core handoff 的
+  高层 transaction。Service waiter cancellation/actor-call timeout 会通过 shared guard latch
+  uncertain，但已 admission 的 OS command 仍由 actor 串行跑完。普通 terminal operation error
+  不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
   lifecycle actor 的 `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰
   底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 local
   `ControlEndpoint` 目前承载 Chimera 的 `Reconcile/Stop/ChangeCore` command、
@@ -215,9 +216,13 @@
   host 当前为 Running 时发布；Stopped 会压掉历史 runtime snapshot，避免 CAS 消费陈旧 revision。
   reconcile admission 现在还会先读一次 authoritative lower status 作为 `expected_applied`，endpoint
   在持有 lifecycle lock 后再次读取当前 Running applied revision 并做 CAS；revision 已变化、丢失或
-  从 None 变为 Some 时都会以 terminal Failed 拒绝旧 reconcile，不会误触发 uncertain。尚未迁移的是
-  Service-host endpoint registry；lower operation id 也尚未透传到 app IPC。也就是说
-  local reply-loss 已可在 endpoint 层恢复终态，但 app 层暂时不能拿 lower id 主动查询。应用退出现在使用专用 `Shutdown`
+  从 None 变为 Some 时都会以 terminal Failed 拒绝旧 reconcile，不会误触发 uncertain。lower
+  operation registry 现在也通过 app IPC 暴露：`get_lower_core_operations` 返回 admission 顺序的
+  bounded history，调用方可从中取得 typed `OperationId`；`get_lower_core_operation(id)` 可再次读取
+  `Running/Succeeded/Failed/Uncertain`、typed output 与 error。Specta 同步导出 `OperationInfo`/
+  `OperationOutput`/`OperationPhase`/`OperationId`。仍未迁移的是 daemon core-control
+  `ServiceEndpoint`/endpoint-handle registry，以及 upper lifecycle operation id 与 lower operation id
+  的显式关联字段；两套 id 当前可分别观察但不是同一个 namespace。应用退出现在使用专用 `Shutdown`
   command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
   recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
@@ -282,9 +287,10 @@
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
   endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，10 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  `core::actor_v2` tests，11 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
   lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
   Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、
+  operation history 保持 admission 顺序且按 id 查询返回同一终态、
   Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
   budget exhausted 后停启、显式 command re-arm budget）；
@@ -304,9 +310,10 @@
   ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
-  status/watch ownership，以及 endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续把
-  lower operation id/terminal status 透传到 app IPC，并把 daemon core-control `ServiceEndpoint`/
-  endpoint handle 收进 lower host protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  status/watch ownership、endpoint-down restart-budget/exhausted latch，以及 lower operation history/id
+  app IPC projection 已落地；下一阶段继续把 daemon core-control `ServiceEndpoint`/endpoint handle
+  收进 lower host protocol，并评估是否需要把 upper lifecycle operation id 与 lower operation id
+  显式关联。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
