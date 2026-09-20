@@ -213,7 +213,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        Ok(self.facade().status().await)
+        self.facade().status().await
     }
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
