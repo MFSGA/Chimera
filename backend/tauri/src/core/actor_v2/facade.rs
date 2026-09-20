@@ -15,8 +15,8 @@ use std::{
 
 use super::{
     endpoint::{
-        ControlEndpoint, CoreCommand, CoreStatusSnapshot, EndpointHandle, ExecutionHost,
-        LocalEndpoint, OperationPhase, ServiceEndpoint,
+        ControlEndpoint, CoreCommand, CoreStatusSnapshot, EndpointHandle, EndpointRegistry,
+        ExecutionHost, OperationPhase,
     },
     service_actor::{OsServiceHostAdapter, ServiceClient},
 };
@@ -87,8 +87,7 @@ fn service_uninstall_plan(
 }
 
 pub(crate) struct CoreFacade {
-    local_endpoint: Arc<LocalEndpoint>,
-    service_endpoint: EndpointHandle,
+    endpoints: EndpointRegistry,
     outcome_uncertain: Arc<AtomicBool>,
     service_client: tokio::sync::OnceCell<ServiceClient>,
     service_restart_attempts: Arc<AtomicU8>,
@@ -102,12 +101,8 @@ pub(crate) struct ServiceTransition {
 
 impl CoreFacade {
     pub(crate) fn new_local() -> Self {
-        let local_endpoint = Arc::new(LocalEndpoint::new());
-        let service_endpoint: EndpointHandle =
-            Arc::new(ServiceEndpoint::new(local_endpoint.clone()));
         Self {
-            local_endpoint,
-            service_endpoint,
+            endpoints: EndpointRegistry::new(),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             service_client: tokio::sync::OnceCell::new(),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -120,12 +115,13 @@ impl CoreFacade {
     }
 
     pub(crate) fn operation_info(&self, id: u64) -> Option<super::endpoint::OperationInfo> {
-        self.local_endpoint
+        self.endpoints
+            .local()
             .operation_info(super::endpoint::OperationId::from_raw(id))
     }
 
     pub(crate) fn operation_history(&self) -> Vec<super::endpoint::OperationInfo> {
-        self.local_endpoint.operation_history()
+        self.endpoints.local().operation_history()
     }
 
     async fn service_client(&self) -> anyhow::Result<&ServiceClient> {
@@ -147,14 +143,14 @@ impl CoreFacade {
     }
 
     fn endpoint_for_run_type(&self, run_type: RunType) -> EndpointHandle {
-        match run_type {
-            RunType::Service => self.service_endpoint.clone(),
-            RunType::Normal | RunType::Elevated => self.local_endpoint.clone(),
-        }
+        self.endpoints.endpoint(match run_type {
+            RunType::Service => ExecutionHost::Service,
+            RunType::Normal | RunType::Elevated => ExecutionHost::Local,
+        })
     }
 
     async fn active_endpoint(&self) -> anyhow::Result<EndpointHandle> {
-        let status = self.local_endpoint.status().await?;
+        let status = self.endpoints.local().status().await?;
         Ok(self.endpoint_for_run_type(status.run_type))
     }
 
@@ -210,7 +206,8 @@ impl CoreFacade {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         let expected_applied = self
-            .local_endpoint
+            .endpoints
+            .local()
             .status()
             .await?
             .applied
@@ -243,12 +240,12 @@ impl CoreFacade {
     }
 
     pub(crate) async fn recover(&self) -> anyhow::Result<()> {
-        let status = self.local_endpoint.status().await?;
+        let status = self.endpoints.local().status().await?;
         anyhow::ensure!(
             status.run_type == RunType::Service,
             "local core recovery requires a fresh typed reconcile"
         );
-        self.run_mutation(self.service_endpoint.clone(), CoreCommand::Recover)
+        self.run_mutation(self.endpoints.service(), CoreCommand::Recover)
             .await
     }
 
@@ -269,27 +266,27 @@ impl CoreFacade {
     }
 
     pub(crate) async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        self.local_endpoint.status().await
+        self.endpoints.local().status().await
     }
 
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
-        self.local_endpoint.recovery_notify()
+        self.endpoints.local().recovery_notify()
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
-        self.local_endpoint.runtime_transform_output()
+        self.endpoints.local().runtime_transform_output()
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        self.local_endpoint.promoted_runtime_snapshot()
+        self.endpoints.local().promoted_runtime_snapshot()
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
-        self.local_endpoint.runtime_transform_failure()
+        self.endpoints.local().runtime_transform_failure()
     }
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
-        self.local_endpoint.effective_clash_info()
+        self.endpoints.local().effective_clash_info()
     }
 
     pub(crate) async fn api_connection(
@@ -299,7 +296,7 @@ impl CoreFacade {
     }
 
     async fn api_client(&self) -> anyhow::Result<ApiClient> {
-        let status = self.local_endpoint.status().await?;
+        let status = self.endpoints.local().status().await?;
         let endpoint = self.endpoint_for_run_type(status.run_type);
         if let Some(connection) = endpoint.api_connection().await? {
             return ApiClient::from_connection(connection);
