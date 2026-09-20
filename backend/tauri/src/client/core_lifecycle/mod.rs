@@ -506,8 +506,11 @@ struct TestProfilesReadPort;
 
 #[cfg(test)]
 impl ProfilesReadPort for TestProfilesReadPort {
-    fn snapshot(&self) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
-        Ok(crate::config::profile::profiles::Profiles::default())
+    fn versioned_snapshot(&self) -> anyhow::Result<crate::client::profiles::ProfilesSnapshot> {
+        Ok(crate::client::profiles::ProfilesSnapshot::new(
+            1,
+            crate::config::profile::profiles::Profiles::default(),
+        ))
     }
 }
 
@@ -994,8 +997,11 @@ mod tests {
     }
 
     impl ProfilesReadPort for SnapshotProfilesReadPort {
-        fn snapshot(&self) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
-            Ok(self.profiles.clone())
+        fn versioned_snapshot(&self) -> anyhow::Result<crate::client::profiles::ProfilesSnapshot> {
+            Ok(crate::client::profiles::ProfilesSnapshot::new(
+                1,
+                self.profiles.clone(),
+            ))
         }
     }
 

@@ -26,8 +26,35 @@ use crate::config::profile::{
     profiles::Profiles,
 };
 
+#[derive(Clone)]
+pub(crate) struct ProfilesSnapshot {
+    revision: u64,
+    profiles: Arc<Profiles>,
+}
+
+impl ProfilesSnapshot {
+    pub(crate) fn new(revision: u64, profiles: Profiles) -> Self {
+        Self {
+            revision,
+            profiles: Arc::new(profiles),
+        }
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(crate) fn into_profiles(self) -> Profiles {
+        Arc::unwrap_or_clone(self.profiles)
+    }
+}
+
 pub(crate) trait ProfilesReadPort: Send + Sync {
-    fn snapshot(&self) -> anyhow::Result<Profiles>;
+    fn versioned_snapshot(&self) -> anyhow::Result<ProfilesSnapshot>;
+
+    fn snapshot(&self) -> anyhow::Result<Profiles> {
+        Ok(self.versioned_snapshot()?.into_profiles())
+    }
 }
 
 #[async_trait]
@@ -273,7 +300,8 @@ enum RemoteImportOutcome {
 
 struct ProfilesActorState {
     profiles: Profiles,
-    snapshot_tx: tokio::sync::watch::Sender<Profiles>,
+    revision: u64,
+    snapshot_tx: tokio::sync::watch::Sender<ProfilesSnapshot>,
     profile_files: Arc<dyn ProfileFsPort>,
     fetcher: Arc<dyn SubscriptionFetcher>,
     importer: Arc<dyn RemoteProfileImporter>,
@@ -284,8 +312,10 @@ struct ProfilesActor;
 
 impl ProfilesActorState {
     fn publish(&mut self, next: Profiles) {
+        self.revision = self.revision.saturating_add(1);
         self.profiles = next.clone();
-        self.snapshot_tx.send_replace(next);
+        self.snapshot_tx
+            .send_replace(ProfilesSnapshot::new(self.revision, next));
     }
 
     async fn mutate<T>(
@@ -786,7 +816,7 @@ pub(crate) struct ProfilesClient {
 
 struct ProfilesClientInner {
     actor_ref: ActorRef<ProfilesActorMessage>,
-    snapshot_rx: tokio::sync::watch::Receiver<Profiles>,
+    snapshot_rx: tokio::sync::watch::Receiver<ProfilesSnapshot>,
 }
 
 impl Drop for ProfilesClientInner {
@@ -812,12 +842,14 @@ impl ProfilesClient {
         fetcher: Arc<dyn SubscriptionFetcher>,
         importer: Arc<dyn RemoteProfileImporter>,
     ) -> anyhow::Result<Self> {
-        let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(profiles.clone());
+        let initial_snapshot = ProfilesSnapshot::new(1, profiles.clone());
+        let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(initial_snapshot);
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ProfilesActor,
             ProfilesActorState {
                 profiles,
+                revision: 1,
                 snapshot_tx,
                 profile_files,
                 fetcher,
@@ -875,7 +907,7 @@ impl ProfilesClient {
 }
 
 impl ProfilesReadPort for ProfilesClient {
-    fn snapshot(&self) -> anyhow::Result<Profiles> {
+    fn versioned_snapshot(&self) -> anyhow::Result<ProfilesSnapshot> {
         Ok(self.inner.snapshot_rx.borrow().clone())
     }
 }
@@ -1700,6 +1732,84 @@ mod actor_tests {
         Profiles {
             items: vec![Profile::Remote(remote_profile())],
             ..Profiles::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_commit_advances_versioned_snapshot_revision() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            Arc::new(MemoryProfileFs::default()),
+            Arc::new(ImmediateFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let initial = client
+            .versioned_snapshot()
+            .expect("initial versioned snapshot should be readable");
+        assert_eq!(initial.revision(), 1);
+
+        client
+            .set_valid_fields(&["mode".to_string()])
+            .await
+            .expect("profile state commit should succeed");
+
+        let committed = client
+            .versioned_snapshot()
+            .expect("committed versioned snapshot should be readable");
+        assert_eq!(committed.revision(), 2);
+        assert_eq!(committed.into_profiles().valid, vec!["mode".to_string()]);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_persistence_does_not_advance_versioned_snapshot_revision() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir(config_dir.path().join("profiles.yaml"))
+            .expect("profiles.yaml directory should force persistence failure");
+
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            Arc::new(MemoryProfileFs::default()),
+            Arc::new(ImmediateFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+        let initial = client
+            .versioned_snapshot()
+            .expect("initial versioned snapshot should be readable");
+        assert_eq!(initial.revision(), 1);
+        let initial_valid = initial.into_profiles().valid;
+
+        client
+            .set_valid_fields(&["mode".to_string()])
+            .await
+            .expect_err("state persistence should fail");
+
+        let after = client
+            .versioned_snapshot()
+            .expect("snapshot should remain readable after failed persistence");
+        assert_eq!(after.revision(), 1);
+        assert_eq!(after.into_profiles().valid, initial_valid);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
         }
     }
 
