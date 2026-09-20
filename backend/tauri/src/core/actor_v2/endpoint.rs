@@ -33,6 +33,7 @@ pub(crate) struct CoreStatusSnapshot {
     pub(crate) state: CoreState,
     pub(crate) state_changed_at: i64,
     pub(crate) run_type: RunType,
+    pub(crate) applied: Option<AppliedRuntimeIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -71,6 +72,16 @@ pub(crate) struct OperationInfo {
     pub(crate) phase: OperationPhase,
     pub(crate) output: Option<OperationOutput>,
     pub(crate) error: Option<String>,
+}
+
+fn applied_identity_for_state(
+    state: &CoreState,
+    identity: Option<(u64, ClashCore)>,
+) -> Option<AppliedRuntimeIdentity> {
+    if !matches!(state, CoreState::Running) {
+        return None;
+    }
+    identity.map(|(revision, core)| AppliedRuntimeIdentity { revision, core })
 }
 
 impl OperationInfo {
@@ -303,10 +314,13 @@ impl ControlEndpoint for LocalEndpoint {
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         let (state, state_changed_at, run_type) = self.manager.status().await;
+        let state = state.into_owned();
+        let applied = applied_identity_for_state(&state, self.manager.applied_runtime_identity());
         Ok(CoreStatusSnapshot {
-            state: state.into_owned(),
+            state,
             state_changed_at,
             run_type,
+            applied,
         })
     }
 }
@@ -314,6 +328,22 @@ impl ControlEndpoint for LocalEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stopped_status_never_exposes_stale_applied_identity() {
+        let identity = Some((7, ClashCore::Mihomo));
+        assert_eq!(
+            applied_identity_for_state(&CoreState::Stopped(None), identity),
+            None
+        );
+        assert_eq!(
+            applied_identity_for_state(&CoreState::Running, identity),
+            Some(AppliedRuntimeIdentity {
+                revision: 7,
+                core: ClashCore::Mihomo,
+            })
+        );
+    }
 
     #[tokio::test]
     async fn admitted_operation_survives_waiter_cancellation() {
