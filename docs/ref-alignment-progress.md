@@ -197,19 +197,21 @@
   已改为该 best-effort dirty producer。旧 `client/rebuild.rs` coordinator 已退出模块图，
   避免 actor 外保留第二套 rebuild 协调层。workflow future panic 现在由 actor 捕获并
   latch `uncertain=true`；lower `CoreFacade` 也新增 ref-shaped `outcome_uncertain` guard。
-  Local core mutation 现在先在 lower facade 分配 operation id 并写入 bounded terminal registry
-  （最多保留 64 条），再由 detached lower task 持有 `CoreManager` lifecycle lock 执行；waiter/
-  caller 被取消不会取消已开始的 mutation，也不会仅因为 reply 丢失就 latch uncertain，后续仍可
-  在 lower registry 按 id 读取终态。lower task panic，或 lower wait budget 到期而 operation 仍未
-  终态时才 latch uncertain。Service daemon mutation 为保持 `HOST_TRANSITION_LOCK` 的完整生命周期仍
+  Local core mutation 现在由 `core/actor_v2/endpoint.rs::LocalEndpoint` 独占 `CoreManager`，并通过
+  ref-shaped `ControlEndpoint::submit / wait_operation(id) / status` 协议执行。submit 分配 typed
+  `OperationId`，写入 bounded terminal registry（最多保留 64 条），再由 detached lower task 持有
+  `CoreManager` lifecycle lock；waiter/caller 被取消不会取消已开始的 mutation，也不会仅因为 reply
+  丢失就 latch uncertain，后续仍可按 id 重新读取 `OperationInfo` 终态。lower task panic，或 lower
+  wait budget 到期而 operation 仍未终态时才 latch uncertain。Service daemon mutation 为保持
+  `HOST_TRANSITION_LOCK` 的完整生命周期仍
   原地执行，但 waiter cancellation/panic 会通过同一 guard latch uncertain。普通 terminal
   operation error 不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
   lifecycle actor 的 `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰
-  底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 Chimera
-  的 lower operation id/terminal registry 仍是 `CoreFacade` 内部协议，尚未透传为
-  `ControlEndpoint::submit` + `wait_operation(id)`/IPC contract，也还没有 ref 的 operation output、
-  revision CAS 与 host endpoint registry。也就是说 local reply-loss 已可在 lower 层恢复终态，但
-  app 层暂时不能拿 lower operation id 主动查询。应用退出现在使用专用 `Shutdown`
+  底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 local
+  `ControlEndpoint` 目前只承载 Chimera 的 `Reconcile/Stop/ChangeCore` command 与
+  `Running/Succeeded/Failed/Uncertain` 终态，还没有 ref 的 operation output、revision CAS、applied
+  identity 与 Service-host endpoint registry；lower operation id 也尚未透传到 app IPC。也就是说
+  local reply-loss 已可在 endpoint 层恢复终态，但 app 层暂时不能拿 lower id 主动查询。应用退出现在使用专用 `Shutdown`
   command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
   recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
@@ -262,8 +264,8 @@
   InstallService/UpdateService 进入 mailbox、StartService/RestartService 在同一 mailbox/host-transition
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在卸载后确认停止并恢复 Local host、endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2::facade::tests`，5 passed（local operation waiter cancellation 后仍可按 lower id
-  读取终态且不误 latch、lower panic latch、terminal error 不误 latch、Service in-place cancellation、
+  `core::actor_v2` tests，5 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Service in-place cancellation、
   仅明确 Stopped daemon 消耗 restart budget）；
   `core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
@@ -278,10 +280,10 @@
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
-  ownership/status/lifecycle-lock/transition、local operation id/terminal registry、fail-closed
-  outcome-uncertain guard，以及 endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续
-  把 lower operation id/status 透传为 ref-shaped endpoint submit/wait contract，并迁移独立
-  ServiceActor 的 bounded command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
+  registry、fail-closed outcome-uncertain guard，以及 endpoint-down restart-budget/exhausted latch 已落地；
+  下一阶段继续补 ref 的 operation output/revision CAS/applied identity、把 lower operation id 透传到
+  app IPC，并迁移独立 ServiceActor 的 bounded command/endpoint-handle protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）
