@@ -12,6 +12,7 @@ use crate::{
 
 pub mod compat;
 pub mod control;
+pub(crate) mod core_host;
 pub mod ipc;
 
 const SERVICE_NAME: &str = "chimera-service";
