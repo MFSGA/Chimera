@@ -18,6 +18,87 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
 const SERVICE_CALL_TIMEOUT: Duration = Duration::from_secs(110);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ServicePhase {
+    Probing,
+    NotInstalled,
+    DaemonStopped,
+    Installing,
+    StartingDaemon,
+    Ready,
+    Incompatible,
+    Restarting,
+    Exhausted,
+    Uninstalling,
+    Unknown,
+}
+
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct ServiceHostStatus {
+    pub(crate) name: std::borrow::Cow<'static, str>,
+    pub(crate) version: std::borrow::Cow<'static, str>,
+    pub(crate) status: chimera_ipc::types::ServiceStatus,
+    pub(crate) server: Option<chimera_ipc::api::status::StatusResBody<'static>>,
+    pub(crate) phase: ServicePhase,
+    pub(crate) compat: crate::core::service::compat::ServiceCompat,
+    pub(crate) runtime_owned: bool,
+    pub(crate) restart_attempts: u8,
+}
+
+impl ServiceHostStatus {
+    pub(crate) fn probing() -> Self {
+        Self {
+            name: std::borrow::Cow::Borrowed("chimera-service"),
+            version: std::borrow::Cow::Borrowed(""),
+            status: chimera_ipc::types::ServiceStatus::NotInstalled,
+            server: None,
+            phase: ServicePhase::Probing,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: false,
+            restart_attempts: 0,
+        }
+    }
+
+    pub(crate) fn from_probe(info: &chimera_ipc::types::StatusInfo<'static>) -> Self {
+        use chimera_ipc::types::ServiceStatus;
+
+        let compat = crate::core::service::compat::ServiceCompat::classify(&info);
+        let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
+        let phase = match info.status {
+            ServiceStatus::Running if compat.allows_service_backend() && runtime_owned => {
+                ServicePhase::Ready
+            }
+            ServiceStatus::Running => ServicePhase::Incompatible,
+            ServiceStatus::Stopped => ServicePhase::DaemonStopped,
+            ServiceStatus::NotInstalled => ServicePhase::NotInstalled,
+        };
+        Self {
+            name: info.name.clone(),
+            version: info.version.clone(),
+            status: info.status,
+            server: info.server.clone(),
+            phase,
+            compat,
+            runtime_owned,
+            restart_attempts: 0,
+        }
+    }
+
+    pub(crate) fn probe_failed(previous: &Self) -> Self {
+        Self {
+            name: previous.name.clone(),
+            version: previous.version.clone(),
+            status: previous.status,
+            server: previous.server.clone(),
+            phase: ServicePhase::Unknown,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: false,
+            restart_attempts: previous.restart_attempts,
+        }
+    }
+}
+
 #[async_trait]
 pub(crate) trait ServiceHostAdapter: Send + Sync {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
@@ -84,6 +165,10 @@ enum Message {
     Stop {
         reply: RpcReplyPort<anyhow::Result<()>>,
     },
+    Observe {
+        info: chimera_ipc::types::StatusInfo<'static>,
+    },
+    ProbeFailed,
     EndpointDown,
 }
 
@@ -91,6 +176,7 @@ struct ServiceActor;
 
 struct ServiceActorArgs {
     adapter: Arc<dyn ServiceHostAdapter>,
+    status_tx: tokio::sync::watch::Sender<ServiceHostStatus>,
     restart_attempts: Arc<AtomicU8>,
     restart_exhausted: Arc<AtomicBool>,
     restart_budget: u8,
@@ -98,6 +184,7 @@ struct ServiceActorArgs {
 
 struct ServiceActorState {
     adapter: Arc<dyn ServiceHostAdapter>,
+    status_tx: tokio::sync::watch::Sender<ServiceHostStatus>,
     restart_attempts: Arc<AtomicU8>,
     restart_exhausted: Arc<AtomicBool>,
     restart_budget: u8,
@@ -109,13 +196,60 @@ impl ServiceActorState {
         self.restart_exhausted.store(false, Ordering::Release);
     }
 
+    fn publish_phase(&self, phase: ServicePhase) {
+        let current = self.status_tx.borrow().clone();
+        self.status_tx.send_replace(ServiceHostStatus {
+            name: current.name,
+            version: current.version,
+            status: current.status,
+            server: current.server,
+            phase,
+            compat: crate::core::service::compat::ServiceCompat::Unknown,
+            runtime_owned: current.runtime_owned,
+            restart_attempts: self.restart_attempts.load(Ordering::Acquire),
+        });
+    }
+
+    fn publish_probe(&self, info: &chimera_ipc::types::StatusInfo<'static>) -> ServiceHostStatus {
+        let mut status = ServiceHostStatus::from_probe(info);
+        status.restart_attempts = self.restart_attempts.load(Ordering::Acquire);
+        if self.restart_exhausted.load(Ordering::Acquire) {
+            status.phase = ServicePhase::Exhausted;
+        }
+        self.status_tx.send_replace(status.clone());
+        status
+    }
+
+    fn publish_probe_failure(&self) {
+        let previous = self.status_tx.borrow().clone();
+        let mut status = ServiceHostStatus::probe_failed(&previous);
+        status.restart_attempts = self.restart_attempts.load(Ordering::Acquire);
+        if self.restart_exhausted.load(Ordering::Acquire) {
+            status.phase = ServicePhase::Exhausted;
+        }
+        self.status_tx.send_replace(status);
+    }
+
+    async fn probe_and_publish(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        match self.adapter.probe().await {
+            Ok(info) => {
+                self.publish_probe(&info);
+                Ok(info)
+            }
+            Err(error) => {
+                self.publish_probe_failure();
+                Err(error)
+            }
+        }
+    }
+
     async fn endpoint_down(&self) {
         use chimera_ipc::types::ServiceStatus;
 
         if self.restart_exhausted.load(Ordering::Acquire) {
             return;
         }
-        let info = match self.adapter.probe().await {
+        let info = match self.probe_and_publish().await {
             Ok(info) => info,
             Err(error) => {
                 tracing::warn!(%error, "service endpoint-down probe failed; not restarting blindly");
@@ -129,13 +263,16 @@ impl ServiceActorState {
         let attempts = self.restart_attempts.load(Ordering::Acquire);
         if attempts >= self.restart_budget {
             self.restart_exhausted.store(true, Ordering::Release);
+            self.publish_phase(ServicePhase::Exhausted);
             return;
         }
         self.restart_attempts
             .store(attempts.saturating_add(1), Ordering::Release);
+        self.publish_phase(ServicePhase::Restarting);
         if let Err(error) = self.adapter.start().await {
             tracing::warn!(%error, "service auto-restart failed");
         }
+        let _ = self.probe_and_publish().await;
     }
 }
 
@@ -149,12 +286,15 @@ impl Actor for ServiceActor {
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(ServiceActorState {
+        let state = ServiceActorState {
             adapter: args.adapter,
+            status_tx: args.status_tx,
             restart_attempts: args.restart_attempts,
             restart_exhausted: args.restart_exhausted,
             restart_budget: args.restart_budget,
-        })
+        };
+        let _ = state.probe_and_publish().await;
+        Ok(state)
     }
 
     async fn handle(
@@ -165,30 +305,50 @@ impl Actor for ServiceActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Probe { reply } => {
-                let _ = reply.send(state.adapter.probe().await);
+                let _ = reply.send(state.probe_and_publish().await);
             }
             Message::Install { reply } => {
                 state.rearm();
-                let _ = reply.send(state.adapter.install().await);
+                state.publish_phase(ServicePhase::Installing);
+                let result = state.adapter.install().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
             Message::Uninstall { reply } => {
-                let _ = reply.send(state.adapter.uninstall().await);
+                state.publish_phase(ServicePhase::Uninstalling);
+                let result = state.adapter.uninstall().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
             Message::Update { reply } => {
                 state.rearm();
-                let _ = reply.send(state.adapter.update().await);
+                let result = state.adapter.update().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
             Message::Start { reply } => {
                 state.rearm();
-                let _ = reply.send(state.adapter.start().await);
+                state.publish_phase(ServicePhase::StartingDaemon);
+                let result = state.adapter.start().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
             Message::Restart { reply } => {
                 state.rearm();
-                let _ = reply.send(state.adapter.restart().await);
+                state.publish_phase(ServicePhase::Restarting);
+                let result = state.adapter.restart().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
             Message::Stop { reply } => {
-                let _ = reply.send(state.adapter.stop().await);
+                let result = state.adapter.stop().await;
+                let _ = state.probe_and_publish().await;
+                let _ = reply.send(result);
             }
+            Message::Observe { info } => {
+                state.publish_probe(&info);
+            }
+            Message::ProbeFailed => state.publish_probe_failure(),
             Message::EndpointDown => state.endpoint_down().await,
         }
         Ok(())
@@ -224,6 +384,7 @@ impl Drop for MutationReplyGuard {
 #[derive(Clone)]
 pub(crate) struct ServiceClient {
     actor: ActorRef<Message>,
+    status_rx: tokio::sync::watch::Receiver<ServiceHostStatus>,
     outcome_uncertain: Arc<AtomicBool>,
 }
 
@@ -235,11 +396,13 @@ impl ServiceClient {
         restart_exhausted: Arc<AtomicBool>,
         restart_budget: u8,
     ) -> anyhow::Result<Self> {
+        let (status_tx, status_rx) = tokio::sync::watch::channel(ServiceHostStatus::probing());
         let (actor, _handle) = Actor::spawn(
             None,
             ServiceActor,
             ServiceActorArgs {
                 adapter,
+                status_tx,
                 restart_attempts,
                 restart_exhausted,
                 restart_budget,
@@ -249,8 +412,21 @@ impl ServiceClient {
         .map_err(|error| anyhow::anyhow!("failed to spawn service actor: {error}"))?;
         Ok(Self {
             actor,
+            status_rx,
             outcome_uncertain,
         })
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<ServiceHostStatus> {
+        self.status_rx.clone()
+    }
+
+    pub(crate) fn observe(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        let _ = self.actor.cast(Message::Observe { info });
+    }
+
+    pub(crate) fn observe_probe_failure(&self) {
+        let _ = self.actor.cast(Message::ProbeFailed);
     }
 
     pub(crate) async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {

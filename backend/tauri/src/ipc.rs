@@ -805,7 +805,7 @@ pub mod service {
         pub version: std::borrow::Cow<'a, str>,
         pub status: chimera_ipc::types::ServiceStatus,
         pub server: Option<chimera_ipc::api::status::StatusResBody<'a>>,
-        pub phase: crate::client::core_lifecycle::ServicePhase,
+        pub phase: crate::core::actor_v2::service_actor::ServicePhase,
         pub compat: crate::core::service::compat::ServiceCompat,
         pub runtime_owned: bool,
         pub restart_attempts: u8,

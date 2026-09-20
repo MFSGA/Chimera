@@ -6,12 +6,10 @@ use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    client::{
-        ChimeraClient,
-        core_lifecycle::{ServiceHostStatus, ServicePhase},
-    },
+    client::ChimeraClient,
     config::{core::Config, profile::item::Profile},
     core::{
+        actor_v2::service_actor::{ServiceHostStatus, ServicePhase},
         clash::{
             core::RunType,
             ws::{ClashConnectionsConnector, ClashConnectionsConnectorState},

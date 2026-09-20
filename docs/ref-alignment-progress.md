@@ -231,12 +231,14 @@
   `InstallService`/`UpdateService`/`StartService`/`RestartService`/`StopService`/
   `UninstallService` 已通过 `ServiceLifecyclePort`/transition lease 进入 mailbox；该 port 的
   production adapter 与 local-core port 现在共享同一个 lower `CoreFacade` owner。
-  lifecycle actor 现在还持有 ref-shaped `watch::Receiver<ServiceHostStatus>` projection：
-  `phase`/`compat`/daemon wire fields 与 `restart_attempts` 由 actor 统一发布，Chimera 额外保留
-  `runtime_owned`，防止“协议兼容但属于其他 runtime”的 daemon 被误判成可用 host。生产启动
-  从 `Probing` 做一次初始 refresh；显式 Service mutation 完成后重新 probe 稳定态，
-  install/start/restart/uninstall 期间分别发布 transient phase。IPC `status_service` 与 Agent
-  diagnostics 现在只读 cached projection，不再为每次读取主动 probe daemon。legacy adapter 持有现有
+  Service status ownership 也已下沉到同一个 `ServiceActor`：actor 自己持有
+  `watch::Sender<ServiceHostStatus>`，`phase`/`compat`/daemon wire fields 与 `restart_attempts`
+  只在 lower ServiceActor 中发布；`ServiceLifecyclePort::subscribe_status` 只把 receiver 交给
+  `CoreLifecycleClient`，lifecycle actor 不再维护第二份 Service 状态镜像。Chimera 额外保留
+  `runtime_owned`，防止“协议兼容但属于其他 runtime”的 daemon 被误判成可用 host。ServiceActor
+  spawn 时从 `Probing` 做一次初始 probe；install/start/restart/uninstall 发布 transient phase，
+  daemon command 完成后 probe 稳定态，`confirm_ready/confirm_stopped` 成功后也会刷新 authoritative
+  watch。IPC `status_service` 与 Agent diagnostics 现在只读这同一份 cached projection，不再为每次读取主动 probe daemon。legacy adapter 持有现有
   `HOST_TRANSITION_LOCK`；start/restart 会在 bounded readiness probe 后按配置收敛到
   Service host 并再次验证，stop 会完成停止确认、Service→Local reconcile 和最终 core
   验证。uninstall 在当前 core 明确为 Running+Service 时也已按 ref 顺序收敛：先
@@ -244,9 +246,10 @@
   Local/Stopped 情况保持既有 UX。lower `ServiceTransition::uninstall_daemon` 也新增 fail-closed
   ownership preflight：probe 失败、Running 但无 server detail、或明确 core Running 都拒绝卸载；
   只有 Running+core Stopped 才会先 stop 并再次证明 daemon 已停后再 uninstall，NotInstalled 幂等返回。
-  transition 失败会由 actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
-  health-loop 仍负责实际周期 probe，但成功 observation/失败状态会 cast 回 lifecycle actor
-  更新同一 watch，不再形成 UI/Agent 的第二套探测路径。legacy `status --json` probe 现在统一使用
+  transition 失败会由 lifecycle actor 标记 runtime dirty 进行后续 best-effort reconcile。Service
+  health-loop 仍负责实际周期 probe，但成功 observation/失败状态会通过 `ServiceLifecyclePort`
+  直接 cast 回 lower ServiceActor 更新同一 watch；lifecycle actor 不再参与 daemon status 发布。
+  因此 UI/Agent、显式 transition 与 health-loop 共享同一 Service 状态 owner。legacy `status --json` probe 现在统一使用
   5 秒 timeout + `kill_on_drop(true)`，因此启动期兼容性检查、health-loop 与 endpoint-down re-probe
   都有同一 fail-closed bound，不会留下孤儿 status 子进程。health loop 仅在
   Connected→Disconnected 边沿提交 `ServiceEndpointDown`；
@@ -260,8 +263,8 @@
   原地执行。caller cancellation/actor-call timeout 会 latch shared `outcome_uncertain`，但已 admission
   的 OS command 仍由 actor handler 串行持有并跑完，不会因 waiter drop 取消；后续 core/service
   mutation 因 uncertain fail-closed。高层 `HOST_TRANSITION_LOCK` 仍覆盖 daemon command + core handoff
-  的跨 host transaction。剩余差异主要是 ref 的 actor-owned status/watch projection、内部每个 adapter
-  leg 的 kill-safe bounded timeout，以及 daemon core-control `ServiceEndpoint`/endpoint-handle routing；
+  的跨 host transaction。剩余差异主要是内部每个 adapter leg 的 kill-safe bounded timeout，以及
+  daemon core-control `ServiceEndpoint`/endpoint-handle routing；
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
@@ -300,10 +303,10 @@
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
   ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
-  expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command ownership，
-  以及 endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续把 lower operation id/terminal
-  status 透传到 app IPC，并把 ServiceActor status/watch 与 daemon core-control endpoint handle 收进 lower
-  host protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
+  expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
+  status/watch ownership，以及 endpoint-down restart-budget/exhausted latch 已落地；下一阶段继续把
+  lower operation id/terminal status 透传到 app IPC，并把 daemon core-control `ServiceEndpoint`/
+  endpoint handle 收进 lower host protocol。当前仍是 lower host protocol 的部分迁移，而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
 ## DIFF-006：Runtime exists_keys 读模型（第五阶段）

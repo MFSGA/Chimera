@@ -96,16 +96,24 @@ struct LegacyServiceTransition {
 
 #[async_trait]
 impl ServiceLifecyclePort for LegacyServiceBridge {
-    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        self.facade.probe_service().await
+    async fn subscribe_status(
+        &self,
+    ) -> anyhow::Result<
+        tokio::sync::watch::Receiver<crate::core::actor_v2::service_actor::ServiceHostStatus>,
+    > {
+        self.facade.service_status_receiver().await
+    }
+
+    fn observe_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        self.facade.observe_service_status(info);
+    }
+
+    fn observe_probe_failure(&self) {
+        self.facade.observe_service_probe_failure();
     }
 
     async fn report_endpoint_down(&self) -> anyhow::Result<()> {
         self.facade.report_service_endpoint_down().await
-    }
-
-    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
-        self.facade.service_restart_policy()
     }
 
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
