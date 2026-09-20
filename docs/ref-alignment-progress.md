@@ -19,11 +19,11 @@
   singleton service locator 取 core manager。
 - 生产 `RuntimeInputOutput` 现在强制携带 `RuntimeInspectionData`；共享 executor
   生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
-- 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor protocol 与 Profile actor
-  的 typed refresh/import/materialization command 面。Profile production writes 已收敛到单一
-  `ProfilesClient`/actor owner；legacy `Config::profiles()` 在 actor 外只剩 runtime builder 与
-  Agent 的只读兼容投影。因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton 访问”
-  和“Profile 持久化单 writer”已完成，完整 ref actor protocol 仍是后续工作。
+- 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor 的完整 endpoint-handle/status protocol，
+  以及 Profile actor snapshot 对 legacy read mirror 的最终替代。Profile production writes、remote refresh
+  与 remote import 已收敛到单一 `ProfilesClient`/actor owner；legacy `Config::profiles()` 在 actor 外只剩
+  runtime builder 与 Agent 的只读兼容投影。因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
+  访问”和“Profile 持久化单 writer + typed refresh/import workflow”已完成，完整 ref actor protocol 仍是后续工作。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
@@ -46,26 +46,31 @@
   为 read/write 注入同一个 `ProfilesClient`；actor 外 `Config::profiles()` 仅剩 runtime builder / Agent
   reads。production persistence command 已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
   current/valid/transforms/remote refresh/definition replacement），不再使用 `Any`/downcast 或 erased
-  mutation closure；仅 e2e 测试保留 test-only mutation seam。remote refresh 也已按 ref 的两阶段
+  mutation closure；仅 e2e 测试保留 test-only mutation seam。remote refresh 已按 ref 的两阶段
   actor workflow 收口：actor 做 duplicate admission 与 definition fingerprint，detached fetch 期间释放
   mailbox，`CommitRemoteRefresh` 回到 actor 后先验证 stale fence，再 materialize file→persist profile state；
-  state persist 失败会回滚 materialized file。与 ref 的剩余差异主要是 remote import、materialization
-  scheduler/rebuild notifier 尚未完全进入 actor protocol。
+  state persist 失败会回滚 materialized file。remote import 也已进入同一 actor ownership：actor 先 reserve
+  managed identity/file，detached importer 在 mailbox 外完成 fetch/prepare，`CommitRemoteImport` 仅在 caller
+  仍等待时执行 file→state 原子提交；prepare 失败或 caller cancellation 都不会发布 profile snapshot，也不会
+  留下 materialized file/reservation。IPC `import_profile_inner` 不再自己构造 `RemoteProfileBuilder` 或调用
+  `commit_new_profile`，而是委托 `ChimeraClient::import_remote_profile` → `ProfilesWritePort::import_remote`。
+  与 ref 的剩余差异主要是 materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
   也不改变已持久化文件。legacy UI/RuntimeBuilder/Agent 通过同步 mirror 继续读取原合同。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
-  --test-threads=1`，6 passed（并发 mutation 无 lost update；persist 成功后才 publish；duplicate refresh
+  --test-threads=1`，9 passed（并发 mutation 无 lost update；persist 成功后才 publish；duplicate refresh
   拒绝；in-flight definition change 触发 stale fence；materialized file write failure 不提交 state；state
-  persist failure 回滚 materialized file）；`cargo test --manifest-path backend/Cargo.toml -p chimera
+  persist failure 回滚 materialized file；remote import 原子提交 file+profiles.yaml；prepare failure 不留下
+  profile/file；caller cancellation 不提交且释放 reservation）；`cargo test --manifest-path backend/Cargo.toml -p chimera
   client::tests --lib -- --test-threads=1`，14 passed；`cargo check --manifest-path
   backend/Cargo.toml -p chimera`、`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
-- 收敛、移除或重新评估条件：下一阶段把 remote import、materialization/rebuild notification
-  改为 actor-owned workflow，并让 RuntimeBuilder/Agent
-  直接消费 actor snapshot 后删除 legacy `Config::profiles()` mirror。Tauri-local Profile 领域模型
+- 收敛、移除或重新评估条件：下一阶段把 materialization/rebuild notification 与 versioned snapshot/error
+  protocol 继续收进 actor，并让 RuntimeBuilder/Agent 直接消费 actor snapshot 后删除 legacy
+  `Config::profiles()` mirror。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
 ## DIFF-002：标准核心切换到 ref RuntimeExecutor（第二阶段）
