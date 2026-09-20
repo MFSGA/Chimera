@@ -899,6 +899,7 @@ export type CoreInfos_Serialize = {
 export type CoreLifecycleOperationResult = {
   id: number;
   error: string | null;
+  backend_operation_id: number | null;
 };
 
 export type CoreLifecycleStatus = {
