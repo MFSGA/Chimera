@@ -1,8 +1,9 @@
 //! Control helpers owned by the lower core-host boundary.
 //!
 //! This is the staged Chimera counterpart of ref `core/actor_v2/facade.rs`.
-//! It centralizes ownership of the legacy `CoreManager` and its lifecycle
-//! lock without pretending that Chimera already has ref's submit/wait protocol.
+//! It centralizes ownership of the legacy `CoreManager`, routes mutations
+//! through explicit Local/Service endpoint handles, and keeps one transaction
+//! owner while the daemon wire is still on its legacy protocol.
 
 use std::{
     sync::{
@@ -13,7 +14,10 @@ use std::{
 };
 
 use super::{
-    endpoint::{ControlEndpoint, CoreCommand, CoreStatusSnapshot, LocalEndpoint, OperationPhase},
+    endpoint::{
+        ControlEndpoint, CoreCommand, CoreStatusSnapshot, EndpointHandle, ExecutionHost,
+        LocalEndpoint, OperationPhase, ServiceEndpoint,
+    },
     service_actor::{OsServiceHostAdapter, ServiceClient},
 };
 use crate::{
@@ -60,7 +64,8 @@ fn service_uninstall_plan(
 }
 
 pub(crate) struct CoreFacade {
-    endpoint: Arc<LocalEndpoint>,
+    local_endpoint: Arc<LocalEndpoint>,
+    service_endpoint: EndpointHandle,
     outcome_uncertain: Arc<AtomicBool>,
     service_client: tokio::sync::OnceCell<ServiceClient>,
     service_restart_attempts: Arc<AtomicU8>,
@@ -74,8 +79,12 @@ pub(crate) struct ServiceTransition {
 
 impl CoreFacade {
     pub(crate) fn new_local() -> Self {
+        let local_endpoint = Arc::new(LocalEndpoint::new());
+        let service_endpoint: EndpointHandle =
+            Arc::new(ServiceEndpoint::new(local_endpoint.clone()));
         Self {
-            endpoint: Arc::new(LocalEndpoint::new()),
+            local_endpoint,
+            service_endpoint,
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             service_client: tokio::sync::OnceCell::new(),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -88,12 +97,12 @@ impl CoreFacade {
     }
 
     pub(crate) fn operation_info(&self, id: u64) -> Option<super::endpoint::OperationInfo> {
-        self.endpoint
+        self.local_endpoint
             .operation_info(super::endpoint::OperationId::from_raw(id))
     }
 
     pub(crate) fn operation_history(&self) -> Vec<super::endpoint::OperationInfo> {
-        self.endpoint.operation_history()
+        self.local_endpoint.operation_history()
     }
 
     async fn service_client(&self) -> anyhow::Result<&ServiceClient> {
@@ -114,15 +123,31 @@ impl CoreFacade {
             .await
     }
 
-    async fn run_local_mutation(&self, command: CoreCommand) -> anyhow::Result<()> {
+    fn endpoint_for_run_type(&self, run_type: RunType) -> EndpointHandle {
+        match run_type {
+            RunType::Service => self.service_endpoint.clone(),
+            RunType::Normal | RunType::Elevated => self.local_endpoint.clone(),
+        }
+    }
+
+    async fn active_endpoint(&self) -> anyhow::Result<EndpointHandle> {
+        let status = self.local_endpoint.status().await?;
+        Ok(self.endpoint_for_run_type(status.run_type))
+    }
+
+    async fn run_mutation(
+        &self,
+        endpoint: EndpointHandle,
+        command: CoreCommand,
+    ) -> anyhow::Result<()> {
         if self.outcome_uncertain() {
             anyhow::bail!(
                 "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
             );
         }
-        let admitted = self.endpoint.submit(command).await?;
+        let admitted = endpoint.submit(command).await?;
         let id = admitted.id;
-        match self.endpoint.wait_operation(id, LOCAL_OPERATION_WAIT).await {
+        match endpoint.wait_operation(id, LOCAL_OPERATION_WAIT).await {
             Some(info) if info.phase == OperationPhase::Succeeded => Ok(()),
             Some(info) if info.phase == OperationPhase::Failed => {
                 Err(anyhow::anyhow!(info.error.unwrap_or_else(|| {
@@ -152,51 +177,65 @@ impl CoreFacade {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         let expected_applied = self
-            .endpoint
+            .local_endpoint
             .status()
             .await?
             .applied
             .map(|identity| identity.revision);
-        self.run_local_mutation(CoreCommand::Reconcile {
-            clash,
-            target_core,
-            run_type,
-            expected_applied,
-        })
+        let endpoint = self.endpoint_for_run_type(run_type);
+        debug_assert_eq!(
+            endpoint.host(),
+            if run_type == RunType::Service {
+                ExecutionHost::Service
+            } else {
+                ExecutionHost::Local
+            }
+        );
+        self.run_mutation(
+            endpoint,
+            CoreCommand::Reconcile {
+                clash,
+                target_core,
+                run_type,
+                expected_applied,
+            },
+        )
         .await
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
-        self.run_local_mutation(CoreCommand::Stop).await
+        let endpoint = self.active_endpoint().await?;
+        self.run_mutation(endpoint, CoreCommand::Stop).await
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
-        self.run_local_mutation(CoreCommand::ChangeCore(clash_core))
+        let endpoint = self.active_endpoint().await?;
+        self.run_mutation(endpoint, CoreCommand::ChangeCore(clash_core))
             .await
     }
 
     pub(crate) async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        self.endpoint.status().await
+        self.local_endpoint.status().await
     }
 
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
-        self.endpoint.recovery_notify()
+        self.local_endpoint.recovery_notify()
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
-        self.endpoint.runtime_transform_output()
+        self.local_endpoint.runtime_transform_output()
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        self.endpoint.promoted_runtime_snapshot()
+        self.local_endpoint.promoted_runtime_snapshot()
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
-        self.endpoint.runtime_transform_failure()
+        self.local_endpoint.runtime_transform_failure()
     }
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
-        self.endpoint.effective_clash_info()
+        self.local_endpoint.effective_clash_info()
     }
 
     pub(crate) async fn service_status_receiver(
@@ -249,6 +288,23 @@ impl CoreFacade {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_selection_maps_run_type_to_explicit_host_handle() {
+        let facade = CoreFacade::new_local();
+        assert_eq!(
+            facade.endpoint_for_run_type(RunType::Normal).host(),
+            ExecutionHost::Local
+        );
+        assert_eq!(
+            facade.endpoint_for_run_type(RunType::Service).host(),
+            ExecutionHost::Service
+        );
+        assert_eq!(
+            facade.endpoint_for_run_type(RunType::Elevated).host(),
+            ExecutionHost::Local
+        );
+    }
 
     #[test]
     fn uninstall_guard_requires_proof_that_service_owns_no_running_core() {
