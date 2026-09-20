@@ -25,7 +25,10 @@ use futures::FutureExt;
 use crate::{
     client::runtime::{RuntimeSnapshot, RuntimeTransformFailure},
     config::{chimera::ClashCore, clash::ClashInfo},
-    core::clash::core::{CoreManager, RunType},
+    core::{
+        clash::core::{CoreManager, RunType},
+        service::core_host::{IpcServiceCoreHost, ServiceCoreHost},
+    },
     enhance::PostProcessingOutput,
 };
 
@@ -432,17 +435,26 @@ impl ControlEndpoint for LocalEndpoint {
     }
 }
 
-/// Compatibility service endpoint while Chimera still speaks the legacy
-/// daemon `/core/start|stop|status` wire. It shares the local transaction
-/// owner and operation registry so revision/recovery state remains singular.
+/// Staged Service-host endpoint.
+///
+/// Pure daemon lifecycle operations (stop/recover/status/API binding) go
+/// directly through the daemon v2 transport, while app-side runtime
+/// materialization for reconcile/change-core remains delegated to the local
+/// transaction owner until that preparation path is split from CoreManager.
+/// Both paths share the same app-side operation registry/ids.
 #[derive(Debug)]
 pub(crate) struct ServiceEndpoint {
     inner: Arc<LocalEndpoint>,
+    host: Arc<dyn ServiceCoreHost>,
 }
 
 impl ServiceEndpoint {
     pub(crate) fn new(inner: Arc<LocalEndpoint>) -> Self {
-        Self { inner }
+        Self::with_host(inner, Arc::new(IpcServiceCoreHost))
+    }
+
+    fn with_host(inner: Arc<LocalEndpoint>, host: Arc<dyn ServiceCoreHost>) -> Self {
+        Self { inner, host }
     }
 }
 
@@ -453,17 +465,36 @@ impl ControlEndpoint for ServiceEndpoint {
     }
 
     async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
-        self.inner.manager.service_api_connection().await
+        self.host.api_connection().await
     }
 
     async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo> {
-        if matches!(
-            &command,
-            CoreCommand::Reconcile { run_type, .. } if *run_type != RunType::Service
-        ) {
-            anyhow::bail!("service endpoint rejected a non-service reconcile");
+        match command {
+            CoreCommand::Stop => {
+                let host = self.host.clone();
+                Ok(self.inner.spawn_operation("service core stop", async move {
+                    host.stop().await?;
+                    Ok(OperationOutput::Stopped)
+                }))
+            }
+            CoreCommand::Recover => {
+                let host = self.host.clone();
+                Ok(self
+                    .inner
+                    .spawn_operation("service core recover", async move {
+                        host.recover().await?;
+                        Ok(OperationOutput::Recovered)
+                    }))
+            }
+            command @ CoreCommand::Reconcile { run_type, .. } => {
+                anyhow::ensure!(
+                    run_type == RunType::Service,
+                    "service endpoint rejected a non-service reconcile"
+                );
+                self.inner.submit(command).await
+            }
+            command @ CoreCommand::ChangeCore { .. } => self.inner.submit(command).await,
         }
-        self.inner.submit(command).await
     }
 
     async fn wait_operation(&self, id: OperationId, timeout: Duration) -> Option<OperationInfo> {
@@ -471,13 +502,56 @@ impl ControlEndpoint for ServiceEndpoint {
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        self.inner.status().await
+        let (state, state_changed_at) = self.host.status().await?;
+        Ok(CoreStatusSnapshot {
+            state,
+            state_changed_at,
+            run_type: RunType::Service,
+            applied: None,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
     use super::*;
+
+    #[derive(Debug, Default)]
+    struct RecordingServiceHost {
+        stops: AtomicUsize,
+        recovers: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ServiceCoreHost for RecordingServiceHost {
+        async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+            Ok(None)
+        }
+
+        async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
+            Ok((CoreState::Running, 42))
+        }
+
+        async fn start(
+            &self,
+            _config_path: &std::path::Path,
+            _core_type: &chimera_utils::core::CoreType,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.stops.fetch_add(1, AtomicOrdering::AcqRel);
+            Ok(())
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.recovers.fetch_add(1, AtomicOrdering::AcqRel);
+            Ok(())
+        }
+    }
 
     #[test]
     fn expected_applied_revision_rejects_stale_or_missing_authority() {
@@ -541,20 +615,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_endpoint_has_distinct_host_identity_and_shared_registry() {
+    async fn service_endpoint_routes_daemon_lifecycle_through_service_host_and_shared_registry() {
         let local = Arc::new(LocalEndpoint::new());
-        let service = ServiceEndpoint::new(local.clone());
+        let host = Arc::new(RecordingServiceHost::default());
+        let service = ServiceEndpoint::with_host(local.clone(), host.clone());
 
         assert_eq!(local.host(), ExecutionHost::Local);
         assert_eq!(service.host(), ExecutionHost::Service);
 
-        let admitted = service.submit(CoreCommand::Stop).await.unwrap();
-        let terminal = service
-            .wait_operation(admitted.id, Duration::from_secs(1))
+        let stop = service.submit(CoreCommand::Stop).await.unwrap();
+        let stop_terminal = service
+            .wait_operation(stop.id, Duration::from_secs(1))
             .await
             .expect("service endpoint stop should reach a terminal state");
-        assert_eq!(terminal.phase, OperationPhase::Succeeded);
-        assert_eq!(local.operation_info(admitted.id), Some(terminal));
+        assert_eq!(stop_terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(stop_terminal.output, Some(OperationOutput::Stopped));
+        assert_eq!(local.operation_info(stop.id), Some(stop_terminal));
+        assert_eq!(host.stops.load(AtomicOrdering::Acquire), 1);
+
+        let recover = service.submit(CoreCommand::Recover).await.unwrap();
+        let recover_terminal = service
+            .wait_operation(recover.id, Duration::from_secs(1))
+            .await
+            .expect("service endpoint recover should reach a terminal state");
+        assert_eq!(recover_terminal.phase, OperationPhase::Succeeded);
+        assert_eq!(recover_terminal.output, Some(OperationOutput::Recovered));
+        assert_eq!(local.operation_info(recover.id), Some(recover_terminal));
+        assert_eq!(host.recovers.load(AtomicOrdering::Acquire), 1);
+
+        let status = service.status().await.unwrap();
+        assert!(matches!(status.state, CoreState::Running));
+        assert_eq!(status.state_changed_at, 42);
+        assert_eq!(status.run_type, RunType::Service);
+        assert_eq!(status.applied, None);
     }
 
     #[tokio::test]

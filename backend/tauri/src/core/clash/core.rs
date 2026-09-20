@@ -546,12 +546,6 @@ impl CoreManager {
             .unwrap_or_else(|| Config::clash().latest().get_client_info())
     }
 
-    pub(crate) async fn service_api_connection(
-        &self,
-    ) -> Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>> {
-        self.service_host.api_connection().await
-    }
-
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
         let instance = {
             let instance = self.instance.lock();
