@@ -19,10 +19,11 @@
   singleton service locator 取 core manager。
 - 生产 `RuntimeInputOutput` 现在强制携带 `RuntimeInspectionData`；共享 executor
   生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
-- 尚未完成的主要 ref 差异仍是 `core_lifecycle/workflow.rs` + `core/actor_v2`
-  的 actor-owned lifecycle/service-host/uncertain-outcome 模型，以及 legacy typed
-  config/profile 持久化边界的进一步收敛。因此 P0 的“单一 runtime 业务实现”和
-  “移除 CoreManager singleton 访问”已完成，但完整 actor_v2 对齐仍是后续工作。
+- 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor protocol 与 Profile actor
+  的 typed refresh/import/materialization command 面。Profile production writes 已收敛到单一
+  `ProfilesClient`/actor owner；legacy `Config::profiles()` 在 actor 外只剩 runtime builder 与
+  Agent 的只读兼容投影。因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton 访问”
+  和“Profile 持久化单 writer”已完成，完整 ref actor protocol 仍是后续工作。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
@@ -38,18 +39,28 @@
   配置包；旧的 `backend/tauri/src/config/profile` 与
   `backend/tauri/src/config/runtime.rs` 仍保留，作为现有生产调用链的兼容
   边界，尚未切换所有 Tauri 调用方。
-- 共通业务入口及适配边界：新模块提供纯 Profile/Runtime 领域 API；现有
-  Tauri Profile 存储、脚本适配器和 UI 暂不改变，下一阶段由
-  `RuntimeBuilder` 负责接入并移除重复业务实现。
-- 影响的主界面、legacy UI、agent、数据、内核和平台：本阶段未改变 UI、
-  agent、持久化格式或内核控制；新增领域类型通过 Rust crate 导出，供后续
-  IPC 和 RuntimeBuilder 使用。
+- 共通业务入口及适配边界：新模块提供纯 Profile/Runtime 领域 API；Tauri 侧 production
+  Profile persistence 已新增 ref-aligned `ProfilesClient` + actor single-writer boundary：所有
+  `ProfilesWritePort` mutation 在 actor mailbox 内 clone→mutate→persist，只有落盘成功才 publish
+  snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
+  为 read/write 注入同一个 `ProfilesClient`；actor 外 `Config::profiles()` 仅剩 runtime builder / Agent
+  reads。当前 actor command 仍是 erased mutation closure，而 ref 已采用 typed
+  `ProfilesActorMessage` 并将 refresh/import/materialization scheduler 纳入 actor protocol；这些继续迁移。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
+  持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
+  也不改变已持久化文件。legacy UI/RuntimeBuilder/Agent 通过同步 mirror 继续读取原合同。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
-  chimera-config -- --test-threads=1`，135 passed；
-  `cargo fmt --manifest-path backend/Cargo.toml --all -- --check` 通过。
-- 收敛、移除或重新评估条件：RuntimeBuilder 接入新 Profiles 快照并覆盖主
-  界面、legacy UI 和 agent 的共同调用链后，删除 Tauri-local 的重复 Profile
-  / Runtime 业务实现；在此之前该差异必须标记为部分迁移。
+  chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
+  backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
+  --test-threads=1`，2 passed（并发 mutation 无 lost update；persist 成功后才 publish，失败 mutation
+  不改变 snapshot/disk）；`cargo test --manifest-path backend/Cargo.toml -p chimera
+  client::tests --lib -- --test-threads=1`，16 passed；`cargo check --manifest-path
+  backend/Cargo.toml -p chimera`、`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
+  与 `git diff --check` 通过。
+- 收敛、移除或重新评估条件：下一阶段把 remote refresh/import/definition replacement、
+  materialization/rebuild notification 改为 typed `ProfilesActorMessage`，并让 RuntimeBuilder/Agent
+  直接消费 actor snapshot 后删除 legacy `Config::profiles()` mirror。Tauri-local Profile 领域模型
+  尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
 ## DIFF-002：标准核心切换到 ref RuntimeExecutor（第二阶段）
 
