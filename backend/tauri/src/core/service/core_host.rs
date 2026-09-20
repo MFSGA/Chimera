@@ -8,7 +8,7 @@ use std::{
     borrow::Cow,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -22,6 +22,12 @@ use chimera_ipc::{
     },
     client::{ClientError, shortcuts::Client},
 };
+use tokio::time::Instant;
+
+const SERVICE_CORE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVICE_CORE_OPERATION_TIMEOUT: Duration = Duration::from_secs(45);
+const SERVICE_CORE_QUERY_WAIT: Duration = Duration::from_secs(5);
+const SERVICE_CORE_QUERY_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -82,6 +88,43 @@ fn query_error(error: ClientError<'_>) -> anyhow::Error {
     ))
 }
 
+fn query_window(remaining: Duration) -> (u64, Duration) {
+    let wait = remaining.min(SERVICE_CORE_QUERY_WAIT);
+    let wait_ms = wait.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
+    let transport = remaining.min(wait.saturating_add(SERVICE_CORE_QUERY_GRACE));
+    (wait_ms, transport)
+}
+
+async fn core_status_bounded() -> anyhow::Result<CoreInfos> {
+    match tokio::time::timeout(
+        SERVICE_CORE_RPC_TIMEOUT,
+        Client::service_default().core_status_v2(),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(anyhow::Error::from),
+        Err(_) => anyhow::bail!(
+            "service core status timed out after {} seconds",
+            SERVICE_CORE_RPC_TIMEOUT.as_secs()
+        ),
+    }
+}
+
+async fn core_api_bounded() -> anyhow::Result<Option<CoreApiConnection>> {
+    match tokio::time::timeout(
+        SERVICE_CORE_RPC_TIMEOUT,
+        Client::service_default().core_api_v2(),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(anyhow::Error::from),
+        Err(_) => anyhow::bail!(
+            "service core API capability timed out after {} seconds",
+            SERVICE_CORE_RPC_TIMEOUT.as_secs()
+        ),
+    }
+}
+
 async fn submit_and_wait(command: CoreCommandInfo<'static>) -> anyhow::Result<OperationOutputInfo> {
     let client = Client::service_default();
     let operation_id = next_operation_id();
@@ -89,10 +132,21 @@ async fn submit_and_wait(command: CoreCommandInfo<'static>) -> anyhow::Result<Op
         operation_id: Cow::Owned(operation_id.clone()),
         command,
     };
-    let mut info = client
-        .submit_core_v2(&request)
-        .await
-        .map_err(submit_error)?;
+    let mut info = match tokio::time::timeout(
+        SERVICE_CORE_RPC_TIMEOUT,
+        client.submit_core_v2(&request),
+    )
+    .await
+    {
+        Ok(result) => result.map_err(submit_error)?,
+        Err(_) => {
+            return Err(uncertain(format!(
+                "service core operation {operation_id} admission timed out after {} seconds; outcome is uncertain",
+                SERVICE_CORE_RPC_TIMEOUT.as_secs()
+            )));
+        }
+    };
+    let deadline = Instant::now() + SERVICE_CORE_OPERATION_TIMEOUT;
 
     loop {
         match info.phase {
@@ -113,14 +167,30 @@ async fn submit_and_wait(command: CoreCommandInfo<'static>) -> anyhow::Result<Op
             OperationPhase::Queued | OperationPhase::Running => {}
         }
 
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(uncertain(format!(
+                "service core operation {} did not reach a terminal state within {} seconds",
+                info.id,
+                SERVICE_CORE_OPERATION_TIMEOUT.as_secs()
+            )));
+        }
+        let (wait_ms, transport_timeout) = query_window(remaining);
         let query = CoreOperationReq {
             operation_id: Cow::Owned(info.id.clone()),
-            wait_ms: Some(60_000),
+            wait_ms: Some(wait_ms),
         };
-        info = client
-            .core_operation_v2(&query)
-            .await
-            .map_err(query_error)?;
+        info = match tokio::time::timeout(transport_timeout, client.core_operation_v2(&query)).await
+        {
+            Ok(result) => result.map_err(query_error)?,
+            Err(_) => {
+                return Err(uncertain(format!(
+                    "service core operation {} terminal query timed out after {} ms",
+                    info.id,
+                    transport_timeout.as_millis()
+                )));
+            }
+        };
     }
 }
 
@@ -143,17 +213,11 @@ pub(crate) struct IpcServiceCoreHost;
 #[async_trait]
 impl ServiceCoreHost for IpcServiceCoreHost {
     async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
-        Client::service_default()
-            .core_api_v2()
-            .await
-            .map_err(anyhow::Error::from)
+        core_api_bounded().await
     }
 
     async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
-        let info = Client::service_default()
-            .core_status_v2()
-            .await
-            .map_err(anyhow::Error::from)?;
+        let info = core_status_bounded().await?;
         Ok((info.state, info.state_changed_at))
     }
 
@@ -171,10 +235,7 @@ impl ServiceCoreHost for IpcServiceCoreHost {
                 )
             })?;
         let digest = payload_digest(config.as_bytes());
-        let status = Client::service_default()
-            .core_status_v2()
-            .await
-            .map_err(anyhow::Error::from)?;
+        let status = core_status_bounded().await?;
         let expected_applied = expected_applied_from_status(&status)?;
 
         let output = submit_and_wait(CoreCommandInfo::Reconcile {
@@ -273,6 +334,17 @@ mod tests {
         };
         let error = expected_applied_from_status(&info).unwrap_err();
         assert!(error.to_string().contains("without a v2 applied revision"));
+    }
+
+    #[test]
+    fn query_window_is_bounded_by_poll_slice_and_remaining_budget() {
+        let (wait_ms, transport) = query_window(Duration::from_secs(30));
+        assert_eq!(wait_ms, 5_000);
+        assert_eq!(transport, Duration::from_secs(6));
+
+        let (wait_ms, transport) = query_window(Duration::from_millis(750));
+        assert_eq!(wait_ms, 750);
+        assert_eq!(transport, Duration::from_millis(750));
     }
 
     #[test]
