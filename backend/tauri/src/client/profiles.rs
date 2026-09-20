@@ -93,6 +93,12 @@ impl<T> ProfilesCommit<T> {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProfilesError {
+    #[error("profile not found: {0}")]
+    ProfileNotFound(ProfileUid),
+    #[error("profile is not a remote profile")]
+    NotARemoteProfile,
+    #[error("invalid reorder list: {reason}")]
+    InvalidReorderList { reason: String },
     #[error("profile operation failed: {0:#}")]
     Domain(#[source] anyhow::Error),
     #[error("failed to persist profiles: {0:#}")]
@@ -108,6 +114,15 @@ pub(crate) enum ProfilesError {
 impl ProfilesError {
     fn with_context(self, context: String) -> Self {
         match self {
+            Self::ProfileNotFound(uid) => {
+                Self::Domain(anyhow::anyhow!("profile not found: {uid}; {context}"))
+            }
+            Self::NotARemoteProfile => Self::Domain(anyhow::anyhow!(
+                "profile is not a remote profile; {context}"
+            )),
+            Self::InvalidReorderList { reason } => Self::InvalidReorderList {
+                reason: format!("{reason}; {context}"),
+            },
             Self::Domain(error) => Self::Domain(error.context(context)),
             Self::Persist(error) => Self::Persist(error.context(context)),
             Self::RefreshFailed { message } => Self::RefreshFailed {
@@ -399,15 +414,15 @@ impl ProfilesActorState {
         snapshot
     }
 
-    async fn mutate<T>(
+    async fn mutate_typed<T>(
         &mut self,
-        mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
+        mutation: impl FnOnce(&mut Profiles) -> ProfilesResult<T>,
     ) -> ProfilesResult<ProfilesCommit<T>>
     where
         T: Send,
     {
         let mut next = self.profiles.clone();
-        let value = mutation(&mut next).map_err(ProfilesError::from)?;
+        let value = mutation(&mut next)?;
         let persisted = tokio::task::spawn_blocking({
             let next = next.clone();
             move || next.save_file()
@@ -423,6 +438,17 @@ impl ProfilesActorState {
         Ok(ProfilesCommit::new(snapshot, value))
     }
 
+    async fn mutate<T>(
+        &mut self,
+        mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
+    ) -> ProfilesResult<ProfilesCommit<T>>
+    where
+        T: Send,
+    {
+        self.mutate_typed(|profiles| mutation(profiles).map_err(ProfilesError::from))
+            .await
+    }
+
     fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
         serde_yaml::to_string(&(
             &profile.url,
@@ -435,11 +461,59 @@ impl ProfilesActorState {
         .context("failed to fingerprint remote profile definition")
     }
 
-    fn remote_profile(&self, uid: &ProfileUid) -> anyhow::Result<RemoteProfile> {
-        let item = self.profiles.get_item(uid)?;
+    fn require_profile(profiles: &Profiles, uid: &ProfileUid) -> ProfilesResult<()> {
+        if profiles.items.iter().any(|profile| profile.uid() == uid) {
+            Ok(())
+        } else {
+            Err(ProfilesError::ProfileNotFound(uid.clone()))
+        }
+    }
+
+    fn require_remote_profile(profiles: &Profiles, uid: &ProfileUid) -> ProfilesResult<()> {
+        let profile = profiles
+            .items
+            .iter()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| ProfilesError::ProfileNotFound(uid.clone()))?;
+        if profile.as_remote().is_some() {
+            Ok(())
+        } else {
+            Err(ProfilesError::NotARemoteProfile)
+        }
+    }
+
+    fn validate_reorder_list(profiles: &Profiles, list: &[ProfileUid]) -> ProfilesResult<()> {
+        if list.len() != profiles.items.len() {
+            return Err(ProfilesError::InvalidReorderList {
+                reason: format!(
+                    "expected {} profile identifiers, got {}",
+                    profiles.items.len(),
+                    list.len()
+                ),
+            });
+        }
+        let mut seen = HashSet::with_capacity(list.len());
+        for uid in list {
+            if !seen.insert(uid) {
+                return Err(ProfilesError::InvalidReorderList {
+                    reason: format!("duplicate profile identifier: {uid}"),
+                });
+            }
+            Self::require_profile(profiles, uid)?;
+        }
+        Ok(())
+    }
+
+    fn remote_profile(&self, uid: &ProfileUid) -> ProfilesResult<RemoteProfile> {
+        let item = self
+            .profiles
+            .items
+            .iter()
+            .find(|profile| profile.uid() == uid)
+            .ok_or_else(|| ProfilesError::ProfileNotFound(uid.clone()))?;
         item.as_remote()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
+            .ok_or(ProfilesError::NotARemoteProfile)
     }
 
     fn reserve_remote_identity(&self) -> anyhow::Result<(ProfileUid, PreparedProfileFile)> {
@@ -597,9 +671,17 @@ impl Actor for ProfilesActor {
             }
             ProfilesActorMessage::Delete { uid, reply } => {
                 let result = state
-                    .mutate(move |profiles| {
-                        let file = profiles.get_item(&uid)?.file().to_string();
-                        let affects_current = profiles.delete_item(&uid)?;
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_profile(profiles, &uid)?;
+                        let file = profiles
+                            .items
+                            .iter()
+                            .find(|profile| profile.uid() == uid)
+                            .expect("profile existence was checked")
+                            .file()
+                            .to_string();
+                        let affects_current =
+                            profiles.delete_item(&uid).map_err(ProfilesError::from)?;
                         Ok((file, affects_current))
                     })
                     .await
@@ -617,18 +699,18 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| {
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_profile(profiles, &uid)?;
                         let current = profiles
                             .items
                             .iter_mut()
                             .find(|item| item.uid() == uid)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("failed to get the profile item `uid:{uid}`")
-                            })?;
+                            .expect("profile existence was checked");
                         match (current, profile) {
                             (Profile::Remote(item), ProfileBuilder::Remote(builder)) => builder
                                 .patch_profile(item)
-                                .context("failed to patch remote profile")?,
+                                .context("failed to patch remote profile")
+                                .map_err(ProfilesError::from)?,
                             (Profile::Local(item), ProfileBuilder::Local(builder)) => {
                                 item.apply(builder)
                             }
@@ -638,7 +720,11 @@ impl Actor for ProfilesActor {
                             (Profile::Script(item), ProfileBuilder::Script(builder)) => {
                                 item.apply(builder)
                             }
-                            _ => anyhow::bail!("profile type mismatch"),
+                            _ => {
+                                return Err(ProfilesError::from(anyhow::anyhow!(
+                                    "profile type mismatch"
+                                )));
+                            }
                         }
                         Ok(())
                     })
@@ -652,7 +738,12 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| profiles.patch_metadata(&uid, name, desc))
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_profile(profiles, &uid)?;
+                        profiles
+                            .patch_metadata(&uid, name, desc)
+                            .map_err(ProfilesError::from)
+                    })
                     .await;
                 let _ = reply.send(result);
             }
@@ -665,14 +756,17 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| {
-                        profiles.patch_remote_options(
-                            &uid,
-                            user_agent,
-                            with_proxy,
-                            self_proxy,
-                            update_interval_minutes,
-                        )
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_remote_profile(profiles, &uid)?;
+                        profiles
+                            .patch_remote_options(
+                                &uid,
+                                user_agent,
+                                with_proxy,
+                                self_proxy,
+                                update_interval_minutes,
+                            )
+                            .map_err(ProfilesError::from)
                     })
                     .await;
                 let _ = reply.send(result);
@@ -683,19 +777,35 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| profiles.reorder(&active_id, &over_id))
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_profile(profiles, &active_id)?;
+                        ProfilesActorState::require_profile(profiles, &over_id)?;
+                        profiles
+                            .reorder(&active_id, &over_id)
+                            .map_err(ProfilesError::from)
+                    })
                     .await;
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::ReorderByList { list, reply } => {
                 let result = state
-                    .mutate(move |profiles| profiles.reorder_by_list(&list))
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::validate_reorder_list(profiles, &list)?;
+                        profiles.reorder_by_list(&list).map_err(ProfilesError::from)
+                    })
                     .await;
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::SetCurrent { uid, reply } => {
                 let result = state
-                    .mutate(move |profiles| profiles.activate(uid.as_deref()))
+                    .mutate_typed(move |profiles| {
+                        if let Some(uid) = uid.as_ref() {
+                            ProfilesActorState::require_profile(profiles, uid)?;
+                        }
+                        profiles
+                            .activate(uid.as_deref())
+                            .map_err(ProfilesError::from)
+                    })
                     .await;
                 let _ = reply.send(result);
             }
@@ -714,7 +824,15 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| profiles.set_profile_transform_chain(&uid, transforms))
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_profile(profiles, &uid)?;
+                        for transform in &transforms {
+                            ProfilesActorState::require_profile(profiles, transform)?;
+                        }
+                        profiles
+                            .set_profile_transform_chain(&uid, transforms)
+                            .map_err(ProfilesError::from)
+                    })
                     .await
                     .map(|commit| {
                         let affects_current = commit.value;
@@ -724,7 +842,14 @@ impl Actor for ProfilesActor {
             }
             ProfilesActorMessage::SetGlobalTransformChain { transforms, reply } => {
                 let result = state
-                    .mutate(move |profiles| profiles.set_global_transform_chain(transforms))
+                    .mutate_typed(move |profiles| {
+                        for transform in &transforms {
+                            ProfilesActorState::require_profile(profiles, transform)?;
+                        }
+                        profiles
+                            .set_global_transform_chain(transforms)
+                            .map_err(ProfilesError::from)
+                    })
                     .await
                     .map(|commit| {
                         let affects_current = commit.value;
@@ -746,16 +871,17 @@ impl Actor for ProfilesActor {
 
                 if let Some(options) = options {
                     let patched = state
-                        .mutate({
+                        .mutate_typed({
                             let uid = uid.clone();
                             move |profiles| {
+                                ProfilesActorState::require_remote_profile(profiles, &uid)?;
                                 let item = profiles
                                     .items
                                     .iter_mut()
                                     .find(|item| item.uid() == uid)
-                                    .ok_or_else(|| anyhow::anyhow!("profile `{uid}` not found"))?;
+                                    .expect("remote profile existence was checked");
                                 let Profile::Remote(profile) = item else {
-                                    anyhow::bail!("profile `{uid}` is not remote");
+                                    unreachable!("remote profile kind was checked")
                                 };
                                 profile.option.apply(options);
                                 Ok(())
@@ -771,7 +897,7 @@ impl Actor for ProfilesActor {
                 let remote = match state.remote_profile(&uid) {
                     Ok(remote) => remote,
                     Err(error) => {
-                        let _ = reply.send(Err(error.into()));
+                        let _ = reply.send(Err(error));
                         return Ok(());
                     }
                 };
@@ -904,16 +1030,22 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let result = state
-                    .mutate(move |profiles| {
-                        profiles.replace_remote_definition_with_transforms(
-                            &uid,
-                            &file,
-                            updated_at,
-                            url,
-                            option,
-                            subscription,
-                            transforms,
-                        )
+                    .mutate_typed(move |profiles| {
+                        ProfilesActorState::require_remote_profile(profiles, &uid)?;
+                        for transform in &transforms {
+                            ProfilesActorState::require_profile(profiles, transform)?;
+                        }
+                        profiles
+                            .replace_remote_definition_with_transforms(
+                                &uid,
+                                &file,
+                                updated_at,
+                                url,
+                                option,
+                                subscription,
+                                transforms,
+                            )
+                            .map_err(ProfilesError::from)
                     })
                     .await
                     .map(|commit| {
@@ -1762,6 +1894,7 @@ mod actor_tests {
     use crate::config::profile::{
         item::{
             Profile,
+            local::LocalProfile,
             remote::{
                 PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileImportMode,
                 RemoteProfileOptions, RemoteProfileOptionsBuilder, SubscriptionInfo,
@@ -2087,7 +2220,7 @@ mod actor_tests {
     }
 
     #[tokio::test]
-    async fn domain_failure_is_typed_without_advancing_snapshot() {
+    async fn common_domain_failures_are_typed_without_advancing_snapshot() {
         let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
         let config_dir = tempfile::tempdir().expect("isolated config dir");
         unsafe {
@@ -2112,11 +2245,53 @@ mod actor_tests {
             })
             .await
         {
-            Ok(_) => panic!("missing profile should be a domain failure"),
+            Ok(_) => panic!("missing profile should be typed"),
             Err(error) => error,
         };
-        assert!(matches!(error, ProfilesError::Domain(_)));
+        assert!(matches!(error, ProfilesError::ProfileNotFound(ref uid) if uid == "missing"));
         assert_eq!(client.versioned_snapshot().unwrap().revision(), 1);
+
+        let error = match client
+            .call_commit(|reply| ProfilesActorMessage::ReorderByList {
+                list: vec!["missing".to_string()],
+                reply,
+            })
+            .await
+        {
+            Ok(_) => panic!("invalid reorder list should be typed"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ProfilesError::InvalidReorderList { .. }));
+        assert_eq!(client.versioned_snapshot().unwrap().revision(), 1);
+
+        let mut local = LocalProfile::builder();
+        local.assign_managed_identity("l-test".to_string());
+        let local = local.build().expect("local profile should build");
+        let added = client
+            .call_commit(|reply| ProfilesActorMessage::Add {
+                profile: Profile::Local(local),
+                reply,
+            })
+            .await
+            .expect("local profile add should commit");
+        assert_eq!(added.snapshot.revision(), 2);
+
+        let error = match client
+            .call_commit(|reply| ProfilesActorMessage::PatchRemoteOptions {
+                uid: "l-test".to_string(),
+                user_agent: None,
+                with_proxy: None,
+                self_proxy: None,
+                update_interval_minutes: None,
+                reply,
+            })
+            .await
+        {
+            Ok(_) => panic!("remote-only mutation on local profile should be typed"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ProfilesError::NotARemoteProfile));
+        assert_eq!(client.versioned_snapshot().unwrap().revision(), 2);
 
         unsafe {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
@@ -2407,7 +2582,11 @@ mod actor_tests {
             .set_current(Some(&"missing-profile".to_string()))
             .await
             .expect_err("invalid activation must fail");
-        assert!(error.to_string().contains("failed to get the profile item"));
+        assert!(
+            error
+                .to_string()
+                .contains("profile not found: missing-profile")
+        );
 
         let after = client.snapshot().expect("snapshot should remain readable");
         assert_eq!(after.valid, committed.valid);

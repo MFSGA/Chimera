@@ -71,10 +71,12 @@
   影响判断已移入 `affects_current`，add/import 的 server-generated uid 同时写入 `created`。`ProfilesWritePort`
   作为兼容边界再解包成既有 tuple/bool 返回，因此 UI/IPC 合同不变，并在 debug trace 中记录 commit revision。
   actor RPC error 也已从裸 `anyhow` 收敛为 typed
-  `ProfilesError::{Domain, Persist, RefreshFailed, ImportFailed, Rpc}`：持久化失败、远程 refresh/import 准备失败和
-  actor RPC failure 可在边界上稳定分类，失败仍不推进 snapshot revision。与 ref 的剩余差异主要是
-  materialization scheduler/rebuild notifier、`ProfileNotFound/ProfileInUse/ValidationFailed/VersionConflict/...`
-  等更细粒度 domain variants、`CommitReport` 的 degradation/materialization metadata 与 shared Profile model。
+  `ProfilesError::{ProfileNotFound, NotARemoteProfile, InvalidReorderList, Domain, Persist,
+  RefreshFailed, ImportFailed, Rpc}`：常见缺失/remote-only/reorder admission、持久化失败、远程 refresh/import
+  准备失败和 actor RPC failure 可在边界上稳定分类，失败仍不推进 snapshot revision。更复杂的 name/type/
+  transform validation 暂由 `Domain(anyhow)` 承接，避免解析 legacy error string。与 ref 的剩余差异主要是
+  materialization scheduler/rebuild notifier、`ProfileInUse/ValidationFailed/VersionConflict/Revision/Materialization`
+  等需要 shared model 或 scheduler 支撑的 variants、`CommitReport` 的 degradation/materialization metadata 与 shared Profile model。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
   也不改变已持久化文件。生产读路径统一走 `ProfilesClient` snapshot；RuntimeBuilder、Agent diagnostics
@@ -82,8 +84,9 @@
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
-  --test-threads=1`，13 passed（并发 mutation 无 lost update；persist 成功后才 publish；typed Domain/Persist/Import
-  failure 可稳定分类且失败不推进 snapshot；commit metadata 的 `created/affects_current` 与 published snapshot revision
+  --test-threads=1`，13 passed（并发 mutation 无 lost update；persist 成功后才 publish；`ProfileNotFound`/
+  `NotARemoteProfile`/`InvalidReorderList` 与 Persist/Import failure 可稳定分类且失败不推进 snapshot；commit metadata 的
+  `created/affects_current` 与 published snapshot revision
   同 generation，删除当前 profile 也正确标记 runtime 影响；versioned snapshot
   成功 commit revision 1→2，且 actor commit reply 的 snapshot revision 与 published watch snapshot 完全一致；
   持久化失败 revision/snapshot 均不前进；duplicate refresh 拒绝；in-flight definition
@@ -97,8 +100,8 @@
   与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：`Config::profiles()`/`profiles_config` mirror 已删除，旧
   `core::state::ManagedState` 也已退出 active module graph。versioned snapshot read、带 `affects_current/created`
-  metadata 的 typed successful commit envelope 与第一阶段 typed actor error protocol 已进入 actor；下一阶段继续把
-  materialization/rebuild notification、ref 细粒度 domain errors 与 degradation/materialization commit metadata
+  metadata 的 typed successful commit envelope 与常用 typed actor domain error protocol 已进入 actor；下一阶段继续把
+  materialization/rebuild notification、ref 剩余 shared-model/scheduler domain errors 与 degradation/materialization commit metadata
   收进 actor。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
