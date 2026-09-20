@@ -38,7 +38,7 @@ use crate::{
     core::{
         clash::api,
         logger::Logger,
-        service::core_host::{LegacyServiceCoreHost, ServiceCoreHost},
+        service::core_host::{IpcServiceCoreHost, ServiceCoreHost, is_outcome_uncertain},
     },
     enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
@@ -109,6 +109,10 @@ enum RuntimeRestartError {
 }
 
 impl RuntimeRestartError {
+    fn outcome_uncertain(&self) -> bool {
+        matches!(self, Self::Start(error) if is_outcome_uncertain(error))
+    }
+
     /// Recovery is only required after the product may have changed or core apply began.
     fn requires_recovery(&self) -> bool {
         matches!(
@@ -439,7 +443,7 @@ pub struct CoreManager {
 
 impl CoreManager {
     pub(crate) fn new() -> Self {
-        Self::with_service_host(Arc::new(LegacyServiceCoreHost))
+        Self::with_service_host(Arc::new(IpcServiceCoreHost))
     }
 
     fn with_service_host(service_host: Arc<dyn ServiceCoreHost>) -> Self {
@@ -783,6 +787,9 @@ impl CoreManager {
             Ok(()) => Ok(()),
             Err(primary) => {
                 Config::runtime().discard();
+                if primary.outcome_uncertain() {
+                    return Err(primary.into());
+                }
                 if !primary.requires_recovery() {
                     *Config::clash().data() = previous_clash;
                     return Err(primary.into());

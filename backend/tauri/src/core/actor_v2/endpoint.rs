@@ -263,6 +263,9 @@ impl LocalEndpoint {
         tokio::spawn(async move {
             let info = match AssertUnwindSafe(future).catch_unwind().await {
                 Ok(Ok(output)) => OperationInfo::succeeded(id, output),
+                Ok(Err(error)) if crate::core::service::core_host::is_outcome_uncertain(&error) => {
+                    OperationInfo::uncertain(id, error.to_string())
+                }
                 Ok(Err(error)) => OperationInfo::failed(id, error.to_string()),
                 Err(_) => {
                     OperationInfo::uncertain(id, format!("{operation} panicked after admission"))
