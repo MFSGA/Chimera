@@ -4,11 +4,12 @@
 //! protocol, while the facade maps application lifecycle workflow onto that
 //! endpoint. Successful local operations publish typed terminal outputs with
 //! the applied runtime identity where available, and reconcile uses an
-//! expected-applied revision CAS. Service-host routing remains staged follow-up
-//! work.
+//! expected-applied revision CAS. Privileged daemon commands are serialized by
+//! a staged ServiceActor; daemon core-control endpoint routing remains follow-up.
 
 pub mod endpoint;
 pub mod facade;
+pub mod service_actor;
 
 pub(crate) use endpoint::CoreStatusSnapshot;
 pub(crate) use facade::CoreFacade;
