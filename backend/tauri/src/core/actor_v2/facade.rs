@@ -173,6 +173,7 @@ impl CoreFacade {
     pub(crate) async fn reconcile(
         &self,
         clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
@@ -195,6 +196,7 @@ impl CoreFacade {
             endpoint,
             CoreCommand::Reconcile {
                 clash,
+                profiles,
                 target_core,
                 run_type,
                 expected_applied,
@@ -208,10 +210,20 @@ impl CoreFacade {
         self.run_mutation(endpoint, CoreCommand::Stop).await
     }
 
-    pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+    pub(crate) async fn change_core(
+        &self,
+        profiles: crate::config::profile::profiles::Profiles,
+        clash_core: ClashCore,
+    ) -> anyhow::Result<()> {
         let endpoint = self.active_endpoint().await?;
-        self.run_mutation(endpoint, CoreCommand::ChangeCore(clash_core))
-            .await
+        self.run_mutation(
+            endpoint,
+            CoreCommand::ChangeCore {
+                profiles,
+                core: clash_core,
+            },
+        )
+        .await
     }
 
     pub(crate) async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {

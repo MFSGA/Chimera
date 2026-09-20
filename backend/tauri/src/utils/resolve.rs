@@ -253,10 +253,7 @@ pub fn resolve_setup(app: &mut App) {
     log_err!(init::init_service((*client).clone()));
     log_err!(crate::client::ports::resolve_random_mixed_port(&client));
 
-    // 启动核心
-    log::trace!("init config");
-    log_err!(Config::init_config());
-
+    // 启动核心；runtime 生成由 lifecycle actor 的 startup reconcile 单独拥有。
     log::trace!("launch core");
     log_err!(client.init_core());
 

@@ -144,12 +144,16 @@ impl OperationInfo {
 pub(crate) enum CoreCommand {
     Reconcile {
         clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
         target_core: ClashCore,
         run_type: RunType,
         expected_applied: Option<u64>,
     },
     Stop,
-    ChangeCore(ClashCore),
+    ChangeCore {
+        profiles: crate::config::profile::profiles::Profiles,
+        core: ClashCore,
+    },
 }
 
 fn ensure_expected_applied(expected: Option<u64>, actual: Option<u64>) -> anyhow::Result<()> {
@@ -165,7 +169,7 @@ impl CoreCommand {
         match self {
             Self::Reconcile { .. } => "core reconcile",
             Self::Stop => "core stop",
-            Self::ChangeCore(_) => "core selection",
+            Self::ChangeCore { .. } => "core selection",
         }
     }
 }
@@ -284,6 +288,7 @@ impl LocalEndpoint {
         match command {
             CoreCommand::Reconcile {
                 clash,
+                profiles,
                 target_core,
                 run_type,
                 expected_applied,
@@ -298,7 +303,7 @@ impl LocalEndpoint {
                 };
                 ensure_expected_applied(expected_applied, actual_applied)?;
                 lease
-                    .rebuild_running_config_with(clash, target_core, run_type)
+                    .rebuild_running_config_with(clash, profiles, target_core, run_type)
                     .await?;
                 let (revision, core) = manager.applied_runtime_identity().ok_or_else(|| {
                     anyhow::anyhow!("reconcile succeeded without an applied runtime identity")
@@ -312,8 +317,8 @@ impl LocalEndpoint {
                 lease.stop_core().await?;
                 Ok(OperationOutput::Stopped)
             }
-            CoreCommand::ChangeCore(core) => {
-                lease.change_core(core).await?;
+            CoreCommand::ChangeCore { profiles, core } => {
+                lease.change_core(profiles, core).await?;
                 let (revision, core) = manager.applied_runtime_identity().ok_or_else(|| {
                     anyhow::anyhow!("core change succeeded without an applied runtime identity")
                 })?;

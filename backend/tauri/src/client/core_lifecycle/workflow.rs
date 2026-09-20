@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use super::{
     super::{
-        application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
+        application::ApplicationClient, clash_config::ClashConfigClient,
+        profiles::ProfilesReadPort, runtime::RuntimePaths,
     },
     ports::{BinaryInstaller, CoreLifecyclePort, PreparedCoreBinary, ServiceLifecyclePort},
 };
@@ -34,6 +35,7 @@ pub(super) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
     core: Arc<dyn CoreLifecyclePort>,
+    profiles: Arc<dyn ProfilesReadPort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
 }
@@ -43,6 +45,7 @@ impl CoreLifecycleWorkflow {
         application: ApplicationClient,
         clash: ClashConfigClient,
         core: Arc<dyn CoreLifecyclePort>,
+        profiles: Arc<dyn ProfilesReadPort>,
         installer: Arc<dyn BinaryInstaller>,
         _runtime_paths: RuntimePaths,
         service: Arc<dyn ServiceLifecyclePort>,
@@ -51,6 +54,7 @@ impl CoreLifecycleWorkflow {
             application,
             clash,
             core,
+            profiles,
             installer,
             service,
         }
@@ -66,7 +70,9 @@ impl CoreLifecycleWorkflow {
             Command::Shutdown => self.core.stop().await,
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
-            Command::SelectCore(core) => self.core.change_core(core).await,
+            Command::SelectCore(core) => {
+                self.core.change_core(self.profiles.snapshot()?, core).await
+            }
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService => self.install_service().await,
             Command::UninstallService => self.uninstall_service().await,
@@ -86,7 +92,10 @@ impl CoreLifecycleWorkflow {
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
-        self.core.reconcile(clash, target_core, run_type).await
+        let profiles = self.profiles.snapshot()?;
+        self.core
+            .reconcile(clash, profiles, target_core, run_type)
+            .await
     }
 
     async fn install_service(&self) -> anyhow::Result<()> {

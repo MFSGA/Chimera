@@ -150,6 +150,7 @@ impl ChimeraClient {
                 core.clone(),
                 typed.application.clone(),
                 typed.clash_config.clone(),
+                profiles.clone(),
                 runtime_paths,
                 service,
             ))?;
@@ -186,6 +187,7 @@ impl ChimeraClient {
             core.clone(),
             typed.application.clone(),
             typed.clash_config.clone(),
+            profiles.clone(),
             runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
         );
         Self::with_parts_and_typed_config(
@@ -267,6 +269,7 @@ mod tests {
         async fn reconcile(
             &self,
             _clash: chimera_config::clash::config::ClashConfig,
+            _profiles: Profiles,
             _target_core: ClashCore,
             _run_type: RunType,
         ) -> anyhow::Result<()> {
@@ -282,7 +285,11 @@ mod tests {
             Ok(())
         }
 
-        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(
+            &self,
+            _profiles: Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("change-core");
             Ok(())
         }

@@ -21,8 +21,8 @@
   生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
 - 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor 的完整 endpoint-handle/status protocol，
   以及 Profile actor snapshot 对 legacy read mirror 的最终替代。Profile production writes、remote refresh
-  与 remote import 已收敛到单一 `ProfilesClient`/actor owner；legacy `Config::profiles()` 在 actor 外只剩
-  runtime builder 的只读 compatibility wrapper，Agent diagnostics 已直接消费 `ProfilesClient` actor snapshot。
+  与 remote import 已收敛到单一 `ProfilesClient`/actor owner；production actor 外已不再读取
+  `Config::profiles()`：Agent diagnostics 与 runtime reconcile/select-core 都消费 `ProfilesClient` actor snapshot。
   因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
   访问”和“Profile 持久化单 writer + typed refresh/import workflow”已完成，完整 ref actor protocol 仍是后续工作。
 
@@ -44,8 +44,10 @@
   Profile persistence 已新增 ref-aligned `ProfilesClient` + actor single-writer boundary：所有
   `ProfilesWritePort` mutation 在 actor mailbox 内 clone→mutate→persist，只有落盘成功才 publish
   snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
-  为 read/write 注入同一个 `ProfilesClient`；Agent diagnostics 已改读 `ChimeraClient::profiles_snapshot()`，
-  因此 actor 外 `Config::profiles()` 仅剩 runtime builder compatibility read。production persistence command
+  为 read/write 注入同一个 `ProfilesClient`；Agent diagnostics 已改读 `ChimeraClient::profiles_snapshot()`。
+  lifecycle workflow 也持有同一个 `ProfilesReadPort`：Reconcile/SelectCore admission 时捕获 actor snapshot，
+  经 `CoreLifecyclePort → CoreFacade → CoreCommand → CoreManager → RuntimeBuilder` 显式传递，不再让 lower
+  runtime builder 从全局 mirror 隐式取 Profile state。production persistence command
   已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
   current/valid/transforms/remote refresh/definition replacement），不再使用 `Any`/downcast 或 erased
   mutation closure；仅 e2e 测试保留 test-only mutation seam。remote refresh 已按 ref 的两阶段
@@ -56,10 +58,12 @@
   仍等待时执行 file→state 原子提交；prepare 失败或 caller cancellation 都不会发布 profile snapshot，也不会
   留下 materialized file/reservation。IPC `import_profile_inner` 不再自己构造 `RemoteProfileBuilder` 或调用
   `commit_new_profile`，而是委托 `ChimeraClient::import_remote_profile` → `ProfilesWritePort::import_remote`。
-  与 ref 的剩余差异主要是 materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
+  启动期旧 `Config::init_config()`/`generate*` 预生成路径也已删除：runtime generation 只由 lifecycle actor 的
+  startup reconcile 驱动，不再在启动时先用 legacy global snapshot 重复生成一次。与 ref 的剩余差异主要是
+  materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
-  也不改变已持久化文件。legacy UI/RuntimeBuilder 仍通过同步 mirror 兼容读取；Agent diagnostics 已直接读取 actor snapshot。
+  也不改变已持久化文件。legacy UI 仍可通过同步 mirror 兼容读取；RuntimeBuilder 与 Agent diagnostics 已直接使用 actor snapshot。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
@@ -67,12 +71,14 @@
   拒绝；in-flight definition change 触发 stale fence；materialized file write failure 不提交 state；state
   persist failure 回滚 materialized file；remote import 原子提交 file+profiles.yaml；prepare failure 不留下
   profile/file；caller cancellation 不提交且释放 reservation）；`cargo test --manifest-path backend/Cargo.toml -p chimera
-  client::tests --lib -- --test-threads=1`，14 passed；`cargo check --manifest-path
-  backend/Cargo.toml -p chimera`、`cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
+  client::tests --lib -- --test-threads=1`，14 passed；`client::core_lifecycle::tests`，23 passed（新增
+  injected Profiles snapshot marker，证明 reconcile 使用 actor snapshot 而不是 legacy global）；
+  `core::actor_v2`，13 passed；`cargo check --manifest-path backend/Cargo.toml -p chimera`、
+  `cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：下一阶段把 materialization/rebuild notification 与 versioned snapshot/error
-  protocol 继续收进 actor，并让 RuntimeBuilder/Agent 直接消费 actor snapshot 后删除 legacy
-  `Config::profiles()` mirror。Tauri-local Profile 领域模型
+  protocol 继续收进 actor，并在 legacy UI/read bridge 迁完后删除 `Config::profiles()` mirror。RuntimeBuilder/Agent
+  已不再依赖该 mirror。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
 ## DIFF-002：标准核心切换到 ref RuntimeExecutor（第二阶段）
@@ -83,7 +89,7 @@
   `backend/tauri/src/enhance/script/adapter.rs`
 - Chimera 路径和符号：`backend/tauri/src/enhance/runtime_builder.rs`、
   `content_source.rs`、`artifact_bridge.rs`、`script/adapter.rs`，以及
-  `Config::generate_runtime_input_with`
+  `Config::generate_runtime_output_with_ports`
 - 类别：临时迁移
 - 差异及必要性：所有 Clash 核心（Premium、Rust、Mihomo、Alpha 与
   Chimera Client）现在都通过共享 `RuntimePipelineInputs` 和 `execute` 完成

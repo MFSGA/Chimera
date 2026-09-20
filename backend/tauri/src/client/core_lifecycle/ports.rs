@@ -97,11 +97,16 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn reconcile(
         &self,
         clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
-    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
+    async fn change_core(
+        &self,
+        profiles: crate::config::profile::profiles::Profiles,
+        clash_core: ClashCore,
+    ) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
     fn outcome_uncertain(&self) -> bool {
