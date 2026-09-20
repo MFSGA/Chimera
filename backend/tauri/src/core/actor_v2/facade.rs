@@ -210,6 +210,16 @@ impl CoreFacade {
         self.run_mutation(endpoint, CoreCommand::Stop).await
     }
 
+    pub(crate) async fn recover(&self) -> anyhow::Result<()> {
+        let status = self.local_endpoint.status().await?;
+        anyhow::ensure!(
+            status.run_type == RunType::Service,
+            "local core recovery requires a fresh typed reconcile"
+        );
+        self.run_mutation(self.service_endpoint.clone(), CoreCommand::Recover)
+            .await
+    }
+
     pub(crate) async fn change_core(
         &self,
         profiles: crate::config::profile::profiles::Profiles,

@@ -967,6 +967,11 @@ mod tests {
         recovery_notify: Arc<tokio::sync::Notify>,
     }
 
+    struct ServiceRecoveryCore {
+        events: Arc<Mutex<Vec<&'static str>>>,
+        recovery_notify: Arc<tokio::sync::Notify>,
+    }
+
     struct PanicOnStopCore {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -1454,6 +1459,52 @@ mod tests {
 
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
             None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ServiceRecoveryCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("unexpected-rebuild");
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("recover");
+            Ok(())
+        }
+
+        async fn change_core(
+            &self,
+            _profiles: crate::config::profile::profiles::Profiles,
+            _clash_core: ClashCore,
+        ) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Service,
+                applied: None,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            Some(self.recovery_notify.clone())
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
@@ -1964,6 +2015,37 @@ mod tests {
         })
         .await
         .expect("recovery signal should be admitted by the lifecycle actor");
+    }
+
+    #[tokio::test]
+    async fn service_crash_recovery_uses_lower_recover_instead_of_reconcile() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recovery_notify = Arc::new(tokio::sync::Notify::new());
+        let _client = CoreLifecycleClient::spawn(
+            Arc::new(ServiceRecoveryCore {
+                events: events.clone(),
+                recovery_notify: recovery_notify.clone(),
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        recovery_notify.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.lock().unwrap().contains(&"recover") {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("Service recovery signal should reach lower Recover");
+
+        assert_eq!(events.lock().unwrap().as_slice(), ["recover"]);
     }
 
     #[tokio::test]

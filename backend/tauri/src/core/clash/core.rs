@@ -206,6 +206,15 @@ impl Instance {
         }
     }
 
+    pub async fn recover(&self) -> Result<()> {
+        match self {
+            Instance::Child { .. } => {
+                anyhow::bail!("local core recovery must use typed reconcile")
+            }
+            Instance::Service { host, .. } => host.recover().await,
+        }
+    }
+
     pub async fn stop(&self) -> Result<()> {
         let state = self.state().await;
         match self {
@@ -419,6 +428,21 @@ impl CoreLifecycleLease<'_> {
 
     pub(crate) async fn stop_core(&self) -> Result<()> {
         self.manager.stop_core_with_lease(self).await
+    }
+
+    pub(crate) async fn recover_service_core(&self) -> Result<()> {
+        let instance = {
+            let instance = self.manager.instance.lock();
+            instance.as_ref().cloned()
+        };
+        let Some(instance) = instance else {
+            return Ok(());
+        };
+        anyhow::ensure!(
+            instance.run_type() == RunType::Service,
+            "service recover requires a Service-hosted core"
+        );
+        instance.recover().await
     }
 
     pub(crate) async fn change_core(
@@ -957,6 +981,11 @@ mod tests {
             self.calls.lock().push("stop");
             Ok(())
         }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.calls.lock().push("recover");
+            Ok(())
+        }
     }
 
     #[test]
@@ -1008,11 +1037,12 @@ mod tests {
         assert_eq!(changed_at, 42);
 
         instance.start().await.unwrap();
+        instance.recover().await.unwrap();
         instance.stop().await.unwrap();
 
         assert_eq!(
             host.calls.lock().as_slice(),
-            ["status", "start", "status", "stop"]
+            ["status", "start", "recover", "status", "stop"]
         );
     }
 }

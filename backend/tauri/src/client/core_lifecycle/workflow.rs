@@ -66,7 +66,8 @@ impl CoreLifecycleWorkflow {
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
-            Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::RecoverCore => self.recover().await,
+            Command::Reconcile => self.reconcile().await,
             Command::Shutdown => self.core.stop().await,
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
@@ -87,6 +88,16 @@ impl CoreLifecycleWorkflow {
             Command::RestartService => self.start_service(true).await,
             Command::StopService => self.stop_service().await,
             Command::ServiceEndpointDown => self.service.report_endpoint_down().await,
+        }
+    }
+
+    async fn recover(&self) -> anyhow::Result<()> {
+        let status = self.core.status().await?;
+        if status.run_type == crate::core::RunType::Service {
+            tracing::debug!("recovering Service-hosted core through daemon v2 Recover");
+            self.core.recover().await
+        } else {
+            self.reconcile().await
         }
     }
 
