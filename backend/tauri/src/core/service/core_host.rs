@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use chimera_ipc::{
     api::{
         core::v2::{
-            CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationOutputInfo, OperationPhase,
-            payload_digest,
+            CoreApiConnection, CoreCommandInfo, CoreOperationReq, CoreSubmitReq,
+            OperationOutputInfo, OperationPhase, payload_digest,
         },
         status::{CoreInfos, CoreState, RevisionIdInfo},
     },
@@ -126,6 +126,7 @@ async fn submit_and_wait(command: CoreCommandInfo<'static>) -> anyhow::Result<Op
 
 #[async_trait]
 pub(crate) trait ServiceCoreHost: Send + Sync + std::fmt::Debug {
+    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>>;
     async fn status(&self) -> anyhow::Result<(CoreState, i64)>;
     async fn start(
         &self,
@@ -140,6 +141,13 @@ pub(crate) struct IpcServiceCoreHost;
 
 #[async_trait]
 impl ServiceCoreHost for IpcServiceCoreHost {
+    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+        Client::service_default()
+            .core_api_v2()
+            .await
+            .map_err(anyhow::Error::from)
+    }
+
     async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
         let info = Client::service_default()
             .core_status_v2()

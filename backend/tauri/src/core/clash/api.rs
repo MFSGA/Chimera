@@ -117,9 +117,29 @@ impl ApiClient {
     pub(crate) fn new(info: crate::config::clash::ClashInfo) -> Result<Self> {
         let base_url =
             url::Url::parse(&format!("http://{}", info.server)).context("failed to parse host")?;
+        Self::from_url_and_secret(base_url, info.secret)
+    }
+
+    pub(crate) fn from_connection(
+        connection: chimera_ipc::api::core::v2::CoreApiConnection,
+    ) -> Result<Self> {
+        use chimera_ipc::api::core::v2::CoreControllerInfo;
+
+        let base_url = match connection.controller {
+            CoreControllerInfo::Http(url) => {
+                url::Url::parse(&url).context("failed to parse bound Clash API URL")?
+            }
+            CoreControllerInfo::UnixSocket(_) | CoreControllerInfo::NamedPipe(_) => {
+                anyhow::bail!("this Chimera build only supports HTTP Clash API bindings")
+            }
+        };
+        Self::from_url_and_secret(base_url, connection.secret)
+    }
+
+    fn from_url_and_secret(base_url: url::Url, secret: Option<String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", "application/json".parse()?);
-        if let Some(secret) = info.secret {
+        if let Some(secret) = secret {
             headers.insert("Authorization", format!("Bearer {secret}").parse()?);
         }
         Ok(Self { base_url, headers })
@@ -346,7 +366,22 @@ pub struct DelayRes {
 
 #[cfg(test)]
 mod tests {
-    use super::ClashRuntimeConfig;
+    use super::{ApiClient, ClashRuntimeConfig};
+
+    #[test]
+    fn instance_bound_http_connection_builds_api_client() {
+        let client = ApiClient::from_connection(chimera_ipc::api::core::v2::CoreApiConnection {
+            instance_id: "service-instance".to_string(),
+            controller: chimera_ipc::api::core::v2::CoreControllerInfo::Http(
+                "http://127.0.0.1:9090".to_string(),
+            ),
+            secret: Some("token".to_string()),
+        })
+        .unwrap();
+
+        assert_eq!(client.base_url.as_str(), "http://127.0.0.1:9090/");
+        assert_eq!(client.headers.get("Authorization").unwrap(), "Bearer token");
+    }
 
     #[test]
     fn runtime_tun_deserializes_mihomo_kebab_case_fields() {

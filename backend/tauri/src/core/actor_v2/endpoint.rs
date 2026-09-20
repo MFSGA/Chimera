@@ -16,7 +16,10 @@ use std::{
 
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
-use chimera_ipc::api::status::CoreState;
+use chimera_ipc::api::{
+    core::v2::{CoreApiConnection, CoreControllerInfo},
+    status::CoreState,
+};
 use futures::FutureExt;
 
 use crate::{
@@ -177,6 +180,10 @@ impl CoreCommand {
 #[async_trait]
 pub(crate) trait ControlEndpoint: Send + Sync {
     fn host(&self) -> ExecutionHost;
+
+    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+        Ok(None)
+    }
 
     /// Admit a mutation. The returned operation survives cancellation of the
     /// caller waiting on this method's result.
@@ -357,6 +364,29 @@ impl ControlEndpoint for LocalEndpoint {
         ExecutionHost::Local
     }
 
+    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+        let status = self.status().await?;
+        if !matches!(status.state, CoreState::Running) {
+            return Ok(None);
+        }
+        let Some(applied) = status.applied else {
+            return Ok(None);
+        };
+        let Some(info) = self.manager.applied_clash_info() else {
+            return Ok(None);
+        };
+        let controller = if info.server.contains("://") {
+            info.server
+        } else {
+            format!("http://{}", info.server)
+        };
+        Ok(Some(CoreApiConnection {
+            instance_id: format!("local-{:016x}", applied.revision),
+            controller: CoreControllerInfo::Http(controller),
+            secret: info.secret,
+        }))
+    }
+
     async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo> {
         let manager = self.manager.clone();
         let operation = command.name();
@@ -413,6 +443,10 @@ impl ServiceEndpoint {
 impl ControlEndpoint for ServiceEndpoint {
     fn host(&self) -> ExecutionHost {
         ExecutionHost::Service
+    }
+
+    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+        self.inner.manager.service_api_connection().await
     }
 
     async fn submit(&self, command: CoreCommand) -> anyhow::Result<OperationInfo> {

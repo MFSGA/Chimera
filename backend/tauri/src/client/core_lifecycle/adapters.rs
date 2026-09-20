@@ -167,7 +167,14 @@ impl LegacyRunningConfigBridge {
         Self { core }
     }
 
-    fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+    async fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+        let status = self.core.status().await?;
+        if let Some(connection) = self.core.api_connection().await? {
+            return crate::core::clash::api::ApiClient::from_connection(connection);
+        }
+        if status.run_type == RunType::Service {
+            anyhow::bail!("the running Service core did not publish an instance-bound API binding");
+        }
         crate::core::clash::api::ApiClient::new(self.core.effective_clash_info())
     }
 }
@@ -175,11 +182,11 @@ impl LegacyRunningConfigBridge {
 #[async_trait]
 impl RunningConfigPort for LegacyRunningConfigBridge {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig> {
-        self.api_client()?.get_configs().await
+        self.api_client().await?.get_configs().await
     }
 
     async fn patch(&self, patch: &Mapping) -> anyhow::Result<()> {
-        self.api_client()?.patch_configs(patch).await
+        self.api_client().await?.patch_configs(patch).await
     }
 }
 
@@ -229,6 +236,12 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         self.facade().status().await
+    }
+
+    async fn api_connection(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>> {
+        self.facade().api_connection().await
     }
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {

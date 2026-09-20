@@ -33,7 +33,7 @@ pub fn update_proxies_buff(client: ChimeraClient, rx: Option<tokio::sync::onesho
         {
             log::error!(target: "app::clash::proxies", "update proxies buff by rx failed: {e}");
         }
-        let api = match client.clash_api_client() {
+        let api = match client.clash_api_client().await {
             Ok(api) => api,
             Err(e) => {
                 log::error!(target: "app::clash::proxies", "failed to create clash api client: {e}");

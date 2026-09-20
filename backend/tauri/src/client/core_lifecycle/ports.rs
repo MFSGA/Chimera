@@ -108,6 +108,11 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         clash_core: ClashCore,
     ) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn api_connection(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>> {
+        Ok(None)
+    }
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
     fn outcome_uncertain(&self) -> bool {
         false

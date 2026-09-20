@@ -9,7 +9,14 @@ use super::ChimeraClient;
 use crate::core::clash::api::ApiClient;
 
 impl ChimeraClient {
-    pub(crate) fn clash_api_client(&self) -> Result<ApiClient> {
+    pub(crate) async fn clash_api_client(&self) -> Result<ApiClient> {
+        let status = self.core_status().await?;
+        if let Some(connection) = self.inner.core.api_connection().await? {
+            return ApiClient::from_connection(connection);
+        }
+        if status.run_type == crate::core::RunType::Service {
+            anyhow::bail!("the running Service core did not publish an instance-bound API binding");
+        }
         ApiClient::new(self.clash_info())
     }
 }

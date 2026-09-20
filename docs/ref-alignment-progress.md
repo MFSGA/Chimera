@@ -343,18 +343,23 @@
   v1 start/stop 会清空该 revision，避免把 legacy/未知 runtime 冒充成可 CAS 状态。app 的
   `IpcServiceCoreHost` 读取 promoted config text、计算同一 digest，Running 时必须从 daemon status
   取得 revision token，否则 fail-closed，不再无条件覆盖未知 Running core；成功后还核对 daemon
-  返回的 source_hash。legacy v1 start/stop/restart route 完整保留。ref 的 Recover command 与
-  instance-bound API connection 仍未进入 daemon wire。submit reply/query transport 在 admission 后丢失会被 app 映射
+  返回的 source_hash。legacy v1 start/stop/restart route 完整保留。daemon v2 现在还新增
+  `/v2/core/api` instance-bound capability：成功 Reconcile 从实际 applied config 提取 controller/secret，
+  以 applied revision 生成 instance id；legacy start/stop 与 v2 Stop 都清空 binding，避免 stale capability。
+  `ServiceCoreHost`/`ServiceEndpoint` 直接读取 daemon binding，Local endpoint 则用 Running applied revision +
+  applied ClashInfo 生成本地 binding。`ChimeraClient::clash_api_client`、RunningConfig bridge、profile-change
+  interruption、IPC/Agent Clash API 调用都已切到当前 host capability；Service host 缺 binding 时 fail-closed，
+  不再回退本地 globals。当前 ref 的 Recover command 仍未进入 daemon wire。submit reply/query transport 在 admission 后丢失会被 app 映射
   为 typed `ServiceCoreOutcomeUncertain`；CoreManager 遇到该状态不做 rollback，lower registry 记录
-  `Uncertain` 并由现有 fail-closed latch 阻断后续 mutation。剩余差异主要是内部每个 adapter leg 的
-  kill-safe bounded timeout，以及上述 daemon v2 revision/digest/API-connection 能力；
+  `Uncertain` 并由现有 fail-closed latch 阻断后续 mutation。剩余差异主要是 Recover parity 与内部每个
+  adapter leg 的 kill-safe bounded timeout；daemon v2 revision/digest/API-connection capability 已落地。
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
   `ChimeraClient` 和端口，未改变持久化格式或现有 UI/agent/E2E 入口。
 - 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p chimera`；
   `cargo test --manifest-path backend/Cargo.toml -p chimera client::tests --lib --
-  --test-threads=1`，14 passed；`client::core_lifecycle::tests`，22 passed（mailbox
+  --test-threads=1`，14 passed；`client::core_lifecycle::tests`，23 passed（mailbox
   mutation serialization、startup reconcile admission、crash recovery signal 复用 typed reconcile、reconcile admission、
   read-only Service probe 更新 watch、health observation 无额外 re-probe 更新 cache、probe failure 发布 Unknown、
   replace-binary 的 stop→install→typed reconcile→finished 顺序、caller timeout 不取消已
@@ -373,13 +378,15 @@
   Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
   budget exhausted 后停启、显式 command re-arm budget）；
-  `core::clash::core::tests`，3 passed（显式 RunType 分类、restart recovery gate、Service instance
-  的 status/start/stop 全部委托注入 `ServiceCoreHost`）；`core::service::core_host::tests`，5 passed
+  `core::clash::api::tests`，2 passed（含 instance-bound HTTP capability）；`core::clash::core::tests`，
+  3 passed（显式 RunType 分类、restart recovery gate、Service instance 的 status/start/stop 全部委托
+  注入 `ServiceCoreHost`）；`core::service::core_host::tests`，5 passed
   （32hex operation id contract、Stopped 无 CAS、Running 携带 daemon revision CAS、Running 缺 revision
   fail-closed、uncertain marker 可穿透 anyhow context chain）；runtime 子仓库
-  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 7 passed、
-  `chimera-service` 12 passed（含 v2 durable/idempotent Stop、id conflict/validation、digest mismatch 与
-  stale CAS 在 mutation 前 terminal Failed）；runtime `cargo fmt --all -- --check` 与
+  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 8 passed、
+  `chimera-service` 13 passed（含 v2 durable/idempotent Stop、id conflict/validation、digest mismatch、
+  stale CAS 在 mutation 前 terminal Failed，以及 applied config → API binding）；runtime
+  `cargo fmt --all -- --check` 与
   `cargo check -p chimera-ipc -p chimera-service` 通过；`core::service` tests，17 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
@@ -398,8 +405,8 @@
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
   app IPC projection、注入式 `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
-  以及显式 Local/Service `EndpointHandle` routing、daemon v2 config-text digest + applied revision CAS
-  已落地。下一阶段剩余的是 daemon v2 的 Recover/API-connection parity、adapter leg 的 kill-safe bound，
+  以及显式 Local/Service `EndpointHandle` routing、daemon v2 config-text digest + applied revision CAS、
+  instance-bound API connection capability 已落地。下一阶段剩余的是 daemon v2 Recover parity、adapter leg 的 kill-safe bound，
   并评估是否需要把 upper lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon
   wire protocol parity 的部分迁移，
   而不是 singleton、

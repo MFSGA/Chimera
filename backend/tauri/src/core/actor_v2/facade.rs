@@ -250,6 +250,24 @@ impl CoreFacade {
         self.local_endpoint.effective_clash_info()
     }
 
+    pub(crate) async fn api_connection(
+        &self,
+    ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>> {
+        self.active_endpoint().await?.api_connection().await
+    }
+
+    async fn api_client(&self) -> anyhow::Result<ApiClient> {
+        let status = self.local_endpoint.status().await?;
+        let endpoint = self.endpoint_for_run_type(status.run_type);
+        if let Some(connection) = endpoint.api_connection().await? {
+            return ApiClient::from_connection(connection);
+        }
+        if status.run_type == RunType::Service {
+            anyhow::bail!("the running Service core did not publish an instance-bound API binding");
+        }
+        ApiClient::new(self.effective_clash_info())
+    }
+
     pub(crate) async fn service_status_receiver(
         &self,
     ) -> anyhow::Result<tokio::sync::watch::Receiver<super::service_actor::ServiceHostStatus>> {
@@ -287,7 +305,7 @@ impl CoreFacade {
     }
 
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
-        let result = match ApiClient::new(self.effective_clash_info()) {
+        let result = match self.api_client().await {
             Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
             Err(error) => Err(error),
         };
