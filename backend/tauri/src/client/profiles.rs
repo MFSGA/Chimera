@@ -65,6 +65,44 @@ impl<T> ProfilesCommit<T> {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProfilesError {
+    #[error("profile operation failed: {0:#}")]
+    Domain(#[source] anyhow::Error),
+    #[error("failed to persist profiles: {0:#}")]
+    Persist(#[source] anyhow::Error),
+    #[error("refresh failed: {message}")]
+    RefreshFailed { message: String },
+    #[error("import failed: {message}")]
+    ImportFailed { message: String },
+    #[error("profiles actor rpc failed: {0}")]
+    Rpc(String),
+}
+
+impl ProfilesError {
+    fn with_context(self, context: String) -> Self {
+        match self {
+            Self::Domain(error) => Self::Domain(error.context(context)),
+            Self::Persist(error) => Self::Persist(error.context(context)),
+            Self::RefreshFailed { message } => Self::RefreshFailed {
+                message: format!("{message}; {context}"),
+            },
+            Self::ImportFailed { message } => Self::ImportFailed {
+                message: format!("{message}; {context}"),
+            },
+            Self::Rpc(message) => Self::Rpc(format!("{message}; {context}")),
+        }
+    }
+}
+
+impl From<anyhow::Error> for ProfilesError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Domain(error)
+    }
+}
+
+type ProfilesResult<T> = Result<T, ProfilesError>;
+
 pub(crate) trait ProfilesReadPort: Send + Sync {
     fn versioned_snapshot(&self) -> anyhow::Result<ProfilesSnapshot>;
 
@@ -207,22 +245,22 @@ pub(crate) struct LegacyProfileFsPort;
 enum ProfilesActorMessage {
     Add {
         profile: Profile,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     Delete {
         uid: ProfileUid,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(String, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(String, bool)>>>,
     },
     PatchProfile {
         uid: ProfileUid,
         profile: ProfileBuilder,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     PatchMetadata {
         uid: ProfileUid,
         name: Option<String>,
         desc: Option<Option<String>>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     PatchRemoteOptions {
         uid: ProfileUid,
@@ -230,56 +268,56 @@ enum ProfilesActorMessage {
         with_proxy: Option<bool>,
         self_proxy: Option<bool>,
         update_interval_minutes: Option<u64>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     Reorder {
         active_id: ProfileUid,
         over_id: ProfileUid,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     ReorderByList {
         list: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     SetCurrent {
         uid: Option<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     SetValidFields {
         fields: Vec<String>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<()>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<()>>>,
     },
     SetProfileTransformChain {
         uid: ProfileUid,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
     },
     SetGlobalTransformChain {
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
     },
     RefreshRemote {
         uid: ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
     },
     CommitRemoteRefresh {
         uid: ProfileUid,
         expected_fingerprint: String,
         outcome: RemoteRefreshOutcome,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
     },
     ImportRemote {
         url: url::Url,
         name: Option<String>,
         option: Option<RemoteProfileOptionsBuilder>,
         mode: RemoteProfileImportMode,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     CommitRemoteImport {
         prepared_file: PreparedProfileFile,
         outcome: RemoteImportOutcome,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<(ProfileUid, bool)>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<(ProfileUid, bool)>>>,
     },
     ReplaceRemoteDefinition {
         uid: ProfileUid,
@@ -289,7 +327,7 @@ enum ProfilesActorMessage {
         option: Option<RemoteProfileOptions>,
         subscription: Option<SubscriptionInfo>,
         transforms: Vec<ProfileUid>,
-        reply: RpcReplyPort<anyhow::Result<ProfilesCommit<bool>>>,
+        reply: RpcReplyPort<ProfilesResult<ProfilesCommit<bool>>>,
     },
     #[cfg(all(test, feature = "e2e"))]
     MutateForTest {
@@ -338,19 +376,23 @@ impl ProfilesActorState {
     async fn mutate<T>(
         &mut self,
         mutation: impl FnOnce(&mut Profiles) -> anyhow::Result<T>,
-    ) -> anyhow::Result<ProfilesCommit<T>>
+    ) -> ProfilesResult<ProfilesCommit<T>>
     where
         T: Send,
     {
         let mut next = self.profiles.clone();
-        let value = mutation(&mut next)?;
+        let value = mutation(&mut next).map_err(ProfilesError::from)?;
         let persisted = tokio::task::spawn_blocking({
             let next = next.clone();
             move || next.save_file()
         })
         .await
-        .context("profile state persistence task failed")?;
-        persisted?;
+        .map_err(|error| {
+            ProfilesError::Persist(anyhow::anyhow!(
+                "profile state persistence task failed: {error}"
+            ))
+        })?;
+        persisted.map_err(ProfilesError::Persist)?;
         let snapshot = self.publish(next);
         Ok(ProfilesCommit::new(snapshot, value))
     }
@@ -399,7 +441,7 @@ impl ProfilesActorState {
         mut prepared_file: PreparedProfileFile,
         profile: RemoteProfile,
         content: String,
-    ) -> anyhow::Result<ProfilesCommit<(ProfileUid, bool)>> {
+    ) -> ProfilesResult<ProfilesCommit<(ProfileUid, bool)>> {
         let uid = profile.uid().to_string();
         let file = profile.shared.file.clone();
         self.profile_files.write_atomic(&file, &content).await?;
@@ -424,7 +466,7 @@ impl ProfilesActorState {
             }
             Err(error) => {
                 if let Err(cleanup_error) = self.profile_files.remove(&file).await {
-                    return Err(error.context(format!(
+                    return Err(error.with_context(format!(
                         "failed to remove materialized profile after import commit failure: {cleanup_error:#}"
                     )));
                 }
@@ -439,13 +481,14 @@ impl ProfilesActorState {
         expected_fingerprint: String,
         previous_file: String,
         prepared: PreparedSubscriptionUpdate,
-    ) -> anyhow::Result<ProfilesCommit<bool>> {
+    ) -> ProfilesResult<ProfilesCommit<bool>> {
         let current = self.remote_profile(&uid)?;
         let current_fingerprint = Self::remote_profile_fingerprint(&current)?;
-        anyhow::ensure!(
-            current_fingerprint == expected_fingerprint,
-            "profile changed while refresh was in progress"
-        );
+        if current_fingerprint != expected_fingerprint {
+            return Err(ProfilesError::from(anyhow::anyhow!(
+                "profile changed while refresh was in progress"
+            )));
+        }
 
         let mut updated = current.clone();
         let content = updated.apply_prepared_subscription_update(prepared)?;
@@ -468,7 +511,7 @@ impl ProfilesActorState {
                 if let Err(restore_error) =
                     self.profile_files.write_atomic(&file, &previous_file).await
                 {
-                    return Err(error.context(format!(
+                    return Err(error.with_context(format!(
                         "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
                     )));
                 }
@@ -642,7 +685,9 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 if state.pending_refreshes.contains(&uid) {
-                    let _ = reply.send(Err(anyhow::anyhow!("profile refresh already in progress")));
+                    let _ = reply.send(Err(ProfilesError::from(anyhow::anyhow!(
+                        "profile refresh already in progress"
+                    ))));
                     return Ok(());
                 }
 
@@ -673,7 +718,7 @@ impl Actor for ProfilesActor {
                 let remote = match state.remote_profile(&uid) {
                     Ok(remote) => remote,
                     Err(error) => {
-                        let _ = reply.send(Err(error));
+                        let _ = reply.send(Err(error.into()));
                         return Ok(());
                     }
                 };
@@ -681,7 +726,7 @@ impl Actor for ProfilesActor {
                     match ProfilesActorState::remote_profile_fingerprint(&remote) {
                         Ok(fingerprint) => fingerprint,
                         Err(error) => {
-                            let _ = reply.send(Err(error));
+                            let _ = reply.send(Err(error.into()));
                             return Ok(());
                         }
                     };
@@ -732,7 +777,9 @@ impl Actor for ProfilesActor {
                             )
                             .await
                     }
-                    RemoteRefreshOutcome::Failed(message) => Err(anyhow::anyhow!(message)),
+                    RemoteRefreshOutcome::Failed(message) => {
+                        Err(ProfilesError::RefreshFailed { message })
+                    }
                 };
                 let _ = reply.send(result);
             }
@@ -746,7 +793,7 @@ impl Actor for ProfilesActor {
                 let (uid, prepared_file) = match state.reserve_remote_identity() {
                     Ok(reserved) => reserved,
                     Err(error) => {
-                        let _ = reply.send(Err(error));
+                        let _ = reply.send(Err(error.into()));
                         return Ok(());
                     }
                 };
@@ -787,7 +834,9 @@ impl Actor for ProfilesActor {
                             .commit_remote_import(prepared_file, profile, content)
                             .await
                     }
-                    RemoteImportOutcome::Failed(message) => Err(anyhow::anyhow!(message)),
+                    RemoteImportOutcome::Failed(message) => {
+                        Err(ProfilesError::ImportFailed { message })
+                    }
                 };
                 let _ = reply.send(result);
             }
@@ -818,7 +867,11 @@ impl Actor for ProfilesActor {
             }
             #[cfg(all(test, feature = "e2e"))]
             ProfilesActorMessage::MutateForTest { mutation, reply } => {
-                let result = state.mutate(mutation).await.map(ProfilesCommit::into_value);
+                let result = state
+                    .mutate(mutation)
+                    .await
+                    .map(ProfilesCommit::into_value)
+                    .map_err(anyhow::Error::new);
                 let _ = reply.send(result);
             }
         }
@@ -895,6 +948,7 @@ impl ProfilesClient {
         .await
     }
 
+    #[cfg(all(test, feature = "e2e"))]
     async fn call<T>(
         &self,
         make: impl FnOnce(RpcReplyPort<anyhow::Result<T>>) -> ProfilesActorMessage,
@@ -912,22 +966,27 @@ impl ProfilesClient {
 
     async fn call_commit<T>(
         &self,
-        make: impl FnOnce(RpcReplyPort<anyhow::Result<ProfilesCommit<T>>>) -> ProfilesActorMessage,
-    ) -> anyhow::Result<ProfilesCommit<T>>
+        make: impl FnOnce(RpcReplyPort<ProfilesResult<ProfilesCommit<T>>>) -> ProfilesActorMessage,
+    ) -> ProfilesResult<ProfilesCommit<T>>
     where
         T: Send + 'static,
     {
-        self.call(make).await
+        match self.inner.actor_ref.call(make, None).await {
+            Ok(CallResult::Success(result)) => result,
+            Ok(CallResult::SenderError) => Err(ProfilesError::Rpc("reply dropped".into())),
+            Ok(CallResult::Timeout) => Err(ProfilesError::Rpc("call timed out".into())),
+            Err(error) => Err(ProfilesError::Rpc(error.to_string())),
+        }
     }
 
     async fn call_commit_value<T>(
         &self,
-        make: impl FnOnce(RpcReplyPort<anyhow::Result<ProfilesCommit<T>>>) -> ProfilesActorMessage,
+        make: impl FnOnce(RpcReplyPort<ProfilesResult<ProfilesCommit<T>>>) -> ProfilesActorMessage,
     ) -> anyhow::Result<T>
     where
         T: Send + 'static,
     {
-        let commit = self.call_commit(make).await?;
+        let commit = self.call_commit(make).await.map_err(anyhow::Error::new)?;
         tracing::debug!(
             profiles_revision = commit.snapshot.revision(),
             "profiles actor commit completed"
@@ -1590,8 +1649,9 @@ mod actor_tests {
     };
 
     use super::{
-        LegacyRemoteProfileImporter, ProfileFsPort, ProfilesClient, ProfilesReadPort,
-        ProfilesWritePort, RemoteProfileImporter, SubscriptionFetcher,
+        LegacyRemoteProfileImporter, ProfileFsPort, ProfilesActorMessage, ProfilesClient,
+        ProfilesError, ProfilesReadPort, ProfilesWritePort, RemoteProfileImporter,
+        SubscriptionFetcher,
     };
     use crate::config::profile::{
         item::{
@@ -1843,16 +1903,60 @@ mod actor_tests {
         assert_eq!(initial.revision(), 1);
         let initial_valid = initial.into_profiles().valid;
 
-        client
-            .set_valid_fields(&["mode".to_string()])
+        let error = match client
+            .call_commit(|reply| ProfilesActorMessage::SetValidFields {
+                fields: vec!["mode".to_string()],
+                reply,
+            })
             .await
-            .expect_err("state persistence should fail");
+        {
+            Ok(_) => panic!("state persistence should fail"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ProfilesError::Persist(_)));
 
         let after = client
             .versioned_snapshot()
             .expect("snapshot should remain readable after failed persistence");
         assert_eq!(after.revision(), 1);
         assert_eq!(after.into_profiles().valid, initial_valid);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn domain_failure_is_typed_without_advancing_snapshot() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let client = ProfilesClient::spawn_from_profiles(
+            Profiles::default(),
+            Arc::new(MemoryProfileFs::default()),
+            Arc::new(ImmediateFetcher),
+            Arc::new(LegacyRemoteProfileImporter),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let error = match client
+            .call_commit(|reply| ProfilesActorMessage::PatchMetadata {
+                uid: "missing".to_string(),
+                name: Some("Missing".to_string()),
+                desc: None,
+                reply,
+            })
+            .await
+        {
+            Ok(_) => panic!("missing profile should be a domain failure"),
+            Err(error) => error,
+        };
+        assert!(matches!(error, ProfilesError::Domain(_)));
+        assert_eq!(client.versioned_snapshot().unwrap().revision(), 1);
 
         unsafe {
             std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
@@ -2246,16 +2350,24 @@ mod actor_tests {
         .await
         .expect("profiles actor should spawn");
 
-        let error = client
-            .import_remote(
-                url::Url::parse("https://example.com/fail.yaml").unwrap(),
-                None,
-                None,
-                RemoteProfileImportMode::Default,
-            )
+        let error = match client
+            .call_commit(|reply| ProfilesActorMessage::ImportRemote {
+                url: url::Url::parse("https://example.com/fail.yaml").unwrap(),
+                name: None,
+                option: None,
+                mode: RemoteProfileImportMode::Default,
+                reply,
+            })
             .await
-            .expect_err("failed preparation must not commit");
-        assert!(error.to_string().contains("injected remote import failure"));
+        {
+            Ok(_) => panic!("failed preparation must not commit"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            ProfilesError::ImportFailed { ref message }
+                if message.contains("injected remote import failure")
+        ));
         assert!(client.snapshot().unwrap().items.is_empty());
         assert!(fs.files.lock().unwrap().is_empty());
         assert!(fs.writes.lock().unwrap().is_empty());
