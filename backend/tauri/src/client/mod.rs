@@ -15,10 +15,7 @@ pub(crate) mod runtime_inspection;
 mod session_state;
 mod system_dns;
 
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::sync::Arc;
 
 #[allow(unused_imports)]
 pub(crate) use self::core_lifecycle::LegacyCoreBridge;
@@ -43,7 +40,6 @@ pub(crate) use self::{
 };
 
 use crate::{
-    config::profile::item_type::ProfileUid,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
     utils::path::PathResolver,
 };
@@ -127,7 +123,6 @@ struct ChimeraClientInner {
     system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
     profile_commit: tokio::sync::Mutex<()>,
-    pending_refreshes: StdMutex<HashSet<ProfileUid>>,
 }
 
 impl ChimeraClient {
@@ -227,7 +222,6 @@ impl ChimeraClient {
             system_dns,
             ui_sink,
             profile_commit: tokio::sync::Mutex::new(()),
-            pending_refreshes: StdMutex::new(HashSet::new()),
         };
         Self {
             inner: Arc::new(inner),
@@ -253,10 +247,7 @@ mod tests {
                 item::{
                     Profile, ProfileMetaGetter,
                     local::LocalProfile,
-                    remote::{
-                        PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
-                        RemoteProfileOptionsBuilder, SubscriptionInfo,
-                    },
+                    remote::{RemoteProfileOptions, RemoteProfileOptionsBuilder, SubscriptionInfo},
                     shared::ProfileShared,
                 },
                 item_type::ProfileUid,
@@ -342,39 +333,6 @@ mod tests {
         }
     }
 
-    struct RecordingProfileFs {
-        previous_file: String,
-        reads: Arc<Mutex<Vec<String>>>,
-        writes: Arc<Mutex<Vec<(String, String)>>>,
-        fail_write: bool,
-    }
-
-    #[async_trait]
-    impl ProfileFsPort for RecordingProfileFs {
-        async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::path::PathBuf::from(file))
-        }
-        async fn read(&self, file: &str) -> anyhow::Result<String> {
-            self.reads.lock().unwrap().push(file.to_string());
-            Ok(self.previous_file.clone())
-        }
-
-        async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((file.to_string(), content.to_string()));
-            if self.fail_write {
-                anyhow::bail!("injected profile file write failure");
-            }
-            Ok(())
-        }
-
-        async fn remove(&self, _file: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
     #[derive(Default)]
     struct NoopProfilesWrite {
         fail_refresh: bool,
@@ -447,17 +405,10 @@ mod tests {
         ) -> anyhow::Result<bool> {
             Ok(false)
         }
-        async fn apply_remote_options(
+        async fn refresh_remote(
             &self,
             _uid: &ProfileUid,
-            _options: RemoteProfileOptionsBuilder,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn commit_refreshed(
-            &self,
-            _uid: &ProfileUid,
-            _updated: RemoteProfile,
+            _options: Option<RemoteProfileOptionsBuilder>,
         ) -> anyhow::Result<bool> {
             if let Some(commits) = &self.refresh_commits {
                 *commits.lock().unwrap() += 1;
@@ -526,22 +477,6 @@ mod tests {
         })
     }
 
-    fn test_remote_profile() -> RemoteProfile {
-        RemoteProfile {
-            url: url::Url::parse("https://example.com/profile.yaml").unwrap(),
-            option: RemoteProfileOptions::default(),
-            shared: ProfileShared {
-                uid: "r-test".into(),
-                name: "Test".into(),
-                file: "r-test.yaml".into(),
-                desc: None,
-                updated: 7,
-            },
-            chain: Vec::new(),
-            extra: SubscriptionInfo::default(),
-        }
-    }
-
     fn recording_client_with_profiles(
         profiles: Profiles,
         fail_rebuild: bool,
@@ -567,60 +502,53 @@ mod tests {
         recording_client_with_profiles(Profiles::default(), fail_rebuild)
     }
 
-    #[test]
-    fn duplicate_profile_refresh_is_rejected_until_guard_drops() {
-        let (client, _) = recording_client(false);
-        let uid = "r-test".to_string();
-        let first = client.begin_profile_refresh(&uid).unwrap();
-        let error = match client.begin_profile_refresh(&uid) {
-            Ok(_) => panic!("duplicate refresh should be rejected"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("already in progress"));
-        drop(first);
-        assert!(client.begin_profile_refresh(&uid).is_ok());
-    }
-
-    #[test]
-    fn refresh_fingerprint_tracks_definition_but_not_display_metadata() {
-        let profile = test_remote_profile();
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&profile).unwrap();
-        let mut renamed = profile.clone();
-        renamed.shared.name = "Renamed".into();
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &renamed).is_ok());
-        let mut changed_url = profile.clone();
-        changed_url.url = url::Url::parse("https://example.com/changed.yaml").unwrap();
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &changed_url).is_err());
-        let mut refreshed = profile;
-        refreshed.shared.updated += 1;
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &refreshed).is_err());
-    }
-
     #[tokio::test]
-    async fn refresh_file_write_failure_does_not_commit_profile_state() {
-        let remote = test_remote_profile();
-        let uid = remote.shared.uid.clone();
-        let profiles = Profiles {
-            items: vec![Profile::Remote(remote.clone())],
-            ..Profiles::default()
-        };
+    async fn refresh_profile_propagates_actor_failure_without_runtime_side_effects() {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let reads = Arc::new(Mutex::new(Vec::new()));
-        let writes = Arc::new(Mutex::new(Vec::new()));
         let refresh_commits = Arc::new(Mutex::new(0));
-        let previous_file = "mode: rule\n".to_string();
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
                 fail_rebuild: false,
             }),
-            Arc::new(StaticProfilesRead { profiles }),
-            Arc::new(RecordingProfileFs {
-                previous_file: previous_file.clone(),
-                reads: reads.clone(),
-                writes: writes.clone(),
-                fail_write: true,
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
             }),
+            Arc::new(NoopProfileFs),
+            Arc::new(NoopProfilesWrite {
+                fail_refresh: true,
+                refresh_commits: Some(refresh_commits.clone()),
+                ..NoopProfilesWrite::default()
+            }),
+            Arc::new(NoopSystemDnsCache),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+
+        let error = client
+            .refresh_profile("r-test".into(), None)
+            .await
+            .expect_err("actor refresh failure should propagate");
+
+        assert!(error.to_string().contains("injected profile state failure"));
+        assert_eq!(*refresh_commits.lock().unwrap(), 1);
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn refresh_profile_success_refreshes_ui_without_unneeded_runtime_rebuild() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let refresh_commits = Arc::new(Mutex::new(0));
+        let client = ChimeraClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles::default(),
+            }),
+            Arc::new(NoopProfileFs),
             Arc::new(NoopProfilesWrite {
                 refresh_commits: Some(refresh_commits.clone()),
                 ..NoopProfilesWrite::default()
@@ -631,100 +559,14 @@ mod tests {
             }),
         );
 
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
-        assert_eq!(snapshot_file, previous_file);
-
-        let mut data = serde_yaml::Mapping::new();
-        data.insert("mode".into(), "global".into());
-        let prepared = PreparedSubscriptionUpdate::for_test(
-            data,
-            SubscriptionInfo {
-                upload: 10,
-                download: 20,
-                total: 30,
-                expire: 40,
-            },
-        );
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
-
-        let error = client
-            .commit_refreshed_profile(uid, fingerprint, previous_file, prepared)
+        let outcome = client
+            .refresh_profile("r-test".into(), None)
             .await
-            .unwrap_err();
+            .expect("actor refresh should succeed");
 
-        assert!(
-            error
-                .to_string()
-                .contains("injected profile file write failure")
-        );
-        assert_eq!(*refresh_commits.lock().unwrap(), 0);
-        assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(events.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn refresh_state_failure_restores_file_through_profile_fs_port() {
-        let remote = test_remote_profile();
-        let uid = remote.shared.uid.clone();
-        let profiles = Profiles {
-            items: vec![Profile::Remote(remote.clone())],
-            ..Profiles::default()
-        };
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let reads = Arc::new(Mutex::new(Vec::new()));
-        let writes = Arc::new(Mutex::new(Vec::new()));
-        let previous_file = "mode: rule\n".to_string();
-        let client = ChimeraClient::with_parts(
-            Arc::new(RecordingCore {
-                events: events.clone(),
-                fail_rebuild: false,
-            }),
-            Arc::new(StaticProfilesRead { profiles }),
-            Arc::new(RecordingProfileFs {
-                previous_file: previous_file.clone(),
-                reads: reads.clone(),
-                writes: writes.clone(),
-                fail_write: false,
-            }),
-            Arc::new(NoopProfilesWrite {
-                fail_refresh: true,
-                ..NoopProfilesWrite::default()
-            }),
-            Arc::new(NoopSystemDnsCache),
-            Arc::new(RecordingUi {
-                events: events.clone(),
-            }),
-        );
-
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
-        assert_eq!(snapshot_file, previous_file);
-        assert_eq!(reads.lock().unwrap().as_slice(), ["r-test.yaml"]);
-
-        let mut data = serde_yaml::Mapping::new();
-        data.insert("mode".into(), "global".into());
-        let prepared = PreparedSubscriptionUpdate::for_test(
-            data,
-            SubscriptionInfo {
-                upload: 10,
-                download: 20,
-                total: 30,
-                expire: 40,
-            },
-        );
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
-
-        let error = client
-            .commit_refreshed_profile(uid, fingerprint, previous_file.clone(), prepared)
-            .await
-            .unwrap_err();
-
-        assert!(error.to_string().contains("injected profile state failure"));
-        let writes = writes.lock().unwrap();
-        assert_eq!(writes.len(), 2);
-        assert_eq!(writes[0].0, "r-test.yaml");
-        assert!(writes[0].1.contains("mode: global"));
-        assert_eq!(writes[1], ("r-test.yaml".to_string(), previous_file));
-        assert!(events.lock().unwrap().is_empty());
+        assert!(matches!(outcome, MutationOutcome::Applied { .. }));
+        assert_eq!(*refresh_commits.lock().unwrap(), 1);
+        assert_eq!(events.lock().unwrap().as_slice(), ["refresh-profiles"]);
     }
 
     #[tokio::test]

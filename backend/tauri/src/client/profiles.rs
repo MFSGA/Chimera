@@ -1,13 +1,13 @@
 //! Profile persistence ports used by the application client during the staged migration.
 
-use std::{io::Write, sync::Arc};
+use std::{collections::HashSet, io::Write, sync::Arc};
 
 use anyhow::Context;
 use async_trait::async_trait;
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
-use super::{ChimeraClient, ChimeraClientInner, Degradation, DegradationPhase, MutationOutcome};
+use super::{ChimeraClient, Degradation, DegradationPhase, MutationOutcome};
 
 use crate::config::{
     core::Config,
@@ -37,6 +37,20 @@ pub(crate) trait ProfileFsPort: Send + Sync {
     async fn read(&self, file: &str) -> anyhow::Result<String>;
     async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()>;
     async fn remove(&self, file: &str) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+pub(crate) trait SubscriptionFetcher: Send + Sync {
+    async fn fetch(&self, profile: RemoteProfile) -> anyhow::Result<PreparedSubscriptionUpdate>;
+}
+
+pub(crate) struct LegacySubscriptionFetcher;
+
+#[async_trait]
+impl SubscriptionFetcher for LegacySubscriptionFetcher {
+    async fn fetch(&self, profile: RemoteProfile) -> anyhow::Result<PreparedSubscriptionUpdate> {
+        profile.prepare_subscription_update(None).await
+    }
 }
 
 #[async_trait]
@@ -79,16 +93,10 @@ pub(crate) trait ProfilesWritePort: Send + Sync {
 
     async fn set_global_transform_chain(&self, transforms: &[ProfileUid]) -> anyhow::Result<bool>;
 
-    async fn apply_remote_options(
+    async fn refresh_remote(
         &self,
         uid: &ProfileUid,
-        options: RemoteProfileOptionsBuilder,
-    ) -> anyhow::Result<()>;
-
-    async fn commit_refreshed(
-        &self,
-        uid: &ProfileUid,
-        updated: RemoteProfile,
+        options: Option<RemoteProfileOptionsBuilder>,
     ) -> anyhow::Result<bool>;
 
     async fn replace_remote_definition(
@@ -159,14 +167,15 @@ enum ProfilesActorMessage {
         transforms: Vec<ProfileUid>,
         reply: RpcReplyPort<anyhow::Result<bool>>,
     },
-    ApplyRemoteOptions {
+    RefreshRemote {
         uid: ProfileUid,
-        options: RemoteProfileOptionsBuilder,
-        reply: RpcReplyPort<anyhow::Result<()>>,
+        options: Option<RemoteProfileOptionsBuilder>,
+        reply: RpcReplyPort<anyhow::Result<bool>>,
     },
-    CommitRefreshed {
+    CommitRemoteRefresh {
         uid: ProfileUid,
-        updated: RemoteProfile,
+        expected_fingerprint: String,
+        outcome: RemoteRefreshOutcome,
         reply: RpcReplyPort<anyhow::Result<bool>>,
     },
     ReplaceRemoteDefinition {
@@ -186,9 +195,20 @@ enum ProfilesActorMessage {
     },
 }
 
+enum RemoteRefreshOutcome {
+    Succeeded {
+        previous_file: String,
+        prepared: PreparedSubscriptionUpdate,
+    },
+    Failed(String),
+}
+
 struct ProfilesActorState {
     profiles: Profiles,
     snapshot_tx: tokio::sync::watch::Sender<Profiles>,
+    profile_files: Arc<dyn ProfileFsPort>,
+    fetcher: Arc<dyn SubscriptionFetcher>,
+    pending_refreshes: HashSet<ProfileUid>,
 }
 
 struct ProfilesActor;
@@ -228,6 +248,69 @@ impl ProfilesActorState {
         self.publish_and_sync_legacy(next);
         Ok(value)
     }
+
+    fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
+        serde_yaml::to_string(&(
+            &profile.url,
+            &profile.option,
+            &profile.shared.file,
+            profile.shared.updated,
+            &profile.chain,
+            &profile.extra,
+        ))
+        .context("failed to fingerprint remote profile definition")
+    }
+
+    fn remote_profile(&self, uid: &ProfileUid) -> anyhow::Result<RemoteProfile> {
+        let item = self.profiles.get_item(uid)?;
+        item.as_remote()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
+    }
+
+    async fn commit_remote_refresh(
+        &mut self,
+        uid: ProfileUid,
+        expected_fingerprint: String,
+        previous_file: String,
+        prepared: PreparedSubscriptionUpdate,
+    ) -> anyhow::Result<bool> {
+        let current = self.remote_profile(&uid)?;
+        let current_fingerprint = Self::remote_profile_fingerprint(&current)?;
+        anyhow::ensure!(
+            current_fingerprint == expected_fingerprint,
+            "profile changed while refresh was in progress"
+        );
+
+        let mut updated = current.clone();
+        let content = updated.apply_prepared_subscription_update(prepared)?;
+        let file = current.shared.file.clone();
+        self.profile_files.write_atomic(&file, &content).await?;
+        let affects_current = self
+            .profiles
+            .current
+            .iter()
+            .any(|current_uid| current_uid == &uid);
+        let result = self
+            .mutate(move |profiles| {
+                profiles.replace_item(&uid, updated.into())?;
+                Ok(affects_current)
+            })
+            .await;
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if let Err(restore_error) =
+                    self.profile_files.write_atomic(&file, &previous_file).await
+                {
+                    return Err(error.context(format!(
+                        "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
+                    )));
+                }
+                Err(error)
+            }
+        }
+    }
 }
 
 impl Actor for ProfilesActor {
@@ -245,7 +328,7 @@ impl Actor for ProfilesActor {
 
     async fn handle(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         message: Self::Msg,
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
@@ -388,42 +471,104 @@ impl Actor for ProfilesActor {
                     .await;
                 let _ = reply.send(result);
             }
-            ProfilesActorMessage::ApplyRemoteOptions {
+            ProfilesActorMessage::RefreshRemote {
                 uid,
                 options,
                 reply,
             } => {
-                let result = state
-                    .mutate(move |profiles| {
-                        let item = profiles
-                            .items
-                            .iter_mut()
-                            .find(|item| item.uid() == uid)
-                            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` not found"))?;
-                        let Profile::Remote(profile) = item else {
-                            anyhow::bail!("profile `{uid}` is not remote");
-                        };
-                        profile.option.apply(options);
-                        Ok(())
-                    })
+                if state.pending_refreshes.contains(&uid) {
+                    let _ = reply.send(Err(anyhow::anyhow!("profile refresh already in progress")));
+                    return Ok(());
+                }
+
+                if let Some(options) = options {
+                    let patched = state
+                        .mutate({
+                            let uid = uid.clone();
+                            move |profiles| {
+                                let item = profiles
+                                    .items
+                                    .iter_mut()
+                                    .find(|item| item.uid() == uid)
+                                    .ok_or_else(|| anyhow::anyhow!("profile `{uid}` not found"))?;
+                                let Profile::Remote(profile) = item else {
+                                    anyhow::bail!("profile `{uid}` is not remote");
+                                };
+                                profile.option.apply(options);
+                                Ok(())
+                            }
+                        })
+                        .await;
+                    if let Err(error) = patched {
+                        let _ = reply.send(Err(error));
+                        return Ok(());
+                    }
+                }
+
+                let remote = match state.remote_profile(&uid) {
+                    Ok(remote) => remote,
+                    Err(error) => {
+                        let _ = reply.send(Err(error));
+                        return Ok(());
+                    }
+                };
+                let expected_fingerprint =
+                    match ProfilesActorState::remote_profile_fingerprint(&remote) {
+                        Ok(fingerprint) => fingerprint,
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            return Ok(());
+                        }
+                    };
+                state.pending_refreshes.insert(uid.clone());
+                let profile_files = state.profile_files.clone();
+                let fetcher = state.fetcher.clone();
+                let actor = myself.clone();
+                tokio::spawn(async move {
+                    let outcome = async {
+                        let previous_file = profile_files.read(&remote.shared.file).await?;
+                        let prepared = fetcher.fetch(remote).await?;
+                        Ok::<_, anyhow::Error>((previous_file, prepared))
+                    }
                     .await;
-                let _ = reply.send(result);
+                    let outcome = match outcome {
+                        Ok((previous_file, prepared)) => RemoteRefreshOutcome::Succeeded {
+                            previous_file,
+                            prepared,
+                        },
+                        Err(error) => RemoteRefreshOutcome::Failed(error.to_string()),
+                    };
+                    let _ = actor.cast(ProfilesActorMessage::CommitRemoteRefresh {
+                        uid,
+                        expected_fingerprint,
+                        outcome,
+                        reply,
+                    });
+                });
             }
-            ProfilesActorMessage::CommitRefreshed {
+            ProfilesActorMessage::CommitRemoteRefresh {
                 uid,
-                updated,
+                expected_fingerprint,
+                outcome,
                 reply,
             } => {
-                let result = state
-                    .mutate(move |profiles| {
-                        let affects_current = profiles
-                            .current
-                            .iter()
-                            .any(|current_uid| current_uid == &uid);
-                        profiles.replace_item(&uid, updated.into())?;
-                        Ok(affects_current)
-                    })
-                    .await;
+                state.pending_refreshes.remove(&uid);
+                let result = match outcome {
+                    RemoteRefreshOutcome::Succeeded {
+                        previous_file,
+                        prepared,
+                    } => {
+                        state
+                            .commit_remote_refresh(
+                                uid,
+                                expected_fingerprint,
+                                previous_file,
+                                prepared,
+                            )
+                            .await
+                    }
+                    RemoteRefreshOutcome::Failed(message) => Err(anyhow::anyhow!(message)),
+                };
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::ReplaceRemoteDefinition {
@@ -478,11 +623,20 @@ impl Drop for ProfilesClientInner {
 }
 
 impl ProfilesClient {
-    pub(crate) async fn spawn() -> anyhow::Result<Self> {
-        Self::spawn_from_profiles(Config::profiles().latest().clone()).await
+    pub(crate) async fn spawn(profile_files: Arc<dyn ProfileFsPort>) -> anyhow::Result<Self> {
+        Self::spawn_from_profiles(
+            Config::profiles().latest().clone(),
+            profile_files,
+            Arc::new(LegacySubscriptionFetcher),
+        )
+        .await
     }
 
-    async fn spawn_from_profiles(profiles: Profiles) -> anyhow::Result<Self> {
+    async fn spawn_from_profiles(
+        profiles: Profiles,
+        profile_files: Arc<dyn ProfileFsPort>,
+        fetcher: Arc<dyn SubscriptionFetcher>,
+    ) -> anyhow::Result<Self> {
         let (snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(profiles.clone());
         let (actor_ref, _handle) = Actor::spawn(
             None,
@@ -490,6 +644,9 @@ impl ProfilesClient {
             ProfilesActorState {
                 profiles,
                 snapshot_tx,
+                profile_files,
+                fetcher,
+                pending_refreshes: HashSet::new(),
             },
         )
         .await
@@ -504,7 +661,12 @@ impl ProfilesClient {
 
     #[cfg(all(test, feature = "e2e"))]
     async fn spawn_with_profiles(profiles: Profiles) -> anyhow::Result<Self> {
-        Self::spawn_from_profiles(profiles).await
+        Self::spawn_from_profiles(
+            profiles,
+            Arc::new(LegacyProfileFsPort),
+            Arc::new(LegacySubscriptionFetcher),
+        )
+        .await
     }
 
     async fn call<T>(
@@ -706,27 +868,14 @@ impl ProfilesWritePort for ProfilesClient {
         .await
     }
 
-    async fn apply_remote_options(
+    async fn refresh_remote(
         &self,
         uid: &ProfileUid,
-        options: RemoteProfileOptionsBuilder,
-    ) -> anyhow::Result<()> {
-        self.call(|reply| ProfilesActorMessage::ApplyRemoteOptions {
+        options: Option<RemoteProfileOptionsBuilder>,
+    ) -> anyhow::Result<bool> {
+        self.call(|reply| ProfilesActorMessage::RefreshRemote {
             uid: uid.clone(),
             options,
-            reply,
-        })
-        .await
-    }
-
-    async fn commit_refreshed(
-        &self,
-        uid: &ProfileUid,
-        updated: RemoteProfile,
-    ) -> anyhow::Result<bool> {
-        self.call(|reply| ProfilesActorMessage::CommitRefreshed {
-            uid: uid.clone(),
-            updated,
             reply,
         })
         .await
@@ -758,21 +907,6 @@ impl ProfilesWritePort for ProfilesClient {
 
 const PROFILE_IDENTITY_ATTEMPTS: usize = 32;
 
-pub(super) struct PendingProfileRefresh {
-    inner: Arc<ChimeraClientInner>,
-    uid: ProfileUid,
-}
-
-impl Drop for PendingProfileRefresh {
-    fn drop(&mut self) {
-        self.inner
-            .pending_refreshes
-            .lock()
-            .expect("pending profile refresh lock")
-            .remove(&self.uid);
-    }
-}
-
 impl ChimeraClient {
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
         self.inner.profiles.snapshot()
@@ -797,67 +931,6 @@ impl ChimeraClient {
             }
         }
         anyhow::bail!("failed to reserve a unique managed profile identity")
-    }
-
-    pub(super) fn begin_profile_refresh(
-        &self,
-        uid: &ProfileUid,
-    ) -> anyhow::Result<PendingProfileRefresh> {
-        let mut pending = self
-            .inner
-            .pending_refreshes
-            .lock()
-            .expect("pending profile refresh lock");
-        anyhow::ensure!(
-            pending.insert(uid.clone()),
-            "profile refresh already in progress"
-        );
-        drop(pending);
-        Ok(PendingProfileRefresh {
-            inner: self.inner.clone(),
-            uid: uid.clone(),
-        })
-    }
-
-    fn remote_profile_state_snapshot(&self, uid: &ProfileUid) -> anyhow::Result<RemoteProfile> {
-        let profiles = self.inner.profiles.snapshot()?;
-        let item = profiles.get_item(uid)?;
-        item.as_remote()
-            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
-            .cloned()
-    }
-
-    pub(super) async fn remote_profile_snapshot(
-        &self,
-        uid: &ProfileUid,
-    ) -> anyhow::Result<(RemoteProfile, String)> {
-        let remote = self.remote_profile_state_snapshot(uid)?;
-        let previous_file = self.inner.profile_files.read(&remote.shared.file).await?;
-        Ok((remote, previous_file))
-    }
-
-    pub(super) fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
-        serde_yaml::to_string(&(
-            &profile.url,
-            &profile.option,
-            &profile.shared.file,
-            profile.shared.updated,
-            &profile.chain,
-            &profile.extra,
-        ))
-        .context("failed to fingerprint remote profile definition")
-    }
-
-    pub(super) fn ensure_refresh_is_current(
-        expected_fingerprint: &str,
-        current: &RemoteProfile,
-    ) -> anyhow::Result<()> {
-        let current_fingerprint = Self::remote_profile_fingerprint(current)?;
-        anyhow::ensure!(
-            current_fingerprint == expected_fingerprint,
-            "profile changed while refresh was in progress"
-        );
-        Ok(())
     }
 
     pub(crate) async fn get_profile_materialized_path(
@@ -963,46 +1036,21 @@ impl ChimeraClient {
         Ok(MutationOutcome::from_parts((), Vec::new()))
     }
 
-    pub(super) async fn commit_refreshed_profile(
+    pub(crate) async fn refresh_profile(
         &self,
         uid: ProfileUid,
-        expected_fingerprint: String,
-        previous_file: String,
-        prepared: PreparedSubscriptionUpdate,
+        options: Option<RemoteProfileOptionsBuilder>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let _commit = self.inner.profile_commit.lock().await;
-        let current = self.remote_profile_state_snapshot(&uid)?;
-        Self::ensure_refresh_is_current(&expected_fingerprint, &current)?;
-        let mut updated = current.clone();
-        let content = updated.apply_prepared_subscription_update(prepared)?;
-        let file = current.shared.file.clone();
-        self.inner
-            .profile_files
-            .write_atomic(&file, &content)
-            .await?;
-        let affects_current = match self
+        let patched_options = options.is_some();
+        let result = self
             .inner
             .profile_writes
-            .commit_refreshed(&uid, updated)
-            .await
-        {
-            Ok(affects_current) => affects_current,
-            Err(error) => {
-                if let Err(restore_error) = self
-                    .inner
-                    .profile_files
-                    .write_atomic(&file, &previous_file)
-                    .await
-                {
-                    return Err(error.context(format!(
-                        "failed to restore materialized profile after refresh commit failure: {restore_error:#}"
-                    )));
-                }
-                return Err(error);
-            }
-        };
-        self.inner.ui_sink.refresh_profiles();
-        drop(_commit);
+            .refresh_remote(&uid, options)
+            .await;
+        if patched_options || result.is_ok() {
+            self.inner.ui_sink.refresh_profiles();
+        }
+        let affects_current = result?;
         if affects_current {
             Ok(self
                 .after_profile_runtime_commit("remote profile refresh")
@@ -1010,27 +1058,6 @@ impl ChimeraClient {
         } else {
             Ok(MutationOutcome::from_parts((), Vec::new()))
         }
-    }
-
-    pub(crate) async fn refresh_profile(
-        &self,
-        uid: ProfileUid,
-        options: Option<RemoteProfileOptionsBuilder>,
-    ) -> anyhow::Result<MutationOutcome<()>> {
-        let _pending = self.begin_profile_refresh(&uid)?;
-        if let Some(options) = options {
-            let _commit = self.inner.profile_commit.lock().await;
-            self.inner
-                .profile_writes
-                .apply_remote_options(&uid, options)
-                .await?;
-            self.inner.ui_sink.refresh_profiles();
-        }
-        let (initial, previous_file) = self.remote_profile_snapshot(&uid).await?;
-        let expected_fingerprint = Self::remote_profile_fingerprint(&initial)?;
-        let prepared = initial.prepare_subscription_update(None).await?;
-        self.commit_refreshed_profile(uid, expected_fingerprint, previous_file, prepared)
-            .await
     }
 
     pub(crate) async fn replace_remote_profile_definition(
@@ -1262,12 +1289,346 @@ impl ChimeraClient {
 
 #[cfg(all(test, feature = "e2e"))]
 mod actor_tests {
-    use std::sync::Mutex;
+    use std::{
+        collections::HashMap,
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
 
-    use super::{ProfilesClient, ProfilesReadPort, ProfilesWritePort};
-    use crate::config::profile::profiles::Profiles;
+    use super::{
+        ProfileFsPort, ProfilesClient, ProfilesReadPort, ProfilesWritePort, SubscriptionFetcher,
+    };
+    use crate::config::profile::{
+        item::{
+            Profile,
+            remote::{
+                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions, SubscriptionInfo,
+            },
+            shared::ProfileShared,
+        },
+        profiles::Profiles,
+    };
 
     static CONFIG_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    fn remote_profile() -> RemoteProfile {
+        RemoteProfile {
+            url: url::Url::parse("https://example.com/profile.yaml").unwrap(),
+            option: RemoteProfileOptions::default(),
+            shared: ProfileShared {
+                uid: "r-test".into(),
+                name: "Test".into(),
+                file: "r-test.yaml".into(),
+                desc: None,
+                updated: 7,
+            },
+            chain: Vec::new(),
+            extra: SubscriptionInfo::default(),
+        }
+    }
+
+    fn prepared_update() -> PreparedSubscriptionUpdate {
+        let mut data = serde_yaml::Mapping::new();
+        data.insert("mode".into(), "global".into());
+        PreparedSubscriptionUpdate::for_test(
+            data,
+            SubscriptionInfo {
+                upload: 10,
+                download: 20,
+                total: 30,
+                expire: 40,
+            },
+        )
+    }
+
+    #[derive(Default)]
+    struct MemoryProfileFs {
+        files: Mutex<HashMap<String, String>>,
+        writes: Mutex<Vec<(String, String)>>,
+        fail_write: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl ProfileFsPort for MemoryProfileFs {
+        async fn resolve_path(&self, file: &str) -> anyhow::Result<PathBuf> {
+            Ok(PathBuf::from(file))
+        }
+
+        async fn read(&self, file: &str) -> anyhow::Result<String> {
+            self.files
+                .lock()
+                .unwrap()
+                .get(file)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("missing profile file {file}"))
+        }
+
+        async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
+            self.writes
+                .lock()
+                .unwrap()
+                .push((file.to_string(), content.to_string()));
+            if self.fail_write.load(Ordering::Acquire) {
+                anyhow::bail!("injected profile file write failure");
+            }
+            self.files
+                .lock()
+                .unwrap()
+                .insert(file.to_string(), content.to_string());
+            Ok(())
+        }
+
+        async fn remove(&self, file: &str) -> anyhow::Result<()> {
+            self.files.lock().unwrap().remove(file);
+            Ok(())
+        }
+    }
+
+    struct ImmediateFetcher;
+
+    #[async_trait::async_trait]
+    impl SubscriptionFetcher for ImmediateFetcher {
+        async fn fetch(
+            &self,
+            _profile: RemoteProfile,
+        ) -> anyhow::Result<PreparedSubscriptionUpdate> {
+            Ok(prepared_update())
+        }
+    }
+
+    struct BlockingFetcher {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl SubscriptionFetcher for BlockingFetcher {
+        async fn fetch(
+            &self,
+            _profile: RemoteProfile,
+        ) -> anyhow::Result<PreparedSubscriptionUpdate> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(prepared_update())
+        }
+    }
+
+    fn profiles_with_remote() -> Profiles {
+        Profiles {
+            items: vec![Profile::Remote(remote_profile())],
+            ..Profiles::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_remote_refresh_is_rejected_while_fetch_is_in_flight() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        fs.files
+            .lock()
+            .unwrap()
+            .insert("r-test.yaml".into(), "mode: rule\n".into());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let client = ProfilesClient::spawn_from_profiles(
+            profiles_with_remote(),
+            fs,
+            Arc::new(BlockingFetcher {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let first = {
+            let client = client.clone();
+            tokio::spawn(async move { client.refresh_remote(&"r-test".to_string(), None).await })
+        };
+        started.notified().await;
+
+        let error = client
+            .refresh_remote(&"r-test".to_string(), None)
+            .await
+            .expect_err("duplicate refresh should be rejected");
+        assert!(error.to_string().contains("already in progress"));
+
+        release.notify_one();
+        first
+            .await
+            .expect("first refresh task should complete")
+            .expect("first refresh should commit");
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_refresh_rejects_stale_download_after_definition_change() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        fs.files
+            .lock()
+            .unwrap()
+            .insert("r-test.yaml".into(), "mode: rule\n".into());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let client = ProfilesClient::spawn_from_profiles(
+            profiles_with_remote(),
+            fs.clone(),
+            Arc::new(BlockingFetcher {
+                started: started.clone(),
+                release: release.clone(),
+            }),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let refresh = {
+            let client = client.clone();
+            tokio::spawn(async move { client.refresh_remote(&"r-test".to_string(), None).await })
+        };
+        started.notified().await;
+
+        client
+            .patch_remote_options(&"r-test".to_string(), None, Some(true), None, None)
+            .await
+            .expect("definition mutation should commit while fetch is in flight");
+        release.notify_one();
+
+        let error = refresh
+            .await
+            .expect("refresh task should complete")
+            .expect_err("stale download must be fenced");
+        assert!(
+            error
+                .to_string()
+                .contains("profile changed while refresh was in progress")
+        );
+        assert_eq!(
+            fs.files
+                .lock()
+                .unwrap()
+                .get("r-test.yaml")
+                .map(String::as_str),
+            Some("mode: rule\n")
+        );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_refresh_file_write_failure_does_not_commit_profile_state() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        fs.files
+            .lock()
+            .unwrap()
+            .insert("r-test.yaml".into(), "mode: rule\n".into());
+        fs.fail_write.store(true, Ordering::Release);
+        let client = ProfilesClient::spawn_from_profiles(
+            profiles_with_remote(),
+            fs,
+            Arc::new(ImmediateFetcher),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        let error = client
+            .refresh_remote(&"r-test".to_string(), None)
+            .await
+            .expect_err("materialized file write should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("injected profile file write failure")
+        );
+
+        let snapshot = client.snapshot().expect("snapshot should remain readable");
+        let remote = snapshot
+            .get_item(&"r-test".to_string())
+            .expect("remote profile should remain")
+            .as_remote()
+            .expect("profile should remain remote");
+        assert_eq!(remote.shared.updated, 7);
+        assert_eq!(remote.extra.upload, 0);
+        assert_eq!(remote.extra.download, 0);
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_refresh_state_persist_failure_restores_materialized_file() {
+        let _guard = CONFIG_DIR_LOCK.lock().expect("config dir lock");
+        let config_dir = tempfile::tempdir().expect("isolated config dir");
+        unsafe {
+            std::env::set_var("CHIMERA_E2E_CONFIG_DIR", config_dir.path());
+        }
+        std::fs::create_dir(config_dir.path().join("profiles.yaml"))
+            .expect("profiles.yaml directory should force persistence failure");
+
+        let fs = Arc::new(MemoryProfileFs::default());
+        fs.files
+            .lock()
+            .unwrap()
+            .insert("r-test.yaml".into(), "mode: rule\n".into());
+        let client = ProfilesClient::spawn_from_profiles(
+            profiles_with_remote(),
+            fs.clone(),
+            Arc::new(ImmediateFetcher),
+        )
+        .await
+        .expect("profiles actor should spawn");
+
+        client
+            .refresh_remote(&"r-test".to_string(), None)
+            .await
+            .expect_err("state persistence should fail");
+
+        let writes = fs.writes.lock().unwrap();
+        assert_eq!(writes.len(), 2);
+        assert!(writes[0].1.contains("mode: global"));
+        assert_eq!(
+            writes[1],
+            ("r-test.yaml".to_string(), "mode: rule\n".to_string())
+        );
+        drop(writes);
+        assert_eq!(
+            fs.files
+                .lock()
+                .unwrap()
+                .get("r-test.yaml")
+                .map(String::as_str),
+            Some("mode: rule\n")
+        );
+
+        unsafe {
+            std::env::remove_var("CHIMERA_E2E_CONFIG_DIR");
+        }
+    }
 
     #[tokio::test]
     async fn concurrent_mutations_are_serialized_without_lost_updates() {
