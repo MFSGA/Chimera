@@ -352,10 +352,15 @@
   `ServiceCoreHost`/`ServiceEndpoint` 直接读取 daemon binding，Local endpoint 则用 Running applied revision +
   applied ClashInfo 生成本地 binding。`ChimeraClient::clash_api_client`、RunningConfig bridge、profile-change
   interruption、IPC/Agent Clash API 调用都已切到当前 host capability；Service host 缺 binding 时 fail-closed，
-  不再回退本地 globals。当前 ref 的 Recover command 仍未进入 daemon wire。submit reply/query transport 在 admission 后丢失会被 app 映射
+  不再回退本地 globals。runtime 子仓库 `5594570` 进一步补齐 ref-shaped v2 `Recover` command/output：
+  没有可恢复 applied runtime 时幂等返回 `Recovered`；只有 daemon 仍保留 applied revision 且 core 已停止时，
+  才按原 core/config 重启，并在成功或失败后保留原 revision/API authority 供后续 retry。app 的
+  `ServiceCoreHost::recover`、lower `CoreCommand::Recover`/`OperationOutput::Recovered` 与 `CoreFacade::recover`
+  已贯通该 wire；upper `RecoverCore` 只有 authoritative `RunType::Service` 才走 daemon Recover，Local host
+  仍使用 fresh app/profile snapshot 的 typed Reconcile。submit reply/query transport 在 admission 后丢失会被 app 映射
   为 typed `ServiceCoreOutcomeUncertain`；CoreManager 遇到该状态不做 rollback，lower registry 记录
-  `Uncertain` 并由现有 fail-closed latch 阻断后续 mutation。剩余差异主要是 Recover parity 与内部每个
-  adapter leg 的 kill-safe bounded timeout；daemon v2 revision/digest/API-connection capability 已落地。
+  `Uncertain` 并由现有 fail-closed latch 阻断后续 mutation。剩余差异主要是内部每个 adapter leg 的
+  kill-safe bounded timeout；daemon v2 revision/digest/API-connection/Recover capability 已落地。
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
@@ -386,9 +391,10 @@
   注入 `ServiceCoreHost`）；`core::service::core_host::tests`，5 passed
   （32hex operation id contract、Stopped 无 CAS、Running 携带 daemon revision CAS、Running 缺 revision
   fail-closed、uncertain marker 可穿透 anyhow context chain）；runtime 子仓库
-  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 8 passed、
-  `chimera-service` 13 passed（含 v2 durable/idempotent Stop、id conflict/validation、digest mismatch、
-  stale CAS 在 mutation 前 terminal Failed，以及 applied config → API binding）；runtime
+  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 9 passed、
+  `chimera-service` 14 passed（含 v2 durable/idempotent Stop、Recover wire/output roundtrip、Recover 在无
+  applied runtime 时幂等成功、id conflict/validation、digest mismatch、stale CAS 在 mutation 前 terminal
+  Failed，以及 applied config → API binding）；runtime
   `cargo fmt --all -- --check` 与
   `cargo check -p chimera-ipc -p chimera-service` 通过；`core::service` tests，17 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
@@ -409,8 +415,8 @@
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
   app IPC projection、注入式 `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
   以及显式 Local/Service `EndpointHandle` routing、daemon v2 config-text digest + applied revision CAS、
-  instance-bound API connection capability 已落地。下一阶段剩余的是 daemon v2 Recover parity、adapter leg 的 kill-safe bound，
-  并评估是否需要把 upper lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon
+  instance-bound API connection capability 与 daemon v2 Recover parity 已落地。下一阶段剩余的是 adapter leg 的
+  kill-safe bound，并评估是否需要把 upper lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon
   wire protocol parity 的部分迁移，
   而不是 singleton、
   manager ownership 或 workflow lease 问题。

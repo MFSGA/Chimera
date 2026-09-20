@@ -1304,6 +1304,7 @@ export type OperationOutput_Deserialize =
       core_changed?: never;
     })
   | 'stopped'
+  | 'recovered'
   | ({ core_changed: AppliedRuntimeIdentity_Deserialize } & {
       reconciled?: never;
     });
@@ -1313,6 +1314,7 @@ export type OperationOutput_Serialize =
       core_changed?: never;
     })
   | 'stopped'
+  | 'recovered'
   | ({ core_changed: AppliedRuntimeIdentity_Serialize } & {
       reconciled?: never;
     });

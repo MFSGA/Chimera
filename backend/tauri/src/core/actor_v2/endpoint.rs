@@ -81,6 +81,7 @@ pub(crate) struct AppliedRuntimeIdentity {
 pub(crate) enum OperationOutput {
     Reconciled(AppliedRuntimeIdentity),
     Stopped,
+    Recovered,
     CoreChanged(AppliedRuntimeIdentity),
 }
 
@@ -153,6 +154,7 @@ pub(crate) enum CoreCommand {
         expected_applied: Option<u64>,
     },
     Stop,
+    Recover,
     ChangeCore {
         profiles: crate::config::profile::profiles::Profiles,
         core: ClashCore,
@@ -172,6 +174,7 @@ impl CoreCommand {
         match self {
             Self::Reconcile { .. } => "core reconcile",
             Self::Stop => "core stop",
+            Self::Recover => "core recover",
             Self::ChangeCore { .. } => "core selection",
         }
     }
@@ -323,6 +326,10 @@ impl LocalEndpoint {
             CoreCommand::Stop => {
                 lease.stop_core().await?;
                 Ok(OperationOutput::Stopped)
+            }
+            CoreCommand::Recover => {
+                lease.recover_service_core().await?;
+                Ok(OperationOutput::Recovered)
             }
             CoreCommand::ChangeCore { profiles, core } => {
                 lease.change_core(profiles, core).await?;

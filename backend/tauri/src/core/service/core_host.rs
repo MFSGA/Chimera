@@ -134,6 +134,7 @@ pub(crate) trait ServiceCoreHost: Send + Sync + std::fmt::Debug {
         core_type: &chimera_utils::core::CoreType,
     ) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
+    async fn recover(&self) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Default)]
@@ -199,6 +200,15 @@ impl ServiceCoreHost for IpcServiceCoreHost {
         anyhow::ensure!(
             matches!(output, OperationOutputInfo::Stopped),
             "service stop returned an unexpected terminal output: {output:?}"
+        );
+        Ok(())
+    }
+
+    async fn recover(&self) -> anyhow::Result<()> {
+        let output = submit_and_wait(CoreCommandInfo::Recover).await?;
+        anyhow::ensure!(
+            matches!(output, OperationOutputInfo::Recovered),
+            "service recover returned an unexpected terminal output: {output:?}"
         );
         Ok(())
     }

@@ -226,6 +226,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().stop().await
     }
 
+    async fn recover(&self) -> anyhow::Result<()> {
+        self.facade().recover().await
+    }
+
     async fn change_core(
         &self,
         profiles: crate::config::profile::profiles::Profiles,

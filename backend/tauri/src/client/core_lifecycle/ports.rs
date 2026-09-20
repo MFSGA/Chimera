@@ -102,6 +102,9 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         run_type: RunType,
     ) -> anyhow::Result<()>;
     async fn stop(&self) -> anyhow::Result<()>;
+    async fn recover(&self) -> anyhow::Result<()> {
+        anyhow::bail!("lower core recovery is not available")
+    }
     async fn change_core(
         &self,
         profiles: crate::config::profile::profiles::Profiles,
