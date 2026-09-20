@@ -59,12 +59,6 @@ fn service_uninstall_plan(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ServiceRestartPolicySnapshot {
-    pub(crate) attempts: u8,
-    pub(crate) exhausted: bool,
-}
-
 pub(crate) struct CoreFacade {
     endpoint: Arc<LocalEndpoint>,
     outcome_uncertain: Arc<AtomicBool>,
@@ -196,16 +190,21 @@ impl CoreFacade {
         self.endpoint.effective_clash_info()
     }
 
-    pub(crate) async fn probe_service(
+    pub(crate) async fn service_status_receiver(
         &self,
-    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        self.service_client().await?.probe().await
+    ) -> anyhow::Result<tokio::sync::watch::Receiver<super::service_actor::ServiceHostStatus>> {
+        Ok(self.service_client().await?.subscribe())
     }
 
-    pub(crate) fn service_restart_policy(&self) -> ServiceRestartPolicySnapshot {
-        ServiceRestartPolicySnapshot {
-            attempts: self.service_restart_attempts.load(Ordering::Acquire),
-            exhausted: self.service_restart_exhausted.load(Ordering::Acquire),
+    pub(crate) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
+        if let Some(client) = self.service_client.get() {
+            client.observe(info);
+        }
+    }
+
+    pub(crate) fn observe_service_probe_failure(&self) {
+        if let Some(client) = self.service_client.get() {
+            client.observe_probe_failure();
         }
     }
 
@@ -309,6 +308,7 @@ impl ServiceTransition {
 
     pub(crate) async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {
         crate::core::service::ipc::wait_until_ready(timeout).await?;
+        self.client.probe().await?;
         Ok(())
     }
 
@@ -319,6 +319,7 @@ impl ServiceTransition {
         if observation.status == chimera_ipc::types::ServiceStatus::Running {
             anyhow::bail!("Chimera Service still reports running after stop");
         }
+        self.client.probe().await?;
         crate::core::service::ipc::mark_disconnected_now();
         Ok(())
     }

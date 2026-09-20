@@ -56,20 +56,8 @@ impl CoreLifecycleWorkflow {
         }
     }
 
-    pub(super) async fn probe_service(
-        &self,
-    ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        self.service.probe().await
-    }
-
     pub(super) fn outcome_uncertain(&self) -> bool {
         self.core.outcome_uncertain()
-    }
-
-    pub(super) fn service_restart_policy(
-        &self,
-    ) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
-        self.service.restart_policy()
     }
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {

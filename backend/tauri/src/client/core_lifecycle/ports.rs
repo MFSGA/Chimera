@@ -52,15 +52,15 @@ pub(crate) trait ServiceTransitionLease: Send {
 
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
-    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+    async fn subscribe_status(
+        &self,
+    ) -> anyhow::Result<
+        tokio::sync::watch::Receiver<crate::core::actor_v2::service_actor::ServiceHostStatus>,
+    >;
+    fn observe_status(&self, _info: chimera_ipc::types::StatusInfo<'static>) {}
+    fn observe_probe_failure(&self) {}
     async fn report_endpoint_down(&self) -> anyhow::Result<()> {
         Ok(())
-    }
-    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
-        crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
-            attempts: 0,
-            exhausted: false,
-        }
     }
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
 }
