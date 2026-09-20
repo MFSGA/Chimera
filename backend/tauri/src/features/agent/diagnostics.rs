@@ -39,7 +39,6 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     let verge = Config::verge().latest().clone();
     let clash = Config::clash().latest().clone();
     let runtime = Config::runtime().latest().clone();
-    let profiles = Config::profiles().data().clone();
     let expected_mixed_port = verge
         .verge_mixed_port
         .unwrap_or_else(|| clash.get_mixed_port());
@@ -60,6 +59,10 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .unwrap_or(true);
 
     let client = app.state::<ChimeraClient>();
+    let profiles = client.profiles_snapshot().unwrap_or_else(|error| {
+        log::warn!(target: "app", "failed to read profiles snapshot for agent diagnostics: {error}");
+        crate::config::profile::profiles::Profiles::default()
+    });
     let service_status = client.service_status();
     let core_status = client.core_status();
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);

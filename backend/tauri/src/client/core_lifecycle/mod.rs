@@ -805,6 +805,12 @@ impl ChimeraClient {
         self.inner.core_lifecycle.service_status()
     }
 
+    pub(crate) fn profiles_snapshot(
+        &self,
+    ) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
+        self.inner.profiles.snapshot()
+    }
+
     pub(crate) fn observe_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
         self.inner.core_lifecycle.observe_service_status(info);
     }
