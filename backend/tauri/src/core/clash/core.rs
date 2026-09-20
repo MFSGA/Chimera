@@ -122,6 +122,14 @@ impl RuntimeRestartError {
     }
 }
 
+struct RuntimeApplyTransaction {
+    paths: RuntimePaths,
+    rollback: RuntimeTransactionSnapshot,
+    previous_clash: crate::config::clash::IClashTemp,
+    recovery_target: ClashCore,
+    target_core: ClashCore,
+}
+
 #[derive(Debug)]
 enum Instance {
     Child {
@@ -743,26 +751,54 @@ impl CoreManager {
         Ok(snapshot)
     }
 
-    async fn promote_and_start_locked(
+    async fn begin_runtime_apply_transaction(
         &self,
-        paths: &RuntimePaths,
         target_core: ClashCore,
-        clash: &ClashConfig,
-        profiles: &crate::config::profile::profiles::Profiles,
+    ) -> std::result::Result<RuntimeApplyTransaction, RuntimeRestartError> {
+        let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
+        if let Err(error) = paths
+            .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
+            .await
+        {
+            log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
+        }
+        let rollback = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
+            .await
+            .map_err(RuntimeRestartError::Prepare)?;
+        let recovery_target = rollback
+            .lifecycle
+            .applied
+            .as_ref()
+            .map(|snapshot| snapshot.target_core)
+            .unwrap_or_else(Self::committed_core);
+        let previous_clash = Config::clash().data().clone();
+        Ok(RuntimeApplyTransaction {
+            paths,
+            rollback,
+            previous_clash,
+            recovery_target,
+            target_core,
+        })
+    }
+
+    async fn apply_prepared_runtime_locked(
+        &self,
+        transaction: &RuntimeApplyTransaction,
+        snapshot: Arc<RuntimeSnapshot>,
         run_type: RunType,
     ) -> std::result::Result<(), RuntimeRestartError> {
-        let snapshot = self
-            .prepare_promoted_runtime_locked(paths, target_core, clash, profiles)
-            .await?;
-        self.run_core_from_product_inner(paths.product(), target_core, run_type)
-            .await
-            .map_err(RuntimeRestartError::Start)?;
+        self.run_core_from_product_inner(
+            transaction.paths.product(),
+            transaction.target_core,
+            run_type,
+        )
+        .await
+        .map_err(RuntimeRestartError::Start)?;
         self.lifecycle
             .runtime_lifecycle
             .publish_applied(snapshot)
             .map_err(RuntimeRestartError::Promote)?;
         Config::runtime().apply();
-
         Ok(())
     }
 
@@ -803,28 +839,24 @@ impl CoreManager {
         profiles: &crate::config::profile::profiles::Profiles,
         run_type: RunType,
     ) -> Result<()> {
-        let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
-        if let Err(error) = paths
-            .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
+        let transaction = self.begin_runtime_apply_transaction(target_core).await?;
+        let primary = match self
+            .prepare_promoted_runtime_locked(
+                &transaction.paths,
+                transaction.target_core,
+                clash,
+                profiles,
+            )
             .await
         {
-            log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
-        }
-        let transaction = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
-            .await
-            .map_err(RuntimeRestartError::Prepare)?;
-        let recovery_target = transaction
-            .lifecycle
-            .applied
-            .as_ref()
-            .map(|snapshot| snapshot.target_core)
-            .unwrap_or_else(Self::committed_core);
-        let previous_clash = Config::clash().data().clone();
+            Ok(snapshot) => {
+                self.apply_prepared_runtime_locked(&transaction, snapshot, run_type)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
 
-        match self
-            .promote_and_start_locked(&paths, target_core, clash, profiles, run_type)
-            .await
-        {
+        match primary {
             Ok(()) => Ok(()),
             Err(primary) => {
                 Config::runtime().discard();
@@ -832,15 +864,15 @@ impl CoreManager {
                     return Err(primary.into());
                 }
                 if !primary.requires_recovery() {
-                    *Config::clash().data() = previous_clash;
+                    *Config::clash().data() = transaction.previous_clash;
                     return Err(primary.into());
                 }
                 match self
                     .restore_after_restart_failure(
-                        &paths,
-                        transaction,
-                        previous_clash,
-                        recovery_target,
+                        &transaction.paths,
+                        transaction.rollback,
+                        transaction.previous_clash,
+                        transaction.recovery_target,
                     )
                     .await
                 {
