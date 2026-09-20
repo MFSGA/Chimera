@@ -507,7 +507,7 @@ struct TestProfilesReadPort;
 #[cfg(test)]
 impl ProfilesReadPort for TestProfilesReadPort {
     fn snapshot(&self) -> anyhow::Result<crate::config::profile::profiles::Profiles> {
-        Ok(crate::config::core::Config::profiles().latest().clone())
+        Ok(crate::config::profile::profiles::Profiles::default())
     }
 }
 
