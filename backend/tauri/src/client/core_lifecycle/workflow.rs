@@ -110,6 +110,23 @@ impl CoreLifecycleWorkflow {
         use chimera_ipc::api::status::CoreState;
 
         let mut transition = self.service.begin_transition().await?;
+        let before = self.core.status().await?;
+
+        if matches!(before.state, CoreState::Running)
+            && before.run_type == crate::core::RunType::Service
+        {
+            transition.stop_daemon().await?;
+            transition.confirm_stopped().await?;
+            self.reconcile().await?;
+
+            let handed_off = self.core.status().await?;
+            anyhow::ensure!(
+                matches!(handed_off.state, CoreState::Running)
+                    && handed_off.run_type != crate::core::RunType::Service,
+                "core did not hand off to the local host before Service uninstall"
+            );
+        }
+
         transition.uninstall_daemon().await?;
         transition.confirm_stopped().await?;
 
@@ -117,9 +134,9 @@ impl CoreLifecycleWorkflow {
             return Ok(());
         }
 
-        let before = self.core.status().await?;
-        if !matches!(before.state, CoreState::Running)
-            || before.run_type == crate::core::RunType::Service
+        let after_uninstall = self.core.status().await?;
+        if !matches!(after_uninstall.state, CoreState::Running)
+            || after_uninstall.run_type == crate::core::RunType::Service
         {
             self.reconcile().await?;
         }
