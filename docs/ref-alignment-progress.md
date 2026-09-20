@@ -22,7 +22,8 @@
 - 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor 的完整 endpoint-handle/status protocol，
   以及 Profile actor snapshot 对 legacy read mirror 的最终替代。Profile production writes、remote refresh
   与 remote import 已收敛到单一 `ProfilesClient`/actor owner；legacy `Config::profiles()` 在 actor 外只剩
-  runtime builder 与 Agent 的只读兼容投影。因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
+  runtime builder 的只读 compatibility wrapper，Agent diagnostics 已直接消费 `ProfilesClient` actor snapshot。
+  因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
   访问”和“Profile 持久化单 writer + typed refresh/import workflow”已完成，完整 ref actor protocol 仍是后续工作。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
@@ -43,8 +44,9 @@
   Profile persistence 已新增 ref-aligned `ProfilesClient` + actor single-writer boundary：所有
   `ProfilesWritePort` mutation 在 actor mailbox 内 clone→mutate→persist，只有落盘成功才 publish
   snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
-  为 read/write 注入同一个 `ProfilesClient`；actor 外 `Config::profiles()` 仅剩 runtime builder / Agent
-  reads。production persistence command 已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
+  为 read/write 注入同一个 `ProfilesClient`；Agent diagnostics 已改读 `ChimeraClient::profiles_snapshot()`，
+  因此 actor 外 `Config::profiles()` 仅剩 runtime builder compatibility read。production persistence command
+  已改为 typed `ProfilesActorMessage`（add/delete/patch/reorder/
   current/valid/transforms/remote refresh/definition replacement），不再使用 `Any`/downcast 或 erased
   mutation closure；仅 e2e 测试保留 test-only mutation seam。remote refresh 已按 ref 的两阶段
   actor workflow 收口：actor 做 duplicate admission 与 definition fingerprint，detached fetch 期间释放
@@ -57,7 +59,7 @@
   与 ref 的剩余差异主要是 materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
-  也不改变已持久化文件。legacy UI/RuntimeBuilder/Agent 通过同步 mirror 继续读取原合同。
+  也不改变已持久化文件。legacy UI/RuntimeBuilder 仍通过同步 mirror 兼容读取；Agent diagnostics 已直接读取 actor snapshot。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
