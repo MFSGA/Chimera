@@ -268,17 +268,25 @@
   原地执行。caller cancellation/actor-call timeout 会 latch shared `outcome_uncertain`，但已 admission
   的 OS command 仍由 actor handler 串行持有并跑完，不会因 waiter drop 取消；后续 core/service
   mutation 因 uncertain fail-closed。高层 `HOST_TRANSITION_LOCK` 仍覆盖 daemon command + core handoff
-  的跨 host transaction。legacy daemon core wire（`/core/start|stop|status`）也已从
-  `CoreManager::Instance::Service` 的直接 shortcut-client 依赖抽成注入式
-  `core/service/core_host.rs::ServiceCoreHost`；`CoreManager`/service instance 只依赖该 adapter，
-  `LegacyServiceCoreHost` 独占现有 stop-before-start 与 one-shot stop/start race recovery。
+  的跨 host transaction。daemon core wire 也已从 `CoreManager::Instance::Service` 的直接
+  shortcut-client 依赖抽成注入式 `core/service/core_host.rs::ServiceCoreHost`；`CoreManager`/
+  service instance 只依赖该 adapter。runtime 子仓库 `3d03c75` 新增 additive
+  `/v2/core/submit`、`/v2/core/operation`、`/v2/core/status`：32 位 lowercase-hex operation id，
+  same-id/same-command 幂等 attach，same-id/different-command conflict，detached execution，
+  serialized mutation lock，最多 64 条 terminal history，operation query 最长 60 秒 long-poll；
+  legacy v1 start/stop/restart route 完整保留。app 的 `IpcServiceCoreHost` 已切到该 v2 wire：
+  Reconcile/Stop 都 submit 后按 id 读取终态，不再在 app 侧复刻 stop-before-start race recovery。
   在此之上，`core/actor_v2/endpoint.rs` 现在也有 ref-shaped `ExecutionHost`、`EndpointHandle`
   与 staged `ServiceEndpoint`：Local/Service handle 共享同一个 `CoreManager` transaction owner 和
   operation registry，因此不会复制 revision/recovery 状态；`CoreFacade` 的 reconcile 按 desired
   `RunType` 选 endpoint，stop/change-core 按 authoritative current `RunType` 选 endpoint，Service
-  endpoint 会拒绝非-Service reconcile。当前 `ServiceEndpoint` 仍是 legacy-wire compatibility
-  endpoint，真正的 daemon-side `/core/v2/submit + wait_operation` registry 尚未存在。剩余差异主要是
-  内部每个 adapter leg 的 kill-safe bounded timeout，以及 daemon wire 自身的 v2 operation registry；
+  endpoint 会拒绝非-Service reconcile。daemon-side operation registry 已存在，但仍是 Chimera
+  compatibility v2：Reconcile 发送 `config_file + core_type`，因为 daemon 当前尚无 ref 的 config-bytes
+  digest / applied revision 模型；ref 的 `expected_applied` CAS、Recover command、instance-bound
+  API connection 仍未进入 daemon wire。submit reply/query transport 在 admission 后丢失会被 app 映射
+  为 typed `ServiceCoreOutcomeUncertain`；CoreManager 遇到该状态不做 rollback，lower registry 记录
+  `Uncertain` 并由现有 fail-closed latch 阻断后续 mutation。剩余差异主要是内部每个 adapter leg 的
+  kill-safe bounded timeout，以及上述 daemon v2 revision/digest/API-connection 能力；
   当前 `runas + spawn_blocking` mutation 本身仍不可安全强杀，因此只在 actor client 层提供 110 秒
   caller bound，超时后保守进入 uncertain，而 actor mailbox 继续占有 command 直到 OS 调用终结。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：调用方继续复用同一
@@ -305,7 +313,11 @@
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
   budget exhausted 后停启、显式 command re-arm budget）；
   `core::clash::core::tests`，3 passed（显式 RunType 分类、restart recovery gate、Service instance
-  的 status/start/stop 全部委托注入 `ServiceCoreHost`）；`core::service` tests，12 passed；
+  的 status/start/stop 全部委托注入 `ServiceCoreHost`）；`core::service::core_host::tests`，2 passed
+  （32hex operation id contract、uncertain marker 可穿透 anyhow context chain）；runtime 子仓库
+  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 5 passed、
+  `chimera-service` 10 passed（含 v2 durable/idempotent Stop 与 id conflict/validation）；runtime
+  `cargo check -p chimera-ipc -p chimera-service` 通过；`core::service` tests，12 passed；
   `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
   chimera` 与 `git diff --check` 通过。
@@ -322,10 +334,11 @@
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
-  app IPC projection、legacy daemon core wire 的注入式 `ServiceCoreHost` adapter，以及显式
-  Local/Service `EndpointHandle` routing 已落地。下一阶段剩余的是把 daemon wire 自身升级到 ref 的
-  submit/wait operation registry、处理 adapter leg 的 kill-safe bound，并评估是否需要把 upper
-  lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon wire protocol 的部分迁移，
+  app IPC projection、注入式 `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
+  以及显式 Local/Service `EndpointHandle` routing 已落地。下一阶段剩余的是 daemon v2 的
+  config-bytes digest + applied revision CAS/Recover/API-connection parity、adapter leg 的 kill-safe bound，
+  并评估是否需要把 upper lifecycle operation id 与 lower operation id 显式关联。当前仍是 daemon
+  wire protocol parity 的部分迁移，
   而不是 singleton、
   manager ownership 或 workflow lease 问题。
 
