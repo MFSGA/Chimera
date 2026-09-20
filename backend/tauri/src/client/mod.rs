@@ -239,6 +239,7 @@ mod tests {
     use chimera_ipc::api::status::CoreState;
 
     use super::core_lifecycle::CoreStatusSnapshot;
+    use super::profiles::{ProfilesCommit, ProfilesSnapshot};
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
@@ -343,6 +344,15 @@ mod tests {
         }
     }
 
+    fn test_profile_commit<T>(value: T, affects_current: bool) -> ProfilesCommit<T> {
+        ProfilesCommit {
+            snapshot: ProfilesSnapshot::new(0, Profiles::default()),
+            value,
+            affects_current,
+            created: None,
+        }
+    }
+
     #[derive(Default)]
     struct NoopProfilesWrite {
         fail_refresh: bool,
@@ -352,30 +362,34 @@ mod tests {
 
     #[async_trait]
     impl ProfilesWritePort for NoopProfilesWrite {
-        async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
-            Ok((profile.uid().to_string(), false))
+        async fn add(&self, profile: Profile) -> anyhow::Result<ProfilesCommit<ProfileUid>> {
+            Ok(test_profile_commit(profile.uid().to_string(), false))
         }
-        async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-            Ok((format!("{uid}.yaml"), false))
+
+        async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<ProfilesCommit<String>> {
+            Ok(test_profile_commit(format!("{uid}.yaml"), false))
         }
+
         async fn patch_profile(
             &self,
             _uid: &ProfileUid,
             _profile: ProfileBuilder,
-        ) -> anyhow::Result<()> {
+        ) -> anyhow::Result<ProfilesCommit<()>> {
             if let Some(commits) = &self.patch_commits {
                 *commits.lock().unwrap() += 1;
             }
-            Ok(())
+            Ok(test_profile_commit((), true))
         }
+
         async fn patch_metadata(
             &self,
             _uid: &ProfileUid,
             _name: Option<String>,
             _desc: Option<Option<String>>,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
+
         async fn patch_remote_options(
             &self,
             _uid: &ProfileUid,
@@ -383,60 +397,75 @@ mod tests {
             _with_proxy: Option<bool>,
             _self_proxy: Option<bool>,
             _update_interval_minutes: Option<u64>,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
+
         async fn reorder(
             &self,
             _active_id: &ProfileUid,
             _over_id: &ProfileUid,
-        ) -> anyhow::Result<()> {
-            Ok(())
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
-        async fn reorder_by_list(&self, _list: &[ProfileUid]) -> anyhow::Result<()> {
-            Ok(())
+
+        async fn reorder_by_list(
+            &self,
+            _list: &[ProfileUid],
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
-        async fn set_current(&self, _uid: Option<&ProfileUid>) -> anyhow::Result<()> {
-            Ok(())
+
+        async fn set_current(
+            &self,
+            _uid: Option<&ProfileUid>,
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), true))
         }
-        async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
-            Ok(())
+
+        async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), true))
         }
+
         async fn set_profile_transform_chain(
             &self,
             _uid: &ProfileUid,
             _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
+
         async fn set_global_transform_chain(
             &self,
             _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
+
         async fn refresh_remote(
             &self,
             _uid: &ProfileUid,
             _options: Option<RemoteProfileOptionsBuilder>,
-        ) -> anyhow::Result<bool> {
+        ) -> anyhow::Result<ProfilesCommit<()>> {
             if let Some(commits) = &self.refresh_commits {
                 *commits.lock().unwrap() += 1;
             }
             if self.fail_refresh {
                 anyhow::bail!("injected profile state failure");
             }
-            Ok(false)
+            Ok(test_profile_commit((), false))
         }
+
         async fn import_remote(
             &self,
             _url: url::Url,
             _name: Option<String>,
             _option: Option<RemoteProfileOptionsBuilder>,
             _mode: crate::config::profile::item::remote::RemoteProfileImportMode,
-        ) -> anyhow::Result<(ProfileUid, bool)> {
-            Ok(("r-import".to_string(), false))
+        ) -> anyhow::Result<ProfilesCommit<ProfileUid>> {
+            Ok(test_profile_commit("r-import".to_string(), false))
         }
+
         async fn replace_remote_definition(
             &self,
             _uid: &ProfileUid,
@@ -446,8 +475,8 @@ mod tests {
             _option: Option<RemoteProfileOptions>,
             _subscription: Option<SubscriptionInfo>,
             _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
+        ) -> anyhow::Result<ProfilesCommit<()>> {
+            Ok(test_profile_commit((), false))
         }
     }
 
