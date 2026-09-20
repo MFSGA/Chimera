@@ -185,10 +185,17 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
+        let expected_applied = self
+            .endpoint
+            .status()
+            .await?
+            .applied
+            .map(|identity| identity.revision);
         self.run_local_mutation(CoreCommand::Reconcile {
             clash,
             target_core,
             run_type,
+            expected_applied,
         })
         .await
     }

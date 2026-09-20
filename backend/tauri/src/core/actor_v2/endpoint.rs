@@ -131,9 +131,18 @@ pub(crate) enum CoreCommand {
         clash: ClashConfig,
         target_core: ClashCore,
         run_type: RunType,
+        expected_applied: Option<u64>,
     },
     Stop,
     ChangeCore(ClashCore),
+}
+
+fn ensure_expected_applied(expected: Option<u64>, actual: Option<u64>) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        expected == actual,
+        "core revision conflict: expected applied revision {expected:?}, found {actual:?}"
+    );
+    Ok(())
 }
 
 impl CoreCommand {
@@ -235,7 +244,17 @@ impl LocalEndpoint {
                 clash,
                 target_core,
                 run_type,
+                expected_applied,
             } => {
+                let (state, _, _) = manager.status().await;
+                let actual_applied = if matches!(state.as_ref(), CoreState::Running) {
+                    manager
+                        .applied_runtime_identity()
+                        .map(|(revision, _)| revision)
+                } else {
+                    None
+                };
+                ensure_expected_applied(expected_applied, actual_applied)?;
                 lease
                     .rebuild_running_config_with(clash, target_core, run_type)
                     .await?;
@@ -328,6 +347,15 @@ impl ControlEndpoint for LocalEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expected_applied_revision_rejects_stale_or_missing_authority() {
+        assert!(ensure_expected_applied(None, None).is_ok());
+        assert!(ensure_expected_applied(Some(7), Some(7)).is_ok());
+        assert!(ensure_expected_applied(Some(7), Some(8)).is_err());
+        assert!(ensure_expected_applied(Some(7), None).is_err());
+        assert!(ensure_expected_applied(None, Some(7)).is_err());
+    }
 
     #[test]
     fn stopped_status_never_exposes_stale_applied_identity() {
