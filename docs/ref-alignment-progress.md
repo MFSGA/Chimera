@@ -20,9 +20,9 @@
 - 生产 `RuntimeInputOutput` 现在强制携带 `RuntimeInspectionData`；共享 executor
   生成失败会直接返回错误，不再伪装为 legacy/fallback 的 `BareRoot` inspection。
 - 尚未完成的主要 ref 差异集中在 lower host endpoint/ServiceActor 的完整 endpoint-handle/status protocol，
-  以及 Profile actor snapshot 对 legacy read mirror 的最终替代。Profile production writes、remote refresh
-  与 remote import 已收敛到单一 `ProfilesClient`/actor owner；production actor 外已不再读取
-  `Config::profiles()`：Agent diagnostics 与 runtime reconcile/select-core 都消费 `ProfilesClient` actor snapshot。
+  以及 Profile shared-model/versioned actor protocol。Profile production writes、reads、remote refresh/import
+  已收敛到单一 `ProfilesClient`/actor owner；legacy `Config::profiles()`/`profiles_config` mirror 已删除，
+  Agent diagnostics 与 runtime reconcile/select-core 都消费 `ProfilesClient` actor snapshot。
   因此 P0 的“单一 runtime 业务实现”“移除 CoreManager singleton
   访问”和“Profile 持久化单 writer + typed refresh/import workflow”已完成，完整 ref actor protocol 仍是后续工作。
 
@@ -43,8 +43,9 @@
 - 共通业务入口及适配边界：新模块提供纯 Profile/Runtime 领域 API；Tauri 侧 production
   Profile persistence 已新增 ref-aligned `ProfilesClient` + actor single-writer boundary：所有
   `ProfilesWritePort` mutation 在 actor mailbox 内 clone→mutate→persist，只有落盘成功才 publish
-  snapshot，并同步 legacy `Config::profiles()` 作为只读 compatibility projection。composition root
-  为 read/write 注入同一个 `ProfilesClient`；Agent diagnostics 已改读 `ChimeraClient::profiles_snapshot()`。
+  snapshot。`ProfilesClient::spawn` 直接从 profiles.yaml/domain loader bootstrap，不再先构造或同步 legacy
+  `Config::profiles()` ManagedState mirror；composition root 为 read/write 注入同一个 `ProfilesClient`。
+  Agent diagnostics 已改读 `ChimeraClient::profiles_snapshot()`。
   lifecycle workflow 也持有同一个 `ProfilesReadPort`：Reconcile/SelectCore admission 时捕获 actor snapshot，
   经 `CoreLifecyclePort → CoreFacade → CoreCommand → CoreManager → RuntimeBuilder` 显式传递，不再让 lower
   runtime builder 从全局 mirror 隐式取 Profile state。production persistence command
@@ -63,7 +64,8 @@
   materialization scheduler/rebuild notifier、versioned snapshot/error protocol 尚未完全迁入 actor。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：不改变 UI、agent、profiles.yaml
   持久化格式或内核控制。Profile write ordering 现在由 actor 串行化；失败 mutation 不发布 snapshot，
-  也不改变已持久化文件。legacy UI 仍可通过同步 mirror 兼容读取；RuntimeBuilder 与 Agent diagnostics 已直接使用 actor snapshot。
+  也不改变已持久化文件。生产读路径统一走 `ProfilesClient` snapshot；RuntimeBuilder、Agent diagnostics
+  与 lifecycle reconcile/select-core 均不再依赖 legacy mirror。
 - 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
   chimera-config -- --test-threads=1`，135 passed；`cargo test --manifest-path
   backend/Cargo.toml -p chimera --features e2e client::profiles::actor_tests --lib --
@@ -76,9 +78,9 @@
   `core::actor_v2`，13 passed；`cargo check --manifest-path backend/Cargo.toml -p chimera`、
   `cargo fmt --manifest-path backend/Cargo.toml --all -- --check`
   与 `git diff --check` 通过。
-- 收敛、移除或重新评估条件：下一阶段把 materialization/rebuild notification 与 versioned snapshot/error
-  protocol 继续收进 actor，并在 legacy UI/read bridge 迁完后删除 `Config::profiles()` mirror。RuntimeBuilder/Agent
-  已不再依赖该 mirror。Tauri-local Profile 领域模型
+- 收敛、移除或重新评估条件：`Config::profiles()`/`profiles_config` mirror 已删除，旧
+  `core::state::ManagedState` 也已退出 active module graph。下一阶段把 materialization/rebuild notification
+  与 versioned snapshot/error protocol 继续收进 actor。Tauri-local Profile 领域模型
   尚未完全替换为 shared ref model，因此 DIFF-001 仍标记为部分迁移。
 
 ## DIFF-002：标准核心切换到 ref RuntimeExecutor（第二阶段）

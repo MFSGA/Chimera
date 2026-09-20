@@ -10,23 +10,20 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 
 use super::{ChimeraClient, Degradation, DegradationPhase, MutationOutcome};
 
-use crate::config::{
-    core::Config,
-    profile::{
-        builder::ProfileBuilder,
-        item::{
-            Profile, ProfileKindGetter, ProfileMetaGetter,
-            remote::{
-                PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileBuilder,
-                RemoteProfileImportMode, RemoteProfileOptions, RemoteProfileOptionsBuilder,
-                SubscriptionInfo,
-            },
-            shared::{PreparedProfileFile, ProfileSharedBuilder},
-            utils::generate_uid,
+use crate::config::profile::{
+    builder::ProfileBuilder,
+    item::{
+        Profile, ProfileKindGetter, ProfileMetaGetter,
+        remote::{
+            PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileBuilder,
+            RemoteProfileImportMode, RemoteProfileOptions, RemoteProfileOptionsBuilder,
+            SubscriptionInfo,
         },
-        item_type::{ProfileItemType, ProfileUid},
-        profiles::Profiles,
+        shared::{PreparedProfileFile, ProfileSharedBuilder},
+        utils::generate_uid,
     },
+    item_type::{ProfileItemType, ProfileUid},
+    profiles::Profiles,
 };
 
 pub(crate) trait ProfilesReadPort: Send + Sync {
@@ -286,19 +283,9 @@ struct ProfilesActorState {
 struct ProfilesActor;
 
 impl ProfilesActorState {
-    fn publish_and_sync_legacy(&mut self, next: Profiles) {
+    fn publish(&mut self, next: Profiles) {
         self.profiles = next.clone();
-        self.snapshot_tx.send_replace(next.clone());
-
-        // Compatibility projection only. The actor is the sole writer; this
-        // mirror remains until the remaining legacy runtime/diagnostics reads
-        // have moved to the client snapshot.
-        let legacy = Config::profiles();
-        {
-            let mut draft = legacy.draft();
-            *draft = next;
-        }
-        legacy.apply();
+        self.snapshot_tx.send_replace(next);
     }
 
     async fn mutate<T>(
@@ -317,7 +304,7 @@ impl ProfilesActorState {
         .await
         .context("profile state persistence task failed")?;
         persisted?;
-        self.publish_and_sync_legacy(next);
+        self.publish(next);
         Ok(value)
     }
 
@@ -811,7 +798,7 @@ impl Drop for ProfilesClientInner {
 impl ProfilesClient {
     pub(crate) async fn spawn(profile_files: Arc<dyn ProfileFsPort>) -> anyhow::Result<Self> {
         Self::spawn_from_profiles(
-            Config::profiles().latest().clone(),
+            Profiles::new(),
             profile_files,
             Arc::new(LegacySubscriptionFetcher),
             Arc::new(LegacyRemoteProfileImporter),
