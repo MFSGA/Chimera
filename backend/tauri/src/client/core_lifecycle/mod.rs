@@ -50,6 +50,7 @@ pub(crate) struct CoreLifecycleStatus {
 pub(crate) struct CoreLifecycleOperationResult {
     pub(crate) id: OperationId,
     pub(crate) error: Option<String>,
+    pub(crate) backend_operation_id: Option<u64>,
 }
 
 #[allow(unused_imports)]
@@ -145,6 +146,10 @@ impl CoreLifecycleActorState {
             status.completed.push(CoreLifecycleOperationResult {
                 id: response.id,
                 error: result.as_ref().err().map(ToString::to_string),
+                backend_operation_id: result
+                    .as_ref()
+                    .err()
+                    .and_then(crate::core::actor_v2::facade::operation_id_from_error),
             });
         }
         if let Some(reply) = response.reply {
@@ -1254,7 +1259,12 @@ mod tests {
         async fn stop(&self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("lower-stop");
             self.uncertain.store(true, AtomicOrdering::Release);
-            anyhow::bail!("lower mutation reply lost")
+            Err(anyhow::Error::new(
+                crate::core::actor_v2::facade::LowerOperationError::new(
+                    41,
+                    "lower mutation reply lost",
+                ),
+            ))
         }
 
         async fn change_core(
@@ -1941,6 +1951,12 @@ mod tests {
                 .contains("previous core lifecycle operation has an uncertain outcome")
         );
         assert_eq!(events.lock().unwrap().as_slice(), ["lower-stop"]);
+
+        let status = client.status();
+        assert_eq!(status.completed.len(), 2);
+        assert_eq!(status.completed[0].id, 1);
+        assert_eq!(status.completed[0].backend_operation_id, Some(41));
+        assert_eq!(status.completed[1].backend_operation_id, None);
     }
 
     #[tokio::test]

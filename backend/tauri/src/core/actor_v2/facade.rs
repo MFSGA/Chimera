@@ -35,6 +35,29 @@ use chimera_config::clash::config::ClashConfig;
 const SERVICE_RESTART_BUDGET: u8 = 3;
 const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct LowerOperationError {
+    operation_id: u64,
+    message: String,
+}
+
+impl LowerOperationError {
+    pub(crate) fn new(operation_id: u64, message: impl Into<String>) -> Self {
+        Self {
+            operation_id,
+            message: message.into(),
+        }
+    }
+}
+
+pub(crate) fn operation_id_from_error(error: &anyhow::Error) -> Option<u64> {
+    error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<LowerOperationError>())
+        .map(|error| error.operation_id)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceUninstallPlan {
     AlreadyAbsent,
@@ -150,22 +173,31 @@ impl CoreFacade {
         match endpoint.wait_operation(id, LOCAL_OPERATION_WAIT).await {
             Some(info) if info.phase == OperationPhase::Succeeded => Ok(()),
             Some(info) if info.phase == OperationPhase::Failed => {
-                Err(anyhow::anyhow!(info.error.unwrap_or_else(|| {
-                    "lower core operation failed without an error".to_string()
-                })))
+                Err(anyhow::Error::new(LowerOperationError::new(
+                    id.get(),
+                    info.error.unwrap_or_else(|| {
+                        "lower core operation failed without an error".to_string()
+                    }),
+                )))
             }
             Some(info) if info.phase == OperationPhase::Uncertain => {
                 self.outcome_uncertain.store(true, Ordering::Release);
-                Err(anyhow::anyhow!(info.error.unwrap_or_else(|| {
-                    "lower core operation reached an uncertain terminal state".to_string()
-                })))
+                Err(anyhow::Error::new(LowerOperationError::new(
+                    id.get(),
+                    info.error.unwrap_or_else(|| {
+                        "lower core operation reached an uncertain terminal state".to_string()
+                    }),
+                )))
             }
             Some(_) | None => {
                 self.outcome_uncertain.store(true, Ordering::Release);
-                anyhow::bail!(
-                    "lower core operation {} did not reach a terminal state within the wait budget",
-                    id.get()
-                )
+                Err(anyhow::Error::new(LowerOperationError::new(
+                    id.get(),
+                    format!(
+                        "lower core operation {} did not reach a terminal state within the wait budget",
+                        id.get()
+                    ),
+                )))
             }
         }
     }
@@ -344,6 +376,13 @@ mod tests {
             facade.endpoint_for_run_type(RunType::Elevated).host(),
             ExecutionHost::Local
         );
+    }
+
+    #[test]
+    fn lower_operation_id_is_preserved_through_anyhow_context() {
+        let error = anyhow::Error::new(LowerOperationError::new(41, "lower failed"))
+            .context("outer context");
+        assert_eq!(operation_id_from_error(&error), Some(41));
     }
 
     #[test]

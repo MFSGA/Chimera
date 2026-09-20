@@ -383,14 +383,14 @@
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
   endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，13 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
+  `core::actor_v2` tests，14 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
   lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
   Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、
   operation history 保持 admission 顺序且按 id 查询返回同一终态、Local/Service endpoint 拥有不同
   host identity 且共享同一 registry、facade 按 RunType 选择显式 endpoint handle、
   Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
   command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
-  budget exhausted 后停启、显式 command re-arm budget）；
+  budget exhausted 后停启、显式 command re-arm budget、lower operation id 可穿透 anyhow context）；
   `core::clash::api::tests`，2 passed（含 instance-bound HTTP capability）；`core::clash::core::tests`，
   3 passed（显式 RunType 分类、restart recovery gate、Service instance 的 status/start/stop 全部委托
   注入 `ServiceCoreHost`）；`core::service::core_host::tests`，6 passed
@@ -418,11 +418,12 @@
   registry + typed terminal output/applied runtime identity + Running-only applied status projection +
   expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
-  app IPC projection、注入式 `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
+  app IPC projection，以及 upper lifecycle failure result 的 `backend_operation_id` 关联、注入式
+  `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
   以及显式 Local/Service `EndpointHandle` routing、daemon v2 config-text digest + applied revision CAS、
-  instance-bound API connection capability、daemon v2 Recover parity 与 async core-control adapter bounds
-  已落地。下一阶段主要评估是否需要把 upper lifecycle operation id 与 lower operation id 显式关联，
-  并补真实桌面 TUN/service lifecycle E2E；privileged `runas` OS mutation 的强制终止仍保留为平台限制。
+  instance-bound API connection capability、daemon v2 Recover parity、async core-control adapter bounds，
+  以及 ref-shaped upper→lower failure operation-id correlation 已落地。下一阶段主要是补真实桌面
+  TUN/service lifecycle E2E；privileged `runas` OS mutation 的强制终止仍保留为平台限制。
   当前 daemon wire protocol parity 已基本收敛，
   而不是 singleton、
   manager ownership 或 workflow lease 问题。
