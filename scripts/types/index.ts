@@ -7,6 +7,7 @@ export interface BinInfo {
   exeFile: string;
   tmpFile: string;
   downloadURL: string;
+  checksumURL?: string;
 }
 
 export enum SupportedArch {

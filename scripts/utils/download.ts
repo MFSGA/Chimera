@@ -7,8 +7,10 @@ import * as tar from 'tar';
 import { BinInfo } from 'types';
 import { fetch, type RequestInit } from 'undici';
 import { getProxyAgent } from './';
+import { verifyFileSha256 } from './checksum';
 import { TAURI_APP_DIR, TEMP_DIR } from './env';
 import { colorize, consola } from './logger';
+import { canReuseExistingSidecar } from './sidecar-cache';
 
 /**
  * download sidecar and rename
@@ -75,7 +77,15 @@ export const resolveSidecar = async (
   platform: string,
   option?: { force?: boolean },
 ) => {
-  const { name, targetFile, tmpFile, exeFile, downloadURL } = await binInfo;
+  const {
+    name,
+    version,
+    targetFile,
+    tmpFile,
+    exeFile,
+    downloadURL,
+    checksumURL,
+  } = await binInfo;
 
   consola.debug(colorize`resolve {cyan ${name}}...`);
 
@@ -85,12 +95,27 @@ export const resolveSidecar = async (
 
   await fs.mkdirp(sidecarDir);
 
-  if (!option?.force && (await fs.pathExists(sidecarPath))) return;
+  // A version-pinned sidecar must never be reused solely because the
+  // canonical target filename already exists. The filename intentionally stays
+  // stable for Tauri's externalBin contract, so existence alone cannot prove
+  // that its bytes match the version selected by the current source tree.
+  if (
+    canReuseExistingSidecar({
+      force: option?.force,
+      version,
+      targetExists: await fs.pathExists(sidecarPath),
+    })
+  ) {
+    return;
+  }
 
   const tempDir = path.join(TEMP_DIR, name);
+  if (option?.force || version) {
+    await fs.remove(tempDir);
+  }
 
   const tempFile = path.join(tempDir, tmpFile);
-
+  const tempChecksum = `${tempFile}.sha256`;
   const tempExe = path.join(tempDir, exeFile);
 
   await fs.mkdirp(tempDir);
@@ -98,6 +123,13 @@ export const resolveSidecar = async (
   try {
     if (!(await fs.pathExists(tempFile))) {
       await downloadFile(downloadURL, tempFile);
+    }
+    if (checksumURL) {
+      await downloadFile(checksumURL, tempChecksum);
+      await verifyFileSha256(tempFile, tempChecksum);
+      consola.success(
+        colorize`verified SHA-256 for {green "${name}"} ${version ?? ''}`,
+      );
     }
     if (tmpFile.endsWith('.zip')) {
       const zip = new AdmZip(tempFile);
@@ -130,7 +162,7 @@ export const resolveSidecar = async (
 
       await fs.rename(path.join(tempDir, entryName), tempExe);
 
-      await fs.rename(tempExe, sidecarPath);
+      await fs.move(tempExe, sidecarPath, { overwrite: true });
 
       consola.debug(colorize`{green "${name}"} unzip finished`);
     } else if (tmpFile.endsWith('.tar.gz')) {
@@ -139,7 +171,7 @@ export const resolveSidecar = async (
         file: tempFile,
         cwd: tempDir,
       });
-      await fs.rename(tempExe, sidecarPath);
+      await fs.move(tempExe, sidecarPath, { overwrite: true });
       consola.debug(colorize`{green "${name}"} untar finished`);
     } else if (tmpFile.endsWith('.gz')) {
       // gz
@@ -168,7 +200,7 @@ export const resolveSidecar = async (
       });
     } else {
       // Common Files
-      await fs.rename(tempFile, sidecarPath);
+      await fs.move(tempFile, sidecarPath, { overwrite: true });
 
       consola.info(colorize`{green "${name}"} rename finished`);
 
