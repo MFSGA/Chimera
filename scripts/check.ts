@@ -10,6 +10,7 @@ import { Resolve } from './utils/resolve';
 
 // force download
 const FORCE = process.argv.includes('--force');
+const USE_LOCAL_E2E_SERVICE = process.env.CHIMERA_E2E_LOCAL_SERVICE === '1';
 console.log(FORCE);
 console.log(FORCE);
 
@@ -54,7 +55,15 @@ const tasks: {
   { name: 'clash-rs', func: () => resolve.clashRust(), retry: 5 },
   { name: 'chimera-client', func: () => resolve.chimeraClient(), retry: 5 },
   { name: 'clash-rs-alpha', func: () => resolve.clashRustAlpha(), retry: 5 },
-  { name: 'chimera-service', func: () => resolve.chimeraService(), retry: 5 },
+  ...(USE_LOCAL_E2E_SERVICE
+    ? []
+    : [
+        {
+          name: 'chimera-service',
+          func: () => resolve.chimeraService(),
+          retry: 5,
+        },
+      ]),
 
   { name: 'mmdb', func: () => resolve.mmdb(), retry: 5 },
   { name: 'geoip', func: () => resolve.geoip(), retry: 5 },
@@ -99,6 +108,12 @@ async function runTask() {
   }
 
   return runTask();
+}
+
+if (USE_LOCAL_E2E_SERVICE) {
+  consola.info(
+    'E2E local Service mode: remote chimera-service sidecar resolution is skipped',
+  );
 }
 
 consola.start('start check and download resources...');

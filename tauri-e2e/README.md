@@ -17,30 +17,30 @@ pnpm --filter @chimera/tauri-e2e test:smoke
 
 `pnpm e2e:tauri` builds the application and runs the default smoke suite. `pnpm e2e:tauri:test` runs smoke against an existing binary. Neither command automatically runs unit tests or all desktop suites. Rebuild after relevant source changes.
 
-| Command in `@chimera/tauri-e2e`                               | Current selection                                                                  |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `test`, `test:desktop`, `test:smoke`                          | Smoke scenarios, including legacy proxy localization                               |
-| `test:critical`                                               | Smoke + runtime + profiles                                                         |
-| `test:runtime`, `test:profiles`, `test:settings`, `test:main` | The named group in `spec-suites.ts`                                                |
-| `test:agent`                                                  | Agent UI/orchestration with the default stale-proxy fixture                        |
-| `test:network`, `test:lan`                                    | Allow LAN; requires the configured external test client                            |
-| `test:system`                                                 | Real Windows Service + TUN lifecycle; elevated dedicated runner/VM only             |
-| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network/system/upgrade |
+| Command in `@chimera/tauri-e2e`                               | Current selection                                                                         |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `test`, `test:desktop`, `test:smoke`                          | Smoke scenarios, including legacy proxy localization                                      |
+| `test:critical`                                               | Smoke + runtime + profiles                                                                |
+| `test:runtime`, `test:profiles`, `test:settings`, `test:main` | The named group in `spec-suites.ts`                                                       |
+| `test:agent`                                                  | Agent UI/orchestration with the default stale-proxy fixture                               |
+| `test:network`, `test:lan`                                    | Allow LAN; requires the configured external test client                                   |
+| `test:system`                                                 | Real Windows Service + TUN lifecycle; elevated dedicated runner/VM only                   |
+| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network/system/upgrade     |
 | `test:all`                                                    | All base groups; includes network, elevated system, and conditional upgrade prerequisites |
-| `test:upgrade:v0.22.3`                                        | Dedicated two-phase upgrade runner; requires its old/new binary setup              |
-| `test:unit`                                                   | Explicit harness/unit list, including suite partitioning and system preflight safety |
+| `test:upgrade:v0.22.3`                                        | Dedicated two-phase upgrade runner; requires its old/new binary setup                     |
+| `test:unit`                                                   | Explicit harness/unit list, including suite partitioning and system preflight safety      |
 
 Inspect [spec-suites.ts](spec-suites.ts) for the authoritative membership and [upgrade-v0223-v0230.ts](upgrade-v0223-v0230.ts) for upgrade prerequisites. The upgrade spec skips when `CHIMERA_E2E_UPGRADE_PHASE` is absent: a normal `test:all` result is not evidence that both upgrade phases ran. The unit command is an explicit list, not discovery of every `.test.ts` file.
 
 ## Current CI coverage
 
-[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network, elevated system lifecycle, and the dedicated upgrade runner are not automatically exercised by those selections.
+[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. A manual workflow dispatch may select `system`; that path still must pass the destructive-suite preflight before the application launches. The workflow also runs the controller-port fallback regression for non-system suites and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network and the dedicated upgrade runner are not automatically exercised by those selections.
 
 Check the workflow and suite membership when adding tests. Register new desktop specs and provide executable unit-test entries; report which assertions actually ran. Build, typecheck, skipped tests, and unselected suites are not test passes.
 
 ## Runtime and isolation
 
-- The E2E build uses `backend/target/e2e` and the Cargo `e2e` feature. The embedded WebDriver is feature-gated; the normal release build should not include that test interface.
+- The E2E build uses `backend/target/e2e` and the Cargo `e2e` feature. It stages a freshly compiled Chimera Service from the checked-out `backend/chimera-runtime` submodule before the Tauri build; E2E resource resolution explicitly skips the remote Service release, so pre-release branches test their current Service source instead of a stale published sidecar. The embedded WebDriver is feature-gated; the normal release build should not include that test interface.
 - The default binary is `backend/target/e2e/debug/chimera.exe` on Windows, or `chimera` elsewhere. `CHIMERA_E2E_BINARY` overrides it. The default embedded port is `4446`, configurable with `CHIMERA_E2E_WEBDRIVER_PORT`.
 - The harness initially connects to the `legacy` window. Main-window specs open and switch to the main window. Both UIs remain supported; shared changes need checks for affected flows in both.
 - Each top-level spec starts and ends with the harness closing temporary non-app windows, focusing `legacy`, and restoring the legacy entry URL. Main specs use the shared main-window helper to reuse a rendered singleton, recover a stale blank main window when necessary, and enter their target route through SPA navigation. Persistent application/config state must still be restored explicitly by the owning test.
