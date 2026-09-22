@@ -116,6 +116,9 @@ jobs:
       - name: Verify sidecar integrity helpers
         run: node --test ./scripts/utils/checksum.test.ts ./scripts/utils/sidecar-cache.test.ts ./scripts/utils/service-release.test.ts
 
+      - name: Verify clash-rs dependency mirror
+        run: pnpm exec tsx --test ./scripts/utils/clash-rs-mirror.test.ts
+
       - name: Prepare frontend
         run: pnpm -r build # Build frontend
         env:
