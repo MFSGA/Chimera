@@ -41,6 +41,9 @@ release.sh
 !/docs/tauri-e2e-minimal-architecture.md
 !/docs/testing/
 !/docs/testing/**
+!/docs/releases/
+!/docs/releases/**
+
 # new rust-analyzer
 target/
 ref/

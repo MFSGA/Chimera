@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  assertServiceReleaseCommit,
   assertStableServiceRelease,
   EXPECTED_SERVICE_ASSETS,
   type ServiceReleaseMetadata,
@@ -35,6 +36,25 @@ test('rejects draft and prerelease candidates', () => {
         'v1.10.0',
       ),
     /prerelease candidate/,
+  );
+});
+
+test('accepts only the exact pinned service commit', () => {
+  const commit = '0123456789abcdef0123456789abcdef01234567';
+  assert.doesNotThrow(() =>
+    assertServiceReleaseCommit(commit, commit.toUpperCase()),
+  );
+  assert.throws(
+    () =>
+      assertServiceReleaseCommit(
+        commit,
+        'fedcba9876543210fedcba9876543210fedcba98',
+      ),
+    /release commit mismatch/,
+  );
+  assert.throws(
+    () => assertServiceReleaseCommit('not-a-sha', commit),
+    /invalid pinned/,
   );
 });
 

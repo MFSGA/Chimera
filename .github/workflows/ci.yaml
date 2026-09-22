@@ -5,12 +5,14 @@
       - master
       - dev
       - release-*
+      - 'release/**'
   push:
     branches:
       - main
       - master
       - dev
       - release-*
+      - 'release/**'
 
 # the name of our workflow
 name: CI

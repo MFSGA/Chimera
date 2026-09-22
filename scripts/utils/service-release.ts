@@ -34,6 +34,27 @@ export const EXPECTED_SERVICE_ASSETS = [
   'chimera-service-x86_64-unknown-linux-musl.tar.gz.sha256',
 ] as const;
 
+export function assertServiceReleaseCommit(
+  pinnedCommit: string,
+  releaseCommit: string,
+): void {
+  const pinned = pinnedCommit.trim().toLowerCase();
+  const released = releaseCommit.trim().toLowerCase();
+  if (!/^[0-9a-f]{40}$/.test(pinned)) {
+    throw new Error(`invalid pinned Chimera Service commit: ${pinnedCommit}`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(released)) {
+    throw new Error(
+      `invalid released Chimera Service commit: ${releaseCommit}`,
+    );
+  }
+  if (pinned !== released) {
+    throw new Error(
+      `Chimera Service release commit mismatch: pinned ${pinned}, released ${released}`,
+    );
+  }
+}
+
 export function assertStableServiceRelease(
   release: ServiceReleaseMetadata,
   expectedTag: string,

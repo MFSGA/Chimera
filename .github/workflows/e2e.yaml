@@ -7,6 +7,7 @@ on:
       - master
       - dev
       - release-*
+      - 'release/**'
     paths:
       - 'backend/**'
       - 'frontend/**'
@@ -22,6 +23,7 @@ on:
       - master
       - dev
       - release-*
+      - 'release/**'
     paths:
       - 'backend/**'
       - 'frontend/**'
@@ -34,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: E2E suite to run (system is destructive and manual-only; network/all remain local-only)
+        description: E2E suite to run (system is destructive; release branches also run it automatically on hosted Windows)
         required: true
         default: critical
         type: choice
@@ -152,4 +154,98 @@ jobs:
         with:
           name: tauri-e2e-diagnostics-${{ github.run_id }}
           path: ${{ github.workspace }}/artifacts/e2e
+          if-no-files-found: ignore
+
+  release_system:
+    name: Release system lifecycle
+    if: github.event_name == 'push' && (startsWith(github.ref_name, 'release/') || startsWith(github.ref_name, 'release-'))
+    needs: desktop
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e-system
+      CHIMERA_E2E_LOCAL_SERVICE: '1'
+      CHIMERA_E2E_SYSTEM_LIFECYCLE: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Assert elevated disposable runner
+        shell: pwsh
+        run: |
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'release system lifecycle requires an elevated Windows runner'
+          }
+
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup toolchain install nightly --profile minimal --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          run_install: false
+
+      - uses: Swatinem/rust-cache@v2
+        name: Cache Rust dependencies
+        with:
+          workspaces: |
+            backend -> target
+          cache-on-failure: true
+
+      - name: Get pnpm store directory
+        shell: pwsh
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $env:GITHUB_ENV
+
+      - uses: actions/cache@v6
+        name: Setup pnpm cache
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify service runtime pin
+        run: pnpm check:service-runtime
+
+      - name: Validate E2E harness
+        run: pnpm --filter @chimera/tauri-e2e test:unit
+
+      - name: Typecheck E2E harness
+        run: pnpm --filter @chimera/tauri-e2e typecheck
+
+      - name: Prepare sidecars and resources
+        run: pnpm check
+
+      - name: Build current runtime and Tauri E2E binary
+        run: pnpm e2e:tauri:build
+        env:
+          NODE_OPTIONS: '--max_old_space_size=4096'
+
+      - name: Run destructive Service/TUN lifecycle
+        shell: pwsh
+        run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite system
+
+      - name: Upload system E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tauri-e2e-system-diagnostics-${{ github.run_id }}
+          path: ${{ github.workspace }}/artifacts/e2e-system
           if-no-files-found: ignore

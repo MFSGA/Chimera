@@ -1,7 +1,9 @@
+import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import https from 'node:https';
 import path from 'node:path';
 import {
+  assertServiceReleaseCommit,
   assertStableServiceRelease,
   type ServiceReleaseMetadata,
 } from './utils/service-release.ts';
@@ -39,34 +41,86 @@ if (process.env.GITHUB_TOKEN) {
   headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
 }
 
-const releaseUrl = `https://api.github.com/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`;
-const response = await new Promise<{
-  statusCode: number;
-  statusMessage: string;
-  body: string;
-}>((resolve, reject) => {
-  const request = https.get(releaseUrl, { headers }, (result) => {
-    const chunks: Buffer[] = [];
-    result.on('data', (chunk: Buffer) => chunks.push(chunk));
-    result.on('end', () => {
-      resolve({
-        statusCode: result.statusCode ?? 0,
-        statusMessage: result.statusMessage ?? '',
-        body: Buffer.concat(chunks).toString('utf8'),
+async function getGitHubJson<T>(apiPath: string): Promise<T> {
+  const url = `https://api.github.com${apiPath}`;
+  const response = await new Promise<{
+    statusCode: number;
+    statusMessage: string;
+    body: string;
+  }>((resolve, reject) => {
+    const request = https.get(url, { headers }, (result) => {
+      const chunks: Buffer[] = [];
+      result.on('data', (chunk: Buffer) => chunks.push(chunk));
+      result.on('end', () => {
+        resolve({
+          statusCode: result.statusCode ?? 0,
+          statusMessage: result.statusMessage ?? '',
+          body: Buffer.concat(chunks).toString('utf8'),
+        });
       });
     });
+    request.on('error', reject);
   });
-  request.on('error', reject);
-});
 
-if (response.statusCode < 200 || response.statusCode >= 300) {
-  throw new Error(
-    `failed to resolve stable service release ${tag}: HTTP ${response.statusCode} ${response.statusMessage}`,
-  );
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(
+      `GitHub API request failed for ${apiPath}: HTTP ${response.statusCode} ${response.statusMessage}`,
+    );
+  }
+  return JSON.parse(response.body) as T;
 }
 
-const release = JSON.parse(response.body) as ServiceReleaseMetadata;
+interface GitObjectRef {
+  object: {
+    type: 'commit' | 'tag';
+    sha: string;
+  };
+}
+
+interface GitAnnotatedTag {
+  object: {
+    type: 'commit' | 'tag';
+    sha: string;
+  };
+}
+
+async function resolveTagCommit(tagName: string): Promise<string> {
+  let object = (
+    await getGitHubJson<GitObjectRef>(
+      `/repos/${repo}/git/ref/tags/${encodeURIComponent(tagName)}`,
+    )
+  ).object;
+
+  for (let depth = 0; object.type === 'tag' && depth < 8; depth += 1) {
+    object = (
+      await getGitHubJson<GitAnnotatedTag>(
+        `/repos/${repo}/git/tags/${object.sha}`,
+      )
+    ).object;
+  }
+  if (object.type !== 'commit') {
+    throw new Error(`failed to resolve ${tagName} to a commit`);
+  }
+  return object.sha;
+}
+
+const release = await getGitHubJson<ServiceReleaseMetadata>(
+  `/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`,
+);
 assertStableServiceRelease(release, tag);
+
+const pinnedCommit = execFileSync(
+  'git',
+  ['-C', 'backend/chimera-runtime', 'rev-parse', 'HEAD'],
+  {
+    cwd: root,
+    encoding: 'utf8',
+    windowsHide: true,
+  },
+).trim();
+const releaseCommit = await resolveTagCommit(tag);
+assertServiceReleaseCommit(pinnedCommit, releaseCommit);
+
 console.log(
-  `stable Chimera Service dependency verified: ${tag} with ${release.assets.length} assets`,
+  `stable Chimera Service dependency verified: ${tag} @ ${releaseCommit} with ${release.assets.length} assets`,
 );
