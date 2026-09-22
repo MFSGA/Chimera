@@ -27,6 +27,7 @@ fn initial_config() -> ClashRuntimeConfig {
         external_controller: Some("127.0.0.1:9090".to_string()),
         secret: None,
         tun: None,
+        ..Default::default()
     }
 }
 
@@ -391,6 +392,42 @@ async fn reports_primary_and_rollback_patch_failures() {
         }
     );
     assert_eq!(snapshot(&state).allow_lan, Some(true));
+}
+
+#[tokio::test]
+async fn rollback_projection_preserves_explicit_null_runtime_values() {
+    let coordinator = RuntimePatchCoordinator::default();
+    let state = Arc::new(Mutex::new(initial_config()));
+    let requested = Mapping::from_iter([("port".into(), Value::from(7890))]);
+
+    let outcome = coordinator
+        .apply(
+            requested,
+            {
+                let state = Arc::clone(&state);
+                move || {
+                    let state = Arc::clone(&state);
+                    async move { Ok(snapshot(&state)) }
+                }
+            },
+            {
+                let state = Arc::clone(&state);
+                move |patch| {
+                    let state = Arc::clone(&state);
+                    async move { update_config(&state, patch) }
+                }
+            },
+            |_patch| async { Err(anyhow!("persist failed")) },
+        )
+        .await;
+
+    assert_eq!(
+        outcome,
+        TransactionOutcome::RolledBack {
+            primary_error: "persist failed".to_string(),
+        }
+    );
+    assert_eq!(snapshot(&state).port, None);
 }
 
 #[tokio::test]

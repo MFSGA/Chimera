@@ -534,7 +534,9 @@ impl CoreLifecycleClient {
             Arc::new(TestProfilesReadPort),
             runtime_paths,
             Arc::new(LegacyServiceBridge::new(Arc::new(
-                crate::core::actor_v2::CoreFacade::new_local(),
+                crate::core::actor_v2::CoreFacade::new_local(
+                    chimera_ipc::client::shortcuts::Client::new(chimera_ipc::SERVICE_PLACEHOLDER),
+                ),
             ))),
         )
         .await
@@ -644,7 +646,9 @@ impl CoreLifecycleClient {
         let (_service_status_tx, service_status_rx) =
             tokio::sync::watch::channel(ServiceHostStatus::probing());
         let service: Arc<dyn ServiceLifecyclePort> = Arc::new(LegacyServiceBridge::new(Arc::new(
-            crate::core::actor_v2::CoreFacade::new_local(),
+            crate::core::actor_v2::CoreFacade::new_local(
+                chimera_ipc::client::shortcuts::Client::new(chimera_ipc::SERVICE_PLACEHOLDER),
+            ),
         )));
         Self(Arc::new(CoreLifecycleClientInner::Direct {
             workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
@@ -1232,6 +1236,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }
@@ -1281,6 +1286,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }
@@ -1329,6 +1335,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }
@@ -1375,6 +1382,7 @@ mod tests {
                 } else {
                     RunType::Service
                 },
+                health: None,
                 applied: None,
             })
         }
@@ -1421,6 +1429,7 @@ mod tests {
                 } else {
                     RunType::Normal
                 },
+                health: None,
                 applied: None,
             })
         }
@@ -1463,6 +1472,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }
@@ -1509,6 +1519,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Service,
+                health: None,
                 applied: None,
             })
         }
@@ -1554,6 +1565,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }

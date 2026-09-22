@@ -48,17 +48,20 @@ impl Config {
         profiles: &Profiles,
         core: crate::config::chimera::ClashCore,
         resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
+        enable_builtin_enhanced: bool,
     ) -> Result<RuntimeInputOutput> {
         // All supported cores use the shared ref-aligned executor. Runtime
         // generation has one business implementation; failures are surfaced
         // instead of silently switching to the legacy enhancer.
         let (config, exists_keys, postprocessing_output, inspection) =
-            enhance::build_from_legacy_with_inspection(clash, profiles, core, resolved_ports)
-                .await?;
-
-        *Config::runtime().draft() = IRuntime {
-            config: Some(config.clone()),
-        };
+            enhance::build_from_legacy_with_inspection(
+                clash,
+                profiles,
+                core,
+                resolved_ports,
+                enable_builtin_enhanced,
+            )
+            .await?;
 
         Ok(RuntimeInputOutput {
             config,

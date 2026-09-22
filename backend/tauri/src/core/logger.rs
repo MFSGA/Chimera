@@ -28,9 +28,4 @@ impl Logger {
         }
         logs.push_back(text);
     }
-
-    pub fn clear_log(&self) {
-        let mut logs = self.log_data.lock();
-        logs.clear();
-    }
 }

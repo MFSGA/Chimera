@@ -27,6 +27,7 @@ chimera-ipc = { path = "chimera-runtime/chimera_ipc", features = [
   "client",
   "specta",
 ] }
+clash-api = { path = "chimera-runtime/crates/clash-api", features = ["specta"] }
 
 thiserror = "2"
 

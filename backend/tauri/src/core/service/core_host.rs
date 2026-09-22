@@ -1,37 +1,36 @@
-//! Daemon core-control adapter.
+//! Service endpoint error adapter.
 //!
-//! The app talks to Chimera Service through the additive v2 submit/wait wire.
-//! The daemon owns operation admission and execution; this adapter waits on
-//! that durable registry and marks transport loss after admission as uncertain.
+//! Service lifecycle execution is owned by `core::actor_v2::endpoint` and the
+//! daemon v2 control plane. This module only preserves typed server errors and
+//! marks transport failures whose mutation outcome cannot be proven.
 
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::atomic::{AtomicU64, Ordering},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::borrow::Cow;
 
-use async_trait::async_trait;
-use chimera_ipc::{
-    api::{
-        core::v2::{
-            CoreApiConnection, CoreCommandInfo, CoreOperationReq, CoreSubmitReq,
-            OperationOutputInfo, OperationPhase, payload_digest,
-        },
-        status::{CoreInfos, CoreState, RevisionIdInfo},
-    },
-    client::{ClientError, shortcuts::Client},
-};
-use tokio::time::Instant;
-
-const SERVICE_CORE_RPC_TIMEOUT: Duration = Duration::from_secs(5);
-const SERVICE_CORE_OPERATION_TIMEOUT: Duration = Duration::from_secs(45);
-const SERVICE_CORE_QUERY_WAIT: Duration = Duration::from_secs(5);
-const SERVICE_CORE_QUERY_GRACE: Duration = Duration::from_secs(1);
+use chimera_ipc::{api::CoreErrorKind, client::ClientError};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub(crate) struct ServiceCoreOutcomeUncertain(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct ServiceOperationError {
+    message: String,
+    error_kind: Option<String>,
+    retryable: bool,
+}
+
+impl ServiceOperationError {
+    pub(crate) fn core_error_kind(&self) -> Option<CoreErrorKind> {
+        self.error_kind
+            .as_deref()
+            .and_then(CoreErrorKind::from_wire)
+    }
+
+    pub(crate) fn retryable(&self) -> bool {
+        self.retryable
+    }
+}
 
 pub(crate) fn is_outcome_uncertain(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
@@ -45,233 +44,33 @@ fn uncertain(message: impl Into<String>) -> anyhow::Error {
     anyhow::Error::new(ServiceCoreOutcomeUncertain(message.into()))
 }
 
-fn next_operation_id() -> String {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    let counter = NEXT.fetch_add(1, Ordering::Relaxed) as u128;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let process = (std::process::id() as u128) << 64;
-    format!("{:032x}", now ^ process ^ counter)
-}
-
-fn submit_error(error: ClientError<'_>) -> anyhow::Error {
-    if matches!(&error, ClientError::ServerResponseFailed(_)) {
-        anyhow::anyhow!(error.to_string())
-    } else {
-        uncertain(format!(
+pub(crate) fn submit_error(error: ClientError<'_>) -> anyhow::Error {
+    match error {
+        ClientError::ServerResponseFailed(response) => {
+            let error_kind = response.error_kind.map(Cow::into_owned);
+            let retryable = response.retryable.unwrap_or_else(|| {
+                error_kind
+                    .as_deref()
+                    .and_then(CoreErrorKind::from_wire)
+                    .is_some_and(|kind| kind.default_retryable())
+            });
+            let error = ServiceOperationError {
+                message: response.msg.into_owned(),
+                error_kind,
+                retryable,
+            };
+            if let Some(kind) = error.core_error_kind() {
+                tracing::debug!(
+                    %kind,
+                    retryable = error.retryable(),
+                    "service operation admission failed with a typed classification"
+                );
+            }
+            anyhow::Error::new(error)
+        }
+        error => uncertain(format!(
             "service core operation admission reply was lost; outcome is uncertain: {error}"
-        ))
-    }
-}
-
-fn expected_applied_from_status(info: &CoreInfos) -> anyhow::Result<Option<RevisionIdInfo>> {
-    match info.state {
-        CoreState::Running => info
-            .revision
-            .as_ref()
-            .map(|revision| revision.id())
-            .map(Some)
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "service core is running without a v2 applied revision; refusing an unconditional reconcile"
-                )
-            }),
-        CoreState::Stopped(_) => Ok(None),
-    }
-}
-
-fn query_error(error: ClientError<'_>) -> anyhow::Error {
-    uncertain(format!(
-        "service core operation was admitted but its terminal state could not be queried: {error}"
-    ))
-}
-
-fn query_window(remaining: Duration) -> (u64, Duration) {
-    let wait = remaining.min(SERVICE_CORE_QUERY_WAIT);
-    let wait_ms = wait.as_millis().clamp(1, u128::from(u64::MAX)) as u64;
-    let transport = remaining.min(wait.saturating_add(SERVICE_CORE_QUERY_GRACE));
-    (wait_ms, transport)
-}
-
-async fn core_status_bounded() -> anyhow::Result<CoreInfos> {
-    match tokio::time::timeout(
-        SERVICE_CORE_RPC_TIMEOUT,
-        Client::service_default().core_status_v2(),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(anyhow::Error::from),
-        Err(_) => anyhow::bail!(
-            "service core status timed out after {} seconds",
-            SERVICE_CORE_RPC_TIMEOUT.as_secs()
-        ),
-    }
-}
-
-async fn core_api_bounded() -> anyhow::Result<Option<CoreApiConnection>> {
-    match tokio::time::timeout(
-        SERVICE_CORE_RPC_TIMEOUT,
-        Client::service_default().core_api_v2(),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(anyhow::Error::from),
-        Err(_) => anyhow::bail!(
-            "service core API capability timed out after {} seconds",
-            SERVICE_CORE_RPC_TIMEOUT.as_secs()
-        ),
-    }
-}
-
-async fn submit_and_wait(command: CoreCommandInfo<'static>) -> anyhow::Result<OperationOutputInfo> {
-    let client = Client::service_default();
-    let operation_id = next_operation_id();
-    let request = CoreSubmitReq {
-        operation_id: Cow::Owned(operation_id.clone()),
-        command,
-    };
-    let mut info = match tokio::time::timeout(
-        SERVICE_CORE_RPC_TIMEOUT,
-        client.submit_core_v2(&request),
-    )
-    .await
-    {
-        Ok(result) => result.map_err(submit_error)?,
-        Err(_) => {
-            return Err(uncertain(format!(
-                "service core operation {operation_id} admission timed out after {} seconds; outcome is uncertain",
-                SERVICE_CORE_RPC_TIMEOUT.as_secs()
-            )));
-        }
-    };
-    let deadline = Instant::now() + SERVICE_CORE_OPERATION_TIMEOUT;
-
-    loop {
-        match info.phase {
-            OperationPhase::Succeeded => {
-                return info.output.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "service core operation {} succeeded without an output",
-                        info.id
-                    )
-                });
-            }
-            OperationPhase::Failed => {
-                let message = info.error.map(|error| error.message).unwrap_or_else(|| {
-                    "service core operation failed without an error".to_string()
-                });
-                anyhow::bail!("service core operation {} failed: {message}", info.id);
-            }
-            OperationPhase::Queued | OperationPhase::Running => {}
-        }
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(uncertain(format!(
-                "service core operation {} did not reach a terminal state within {} seconds",
-                info.id,
-                SERVICE_CORE_OPERATION_TIMEOUT.as_secs()
-            )));
-        }
-        let (wait_ms, transport_timeout) = query_window(remaining);
-        let query = CoreOperationReq {
-            operation_id: Cow::Owned(info.id.clone()),
-            wait_ms: Some(wait_ms),
-        };
-        info = match tokio::time::timeout(transport_timeout, client.core_operation_v2(&query)).await
-        {
-            Ok(result) => result.map_err(query_error)?,
-            Err(_) => {
-                return Err(uncertain(format!(
-                    "service core operation {} terminal query timed out after {} ms",
-                    info.id,
-                    transport_timeout.as_millis()
-                )));
-            }
-        };
-    }
-}
-
-#[async_trait]
-pub(crate) trait ServiceCoreHost: Send + Sync + std::fmt::Debug {
-    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>>;
-    async fn status(&self) -> anyhow::Result<(CoreState, i64)>;
-    async fn start(
-        &self,
-        config_path: &Path,
-        core_type: &chimera_utils::core::CoreType,
-    ) -> anyhow::Result<()>;
-    async fn stop(&self) -> anyhow::Result<()>;
-    async fn recover(&self) -> anyhow::Result<()>;
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct IpcServiceCoreHost;
-
-#[async_trait]
-impl ServiceCoreHost for IpcServiceCoreHost {
-    async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
-        core_api_bounded().await
-    }
-
-    async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
-        let info = core_status_bounded().await?;
-        Ok((info.state, info.state_changed_at))
-    }
-
-    async fn start(
-        &self,
-        config_path: &Path,
-        core_type: &chimera_utils::core::CoreType,
-    ) -> anyhow::Result<()> {
-        let config = tokio::fs::read_to_string(config_path)
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to read promoted service config {}: {error}",
-                    config_path.display()
-                )
-            })?;
-        let digest = payload_digest(config.as_bytes());
-        let status = core_status_bounded().await?;
-        let expected_applied = expected_applied_from_status(&status)?;
-
-        let output = submit_and_wait(CoreCommandInfo::Reconcile {
-            core_type: Cow::Owned(core_type.clone()),
-            config: Cow::Owned(config),
-            expected_digest: Some(Cow::Owned(digest.clone())),
-            expected_applied,
-        })
-        .await?;
-        let OperationOutputInfo::Reconciled(outcome) = output else {
-            anyhow::bail!("service reconcile returned an unexpected terminal output: {output:?}");
-        };
-        anyhow::ensure!(
-            outcome.revision.source_hash == digest,
-            "service reconcile applied a different config digest: expected {digest}, got {}",
-            outcome.revision.source_hash
-        );
-        Ok(())
-    }
-
-    async fn stop(&self) -> anyhow::Result<()> {
-        let output = submit_and_wait(CoreCommandInfo::Stop).await?;
-        anyhow::ensure!(
-            matches!(output, OperationOutputInfo::Stopped),
-            "service stop returned an unexpected terminal output: {output:?}"
-        );
-        Ok(())
-    }
-
-    async fn recover(&self) -> anyhow::Result<()> {
-        let output = submit_and_wait(CoreCommandInfo::Recover).await?;
-        anyhow::ensure!(
-            matches!(output, OperationOutputInfo::Recovered),
-            "service recover returned an unexpected terminal output: {output:?}"
-        );
-        Ok(())
+        )),
     }
 }
 
@@ -280,71 +79,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_operation_ids_match_the_daemon_contract() {
-        let first = next_operation_id();
-        let second = next_operation_id();
-        assert_eq!(first.len(), 32);
-        assert!(
-            first
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    fn submit_error_preserves_typed_server_classification() {
+        let response = chimera_ipc::api::RBuilder::<Option<()>>::other_error_with_kind(
+            Cow::Borrowed("operation conflict"),
+            Some(CoreErrorKind::OperationConflict),
+            Some(false),
         );
-        assert_ne!(first, second);
-    }
+        let error = submit_error(ClientError::ServerResponseFailed(response));
+        let classified = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<ServiceOperationError>())
+            .expect("typed service operation error");
 
-    #[test]
-    fn stopped_service_reconcile_is_unconditional() {
-        let info = CoreInfos {
-            r#type: None,
-            state: CoreState::Stopped(None),
-            state_changed_at: 0,
-            config_path: None,
-            revision: None,
-        };
-        assert_eq!(expected_applied_from_status(&info).unwrap(), None);
-    }
-
-    #[test]
-    fn running_service_reconcile_uses_daemon_revision_cas() {
-        let revision = chimera_ipc::api::status::ConfigRevisionInfo {
-            epoch: 4,
-            generation: 2,
-            source_hash: "source".to_string(),
-            effective_hash: "effective".to_string(),
-        };
-        let expected = revision.id();
-        let info = CoreInfos {
-            r#type: None,
-            state: CoreState::Running,
-            state_changed_at: 0,
-            config_path: None,
-            revision: Some(revision),
-        };
-        assert_eq!(expected_applied_from_status(&info).unwrap(), Some(expected));
-    }
-
-    #[test]
-    fn running_service_without_revision_fails_closed() {
-        let info = CoreInfos {
-            r#type: None,
-            state: CoreState::Running,
-            state_changed_at: 0,
-            config_path: None,
-            revision: None,
-        };
-        let error = expected_applied_from_status(&info).unwrap_err();
-        assert!(error.to_string().contains("without a v2 applied revision"));
-    }
-
-    #[test]
-    fn query_window_is_bounded_by_poll_slice_and_remaining_budget() {
-        let (wait_ms, transport) = query_window(Duration::from_secs(30));
-        assert_eq!(wait_ms, 5_000);
-        assert_eq!(transport, Duration::from_secs(6));
-
-        let (wait_ms, transport) = query_window(Duration::from_millis(750));
-        assert_eq!(wait_ms, 750);
-        assert_eq!(transport, Duration::from_millis(750));
+        assert_eq!(
+            classified.core_error_kind(),
+            Some(CoreErrorKind::OperationConflict)
+        );
+        assert!(!classified.retryable());
+        assert!(classified.to_string().contains("operation conflict"));
     }
 
     #[test]

@@ -116,6 +116,11 @@ impl RuntimeRevision {
     pub fn get(self) -> u64 {
         self.0
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -154,6 +159,62 @@ pub(crate) struct RuntimeSnapshotData {
     pub(crate) inspection: Arc<super::runtime_inspection::RuntimeInspectionData>,
 }
 
+/// Deterministic runtime build artifact before any lifecycle owner assigns a
+/// revision or inspection identity.
+///
+/// Port choices are explicit inputs to the builder that creates this document;
+/// lifecycle revision allocation happens only when the document is
+/// materialized into a RuntimeSnapshot.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeDocument {
+    target_core: ClashCore,
+    product_sha256: [u8; 32],
+    product_bytes: Arc<[u8]>,
+    data: RuntimeSnapshotData,
+}
+
+impl RuntimeDocument {
+    pub(crate) fn from_data(
+        target_core: ClashCore,
+        product_bytes: Arc<[u8]>,
+        data: RuntimeSnapshotData,
+    ) -> Self {
+        let product_sha256 = Sha256::digest(&product_bytes).into();
+        Self {
+            target_core,
+            product_sha256,
+            product_bytes,
+            data,
+        }
+    }
+
+    pub(crate) fn target_core(&self) -> ClashCore {
+        self.target_core
+    }
+
+    pub(crate) fn product_bytes(&self) -> &[u8] {
+        &self.product_bytes
+    }
+
+    pub(crate) fn product_sha256(&self) -> [u8; 32] {
+        self.product_sha256
+    }
+
+    pub(crate) fn into_snapshot(self, revision: RuntimeRevision) -> RuntimeSnapshot {
+        RuntimeSnapshot {
+            inspection_id: nanoid::nanoid!(),
+            revision,
+            target_core: self.target_core,
+            product_sha256: self.product_sha256,
+            config: self.data.config,
+            exists_keys: self.data.exists_keys,
+            postprocessing_output: self.data.postprocessing_output,
+            product_bytes: self.product_bytes,
+            inspection: self.data.inspection,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshot {
     pub(crate) inspection_id: String,
@@ -168,24 +229,14 @@ pub struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    #[cfg(test)]
     pub(crate) fn from_data(
         revision: RuntimeRevision,
         target_core: ClashCore,
         product_bytes: Arc<[u8]>,
         data: RuntimeSnapshotData,
     ) -> Self {
-        let product_sha256 = Sha256::digest(&product_bytes).into();
-        Self {
-            inspection_id: nanoid::nanoid!(),
-            revision,
-            target_core,
-            product_sha256,
-            config: data.config,
-            exists_keys: data.exists_keys,
-            postprocessing_output: data.postprocessing_output,
-            product_bytes,
-            inspection: data.inspection,
-        }
+        RuntimeDocument::from_data(target_core, product_bytes, data).into_snapshot(revision)
     }
 
     #[cfg(test)]
@@ -204,6 +255,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(test)]
     pub fn new_with_transform_output(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -221,6 +273,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_transform_output_and_exists_keys(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -242,6 +295,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_transform_output_and_inspection(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -261,6 +315,7 @@ impl RuntimeSnapshot {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_transform_output_and_inspection_and_exists_keys(
         revision: RuntimeRevision,
         target_core: ClashCore,
@@ -317,12 +372,17 @@ pub struct RuntimeLifecycleState {
 #[derive(Debug, Default)]
 pub struct RuntimeLifecycle {
     revisions: RuntimeRevisionAllocator,
+    transform_attempts: RuntimeRevisionAllocator,
     state: RwLock<RuntimeLifecycleState>,
 }
 
 impl RuntimeLifecycle {
     pub fn allocate_revision(&self) -> Result<RuntimeRevision> {
         self.revisions.allocate()
+    }
+
+    pub fn allocate_transform_attempt_revision(&self) -> Result<RuntimeRevision> {
+        self.transform_attempts.allocate()
     }
 
     pub fn snapshot(&self) -> RuntimeLifecycleState {
@@ -345,6 +405,10 @@ impl RuntimeLifecycle {
         state.applied = Some(snapshot);
         state.last_transform_failure = None;
         Ok(())
+    }
+
+    pub fn clear_applied(&self) {
+        self.state.write().applied = None;
     }
 
     pub fn publish_transform_failure(&self, failure: RuntimeTransformFailure) {
@@ -631,10 +695,10 @@ where
     } = snapshot;
     let current_transform_failure = lifecycle.snapshot().last_transform_failure;
     previous_lifecycle.last_transform_failure = current_transform_failure;
-    let had_product = product.is_some();
+    let had_active_runtime = previous_lifecycle.applied.is_some();
     restore_optional_product(paths.product(), product.as_deref()).await?;
 
-    match recover(had_product).await {
+    match recover(had_active_runtime).await {
         Ok(()) => {
             lifecycle.restore(previous_lifecycle);
             Ok(())
@@ -721,9 +785,43 @@ mod tests {
     }
 
     #[test]
+    fn runtime_document_materialization_assigns_revision_without_changing_product() {
+        let mut config = Mapping::new();
+        config.insert(
+            serde_yaml::Value::String("mode".into()),
+            serde_yaml::Value::String("rule".into()),
+        );
+        let data = RuntimeSnapshotData {
+            config,
+            exists_keys: vec!["mode".into()],
+            postprocessing_output: transform_output("document"),
+            inspection: Arc::new(super::super::runtime_inspection::RuntimeInspectionData::bare()),
+        };
+        let document = RuntimeDocument::from_data(
+            ClashCore::Mihomo,
+            Arc::from(b"# Generated\nmode: rule\n".as_slice()),
+            data,
+        );
+
+        let first = document
+            .clone()
+            .into_snapshot(RuntimeRevision::from_raw(41));
+        let second = document.into_snapshot(RuntimeRevision::from_raw(42));
+
+        assert_ne!(first.revision, second.revision);
+        assert_ne!(first.inspection_id, second.inspection_id);
+        assert_eq!(first.target_core, second.target_core);
+        assert_eq!(first.product_sha256, second.product_sha256);
+        assert_eq!(first.product_bytes(), second.product_bytes());
+        assert_eq!(first.config, second.config);
+        assert_eq!(first.exists_keys, second.exists_keys);
+        assert_eq!(first.postprocessing_output, second.postprocessing_output);
+    }
+
+    #[test]
     fn successful_apply_clears_the_last_transform_failure() {
         let lifecycle = RuntimeLifecycle::default();
-        let failed_revision = lifecycle.allocate_revision().unwrap();
+        let failed_revision = lifecycle.allocate_transform_attempt_revision().unwrap();
         lifecycle.publish_transform_failure(RuntimeTransformFailure {
             attempt_revision: failed_revision,
             transform_uid: "sj-failed".into(),
@@ -740,8 +838,14 @@ mod tests {
             Some(failed_revision)
         );
 
+        let applied_revision = lifecycle.allocate_revision().unwrap();
+        assert_eq!(
+            applied_revision.get(),
+            1,
+            "transform diagnostics must not consume applied runtime revisions"
+        );
         let applied = Arc::new(RuntimeSnapshot::new(
-            lifecycle.allocate_revision().unwrap(),
+            applied_revision,
             ClashCore::Mihomo,
             b"mode: rule\n".to_vec(),
             Mapping::new(),
@@ -918,6 +1022,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(transaction.product.unwrap(), b"mode: rule\n");
+    }
+
+    #[tokio::test]
+    async fn stopped_product_restore_does_not_request_process_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        let lifecycle = RuntimeLifecycle::default();
+        restore_product(paths.product(), b"mode: rule\n")
+            .await
+            .unwrap();
+        let observed = Arc::new(RuntimeSnapshot::new(
+            lifecycle.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+        ));
+        lifecycle.publish_promoted(observed);
+        assert!(lifecycle.snapshot().applied.is_none());
+
+        let transaction = capture_runtime_transaction(&paths, &lifecycle)
+            .await
+            .unwrap();
+        restore_product(paths.product(), b"mode: direct\n")
+            .await
+            .unwrap();
+
+        restore_failed_apply(
+            &paths,
+            &lifecycle,
+            transaction,
+            |had_active_runtime| async move {
+                assert!(
+                    !had_active_runtime,
+                    "a retained product without an applied runtime must not become a restart target"
+                );
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read(paths.product()).unwrap(), b"mode: rule\n");
+        assert!(lifecycle.snapshot().applied.is_none());
+    }
+
+    #[test]
+    fn clearing_applied_runtime_retains_last_promoted_observation() {
+        let lifecycle = RuntimeLifecycle::default();
+        let snapshot = Arc::new(RuntimeSnapshot::new(
+            lifecycle.allocate_revision().unwrap(),
+            ClashCore::Mihomo,
+            b"mode: rule\n".to_vec(),
+            Mapping::new(),
+        ));
+        lifecycle.publish_promoted(snapshot.clone());
+        lifecycle.publish_applied(snapshot.clone()).unwrap();
+
+        lifecycle.clear_applied();
+
+        let state = lifecycle.snapshot();
+        assert!(state.applied.is_none());
+        assert_eq!(state.promoted.unwrap().revision, snapshot.revision);
     }
 
     #[tokio::test]

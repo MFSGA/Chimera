@@ -2,122 +2,26 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
-use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use specta::Type;
-use tauri::http::HeaderMap;
 use tracing::instrument;
 
-/// TUN runtime projection returned by the running core's `GET /configs` endpoint.
-///
-/// Keep the field names aligned with upstream `clash_api::RuntimeTun`. This is
-/// intentionally limited to the fields Chimera currently consumes; serde
-/// ignores additional runtime fields until their shared callers need them.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
-#[serde(default, rename_all = "kebab-case")]
-pub struct RuntimeTun {
-    pub enable: bool,
-    pub device: String,
-    pub auto_route: bool,
-    pub auto_detect_interface: bool,
-    pub strict_route: bool,
-    pub route_address: Vec<String>,
-    pub route_exclude_address: Vec<String>,
-    pub inet4_route_address: Vec<String>,
-    pub inet6_route_address: Vec<String>,
-}
-
-/// Runtime state returned by the running core's `GET /configs` endpoint.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
-pub struct ClashRuntimeConfig {
-    pub port: Option<u16>,
-    pub mode: Option<String>,
-    pub ipv6: Option<bool>,
-    #[serde(rename = "socket-port")]
-    pub socket_port: Option<u16>,
-    #[serde(rename = "allow-lan")]
-    pub allow_lan: Option<bool>,
-    #[serde(rename = "log-level")]
-    pub log_level: Option<String>,
-    #[serde(rename = "mixed-port")]
-    pub mixed_port: Option<u16>,
-    #[serde(rename = "redir-port")]
-    pub redir_port: Option<u16>,
-    #[serde(rename = "socks-port")]
-    pub socks_port: Option<u16>,
-    #[serde(rename = "tproxy-port")]
-    pub tproxy_port: Option<u16>,
-    #[serde(rename = "external-controller")]
-    pub external_controller: Option<String>,
-    pub secret: Option<String>,
-    #[specta(skip)]
-    pub tun: Option<RuntimeTun>,
-}
-
-/// A newtype wrapper for query parameters
-struct Query<T>(T);
-/// A newtype wrapper for request body
-struct Data<T>(T);
-
-impl From<(reqwest::Method, &str)> for PerformRequest<(), ()> {
-    fn from((method, path): (reqwest::Method, &str)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: None,
-            query: None,
-        }
-    }
-}
-
-impl<T> From<(reqwest::Method, &str, Data<T>)> for PerformRequest<T, ()>
-where
-    T: Serialize,
-{
-    fn from((method, path, Data(data)): (reqwest::Method, &str, Data<T>)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: Some(data),
-            query: None,
-        }
-    }
-}
-
-impl<T> From<(reqwest::Method, &str, Query<T>)> for PerformRequest<(), T>
-where
-    T: Serialize,
-{
-    fn from((method, path, Query(query)): (reqwest::Method, &str, Query<T>)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: None,
-            query: Some(query),
-        }
-    }
-}
-
-/// The Request Parameters
-struct PerformRequest<D = (), Q = ()> {
-    method: reqwest::Method,
-    path: String,
-    query: Option<Q>,
-    data: Option<D>,
-}
+pub use clash_api::RuntimeConfig as ClashRuntimeConfig;
+#[cfg(test)]
+pub use clash_api::RuntimeTun;
 
 #[derive(Clone)]
 pub(crate) struct ApiClient {
-    base_url: url::Url,
-    headers: HeaderMap,
+    client: clash_api::Client,
 }
 
 impl ApiClient {
     pub(crate) fn new(info: crate::config::clash::ClashInfo) -> Result<Self> {
-        let base_url =
-            url::Url::parse(&format!("http://{}", info.server)).context("failed to parse host")?;
-        Self::from_url_and_secret(base_url, info.secret)
+        let host = clash_api::Host::http(&info.server).context("failed to parse Clash API host")?;
+        Ok(Self {
+            client: clash_api::Client::with_secret(host, info.secret.unwrap_or_default()),
+        })
     }
 
     pub(crate) fn from_connection(
@@ -125,118 +29,28 @@ impl ApiClient {
     ) -> Result<Self> {
         use chimera_ipc::api::core::v2::CoreControllerInfo;
 
-        let base_url = match connection.controller {
+        let host = match connection.controller {
             CoreControllerInfo::Http(url) => {
-                url::Url::parse(&url).context("failed to parse bound Clash API URL")?
+                clash_api::Host::url(&url).context("failed to parse bound Clash API URL")?
             }
-            CoreControllerInfo::UnixSocket(_) | CoreControllerInfo::NamedPipe(_) => {
-                anyhow::bail!("this Chimera build only supports HTTP Clash API bindings")
-            }
+            CoreControllerInfo::UnixSocket(path) => clash_api::Host::unix_socket(path),
+            CoreControllerInfo::NamedPipe(path) => clash_api::Host::named_pipe(path),
         };
-        Self::from_url_and_secret(base_url, connection.secret)
-    }
-
-    fn from_url_and_secret(base_url: url::Url, secret: Option<String>) -> Result<Self> {
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", "application/json".parse()?);
-        if let Some(secret) = secret {
-            headers.insert("Authorization", format!("Bearer {secret}").parse()?);
-        }
-        Ok(Self { base_url, headers })
-    }
-
-    #[instrument(skip_all, fields(
-        method = tracing::field::Empty,
-        url = tracing::field::Empty,
-        query = tracing::field::Empty,
-        data = tracing::field::Empty,
-    ))]
-    async fn perform_request<D, Q>(
-        &self,
-        param: impl Into<PerformRequest<D, Q>>,
-    ) -> Result<reqwest::Response>
-    where
-        Q: Serialize + core::fmt::Debug,
-        D: Serialize + core::fmt::Debug,
-    {
-        let PerformRequest {
-            method,
-            path,
-            data,
-            query,
-        } = param.into();
-        let opts = url::Url::options().base_url(Some(&self.base_url));
-        let url = opts.parse(&path).context("failed to parse path")?;
-
-        let span = tracing::Span::current();
-        span.record("method", tracing::field::display(&method));
-        span.record("url", tracing::field::display(&url));
-        span.record("query", tracing::field::debug(&query));
-        span.record("data", tracing::field::debug(&data));
-
-        async {
-            let http_client = reqwest::ClientBuilder::new().no_proxy().build()?;
-            let mut builder = http_client
-                .request(method.clone(), url.clone())
-                .headers(self.headers.clone());
-
-            if let Some(query) = &query {
-                builder = builder.query(query);
-            }
-            if let Some(data) = &data {
-                builder = builder.json(data);
-            }
-
-            let resp = builder.send().await?;
-
-            if let Err(err) = resp.error_for_status_ref() {
-                match err.status() {
-                    Some(StatusCode::BAD_REQUEST) => {
-                        let Ok(bytes) = resp.bytes().await else {
-                            return Err(err.into());
-                        };
-
-                        let message: serde_json::Value = match serde_json::from_slice(&bytes) {
-                            Ok(v) => v,
-                            Err(_) => {
-                                let s = String::from_utf8_lossy(&bytes);
-                                serde_json::Value::String(s.to_string())
-                            }
-                        };
-
-                        return Err(err).context(format!("message: {message}"));
-                    }
-                    _ => return Err(err).context("clash api error"),
-                }
-            }
-            Ok(resp)
-        }
-        .await
-        .inspect_err(|e| tracing::error!(method = %method, url = %url, query = ?query, data = ?data, "failed to perform request: {:?}", e))
+        Ok(Self {
+            client: clash_api::Client::with_secret(host, connection.secret.unwrap_or_default()),
+        })
     }
 
     pub(crate) async fn get_configs(&self) -> Result<ClashRuntimeConfig> {
-        Ok(self
-            .perform_request((Method::GET, "/configs"))
-            .await?
-            .json()
-            .await?)
+        Ok(self.client.configs().await?)
     }
 
     pub(crate) async fn get_proxies(&self) -> Result<ProxiesRes> {
-        Ok(self
-            .perform_request((Method::GET, "/proxies"))
-            .await?
-            .json()
-            .await?)
+        Ok(self.client.get_json("/proxies").await?)
     }
 
     pub(crate) async fn get_connections(&self) -> Result<ConnectionsRes> {
-        Ok(self
-            .perform_request((Method::GET, "/connections"))
-            .await?
-            .json()
-            .await?)
+        Ok(self.client.get_json("/connections").await?)
     }
 
     pub(crate) async fn delete_connections(&self, id: Option<&str>) -> Result<()> {
@@ -244,24 +58,18 @@ impl ApiClient {
             Some(id) => format!("/connections/{id}"),
             None => "/connections".to_string(),
         };
-        self.perform_request((Method::DELETE, path.as_str()))
-            .await?;
-        Ok(())
+        Ok(self.client.delete(&path).await?)
     }
 
     pub(crate) async fn update_proxy(&self, group: &str, name: &str) -> Result<()> {
         let path = format!("/proxies/{group}");
         let mut data = HashMap::new();
         data.insert("name", name);
-        self.perform_request((Method::PUT, path.as_str(), Data(data)))
-            .await?;
-        Ok(())
+        Ok(self.client.put_json(&path, &data).await?)
     }
 
     pub(crate) async fn patch_configs(&self, config: &Mapping) -> Result<()> {
-        self.perform_request((Method::PATCH, "/configs", Data(config)))
-            .await?;
-        Ok(())
+        Ok(self.client.patch_json("/configs", config).await?)
     }
 
     pub(crate) async fn get_proxy_delay(
@@ -274,13 +82,8 @@ impl ApiClient {
         let test_url = test_url
             .map(|s| if s.is_empty() { default_url.into() } else { s })
             .unwrap_or(default_url.into());
-
-        let query = Query([("timeout", "10000"), ("url", &test_url)]);
-        Ok(self
-            .perform_request((Method::GET, path.as_str(), query))
-            .await?
-            .json()
-            .await?)
+        let query = [("timeout", "10000"), ("url", test_url.as_str())];
+        Ok(self.client.get_json_query(&path, &query).await?)
     }
 
     pub(crate) async fn get_group_delay(
@@ -293,13 +96,8 @@ impl ApiClient {
         let test_url = url
             .map(|s| if s.is_empty() { default_url.into() } else { s })
             .unwrap_or(default_url.into());
-
-        let query = Query([("timeout", "10000"), ("url", &test_url)]);
-        Ok(self
-            .perform_request((Method::GET, path.as_str(), query))
-            .await?
-            .json()
-            .await?)
+        let query = [("timeout", "10000"), ("url", test_url.as_str())];
+        Ok(self.client.get_json_query(&path, &query).await?)
     }
 }
 
@@ -369,18 +167,38 @@ mod tests {
     use super::{ApiClient, ClashRuntimeConfig};
 
     #[test]
-    fn instance_bound_http_connection_builds_api_client() {
-        let client = ApiClient::from_connection(chimera_ipc::api::core::v2::CoreApiConnection {
-            instance_id: "service-instance".to_string(),
-            controller: chimera_ipc::api::core::v2::CoreControllerInfo::Http(
-                "http://127.0.0.1:9090".to_string(),
-            ),
+    fn instance_bound_connections_build_transport_aware_api_client() {
+        use chimera_ipc::api::core::v2::{CoreApiConnection, CoreControllerInfo};
+
+        let http = ApiClient::from_connection(CoreApiConnection {
+            instance_id: "service-http".to_string(),
+            controller: CoreControllerInfo::Http("http://127.0.0.1:9090".to_string()),
             secret: Some("token".to_string()),
         })
         .unwrap();
+        assert!(matches!(http.client.host(), clash_api::Host::Http(_)));
 
-        assert_eq!(client.base_url.as_str(), "http://127.0.0.1:9090/");
-        assert_eq!(client.headers.get("Authorization").unwrap(), "Bearer token");
+        let unix = ApiClient::from_connection(CoreApiConnection {
+            instance_id: "service-unix".to_string(),
+            controller: CoreControllerInfo::UnixSocket("/tmp/chimera.sock".to_string()),
+            secret: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            unix.client.host(),
+            clash_api::Host::UnixSocket(path) if path == std::path::Path::new("/tmp/chimera.sock")
+        ));
+
+        let pipe = ApiClient::from_connection(CoreApiConnection {
+            instance_id: "service-pipe".to_string(),
+            controller: CoreControllerInfo::NamedPipe("chimera-pipe".to_string()),
+            secret: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            pipe.client.host(),
+            clash_api::Host::NamedPipe(path) if path == std::path::Path::new("chimera-pipe")
+        ));
     }
 
     #[test]

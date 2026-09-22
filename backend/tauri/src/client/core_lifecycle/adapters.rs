@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::ports::{
     BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary, RunningConfigPort,
-    RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics, ServiceLifecyclePort,
-    ServiceTransitionLease,
+    RuntimeBuildOptions, RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics,
+    ServiceLifecyclePort, ServiceTransitionLease,
 };
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -218,7 +218,26 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         self.facade()
-            .reconcile(clash, profiles, target_core, run_type)
+            .reconcile(clash, profiles, target_core, run_type, true)
+            .await
+    }
+
+    async fn reconcile_with_build_options(
+        &self,
+        clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
+        target_core: ClashCore,
+        run_type: RunType,
+        options: RuntimeBuildOptions,
+    ) -> anyhow::Result<()> {
+        self.facade()
+            .reconcile(
+                clash,
+                profiles,
+                target_core,
+                run_type,
+                options.enable_builtin_enhanced,
+            )
             .await
     }
 
