@@ -1,10 +1,21 @@
 # ref 对齐进度
 
-本记录使用的参考基线为 `ref` 提交
-`f7dbce2997c633e484f54788035e770b3ee99773`。参考工作区存在预先的
-`?? NUL`，不属于该提交，也未被复制或修改。
+当前比较基线已于 2026-09-21 刷新为 `ref` 提交
+`1eb110f05d549b3e620ce25f6728c3f3342c9822`，对应 runtime submodule
+`a7e44026a70894053aafca9eea5f28e2430139d6`（v2.0.0-rc.8）。此前各 DIFF 条目的
+`ref commit` 字段保留当时实施/审计所用基线，作为历史 provenance，不代表当前比较头。
+参考工作区仍只有预先存在的 `?? NUL`，未被复制或修改。
 
-## 当前 P0 收敛状态（2026-09-18）
+本次刷新从旧基线 `f7dbce2997c633e484f54788035e770b3ee99773` fast-forward 98 个主仓库提交。
+最新 ref 新增/强化了 `ApplicationWorkflowActor`、`RuntimeApplyOptions`、request-scoped
+`InstanceOptions.local_ipc`、更完整的 core status/controller/effective-config read model，以及
+core-manager restart/switch compensation transaction。Chimera 本轮先收敛其中最直接的 Service
+transaction contract：wire `ReconcileOutcomeInfo` 增加 optional `warning/failed_apply`，daemon desired
+runtime 启动失败时尝试恢复旧 core/config，并在恢复成功后返回带旧 revision 与 `failed_apply` 的
+`RolledBack`；app 继续把该 outcome fail-closed 映射为 desired apply failure。完整 config staging/check、
+in-place patch/reload、durability/quarantine 与 request-scoped local IPC policy 仍未对齐。
+
+## 当前 P0 收敛状态（2026-09-21）
 
 - 所有支持的 Clash core（含 Chimera Client）已统一通过
   `chimera-config::runtime::executor` 生成 runtime；Chimera Client 的 legacy
@@ -265,21 +276,40 @@
   uncertain，但已 admission 的 OS command 仍由 actor 串行跑完。普通 terminal operation error
   不会误触发 uncertain。lower uncertain 经 `CoreLifecyclePort` 回传并并入
   lifecycle actor 的 `uncertain=true`，之后 mutation、recover 和 runtime-dirty 都不会再触碰
-  底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。与 ref 的剩余差异是 local
-  `ControlEndpoint` 目前承载 Chimera 的 `Reconcile/Stop/ChangeCore` command、
-  `Running/Succeeded/Failed/Uncertain` phase 与 typed `OperationOutput`。`Stop` 返回 `Stopped`；
-  `Reconcile/ChangeCore` 成功后从 `RuntimeLifecycleState.applied` 返回实际 `revision + core`，不会从
-  desired config 猜 applied identity。lower `CoreStatusSnapshot` 也新增可选 applied identity，并且只在
-  host 当前为 Running 时发布；Stopped 会压掉历史 runtime snapshot，避免 CAS 消费陈旧 revision。
-  reconcile admission 现在还会先读一次 authoritative lower status 作为 `expected_applied`，endpoint
-  在持有 lifecycle lock 后再次读取当前 Running applied revision 并做 CAS；revision 已变化、丢失或
-  从 None 变为 Some 时都会以 terminal Failed 拒绝旧 reconcile，不会误触发 uncertain。lower
-  operation registry 现在也通过 app IPC 暴露：`get_lower_core_operations` 返回 admission 顺序的
-  bounded history，调用方可从中取得 typed `OperationId`；`get_lower_core_operation(id)` 可再次读取
-  `Running/Succeeded/Failed/Uncertain`、typed output 与 error。Specta 同步导出 `OperationInfo`/
-  `OperationOutput`/`OperationPhase`/`OperationId`。仍未迁移的是 daemon core-control
-  `ServiceEndpoint`/endpoint-handle registry，以及 upper lifecycle operation id 与 lower operation id
-  的显式关联字段；两套 id 当前可分别观察但不是同一个 namespace。应用退出现在使用专用 `Shutdown`
+  底层 lifecycle；该状态也通过 `get_core_lifecycle_status` 暴露。lower core-control 现在统一为
+  `CoreSubmission { id, command }`：`CoreCommand` 只保留 `Reconcile/Stop/Recover`，旧
+  `ChangeCore` lower command 已删除，core selection 由 facade 更新 desired core 后复用同一 fresh
+  reconcile 路径。runtime document/snapshot 在 endpoint admission 前生成；facade 先从**目标 endpoint**
+  读取 authoritative applied revision 作为 `expected_applied`，再提交同一个 snapshot，因此
+  Local→Local 与 Local→Service 都使用各自 host 的 CAS authority。Local endpoint 仍由唯一
+  `CoreManager` 执行并在 lifecycle lock 内再次检查 revision；Service endpoint 已完全脱离
+  `LocalEndpoint/CoreManager`，直接把 config text + digest + CAS 送入 daemon v2
+  `submit/operation/status/api`。Service Running status 只信 daemon revision，不把当前 daemon
+  `type` echo 当成 applied identity，避免 core switch 后短暂旧 type 被误判为权威。
+  `CoreStatusSnapshot.applied` 因此只投影可 CAS 的 `RevisionIdInfo`，Stopped 仍压掉历史 revision。
+  lower operation id 使用 app 生成的非固定起点 id，并以同一个 32 位 lowercase-hex id 提交给 daemon；
+  Local/Service 共享的 app registry 只作为 bounded observation cache/统一 id namespace，不执行
+  Service mutation。registry 现在也按 ref 保存 command identity digest，并把 same-id 的查重与首次
+  registration 合并到同一个 mutex 临界区：并发提交同一 operation id + 同一 envelope 时只有一个 caller
+  能注册/启动 Local mutation，其余直接 attach 原 operation；同一 id 若改了 core/config bytes/CAS/declared
+  digest 则 fail-closed conflict，不会覆盖旧 operation。daemon v2 registry 同样改成原子
+  check+register，避免并发 same-id 请求各自启动 mutation；Stop/Recover 也各有稳定 identity。该 registry 继续通过 app IPC 暴露：`get_lower_core_operations`/
+  `get_lower_core_operation(id)` 可读取 `Running/Succeeded/Failed/Uncertain`、typed output 与 error。
+  Specta 同步导出 `OperationInfo`/`OperationOutput`/`OperationPhase`/`OperationId`。lower submit
+  现在也已收敛为 ref-shaped `CoreSubmission { envelope, ... }`：operation id 属于
+  `CoreCommandEnvelope`，Reconcile 使用 `ReconcileRequest { CoreSpec, ConfigInput::Inline,
+  expected_applied }`。`ConfigInput::Inline.expected_digest` 已与 ref 收敛为 optional：`Some` 时 host
+  必须校验，`None` 时不凭空补造完整性前置条件；`expected_applied=None` 也恢复 ref 的 unconditional
+  reconcile 语义，不再错误要求“当前必须没有 applied revision”。Service endpoint 只消费 envelope，
+  不再读取 `RuntimeSnapshot`。Local submit 也已删除携带完整 `RuntimeSnapshot` 的 `local_snapshot` bridge：
+  `CoreSubmission::local_runtime` 只保留 revision + inspection/read-model metadata，不再携带 config bytes；
+  Local executor 始终从 authoritative `ConfigInput::Inline.bytes` 重建待 apply snapshot，并按 optional digest
+  fail-closed 校验，因此 lower command 已不存在第二套 config authority。当前 lower idempotency identity 已覆盖 ref 在 Chimera 当前
+  domain 中可表达的 desired core/run type、config bytes、CAS token 与 declared digest；ref `CoreSpec`
+  额外的 binary/version/features 与 `InstanceOptions` 仍属于后续 core-manager ownership 迁移范围。
+  当前仍保留的差异是 upper lifecycle operation id 与 lower operation id 仍为显式关联的两个层级，
+  以及 Local revision/inspection metadata 仍在 admission 前生成，尚未完全成为 ref 的 core-manager owned
+  applied runtime state。应用退出现在使用专用 `Shutdown`
   command，而不是普通
   `StopCore`：首次 shutdown 会 latch `shutting_down=true`、停止接收后续普通 mutation/
   recover/runtime-dirty，并缓存 stop 终态；重复 shutdown 复用同一终态，不会重复 stop。
@@ -325,31 +355,37 @@
   原地执行。caller cancellation/actor-call timeout 会 latch shared `outcome_uncertain`，但已 admission
   的 OS command 仍由 actor handler 串行持有并跑完，不会因 waiter drop 取消；后续 core/service
   mutation 因 uncertain fail-closed。高层 `HOST_TRANSITION_LOCK` 仍覆盖 daemon command + core handoff
-  的跨 host transaction。daemon core wire 也已从 `CoreManager::Instance::Service` 的直接
-  shortcut-client 依赖抽成注入式 `core/service/core_host.rs::ServiceCoreHost`；`CoreManager`/
-  service instance 只依赖该 adapter。runtime 子仓库 `3d03c75` 新增 additive
+  的跨 host transaction。Local `CoreManager` 当前只允许 child-process `Instance`，`Instance::try_new`
+  对 `RunType::Service` fail-closed；Service process ownership 完全由 `core/actor_v2/endpoint.rs::ServiceEndpoint`
+  与 daemon v2 持有。`core/service/core_host.rs` 已不再是 process-host adapter，只保留 typed Service
+  admission error / outcome-uncertain 映射。runtime 子仓库 `3d03c75` 新增 additive
   `/v2/core/submit`、`/v2/core/operation`、`/v2/core/status`：32 位 lowercase-hex operation id，
   same-id/same-command 幂等 attach，same-id/different-command conflict，detached execution，
   serialized mutation lock，最多 64 条 terminal history，operation query 最长 60 秒 long-poll；
-  legacy v1 start/stop/restart route 完整保留。app 的 `IpcServiceCoreHost` 已切到该 v2 wire：
-  Reconcile/Stop 都 submit 后按 id 读取终态，不再在 app 侧复刻 stop-before-start race recovery。
-  在此之上，`core/actor_v2/endpoint.rs` 现在也有 ref-shaped `ExecutionHost`、`EndpointHandle`
-  与 staged `ServiceEndpoint`：Local/Service handle 共享同一个 `CoreManager` transaction owner 和
-  operation registry，因此不会复制 revision/recovery 状态；`CoreFacade` 的 reconcile 按 desired
-  `RunType` 选 endpoint，stop/change-core 按 authoritative current `RunType` 选 endpoint，Service
-  endpoint 会拒绝非-Service reconcile。runtime 子仓库 `ce9fe6a` 进一步把 daemon v2 Reconcile
+  legacy v1 start/stop/restart route 完整保留。`core/actor_v2/endpoint.rs::ServiceEndpoint`
+  已改为直接持有显式注入的 IPC client：client 在 `setup` composition root 构造，经
+  `CoreFacade -> EndpointRegistry` 注入，不再调用 process-wide `service_default()`。其
+  `submit/wait_operation/status/api_connection` 全部直接对应 daemon v2；Local 与 Service 不再共享
+  `CoreManager` transaction owner。Service reconcile 成功后也不再创建任何 Local `Instance::Service`
+  或 Local applied-revision shadow：facade 只在独立 Service observation cache 中保留 runtime document
+  materialization，供 inspection/runtime read model 使用；Local `RuntimeLifecycle` 只记录 Local apply。
+  active host authority 由 facade 独立保存，并在首选 endpoint 非 Running 时才用另一端真实 Running status
+  修正；`CoreFacade::status()/api/recover` 都按该 endpoint authority 路由。Service wire 若返回
+  `ReconcileOutcomeKind::RolledBack`，app lower
+  mapping 也会 fail-closed 转成 Failed，因此 facade 不会继续 `adopt_service_runtime(desired_snapshot)`。
+  旧 `CoreManager` Service rebuild/change-core bridge 已删除。runtime 子仓库 `ce9fe6a` 进一步把 daemon v2 Reconcile
   收敛为 ref-shaped portable intent：wire 发送 `core_type + config text + expected_digest +
   expected_applied`，不再携带 caller filesystem path；daemon 在自己的 service config 目录 materialize
   runtime file，并在持有 serialized mutation lock 后先验证 FNV-1a digest 与 Running applied revision
   CAS，digest/revision mismatch 在 stop/write/start 之前 terminal Failed。成功 reconcile 发布
   `ConfigRevisionInfo(epoch/generation/source_hash/effective_hash)` 到 v2 status 与 typed Reconciled output；
   v1 start/stop 会清空该 revision，避免把 legacy/未知 runtime 冒充成可 CAS 状态。app 的
-  `IpcServiceCoreHost` 读取 promoted config text、计算同一 digest，Running 时必须从 daemon status
+  Service endpoint 读取 prepared config text、计算同一 digest，Running 时必须从 daemon status
   取得 revision token，否则 fail-closed，不再无条件覆盖未知 Running core；成功后还核对 daemon
   返回的 source_hash。legacy v1 start/stop/restart route 完整保留。daemon v2 现在还新增
   `/v2/core/api` instance-bound capability：成功 Reconcile 从实际 applied config 提取 controller/secret，
   以 applied revision 生成 instance id；legacy start/stop 与 v2 Stop 都清空 binding，避免 stale capability。
-  `ServiceCoreHost`/`ServiceEndpoint` 直接读取 daemon binding，Local endpoint 则用 Running applied revision +
+  `ServiceEndpoint` 直接读取 daemon binding，Local endpoint 则用 Running applied revision +
   applied ClashInfo 生成本地 binding。`ChimeraClient::clash_api_client`、RunningConfig bridge、profile-change
   interruption、IPC/Agent Clash API 调用都已切到当前 host capability；Service host 缺 binding 时 fail-closed，
   不再回退本地 globals。runtime 子仓库 `5594570` 进一步补齐 ref-shaped v2 `Recover` command/output：
@@ -383,28 +419,58 @@
   lease 内收敛到 Service host、StopService 把 core 从 Service handoff 回 Local、
   UninstallService 在 Service host 时先 stop/confirm + handoff Local 再 uninstall、
   endpoint-down restart budget/exhausted latch）；
-  `core::actor_v2` tests，14 passed（endpoint waiter cancellation 后仍可按 lower id 读取终态、
-  lower panic 持久化为 Uncertain、terminal error 持久化为 Failed、Stop typed terminal output、
-  Stopped status 不暴露 stale applied identity、expected-applied revision CAS 拒绝 stale/missing authority、
-  operation history 保持 admission 顺序且按 id 查询返回同一终态、Local/Service endpoint 拥有不同
-  host identity 且共享同一 registry、facade 按 RunType 选择显式 endpoint handle、
-  Service uninstall fail-closed ownership guard、ServiceActor mailbox 在 waiter cancellation 后仍串行持有
-  command、ServiceClient cancellation latch uncertain、仅明确 Stopped daemon 消耗 restart budget 并在
-  budget exhausted 后停启、显式 command re-arm budget、lower operation id 可穿透 anyhow context）；
-  `core::clash::api::tests`，2 passed（含 instance-bound HTTP capability）；`core::clash::core::tests`，
-  3 passed（显式 RunType 分类、restart recovery gate、Service instance 的 status/start/stop 全部委托
-  注入 `ServiceCoreHost`）；`core::service::core_host::tests`，6 passed
+  `core::actor_v2::` tests，32 passed，其中 endpoint/facade 覆盖 waiter cancellation 后仍可按 lower id
+  读取终态、panic→Uncertain、terminal error→Failed、Stop typed terminal output、Stopped 不暴露 stale
+  applied revision、32hex operation id、Service reconcile wire config digest + CAS、daemon terminal output
+  映射、Running daemon revision authority、缺 revision fail-closed、daemon health structured status 透传、Noop/warning structured outcome 穿透、RolledBack 不冒充成功、Local/Service
+  只共享 observation registry、16 路并发 same-id admission 恰好一次 registration、同 operation id 同 envelope
+  replay、不同 work conflict、reconcile identity 覆盖 CAS 与 declared digest）以及 facade 3 passed
+  （RunType→显式 endpoint、Service uninstall fail-closed ownership guard、lower operation id 穿透 anyhow
+  context）；intent 2 passed、ServiceActor 3 passed。
+  `core::clash::api::tests`，2 passed（含 instance-bound HTTP/Unix-socket/named-pipe transport-aware capability）；`core::clash::transaction::tests`，12 passed（shared projection verification、partial-apply compensation、显式 null rollback、persist/read-back/rollback failure 与并发 serialization）；`features::agent::core_probe::tests`，3 passed；`core::clash::core::tests`，
+  5 passed（显式 RunType 分类、restart recovery gate、Service instance 委托注入 host、显式 Service host launch 不回退 manager 默认 host、transform failure attempt revision 与 applied runtime revision allocator 分离）；`core::service::core_host::tests`，6 passed
   （32hex operation id contract、Stopped 无 CAS、Running 携带 daemon revision CAS、Running 缺 revision
   fail-closed、bounded long-poll window、uncertain marker 可穿透 anyhow context chain）；runtime 子仓库
-  `cargo test -p chimera-ipc -p chimera-service -- --test-threads=1`：`chimera-ipc` 9 passed、
-  `chimera-service` 14 passed（含 v2 durable/idempotent Stop、Recover wire/output roundtrip、Recover 在无
+  `cargo test -p clash-api -p chimera-ipc -p chimera-service -- --test-threads=1`：shared `clash-api` 8 passed、`chimera-ipc` 15 passed、
+  `chimera-service` 38 passed（含完整 ref patchable wire surface 的 Noop/Patch/Reload/Switch classification、Patch/Reload 及其失败后的 Restart 保持 epoch + generation 递增、Switch/冷启动分配新 epoch、Patch/Reload controller mutation 后必须通过 Running owner + `GET /version` reconcile health probe、cold start/restart 在 controller 可用时按 ref 默认 30s startup budget / 250ms interval / 1s probe timeout 等待 `GET /version` readiness、Running 后持续 250ms controller-version liveness + 3-failure/1-success health tracker + 512-byte error cap + authoritative `CoreInfos.health`、stable `config-<epoch>.yaml` store + backup/restore + legacy digest-path migration + parent-dir durability warning、structured `core-<epoch>.pid` process identity + identity-verified quarantine recovery + startup orphan sweep/artifact-seeded epoch allocator、稳定 `CoreErrorKind` wire spelling + optional envelope `error_kind/retryable` + terminal `OperationErrorInfo.kind`、并发 same-id admission 原子 registration、v2 durable/idempotent Stop、Recover wire/output roundtrip、Recover 在无
   applied runtime 时幂等成功、id conflict/validation、digest mismatch、stale CAS 在 mutation 前 terminal
-  Failed，以及 applied config → API binding）；runtime
+  Failed、rollback-failure quarantine + explicit Stop re-arm，以及 applied config → API binding）；runtime
   `cargo fmt --all -- --check` 与
-  `cargo check -p chimera-ipc -p chimera-service` 通过；`core::service` tests，17 passed；
-  `features::agent::diagnostics`，5 passed；`typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
-  `pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
-  chimera` 与 `git diff --check` 通过。
+  `cargo check -p chimera-ipc -p chimera-service` 通过；`core::service` tests，19 passed；
+  `features::agent::diagnostics`，5 passed；本次 endpoint parity 另实际运行 daemon
+  IPC `rolled_back_output_roundtrips_failure_reason`、`core_health_wire_roundtrips_and_is_omitted_when_absent`、`core_error_kind_wire_strings_and_defaults_match_ref`、`typed_terminal_error_roundtrips_kind_and_retryable` 以及 daemon
+  shared client `http_transport_updates_and_verifies_configs`、typed projection
+  `projection_verifies_only_fields_carried_by_patch`、`extended_patch_surface_verifies_tuic_and_access_ranges`、daemon
+  `reconcile_classification_preserves_noop_patch_reload_restart_and_switch_boundaries`、
+  `extended_patch_surface_matches_ref_safe_fields`、
+  `reconcile_revision_preserves_epoch_for_patch_reload_restart_and_allocates_for_switch`、
+  `v2_patch_verifies_read_back_after_uncertain_patch_error`、
+  `v2_reload_uses_shared_controller_client_and_verifies_controller`、
+  `v2_in_place_reconcile_requires_running_process_health`、
+  `v2_reconcile_controller_probe_uses_version_endpoint`、
+  `replace_warns_after_atomic_install_when_parent_sync_is_uncertain`、
+  `backup_restore_preserves_stable_epoch_path`、
+  `seed_current_migrates_legacy_digest_path_to_stable_epoch_path`、
+  `durability_warning_preserves_primary_terminal_error_message`、
+  `controller_binding_maps_all_transports_to_shared_client`、
+  `v2_concurrent_same_id_admission_registers_exactly_once`、
+  `v2_quarantine_recovery_requires_authoritative_epoch_pid_record`、
+  `v2_quarantine_recovery_reaps_identity_verified_epoch_process`、
+  `v2_epoch_allocator_advances_past_existing_runtime_artifacts`、
+  `v2_startup_orphan_sweep_reaps_owned_process_and_seeds_allocator`、
+  `v2_startup_orphan_sweep_rejects_unverifiable_pid_record`、
+  `v2_startup_readiness_retries_controller_until_healthy`、
+  `v2_startup_readiness_fails_closed_when_process_is_not_running`、
+  `v2_liveness_health_driver_tracks_unhealthy_and_recovery`、
+  `v2_health_error_detail_is_capped_without_breaking_utf8`、
+  `v2_reconcile_digest_mismatch_fails_before_mutation`、
+  `v2_reconcile_stale_cas_fails_before_mutation`、
+  `v2_quarantined_reconcile_reports_typed_terminal_error`、
+  `v2_operation_conflict_envelope_carries_kind_and_retryable`、
+  `v2_operation_id_validation_and_conflict_fail_closed` 均通过；app endpoint `service_terminal_error_preserves_kind_and_retryable` 与 `core_host::submit_error_preserves_typed_server_classification` 也通过；
+  `typescript_bindings_are_fresh`，1 passed；`pnpm typecheck`、
+  `pnpm lint:frontend-boundaries`、`pnpm --filter @chimera/tauri-e2e test:unit`（16 passed）、
+  app/runtime 两个 workspace 的 `cargo fmt -- --check`、Prettier 与 `git diff --check` 通过。
 - 收敛、移除或重新评估条件：singleton service-locator 已清除，生产
   `ChimeraClient` 也已持有 actor-backed `CoreLifecycleClient`，runtime reconcile 与
   updater binary replacement 已迁入 mailbox，operation-id/status/有界等待、actor-owned
@@ -414,17 +480,75 @@
   core reconcile 与 service auto-update 都不再绕过 actor，旧 `CoreManager::init`、
   `CoreManager::run_core`、旧 recovery API、`CoreBinaryUpdateLease` 和无参 lifecycle rebuild
   convenience API 已删除。`core/actor_v2::CoreFacade` 的 local-core + Service-host
-  ownership/status/lifecycle-lock/transition、local `ControlEndpoint` submit/wait/status + operation
-  registry + typed terminal output/applied runtime identity + Running-only applied status projection +
-  expected-applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
+  ownership/status/transition、统一 `CoreSubmission`、Local `ControlEndpoint` submit/wait/status +
+  Running-only applied revision CAS、fail-closed outcome-uncertain guard、独立 ServiceActor command +
   status/watch ownership、endpoint-down restart-budget/exhausted latch、lower operation history/id
-  app IPC projection，以及 upper lifecycle failure result 的 `backend_operation_id` 关联、注入式
-  `ServiceCoreHost`、additive daemon v2 submit/wait/status registry，
-  以及显式 Local/Service `EndpointHandle` routing、daemon v2 config-text digest + applied revision CAS、
-  instance-bound API connection capability、daemon v2 Recover parity、async core-control adapter bounds，
-  以及 ref-shaped upper→lower failure operation-id correlation 已落地。下一阶段主要是补真实桌面
-  TUN/service lifecycle E2E；privileged `runas` OS mutation 的强制终止仍保留为平台限制。
-  当前 daemon wire protocol parity 已基本收敛，
+  app IPC projection，以及 upper lifecycle failure result 的 `backend_operation_id` 关联均已落地。
+  Service `ControlEndpoint` 现在由 composition root 显式注入 IPC client，并直接拥有 daemon v2
+  submit/wait/status/api；不再借用 LocalEndpoint/CoreManager 执行 Service mutation。旧 lower
+  ChangeCore 与 Service rebuild bridge 已删除；Local `Instance` 模型也已移除 Service variant，
+  `core_host.rs` 仅保留 typed Service error/outcome-uncertain adapter。`CoreSubmission`/`CoreCommandEnvelope`/
+  `ReconcileRequest`/`ConfigInput::Inline`/`CoreSpec` 的 lower control shape 已落地，且新增 Local
+  fail-closed 测试证明 compatibility snapshot 与 inline bytes 不一致时不会进入 apply；另有 wire/CAS
+  测试锁定 optional digest 与 unconditional reconcile 语义。runtime intent 构建又移除了一层 legacy
+  `Config::*` 隐式状态：runtime preparation 不再 reload/mutate `Config::clash()`，shared executor generation
+  也不再提前写 `Config::runtime().draft()`；legacy runtime projection 只在 core 成功启动且
+  `RuntimeLifecycle` 接受 applied snapshot 后，才从该 authoritative snapshot 提交。这使 prepare/transform/check
+  失败不再留下“尚未 applied”的 runtime draft。原 `CoreManager::build_runtime_snapshot` 已进一步移出 manager：
+  composition 时一次性构造 Local endpoint 与共享 `RuntimeLifecycle`/`SessionPortResolver` 的
+  `RuntimePreparation` handle，`EndpointRegistry::new` 将两者作为显式 composition outputs 返回给 facade；
+  `CoreFacade` 不再通过 `LocalEndpoint` service API 反向取得 preparation dependency，endpoint 的公开能力因此
+  只保留 control/status/read-model，Local manager 只保留 lifecycle/apply ownership。portable reconcile intent 也已按 ref 新增
+  `core/actor_v2/intent.rs::RuntimeIntentBuilder` 纯服务：facade 不再自行拼装 digest/`CoreSpec`/
+  `ConfigInput::Inline`，相同 portable 输入由 builder 稳定生成同一 command identity；对应单测锁定 deterministic
+  intent 与 config-change identity。Local lower submit 已进一步删除完整 `RuntimeSnapshot` compatibility attachment：
+  facade 只把 deterministic `RuntimeDocument` 作为 Local-only prepared artifact 随 admission 交给 Local endpoint；Local executor 校验 envelope inline bytes/digest/core identity 后，才由 manager-owned lifecycle 分配 applied revision、materialize snapshot、执行 promote/start 并发布 promoted/applied/inspection read-model，因此旧 `LocalRuntimeMetadata` 已删除。runtime preparation 已成为 facade 的显式依赖，document build 的端口也改成显式 `PreparedPortBindings` 输入；`SessionPortResolver::prepare` 只计算 candidate，不再提前写 committed cache，只有 lower reconcile 返回 `Reconciled` 后 facade 才 `commit`，transform/build/apply 失败不会污染 session port state。transform diagnostics 也使用独立 attempt revision allocator，不再推进下一次成功 applied runtime revision。
+  下一收敛条件分成两个相邻目标：daemon v2 已补上最小 restart compensation，并进一步把 candidate
+  config 先写入 staged 文件、用目标 core 的原生 config check 校验后才允许 retire 旧 runtime；desired start
+  失败且旧 v2 revision 可确认时会重启旧 core/config、恢复旧 revision/API binding 并返回 structured
+  `RolledBack`。如果 rollback 自身失败，daemon 会 latch quarantine，status 暴露失败原因并拒绝后续
+  Reconcile；wire `Recover` 现在执行 identity-verified quarantine recovery，只有 authoritative epoch PID record 能证明对应进程已退出/被安全 reap 并完成 artifact cleanup 后才 re-arm，显式 Stop 不再绕过 quarantine。daemon 现在还会按 latest ref 的
+  process-spec/config 第一层语义已进一步收敛为 Noop/Patch/Reload/Switch：同 core + 同 source digest 或语义等价 YAML
+  直接 Noop 且保持 revision；typed Patch 的 wire surface 已覆盖 latest ref 当前全部 patchable roots，包括
+  `tuic-server`、ss/vmess/tcp/udp tunnel config、auth/IP ranges 与完整 ref TUN patch fields；仅
+  proxies/proxy-groups/providers/rules/hosts/dns 等 ref reloadable roots 变化且
+  `dns.listen` 不变时走 Reload；其余无法安全 in-place 的变化（含 controller 或 `dns.listen` 变化）进入 Switch/new epoch。
+  Patch/Reload 成功保持 epoch、generation +1；只有 in-place 验证失败后的 replacement 才返回 Restarted 并保持该
+  epoch，Switch/冷启动分配新 epoch。runtime 现有 `crates/clash-api`
+  已从 Host/Secret 数据模型扩成 shared controller client：HTTP 与 interprocess local socket 共用请求边界，
+  daemon 将 `CoreControllerInfo::{Http,UnixSocket,NamedPipe}` 全部映射到该 client；Reload 通过 `PUT /configs?force=true`
+  后再 `GET /configs` 验证 controller 可用，任一步失败都会降级到现有 Restart transaction。HTTP 有真实 roundtrip
+  测试；Unix/named-pipe mapping 已锁定，真实 local-socket controller roundtrip 仍待对应平台 runner。app-side
+  `core::clash::ApiClient` 也已切到同一个 shared `clash-api::Client`，原本自建 reqwest/headers/query wrapper 与
+  “Unix/named-pipe 直接拒绝”的 HTTP-only bridge 已删除；现有 configs/proxies/connections/delay/PATCH 调用因此共享
+  同一 transport。shared `clash-api` 现在还新增 `ConfigPatch`、`RuntimeConfig` 与 field-scoped
+  `RuntimeProjection`；daemon PATCH 即使 transport 返回错误也会继续 `GET /configs`，只有实际 runtime projection
+  匹配才发布 `Patched`，否则自动降级到已有 Restart compensation。为避免额外解析依赖，enum/IP network 在
+  shared model 内仍按 controller wire string 表示，少了 ref 的 enum/IpNet 解析级校验，但 projection 比较仍是
+  精确 wire-value verification。app 侧原本重复维护的 `ClashRuntimeConfig/RuntimeTun` 字段定义已删除并直接复用
+  shared `RuntimeConfig/RuntimeTun`；legacy runtime patch transaction 也删除本地 `patch_matches_config` verifier，
+  改用同一个 `RuntimeProjection`，同时保留 Mapping-based compensation 以支持显式 `null` rollback。Patch/Reload
+  现在还必须通过 manager-owned reconcile health gate：Service owner 必须仍持有 `ServiceProcessState::Running`，并在
+  1 秒 timeout 内成功访问 shared controller client 的 `GET /version`，probe 前后都会重新确认 process state；controller
+  mutation/read-back 全成功但没有 Running owner 时也不会发布 `Patched/Reloaded`，而是回落到已有 Restart
+  compensation。runtime config materialization 已进一步收敛为独立 `server/runtime_store.rs`：稳定路径 `config-<epoch>.yaml`、唯一 temp name、`create_new`、Unix 0600、`flush + sync_all`、shared `nyanpasu-utils::io::atomic_fs` 原子 publish、same-epoch backup/restore 以及 epoch artifact cleanup；既有 digest-keyed running config 会在下一次 same-epoch apply 前安全 seed 到稳定 epoch path。原子替换成功但 parent-dir sync 失败时不会撤销已安装内容，而是把 warning 贯穿 `Patched/Reloaded/Started/Restarted/Switched/RolledBack` outcome；若后续 stop/start/restore/rollback 再失败，terminal error message 也会像 ref 的 `DurabilityUncertain` Display 一样保留 primary failure 与 durability warning。Service process ownership 现在也已从 legacy `CoreInstance` numeric PID 迁到 `nyanpasu-utils::process::Command::epoch_pid_file`：每个 stable runtime epoch 使用 `core-<epoch>.pid`，record 含 PID、epoch、executable、start token 与 runtime config；wire `Recover` 已改成与 ref 一致的 quarantine recovery，而不是 restart。Recover 只有在 `reap_epoch_pid_file` 通过 identity verification 返回 `AlreadyExited/Killed` 后才清理 epoch artifacts 并解除 quarantine；缺 authoritative record 时 fail-closed，显式 Stop 也不再清 quarantine。runtime store 启动时还会扫描残留 config/pid/backup/temp artifact：只有 structured epoch PID record 能通过 identity verification 后被 reap；无法验证的 legacy/numeric PID record fail-closed 并保留 artifacts，同时 allocator seed 到 `max_seen + 1`，避免 daemon restart 后复用旧 epoch。Service cold start/restart 也不再仅凭固定 1.5 秒存活判定成功：配置存在 controller 时按 ref 默认 `startup_timeout=30s`、250ms interval、单 probe 1s timeout 轮询 `GET /version`，且 probe 前后都确认 process 仍 Running；无 controller 的 legacy 配置才保留 1.5 秒 survival fallback。Running 后持续 health driver 继续每 250ms 使用同一 controller-version probe，liveness 与 reconcile probe 通过 per-runtime mutex 串行；连续 3 次失败转 `Unhealthy`、一次成功恢复 `Healthy`，保留 `changed_at`/failure count/last error/last success，并将 error detail 按 ref 限制为 512 bytes。daemon `CoreInfos.health` 为 additive optional wire 字段，None 时仍省略；Service endpoint snapshot 直接透传权威 health，Local 明确不伪造。typed error contract 也已按 ref 做成 additive：`R.error_kind/retryable` 与 `OperationErrorInfo.kind` 均可省略，稳定 `CoreErrorKind` wire spelling 与默认 retryability 对齐 ref；operation conflict、digest invalid、revision conflict、quarantined、binary/config-check、apply/apply-rollback、not-started/already-running、stop-unconfirmed 与内部 invariant 在其事实成立处显式分类，未知 I/O/startup/API failure 仍保持 unclassified，不从 message 猜。app Service admission 与 terminal mapping 会保留 kind/retryable；submit/query transport 丢失仍保留 Chimera 现有更保守的 outcome-uncertain latch，不把“可能已提交”错误降级成普通 retryable backend failure。下一步 Service 侧不再扩 error wire，
+  而不是继续扩展现有 stop/start
+  shortcut。app lower `OperationOutput::Reconciled` 已改为直接携带 shared `ReconcileOutcomeInfo`，完整保留
+  `Noop/Patched/Reloaded/Restarted/Switched`、authoritative revision、warning 与 failed_apply；facade 因此能
+  识别 Service Noop，并在 facade 的 Service observation 已对应同一 effective hash 时跳过无意义的
+  observation republish。该 Tauri contract 已重新生成 `frontend/interface/src/ipc/bindings.ts`，CI endpoint parity step 也
+  显式运行 `typescript_bindings_are_fresh`。shared controller transport、daemon Reload、完整 patchable wire
+  surface 的 typed Patch/read-back verification、app-side API client 与 runtime config model 复用均已落地；生成的
+  `frontend/interface/src/ipc/bindings.ts` 已重新同步当前 Rust contract，`ClashRuntimeConfig` 前端字段 shape 保持不变，
+  同时补上此前代码已使用但生成文件尚未反映的 structured `ReconcileOutcomeInfo`。in-place reconcile 的
+  process health probe、stable epoch runtime store + backup/restore、legacy path migration、success/rollback durability warning propagation、terminal failure durability wrapping、authoritative epoch PID identity record、identity-verified quarantine recovery、daemon startup orphan sweep/epoch allocator seeding、controller-version startup readiness、持续 liveness/status health 与 typed error kind/retryable parity 均已落地。deterministic runtime document generation 与 revision/port state 分离也已完成当前 ownership 收敛：document build 不分配 lifecycle revision，port candidate 在成功 reconcile 前不提交，transform failure 使用独立 attempt counter，Local executor/manager 在 apply transaction 内自己分配 revision 并发布 promoted/applied/inspection snapshot。app-side Service process/revision shadow 也已移除：Local `RuntimeLifecycle` 只记录 Local apply，Service observation 独立存放，cross-host handoff 按 ref 的 commit-first 语义在 source stop/proof 后先提交 target host authority，再执行 target reconcile；target reconcile 失败不回退旧 host。下一步转向 request-scoped `InstanceOptions.local_ipc` / controller binding parity 与更完整的 host-router actor 化。真实 Windows Service/TUN lifecycle
+  已新增专用 `tauri-e2e` system spec：要求 `CHIMERA_E2E_SYSTEM_LIFECYCLE=1`、提升权限、初始 Service
+  `not_installed`，并在 Tauri 启动前由 WDIO preflight fail-closed；用例通过正式 IPC 执行
+  install/start → Service Mode → TUN → Service restart，并在 restart 前后运行只读
+  `windows-tun-smoke.ps1 -SkipTraffic`，最后按 TUN→Local handoff→stop→uninstall 清理。当前开发机非管理员且
+  已有用户 Service，因此该 system spec 尚未执行，不能记为系统验收通过；需在专用 runner/VM 跑绿后关闭此
+  最后验证项。privileged `runas` OS mutation 的强制终止仍保留为平台限制。当前 daemon wire protocol parity
+  已基本收敛，
   而不是 singleton、
   manager ownership 或 workflow lease 问题。
 

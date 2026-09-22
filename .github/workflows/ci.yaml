@@ -125,6 +125,55 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm --filter @chimera/tauri-e2e test:unit
 
+      - name: Test core endpoint parity
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: |
+          cargo test --manifest-path backend/tauri/Cargo.toml core::actor_v2::endpoint::tests
+          cargo test --manifest-path backend/tauri/Cargo.toml core::actor_v2::facade::tests
+          cargo test --manifest-path backend/tauri/Cargo.toml core::clash::api::tests
+          cargo test --manifest-path backend/tauri/Cargo.toml core::clash::transaction::tests
+          cargo test --manifest-path backend/tauri/Cargo.toml client::ports::tests
+          cargo test --manifest-path backend/tauri/Cargo.toml client::runtime::tests::successful_apply_clears_the_last_transform_failure
+          cargo test --manifest-path backend/tauri/Cargo.toml client::runtime::tests::runtime_document_materialization_assigns_revision_without_changing_product
+          cargo test --manifest-path backend/tauri/Cargo.toml core::clash::core::tests::transform_failure_attempt_does_not_consume_applied_runtime_revision
+          cargo test --manifest-path backend/tauri/Cargo.toml core::clash::core::tests::local_instance_rejects_service_host
+          cargo test --manifest-path backend/tauri/Cargo.toml specta_export::tests::typescript_bindings_are_fresh
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc rolled_back_output_roundtrips_failure_reason
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc core_health_wire_roundtrips_and_is_omitted_when_absent
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc core_error_kind_wire_strings_and_defaults_match_ref
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc typed_terminal_error_roundtrips_kind_and_retryable
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p clash-api http_transport_updates_and_verifies_configs
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p clash-api projection_verifies_only_fields_carried_by_patch
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p clash-api extended_patch_surface_verifies_tuic_and_access_ranges
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service reconcile_classification_preserves_noop_patch_reload_restart_and_switch_boundaries
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service extended_patch_surface_matches_ref_safe_fields
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service reconcile_revision_preserves_epoch_for_patch_reload_restart_and_allocates_for_switch
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_patch_verifies_read_back_after_uncertain_patch_error
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_reload_uses_shared_controller_client_and_verifies_controller
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_in_place_reconcile_requires_running_process_health
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_reconcile_controller_probe_uses_version_endpoint
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service replace_warns_after_atomic_install_when_parent_sync_is_uncertain
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service backup_restore_preserves_stable_epoch_path
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service seed_current_migrates_legacy_digest_path_to_stable_epoch_path
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service durability_warning_preserves_primary_terminal_error_message
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service controller_binding_maps_all_transports_to_shared_client
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_concurrent_same_id_admission_registers_exactly_once
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_quarantine_recovery_requires_authoritative_epoch_pid_record
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_quarantine_recovery_reaps_identity_verified_epoch_process
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_epoch_allocator_advances_past_existing_runtime_artifacts
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_startup_orphan_sweep_reaps_owned_process_and_seeds_allocator
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_startup_orphan_sweep_rejects_unverifiable_pid_record
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_startup_readiness_retries_controller_until_healthy
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_startup_readiness_fails_closed_when_process_is_not_running
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_liveness_health_driver_tracks_unhealthy_and_recovery
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_health_error_detail_is_capped_without_breaking_utf8
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_reconcile_digest_mismatch_fails_before_mutation
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_reconcile_stale_cas_fails_before_mutation
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_quarantined_reconcile_reports_typed_terminal_error
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_operation_conflict_envelope_carries_kind_and_retryable
+          cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service v2_operation_id_validation_and_conflict_fail_closed
+          cargo test --manifest-path backend/tauri/Cargo.toml core::service::core_host::tests::submit_error_preserves_typed_server_classification
+
       - name: Verify generated files are committed
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: git diff --exit-code
