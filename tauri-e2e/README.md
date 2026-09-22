@@ -39,7 +39,7 @@ Check the workflow and suite membership when adding tests. Register new desktop 
 
 ## Runtime and isolation
 
-- The E2E build uses `backend/target/e2e` and the Cargo `e2e` feature. The embedded WebDriver is feature-gated; the normal release build should not include that test interface.
+- The E2E build uses `backend/target/e2e` and the Cargo `e2e` feature. It stages a freshly compiled Chimera Service from the checked-out `backend/chimera-runtime` submodule before the Tauri build; E2E resource resolution explicitly skips the remote Service release, so branch tests exercise their current Service source instead of a stale published sidecar. The embedded WebDriver is feature-gated; the normal release build should not include that test interface.
 - The default binary is `backend/target/e2e/debug/chimera.exe` on Windows, or `chimera` elsewhere. `CHIMERA_E2E_BINARY` overrides it. The default embedded port is `4446`, configurable with `CHIMERA_E2E_WEBDRIVER_PORT`.
 - The harness initially connects to the `legacy` window. Main-window specs open and switch to the main window. Both UIs remain supported; shared changes need checks for affected flows in both.
 - Each top-level spec starts and ends with the harness closing temporary non-app windows, focusing `legacy`, and restoring the legacy entry URL. Main specs use the shared main-window helper to reuse a rendered singleton, recover a stale blank main window when necessary, and enter their target route through SPA navigation. Persistent application/config state must still be restored explicitly by the owning test.

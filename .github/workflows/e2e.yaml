@@ -12,6 +12,7 @@ on:
       - 'frontend/**'
       - 'tauri-e2e/**'
       - 'package.json'
+      - 'scripts/**'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/e2e.yaml'
@@ -26,6 +27,7 @@ on:
       - 'frontend/**'
       - 'tauri-e2e/**'
       - 'package.json'
+      - 'scripts/**'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
       - '.github/workflows/e2e.yaml'
@@ -66,6 +68,7 @@ jobs:
     env:
       E2E_SUITE: ${{ github.event_name == 'schedule' && 'hermetic' || github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'critical' || 'smoke' }}
       CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e
+      CHIMERA_E2E_LOCAL_SERVICE: '1'
     steps:
       - uses: actions/checkout@v7
         with:
@@ -75,6 +78,7 @@ jobs:
         shell: pwsh
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
+          rustup toolchain install nightly --profile minimal --no-self-update
           rustup default stable
           rustc --version
           cargo --version
