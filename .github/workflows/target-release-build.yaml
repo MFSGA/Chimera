@@ -21,15 +21,42 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  service_release_gate:
+    name: Verify release dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Verify application release tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          node -e "const fs=require('fs'); const version=JSON.parse(fs.readFileSync('package.json','utf8')).version; const expected='v'+version; if(process.env.RELEASE_TAG!==expected){console.error('release tag mismatch: expected '+expected+', got '+process.env.RELEASE_TAG); process.exit(1)}"
+
+      - name: Verify stable Chimera Service dependency
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/check-service-release.ts
+
   macos_aarch64_build:
+    needs: service_release_gate
     name: macOS aarch64 Build
     uses: ./.github/workflows/deps-build-macos.yaml
     with:
       nightly: false
       aarch64: true
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag || github.event.release.tag_name }}
     secrets: inherit
   windows_build:
+    needs: service_release_gate
     name: Windows Build
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
     with:
@@ -41,6 +68,7 @@ jobs:
       tag: ${{ inputs.tag || github.event.release.tag_name }}
     secrets: inherit
   linux_build:
+    needs: service_release_gate
     name: Linux Build
     uses: ./.github/workflows/deps-build-linux.yaml
     with:
