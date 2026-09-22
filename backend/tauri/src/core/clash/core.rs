@@ -22,24 +22,19 @@ use chimera_utils::{
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use specta::Type;
-use tracing::instrument;
 
 use crate::{
     client::{
         SessionPortResolver,
         runtime::{
-            CheckedPromotionError, RuntimeLifecycle, RuntimePaths, RuntimeRebuildGate,
-            RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransactionSnapshot,
+            CheckedPromotionError, RuntimeDocument, RuntimeLifecycle, RuntimePaths,
+            RuntimeRebuildGate, RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransactionSnapshot,
             RuntimeTransformFailure, capture_runtime_transaction, check_and_promote_candidate,
             restore_failed_apply,
         },
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
-    core::{
-        clash::api,
-        logger::Logger,
-        service::core_host::{IpcServiceCoreHost, ServiceCoreHost, is_outcome_uncertain},
-    },
+    core::{clash::api, logger::Logger},
     enhance::{PostProcessingOutput, TransformFailureError},
     log_err,
     utils::dirs,
@@ -95,7 +90,7 @@ impl Default for RunType {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum RuntimeRestartError {
+pub(crate) enum RuntimeRestartError {
     #[error("failed to prepare runtime candidate: {0}")]
     Prepare(#[source] anyhow::Error),
     #[error("runtime candidate check failed: {0}")]
@@ -109,10 +104,6 @@ enum RuntimeRestartError {
 }
 
 impl RuntimeRestartError {
-    fn outcome_uncertain(&self) -> bool {
-        matches!(self, Self::Start(error) if is_outcome_uncertain(error))
-    }
-
     /// Recovery is only required after the product may have changed or core apply began.
     fn requires_recovery(&self) -> bool {
         matches!(
@@ -131,121 +122,51 @@ struct RuntimeApplyTransaction {
 }
 
 #[derive(Debug)]
-enum Instance {
-    Child {
-        child: Mutex<Arc<CoreInstance>>,
-        stated_changed_at: Arc<AtomicI64>,
-        kill_flag: Arc<AtomicBool>,
-        recovery_notify: Arc<tokio::sync::Notify>,
-    },
-    Service {
-        config_path: PathBuf,
-        core_type: chimera_utils::core::CoreType,
-        host: Arc<dyn ServiceCoreHost>,
-    },
+struct Instance {
+    child: Mutex<Arc<CoreInstance>>,
+    stated_changed_at: Arc<AtomicI64>,
+    kill_flag: Arc<AtomicBool>,
+    recovery_notify: Arc<tokio::sync::Notify>,
 }
 
 impl Instance {
     /// get core state with state changed timestamp
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64) {
-        match self {
-            Instance::Child {
-                child,
-                stated_changed_at,
-                ..
-            } => {
-                let this = child.lock();
-                (
-                    Cow::Borrowed(match this.state() {
-                        chimera_utils::core::instance::CoreInstanceState::Running => {
-                            &CoreState::Running
-                        }
-                        chimera_utils::core::instance::CoreInstanceState::Stopped => {
-                            &CoreState::Stopped(None)
-                        }
-                    }),
-                    stated_changed_at.load(Ordering::Relaxed),
-                )
-            }
-            Instance::Service { host, .. } => match host.status().await {
-                Ok((state, changed_at)) => (
-                    Cow::Owned(match state {
-                        CoreState::Running => CoreState::Running,
-                        CoreState::Stopped(_) => CoreState::Stopped(None),
-                    }),
-                    changed_at,
-                ),
-                Err(_) => (Cow::Owned(CoreState::Stopped(None)), 0),
-            },
-        }
+        let this = self.child.lock();
+        (
+            Cow::Borrowed(match this.state() {
+                chimera_utils::core::instance::CoreInstanceState::Running => &CoreState::Running,
+                chimera_utils::core::instance::CoreInstanceState::Stopped => {
+                    &CoreState::Stopped(None)
+                }
+            }),
+            self.stated_changed_at.load(Ordering::Relaxed),
+        )
     }
 
     pub fn run_type(&self) -> RunType {
-        match self {
-            Instance::Child { .. } => RunType::Normal,
-            Instance::Service { .. } => RunType::Service,
-        }
+        RunType::Normal
     }
 
     pub async fn state<'a>(&self) -> Cow<'a, CoreState> {
-        match self {
-            Instance::Child { child, .. } => {
-                let this = child.lock();
-                Cow::Borrowed(match this.state() {
-                    chimera_utils::core::instance::CoreInstanceState::Running => {
-                        &CoreState::Running
-                    }
-                    chimera_utils::core::instance::CoreInstanceState::Stopped => {
-                        &CoreState::Stopped(None)
-                    }
-                })
-            }
-            Instance::Service { host, .. } => {
-                let status = host
-                    .status()
-                    .await
-                    .map(|(state, _)| match state {
-                        CoreState::Running => CoreState::Running,
-                        CoreState::Stopped(_) => CoreState::Stopped(None),
-                    })
-                    .unwrap_or(CoreState::Stopped(None));
-                Cow::Owned(status)
-            }
-        }
-    }
-
-    pub async fn recover(&self) -> Result<()> {
-        match self {
-            Instance::Child { .. } => {
-                anyhow::bail!("local core recovery must use typed reconcile")
-            }
-            Instance::Service { host, .. } => host.recover().await,
-        }
+        let this = self.child.lock();
+        Cow::Borrowed(match this.state() {
+            chimera_utils::core::instance::CoreInstanceState::Running => &CoreState::Running,
+            chimera_utils::core::instance::CoreInstanceState::Stopped => &CoreState::Stopped(None),
+        })
     }
 
     pub async fn stop(&self) -> Result<()> {
         let state = self.state().await;
-        match self {
-            Instance::Child {
-                child,
-                stated_changed_at,
-                kill_flag,
-                ..
-            } => {
-                if matches!(state.as_ref(), CoreState::Stopped(_)) {
-                    anyhow::bail!("core is already stopped");
-                }
-                kill_flag.store(true, Ordering::Release);
-                let child = {
-                    let child = child.lock();
-                    child.clone()
-                };
-                child.kill().await?;
-                stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
-                Ok(())
-            }
-            Instance::Service { host, .. } => host.stop().await,
+        if matches!(state.as_ref(), CoreState::Stopped(_)) {
+            anyhow::bail!("core is already stopped");
         }
+        self.kill_flag.store(true, Ordering::Release);
+        let child = self.child.lock().clone();
+        child.kill().await?;
+        self.stated_changed_at
+            .store(get_current_ts(), Ordering::Relaxed);
+        Ok(())
     }
 
     pub fn try_new(
@@ -253,22 +174,25 @@ impl Instance {
         clash_core: ClashCore,
         config_path: PathBuf,
         recovery_notify: Arc<tokio::sync::Notify>,
-        service_host: Arc<dyn ServiceCoreHost>,
     ) -> Result<Self> {
-        let core_type: chimera_utils::core::CoreType = (&clash_core).into();
-        let service_core_type: chimera_utils::core::CoreType = (&clash_core).into();
-
-        let data_dir = camino::Utf8PathBuf::from_path_buf(dirs::app_data_dir()?)
-            .map_err(|e| anyhow::anyhow!("failed to convert data dir to utf8 path: {:?}", e))?;
-        let binary = camino::Utf8PathBuf::from_path_buf(find_binary_path(&core_type)?)
-            .map_err(|e| anyhow::anyhow!("failed to convert binary path to utf8 path: {:?}", e))?;
         let config_path = camino::Utf8PathBuf::from_path_buf(config_path)
             .map_err(|e| anyhow::anyhow!("failed to convert config path to utf8 path: {:?}", e))?;
 
-        let pid_path = camino::Utf8PathBuf::from_path_buf(dirs::clash_pid_path()?)
-            .map_err(|e| anyhow::anyhow!("failed to convert pid path to utf8 path: {:?}", e))?;
         match run_type {
             RunType::Normal => {
+                let core_type: chimera_utils::core::CoreType = (&clash_core).into();
+                let data_dir =
+                    camino::Utf8PathBuf::from_path_buf(dirs::app_data_dir()?).map_err(|e| {
+                        anyhow::anyhow!("failed to convert data dir to utf8 path: {:?}", e)
+                    })?;
+                let binary = camino::Utf8PathBuf::from_path_buf(find_binary_path(&core_type)?)
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to convert binary path to utf8 path: {:?}", e)
+                    })?;
+                let pid_path = camino::Utf8PathBuf::from_path_buf(dirs::clash_pid_path()?)
+                    .map_err(|e| {
+                        anyhow::anyhow!("failed to convert pid path to utf8 path: {:?}", e)
+                    })?;
                 let instance = Arc::new(
                     CoreInstanceBuilder::default()
                         .core_type(core_type)
@@ -278,139 +202,111 @@ impl Instance {
                         .pid_path(pid_path)
                         .build()?,
                 );
-                Ok(Instance::Child {
+                Ok(Instance {
                     child: Mutex::new(instance),
                     kill_flag: Arc::new(AtomicBool::new(false)),
                     stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
                     recovery_notify,
                 })
             }
-            RunType::Service => Ok(Instance::Service {
-                config_path: config_path.into(),
-                core_type: service_core_type,
-                host: service_host,
-            }),
-            RunType::Elevated => {
-                todo!()
+            RunType::Service => {
+                anyhow::bail!("local CoreManager cannot construct a Service-hosted instance")
             }
+            RunType::Elevated => todo!(),
         }
     }
 
     pub async fn start(&self) -> Result<()> {
-        match self {
-            Instance::Child {
-                child,
-                kill_flag,
-                stated_changed_at,
-                recovery_notify,
-            } => {
-                let instance = {
-                    let child = child.lock();
-                    child.clone()
-                };
-                let (is_premium, core_type) = {
-                    let child = child.lock();
-                    (
-                        matches!(
-                            child.core_type,
-                            chimera_utils::core::CoreType::Clash(
-                                chimera_utils::core::ClashCoreType::ClashPremium
-                            )
-                        ),
-                        child.core_type.clone(),
+        let instance = self.child.lock().clone();
+        let (is_premium, core_type) = {
+            let child = self.child.lock();
+            (
+                matches!(
+                    child.core_type,
+                    chimera_utils::core::CoreType::Clash(
+                        chimera_utils::core::ClashCoreType::ClashPremium
                     )
-                };
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<()>>(1); // use mpsc channel just to avoid type moved error, though it never fails
-                let stated_changed_at = stated_changed_at.clone();
-                let kill_flag = kill_flag.clone();
-                let recovery_notify = recovery_notify.clone();
-                tracing::trace!("todo: instance start and may use admin performs better.");
-                // This block below is to handle the stdio from the core process
-                tokio::spawn(async move {
-                    match instance.run().await {
-                        Ok((_, mut rx)) => {
-                            kill_flag.store(false, Ordering::Release); // reset kill flag
-                            let mut err_buf: Vec<String> = Vec::with_capacity(6);
-                            loop {
-                                if let Some(event) = rx.recv().await {
-                                    match event {
-                                        CommandEvent::Stdout(line) => {
-                                            if is_premium {
-                                                let log = api::parse_log(line.clone());
-                                                log::info!(target: "app", "[{core_type}]: {log}");
-                                            } else {
-                                                log::info!(target: "app", "[{core_type}]: {line}");
-                                            }
-                                            Logger::global().set_log(line);
-                                        }
-                                        CommandEvent::Stderr(line) => {
-                                            log::error!(target: "app", "[{core_type}]: {line}");
-                                            err_buf.push(line.clone());
-                                            Logger::global().set_log(line);
-                                        }
-                                        CommandEvent::Error(e) => {
-                                            log::error!(target: "app", "[{core_type}]: {e}");
-                                            let err = anyhow::anyhow!(format!(
-                                                "{}\n{}",
-                                                e,
-                                                err_buf.join("\n")
-                                            ));
-                                            Logger::global().set_log(e);
-                                            let _ = tx.send(Err(err)).await;
-                                            stated_changed_at
-                                                .store(get_current_ts(), Ordering::Relaxed);
-                                            break;
-                                        }
-                                        CommandEvent::Terminated(status) => {
-                                            log::error!(
-                                                target: "app",
-                                                "core terminated with status: {status:?}"
-                                            );
-                                            stated_changed_at
-                                                .store(get_current_ts(), Ordering::Relaxed);
-                                            if status.code != Some(0)
-                                                || !matches!(status.signal, Some(9) | Some(15))
-                                            {
-                                                let err = anyhow::anyhow!(format!(
-                                                    "core terminated with status: {:?}\n{}",
-                                                    status,
-                                                    err_buf.join("\n")
-                                                ));
-                                                tracing::error!("{}\n{}", err, err_buf.join("\n"));
-                                                if tx.send(Err(err)).await.is_err()
-                                                    && !kill_flag.load(Ordering::Acquire)
-                                                {
-                                                    recovery_notify.notify_one();
-                                                }
-                                            }
-                                            break;
-                                        }
-                                        CommandEvent::DelayCheckpointPass => {
-                                            tracing::debug!("delay checkpoint pass");
-                                            stated_changed_at
-                                                .store(get_current_ts(), Ordering::Relaxed);
-                                            tx.send(Ok(())).await.unwrap();
+                ),
+                child.core_type.clone(),
+            )
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<()>>(1);
+        let stated_changed_at = self.stated_changed_at.clone();
+        let kill_flag = self.kill_flag.clone();
+        let recovery_notify = self.recovery_notify.clone();
+        tracing::trace!("todo: instance start and may use admin performs better.");
+        tokio::spawn(async move {
+            match instance.run().await {
+                Ok((_, mut rx)) => {
+                    kill_flag.store(false, Ordering::Release);
+                    let mut err_buf: Vec<String> = Vec::with_capacity(6);
+                    loop {
+                        if let Some(event) = rx.recv().await {
+                            match event {
+                                CommandEvent::Stdout(line) => {
+                                    if is_premium {
+                                        let log = api::parse_log(line.clone());
+                                        log::info!(target: "app", "[{core_type}]: {log}");
+                                    } else {
+                                        log::info!(target: "app", "[{core_type}]: {line}");
+                                    }
+                                    Logger::global().set_log(line);
+                                }
+                                CommandEvent::Stderr(line) => {
+                                    log::error!(target: "app", "[{core_type}]: {line}");
+                                    err_buf.push(line.clone());
+                                    Logger::global().set_log(line);
+                                }
+                                CommandEvent::Error(e) => {
+                                    log::error!(target: "app", "[{core_type}]: {e}");
+                                    let err =
+                                        anyhow::anyhow!(format!("{}\n{}", e, err_buf.join("\n")));
+                                    Logger::global().set_log(e);
+                                    let _ = tx.send(Err(err)).await;
+                                    stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
+                                    break;
+                                }
+                                CommandEvent::Terminated(status) => {
+                                    log::error!(
+                                        target: "app",
+                                        "core terminated with status: {status:?}"
+                                    );
+                                    stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
+                                    if status.code != Some(0)
+                                        || !matches!(status.signal, Some(9) | Some(15))
+                                    {
+                                        let err = anyhow::anyhow!(format!(
+                                            "core terminated with status: {:?}\n{}",
+                                            status,
+                                            err_buf.join("\n")
+                                        ));
+                                        tracing::error!("{}\n{}", err, err_buf.join("\n"));
+                                        if tx.send(Err(err)).await.is_err()
+                                            && !kill_flag.load(Ordering::Acquire)
+                                        {
+                                            recovery_notify.notify_one();
                                         }
                                     }
+                                    break;
+                                }
+                                CommandEvent::DelayCheckpointPass => {
+                                    tracing::debug!("delay checkpoint pass");
+                                    stated_changed_at.store(get_current_ts(), Ordering::Relaxed);
+                                    tx.send(Ok(())).await.unwrap();
                                 }
                             }
                         }
-                        Err(err) => {
-                            spawn(async move {
-                                tx.send(Err(err.into())).await.unwrap();
-                            });
-                        }
                     }
-                });
-                rx.recv().await.unwrap()?;
-                Ok(())
+                }
+                Err(err) => {
+                    spawn(async move {
+                        tx.send(Err(err.into())).await.unwrap();
+                    });
+                }
             }
-            Instance::Service {
-                config_path,
-                core_type,
-                host,
-            } => host.start(config_path, core_type).await,
-        }
+        });
+        rx.recv().await.unwrap()?;
+        Ok(())
     }
 }
 
@@ -422,45 +318,18 @@ pub(crate) struct CoreLifecycleLease<'a> {
 }
 
 impl CoreLifecycleLease<'_> {
-    pub(crate) async fn rebuild_running_config_with(
+    pub(crate) async fn apply_runtime_snapshot(
         &self,
-        clash: ClashConfig,
-        profiles: crate::config::profile::profiles::Profiles,
-        target_core: ClashCore,
+        snapshot: Arc<RuntimeSnapshot>,
         run_type: RunType,
     ) -> Result<()> {
         self.manager
-            .rebuild_and_run_locked_with(target_core, &clash, &profiles, run_type)
+            .apply_runtime_snapshot_locked(snapshot, run_type)
             .await
     }
 
     pub(crate) async fn stop_core(&self) -> Result<()> {
         self.manager.stop_core_with_lease(self).await
-    }
-
-    pub(crate) async fn recover_service_core(&self) -> Result<()> {
-        let instance = {
-            let instance = self.manager.instance.lock();
-            instance.as_ref().cloned()
-        };
-        let Some(instance) = instance else {
-            return Ok(());
-        };
-        anyhow::ensure!(
-            instance.run_type() == RunType::Service,
-            "service recover requires a Service-hosted core"
-        );
-        instance.recover().await
-    }
-
-    pub(crate) async fn change_core(
-        &self,
-        profiles: crate::config::profile::profiles::Profiles,
-        clash_core: ClashCore,
-    ) -> Result<()> {
-        self.manager
-            .change_core_with_lease(self, profiles, clash_core)
-            .await
     }
 }
 
@@ -468,33 +337,102 @@ impl CoreLifecycleLease<'_> {
 struct CoreLifecycleState {
     /// Single mutex domain for run/restart, stop, check, recover, and core changes.
     run_lock: RuntimeRebuildGate,
-    runtime_lifecycle: RuntimeLifecycle,
-    port_resolver: SessionPortResolver,
+    runtime_lifecycle: Arc<RuntimeLifecycle>,
+    port_resolver: Arc<SessionPortResolver>,
     recovery_notify: Arc<tokio::sync::Notify>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimePreparation {
+    runtime_lifecycle: Arc<RuntimeLifecycle>,
+    port_resolver: Arc<SessionPortResolver>,
+}
+
+impl RuntimePreparation {
+    pub(crate) fn prepare_ports(
+        &self,
+        clash: &ClashConfig,
+    ) -> std::result::Result<crate::client::ports::PreparedPortBindings, RuntimeRestartError> {
+        self.port_resolver
+            .prepare(clash)
+            .map_err(RuntimeRestartError::Prepare)
+    }
+
+    pub(crate) fn commit_ports(&self, prepared: crate::client::ports::PreparedPortBindings) {
+        self.port_resolver.commit(prepared);
+    }
+
+    pub(crate) fn record_prepare_failure(
+        &self,
+        error: &anyhow::Error,
+    ) -> std::result::Result<(), RuntimeRestartError> {
+        if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
+            let revision = self
+                .runtime_lifecycle
+                .allocate_transform_attempt_revision()
+                .map_err(RuntimeRestartError::Prepare)?;
+            self.runtime_lifecycle
+                .publish_transform_failure(RuntimeTransformFailure {
+                    attempt_revision: revision,
+                    transform_uid: transform.transform_uid.clone(),
+                    scope_uid: transform.scope_uid.clone(),
+                    script_type: transform.script_type,
+                    message: transform.message(),
+                });
+        }
+        Ok(())
+    }
+
+    pub(crate) fn clear_prepare_failure(&self) {
+        self.runtime_lifecycle.clear_transform_failure();
+    }
+
+    pub(crate) async fn build_runtime_document(
+        &self,
+        target_core: ClashCore,
+        clash: &ClashConfig,
+        profiles: &crate::config::profile::profiles::Profiles,
+        resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
+        enable_builtin_enhanced: bool,
+    ) -> anyhow::Result<RuntimeDocument> {
+        let output = Config::generate_runtime_output_with_ports(
+            clash,
+            profiles,
+            target_core,
+            resolved_ports,
+            enable_builtin_enhanced,
+        )
+        .await?;
+        let bytes = Config::render_runtime_bytes(&output.config)?;
+        Ok(RuntimeDocument::from_data(
+            target_core,
+            bytes.into(),
+            RuntimeSnapshotData {
+                config: output.config,
+                exists_keys: output.exists_keys,
+                postprocessing_output: output.postprocessing_output,
+                inspection: Arc::new(output.inspection),
+            },
+        ))
+    }
 }
 
 #[derive(Debug)]
 pub struct CoreManager {
     instance: Mutex<Option<Arc<Instance>>>,
     lifecycle: CoreLifecycleState,
-    service_host: Arc<dyn ServiceCoreHost>,
 }
 
 impl CoreManager {
     pub(crate) fn new() -> Self {
-        Self::with_service_host(Arc::new(IpcServiceCoreHost))
-    }
-
-    fn with_service_host(service_host: Arc<dyn ServiceCoreHost>) -> Self {
         Self {
             instance: Mutex::new(None),
             lifecycle: CoreLifecycleState {
                 run_lock: RuntimeRebuildGate::default(),
-                runtime_lifecycle: RuntimeLifecycle::default(),
-                port_resolver: SessionPortResolver::default(),
+                runtime_lifecycle: Arc::new(RuntimeLifecycle::default()),
+                port_resolver: Arc::new(SessionPortResolver::default()),
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             },
-            service_host,
         }
     }
 
@@ -503,6 +441,19 @@ impl CoreManager {
             manager: self,
             _guard: self.lifecycle.run_lock.lock().await,
         }
+    }
+
+    pub(crate) fn runtime_preparation(&self) -> RuntimePreparation {
+        RuntimePreparation {
+            runtime_lifecycle: self.lifecycle.runtime_lifecycle.clone(),
+            port_resolver: self.lifecycle.port_resolver.clone(),
+        }
+    }
+
+    pub(crate) fn allocate_runtime_revision(
+        &self,
+    ) -> anyhow::Result<crate::client::runtime::RuntimeRevision> {
+        self.lifecycle.runtime_lifecycle.allocate_revision()
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
@@ -522,12 +473,12 @@ impl CoreManager {
         self.lifecycle.runtime_lifecycle.snapshot().promoted
     }
 
-    pub(crate) fn applied_runtime_identity(&self) -> Option<(u64, ClashCore)> {
-        self.lifecycle
-            .runtime_lifecycle
-            .snapshot()
-            .applied
-            .map(|snapshot| (snapshot.revision.get(), snapshot.target_core))
+    pub(crate) fn applied_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        self.lifecycle.runtime_lifecycle.snapshot().applied
+    }
+
+    pub(crate) fn discard_runtime_draft(&self) {
+        Config::runtime().discard();
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
@@ -563,11 +514,7 @@ impl CoreManager {
             let (state, ts) = instance.status().await;
             (state, ts, instance.run_type())
         } else {
-            (
-                Cow::Owned(CoreState::Stopped(None)),
-                0_i64,
-                RunType::default(),
-            )
+            (Cow::Owned(CoreState::Stopped(None)), 0_i64, RunType::Normal)
         }
     }
 
@@ -576,11 +523,6 @@ impl CoreManager {
             .data()
             .clash_core
             .unwrap_or(ClashCore::Mihomo)
-    }
-
-    fn committed_run_type() -> RunType {
-        let enable_service = Config::verge().data().enable_service_mode.unwrap_or(false);
-        RunType::from_service_mode(enable_service)
     }
 
     async fn stop_running_instance(&self) -> Result<()> {
@@ -609,7 +551,6 @@ impl CoreManager {
             target_core,
             product.to_path_buf(),
             self.lifecycle.recovery_notify.clone(),
-            self.service_host.clone(),
         )?);
 
         #[cfg(target_os = "macos")]
@@ -657,68 +598,16 @@ impl CoreManager {
             .context("failed to check runtime candidate")
     }
 
-    async fn prepare_promoted_runtime_locked(
+    async fn promote_runtime_snapshot_locked(
         &self,
         paths: &RuntimePaths,
-        target_core: ClashCore,
-        clash: &ClashConfig,
-        profiles: &crate::config::profile::profiles::Profiles,
+        snapshot: Arc<RuntimeSnapshot>,
     ) -> std::result::Result<Arc<RuntimeSnapshot>, RuntimeRestartError> {
-        Config::clash().reload();
-        log::debug!(target: "app", "reloaded clash config from file");
-        Config::clash()
-            .latest()
-            .prepare_external_controller_port()
-            .map_err(RuntimeRestartError::Prepare)?;
-
-        let resolved_ports = self
-            .lifecycle
-            .port_resolver
-            .resolve(clash)
-            .map_err(RuntimeRestartError::Prepare)?;
-
-        let revision = self
-            .lifecycle
-            .runtime_lifecycle
-            .allocate_revision()
-            .map_err(RuntimeRestartError::Prepare)?;
-        let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with_ports(
-                clash,
-                profiles,
-                target_core,
-                resolved_ports,
-            )
-            .await
-            {
-                Ok(output) => (
-                    output.config,
-                    output.exists_keys,
-                    output.postprocessing_output,
-                    output.inspection,
-                ),
-                Err(error) => {
-                    if let Some(transform) = error.downcast_ref::<TransformFailureError>() {
-                        self.lifecycle.runtime_lifecycle.publish_transform_failure(
-                            RuntimeTransformFailure {
-                                attempt_revision: revision,
-                                transform_uid: transform.transform_uid.clone(),
-                                scope_uid: transform.scope_uid.clone(),
-                                script_type: transform.script_type,
-                                message: transform.message(),
-                            },
-                        );
-                    }
-                    return Err(RuntimeRestartError::Prepare(error));
-                }
-            };
-        self.lifecycle.runtime_lifecycle.clear_transform_failure();
-        let bytes = Config::render_runtime_bytes(&config).map_err(RuntimeRestartError::Prepare)?;
         let candidate = paths
-            .create_candidate(&bytes)
+            .create_candidate(snapshot.product_bytes())
             .await
             .map_err(RuntimeRestartError::Prepare)?;
-
+        let target_core = snapshot.target_core;
         let checked =
             check_and_promote_candidate(&candidate, paths.product(), |candidate_path| async move {
                 self.check_candidate_path(&candidate_path, target_core)
@@ -734,17 +623,11 @@ impl CoreManager {
             }
             CheckedPromotionError::Promote(error) => RuntimeRestartError::Promote(error),
         })?;
-        let snapshot = Arc::new(RuntimeSnapshot::from_data(
-            revision,
-            target_core,
-            promoted_bytes.into(),
-            RuntimeSnapshotData {
-                config,
-                exists_keys,
-                postprocessing_output: transform_output,
-                inspection: Arc::new(inspection),
-            },
-        ));
+        if promoted_bytes.as_slice() != snapshot.product_bytes() {
+            return Err(RuntimeRestartError::Promote(anyhow::anyhow!(
+                "promoted runtime product differs from the prepared runtime snapshot"
+            )));
+        }
         self.lifecycle
             .runtime_lifecycle
             .publish_promoted(snapshot.clone());
@@ -755,6 +638,15 @@ impl CoreManager {
         &self,
         target_core: ClashCore,
     ) -> std::result::Result<RuntimeApplyTransaction, RuntimeRestartError> {
+        let had_active_runtime = {
+            let instance = self.instance.lock().as_ref().cloned();
+            match instance {
+                Some(instance) => {
+                    matches!(instance.state().await.as_ref(), CoreState::Running)
+                }
+                None => false,
+            }
+        };
         let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
         if let Err(error) = paths
             .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
@@ -762,9 +654,12 @@ impl CoreManager {
         {
             log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
         }
-        let rollback = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
+        let mut rollback = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
             .await
             .map_err(RuntimeRestartError::Prepare)?;
+        if !had_active_runtime {
+            rollback.lifecycle.applied = None;
+        }
         let recovery_target = rollback
             .lifecycle
             .applied
@@ -796,8 +691,11 @@ impl CoreManager {
         .map_err(RuntimeRestartError::Start)?;
         self.lifecycle
             .runtime_lifecycle
-            .publish_applied(snapshot)
+            .publish_applied(snapshot.clone())
             .map_err(RuntimeRestartError::Promote)?;
+        *Config::runtime().draft() = crate::config::runtime::IRuntime {
+            config: Some(snapshot.config.clone()),
+        };
         Config::runtime().apply();
         Ok(())
     }
@@ -819,7 +717,7 @@ impl CoreManager {
                     self.run_core_from_product_inner(
                         paths.product(),
                         recovery_target,
-                        Self::committed_run_type(),
+                        RunType::Normal,
                     )
                     .await
                 } else {
@@ -832,21 +730,16 @@ impl CoreManager {
         .await
     }
 
-    async fn rebuild_and_run_locked_with(
+    async fn apply_runtime_snapshot_locked(
         &self,
-        target_core: ClashCore,
-        clash: &ClashConfig,
-        profiles: &crate::config::profile::profiles::Profiles,
+        snapshot: Arc<RuntimeSnapshot>,
         run_type: RunType,
     ) -> Result<()> {
-        let transaction = self.begin_runtime_apply_transaction(target_core).await?;
+        let transaction = self
+            .begin_runtime_apply_transaction(snapshot.target_core)
+            .await?;
         let primary = match self
-            .prepare_promoted_runtime_locked(
-                &transaction.paths,
-                transaction.target_core,
-                clash,
-                profiles,
-            )
+            .promote_runtime_snapshot_locked(&transaction.paths, snapshot)
             .await
         {
             Ok(snapshot) => {
@@ -860,9 +753,6 @@ impl CoreManager {
             Ok(()) => Ok(()),
             Err(primary) => {
                 Config::runtime().discard();
-                if primary.outcome_uncertain() {
-                    return Err(primary.into());
-                }
                 if !primary.requires_recovery() {
                     *Config::clash().data() = transaction.previous_clash;
                     return Err(primary.into());
@@ -902,51 +792,15 @@ impl CoreManager {
             .change_default_network_dns(false)
             .await
             .inspect_err(|e| log::error!(target: "app", "failed to set system dns: {:?}", e));
-        let instance = {
-            let instance = self.instance.lock();
-            instance.as_ref().cloned()
-        };
-        if let Some(instance) = instance.as_ref() {
+        let instance = self.instance.lock().as_ref().cloned();
+        if let Some(instance) = instance.as_ref()
+            && matches!(instance.state().await.as_ref(), CoreState::Running)
+        {
             instance.stop().await?;
         }
+        self.instance.lock().take();
+        self.lifecycle.runtime_lifecycle.clear_applied();
         Ok(())
-    }
-
-    /// 切换核心
-    #[instrument(skip(self, _lease, profiles))]
-    async fn change_core_with_lease(
-        &self,
-        _lease: &CoreLifecycleLease<'_>,
-        profiles: crate::config::profile::profiles::Profiles,
-        clash_core: ClashCore,
-    ) -> Result<()> {
-        log::debug!(target: "app", "change core to `{clash_core}`");
-        Config::verge().draft().clash_core = Some(clash_core);
-
-        // 清掉旧日志
-        Logger::global().clear_log();
-
-        let clash = crate::bridge::clash::clash_config_from_legacy(
-            &Config::verge().latest(),
-            &Config::clash().latest().0,
-        )?;
-        match self
-            .rebuild_and_run_locked_with(clash_core, &clash, &profiles, RunType::default())
-            .await
-        {
-            Ok(_) => {
-                tracing::info!("change core success");
-                Config::verge().apply();
-                log_err!(Config::verge().latest().save_file());
-                Ok(())
-            }
-            Err(err) => {
-                tracing::error!("failed to change core: {err:?}");
-                Config::verge().discard();
-                Config::runtime().discard();
-                Err(err)
-            }
-        }
     }
 }
 
@@ -978,53 +832,8 @@ pub fn find_binary_path(
 mod tests {
     use std::{path::PathBuf, sync::Arc};
 
-    use async_trait::async_trait;
-    use chimera_ipc::api::status::CoreState;
-
-    use super::{Instance, RunType, RuntimeRestartError};
-    use crate::{
-        config::chimera::ClashCore,
-        core::service::{core_host::ServiceCoreHost, ipc::IpcState},
-    };
-
-    #[derive(Debug, Default)]
-    struct RecordingServiceCoreHost {
-        calls: parking_lot::Mutex<Vec<&'static str>>,
-    }
-
-    #[async_trait]
-    impl ServiceCoreHost for RecordingServiceCoreHost {
-        async fn api_connection(
-            &self,
-        ) -> anyhow::Result<Option<chimera_ipc::api::core::v2::CoreApiConnection>> {
-            self.calls.lock().push("api");
-            Ok(None)
-        }
-
-        async fn status(&self) -> anyhow::Result<(CoreState, i64)> {
-            self.calls.lock().push("status");
-            Ok((CoreState::Running, 42))
-        }
-
-        async fn start(
-            &self,
-            _config_path: &std::path::Path,
-            _core_type: &chimera_utils::core::CoreType,
-        ) -> anyhow::Result<()> {
-            self.calls.lock().push("start");
-            Ok(())
-        }
-
-        async fn stop(&self) -> anyhow::Result<()> {
-            self.calls.lock().push("stop");
-            Ok(())
-        }
-
-        async fn recover(&self) -> anyhow::Result<()> {
-            self.calls.lock().push("recover");
-            Ok(())
-        }
-    }
+    use super::{CoreManager, Instance, RunType, RuntimeRestartError};
+    use crate::{config::chimera::ClashCore, core::service::ipc::IpcState};
 
     #[test]
     fn run_type_classification_uses_only_explicit_inputs() {
@@ -1047,6 +856,30 @@ mod tests {
     }
 
     #[test]
+    fn transform_failure_attempt_does_not_consume_applied_runtime_revision() {
+        let manager = CoreManager::new();
+        let preparation = manager.runtime_preparation();
+        let error = anyhow::Error::new(crate::enhance::TransformFailureError::merge(
+            "transform-failed".into(),
+            Some("source-test".into()),
+            anyhow::anyhow!("transform exploded"),
+        ));
+
+        preparation.record_prepare_failure(&error).unwrap();
+        let failure = manager
+            .runtime_transform_failure()
+            .expect("transform failure must be published");
+        assert_eq!(failure.attempt_revision.get(), 1);
+
+        let applied_revision = manager.allocate_runtime_revision().unwrap();
+        assert_eq!(
+            applied_revision.get(),
+            1,
+            "prepare failure diagnostics must not advance the applied revision allocator"
+        );
+    }
+
+    #[test]
     fn recovery_only_runs_after_product_or_core_may_have_changed() {
         assert!(!RuntimeRestartError::Prepare(anyhow::anyhow!("prepare")).requires_recovery());
         assert!(!RuntimeRestartError::Check(anyhow::anyhow!("check")).requires_recovery());
@@ -1061,26 +894,20 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn service_instance_delegates_to_injected_core_host() {
-        let host = Arc::new(RecordingServiceCoreHost::default());
-        let instance = Instance::Service {
-            config_path: PathBuf::from("runtime.yaml"),
-            core_type: (&ClashCore::Mihomo).into(),
-            host: host.clone(),
-        };
+    #[test]
+    fn local_instance_rejects_service_host() {
+        let error = Instance::try_new(
+            RunType::Service,
+            ClashCore::Mihomo,
+            PathBuf::from("runtime.yaml"),
+            Arc::new(tokio::sync::Notify::new()),
+        )
+        .unwrap_err();
 
-        let (state, changed_at) = instance.status().await;
-        assert!(matches!(state.as_ref(), CoreState::Running));
-        assert_eq!(changed_at, 42);
-
-        instance.start().await.unwrap();
-        instance.recover().await.unwrap();
-        instance.stop().await.unwrap();
-
-        assert_eq!(
-            host.calls.lock().as_slice(),
-            ["status", "start", "recover", "status", "stop"]
+        assert!(
+            error
+                .to_string()
+                .contains("cannot construct a Service-hosted instance")
         );
     }
 }

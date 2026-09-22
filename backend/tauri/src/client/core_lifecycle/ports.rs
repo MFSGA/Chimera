@@ -92,6 +92,11 @@ pub struct RuntimeTransformDiagnostics {
     pub failure: Option<RuntimeTransformFailureDiagnostics>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeBuildOptions {
+    pub enable_builtin_enhanced: bool,
+}
+
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn reconcile(
@@ -101,6 +106,17 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
+
+    async fn reconcile_with_build_options(
+        &self,
+        clash: ClashConfig,
+        profiles: crate::config::profile::profiles::Profiles,
+        target_core: ClashCore,
+        run_type: RunType,
+        _options: RuntimeBuildOptions,
+    ) -> anyhow::Result<()> {
+        self.reconcile(clash, profiles, target_core, run_type).await
+    }
     async fn stop(&self) -> anyhow::Result<()>;
     async fn recover(&self) -> anyhow::Result<()> {
         anyhow::bail!("lower core recovery is not available")

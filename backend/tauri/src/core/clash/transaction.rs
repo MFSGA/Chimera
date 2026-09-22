@@ -4,6 +4,8 @@ use anyhow::{Result, anyhow};
 use serde_yaml::Mapping;
 use tokio::sync::Mutex;
 
+use clash_api::RuntimeProjection;
+
 use super::api::ClashRuntimeConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,8 +91,9 @@ fn values_for_patch(config: &ClashRuntimeConfig, patch: &Mapping) -> Result<Mapp
     Ok(selected)
 }
 
-fn patch_matches_config(config: &ClashRuntimeConfig, patch: &Mapping) -> Result<bool> {
-    Ok(values_for_patch(config, patch)? == *patch)
+fn projection_for_mapping(patch: &Mapping) -> Result<RuntimeProjection> {
+    RuntimeProjection::from_serializable(patch)
+        .map_err(|error| anyhow!("failed to build runtime patch projection: {error}"))
 }
 
 async fn rollback_after_failure<R, RFut, P, PFut>(
@@ -134,7 +137,18 @@ where
         }
     };
 
-    match patch_matches_config(&restored, &rollback) {
+    let projection = match projection_for_mapping(&rollback) {
+        Ok(projection) => projection,
+        Err(error) => {
+            return TransactionOutcome::RollbackFailed {
+                primary_error,
+                rollback_error: format!(
+                    "rollback verification could not build a projection: {error}"
+                ),
+            };
+        }
+    };
+    match projection.verify(&restored) {
         Ok(true) => TransactionOutcome::RolledBack { primary_error },
         Ok(false) => TransactionOutcome::RollbackFailed {
             primary_error,
@@ -172,6 +186,15 @@ where
         return TransactionOutcome::Committed;
     }
 
+    let projection = match projection_for_mapping(&requested) {
+        Ok(projection) => projection,
+        Err(error) => {
+            return TransactionOutcome::Rejected {
+                primary_error: error.to_string(),
+            };
+        }
+    };
+
     let previous = match read_core().await {
         Ok(previous) => previous,
         Err(error) => {
@@ -206,7 +229,7 @@ where
         }
     };
 
-    match patch_matches_config(&current, &requested) {
+    match projection.verify(&current) {
         Ok(true) => {}
         Ok(false) => {
             return rollback_after_failure(
@@ -224,7 +247,7 @@ where
                 &mut patch_core,
                 &previous,
                 &requested,
-                error,
+                anyhow!("runtime patch verification failed: {error}"),
             )
             .await;
         }

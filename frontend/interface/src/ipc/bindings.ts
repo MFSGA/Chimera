@@ -227,6 +227,8 @@ export const commands = {
         phase: OperationPhase;
         output: OperationOutput_Serialize | null;
         error: string | null;
+        error_kind: string | null;
+        retryable: boolean;
       } | null,
       string
     >(__TAURI_INVOKE('get_lower_core_operation', { id })),
@@ -676,19 +678,6 @@ export type AgentTunSnapshot = {
 export type AgentUnsupportedIntentReason =
   'empty_input' | 'input_too_long' | 'no_matching_intent';
 
-export type AppliedRuntimeIdentity =
-  AppliedRuntimeIdentity_Serialize | AppliedRuntimeIdentity_Deserialize;
-
-export type AppliedRuntimeIdentity_Deserialize = {
-  revision: number;
-  core: ClashCore_Deserialize;
-};
-
-export type AppliedRuntimeIdentity_Serialize = {
-  revision: number;
-  core: ClashCore_Serialize;
-};
-
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
 export type BuildInfo = {
@@ -764,7 +753,12 @@ export type ClashInfo = {
   secret: string | null;
 };
 
-/**  Runtime state returned by the running core's `GET /configs` endpoint. */
+/**
+ *  Typed subset of Mihomo's running `GET /configs` response used by Chimera.
+ *
+ *  Fields are optional/defaulted so older or forked controllers can omit
+ *  capabilities without making read-back verification fail to deserialize.
+ */
 export type ClashRuntimeConfig = {
   port: number | null;
   mode: string | null;
@@ -878,6 +872,16 @@ export type ConfigRevisionInfo = {
   effective_hash: string;
 };
 
+export type CoreHealthInfo = {
+  state: CoreHealthState;
+  changed_at: number;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_success_at: number | null;
+};
+
+export type CoreHealthState = 'Starting' | 'Healthy' | 'Unhealthy';
+
 export type CoreInfos = CoreInfos_Serialize | CoreInfos_Deserialize;
 
 export type CoreInfos_Deserialize = {
@@ -885,6 +889,7 @@ export type CoreInfos_Deserialize = {
   state: CoreState;
   state_changed_at: number;
   config_path: string | null;
+  health?: CoreHealthInfo | null;
   revision?: ConfigRevisionInfo | null;
 };
 
@@ -893,6 +898,7 @@ export type CoreInfos_Serialize = {
   state: CoreState;
   state_changed_at: number;
   config_path: string | null;
+  health?: CoreHealthInfo | null;
   revision?: ConfigRevisionInfo | null;
 };
 
@@ -1288,6 +1294,8 @@ export type OperationInfo_Deserialize = {
   phase: OperationPhase;
   output: OperationOutput_Deserialize | null;
   error: string | null;
+  error_kind: string | null;
+  retryable: boolean;
 };
 
 export type OperationInfo_Serialize = {
@@ -1295,30 +1303,18 @@ export type OperationInfo_Serialize = {
   phase: OperationPhase;
   output: OperationOutput_Serialize | null;
   error: string | null;
+  error_kind: string | null;
+  retryable: boolean;
 };
 
 export type OperationOutput =
   OperationOutput_Serialize | OperationOutput_Deserialize;
 
 export type OperationOutput_Deserialize =
-  | ({ reconciled: AppliedRuntimeIdentity_Deserialize } & {
-      core_changed?: never;
-    })
-  | 'stopped'
-  | 'recovered'
-  | ({ core_changed: AppliedRuntimeIdentity_Deserialize } & {
-      reconciled?: never;
-    });
+  { reconciled: ReconcileOutcomeInfo_Deserialize } | 'stopped' | 'recovered';
 
 export type OperationOutput_Serialize =
-  | ({ reconciled: AppliedRuntimeIdentity_Serialize } & {
-      core_changed?: never;
-    })
-  | 'stopped'
-  | 'recovered'
-  | ({ core_changed: AppliedRuntimeIdentity_Serialize } & {
-      reconciled?: never;
-    });
+  { reconciled: ReconcileOutcomeInfo_Serialize } | 'stopped' | 'recovered';
 
 export type OperationPhase = 'running' | 'succeeded' | 'failed' | 'uncertain';
 
@@ -1637,6 +1633,38 @@ export type ProxyItem_Serialize = {
   udp: boolean;
   icon?: string | null;
 };
+
+export type ReconcileOutcomeInfo =
+  ReconcileOutcomeInfo_Serialize | ReconcileOutcomeInfo_Deserialize;
+
+export type ReconcileOutcomeInfo_Deserialize = {
+  outcome: ReconcileOutcomeKind;
+  /**  The revision the core is actually running after the transaction. */
+  revision: ConfigRevisionInfo;
+  /**  A non-fatal durability/degradation warning survived by the transaction. */
+  warning?: string | null;
+  /**  Why the desired runtime failed when the transaction rolled back. */
+  failed_apply?: string | null;
+};
+
+export type ReconcileOutcomeInfo_Serialize = {
+  outcome: ReconcileOutcomeKind;
+  /**  The revision the core is actually running after the transaction. */
+  revision: ConfigRevisionInfo;
+  /**  A non-fatal durability/degradation warning survived by the transaction. */
+  warning?: string | null;
+  /**  Why the desired runtime failed when the transaction rolled back. */
+  failed_apply?: string | null;
+};
+
+export type ReconcileOutcomeKind =
+  | 'started'
+  | 'noop'
+  | 'patched'
+  | 'reloaded'
+  | 'restarted'
+  | 'switched'
+  | 'rolled_back';
 
 export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
 

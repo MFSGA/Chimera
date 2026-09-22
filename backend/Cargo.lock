@@ -1018,6 +1018,7 @@ dependencies = [
  "chimera-macro",
  "chimera_utils",
  "chrono",
+ "clash-api",
  "convert_case",
  "dashmap",
  "deelevate",
@@ -1278,6 +1279,25 @@ dependencies = [
  "glob",
  "libc",
  "libloading 0.8.9",
+]
+
+[[package]]
+name = "clash-api"
+version = "0.2.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "interprocess",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "specta",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -3463,9 +3483,9 @@ dependencies = [
 
 [[package]]
 name = "interprocess"
-version = "2.4.2"
+version = "2.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "069323743400cb7ab06a8fe5c1ed911d36b6919ec531661d034c89083629595b"
+checksum = "6cb02ffbf25e8ef0f4a95bff054eef75f6d1bf16919474cf2caa63b21997478a"
 dependencies = [
  "doctest-file",
  "futures-core",

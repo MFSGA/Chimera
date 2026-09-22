@@ -47,22 +47,37 @@ impl PortsFingerprint {
 /// The executor receives concrete bindings and never performs port probing. A
 /// later config change only re-probes the strategy fields that changed, so a
 /// running core's existing listeners are not mistaken for collisions.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PreparedPortBindings {
+    fingerprint: PortsFingerprint,
+    bindings: ResolvedPortBindings,
+}
+
+impl PreparedPortBindings {
+    pub(crate) fn bindings(&self) -> &ResolvedPortBindings {
+        &self.bindings
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct SessionPortResolver {
     cached: Mutex<Option<(PortsFingerprint, ResolvedPortBindings)>>,
 }
 
 impl SessionPortResolver {
-    pub(crate) fn resolve(&self, clash: &ClashConfig) -> Result<ResolvedPortBindings> {
+    pub(crate) fn prepare(&self, clash: &ClashConfig) -> Result<PreparedPortBindings> {
         let fingerprint = PortsFingerprint::of(clash);
-        let mut cached = self
+        let cached = self
             .cached
             .lock()
             .expect("port resolver cache should not poison");
         if let Some((previous, ports)) = cached.as_ref()
             && *previous == fingerprint
         {
-            return Ok(ports.clone());
+            return Ok(PreparedPortBindings {
+                fingerprint,
+                bindings: ports.clone(),
+            });
         }
 
         let previous = cached.clone();
@@ -146,10 +161,21 @@ impl SessionPortResolver {
             socks_port,
             external_controller,
         };
-        *cached = Some((fingerprint, ports.clone()));
-        Ok(ports)
+        Ok(PreparedPortBindings {
+            fingerprint,
+            bindings: ports,
+        })
     }
 
+    pub(crate) fn commit(&self, prepared: PreparedPortBindings) {
+        *self
+            .cached
+            .lock()
+            .expect("port resolver cache should not poison") =
+            Some((prepared.fingerprint, prepared.bindings));
+    }
+
+    #[cfg(test)]
     pub(crate) fn cached_ports(&self) -> Option<ResolvedPortBindings> {
         self.cached
             .lock()
@@ -236,7 +262,8 @@ mod tests {
         clash.http_port = None;
         clash.external_controller.port = fixed(48233);
 
-        let ports = resolver.resolve(&clash).unwrap();
+        let prepared = resolver.prepare(&clash).unwrap();
+        let ports = prepared.bindings().clone();
         assert_eq!(ports.mixed_port, 48231);
         assert_eq!(ports.socks_port, Some(48232));
         assert_eq!(ports.port, None);
@@ -244,6 +271,8 @@ mod tests {
             ports.external_controller.as_deref(),
             Some("127.0.0.1:48233")
         );
+        assert_eq!(resolver.cached_ports(), None);
+        resolver.commit(prepared);
         assert_eq!(resolver.cached_ports(), Some(ports));
     }
 
@@ -256,19 +285,23 @@ mod tests {
             start_port: 0,
         };
 
-        let first = resolver.resolve(&clash).unwrap();
-        let second = resolver.resolve(&clash).unwrap();
+        let first = resolver.prepare(&clash).unwrap();
+        let first_ports = first.bindings().clone();
+        resolver.commit(first);
+        let second = resolver.prepare(&clash).unwrap();
         assert_eq!(
-            first, second,
-            "same fingerprint must reuse the session pick"
+            first_ports,
+            *second.bindings(),
+            "same committed fingerprint must reuse the session pick"
         );
 
         clash.socks_port = Some(fixed(48234));
-        let third = resolver.resolve(&clash).unwrap();
-        assert_eq!(third.socks_port, Some(48234));
+        let third = resolver.prepare(&clash).unwrap();
+        assert_eq!(third.bindings().socks_port, Some(48234));
         assert_eq!(
-            third.mixed_port, first.mixed_port,
-            "unchanged mixed strategy must keep the session pick"
+            third.bindings().mixed_port,
+            first_ports.mixed_port,
+            "unchanged mixed strategy must keep the committed session pick"
         );
     }
 
@@ -284,16 +317,17 @@ mod tests {
         let resolver = SessionPortResolver::default();
         let mut clash = ClashConfig::default();
         clash.mixed_port = fixed(mixed);
-        let first = resolver.resolve(&clash).unwrap();
-        assert_eq!(first.mixed_port, mixed);
+        let first = resolver.prepare(&clash).unwrap();
+        assert_eq!(first.bindings().mixed_port, mixed);
+        resolver.commit(first);
 
         let _core = TcpListener::bind(("127.0.0.1", mixed)).unwrap();
         clash.socks_port = Some(fixed(socks));
         let second = resolver
-            .resolve(&clash)
+            .prepare(&clash)
             .expect("unchanged mixed port must not be re-probed");
-        assert_eq!(second.mixed_port, mixed);
-        assert_eq!(second.socks_port, Some(socks));
+        assert_eq!(second.bindings().mixed_port, mixed);
+        assert_eq!(second.bindings().socks_port, Some(socks));
     }
 
     #[test]
@@ -305,19 +339,20 @@ mod tests {
         let resolver = SessionPortResolver::default();
         let mut clash = ClashConfig::default();
         clash.external_controller.port = fixed(external);
-        let first = resolver.resolve(&clash).unwrap();
+        let first = resolver.prepare(&clash).unwrap();
         assert_eq!(
-            first.external_controller.as_deref(),
+            first.bindings().external_controller.as_deref(),
             Some(format!("127.0.0.1:{external}").as_str())
         );
+        resolver.commit(first);
 
         let _core = TcpListener::bind(("127.0.0.1", external)).unwrap();
         clash.external_controller.host = "0.0.0.0".parse().unwrap();
         let second = resolver
-            .resolve(&clash)
+            .prepare(&clash)
             .expect("host-only change must not re-probe the external port");
         assert_eq!(
-            second.external_controller.as_deref(),
+            second.bindings().external_controller.as_deref(),
             Some(format!("0.0.0.0:{external}").as_str())
         );
     }
@@ -330,7 +365,8 @@ mod tests {
         let mut clash = ClashConfig::default();
         clash.mixed_port = PortStrategy::new_allow_fallback(taken);
 
-        let ports = resolver.resolve(&clash).unwrap();
-        assert_ne!(ports.mixed_port, taken);
+        let prepared = resolver.prepare(&clash).unwrap();
+        assert_ne!(prepared.bindings().mixed_port, taken);
+        assert!(resolver.cached_ports().is_none());
     }
 }

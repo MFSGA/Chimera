@@ -300,6 +300,7 @@ mod tests {
                 state: CoreState::Stopped(None),
                 state_changed_at: 7,
                 run_type: RunType::Normal,
+                health: None,
                 applied: None,
             })
         }

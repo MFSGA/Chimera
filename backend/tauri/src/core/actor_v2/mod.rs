@@ -9,6 +9,7 @@
 
 pub mod endpoint;
 pub mod facade;
+pub mod intent;
 pub mod service_actor;
 
 pub(crate) use endpoint::CoreStatusSnapshot;

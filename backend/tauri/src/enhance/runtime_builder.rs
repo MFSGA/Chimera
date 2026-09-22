@@ -19,10 +19,7 @@ use chimera_config::{
 };
 
 use crate::{
-    config::{
-        chimera::ClashCore as LegacyClashCore, core::Config,
-        profile::ref_adapter::to_runtime_profiles,
-    },
+    config::{chimera::ClashCore as LegacyClashCore, profile::ref_adapter::to_runtime_profiles},
     enhance::{
         EnhanceScriptRunner, FsProfileContentSource,
         artifact_bridge::artifact_to_legacy_output_with_inspection,
@@ -174,6 +171,7 @@ pub(crate) async fn build_from_legacy_with_inspection(
     profiles: &crate::config::profile::profiles::Profiles,
     core: LegacyClashCore,
     resolved_ports: ResolvedPortBindings,
+    enable_builtin_enhanced: bool,
 ) -> Result<(
     serde_yaml::Mapping,
     Vec<String>,
@@ -183,10 +181,7 @@ pub(crate) async fn build_from_legacy_with_inspection(
     let profiles = Arc::new(to_runtime_profiles(profiles)?);
     let mut app = ChimeraAppConfig::default();
     app.core = map_core(core);
-    app.enable_builtin_enhanced = Config::verge()
-        .latest()
-        .enable_builtin_enhanced
-        .unwrap_or(true);
+    app.enable_builtin_enhanced = enable_builtin_enhanced;
 
     let input = RuntimeBuildInput {
         profiles: profiles.clone(),

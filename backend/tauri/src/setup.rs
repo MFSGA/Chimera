@@ -31,7 +31,9 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     app.manage(tokio::sync::RwLock::new(
         crate::core::updater::UpdaterManager::new(),
     ));
-    let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local());
+    let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local(
+        chimera_ipc::client::shortcuts::Client::new(chimera_ipc::SERVICE_PLACEHOLDER),
+    ));
     let profile_files = Arc::new(LegacyProfileFsPort);
     let profiles = Arc::new(
         tauri::async_runtime::block_on(ProfilesClient::spawn(profile_files.clone()))
