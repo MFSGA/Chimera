@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
   resolveRuntimeDirectory,
 } from './runtime-path.js';
 import { e2eSuites } from './spec-suites.js';
+import { assertSystemLifecyclePreflight } from './system-lifecycle-preflight.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const selectedSuiteIndex = process.argv.indexOf('--suite');
@@ -28,6 +30,72 @@ const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
 const appBinaryPath =
   process.env.CHIMERA_E2E_BINARY ??
   path.resolve(configDirectory, '../backend/target/e2e/debug', binaryName);
+const systemLifecycleSpec = 'windows-service-tun-lifecycle.e2e.ts';
+const systemLifecycleSelected =
+  selectedSuite === 'system' ||
+  selectedSuite === 'all' ||
+  process.argv.some((argument) => argument.includes(systemLifecycleSpec));
+
+function assertSafeSystemLifecycleHost(): void {
+  if (!systemLifecycleSelected) return;
+
+  const serviceBinary =
+    process.env.CHIMERA_E2E_SERVICE_BINARY ??
+    path.join(path.dirname(appBinaryPath), 'chimera-service.exe');
+  if (!fs.existsSync(serviceBinary)) {
+    throw new Error('Current E2E Service binary is missing: ' + serviceBinary);
+  }
+
+  let elevated = false;
+  if (process.platform === 'win32') {
+    try {
+      execFileSync(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          [
+            '$identity=[Security.Principal.WindowsIdentity]::GetCurrent()',
+            '$principal=New-Object Security.Principal.WindowsPrincipal($identity)',
+            'if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }',
+            'exit 1',
+          ].join('; '),
+        ],
+        { stdio: 'ignore', windowsHide: true },
+      );
+      elevated = true;
+    } catch {
+      elevated = false;
+    }
+  }
+
+  let serviceStatus = 'unknown';
+  try {
+    const output = execFileSync(serviceBinary, ['status', '--json'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    serviceStatus = String(
+      (JSON.parse(output) as { status?: unknown }).status ?? 'unknown',
+    );
+  } catch (error) {
+    throw new Error('Failed to read Chimera Service preflight status.', {
+      cause: error,
+    });
+  }
+
+  assertSystemLifecyclePreflight({
+    platform: process.platform,
+    optedIn: process.env.CHIMERA_E2E_SYSTEM_LIFECYCLE === '1',
+    elevated,
+    serviceStatus,
+  });
+}
+
+assertSafeSystemLifecycleHost();
+
 const runtimeRootDirectory = path.resolve(configDirectory, '.tmp/runtime');
 const hostProxySnapshot =
   process.env.CHIMERA_E2E_SKIP_PROXY_RESTORE === '1'

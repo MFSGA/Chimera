@@ -157,7 +157,7 @@ MUST NOT 保存真实订阅凭据、完整认证头或不相关宿主环境信�
 
 每个新 spec MUST 恰好归属一个 `baseE2eSuites` 分组；组合套件由其派生，运行 `spec-suites.test.ts` 验证遗漏/重复。`critical`、`hermetic` 和 `all` 的含义以[实际定义](../../tauri-e2e/spec-suites.ts)为准。
 
-当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：匹配路径和分支的 PR 跑 critical，push 跑 smoke，每日跑 hermetic；均在 Windows。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
+当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：匹配路径和分支的 PR 跑 critical，push 跑 smoke，每日跑 hermetic；均在 Windows。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。常规 [CI](../../.github/workflows/ci.yaml) 的 Ubuntu lint job 另外运行 core endpoint parity Rust 回归：覆盖 Local/Service endpoint 合同、Service reconcile config digest + revision CAS、daemon status revision authority，以及 daemon 侧 stale-CAS / operation-id fail-closed；它不替代提升权限的 Windows Service/TUN 系统验收。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
 
 下列是审查所需证据，**不表示工作流已经自动执行所有项目**：
 
@@ -187,6 +187,8 @@ pnpm e2e:tauri:build
 # 把示例路径替换为本次目标；此命令不会自动重新构建应用。
 pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/ipv6-runtime-setting.e2e.ts
 pnpm --filter @chimera/tauri-e2e test:runtime
+# 仅限提升权限、初始未安装 Chimera Service 的专用 Windows runner/VM。
+$env:CHIMERA_E2E_SYSTEM_LIFECYCLE='1'; pnpm --filter @chimera/tauri-e2e test:system
 ```
 
 MUST 记录测试二进制的路径、构建来源和时间/哈希，确保对应本次产品代码。若使用 `CHIMERA_E2E_BINARY` 覆盖路径，也必须验证对应的 e2e 特性和前端产物。不要拿旧二进制通过当作当前代码通过。工具或平台缺失时如实记录未运行及原因；静态检查通过不得写成桌面测试通过。

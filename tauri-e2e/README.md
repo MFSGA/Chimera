@@ -24,16 +24,17 @@ pnpm --filter @chimera/tauri-e2e test:smoke
 | `test:runtime`, `test:profiles`, `test:settings`, `test:main` | The named group in `spec-suites.ts`                                                |
 | `test:agent`                                                  | Agent UI/orchestration with the default stale-proxy fixture                        |
 | `test:network`, `test:lan`                                    | Allow LAN; requires the configured external test client                            |
-| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network and upgrade |
-| `test:all`                                                    | All base groups; includes network prerequisites and the conditional upgrade spec   |
+| `test:system`                                                 | Real Windows Service + TUN lifecycle; elevated dedicated runner/VM only             |
+| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network/system/upgrade |
+| `test:all`                                                    | All base groups; includes network, elevated system, and conditional upgrade prerequisites |
 | `test:upgrade:v0.22.3`                                        | Dedicated two-phase upgrade runner; requires its old/new binary setup              |
-| `test:unit`                                                   | Only `process-cleanup.test.ts`, `runtime-path.test.ts`, and `spec-suites.test.ts`  |
+| `test:unit`                                                   | Explicit harness/unit list, including suite partitioning and system preflight safety |
 
 Inspect [spec-suites.ts](spec-suites.ts) for the authoritative membership and [upgrade-v0223-v0230.ts](upgrade-v0223-v0230.ts) for upgrade prerequisites. The upgrade spec skips when `CHIMERA_E2E_UPGRADE_PHASE` is absent: a normal `test:all` result is not evidence that both upgrade phases ran. The unit command is an explicit list, not discovery of every `.test.ts` file.
 
 ## Current CI coverage
 
-[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network and the dedicated upgrade runner are not automatically exercised by those selections.
+[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network, elevated system lifecycle, and the dedicated upgrade runner are not automatically exercised by those selections.
 
 Check the workflow and suite membership when adding tests. Register new desktop specs and provide executable unit-test entries; report which assertions actually ran. Build, typecheck, skipped tests, and unselected suites are not test passes.
 
@@ -45,6 +46,7 @@ Check the workflow and suite membership when adding tests. Register new desktop 
 - Each top-level spec starts and ends with the harness closing temporary non-app windows, focusing `legacy`, and restoring the legacy entry URL. Main specs use the shared main-window helper to reuse a rendered singleton, recover a stale blank main window when necessary, and enter their target route through SPA navigation. Persistent application/config state must still be restored explicitly by the owning test.
 - Each normal run creates a unique `tauri-e2e/.tmp/runtime` directory and passes isolated config/data paths to the application. An explicit `CHIMERA_E2E_RUNTIME_DIR` is retained by the harness for callers such as the upgrade runner.
 - The application still runs production service/core/system-proxy initialization paths. Isolated files do not isolate host networking. Use a dedicated runner or VM for host-affecting tests and remain within the authorized scope.
+- `test:system` is destructive by design. `wdio.conf.ts` runs its safety preflight before the Tauri application is launched and refuses to start unless `CHIMERA_E2E_SYSTEM_LIFECYCLE=1`, Windows is elevated, the current E2E Service binary exists, and Chimera Service is initially `not_installed`. The spec then installs/starts only the Service it owns, enables Service Mode + TUN through product IPC, runs the read-only Windows TUN verifier before and after a real Service restart, disables TUN, hands the core back to Local, and uninstalls the owned Service. Do not run it on a workstation with an existing Chimera Service.
 - On Windows, the harness captures host proxy settings and attempts to restore them in `onComplete`, unless explicitly disabled. A forced termination can prevent cleanup. Process cleanup currently matches the E2E binary directory, not a per-run PID set; do not run independent sessions sharing that directory concurrently.
 - Non-Windows host proxy restoration and process cleanup are not implemented by `process-cleanup.ts`. Do not infer cross-platform isolation or verification from the available binary-path branches.
 
