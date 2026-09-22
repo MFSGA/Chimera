@@ -23,6 +23,7 @@ concurrency:
 
 env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+  CHIMERA_RELEASE_CANDIDATE: ${{ (startsWith(github.ref_name, 'release/') || startsWith(github.ref_name, 'release-') || startsWith(github.head_ref, 'release/') || startsWith(github.head_ref, 'release-')) && '1' || '0' }}
 
 jobs:
   lint:
@@ -122,6 +123,8 @@ jobs:
       # TODO: preapre the js script file
       - name: Prepare sidecar and resources
         run: pnpm check
+        env:
+          CHIMERA_E2E_LOCAL_SERVICE: ${{ env.CHIMERA_RELEASE_CANDIDATE }}
       - name: Verify quality
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm verify:quality
@@ -264,6 +267,16 @@ jobs:
       # todo: prepare the js script file
       - name: Prepare sidecar and resources
         run: pnpm check
+        env:
+          CHIMERA_E2E_LOCAL_SERVICE: ${{ env.CHIMERA_RELEASE_CANDIDATE }}
+
+      - name: Install nightly Service toolchain for release candidate
+        if: env.CHIMERA_RELEASE_CANDIDATE == '1'
+        run: rustup toolchain install nightly --profile minimal --no-self-update
+
+      - name: Stage current Service candidate
+        if: env.CHIMERA_RELEASE_CANDIDATE == '1'
+        run: pnpm e2e:service:stage
 
       - name: Prepare frontend
         run: pnpm -r build
