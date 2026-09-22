@@ -51,6 +51,11 @@ test('critical and hermetic suites have intentional coverage boundaries', () => 
     false,
     'LAN test must stay out of hermetic CI because it requires an external WSL/LAN client',
   );
+  assert.equal(
+    e2eSuites.hermetic.includes(baseE2eSuites.system[0]),
+    false,
+    'Windows Service/TUN lifecycle must stay out of hermetic CI because it mutates elevated host state',
+  );
   assert.deepEqual(
     [...e2eSuites.all].sort(),
     Object.values(baseE2eSuites).flat().sort(),

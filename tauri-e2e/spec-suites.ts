@@ -57,6 +57,7 @@ export const baseE2eSuites = {
     './specs/rules-main-proxy-icon.e2e.ts',
   ],
   network: ['./specs/allow-lan.e2e.ts'],
+  system: ['./specs/windows-service-tun-lifecycle.e2e.ts'],
   upgrade: ['./specs/upgrade-v0.22.3-to-v0.23.0.e2e.ts'],
 } as const;
 
@@ -86,6 +87,7 @@ export const e2eSuites = {
     baseE2eSuites.main,
     baseE2eSuites.agent,
     baseE2eSuites.network,
+    baseE2eSuites.system,
     baseE2eSuites.upgrade,
   ),
 } satisfies Record<string, readonly string[]>;

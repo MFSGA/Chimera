@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "pnpm run test:smoke",
-    "test:unit": "node --test ./agent-issue-guidance.test.ts ./clash-runtime.test.ts ./process-cleanup.test.ts ./privacy-safe-context.test.ts ./runtime-path.test.ts ./spec-suites.test.ts",
+    "test:unit": "node --test ./agent-issue-guidance.test.ts ./clash-runtime.test.ts ./process-cleanup.test.ts ./privacy-safe-context.test.ts ./runtime-path.test.ts ./spec-suites.test.ts ./system-lifecycle-preflight.test.ts",
     "test:upgrade:v0.22.3": "node ./upgrade-v0223-v0230.ts",
     "test:desktop": "pnpm run test:smoke",
     "test:smoke": "wdio run ./wdio.conf.ts --suite smoke",
@@ -16,6 +16,7 @@
     "test:agent": "wdio run ./wdio.conf.ts --suite agent",
     "test:main": "wdio run ./wdio.conf.ts --suite main",
     "test:network": "wdio run ./wdio.conf.ts --suite network",
+    "test:system": "wdio run ./wdio.conf.ts --suite system",
     "test:hermetic": "wdio run ./wdio.conf.ts --suite hermetic",
     "test:all": "wdio run ./wdio.conf.ts --suite all",
     "test:lan": "pnpm run test:network",
