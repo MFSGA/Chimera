@@ -35,6 +35,7 @@ export const getChimeraServiceInfo = async ({
   const urlExt = isWin ? 'zip' : 'tar.gz';
   const version = await getChimeraServiceVersion();
   const downloadURL = `https://github.com/${CHIMERA_SERVICE_REPO}/releases/download/${version}/${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
+  const checksumURL = `${downloadURL}.sha256`;
   const exeFile = `${CHIMERA_SERVICE_NAME}${isWin ? '.exe' : ''}`;
   const tmpFile = `${CHIMERA_SERVICE_NAME}-${sidecarHost}.${urlExt}`;
   const targetFile = `${CHIMERA_SERVICE_NAME}-${sidecarHost}${isWin ? '.exe' : ''}`;
@@ -46,5 +47,6 @@ export const getChimeraServiceInfo = async ({
     exeFile,
     tmpFile,
     downloadURL,
+    checksumURL,
   };
 };
