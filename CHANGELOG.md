@@ -1,3 +1,41 @@
+## [0.25.0] - 2026-09-22 02:48:00
+
+### ✨ Features
+
+- **subscription:** Add direct subscription import with shared bounded network probing by @MFSGA
+
+- **legacy:** Add best-effort subscription onboarding by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **e2e:** Follow the effective Clash controller while the runtime is starting by @MFSGA
+
+- **agent:** Remove stale Service timeout message mapping by @MFSGA
+
+- **release:** Refresh version-pinned Chimera Service sidecars and verify release SHA-256 before packaging by @MFSGA
+
+### 🔨 Refactor
+
+- **core:** Move lifecycle ownership behind the actor/facade boundary with typed durable operations, applied-revision guards, rollback, recovery, and explicit host routing by @MFSGA
+
+- **profile:** Move profile persistence, refresh, import, and runtime snapshots behind the versioned profiles actor by @MFSGA
+
+- **runtime:** Unify the Chimera Client runtime/TUN pipeline and retire legacy lifecycle compatibility paths by @MFSGA
+
+- **service:** Align the Service runtime with transactional apply, health verification, durable runtime-store commits, identity-verified orphan recovery, and fail-closed quarantine semantics by @MFSGA
+
+### ✅ Testing
+
+- **e2e:** Add a guarded Windows Service + TUN lifecycle suite that verifies handoff, TUN convergence, Service restart recovery, cleanup, and ownership boundaries by @MFSGA
+
+### 👷 CI
+
+- **release:** Stage Chimera Service releases as candidates before promotion, require complete signed assets, and block Chimera release builds until the pinned Service release is stable by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.24.0...v0.25.0
+
 ## [0.24.0] - 2026-09-16 10:06:41
 
 ### ⚡ Performance Improvements
