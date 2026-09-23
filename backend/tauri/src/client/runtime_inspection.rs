@@ -18,8 +18,8 @@ pub(crate) struct RuntimeInspectionData {
 }
 
 impl RuntimeInspectionData {
-    /// Compatibility root used by legacy/fallback builds that do not expose
-    /// the ref executor graph yet.
+    /// Empty root used by explicit compatibility constructors and tests that
+    /// do not carry a RuntimeExecutor graph.
     pub(crate) fn bare() -> Self {
         let config = ConfigValue::try_from(serde_json::json!({}))
             .expect("empty JSON object is a valid runtime config value");

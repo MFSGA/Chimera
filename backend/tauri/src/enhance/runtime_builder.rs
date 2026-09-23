@@ -169,24 +169,6 @@ impl RuntimeBuilder {
     }
 }
 
-/// Build the ref pipeline from the existing persisted Chimera state. The
-/// Chimera Client core remains on the legacy path until its custom TUN
-/// contract is represented in the shared executor.
-pub async fn build_from_legacy(
-    clash: &ClashConfig,
-    core: LegacyClashCore,
-) -> Result<(serde_yaml::Mapping, crate::enhance::PostProcessingOutput)> {
-    let client_info = Config::clash().latest().get_client_info();
-    let resolved_ports = ResolvedPortBindings {
-        mixed_port: client_info.port,
-        external_controller: Some(client_info.server),
-        ..ResolvedPortBindings::default()
-    };
-    build_from_legacy_with_inspection(clash, core, resolved_ports)
-        .await
-        .map(|(mapping, _exists_keys, output, _inspection)| (mapping, output))
-}
-
 pub(crate) async fn build_from_legacy_with_inspection(
     clash: &ClashConfig,
     core: LegacyClashCore,

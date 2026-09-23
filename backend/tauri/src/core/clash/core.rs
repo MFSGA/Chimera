@@ -753,9 +753,7 @@ impl CoreManager {
                 config,
                 exists_keys,
                 postprocessing_output: transform_output,
-                inspection: Arc::new(inspection.unwrap_or_else(
-                    crate::client::runtime_inspection::RuntimeInspectionData::bare,
-                )),
+                inspection: Arc::new(inspection),
             },
         ));
         self.lifecycle

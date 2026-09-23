@@ -18,7 +18,7 @@ pub(crate) struct RuntimeInputOutput {
     pub(crate) config: Mapping,
     pub(crate) exists_keys: Vec<String>,
     pub(crate) postprocessing_output: PostProcessingOutput,
-    pub(crate) inspection: Option<crate::client::runtime_inspection::RuntimeInspectionData>,
+    pub(crate) inspection: crate::client::runtime_inspection::RuntimeInspectionData,
 }
 
 /// whole config
@@ -79,23 +79,10 @@ impl Config {
         core: crate::config::chimera::ClashCore,
         resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
     ) -> Result<RuntimeInputOutput> {
-        // All supported cores use the ref-aligned executor. Keep the legacy
-        // enhancer as an observable compatibility fallback while profile and
-        // script behavior continues to converge.
+        // All supported cores use one ref-aligned runtime executor. Surface
+        // build failures instead of silently switching to a second pipeline.
         let (config, exists_keys, postprocessing_output, inspection) =
-            match enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await {
-                Ok((config, exists_keys, output, inspection)) => {
-                    (config, exists_keys, output, Some(inspection))
-                }
-                Err(error) => {
-                    log::warn!(
-                        target: "app",
-                        "ref runtime build failed for {core}; falling back to legacy enhance: {error:#}"
-                    );
-                    let (config, exists_keys, output) = enhance::enhance(clash, core).await?;
-                    (config, exists_keys, output, None)
-                }
-            };
+            enhance::build_from_legacy_with_inspection(clash, core, resolved_ports).await?;
 
         *Config::runtime().draft() = IRuntime {
             config: Some(config.clone()),
