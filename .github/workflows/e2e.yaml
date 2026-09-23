@@ -89,6 +89,11 @@ jobs:
         with:
           run_install: false
 
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
         with:
