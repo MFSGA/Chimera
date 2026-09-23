@@ -1,3 +1,29 @@
+## [0.24.1] - 2026-09-23 11:08:19
+
+### ✅ Testing
+
+- **e2e:** Cover legacy subscription onboarding by @MFSGA
+
+### ✨ Features
+
+- **legacy:** Add best-effort subscription onboarding by @MFSGA
+
+- **subscription:** Add direct import and shared network probe by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **e2e:** Follow effective clash controller during startup by @MFSGA
+
+- Sync prepare check with upstream by @MFSGA
+
+### 📚 Documentation
+
+- **alignment:** Record subscription onboarding by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.24.0...v0.24.1
+
 ## [0.24.0] - 2026-09-16 10:06:41
 
 ### ⚡ Performance Improvements
