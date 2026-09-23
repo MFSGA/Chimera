@@ -84,8 +84,8 @@ pub struct TunParams {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TunFlavor {
     ClashRs,
-    /// Chimera Client keeps a custom TUN contract while sharing the runtime
-    /// pipeline. Platform-specific details remain in the Tauri adapter.
+    /// Chimera Client's product-specific TUN contract, retained as an
+    /// extension to the reference flavor set.
     ChimeraClient,
     Standard {
         stack: TunStack,

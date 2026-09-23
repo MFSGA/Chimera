@@ -44,8 +44,8 @@
 - 差异及必要性：标准 Clash 核心（Premium、Rust、Mihomo 及 Alpha）现在
   通过共享 `RuntimePipelineInputs` 和 `execute` 完成 Profile 合成、全局
   变换、内置脚本、字段白名单、Guard、TUN 默认值和产物日志；旧的
-  `PostProcessingOutput` 由适配器生成。Chimera Client 仍保留旧 Enhance
-  路径，因为其自定义 TUN 合同尚未进入共享 executor，避免回归。
+  `PostProcessingOutput` 由适配器生成。该阶段 Chimera Client 仍保留旧 Enhance
+  路径；自定义 TUN 合同后续迁入共享 executor 的进展见 DIFF-013。
 - 失败回退：若 legacy Profile 转换或 ref executor 构建失败，入口会记录
   warning 并回退到旧 Enhance，保证已有用户配置仍可启动；该回退是可观测的
   临时兼容边界，不代表两条实现长期并存。
@@ -61,10 +61,9 @@
   backend/Cargo.toml -p chimera enhance -- --test-threads=1`，39 passed；
   `cargo test --manifest-path backend/Cargo.toml -p chimera-config --
   --test-threads=1`，135 passed；workspace `cargo check` 通过。
-- 收敛、移除或重新评估条件：为 Chimera Client 实现共享 executor 所需的
-  自定义 TUN/运行时合同，并在主界面、legacy UI 和 agent 的真实启动路径
-  完成验证后，移除旧 Enhance 分支及 legacy profile adapter。当前仍是部分
-  迁移，不能宣称已经完全等同 ref。
+- 收敛、移除或重新评估条件：DIFF-013 已把 Chimera Client 的自定义 TUN 合同
+  纳入共享 executor；待 legacy profile/script adapter 收敛、真实核心路径验证后，
+  再移除旧 Enhance fallback。当前仍是部分迁移，不能宣称已经完全等同 ref。
 
 ## DIFF-003：应用/Clash 共享配置合同补齐（第二阶段）
 
@@ -107,9 +106,10 @@
   `RuntimeSnapshot`，通过两个只读 IPC 投影节点摘要、YAML、父节点 diff 和
   日志；生成的 TypeScript binding 已按既有 Specta 流程更新。该能力只读取
   已发布快照，不修改代理、TUN、系统设置或用户配置。
-- 兼容边界：Chimera Client 和 ref executor 构建失败的 legacy/fallback 路径
-  继续使用安全的 `BareRoot` 空图，因此这些路径暂时只能显示最终产物的根节点，
-  不会伪造未生成的中间节点；待其迁移到共享 executor 后再移除该兼容值。
+- 兼容边界：executor 构建失败时走 legacy fallback，并继续使用安全的 `BareRoot`
+  空图；这包括 Chimera Client 仅在 fallback 发生时的路径。Client 成功走共享
+  executor 时现在也有真实图（见 DIFF-013）。fallback 暂时只能显示最终产物的根节点，
+  不会伪造未生成的中间节点。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：新增 IPC/API 可供主界面、
   legacy UI 或 agent 复用；本批未改变既有 UI 流程、持久化格式、核心启动和
   系统代理行为。
@@ -118,10 +118,9 @@
   -- --test-threads=1`，4 passed；`cargo test --manifest-path
   backend/tauri/Cargo.toml typescript_bindings_are_fresh --
   --test-threads=1` 通过；`pnpm typecheck` 通过。
-- 收敛、移除或重新评估条件：将 Chimera Client、legacy/fallback 构建接入
-  共享 executor 并完成真实 runtime/E2E 验证后，删除 `RuntimeInspectionData::bare`
-  兼容分支，补充端到端快照更新/过期检查；当前仍是部分迁移，不能宣称已完全
-  等同 ref。
+- 收敛、移除或重新评估条件：完成 legacy/fallback 构建的共享 executor 接入并完成
+  真实 runtime/E2E 验证后，删除 `RuntimeInspectionData::bare` 兼容分支，补充端到端
+  快照更新/过期检查；当前仍是部分迁移，不能宣称已完全等同 ref。
 
 ## DIFF-005：CoreLifecycle 目录边界（第四阶段）
 
@@ -276,9 +275,9 @@
   冲突。`service/profile_file::SelfProxyPortSource` 在 Chimera 尚无对应 service
   模块，因此暂未复制该 trait 实现，保留 `cached_ports` 作为等价只读边界。
 - 兼容边界：旧的 `generate_runtime_output_with` 与公开
-  `build_from_legacy` 仍从现有 legacy client info 构造 fallback bindings；
-  `ChimeraClient` 专用 Enhance 路径保持原有自定义 TUN 合同，未改变持久化格式、
-  legacy UI、agent 或 E2E 入口。
+  `build_from_legacy` 仍从现有 legacy client info 构造 fallback bindings；该阶段
+  `ChimeraClient` 专用 Enhance 路径保持原有自定义 TUN 合同，后续已由 DIFF-013
+  迁入共享 executor，持久化格式、legacy UI、agent 或 E2E 入口未改变。
 - 影响的主界面、legacy UI、agent、数据、内核和平台：标准核心启动、重启和
   runtime 快照现在共享同一组具体端口；主界面、legacy UI 与 agent 继续通过同一
   application API 读取状态，系统代理和配置文件副作用保持不变。
@@ -352,3 +351,40 @@
   继承 legacy 默认选项。随后补充代理/TUN 状态回读、真实网络和恢复测试，再重新评估
   当前 3 次探测、3000ms 波动阈值及失败恢复语义。当前仍是功能可用但对齐未完成的
   部分迁移。
+
+## DIFF-013：Chimera Client TUN 合同迁入共享 RuntimeExecutor
+
+- ref commit：`1eb110f05d549b3e620ce25f6728c3f3342c9822`（本次本地 `ref/`；工作区干净。
+  对应 `builtin.rs` 和 `tests/builtin.rs` 与指南记录的
+  `f7dbce2997c633e484f54788035e770b3ee99773` 相同。）
+- ref 路径和符号：`backend/nyanpasu-config/src/runtime/executor/builtin.rs` 的
+  `apply_tun`、`apply_tun_dns` 及对应测试。ref 仅定义 `ClashRs` 和 `Standard`，
+  没有 Chimera Client 专用 flavor。
+- Chimera 路径和符号：`backend/chimera-config/src/runtime/executor/mod.rs` 的
+  `TunFlavor::ChimeraClient`、`runtime/executor/builtin.rs` 的 `apply_tun` 与
+  `apply_tun_dns`；`backend/tauri/src/config/core.rs` 的
+  `Config::generate_runtime_output_with_ports`；旧合同来源
+  `backend/tauri/src/enhance/tun.rs::use_tun`。
+- 类别：兼容扩展 / 临时迁移
+- 差异及必要性：将 Chimera Client 原有 TUN 字段
+  (`device-id`、`route-all`、`dns-hijack`、`so-mark`) 和 DNS 默认值迁入共享
+  executor。Client 不生成 `auto-route`、`fake-ip-range` 或空 `fallback`；仍只补齐
+  缺失字段，保留用户已有 TUN/DNS 值。ref 的标准核心与 Clash-RS 分支保持不变。
+- 共通业务入口及适配边界：所有核心先走同一 RuntimeExecutor；构建失败时仍记录
+  warning 并回退到旧 Enhance。该 fallback 是有观测的临时兼容边界，不是目标中的
+  第二套长期业务实现。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：共用 runtime 生成入口的
+  调用方现在获得同一生成路径；不改持久化格式。改变 Chimera Client 生成的 TUN/DNS
+  YAML。本批仅执行纯逻辑测试，没有触发真实 TUN、宿主路由、DNS 或网络副作用。
+- 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p chimera-config
+  -- --test-threads=1`（138 passed）；`cargo test --manifest-path
+  backend/Cargo.toml -p chimera enhance::runtime_builder::tests -- --test-threads=1`
+  （5 passed）；`cargo test --manifest-path backend/Cargo.toml -p chimera enhance::
+  -- --test-threads=1`（43 passed）；`cargo test --manifest-path backend/Cargo.toml -p chimera config::core
+  -- --test-threads=1`（1 passed）；`cargo test --manifest-path
+  backend/Cargo.toml -p chimera enhance::tun::tests -- --test-threads=1`（7 passed）；
+  `cargo fmt --manifest-path backend/Cargo.toml --all -- --check` 和 `git diff --check`
+  通过。Rust 输出中有既有 derive/unused/lifetime warnings。
+- 收敛、移除或重新评估条件：完成 legacy profile/script adapter 收敛并证明 fallback
+  不再需要后，再删除旧 Enhance fallback；Chimera Client 专用值作为产品扩展保留，
+  不因 ref 无该核心而移除。
