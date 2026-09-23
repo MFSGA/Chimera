@@ -113,7 +113,7 @@ pnpm generate:manifest
 Prepare core binary resources and run checks:
 
 ```bash
-pnpm check
+pnpm prepare:check
 ```
 
 Start the desktop application:

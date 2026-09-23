@@ -42,13 +42,13 @@ pub(super) fn get_download_path(core_type: CoreTypeMeta, artifact: &str) -> Stri
             format!("MetaCubeX/mihomo/releases/download/Prerelease-Alpha/{artifact}")
         }
         CoreTypeMeta::ClashRs(tag) => {
-            format!("Watfaq/clash-rs/releases/download/{tag}/{artifact}")
+            format!("ibigbug/clash-rs/releases/download/{tag}/{artifact}")
         }
         CoreTypeMeta::ChimeraClient(tag) => {
             format!("MFSGA/Chimera_Client/releases/download/{tag}/{artifact}")
         }
         CoreTypeMeta::ClashRsAlpha => {
-            format!("Watfaq/clash-rs/releases/download/latest/{artifact}")
+            format!("ibigbug/clash-rs/releases/download/latest/{artifact}")
         }
         CoreTypeMeta::ClashPremium(tag) => {
             format!("zhongfly/Clash-premium-backup/releases/download/{tag}/{artifact}")

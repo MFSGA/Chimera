@@ -63,7 +63,7 @@ pnpm generate:manifest
 Подготовить бинарные ресурсы ядер и выполнить проверку:
 
 ```bash
-pnpm check
+pnpm prepare:check
 ```
 
 Запустить настольное приложение:

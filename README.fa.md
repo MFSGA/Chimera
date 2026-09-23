@@ -63,7 +63,7 @@ pnpm generate:manifest
 آماده‌سازی فایل‌های دودویی هسته و اجرای بررسی‌ها:
 
 ```bash
-pnpm check
+pnpm prepare:check
 ```
 
 اجرای برنامه دسکتاپ:

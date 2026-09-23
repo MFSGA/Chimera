@@ -78,7 +78,7 @@ export const resolveMihomoAlpha = async (): LatestVersionResolver => {
 export const resolveClashRs = async (): LatestVersionResolver => {
   const latestRelease = await octokit.rest.repos.getLatestRelease(
     applyProxy({
-      owner: 'Watfaq',
+      owner: 'ibigbug',
       repo: 'clash-rs',
     }),
   );
@@ -139,15 +139,38 @@ export const resolveChimeraClient = async (): LatestVersionResolver => {
 };
 
 export const resolveClashRsAlpha = async (): LatestVersionResolver => {
-  const resp = await fetch(
-    'https://github.com/Watfaq/clash-rs/releases/download/latest/version.txt',
-    { dispatcher: getProxyAgent() },
-  );
+  const owner = 'ibigbug';
+  const repo = 'clash-rs';
+  const [ref, latestRelease] = await Promise.all([
+    octokit.rest.git.getRef(
+      applyProxy({
+        owner,
+        repo,
+        ref: 'tags/latest',
+      }),
+    ),
+    octokit.rest.repos.getLatestRelease(
+      applyProxy({
+        owner,
+        repo,
+      }),
+    ),
+  ]);
 
-  const alphaVersion = resp.ok
-    ? (await resp.text()).trim().split(' ').pop()!
-    : 'latest';
+  let commitSha = ref.data.object.sha;
+  if (ref.data.object.type === 'tag') {
+    const tag = await octokit.rest.git.getTag(
+      applyProxy({
+        owner,
+        repo,
+        tag_sha: commitSha,
+      }),
+    );
+    commitSha = tag.data.object.sha;
+  }
 
+  const baseVersion = latestRelease.data.tag_name.replace(/^v/, '');
+  const alphaVersion = `${baseVersion}-alpha+sha.${commitSha.substring(0, 7)}`;
   consola.debug(`clash-rs alpha latest release: ${alphaVersion}`);
 
   const archMapping: ArchMapping = {

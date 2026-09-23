@@ -50,7 +50,7 @@
 - During development, try to run with administrator/root privileges when possible (needed for TUN-related setup).
 - Install JS deps with `pnpm install`.
 - Rust toolchain is required for `backend/` (cargo, rustfmt, clippy).
-- Run `pnpm check`.
+- Run `pnpm prepare:check`.
 - Ensure required binary resources are available before development runs.
 
 ## Common commands

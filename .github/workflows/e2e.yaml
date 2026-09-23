@@ -121,7 +121,7 @@ jobs:
         run: pnpm --filter @chimera/tauri-e2e typecheck
 
       - name: Prepare sidecars and resources
-        run: pnpm check
+        run: pnpm prepare:check
 
       - name: Build Tauri E2E binary
         run: pnpm e2e:tauri:build
