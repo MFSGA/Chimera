@@ -207,6 +207,85 @@ fn tun_enabled_clash_rs_uses_device_branch_and_no_windows_filter() {
 }
 
 #[test]
+fn tun_enabled_chimera_client_retains_legacy_contract() {
+    let params = TunParams {
+        enable: true,
+        flavor: TunFlavor::ChimeraClient,
+        windows_fake_ip_filter: true,
+    };
+    let result = finalize(&value(json!({})), &params, false).to_json();
+
+    assert_eq!(result["tun"]["enable"], json!(true));
+    assert_eq!(result["tun"]["device-id"], json!("dev://utun1989"));
+    assert_eq!(result["tun"]["route-all"], json!(true));
+    assert_eq!(result["tun"]["dns-hijack"], json!(true));
+    assert_eq!(result["tun"]["so-mark"], json!(7777));
+    assert!(result["tun"].get("auto-route").is_none());
+
+    assert_eq!(result["dns"]["enable"], json!(true));
+    assert_eq!(result["dns"]["enhanced-mode"], json!("fake-ip"));
+    assert!(result["dns"].get("fake-ip-range").is_none());
+    assert!(result["dns"].get("fallback").is_none());
+    assert_eq!(
+        result["dns"]["nameserver"],
+        json!([
+            "https://dns.alidns.com/dns-query",
+            "114.114.114.114",
+            "223.5.5.5",
+            "8.8.8.8"
+        ])
+    );
+    assert_eq!(
+        result["dns"]["default-nameserver"],
+        json!(["114.114.114.114", "1.1.1.1", "8.8.8.8"])
+    );
+    assert_eq!(
+        result["dns"]["fake-ip-filter"],
+        json!([
+            "dns.msftncsi.com",
+            "www.msftncsi.com",
+            "www.msftconnecttest.com"
+        ])
+    );
+}
+
+#[test]
+fn tun_enabled_chimera_client_preserves_user_tun_and_dns_values() {
+    let params = TunParams {
+        enable: true,
+        flavor: TunFlavor::ChimeraClient,
+        windows_fake_ip_filter: true,
+    };
+    let result = finalize(
+        &value(json!({
+            "tun": {
+                "device-id": "custom-device",
+                "route-all": false,
+                "so-mark": 42
+            },
+            "dns": {
+                "enhanced-mode": "redir-host",
+                "nameserver": ["1.1.1.1"],
+                "default-nameserver": ["9.9.9.9"],
+                "fake-ip-range": "198.19.0.1/16"
+            }
+        })),
+        &params,
+        false,
+    )
+    .to_json();
+
+    assert_eq!(result["tun"]["device-id"], json!("custom-device"));
+    assert_eq!(result["tun"]["route-all"], json!(false));
+    assert_eq!(result["tun"]["so-mark"], json!(42));
+    assert_eq!(result["dns"]["enhanced-mode"], json!("redir-host"));
+    assert_eq!(result["dns"]["nameserver"], json!(["1.1.1.1"]));
+    assert_eq!(result["dns"]["default-nameserver"], json!(["9.9.9.9"]));
+    assert_eq!(result["dns"]["fake-ip-range"], json!("198.19.0.1/16"));
+    assert!(result["dns"].get("fallback").is_none());
+}
+
+#[test]
 fn finalize_applies_include_all_cache_sort_and_stage2_filter() {
     let config = value(json!({
         "custom-unknown": 1,

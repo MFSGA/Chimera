@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chimera_config::{
     application::ChimeraAppConfig,
     clash::config::{ClashConfig, tun_stack::TunStack},
@@ -115,6 +115,9 @@ pub fn derive_tun_flavor(
     if core == chimera_config::application::ClashCore::ClashRs {
         return TunFlavor::ClashRs;
     }
+    if core == chimera_config::application::ClashCore::ChimeraClient {
+        return TunFlavor::ChimeraClient;
+    }
     let stack = if core == chimera_config::application::ClashCore::ClashPremium
         && stack == TunStack::Mixed
     {
@@ -194,10 +197,6 @@ pub(crate) async fn build_from_legacy_with_inspection(
     crate::enhance::PostProcessingOutput,
     crate::client::runtime_inspection::RuntimeInspectionData,
 )> {
-    if core == LegacyClashCore::ChimeraClient {
-        bail!("Chimera Client runtime still uses its compatibility builder");
-    }
-
     let profiles = Arc::new(to_runtime_profiles(&Config::profiles().latest())?);
     let mut app = ChimeraAppConfig::default();
     app.core = map_core(core);
@@ -249,6 +248,7 @@ mod tests {
         runtime::executor::{PortError, ScriptRunOutcome},
         runtime::value::ConfigValue,
     };
+    use serde_json::json;
 
     struct EmptyContent;
 
@@ -297,6 +297,10 @@ mod tests {
             names(chimera_config::application::ClashCore::ClashRsAlpha),
             vec!["config_fixer"]
         );
+        assert_eq!(
+            names(chimera_config::application::ClashCore::ChimeraClient),
+            vec!["verge_hy_alpn", "verge_meta_guard", "config_fixer"]
+        );
     }
 
     #[test]
@@ -343,6 +347,40 @@ mod tests {
         input.app.core = chimera_config::application::ClashCore::Mihomo;
         let artifact = RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner).unwrap();
         assert!(!format!("{:?}", artifact.graph).contains("verge_hy_alpn"));
+    }
+
+    #[test]
+    fn chimera_client_runtime_uses_its_custom_tun_contract_in_shared_executor() {
+        let mut input = RuntimeBuildInput {
+            profiles: Arc::new(Profiles::default()),
+            clash: ClashConfig::default(),
+            app: ChimeraAppConfig::default(),
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        input.app.core = chimera_config::application::ClashCore::ChimeraClient;
+        input.app.enable_builtin_enhanced = true;
+        input.clash.enable_tun_mode = true;
+
+        let artifact = RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner).unwrap();
+        let config = artifact.final_config.to_json();
+
+        assert!(format!("{:?}", artifact.graph).contains("verge_hy_alpn"));
+        assert_eq!(config["tun"]["device-id"], json!("dev://utun1989"));
+        assert_eq!(config["tun"]["route-all"], json!(true));
+        assert_eq!(config["tun"]["dns-hijack"], json!(true));
+        assert_eq!(config["tun"]["so-mark"], json!(7777));
+        assert_eq!(
+            config["dns"]["nameserver"],
+            json!([
+                "https://dns.alidns.com/dns-query",
+                "114.114.114.114",
+                "223.5.5.5",
+                "8.8.8.8"
+            ])
+        );
     }
 
     #[test]

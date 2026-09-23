@@ -84,7 +84,12 @@ pub struct TunParams {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TunFlavor {
     ClashRs,
-    Standard { stack: TunStack },
+    /// Chimera Client's product-specific TUN contract, retained as an
+    /// extension to the reference flavor set.
+    ChimeraClient,
+    Standard {
+        stack: TunStack,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
