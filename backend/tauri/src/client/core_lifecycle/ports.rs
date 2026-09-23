@@ -5,7 +5,8 @@ use chimera_config::clash::config::ClashConfig;
 use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
+use tempfile::TempDir;
 
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -16,6 +17,25 @@ use crate::{
     core::clash::{api::ClashRuntimeConfig, core::RunType},
     enhance::PostProcessingOutput,
 };
+
+/// Owns the staged core binary until installation and any restart have finished.
+pub(crate) struct PreparedCoreBinary {
+    pub(crate) target: ClashCore,
+    pub(crate) source: PathBuf,
+    pub(crate) destination: PathBuf,
+    pub(crate) staging: Arc<TempDir>,
+    pub(crate) progress: Arc<dyn BinaryInstallProgress>,
+}
+
+pub(crate) trait BinaryInstallProgress: Send + Sync + 'static {
+    fn restarting(&self);
+    fn finished(&self, error: Option<&str>);
+}
+
+#[async_trait]
+pub(crate) trait BinaryInstaller: Send + Sync + 'static {
+    async fn install(&self, artifact: &PreparedCoreBinary) -> anyhow::Result<()>;
+}
 
 /// Narrow boundary around the running core's `/configs` API.
 ///
@@ -73,6 +93,8 @@ pub(crate) trait CoreLifecycleLease: Send {
 pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn recover(&self) -> anyhow::Result<()>;
+    fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         Ok(None)

@@ -5,9 +5,7 @@
 //! legacy callers while the actor-backed lifecycle is introduced.
 
 #[allow(unused_imports)]
-pub(crate) use super::core_lifecycle::adapters::{
-    CoreUpdateLease, LegacyCoreBridge, LegacyRunningConfigBridge,
-};
+pub(crate) use super::core_lifecycle::adapters::{LegacyCoreBridge, LegacyRunningConfigBridge};
 #[allow(unused_imports)]
 pub(crate) use super::core_lifecycle::ports::{
     CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, RunningConfigPort,

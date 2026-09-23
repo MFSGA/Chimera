@@ -20,7 +20,7 @@ use chimera_utils::{
         CommandEvent,
         instance::{CoreInstance, CoreInstanceBuilder},
     },
-    runtime::{block_on, spawn},
+    runtime::spawn,
 };
 use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
@@ -124,6 +124,7 @@ enum Instance {
         child: Mutex<Arc<CoreInstance>>,
         stated_changed_at: Arc<AtomicI64>,
         kill_flag: Arc<AtomicBool>,
+        recovery_notify: Arc<tokio::sync::Notify>,
     },
     Service {
         config_path: PathBuf,
@@ -214,6 +215,7 @@ impl Instance {
                 child,
                 stated_changed_at,
                 kill_flag,
+                ..
             } => {
                 if matches!(state.as_ref(), CoreState::Stopped(_)) {
                     anyhow::bail!("core is already stopped");
@@ -235,7 +237,12 @@ impl Instance {
         }
     }
 
-    pub fn try_new(run_type: RunType, clash_core: ClashCore, config_path: PathBuf) -> Result<Self> {
+    pub fn try_new(
+        run_type: RunType,
+        clash_core: ClashCore,
+        config_path: PathBuf,
+        recovery_notify: Arc<tokio::sync::Notify>,
+    ) -> Result<Self> {
         let core_type: chimera_utils::core::CoreType = (&clash_core).into();
         let service_core_type: chimera_utils::core::CoreType = (&clash_core).into();
 
@@ -263,6 +270,7 @@ impl Instance {
                     child: Mutex::new(instance),
                     kill_flag: Arc::new(AtomicBool::new(false)),
                     stated_changed_at: Arc::new(AtomicI64::new(get_current_ts())),
+                    recovery_notify,
                 })
             }
             RunType::Service => Ok(Instance::Service {
@@ -281,6 +289,7 @@ impl Instance {
                 child,
                 kill_flag,
                 stated_changed_at,
+                recovery_notify,
             } => {
                 let instance = {
                     let child = child.lock();
@@ -301,6 +310,7 @@ impl Instance {
                 let (tx, mut rx) = tokio::sync::mpsc::channel::<anyhow::Result<()>>(1); // use mpsc channel just to avoid type moved error, though it never fails
                 let stated_changed_at = stated_changed_at.clone();
                 let kill_flag = kill_flag.clone();
+                let recovery_notify = recovery_notify.clone();
                 tracing::trace!("todo: instance start and may use admin performs better.");
                 // This block below is to handle the stdio from the core process
                 tokio::spawn(async move {
@@ -357,16 +367,7 @@ impl Instance {
                                                 if tx.send(Err(err)).await.is_err()
                                                     && !kill_flag.load(Ordering::Acquire)
                                                 {
-                                                    std::thread::spawn(move || {
-                                                        block_on(async {
-                                                            tracing::info!(
-                                                                "Trying to recover core."
-                                                            );
-                                                            let _ = CoreManager::global()
-                                                                .recover_core()
-                                                                .await;
-                                                        });
-                                                    });
+                                                    recovery_notify.notify_one();
                                                 }
                                             }
                                             break;
@@ -488,6 +489,7 @@ pub struct CoreManager {
     run_lock: RuntimeRebuildGate,
     runtime_lifecycle: RuntimeLifecycle,
     port_resolver: SessionPortResolver,
+    recovery_notify: Arc<tokio::sync::Notify>,
 }
 
 impl CoreManager {
@@ -498,6 +500,7 @@ impl CoreManager {
             run_lock: RuntimeRebuildGate::default(),
             runtime_lifecycle: RuntimeLifecycle::default(),
             port_resolver: SessionPortResolver::default(),
+            recovery_notify: Arc::new(tokio::sync::Notify::new()),
         })
     }
 
@@ -609,6 +612,7 @@ impl CoreManager {
             run_type,
             target_core,
             product.to_path_buf(),
+            self.recovery_notify.clone(),
         )?);
 
         #[cfg(target_os = "macos")]
@@ -851,21 +855,15 @@ impl CoreManager {
     }
 
     /// 重启内核
-    pub async fn recover_core(&'static self) -> Result<()> {
-        let _guard = self.run_lock.lock().await;
-        if let Err(err) = self.rebuild_and_run_locked(Self::selected_core()).await {
-            log::error!(target: "app", "failed to recover clash core");
-            log::error!(target: "app", "{err:?}");
-            drop(_guard);
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            std::thread::spawn(move || {
-                block_on(async {
-                    let _ = self.recover_core().await;
-                })
-            });
-        }
+    pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
+        self.recovery_notify.clone()
+    }
 
-        Ok(())
+    /// Perform one recovery attempt after an unexpected process termination.
+    /// Retry scheduling belongs to the client-owned lifecycle actor.
+    pub(crate) async fn recover_core_once(&self) -> Result<()> {
+        let _guard = self.run_lock.lock().await;
+        self.rebuild_and_run_locked(Self::selected_core()).await
     }
 
     pub fn init(&'static self) -> Result<()> {

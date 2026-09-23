@@ -27,7 +27,7 @@ pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
 use self::{
     application::ApplicationClient,
     clash_config::ClashConfigClient,
-    core_lifecycle::CoreLifecyclePort,
+    core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
     event_sink::UiEventSink,
     profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
@@ -118,6 +118,7 @@ struct ChimeraClientInner {
     application: ApplicationClient,
     session_state: SessionStateClient,
     clash_config: ClashConfigClient,
+    core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
     profiles: Arc<dyn ProfilesReadPort>,
     profile_files: Arc<dyn ProfileFsPort>,
@@ -141,8 +142,16 @@ impl ChimeraClient {
             ui_sink,
         } = args;
         let typed = tauri::async_runtime::block_on(new_typed_config_clients(&paths, &bridges))?;
+        let runtime_paths =
+            runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
+        let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
+            core.clone(),
+            typed.application.clone(),
+            runtime_paths,
+        ))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
@@ -169,8 +178,14 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
+        let core_lifecycle = CoreLifecycleClient::direct(
+            core.clone(),
+            typed.application.clone(),
+            runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        );
         Self::with_parts_and_typed_config(
             typed,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
@@ -182,6 +197,7 @@ impl ChimeraClient {
 
     fn with_parts_and_typed_config(
         typed: TypedConfigClients,
+        core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
         profiles: Arc<dyn ProfilesReadPort>,
         profile_files: Arc<dyn ProfileFsPort>,
@@ -193,6 +209,7 @@ impl ChimeraClient {
             application: typed.application,
             session_state: typed.session_state,
             clash_config: typed.clash_config,
+            core_lifecycle,
             core,
             profiles,
             profile_files,
@@ -309,6 +326,15 @@ mod tests {
                 state_changed_at: 7,
                 run_type: RunType::Normal,
             })
+        }
+
+        async fn recover(&self) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push("recover");
+            Ok(())
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+            None
         }
 
         async fn on_profile_change(&self, _break_when: bool) {
@@ -862,34 +888,6 @@ mod tests {
         let (client, events, _) = recording_client(false);
         client.stop_core().await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
-    }
-
-    #[tokio::test]
-    async fn core_update_lease_keeps_restart_target_on_one_lifecycle_lease() {
-        let (client, events, restart_args) = recording_client(false);
-        let mut lease = client.begin_core_update().await.unwrap();
-        lease.stop().await.unwrap();
-        lease
-            .run_core_from(
-                std::path::Path::new("runtime.yaml"),
-                ClashCore::ClashRs,
-                RunType::Service,
-            )
-            .await
-            .unwrap();
-        drop(lease);
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["begin", "stop", "run-from"]
-        );
-        assert_eq!(
-            restart_args.lock().unwrap().as_slice(),
-            &[(
-                std::path::PathBuf::from("runtime.yaml"),
-                ClashCore::ClashRs,
-                RunType::Service,
-            )]
-        );
     }
 
     #[tokio::test]

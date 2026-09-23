@@ -1,11 +1,13 @@
 use super::shared::{self, CoreTypeMeta};
 use crate::{
-    client::{ChimeraClient, runtime::RuntimePaths},
+    client::{
+        ChimeraClient,
+        core_lifecycle::{BinaryInstallProgress, PreparedCoreBinary},
+    },
     config::chimera::ClashCore,
     core::download::{DownloadSession, DownloadStatus},
 };
 use anyhow::anyhow;
-use runas::Command as RunasCommand;
 use serde::Serialize;
 use specta::Type;
 #[cfg(target_family = "unix")]
@@ -28,16 +30,33 @@ pub enum UpdaterState {
 
 pub(super) struct Updater {
     id: usize,
-    temp_dir: TempDir,
+    temp_dir: Arc<TempDir>,
     core_type: ClashCore,
     artifact: String,
-    inner: parking_lot::RwLock<UpdaterInner>,
+    inner: Arc<parking_lot::RwLock<UpdaterInner>>,
     downloader: Arc<DownloadSession>,
     runtime_client: ChimeraClient,
 }
 
 struct UpdaterInner {
     state: UpdaterState,
+}
+
+struct UpdaterProgress {
+    inner: Arc<parking_lot::RwLock<UpdaterInner>>,
+}
+
+impl BinaryInstallProgress for UpdaterProgress {
+    fn restarting(&self) {
+        self.inner.write().state = UpdaterState::Restarting;
+    }
+
+    fn finished(&self, error: Option<&str>) {
+        self.inner.write().state = match error {
+            Some(error) => UpdaterState::Failed(error.to_string()),
+            None => UpdaterState::Done,
+        };
+    }
 }
 
 #[derive(Debug, Serialize, Type)]
@@ -112,10 +131,10 @@ impl UpdaterBuilder {
         let tag = self.tag.ok_or(anyhow::anyhow!("tag is required"))?;
         let mirror = self.mirror.ok_or(anyhow::anyhow!("mirror is required"))?;
 
-        let temp_dir = TempDir::new()?;
-        let inner = UpdaterInner {
+        let temp_dir = Arc::new(TempDir::new()?);
+        let inner = Arc::new(parking_lot::RwLock::new(UpdaterInner {
             state: UpdaterState::Idle,
-        };
+        }));
 
         // setup downloader
         let download_path = shared::get_download_path(tag, &artifact);
@@ -130,7 +149,7 @@ impl UpdaterBuilder {
             id: rand::random::<u32>() as usize,
             temp_dir,
             core_type,
-            inner: parking_lot::RwLock::new(inner),
+            inner,
             artifact,
             downloader,
             runtime_client,
@@ -208,84 +227,31 @@ impl Updater {
 
     async fn replace_core(&self) -> anyhow::Result<()> {
         self.dispatch_state(UpdaterState::Replacing);
-        let mut lifecycle = self.runtime_client.begin_core_update().await?;
-        let current_core = crate::bridge::verge::legacy_core_from_typed(
-            self.runtime_client.get_app_config()?.core,
-        );
-        let current_run_type = self.runtime_client.core_status().await?.run_type;
-        tracing::debug!("current core: {}", current_core);
-        let runtime_paths = if current_core == self.core_type {
-            let runtime_paths = RuntimePaths::from_app_config_dir()?;
-            tracing::debug!("stopping core to replace");
-            lifecycle.stop().await?;
-            Some(runtime_paths)
-        } else {
-            None
-        };
         #[cfg(target_os = "windows")]
-        let target_core = format!("{}.exe", self.core_type);
+        let target_name = format!("{}.exe", self.core_type);
         #[cfg(not(target_os = "windows"))]
-        let target_core = self.core_type.clone().to_string();
+        let target_name = self.core_type.clone().to_string();
         let core_dir = tauri::utils::platform::current_exe()?;
         let core_dir = core_dir.parent().ok_or(anyhow!("failed to get core dir"))?;
-        let target_core = core_dir.join(target_core);
-        tracing::debug!("copying core to {:?}", target_core);
-        let tmp_core_path = self.temp_dir.path().join(format!(
+        let destination = core_dir.join(target_name);
+        let source = self.temp_dir.path().join(format!(
             "{}{}",
             self.core_type,
             std::env::consts::EXE_SUFFIX
         ));
-        match tokio::fs::copy(tmp_core_path.clone(), target_core.clone()).await {
-            Ok(size) => {
-                tracing::debug!("copied core to {:?} ({} bytes)", target_core, size);
-            }
-            Err(err) => {
-                tracing::warn!(
-                    "failed to copy core: {}, trying to use elevated permission to copy and override core",
-                    err
-                );
-                let mut target_core_str = target_core.to_str().unwrap().to_string();
-                if target_core_str.starts_with("\\\\?\\") {
-                    target_core_str = target_core_str[4..].to_string();
-                }
-                tracing::debug!("tmp core path: {:?}", tmp_core_path);
-                tracing::debug!("target core path: {:?}", target_core_str);
-                // 防止 UAC 弹窗堵塞主线程
-                let status_code = tokio::task::spawn_blocking(move || {
-                    #[cfg(target_os = "windows")]
-                    {
-                        RunasCommand::new("cmd")
-                            .args(&[
-                                "/C",
-                                "copy",
-                                "/Y",
-                                tmp_core_path.to_str().unwrap(),
-                                &target_core_str,
-                            ])
-                            .status()
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        RunasCommand::new("cp")
-                            .args(&["-f", tmp_core_path.to_str().unwrap(), &target_core_str])
-                            .status()
-                    }
-                })
-                .await??;
-                if !status_code.success() {
-                    anyhow::bail!("failed to copy core: {}", status_code);
-                }
-            }
-        };
+        tracing::debug!(?source, ?destination, "submitting core binary replacement");
 
-        if let Some(runtime_paths) = runtime_paths.as_ref() {
-            self.dispatch_state(UpdaterState::Restarting);
-            lifecycle
-                .run_core_from(runtime_paths.product(), current_core, current_run_type)
-                .await?;
-        }
-
-        Ok(())
+        self.runtime_client
+            .replace_core_binary(PreparedCoreBinary {
+                target: self.core_type.clone(),
+                source,
+                destination,
+                staging: self.temp_dir.clone(),
+                progress: Arc::new(UpdaterProgress {
+                    inner: self.inner.clone(),
+                }),
+            })
+            .await
     }
 
     pub async fn start(&self) {
