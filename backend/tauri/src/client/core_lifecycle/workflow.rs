@@ -14,6 +14,7 @@ use super::{
 
 pub(super) enum Command {
     Shutdown,
+    #[cfg(test)]
     StopCore,
     SelectCore(ClashCore),
     RecoverCore,
@@ -31,6 +32,7 @@ pub(super) enum Command {
         ready_timeout: std::time::Duration,
     },
     StopService(Box<dyn ServiceTransitionLease>),
+    ServiceEndpointDown(Box<dyn ServiceTransitionLease>),
 }
 
 /// The lower-level port remains the compatibility boundary for Chimera's
@@ -68,10 +70,22 @@ impl CoreLifecycleWorkflow {
         self.service.probe().await
     }
 
+    pub(super) fn outcome_uncertain(&self) -> bool {
+        self.core.outcome_uncertain()
+    }
+
+    pub(super) fn service_restart_policy(
+        &self,
+    ) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+        self.service.restart_policy()
+    }
+
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
-            Command::Shutdown | Command::StopCore => self.core.stop().await,
+            Command::Shutdown => self.core.stop().await,
+            #[cfg(test)]
+            Command::StopCore => self.core.stop().await,
             Command::SelectCore(core) => self.core.change_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService(mut transition) => transition.install_daemon().await,
@@ -94,6 +108,9 @@ impl CoreLifecycleWorkflow {
                     .await
             }
             Command::StopService(mut transition) => self.stop_service(transition.as_mut()).await,
+            Command::ServiceEndpointDown(mut transition) => {
+                self.service.report_endpoint_down(transition.as_mut()).await
+            }
         }
     }
 

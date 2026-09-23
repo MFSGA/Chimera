@@ -40,6 +40,9 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
 
 #[async_trait]
 pub(crate) trait ServiceTransitionLease: Send {
+    async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn install_daemon(&mut self) -> anyhow::Result<()>;
     async fn uninstall_daemon(&mut self) -> anyhow::Result<()>;
     async fn update_daemon(&mut self) -> anyhow::Result<()>;
@@ -53,6 +56,18 @@ pub(crate) trait ServiceTransitionLease: Send {
 #[async_trait]
 pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
     async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+    async fn report_endpoint_down(
+        &self,
+        transition: &mut dyn ServiceTransitionLease,
+    ) -> anyhow::Result<()> {
+        transition.report_endpoint_down().await
+    }
+    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+        crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+            attempts: 0,
+            exhausted: false,
+        }
+    }
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
 }
 
@@ -95,6 +110,9 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
+    fn outcome_uncertain(&self) -> bool {
+        false
+    }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
         Ok(None)

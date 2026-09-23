@@ -81,15 +81,23 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
         self.facade.probe_service().await
     }
 
+    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+        self.facade.service_restart_policy()
+    }
+
     async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
         Ok(Box::new(LegacyServiceTransition {
-            inner: self.facade.begin_service_transition().await,
+            inner: self.facade.begin_service_transition().await?,
         }))
     }
 }
 
 #[async_trait]
 impl ServiceTransitionLease for LegacyServiceTransition {
+    async fn report_endpoint_down(&mut self) -> anyhow::Result<()> {
+        self.inner.report_endpoint_down().await
+    }
+
     async fn install_daemon(&mut self) -> anyhow::Result<()> {
         self.inner.install_daemon().await
     }
@@ -199,6 +207,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
         Some(self.facade().recovery_notify())
+    }
+
+    fn outcome_uncertain(&self) -> bool {
+        self.facade().outcome_uncertain()
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {

@@ -116,7 +116,7 @@ pub(super) fn set_ipc_state(state: IpcState, client: &ChimeraClient) {
     on_ipc_state_changed(state, client);
 }
 
-fn dispatch_disconnected(client: &ChimeraClient) {
+fn dispatch_disconnected(client: &ChimeraClient) -> bool {
     if IPC_STATE
         .compare_exchange(
             IpcState::Connected,
@@ -126,7 +126,10 @@ fn dispatch_disconnected(client: &ChimeraClient) {
         )
         .is_ok()
     {
-        on_ipc_state_changed(IpcState::Disconnected, client)
+        on_ipc_state_changed(IpcState::Disconnected, client);
+        true
+    } else {
+        false
     }
 }
 
@@ -294,9 +297,15 @@ async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
                 WarnLevel::Silent => {}
             }
 
-            match state {
-                IpcState::Connected => dispatch_connected(client),
+            let endpoint_down = match state {
+                IpcState::Connected => {
+                    dispatch_connected(client);
+                    false
+                }
                 IpcState::Disconnected => dispatch_disconnected(client),
+            };
+            if endpoint_down {
+                client.request_service_endpoint_down().await;
             }
             client.observe_service_status(info);
             next_warned
@@ -304,7 +313,9 @@ async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
         Err(e) => {
             tracing::error!("IPC health check failed: {}", e);
             client.observe_service_probe_failure();
-            dispatch_disconnected(client);
+            if dispatch_disconnected(client) {
+                client.request_service_endpoint_down().await;
+            }
             let (_, next_warned) = next_ineligible_warning_state(warned, false);
             next_warned
         }
