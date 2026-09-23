@@ -115,6 +115,9 @@ jobs:
       - name: Verify service runtime pin
         run: pnpm check:service-runtime
 
+      - name: Verify Service sidecar integrity and preservation
+        run: deno test --allow-read --allow-write scripts/deno/utils/sidecar-integrity_test.ts
+
       - name: Prepare frontend
         run: pnpm -r build # Build frontend
         env:

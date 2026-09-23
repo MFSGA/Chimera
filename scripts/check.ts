@@ -4,6 +4,7 @@ import * as path from 'jsr:@std/path';
 // @ts-types="npm:@types/adm-zip@0.5.8"
 import AdmZip from 'npm:adm-zip@0.6.0';
 import { colorize, consola } from './deno/utils/logger.ts';
+import { verifyAndInstallSidecar } from './deno/utils/sidecar-integrity.ts';
 
 // === Types ===
 
@@ -14,6 +15,7 @@ interface BinInfo {
   exeFile: string;
   tmpFile: string;
   downloadURL: string;
+  checksumURL?: string;
 }
 
 type SupportedArch =
@@ -424,8 +426,15 @@ async function resolveSidecar(
   binInfo: BinInfo | Promise<BinInfo>,
   options?: ResolveOptions,
 ): Promise<ResolveInfo> {
-  const { name, version, targetFile, tmpFile, exeFile, downloadURL } =
-    await binInfo;
+  const {
+    name,
+    version,
+    targetFile,
+    tmpFile,
+    exeFile,
+    downloadURL,
+    checksumURL,
+  } = await binInfo;
 
   const sidecarDir = path.join(TAURI_APP_DIR, 'sidecar');
   const sidecarPath = path.join(sidecarDir, targetFile);
@@ -456,7 +465,15 @@ async function resolveSidecar(
   const tempDir = path.join(TEMP_DIR, name);
   const tempFile = path.join(tempDir, tmpFile);
   const tempExe = path.join(tempDir, exeFile);
+  const checksumFile = `${tempFile}.sha256`;
 
+  if (options?.force || name === 'chimera-service') {
+    try {
+      await Deno.remove(tempDir, { recursive: true });
+    } catch (error) {
+      if (!(error instanceof Deno.errors.NotFound)) throw error;
+    }
+  }
   await ensureDir(tempDir);
 
   try {
@@ -472,41 +489,49 @@ async function resolveSidecar(
       size = (await Deno.stat(tempFile)).size;
     }
 
-    if (tmpFile.endsWith('.zip')) {
-      const extractedExe = extractZip(tempFile, tempDir, name);
-      await Deno.rename(extractedExe, tempExe);
-      await Deno.rename(tempExe, sidecarPath);
-    } else if (tmpFile.endsWith('.tar.gz')) {
-      await extractTarGz(tempFile, tempDir);
-      await Deno.rename(tempExe, sidecarPath);
-    } else if (tmpFile.endsWith('.gz')) {
-      await gunzipFile(tempFile, sidecarPath);
-      await Deno.chmod(sidecarPath, 0o755);
-    } else {
-      await Deno.rename(tempFile, sidecarPath);
-      if (platform !== 'win32') {
-        await Deno.chmod(sidecarPath, 0o755);
-      }
+    if (checksumURL) {
+      await downloadFile(checksumURL, checksumFile);
     }
 
-    if (name === 'chimera-service' && version) {
-      await Deno.writeTextFile(versionStampPath, version);
+    await verifyAndInstallSidecar({
+      archivePath: tempFile,
+      checksumPath: checksumURL ? checksumFile : undefined,
+      targetPath: sidecarPath,
+      versionStampPath:
+        name === 'chimera-service' && version ? versionStampPath : undefined,
+      version,
+      stage: async (stagedPath) => {
+        if (tmpFile.endsWith('.zip')) {
+          const extractedExe = extractZip(tempFile, tempDir, name);
+          await Deno.copyFile(extractedExe, stagedPath);
+        } else if (tmpFile.endsWith('.tar.gz')) {
+          await extractTarGz(tempFile, tempDir);
+          await Deno.copyFile(tempExe, stagedPath);
+        } else if (tmpFile.endsWith('.gz')) {
+          await gunzipFile(tempFile, stagedPath);
+        } else {
+          await Deno.copyFile(tempFile, stagedPath);
+        }
+
+        if (platform !== 'win32') {
+          await Deno.chmod(stagedPath, 0o755);
+        }
+      },
+    });
+
+    if (checksumURL) {
+      consola.success(
+        colorize`verified SHA-256 for {green "${name}"} ${version ?? ''}`,
+      );
     }
 
     debugLog(colorize`resolve {green ${name}} finished`);
     return { file: targetFile, version, size, speed, cached: false };
-  } catch (err) {
-    try {
-      await Deno.remove(sidecarPath);
-    } catch {
-      // ignore
-    }
-    throw err;
   } finally {
     try {
       await Deno.remove(tempDir, { recursive: true });
     } catch {
-      // ignore
+      // ignore temporary download cleanup failures
     }
   }
 }
@@ -610,6 +635,7 @@ async function getChimeraServiceInfo(): Promise<BinInfo> {
     exeFile: `${name}${isWin ? '.exe' : ''}`,
     tmpFile: `${name}-${version}-${SIDECAR_HOST}.${urlExt}`,
     downloadURL: `https://github.com/${serviceRepo}/releases/download/${version}/${name}-${SIDECAR_HOST}.${urlExt}`,
+    checksumURL: `https://github.com/${serviceRepo}/releases/download/${version}/${name}-${SIDECAR_HOST}.${urlExt}.sha256`,
   };
 }
 
