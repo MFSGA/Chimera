@@ -31,10 +31,16 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     app.manage(tokio::sync::RwLock::new(
         crate::core::updater::UpdaterManager::new(),
     ));
+    let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local());
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
         bridges,
-        core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new()),
+        core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
+            core_facade.clone(),
+        )),
+        service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
+            core_facade,
+        )),
         profiles: Arc::new(LegacyProfilesReadPort),
         profile_files: Arc::new(LegacyProfileFsPort),
         profile_writes: Arc::new(LegacyProfilesWritePort),

@@ -444,12 +444,6 @@ pub(crate) struct CoreLifecycleLease<'a> {
 }
 
 impl CoreLifecycleLease<'_> {
-    pub(crate) async fn rebuild_running_config(&self) -> Result<()> {
-        self.manager
-            .rebuild_and_run_locked(CoreManager::selected_core())
-            .await
-    }
-
     pub(crate) async fn rebuild_running_config_with(
         &self,
         clash: ClashConfig,
@@ -458,17 +452,6 @@ impl CoreLifecycleLease<'_> {
     ) -> Result<()> {
         self.manager
             .rebuild_and_run_locked_with(target_core, &clash, run_type)
-            .await
-    }
-
-    pub(crate) async fn run_core_from(
-        &self,
-        config_path: &Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> Result<()> {
-        self.manager
-            .run_core_from_product_inner(config_path, target_core, run_type)
             .await
     }
 
@@ -572,20 +555,6 @@ impl CoreManager {
                 RunType::default(),
             )
         }
-    }
-
-    /// Start the core from one generated candidate that is checked, promoted and applied under
-    /// the same lifecycle lock.
-    pub async fn run_core(&self) -> Result<()> {
-        let lease = self.begin_lifecycle().await;
-        lease.rebuild_running_config().await
-    }
-
-    fn selected_core() -> ClashCore {
-        Config::verge()
-            .latest()
-            .clash_core
-            .unwrap_or(ClashCore::Mihomo)
     }
 
     fn committed_core() -> ClashCore {
@@ -874,23 +843,6 @@ impl CoreManager {
     /// 重启内核
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
         self.lifecycle.recovery_notify.clone()
-    }
-
-    /// Perform one recovery attempt after an unexpected process termination.
-    /// Retry scheduling belongs to the client-owned lifecycle actor.
-    pub(crate) async fn recover_core_once(&self) -> Result<()> {
-        let _guard = self.lifecycle.run_lock.lock().await;
-        self.rebuild_and_run_locked(Self::selected_core()).await
-    }
-
-    pub fn init(self: &Arc<Self>) -> Result<()> {
-        let manager = self.clone();
-        tauri::async_runtime::spawn(async move {
-            // 启动clash
-            log_err!(manager.run_core().await);
-        });
-
-        Ok(())
     }
 
     async fn stop_core_with_lease(&self, _lease: &CoreLifecycleLease<'_>) -> Result<()> {

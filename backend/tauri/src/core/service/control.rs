@@ -107,12 +107,8 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
     Ok(args)
 }
 
-pub async fn install_service(client: crate::client::ChimeraClient) -> anyhow::Result<()> {
-    run_service_command("install service", get_service_install_args().await?).await?;
-    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Relaxed) {
-        super::ipc::spawn_health_check(client);
-    }
-    Ok(())
+pub async fn install_service_daemon() -> anyhow::Result<()> {
+    run_service_command("install service", get_service_install_args().await?).await
 }
 
 pub async fn update_service() -> anyhow::Result<()> {
@@ -130,12 +126,8 @@ pub async fn uninstall_service() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn start_service(client: crate::client::ChimeraClient) -> anyhow::Result<()> {
-    run_service_command("start service", vec!["start".into()]).await?;
-    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
-        super::ipc::spawn_health_check(client);
-    }
-    Ok(())
+pub async fn start_service_daemon() -> anyhow::Result<()> {
+    run_service_command("start service", vec!["start".into()]).await
 }
 
 pub async fn stop_service() -> anyhow::Result<()> {
@@ -149,12 +141,8 @@ pub async fn stop_service() -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn restart_service(client: crate::client::ChimeraClient) -> anyhow::Result<()> {
-    run_service_command("restart service", vec!["restart".into()]).await?;
-    if !super::ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
-        super::ipc::spawn_health_check(client);
-    }
-    Ok(())
+pub async fn restart_service_daemon() -> anyhow::Result<()> {
+    run_service_command("restart service", vec!["restart".into()]).await
 }
 
 #[tracing::instrument]

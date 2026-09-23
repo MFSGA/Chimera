@@ -797,34 +797,41 @@ pub mod service {
         Ok(())
     }
 
-    /// Additive status projection that preserves the service wire fields while
-    /// exposing the app-side compatibility decision to frontend consumers.
+    /// Cached service-host projection for UI consumers. It preserves the service
+    /// wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
     #[derive(serde::Serialize, specta::Type)]
     pub struct ServiceStatusInfo<'a> {
         pub name: std::borrow::Cow<'a, str>,
         pub version: std::borrow::Cow<'a, str>,
         pub status: chimera_ipc::types::ServiceStatus,
         pub server: Option<chimera_ipc::api::status::StatusResBody<'a>>,
+        pub phase: crate::client::core_lifecycle::ServicePhase,
         pub compat: crate::core::service::compat::ServiceCompat,
+        pub runtime_owned: bool,
+        pub restart_attempts: u8,
     }
 
     #[tauri::command]
     #[specta::specta]
-    pub async fn status_service<'a>() -> Result<ServiceStatusInfo<'a>> {
-        let info = service::control::status().await?;
-        let compat = crate::core::service::compat::ServiceCompat::classify(&info);
+    pub async fn status_service(
+        client: State<'_, ChimeraClient>,
+    ) -> Result<ServiceStatusInfo<'static>> {
+        let status = client.service_status();
         Ok(ServiceStatusInfo {
-            name: info.name,
-            version: info.version,
-            status: info.status,
-            server: info.server,
-            compat,
+            name: status.name,
+            version: status.version,
+            status: status.status,
+            server: status.server,
+            phase: status.phase,
+            compat: status.compat,
+            runtime_owned: status.runtime_owned,
+            restart_attempts: status.restart_attempts,
         })
     }
     #[tauri::command]
     #[specta::specta]
     pub async fn install_service(client: State<'_, ChimeraClient>) -> Result {
-        service::control::install_service((*client).clone()).await?;
+        client.install_service().await?;
         Ok(())
     }
     #[tauri::command]

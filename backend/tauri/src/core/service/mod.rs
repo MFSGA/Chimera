@@ -25,7 +25,7 @@ static SERVICE_PATH: Lazy<PathBuf> = Lazy::new(|| {
 /// reconciliation. This is intentionally narrower than upstream's ServiceActor:
 /// Chimera only needs one transition owner here to keep the privileged Windows
 /// TUN host stable while the legacy service backend remains in place.
-pub(super) static HOST_TRANSITION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub(crate) static HOST_TRANSITION_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn normalize_path(path: &std::path::Path) -> PathBuf {
     dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
@@ -59,11 +59,6 @@ pub fn is_service_runtime_owned(status: &StatusInfo<'_>) -> bool {
     let service_data_dir = normalize_path(server.runtime_infos.nyanpasu_data_dir.as_ref());
 
     expected_config_dir == service_config_dir && expected_data_dir == service_data_dir
-}
-
-pub fn is_service_runtime_compatible(status: &StatusInfo<'_>) -> bool {
-    compat::ServiceCompat::classify(status).allows_service_backend()
-        && is_service_runtime_owned(status)
 }
 
 async fn converge_core_to_service_host_locked(
@@ -149,43 +144,6 @@ pub(crate) async fn ensure_tun_host_ready(
     }
 }
 
-/// After an explicit Service stop, converge the core back to the local host.
-/// The stop command has already completed at this point, so a failed status
-/// probe is treated as an error rather than guessing that the daemon is gone.
-async fn ensure_local_host_after_service_stop_locked(
-    client: &crate::client::ChimeraClient,
-) -> anyhow::Result<()> {
-    use crate::core::RunType;
-
-    let observation = ipc::refresh_state_now()
-        .await
-        .context("failed to verify Chimera Service after stop")?;
-    if observation.status == chimera_ipc::types::ServiceStatus::Running {
-        anyhow::bail!("Chimera Service still reports running after stop");
-    }
-    ipc::mark_disconnected_now();
-
-    let before = client
-        .core_status()
-        .await
-        .context("failed to inspect the core after Service stop")?;
-    if (!matches!(before.state, CoreState::Running) || before.run_type == RunType::Service)
-        && let Err(error) = client.rebuild_running_config().await
-    {
-        ipc::request_reconcile(client);
-        return Err(error).context("failed to restore the core to the local host");
-    }
-
-    let after = client
-        .core_status()
-        .await
-        .context("failed to verify the local core after Service stop")?;
-    if !matches!(after.state, CoreState::Running) || after.run_type == RunType::Service {
-        anyhow::bail!("core did not recover to the local host after Service stop");
-    }
-    Ok(())
-}
-
 /// Execute an explicit daemon start under the same transition lock used by the
 /// health loop, then converge the core to the Service host when Service Mode is
 /// desired. This prevents a health observation from interleaving a second host
@@ -194,12 +152,7 @@ pub(crate) async fn start_service_and_converge(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::start_service(client.clone()).await?;
-    if client.get_app_config()?.enable_service_mode {
-        converge_core_to_service_host_locked(client, ready_timeout, false).await?;
-    }
-    Ok(())
+    client.start_service(ready_timeout).await
 }
 
 /// Restarting the daemon is allowed while TUN is enabled, but the whole restart
@@ -210,38 +163,19 @@ pub(crate) async fn restart_service_and_converge(
     client: &crate::client::ChimeraClient,
     ready_timeout: std::time::Duration,
 ) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::restart_service(client.clone()).await?;
-    if client.get_app_config()?.enable_service_mode {
-        converge_core_to_service_host_locked(client, ready_timeout, false).await?;
-    }
-    Ok(())
+    client.restart_service(ready_timeout).await
 }
 
 pub(crate) async fn stop_service_and_converge(
     client: &crate::client::ChimeraClient,
 ) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::stop_service().await?;
-    if client.get_app_config()?.enable_service_mode {
-        ensure_local_host_after_service_stop_locked(client).await?;
-    } else {
-        ipc::mark_disconnected_now();
-    }
-    Ok(())
+    client.stop_service().await
 }
 
 pub(crate) async fn uninstall_service_and_converge(
     client: &crate::client::ChimeraClient,
 ) -> anyhow::Result<()> {
-    let _transition = HOST_TRANSITION_LOCK.lock().await;
-    control::uninstall_service().await?;
-    if client.get_app_config()?.enable_service_mode {
-        ensure_local_host_after_service_stop_locked(client).await?;
-    } else {
-        ipc::mark_disconnected_now();
-    }
-    Ok(())
+    client.uninstall_service().await
 }
 
 pub async fn init_service(client: crate::client::ChimeraClient) {

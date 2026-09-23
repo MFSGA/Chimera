@@ -6,7 +6,6 @@
 mod application;
 mod clash_api;
 mod clash_config;
-mod core_bridge;
 pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
@@ -60,6 +59,7 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) paths: PathResolver,
     pub(crate) bridges: LegacyBridgeSet,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
+    pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
     pub(crate) profiles: Arc<dyn ProfilesReadPort>,
     pub(crate) profile_files: Arc<dyn ProfileFsPort>,
     pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
@@ -136,6 +136,7 @@ impl ChimeraClient {
             paths,
             bridges,
             core,
+            service,
             profiles,
             profile_files,
             profile_writes,
@@ -149,12 +150,15 @@ impl ChimeraClient {
         ))?;
         let runtime_paths =
             runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
-        let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
-            core.clone(),
-            typed.application.clone(),
-            typed.clash_config.clone(),
-            runtime_paths,
-        ))?;
+        let core_lifecycle =
+            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_service(
+                core.clone(),
+                typed.application.clone(),
+                typed.clash_config.clone(),
+                runtime_paths,
+                Arc::new(core_lifecycle::FsBinaryInstaller),
+                service,
+            ))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
@@ -239,7 +243,7 @@ mod tests {
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;
 
-    use super::core_lifecycle::{CoreLifecycleLease, CoreStatusSnapshot};
+    use super::core_lifecycle::CoreStatusSnapshot;
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
     use crate::{
@@ -265,20 +269,13 @@ mod tests {
 
     struct RecordingCore {
         events: Arc<Mutex<Vec<&'static str>>>,
-        restart_args: Arc<Mutex<Vec<(std::path::PathBuf, ClashCore, RunType)>>>,
-        fail_rebuild: bool,
-    }
-
-    struct RecordingLease {
-        events: Arc<Mutex<Vec<&'static str>>>,
-        restart_args: Arc<Mutex<Vec<(std::path::PathBuf, ClashCore, RunType)>>>,
         fail_rebuild: bool,
     }
 
     #[async_trait]
-    impl CoreLifecycleLease for RecordingLease {
-        async fn rebuild_running_config(
-            &mut self,
+    impl CoreLifecyclePort for RecordingCore {
+        async fn reconcile(
+            &self,
             _clash: chimera_config::clash::config::ClashConfig,
             _target_core: ClashCore,
             _run_type: RunType,
@@ -290,58 +287,21 @@ mod tests {
             Ok(())
         }
 
-        async fn run_core_from(
-            &mut self,
-            config_path: &std::path::Path,
-            target_core: ClashCore,
-            run_type: RunType,
-        ) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("run-from");
-            self.restart_args.lock().unwrap().push((
-                config_path.to_path_buf(),
-                target_core,
-                run_type,
-            ));
-            Ok(())
-        }
-
-        async fn stop(&mut self) -> anyhow::Result<()> {
+        async fn stop(&self) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("stop");
             Ok(())
         }
 
-        async fn change_core(&mut self, _clash_core: ClashCore) -> anyhow::Result<()> {
+        async fn change_core(&self, _clash_core: ClashCore) -> anyhow::Result<()> {
             self.events.lock().unwrap().push("change-core");
             Ok(())
         }
-    }
-
-    #[async_trait]
-    impl CoreLifecyclePort for RecordingCore {
-        fn init(&self) -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-            self.events.lock().unwrap().push("begin");
-            Ok(Box::new(RecordingLease {
-                events: self.events.clone(),
-                restart_args: self.restart_args.clone(),
-                fail_rebuild: self.fail_rebuild,
-            }))
-        }
-
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
                 state: CoreState::Stopped(None),
                 state_changed_at: 7,
                 run_type: RunType::Normal,
             })
-        }
-
-        async fn recover(&self) -> anyhow::Result<()> {
-            self.events.lock().unwrap().push("recover");
-            Ok(())
         }
 
         fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
@@ -584,17 +544,11 @@ mod tests {
     fn recording_client_with_profiles(
         profiles: Profiles,
         fail_rebuild: bool,
-    ) -> (
-        ChimeraClient,
-        Arc<Mutex<Vec<&'static str>>>,
-        Arc<Mutex<Vec<(std::path::PathBuf, ClashCore, RunType)>>>,
-    ) {
+    ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let restart_args = Arc::new(Mutex::new(Vec::new()));
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: restart_args.clone(),
                 fail_rebuild,
             }),
             Arc::new(StaticProfilesRead { profiles }),
@@ -605,22 +559,16 @@ mod tests {
                 events: events.clone(),
             }),
         );
-        (client, events, restart_args)
+        (client, events)
     }
 
-    fn recording_client(
-        fail_rebuild: bool,
-    ) -> (
-        ChimeraClient,
-        Arc<Mutex<Vec<&'static str>>>,
-        Arc<Mutex<Vec<(std::path::PathBuf, ClashCore, RunType)>>>,
-    ) {
+    fn recording_client(fail_rebuild: bool) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         recording_client_with_profiles(Profiles::default(), fail_rebuild)
     }
 
     #[test]
     fn duplicate_profile_refresh_is_rejected_until_guard_drops() {
-        let (client, _, _) = recording_client(false);
+        let (client, _) = recording_client(false);
         let uid = "r-test".to_string();
         let first = client.begin_profile_refresh(&uid).unwrap();
         let error = match client.begin_profile_refresh(&uid) {
@@ -663,7 +611,6 @@ mod tests {
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: Arc::new(Mutex::new(Vec::new())),
                 fail_rebuild: false,
             }),
             Arc::new(StaticProfilesRead { profiles }),
@@ -729,7 +676,6 @@ mod tests {
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: Arc::new(Mutex::new(Vec::new())),
                 fail_rebuild: false,
             }),
             Arc::new(StaticProfilesRead { profiles }),
@@ -787,7 +733,6 @@ mod tests {
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: Arc::new(Mutex::new(Vec::new())),
                 fail_rebuild: false,
             }),
             Arc::new(StaticProfilesRead {
@@ -815,7 +760,6 @@ mod tests {
             events.lock().unwrap().as_slice(),
             [
                 "refresh-profiles",
-                "begin",
                 "rebuild",
                 "refresh-ui",
                 "profile-change"
@@ -830,7 +774,6 @@ mod tests {
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: Arc::new(Mutex::new(Vec::new())),
                 fail_rebuild: false,
             }),
             Arc::new(StaticProfilesRead {
@@ -855,7 +798,6 @@ mod tests {
         let client = ChimeraClient::with_parts(
             Arc::new(RecordingCore {
                 events: events.clone(),
-                restart_args: Arc::new(Mutex::new(Vec::new())),
                 fail_rebuild: false,
             }),
             Arc::new(StaticProfilesRead {
@@ -880,7 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn core_status_is_read_through_the_injected_lifecycle_port() {
-        let (client, _, _) = recording_client(false);
+        let (client, _) = recording_client(false);
         let snapshot = client.core_status().await.unwrap();
         assert!(matches!(snapshot.state, CoreState::Stopped(None)));
         assert_eq!(snapshot.state_changed_at, 7);
@@ -888,37 +830,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn change_core_runs_through_the_injected_lifecycle_lease() {
-        let (client, events, _) = recording_client(false);
+    async fn change_core_runs_through_the_injected_lifecycle_port() {
+        let (client, events) = recording_client(false);
         client.change_core(ClashCore::Mihomo).await.unwrap();
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "change-core"]);
+        assert_eq!(events.lock().unwrap().as_slice(), ["change-core"]);
     }
 
     #[tokio::test]
-    async fn stop_core_runs_through_the_injected_lifecycle_lease() {
-        let (client, events, _) = recording_client(false);
+    async fn stop_core_runs_through_the_injected_lifecycle_port() {
+        let (client, events) = recording_client(false);
         client.stop_core().await.unwrap();
-        assert_eq!(events.lock().unwrap().as_slice(), ["begin", "stop"]);
+        assert_eq!(events.lock().unwrap().as_slice(), ["stop"]);
     }
 
     #[tokio::test]
     async fn runtime_rebuild_does_not_emit_profile_change_side_effects() {
-        let (client, events, _) = recording_client(false);
+        let (client, events) = recording_client(false);
         client.rebuild_running_config().await.unwrap();
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui"]
-        );
+        assert_eq!(events.lock().unwrap().as_slice(), ["rebuild", "refresh-ui"]);
     }
 
     #[tokio::test]
     async fn rebuild_failure_stops_follow_up_side_effects() {
-        let (client, events, _) = recording_client(true);
+        let (client, events) = recording_client(true);
         let error = client.rebuild_running_config().await.unwrap_err();
         assert!(error.to_string().contains("injected rebuild failure"));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-diagnostics"]
+            ["rebuild", "refresh-diagnostics"]
         );
     }
 
@@ -929,7 +868,7 @@ mod tests {
             items: vec![test_local_profile("l-active")],
             ..Profiles::default()
         };
-        let (client, events, _) = recording_client_with_profiles(profiles, false);
+        let (client, events) = recording_client_with_profiles(profiles, false);
         let outcome = client
             .save_profile_file("l-active".into(), "proxies: []\n".into())
             .await
@@ -937,7 +876,7 @@ mod tests {
         assert!(matches!(outcome, MutationOutcome::Applied { .. }));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-ui", "profile-change"]
+            ["rebuild", "refresh-ui", "profile-change"]
         );
     }
 
@@ -948,7 +887,7 @@ mod tests {
             items: vec![test_local_profile("l-active"), test_local_profile("l-idle")],
             ..Profiles::default()
         };
-        let (client, events, _) = recording_client_with_profiles(profiles, false);
+        let (client, events) = recording_client_with_profiles(profiles, false);
         let outcome = client
             .save_profile_file("l-idle".into(), "proxies: []\n".into())
             .await
@@ -959,7 +898,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_commit_rebuild_failure_is_structured_degradation() {
-        let (client, events, _) = recording_client(true);
+        let (client, events) = recording_client(true);
         let outcome = client.after_profile_runtime_commit("test mutation").await;
         assert!(matches!(outcome, MutationOutcome::CommittedDegraded { .. }));
         assert_eq!(outcome.degradations().len(), 1);
@@ -970,7 +909,7 @@ mod tests {
         assert!(degradation.message.contains("injected rebuild failure"));
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["begin", "rebuild", "refresh-diagnostics"]
+            ["rebuild", "refresh-diagnostics"]
         );
     }
 

@@ -6,8 +6,9 @@ use serde_yaml::Mapping;
 use std::sync::Arc;
 
 use super::ports::{
-    BinaryInstaller, CoreLifecycleLease, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary,
-    RunningConfigPort, RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics,
+    BinaryInstaller, CoreLifecyclePort, CoreStatusSnapshot, PreparedCoreBinary, RunningConfigPort,
+    RuntimeTransformDiagnostics, RuntimeTransformFailureDiagnostics, ServiceLifecyclePort,
+    ServiceTransitionLease,
 };
 
 pub(crate) struct FsBinaryInstaller;
@@ -59,15 +60,74 @@ impl BinaryInstaller for FsBinaryInstaller {
         Ok(())
     }
 }
+
+pub(crate) struct LegacyServiceBridge {
+    facade: Arc<CoreFacade>,
+}
+
+impl LegacyServiceBridge {
+    pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
+        Self { facade }
+    }
+}
+
+struct LegacyServiceTransition {
+    inner: crate::core::actor_v2::facade::ServiceTransition,
+}
+
+#[async_trait]
+impl ServiceLifecyclePort for LegacyServiceBridge {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
+        self.facade.probe_service().await
+    }
+
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>> {
+        Ok(Box::new(LegacyServiceTransition {
+            inner: self.facade.begin_service_transition().await,
+        }))
+    }
+}
+
+#[async_trait]
+impl ServiceTransitionLease for LegacyServiceTransition {
+    async fn install_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.install_daemon().await
+    }
+
+    async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.uninstall_daemon().await
+    }
+
+    async fn update_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.update_daemon().await
+    }
+
+    async fn start_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.start_daemon().await
+    }
+
+    async fn restart_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.restart_daemon().await
+    }
+
+    async fn stop_daemon(&mut self) -> anyhow::Result<()> {
+        self.inner.stop_daemon().await
+    }
+
+    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()> {
+        self.inner.confirm_ready(timeout).await
+    }
+
+    async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
+        self.inner.confirm_stopped().await
+    }
+}
 use crate::{
     client::runtime::RuntimeSnapshot,
     config::chimera::ClashCore,
     core::{
-        clash::{
-            api::ClashRuntimeConfig,
-            core::{CoreLifecycleLease as CoreManagerLifecycleLease, CoreManager, RunType},
-        },
-        connection_interruption::ConnectionInterruptionService,
+        actor_v2::CoreFacade,
+        clash::{api::ClashRuntimeConfig, core::RunType},
     },
 };
 
@@ -97,93 +157,52 @@ impl RunningConfigPort for LegacyRunningConfigBridge {
 }
 
 pub(crate) struct LegacyCoreBridge {
-    manager: Arc<CoreManager>,
+    facade: Arc<CoreFacade>,
 }
 
 impl LegacyCoreBridge {
-    pub(crate) fn new() -> Self {
-        Self {
-            manager: Arc::new(CoreManager::new()),
-        }
+    pub(crate) fn new(facade: Arc<CoreFacade>) -> Self {
+        Self { facade }
     }
 
     /// Compatibility boundary for the staged lifecycle migration.
     ///
-    /// New lifecycle implementations can replace this adapter without
-    /// changing client callers.
-    fn manager(&self) -> &Arc<CoreManager> {
-        &self.manager
-    }
-}
-
-struct LegacyCoreLifecycleLease<'a> {
-    lease: CoreManagerLifecycleLease<'a>,
-}
-
-#[async_trait]
-impl CoreLifecycleLease for LegacyCoreLifecycleLease<'_> {
-    async fn rebuild_running_config(
-        &mut self,
-        clash: ClashConfig,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()> {
-        self.lease
-            .rebuild_running_config_with(clash, target_core, run_type)
-            .await
-    }
-
-    async fn run_core_from(
-        &mut self,
-        config_path: &std::path::Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()> {
-        self.lease
-            .run_core_from(config_path, target_core, run_type)
-            .await
-    }
-
-    async fn stop(&mut self) -> anyhow::Result<()> {
-        self.lease.stop_core().await
-    }
-
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()> {
-        self.lease.change_core(clash_core).await
+    /// The concrete CoreManager is owned by the lower core facade; this adapter
+    /// only maps that lower host boundary into the client lifecycle port.
+    fn facade(&self) -> &Arc<CoreFacade> {
+        &self.facade
     }
 }
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
-    fn init(&self) -> anyhow::Result<()> {
-        self.manager().init()
+    async fn reconcile(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()> {
+        self.facade().reconcile(clash, target_core, run_type).await
     }
 
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
-        Ok(Box::new(LegacyCoreLifecycleLease {
-            lease: self.manager().begin_lifecycle().await,
-        }))
+    async fn stop(&self) -> anyhow::Result<()> {
+        self.facade().stop().await
+    }
+
+    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+        self.facade().change_core(clash_core).await
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        let (state, state_changed_at, run_type) = self.manager().status().await;
-        Ok(CoreStatusSnapshot {
-            state: state.into_owned(),
-            state_changed_at,
-            run_type,
-        })
-    }
-
-    async fn recover(&self) -> anyhow::Result<()> {
-        self.manager().recover_core_once().await
+        Ok(self.facade().status().await)
     }
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
-        Some(self.manager().recovery_notify())
+        Some(self.facade().recovery_notify())
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        let core = self.manager();
+        let core = self.facade();
         let failure =
             core.runtime_transform_failure()
                 .map(|failure| RuntimeTransformFailureDiagnostics {
@@ -203,21 +222,14 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        self.manager().promoted_runtime_snapshot()
+        self.facade().promoted_runtime_snapshot()
     }
 
     fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
-        self.manager().effective_clash_info()
+        self.facade().effective_clash_info()
     }
 
     async fn on_profile_change(&self, break_when: bool) {
-        let result =
-            match crate::core::clash::api::ApiClient::new(self.manager().effective_clash_info()) {
-                Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
-                Err(error) => Err(error),
-            };
-        if let Err(error) = result {
-            tracing::warn!(%error, "failed to interrupt connections after profile change");
-        }
+        self.facade().on_profile_change(break_when).await;
     }
 }

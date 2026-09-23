@@ -2,11 +2,12 @@
 
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
-use chimera_ipc::api::status::CoreState;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
+
+pub(crate) use crate::core::actor_v2::CoreStatusSnapshot;
 
 use crate::{
     client::runtime::RuntimeSnapshot,
@@ -37,6 +38,24 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
     async fn install(&self, artifact: &PreparedCoreBinary) -> anyhow::Result<()>;
 }
 
+#[async_trait]
+pub(crate) trait ServiceTransitionLease: Send {
+    async fn install_daemon(&mut self) -> anyhow::Result<()>;
+    async fn uninstall_daemon(&mut self) -> anyhow::Result<()>;
+    async fn update_daemon(&mut self) -> anyhow::Result<()>;
+    async fn start_daemon(&mut self) -> anyhow::Result<()>;
+    async fn restart_daemon(&mut self) -> anyhow::Result<()>;
+    async fn stop_daemon(&mut self) -> anyhow::Result<()>;
+    async fn confirm_ready(&mut self, timeout: std::time::Duration) -> anyhow::Result<()>;
+    async fn confirm_stopped(&mut self) -> anyhow::Result<()>;
+}
+
+#[async_trait]
+pub(crate) trait ServiceLifecyclePort: Send + Sync + 'static {
+    async fn probe(&self) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>>;
+    async fn begin_transition(&self) -> anyhow::Result<Box<dyn ServiceTransitionLease>>;
+}
+
 /// Narrow boundary around the running core's `/configs` API.
 ///
 /// The legacy API remains behind this port while the ref core lifecycle is
@@ -46,13 +65,6 @@ pub(crate) trait BinaryInstaller: Send + Sync + 'static {
 pub(crate) trait RunningConfigPort: Send + Sync {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig>;
     async fn patch(&self, patch: &Mapping) -> anyhow::Result<()>;
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct CoreStatusSnapshot {
-    pub(crate) state: CoreState,
-    pub(crate) state_changed_at: i64,
-    pub(crate) run_type: RunType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
@@ -72,29 +84,16 @@ pub struct RuntimeTransformDiagnostics {
 }
 
 #[async_trait]
-pub(crate) trait CoreLifecycleLease: Send {
-    async fn rebuild_running_config(
-        &mut self,
+pub(crate) trait CoreLifecyclePort: Send + Sync {
+    async fn reconcile(
+        &self,
         clash: ClashConfig,
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
-    async fn run_core_from(
-        &mut self,
-        config_path: &std::path::Path,
-        target_core: ClashCore,
-        run_type: RunType,
-    ) -> anyhow::Result<()>;
-    async fn stop(&mut self) -> anyhow::Result<()>;
-    async fn change_core(&mut self, clash_core: ClashCore) -> anyhow::Result<()>;
-}
-
-#[async_trait]
-pub(crate) trait CoreLifecyclePort: Send + Sync {
-    fn init(&self) -> anyhow::Result<()>;
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>>;
+    async fn stop(&self) -> anyhow::Result<()>;
+    async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
-    async fn recover(&self) -> anyhow::Result<()>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
