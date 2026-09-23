@@ -34,7 +34,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: E2E suite to run (network/all require a configured WSL/LAN client and remain local-only)
+        description: E2E suite to run (system is destructive and manual-only; network/all remain local-only)
         required: true
         default: critical
         type: choice
@@ -47,6 +47,7 @@ on:
           - settings
           - main
           - hermetic
+          - system
   schedule:
     - cron: '45 20 * * *'
 
@@ -134,9 +135,12 @@ jobs:
 
       - name: Run ${{ env.E2E_SUITE }} suite
         shell: pwsh
+        env:
+          CHIMERA_E2E_SYSTEM_LIFECYCLE: ${{ github.event_name == 'workflow_dispatch' && inputs.suite == 'system' && '1' || '0' }}
         run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite $env:E2E_SUITE
 
       - name: Run controller fallback regression
+        if: env.E2E_SUITE != 'system'
         shell: pwsh
         env:
           CHIMERA_E2E_OCCUPY_CONTROLLER_PORT: '9872'
