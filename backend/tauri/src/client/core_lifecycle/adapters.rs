@@ -53,8 +53,15 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
             .await
     }
 
-    async fn run_core_from(&mut self, config_path: &std::path::Path) -> anyhow::Result<()> {
-        self.lease.run_core_from(config_path).await
+    async fn run_core_from(
+        &mut self,
+        config_path: &std::path::Path,
+        target_core: ClashCore,
+        run_type: RunType,
+    ) -> anyhow::Result<()> {
+        self.lease
+            .run_core_from(config_path, target_core, run_type)
+            .await
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
@@ -124,7 +131,11 @@ impl CoreUpdateLease {
     pub(crate) async fn run_core_from(
         &mut self,
         config_path: &std::path::Path,
+        target_core: ClashCore,
+        run_type: RunType,
     ) -> anyhow::Result<()> {
-        self.lease.run_core_from(config_path).await
+        self.lease
+            .run_core_from(config_path, target_core, run_type)
+            .await
     }
 }

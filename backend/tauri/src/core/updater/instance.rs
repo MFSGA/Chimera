@@ -212,6 +212,7 @@ impl Updater {
         let current_core = crate::bridge::verge::legacy_core_from_typed(
             self.runtime_client.get_app_config()?.core,
         );
+        let current_run_type = self.runtime_client.core_status().await?.run_type;
         tracing::debug!("current core: {}", current_core);
         let runtime_paths = if current_core == self.core_type {
             let runtime_paths = RuntimePaths::from_app_config_dir()?;
@@ -279,7 +280,9 @@ impl Updater {
 
         if let Some(runtime_paths) = runtime_paths.as_ref() {
             self.dispatch_state(UpdaterState::Restarting);
-            lifecycle.run_core_from(runtime_paths.product()).await?;
+            lifecycle
+                .run_core_from(runtime_paths.product(), current_core, current_run_type)
+                .await?;
         }
 
         Ok(())
