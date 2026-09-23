@@ -91,7 +91,8 @@ pub(crate) trait CoreLifecycleLease: Send {
 
 #[async_trait]
 pub(crate) trait CoreLifecyclePort: Send + Sync {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>>;
+    fn init(&self) -> anyhow::Result<()>;
+    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
     async fn recover(&self) -> anyhow::Result<()>;
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
@@ -102,6 +103,12 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
 
     fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
         None
+    }
+
+    fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
+        crate::config::core::Config::clash()
+            .latest()
+            .get_client_info()
     }
 
     async fn on_profile_change(&self, break_when: bool);

@@ -39,13 +39,26 @@ use crate::{
 use super::{ChimeraClient, core_lifecycle::RunningConfigPort};
 
 #[cfg(test)]
-use super::core_lifecycle::LegacyRunningConfigBridge;
+struct TestRunningConfigBridge;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl RunningConfigPort for TestRunningConfigBridge {
+    async fn read(&self) -> anyhow::Result<crate::core::clash::api::ClashRuntimeConfig> {
+        Ok(crate::core::clash::api::ClashRuntimeConfig::default())
+    }
+
+    async fn patch(&self, _patch: &Mapping) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
 
 const CLASH_CONFIG_READ_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Clone)]
 pub(crate) struct ClashConfigClient {
     state: Arc<ClashConfigStateBackend>,
-    runtime_patch: RuntimePatchCoordinator,
+    runtime_patch: Arc<RuntimePatchCoordinator>,
     running_config: Arc<dyn RunningConfigPort>,
 }
 
@@ -77,7 +90,7 @@ impl ClashConfigClient {
             ClashConfigStateBackend::Static {
                 state: parking_lot::RwLock::new(ClashConfig::default()),
             },
-            Arc::new(LegacyRunningConfigBridge),
+            Arc::new(TestRunningConfigBridge),
         ))
     }
 
@@ -134,7 +147,7 @@ impl ClashConfigClient {
     ) -> Self {
         Self {
             state: Arc::new(state),
-            runtime_patch: RuntimePatchCoordinator::default(),
+            runtime_patch: Arc::new(RuntimePatchCoordinator::default()),
             running_config,
         }
     }
@@ -360,7 +373,7 @@ impl ClashConfigClient {
 
         let finalize = async {
             apply_clash_runtime_change(owner, &plan).await?;
-            run_clash_patch_side_effects(&plan);
+            run_clash_patch_side_effects(owner, &plan);
             Config::runtime().draft().patch_config(&overrides);
             Config::runtime().apply();
             Config::clash().data().save_config()?;
@@ -405,8 +418,10 @@ impl ClashConfigClient {
         }
 
         if plan.mode_changed {
+            let api = owner.clash_api_client()?;
             log_err!(
                 crate::core::connection_interruption::ConnectionInterruptionService::on_mode_change(
+                    &api,
                     plan.break_on_mode_change,
                 )
                 .await,
@@ -433,7 +448,7 @@ impl ChimeraClient {
     }
 
     pub(crate) fn clash_info(&self) -> ClashInfo {
-        crate::core::clash::core::CoreManager::global().effective_clash_info()
+        self.effective_clash_info()
     }
 
     pub(crate) async fn patch_clash(&self, patch: Mapping) -> Result<()> {
@@ -613,13 +628,13 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     }
 }
 
-fn run_clash_patch_side_effects(plan: &ClashPatchPlan) {
+fn run_clash_patch_side_effects(client: &ChimeraClient, plan: &ClashPatchPlan) {
     if plan.mixed_port.is_some() {
         log_err!(sysopt::Sysopt::global().init_sysproxy());
     }
 
     if plan.mode_changed {
-        crate::feat::update_proxies_buff(None);
+        crate::feat::update_proxies_buff(client.clone(), None);
         log::debug!("systray mode changed, update proxies buff");
         log_err!(handle::Handle::update_systray_part());
     }
@@ -678,7 +693,7 @@ mod tests {
             path,
             ClashConfig::default(),
             bridge,
-            Arc::new(LegacyRunningConfigBridge),
+            Arc::new(TestRunningConfigBridge),
         )
         .await
         .unwrap();

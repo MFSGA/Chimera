@@ -24,7 +24,7 @@ pub async fn patch_clash(client: &ChimeraClient, patch: Mapping) -> Result<()> {
     client.patch_clash(patch).await
 }
 
-pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
+pub fn update_proxies_buff(client: ChimeraClient, rx: Option<tokio::sync::oneshot::Receiver<()>>) {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
 
     tauri::async_runtime::spawn(async move {
@@ -33,7 +33,14 @@ pub fn update_proxies_buff(rx: Option<tokio::sync::oneshot::Receiver<()>>) {
         {
             log::error!(target: "app::clash::proxies", "update proxies buff by rx failed: {e}");
         }
-        match ProxiesGuard::global().update().await {
+        let api = match client.clash_api_client() {
+            Ok(api) => api,
+            Err(error) => {
+                log::error!(target: "app::clash::proxies", "failed to create clash api client: {error}");
+                return;
+            }
+        };
+        match ProxiesGuard::global().update(&api).await {
             Ok(_) => {
                 log::debug!(target: "app::clash::proxies", "update proxies buff success");
                 handle::Handle::mutate_proxies();

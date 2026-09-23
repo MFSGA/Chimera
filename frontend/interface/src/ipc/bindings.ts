@@ -216,6 +216,10 @@ export const commands = {
     typedError<[CoreState, number, RunType], string>(
       __TAURI_INVOKE('get_core_status'),
     ),
+  getCoreLifecycleStatus: () =>
+    typedError<CoreLifecycleStatus, string>(
+      __TAURI_INVOKE('get_core_lifecycle_status'),
+    ),
   urlDelayTest: (url: string, expectedStatus: number) =>
     typedError<number | null, string>(
       __TAURI_INVOKE('url_delay_test', { url, expectedStatus }),
@@ -844,6 +848,18 @@ export type CoreInfos = {
   state: CoreState;
   state_changed_at: number;
   config_path: string | null;
+};
+
+export type CoreLifecycleOperationResult = {
+  id: number;
+  error: string | null;
+};
+
+export type CoreLifecycleStatus = {
+  active: number | null;
+  queued: number[];
+  uncertain: boolean;
+  completed: CoreLifecycleOperationResult[];
 };
 
 export type CoreState = 'Running' | { Stopped: string | null };

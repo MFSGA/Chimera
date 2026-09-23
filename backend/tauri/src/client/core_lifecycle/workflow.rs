@@ -3,7 +3,9 @@ use std::sync::Arc;
 use crate::config::chimera::ClashCore;
 
 use super::{
-    super::{application::ApplicationClient, runtime::RuntimePaths},
+    super::{
+        application::ApplicationClient, clash_config::ClashConfigClient, runtime::RuntimePaths,
+    },
     ports::{BinaryInstaller, CoreLifecyclePort, PreparedCoreBinary},
 };
 
@@ -11,12 +13,14 @@ pub(super) enum Command {
     StopCore,
     SelectCore(ClashCore),
     RecoverCore,
+    Reconcile,
     ReplaceCoreBinary(PreparedCoreBinary),
 }
 
 /// Serialize lifecycle mutations while execution remains behind the legacy port.
 pub(super) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
+    clash: ClashConfigClient,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     runtime_paths: RuntimePaths,
@@ -25,12 +29,14 @@ pub(super) struct CoreLifecycleWorkflow {
 impl CoreLifecycleWorkflow {
     pub(super) fn new(
         application: ApplicationClient,
+        clash: ClashConfigClient,
         core: Arc<dyn CoreLifecyclePort>,
         installer: Arc<dyn BinaryInstaller>,
         runtime_paths: RuntimePaths,
     ) -> Self {
         Self {
             application,
+            clash,
             core,
             installer,
             runtime_paths,
@@ -40,6 +46,7 @@ impl CoreLifecycleWorkflow {
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore => self.core.recover().await,
+            Command::Reconcile => self.reconcile().await,
             Command::StopCore => {
                 let mut lease = self.core.begin().await?;
                 lease.stop().await
@@ -50,6 +57,20 @@ impl CoreLifecycleWorkflow {
             }
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
         }
+    }
+
+    async fn reconcile(&self) -> anyhow::Result<()> {
+        let clash = self.clash.get()?;
+        let app = self.application.get_typed();
+        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        let mut lease = self.core.begin().await?;
+        lease
+            .rebuild_running_config(clash, target_core, run_type)
+            .await
     }
 
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {

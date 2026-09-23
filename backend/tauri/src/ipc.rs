@@ -904,7 +904,7 @@ pub async fn patch_clash_config(
     if let Err(error) = outcome.into_result() {
         return Err(IpcError::from(error));
     }
-    feat::update_proxies_buff(None);
+    feat::update_proxies_buff((*client).clone(), None);
     Ok(())
 }
 
@@ -923,13 +923,15 @@ pub async fn patch_clash_core_config(
         tracing::error!("{e}");
         return Err(IpcError::from(e));
     }
-    feat::update_proxies_buff(None);
+    feat::update_proxies_buff((*client).clone(), None);
     Ok(())
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
+pub async fn get_proxies(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::core::clash::proxies::Proxies> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     {
         let guard = ProxiesGuard::global().read();
@@ -937,7 +939,8 @@ pub async fn get_proxies() -> Result<crate::core::clash::proxies::Proxies> {
             return Ok(guard.inner().clone());
         }
     }
-    match ProxiesGuard::global().update().await {
+    let api = client.clash_api_client()?;
+    match ProxiesGuard::global().update(&api).await {
         Ok(_) => Ok(ProxiesGuard::global().read().inner().clone()),
         Err(err) => Err(err.into()),
     }
@@ -952,10 +955,13 @@ pub async fn select_proxy(
 ) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
-    ProxiesGuard::global().select_proxy(&group, &name).await?;
+    let api = client.clash_api_client()?;
+    ProxiesGuard::global()
+        .select_proxy(&api, &group, &name)
+        .await?;
     handle::Handle::mutate_proxies();
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
-        break_when, &group,
+        &api, break_when, &group,
     )
     .await;
     Ok(())
@@ -985,6 +991,14 @@ pub async fn get_core_status(
 ) -> Result<(CoreState, i64, RunType)> {
     let status = client.core_status().await?;
     Ok((status.state, status.state_changed_at, status.run_type))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_core_lifecycle_status(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::client::core_lifecycle::CoreLifecycleStatus> {
+    Ok(client.core_lifecycle_status())
 }
 
 #[tauri::command]
@@ -1494,8 +1508,10 @@ pub async fn clear_clash_ws_history(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_get_configs() -> Result<clash::api::ClashRuntimeConfig> {
-    Ok(clash::api::get_configs().await?)
+pub async fn clash_api_get_configs(
+    client: State<'_, ChimeraClient>,
+) -> Result<clash::api::ClashRuntimeConfig> {
+    Ok(client.clash_api_client()?.get_configs().await?)
 }
 
 #[tauri::command]
@@ -1503,8 +1519,9 @@ pub async fn clash_api_get_configs() -> Result<clash::api::ClashRuntimeConfig> {
 pub async fn clash_api_get_proxy_delay(
     name: String,
     url: Option<String>,
+    client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::DelayRes> {
-    match clash::api::get_proxy_delay(name, url).await {
+    match client.clash_api_client()?.get_proxy_delay(name, url).await {
         Ok(res) => Ok(res),
         Err(err) => Err(err.into()),
     }
@@ -1515,14 +1532,24 @@ pub async fn clash_api_get_proxy_delay(
 pub async fn clash_api_get_group_delay(
     group: String,
     url: Option<String>,
+    client: State<'_, ChimeraClient>,
 ) -> Result<HashMap<String, u32>> {
-    Ok(clash::api::get_group_delay(group, url).await?)
+    Ok(client
+        .clash_api_client()?
+        .get_group_delay(group, url)
+        .await?)
 }
 
 #[tauri::command]
 #[specta::specta]
-pub async fn clash_api_delete_connections(id: Option<String>) -> Result<()> {
-    Ok(clash::api::delete_connections(id.as_deref()).await?)
+pub async fn clash_api_delete_connections(
+    id: Option<String>,
+    client: State<'_, ChimeraClient>,
+) -> Result<()> {
+    Ok(client
+        .clash_api_client()?
+        .delete_connections(id.as_deref())
+        .await?)
 }
 
 #[cfg(test)]

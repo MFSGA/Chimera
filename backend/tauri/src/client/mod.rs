@@ -4,13 +4,13 @@
 //! staged migration from legacy globals and Chimera-specific core support.
 
 mod application;
+mod clash_api;
 mod clash_config;
 mod core_bridge;
 pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
-pub mod rebuild;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
@@ -86,6 +86,7 @@ fn utf8_path(path: std::path::PathBuf) -> anyhow::Result<camino::Utf8PathBuf> {
 async fn new_typed_config_clients(
     paths: &PathResolver,
     bridges: &LegacyBridgeSet,
+    core: Arc<dyn CoreLifecyclePort>,
 ) -> anyhow::Result<TypedConfigClients> {
     let application = ApplicationClient::new(
         utf8_path(paths.application_config_path())?,
@@ -103,7 +104,7 @@ async fn new_typed_config_clients(
         utf8_path(paths.clash_config_path())?,
         bridges.clash.snapshot_legacy()?,
         bridges.clash.clone(),
-        Arc::new(core_lifecycle::LegacyRunningConfigBridge),
+        Arc::new(core_lifecycle::LegacyRunningConfigBridge::new(core)),
     )
     .await?;
 
@@ -141,12 +142,17 @@ impl ChimeraClient {
             system_dns,
             ui_sink,
         } = args;
-        let typed = tauri::async_runtime::block_on(new_typed_config_clients(&paths, &bridges))?;
+        let typed = tauri::async_runtime::block_on(new_typed_config_clients(
+            &paths,
+            &bridges,
+            core.clone(),
+        ))?;
         let runtime_paths =
             runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
         let core_lifecycle = tauri::async_runtime::block_on(CoreLifecycleClient::spawn(
             core.clone(),
             typed.application.clone(),
+            typed.clash_config.clone(),
             runtime_paths,
         ))?;
         Ok(Self::with_parts_and_typed_config(
@@ -181,6 +187,7 @@ impl ChimeraClient {
         let core_lifecycle = CoreLifecycleClient::direct(
             core.clone(),
             typed.application.clone(),
+            typed.clash_config.clone(),
             runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
         );
         Self::with_parts_and_typed_config(
@@ -311,7 +318,11 @@ mod tests {
 
     #[async_trait]
     impl CoreLifecyclePort for RecordingCore {
-        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+        fn init(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
             self.events.lock().unwrap().push("begin");
             Ok(Box::new(RecordingLease {
                 events: self.events.clone(),
