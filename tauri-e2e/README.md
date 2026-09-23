@@ -15,6 +15,8 @@ pnpm e2e:tauri:build
 pnpm --filter @chimera/tauri-e2e test:smoke
 ```
 
+The E2E build also compiles the pinned `chimera-service` submodule with the Rust `nightly` toolchain and stages that binary into the Tauri sidecar directory. Install both stable and nightly Rust toolchains before running `pnpm e2e:tauri:build`.
+
 `pnpm e2e:tauri` builds the application and runs the default smoke suite. `pnpm e2e:tauri:test` runs smoke against an existing binary. Neither command automatically runs unit tests or all desktop suites. Rebuild after relevant source changes.
 
 | Command in `@chimera/tauri-e2e`                               | Current selection                                                                  |

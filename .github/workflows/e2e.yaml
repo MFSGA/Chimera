@@ -75,6 +75,7 @@ jobs:
         shell: pwsh
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
+          rustup toolchain install nightly --profile minimal --no-self-update
           rustup default stable
           rustc --version
           cargo --version
@@ -88,6 +89,11 @@ jobs:
         name: Install pnpm
         with:
           run_install: false
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
 
       - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
@@ -121,7 +127,7 @@ jobs:
         run: pnpm --filter @chimera/tauri-e2e typecheck
 
       - name: Prepare sidecars and resources
-        run: pnpm check
+        run: pnpm prepare:check
 
       - name: Build Tauri E2E binary
         run: pnpm e2e:tauri:build

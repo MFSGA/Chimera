@@ -1,8 +1,6 @@
 import { ClashManifest } from 'types';
 import versionManifest from '../../manifest/version.json';
-
-const CLASH_RS_MIRROR_TAG = 'deps-clash-rs-0.10.8';
-const CLASH_RS_MIRROR_URL = `https://github.com/MFSGA/Chimera_Service/releases/download/${CLASH_RS_MIRROR_TAG}`;
+import { CLASH_RS_MIRROR_URL } from '../utils/clash-rs-mirror';
 
 export const CLASH_RS_MANIFEST: ClashManifest = {
   URL_PREFIX: CLASH_RS_MIRROR_URL,

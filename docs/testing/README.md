@@ -181,8 +181,8 @@ MUST NOT 保存真实订阅凭据、完整认证头或不相关宿主环境信�
 pnpm install --frozen-lockfile
 pnpm --filter @chimera/tauri-e2e test:unit
 pnpm --filter @chimera/tauri-e2e typecheck
-# 需要新建或更新桌面测试产物时执行；check 会准备/下载 sidecar 和资源。
-pnpm check
+# 需要新建或更新桌面测试产物时执行；prepare:check 会准备/下载 sidecar 和资源。
+pnpm prepare:check
 pnpm e2e:tauri:build
 # 把示例路径替换为本次目标；此命令不会自动重新构建应用。
 pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/ipv6-runtime-setting.e2e.ts

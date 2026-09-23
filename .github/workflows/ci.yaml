@@ -94,6 +94,11 @@ jobs:
         with:
           run_install: false
 
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Get pnpm store directory
         shell: bash
         run: |
@@ -125,7 +130,7 @@ jobs:
           NODE_OPTIONS: '--max_old_space_size=4096'
       # TODO: preapre the js script file
       - name: Prepare sidecar and resources
-        run: pnpm check
+        run: pnpm prepare:check
         env:
           CHIMERA_E2E_LOCAL_SERVICE: ${{ env.CHIMERA_RELEASE_CANDIDATE }}
       - name: Verify quality
@@ -248,6 +253,11 @@ jobs:
         with:
           run_install: false
 
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - name: Get pnpm store directory
         shell: bash
         run: |
@@ -269,7 +279,7 @@ jobs:
 
       # todo: prepare the js script file
       - name: Prepare sidecar and resources
-        run: pnpm check
+        run: pnpm prepare:check
         env:
           CHIMERA_E2E_LOCAL_SERVICE: ${{ env.CHIMERA_RELEASE_CANDIDATE }}
 

@@ -113,7 +113,7 @@ pnpm generate:manifest
 准备核心二进制资源并执行检查：
 
 ```bash
-pnpm check
+pnpm prepare:check
 ```
 
 启动桌面应用：

@@ -172,3 +172,10 @@ export const getClashRustAlphaInfo = ({
     checksumURL: `${downloadURL}.sha256`,
   };
 };
+export const getClashRsAlphaLatestVersion = () => {
+  const version = CLASH_RS_ALPHA_MANIFEST.VERSION;
+  if (!version) {
+    throw new Error('clash-rs alpha version is missing from manifest');
+  }
+  return version;
+};
