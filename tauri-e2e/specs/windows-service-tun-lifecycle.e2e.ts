@@ -1,4 +1,3 @@
-
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,7 +10,14 @@ const specDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(specDirectory, '../..');
 const serviceBinary =
   process.env.CHIMERA_E2E_SERVICE_BINARY ??
-  path.join(repoRoot, 'backend', 'target', 'e2e', 'debug', 'chimera-service.exe');
+  path.join(
+    repoRoot,
+    'backend',
+    'target',
+    'e2e',
+    'debug',
+    'chimera-service.exe',
+  );
 const tunSmokeScript = path.join(repoRoot, 'scripts', 'windows-tun-smoke.ps1');
 
 type CoreState = 'Running' | { Stopped: string | null };
