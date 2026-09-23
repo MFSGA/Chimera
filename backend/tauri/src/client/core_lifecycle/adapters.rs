@@ -34,14 +34,28 @@ impl RunningConfigPort for LegacyRunningConfigBridge {
     }
 }
 
-pub(crate) struct LegacyCoreBridge;
+pub(crate) struct LegacyCoreBridge {
+    manager: Arc<CoreManager>,
+}
 
-struct LegacyCoreLifecycleLease {
-    lease: CoreManagerLifecycleLease<'static>,
+impl LegacyCoreBridge {
+    pub(crate) fn new() -> Self {
+        Self {
+            manager: Arc::new(CoreManager::new()),
+        }
+    }
+
+    fn manager(&self) -> &Arc<CoreManager> {
+        &self.manager
+    }
+}
+
+struct LegacyCoreLifecycleLease<'a> {
+    lease: CoreManagerLifecycleLease<'a>,
 }
 
 #[async_trait]
-impl CoreLifecycleLease for LegacyCoreLifecycleLease {
+impl CoreLifecycleLease for LegacyCoreLifecycleLease<'_> {
     async fn rebuild_running_config(
         &mut self,
         clash: ClashConfig,
@@ -68,14 +82,14 @@ impl CoreLifecycleLease for LegacyCoreLifecycleLease {
 
 #[async_trait]
 impl CoreLifecyclePort for LegacyCoreBridge {
-    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease>> {
+    async fn begin(&self) -> anyhow::Result<Box<dyn CoreLifecycleLease + '_>> {
         Ok(Box::new(LegacyCoreLifecycleLease {
-            lease: CoreManager::global().begin_lifecycle().await,
+            lease: self.manager().begin_lifecycle().await,
         }))
     }
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
-        let (state, state_changed_at, run_type) = CoreManager::global().status().await;
+        let (state, state_changed_at, run_type) = self.manager().status().await;
         Ok(CoreStatusSnapshot {
             state: state.into_owned(),
             state_changed_at,
@@ -84,7 +98,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     fn runtime_transform_diagnostics(&self) -> anyhow::Result<Option<RuntimeTransformDiagnostics>> {
-        let core = CoreManager::global();
+        let core = self.manager();
         let failure =
             core.runtime_transform_failure()
                 .map(|failure| RuntimeTransformFailureDiagnostics {
@@ -104,7 +118,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 
     fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        CoreManager::global().promoted_runtime_snapshot()
+        self.manager().promoted_runtime_snapshot()
     }
 
     async fn on_profile_change(&self, break_when: bool) {
@@ -112,11 +126,11 @@ impl CoreLifecyclePort for LegacyCoreBridge {
     }
 }
 
-pub(crate) struct CoreUpdateLease {
-    pub(crate) lease: Box<dyn CoreLifecycleLease>,
+pub(crate) struct CoreUpdateLease<'a> {
+    pub(crate) lease: Box<dyn CoreLifecycleLease + 'a>,
 }
 
-impl CoreUpdateLease {
+impl CoreUpdateLease<'_> {
     pub(crate) async fn stop(&mut self) -> anyhow::Result<()> {
         self.lease.stop().await
     }

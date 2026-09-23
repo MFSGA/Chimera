@@ -490,14 +490,18 @@ pub struct CoreManager {
 }
 
 impl CoreManager {
-    pub fn global() -> &'static CoreManager {
-        static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
-        CORE_MANAGER.get_or_init(|| CoreManager {
+    pub(crate) fn new() -> Self {
+        Self {
             instance: Mutex::new(None),
             run_lock: RuntimeRebuildGate::default(),
             runtime_lifecycle: RuntimeLifecycle::default(),
             port_resolver: SessionPortResolver::default(),
-        })
+        }
+    }
+
+    pub fn global() -> &'static CoreManager {
+        static CORE_MANAGER: OnceCell<CoreManager> = OnceCell::new();
+        CORE_MANAGER.get_or_init(Self::new)
     }
 
     pub(crate) async fn begin_lifecycle(&self) -> CoreLifecycleLease<'_> {
