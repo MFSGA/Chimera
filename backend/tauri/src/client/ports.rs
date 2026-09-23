@@ -255,21 +255,29 @@ mod tests {
 
     #[test]
     fn resolves_fixed_strategies_and_formats_external_controller() {
+        let mixed_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let socks_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let external_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mixed = mixed_probe.local_addr().unwrap().port();
+        let socks = socks_probe.local_addr().unwrap().port();
+        let external = external_probe.local_addr().unwrap().port();
+        drop((mixed_probe, socks_probe, external_probe));
+
         let resolver = SessionPortResolver::default();
         let mut clash = ClashConfig::default();
-        clash.mixed_port = fixed(48231);
-        clash.socks_port = Some(fixed(48232));
+        clash.mixed_port = fixed(mixed);
+        clash.socks_port = Some(fixed(socks));
         clash.http_port = None;
-        clash.external_controller.port = fixed(48233);
+        clash.external_controller.port = fixed(external);
 
         let prepared = resolver.prepare(&clash).unwrap();
         let ports = prepared.bindings().clone();
-        assert_eq!(ports.mixed_port, 48231);
-        assert_eq!(ports.socks_port, Some(48232));
+        assert_eq!(ports.mixed_port, mixed);
+        assert_eq!(ports.socks_port, Some(socks));
         assert_eq!(ports.port, None);
         assert_eq!(
             ports.external_controller.as_deref(),
-            Some("127.0.0.1:48233")
+            Some(format!("127.0.0.1:{external}").as_str())
         );
         assert_eq!(resolver.cached_ports(), None);
         resolver.commit(prepared);
