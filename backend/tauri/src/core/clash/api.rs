@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
@@ -123,6 +123,41 @@ impl ApiClient {
             headers.insert("Authorization", format!("Bearer {secret}").parse()?);
         }
         Ok(Self { base_url, headers })
+    }
+
+    /// Wait until the applied core's HTTP controller is actually accepting
+    /// authenticated requests. Process liveness alone is not API readiness.
+    pub(crate) async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
+        let http_client = reqwest::ClientBuilder::new()
+            .no_proxy()
+            .timeout(Duration::from_secs(1))
+            .build()?;
+        let url = url::Url::options()
+            .base_url(Some(&self.base_url))
+            .parse("/configs")
+            .context("failed to create controller readiness URL")?;
+        let deadline = tokio::time::Instant::now() + timeout;
+
+        loop {
+            match http_client
+                .get(url.clone())
+                .headers(self.headers.clone())
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status)
+            {
+                Ok(_) => return Ok(()),
+                Err(error) if tokio::time::Instant::now() >= deadline => {
+                    return Err(error).context(format!(
+                        "Clash controller {} did not become ready within {timeout:?}",
+                        self.base_url
+                    ));
+                }
+                Err(_) => {}
+            }
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     #[instrument(skip_all, fields(
@@ -352,7 +387,44 @@ pub struct DelayRes {
 
 #[cfg(test)]
 mod tests {
-    use super::ClashRuntimeConfig;
+    use std::time::Duration;
+
+    use super::{ApiClient, ClashRuntimeConfig};
+
+    #[tokio::test]
+    async fn readiness_requires_an_responding_controller() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("probe should connect");
+            let mut request = [0_u8; 1024];
+            let read = stream
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            assert!(read > 0, "readiness probe must send an HTTP request");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .expect("response should write");
+            stream.shutdown().await.expect("response should close");
+        });
+        let api = ApiClient::new(crate::config::clash::ClashInfo {
+            port: address.port(),
+            server: address.to_string(),
+            secret: None,
+        })
+        .expect("API client should build");
+
+        api.wait_until_ready(Duration::from_secs(1))
+            .await
+            .expect("controller response should satisfy readiness");
+        server.await.expect("server task should finish");
+    }
 
     #[test]
     fn runtime_tun_deserializes_mihomo_kebab_case_fields() {

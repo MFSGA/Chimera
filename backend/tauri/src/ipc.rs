@@ -946,7 +946,7 @@ pub async fn get_proxies(
             return Ok(guard.inner().clone());
         }
     }
-    let api = client.clash_api_client()?;
+    let api = client.clash_api_client().await?;
     match ProxiesGuard::global().update(&api).await {
         Ok(_) => Ok(ProxiesGuard::global().read().inner().clone()),
         Err(err) => Err(err.into()),
@@ -962,7 +962,7 @@ pub async fn select_proxy(
 ) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
-    let api = client.clash_api_client()?;
+    let api = client.clash_api_client().await?;
     ProxiesGuard::global()
         .select_proxy(&api, &group, &name)
         .await?;
@@ -1518,7 +1518,7 @@ pub async fn clear_clash_ws_history(
 pub async fn clash_api_get_configs(
     client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::ClashRuntimeConfig> {
-    Ok(client.clash_api_client()?.get_configs().await?)
+    Ok(client.clash_api_client().await?.get_configs().await?)
 }
 
 #[tauri::command]
@@ -1528,7 +1528,12 @@ pub async fn clash_api_get_proxy_delay(
     url: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::DelayRes> {
-    match client.clash_api_client()?.get_proxy_delay(name, url).await {
+    match client
+        .clash_api_client()
+        .await?
+        .get_proxy_delay(name, url)
+        .await
+    {
         Ok(res) => Ok(res),
         Err(err) => Err(err.into()),
     }
@@ -1542,7 +1547,8 @@ pub async fn clash_api_get_group_delay(
     client: State<'_, ChimeraClient>,
 ) -> Result<HashMap<String, u32>> {
     Ok(client
-        .clash_api_client()?
+        .clash_api_client()
+        .await?
         .get_group_delay(group, url)
         .await?)
 }
@@ -1554,7 +1560,8 @@ pub async fn clash_api_delete_connections(
     client: State<'_, ChimeraClient>,
 ) -> Result<()> {
     Ok(client
-        .clash_api_client()?
+        .clash_api_client()
+        .await?
         .delete_connections(id.as_deref())
         .await?)
 }

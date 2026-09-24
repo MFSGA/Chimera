@@ -19,9 +19,9 @@ pub(super) struct ObservedCoreConfig {
 /// The loopback guard keeps the controller credential on-host even if the
 /// effective controller endpoint is unexpectedly changed.
 pub(super) async fn observed_core_config(client: &ChimeraClient) -> Result<ObservedCoreConfig, ()> {
-    let info = client.clash_info();
+    let info = client.active_clash_info().await.map_err(|_| ())?;
     loopback_controller_url(&info.server)?;
-    let api = client.clash_api_client().map_err(|_| ())?;
+    let api = client.clash_api_client().await.map_err(|_| ())?;
     let config = tokio::time::timeout(CORE_PROBE_TIMEOUT, api.get_configs())
         .await
         .map_err(|_| ())?

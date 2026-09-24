@@ -274,13 +274,16 @@ impl CoreFacade {
         run_type: RunType,
     ) -> anyhow::Result<()> {
         let manager = self.manager.clone();
-        self.run_local_mutation("core reconcile", async move {
-            let lease = manager.begin_lifecycle().await;
-            lease
-                .rebuild_running_config_with(clash, target_core, run_type)
-                .await
-        })
-        .await
+        let result = self
+            .run_local_mutation("core reconcile", async move {
+                let lease = manager.begin_lifecycle().await;
+                lease
+                    .rebuild_running_config_with(clash, target_core, run_type)
+                    .await
+            })
+            .await;
+        self.refresh_ws_binding().await;
+        result
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
@@ -294,11 +297,14 @@ impl CoreFacade {
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
         let manager = self.manager.clone();
-        self.run_local_mutation("core selection", async move {
-            let lease = manager.begin_lifecycle().await;
-            lease.change_core(clash_core).await
-        })
-        .await
+        let result = self
+            .run_local_mutation("core selection", async move {
+                let lease = manager.begin_lifecycle().await;
+                lease.change_core(clash_core).await
+            })
+            .await;
+        self.refresh_ws_binding().await;
+        result
     }
 
     pub(crate) async fn status(&self) -> CoreStatusSnapshot {
@@ -328,6 +334,26 @@ impl CoreFacade {
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
         self.manager.effective_clash_info()
+    }
+
+    pub(crate) async fn active_clash_info(&self) -> anyhow::Result<ClashInfo> {
+        self.manager.active_clash_info().await
+    }
+
+    async fn refresh_ws_binding(&self) {
+        if self.outcome_uncertain() {
+            return;
+        }
+        let app_handle = crate::core::handle::Handle::global()
+            .app_handle
+            .lock()
+            .clone();
+        let Some(app_handle) = app_handle else {
+            return;
+        };
+        if let Err(error) = crate::core::clash::restart_ws_connector(&app_handle).await {
+            tracing::debug!(%error, "Clash websocket binding is not ready after core mutation");
+        }
     }
 
     pub(crate) async fn probe_service(
@@ -364,7 +390,7 @@ impl CoreFacade {
     }
 
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
-        let result = match ApiClient::new(self.effective_clash_info()) {
+        let result = match self.active_clash_info().await.and_then(ApiClient::new) {
             Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
             Err(error) => Err(error),
         };

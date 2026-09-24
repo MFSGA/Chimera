@@ -40,7 +40,10 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         .state::<crate::client::ChimeraClient>()
         .inner()
         .clone();
-    let endpoint: ws::ClashEndpointResolver = Arc::new(move || client.clash_info());
+    let endpoint: ws::ClashEndpointResolver = Arc::new(move || {
+        let client = client.clone();
+        Box::pin(async move { client.active_clash_info().await })
+    });
     let ws_connector = ws::ClashConnectionsConnector::new(endpoint);
     manager.manage(ws_connector.clone());
     let app_handle = manager.app_handle().clone();

@@ -128,5 +128,13 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
             .get_client_info()
     }
 
+    async fn active_clash_info(&self) -> anyhow::Result<crate::config::clash::ClashInfo> {
+        let status = self.status().await?;
+        if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
+            anyhow::bail!("the core API is unavailable because the core is not running");
+        }
+        Ok(self.effective_clash_info())
+    }
+
     async fn on_profile_change(&self, break_when: bool);
 }

@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use atomic_enum::atomic_enum;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, future::BoxFuture};
 use parking_lot::Mutex;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,9 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
 };
 
-pub(crate) type ClashEndpointResolver =
-    Arc<dyn Fn() -> crate::config::clash::ClashInfo + Send + Sync>;
+pub(crate) type ClashEndpointResolver = Arc<
+    dyn Fn() -> BoxFuture<'static, anyhow::Result<crate::config::clash::ClashInfo>> + Send + Sync,
+>;
 
 const MAX_CONNECTIONS_HISTORY: usize = 32;
 const MAX_MEMORY_HISTORY: usize = 32;
@@ -538,7 +539,10 @@ impl ClashConnectionsActor {
                 .dispatch_state_changed(ClashConnectionsConnectorState::Connecting);
         }
 
-        let endpoint = ClashConnectionsConnector::endpoint((state.endpoint)(), kind.path())
+        let info = (state.endpoint)()
+            .await
+            .with_context(|| format!("{} API binding is unavailable", kind.path()))?;
+        let endpoint = ClashConnectionsConnector::endpoint(info, kind.path())
             .with_context(|| format!("failed to create {} endpoint", kind.path()))?;
         log::debug!(
             "connecting to clash {} ws server: {endpoint:?}",
@@ -661,7 +665,10 @@ impl Actor for ClashConnectionsActor {
             }
             ClashConnectionsActorMessage::Reconnect(kind) => {
                 if let Err(err) = Self::start_stream(myself.clone(), state, kind).await {
-                    tracing::error!("failed to restart clash {} ws: {err:#}", kind.path());
+                    tracing::debug!(
+                        "clash {} ws is waiting for an active API binding: {err:#}",
+                        kind.path()
+                    );
                     if kind == ClashWsKind::Connections {
                         state
                             .shared
@@ -889,10 +896,14 @@ mod tests {
     async fn actor_stop_sets_disconnected() {
         let shared = Arc::new(ClashConnectionsConnectorShared::new());
         shared.dispatch_state_changed(ClashConnectionsConnectorState::Connected);
-        let endpoint: ClashEndpointResolver = Arc::new(|| crate::config::clash::ClashInfo {
-            port: 9090,
-            server: "127.0.0.1:9090".into(),
-            secret: None,
+        let endpoint: ClashEndpointResolver = Arc::new(|| {
+            Box::pin(async {
+                Ok(crate::config::clash::ClashInfo {
+                    port: 9090,
+                    server: "127.0.0.1:9090".into(),
+                    secret: None,
+                })
+            })
         });
         let (actor_ref, handle) =
             Actor::spawn(None, ClashConnectionsActor, (shared.clone(), endpoint))

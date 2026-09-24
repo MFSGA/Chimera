@@ -540,6 +540,30 @@ impl CoreManager {
             .unwrap_or_else(|| Config::clash().latest().get_client_info())
     }
 
+    /// Return the controller binding only when it belongs to the currently
+    /// applied, running core. This is the staged equivalent of ref's
+    /// instance-bound `CoreApiConnection`: desired config is never treated as
+    /// proof that an API endpoint exists.
+    pub(crate) async fn active_clash_info(&self) -> Result<ClashInfo> {
+        if self.lifecycle.run_lock.is_locked() {
+            anyhow::bail!("the core API is unavailable during a lifecycle transition");
+        }
+        let instance = self
+            .instance
+            .lock()
+            .as_ref()
+            .cloned()
+            .context("no active core instance exposes an API")?;
+        if !matches!(instance.state().await.as_ref(), CoreState::Running) {
+            anyhow::bail!("the core API is unavailable because the core is not running");
+        }
+        if self.lifecycle.run_lock.is_locked() {
+            anyhow::bail!("the core API became unavailable during a lifecycle transition");
+        }
+        self.applied_clash_info()
+            .context("the running core has no applied runtime API binding")
+    }
+
     pub async fn status<'a>(&self) -> (Cow<'a, CoreState>, i64, RunType) {
         let instance = {
             let instance = self.instance.lock();
@@ -611,16 +635,6 @@ impl CoreManager {
             *this = Some(instance.clone());
         }
         instance.start().await?;
-        let app_handle = crate::core::handle::Handle::global()
-            .app_handle
-            .lock()
-            .clone();
-        if let Some(app_handle) = app_handle {
-            log_err!(
-                crate::core::clash::restart_ws_connector(&app_handle).await,
-                "failed to restart clash websocket connector"
-            );
-        }
         crate::core::handle::Handle::refresh_clash();
         Ok(())
     }
@@ -732,6 +746,11 @@ impl CoreManager {
         self.run_core_from_product_inner(paths.product(), target_core, run_type)
             .await
             .map_err(RuntimeRestartError::Start)?;
+        api::ApiClient::new(snapshot.clash_info())
+            .map_err(RuntimeRestartError::Start)?
+            .wait_until_ready(Duration::from_secs(10))
+            .await
+            .map_err(RuntimeRestartError::Start)?;
         self.lifecycle
             .runtime_lifecycle
             .publish_applied(snapshot)
@@ -747,6 +766,7 @@ impl CoreManager {
         transaction: RuntimeTransactionSnapshot,
         previous_clash: crate::config::clash::IClashTemp,
         recovery_target: ClashCore,
+        recovery_api_info: Option<ClashInfo>,
     ) -> Result<()> {
         *Config::clash().data() = previous_clash;
         restore_failed_apply(
@@ -760,7 +780,13 @@ impl CoreManager {
                         recovery_target,
                         Self::committed_run_type(),
                     )
-                    .await
+                    .await?;
+                    if let Some(info) = recovery_api_info {
+                        api::ApiClient::new(info)?
+                            .wait_until_ready(Duration::from_secs(10))
+                            .await?;
+                    }
+                    Ok(())
                 } else {
                     self.stop_running_instance().await?;
                     self.instance.lock().take();
@@ -803,6 +829,11 @@ impl CoreManager {
             .map(|snapshot| snapshot.target_core)
             .unwrap_or_else(Self::committed_core);
         let previous_clash = Config::clash().data().clone();
+        let recovery_api_info = transaction
+            .lifecycle
+            .applied
+            .as_ref()
+            .map(|snapshot| snapshot.clash_info());
 
         match self
             .promote_and_start_locked(&paths, target_core, clash, run_type)
@@ -821,6 +852,7 @@ impl CoreManager {
                         transaction,
                         previous_clash,
                         recovery_target,
+                        recovery_api_info,
                     )
                     .await
                 {
@@ -917,8 +949,29 @@ pub fn find_binary_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{RunType, RuntimeRestartError};
+    use super::{CoreManager, RunType, RuntimeRestartError};
     use crate::core::service::ipc::IpcState;
+
+    #[tokio::test]
+    async fn active_api_binding_requires_a_running_applied_core() {
+        let manager = CoreManager::new();
+        let error = manager
+            .active_clash_info()
+            .await
+            .expect_err("an idle manager must not publish an API binding");
+        assert!(error.to_string().contains("no active core instance"));
+    }
+
+    #[tokio::test]
+    async fn active_api_binding_is_hidden_during_lifecycle_transition() {
+        let manager = CoreManager::new();
+        let _lease = manager.begin_lifecycle().await;
+        let error = manager
+            .active_clash_info()
+            .await
+            .expect_err("a lifecycle transition must hide the API binding");
+        assert!(error.to_string().contains("lifecycle transition"));
+    }
 
     #[test]
     fn run_type_classification_uses_only_explicit_inputs() {

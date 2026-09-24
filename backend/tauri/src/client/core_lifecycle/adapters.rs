@@ -148,19 +148,19 @@ impl LegacyRunningConfigBridge {
         Self { core }
     }
 
-    fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
-        crate::core::clash::api::ApiClient::new(self.core.effective_clash_info())
+    async fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+        crate::core::clash::api::ApiClient::new(self.core.active_clash_info().await?)
     }
 }
 
 #[async_trait]
 impl RunningConfigPort for LegacyRunningConfigBridge {
     async fn read(&self) -> anyhow::Result<ClashRuntimeConfig> {
-        self.api_client()?.get_configs().await
+        self.api_client().await?.get_configs().await
     }
 
     async fn patch(&self, patch: &Mapping) -> anyhow::Result<()> {
-        self.api_client()?.patch_configs(patch).await
+        self.api_client().await?.patch_configs(patch).await
     }
 }
 
@@ -239,6 +239,10 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
         self.facade().effective_clash_info()
+    }
+
+    async fn active_clash_info(&self) -> anyhow::Result<crate::config::clash::ClashInfo> {
+        self.facade().active_clash_info().await
     }
 
     async fn on_profile_change(&self, break_when: bool) {
