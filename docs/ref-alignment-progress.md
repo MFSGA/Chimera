@@ -490,6 +490,13 @@
   `typescript_bindings_are_fresh` 1 项通过；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、
   `node --check scripts/ref-align.mjs`、`git diff --check` 通过。Profile content hook 子任务的
   `pnpm typecheck` 与 Prettier 检查通过。未运行桌面 E2E。
+- 本次增量：本地 `qwen2.5-coder:14b` 对固定 ref 的
+  `frontend/interface/src/ipc/index.ts` 生成并确认了受限复制计划；`ref-align` 按映射精确插入
+  `mutations`/`queries` 与 `invokeMutation`/`invokeQuery`/`unwrapQueryOptions` 的导出，保留
+  Chimera barrel 的其他内容。首次计划因 ref 代码块顺序声明错误被执行器拒绝且未写文件；修正
+  manifest 后第二次计划通过。该增量仅公开现有生成 API，不改变命令实现、Profile DTO 或运行时。
+  Codex 复核了来源、插入标记和最终 diff，并运行 `pnpm typecheck`、
+  `pnpm lint:frontend-boundaries`、目标文件 Prettier 检查及 `git diff --check`，均通过。
 - 状态：T06 仍在进行。剩余工作是把 Profile IPC 与 actor-backed application facade 接通，迁移
   main/legacy hooks 与 UI，随后切换 agent；setup 的 Profile migrator 闸门继续保留到所有消费者
   迁移完成。此切片只提供 query/mutation 绑定生成，不改变运行时 Profile owner。
