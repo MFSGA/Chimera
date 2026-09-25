@@ -497,6 +497,13 @@
   manifest 后第二次计划通过。该增量仅公开现有生成 API，不改变命令实现、Profile DTO 或运行时。
   Codex 复核了来源、插入标记和最终 diff，并运行 `pnpm typecheck`、
   `pnpm lint:frontend-boundaries`、目标文件 Prettier 检查及 `git diff --check`，均通过。
+- 下一段后端边界复核：Qwen 的只读审计建议单独复制
+  `application_workflow/profiles.rs`，但 Codex 核验发现本地
+  `backend/tauri/src/client/application_workflow/` 不存在，也没有注册
+  `ApplicationWorkflow`；ref 函数依赖该 workflow 的 `clash`、`lifecycle`、`preparation`、
+  `profiles` 和 `ui` 字段。该建议不可编译且不能构成完整调用链，未执行复制。actor-backed
+  IPC 需要与 `ChimeraClient` 的唯一 Profile owner、Tauri state/handler 注册及迁移闸门协调；
+  单独添加 ref 文件会成为未接线代码，因此 T06 仍不能宣称完成。
 - 状态：T06 仍在进行。剩余工作是把 Profile IPC 与 actor-backed application facade 接通，迁移
   main/legacy hooks 与 UI，随后切换 agent；setup 的 Profile migrator 闸门继续保留到所有消费者
   迁移完成。此切片只提供 query/mutation 绑定生成，不改变运行时 Profile owner。
