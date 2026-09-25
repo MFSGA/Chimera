@@ -457,3 +457,23 @@
   `ProfilesClient` 收敛回 `client/profiles.rs`，从 setup 注入唯一 actor/service/fetcher/notifier，
   移除 legacy Profile owner，并将 setup 切到完整 Profile migrator。生产切换未完成前，Profile
   全流程仍是部分迁移。
+
+## T06 IPC helpers（进行中；仅完成依赖切片）
+
+- ref commit：`232321d52121fe8bb25cb2a090d814129cb50c55`；读取时 `git -C ref status --short`
+  为空。
+- ref → Chimera 映射：`frontend/interface/src/ipc/query-options.ts` → 同路径，完整复制
+  query/mutation invoke helpers；`frontend/interface/src/utils/index.ts::Result` → 同名类型，
+  仅复制 ref 的 `export` 声明以满足 helper 导入，保留本地 `unwrapResult` 实现。
+- 本切片由本地 `qwen2.5-coder:14b` 通过受限映射计划选择并执行；Codex 核对了源/目标与
+  计划 SHA-256，并将复制文件按本地 Prettier 规则格式化。无品牌替换。T06 允许目标新增
+  `query-options.ts` 及 `utils/index.ts`，后者只为导出已有 Result union。
+- 本地模型判定 profile hooks 与单个 workflow 文件当前都不能安全独立复制：hooks 依赖尚未
+  生成的 `queries`/`mutations` bindings；workflow 依赖本地尚未接入的 ApplicationWorkflow。
+  未复制这些目标，也未宣称 IPC 或 Profile 主流程已切换。
+- 实际验证：`pnpm typecheck` 通过（interface、utils、ui、chimera 与 tauri-e2e）；相关
+  文件及本文档的 Prettier 检查、`git diff --check` 通过。未运行单测、Rust check 或桌面 E2E；
+  此切片没有 Rust 行为变化。
+- 状态：T06 仍在进行。剩余工作是完成 actor-backed facade 与薄 IPC adapter，运行生成器更新
+  bindings，再把 profile hooks 接到生成的 query/mutation API；须保留 setup 的生产迁移闸门，
+  直到所有 UI 与 agent 消费者均迁移完成。

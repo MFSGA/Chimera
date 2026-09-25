@@ -167,13 +167,15 @@ backend/tauri/src/ipc.rs
 backend/tauri/src/specta_export.rs
 frontend/interface/src/ipc/use-profile.ts
 frontend/interface/src/ipc/use-profile-content.ts
+frontend/interface/src/ipc/query-options.ts
 frontend/interface/src/ipc/index.ts
 frontend/interface/src/ipc/bindings.ts   # only through generator
+frontend/interface/src/utils/index.ts
 ```
 
 **交给模型：**
 
-> 对照 ref 的 `client/application_workflow/profiles.rs`、workflow 相关模块、`ipc.rs`、`specta_export.rs` 和 interface profile hooks，把 ProfilesClient 接到统一 application facade。Profile IPC 只做边界转换，错误/degradation 保留 ref 语义；生成 bindings 必须运行项目现有 generator，禁止手改。处理 user 当前 `git diff`，只针对这条流程编辑。更新 shared query keys、cache invalidation、mutation 返回值。运行 Rust check/目标测试、binding freshness、`pnpm typecheck` 和 `pnpm lint:frontend-boundaries`。
+> 对照 ref 的 `client/application_workflow/profiles.rs`、workflow 相关模块、`ipc.rs`、`specta_export.rs` 和 interface profile hooks，把 ProfilesClient 接到统一 application facade。补入 ref 的 `query-options.ts` 作为 hooks 所需 IPC 辅助模块。Profile IPC 只做边界转换，错误/degradation 保留 ref 语义；生成 bindings 必须运行项目现有 generator，禁止手改。处理当前工作树差异，只针对这条流程编辑。更新 shared query keys、cache invalidation、mutation 返回值。运行 Rust check/目标测试、binding freshness、`pnpm typecheck` 和 `pnpm lint:frontend-boundaries`。
 
 **验收：** IPC 不再依赖旧 `ProfilesResponse`/ProfileBuilder 业务结构；所有 profile 命令由唯一共享 client 提供；bindings fresh。
 
