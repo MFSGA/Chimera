@@ -498,11 +498,10 @@ impl ChimeraClient {
         let profiles = self.inner.profiles.snapshot()?;
         let item = profiles.get_item(&uid)?;
         let raw = self.inner.profile_files.read(item.file()).await?;
-        if matches!(item.kind(), ProfileItemType::Script(_)) {
-            return Ok(raw);
+        if item.kind().is_config() {
+            return crate::service::profile_file::normalize_yaml_document(&raw);
         }
-        let data = serde_yaml::from_str::<serde_yaml::Mapping>(&raw)?;
-        serde_yaml::to_string(&data).context("failed to convert yaml to string")
+        Ok(raw)
     }
 
     pub(crate) async fn commit_new_profile(

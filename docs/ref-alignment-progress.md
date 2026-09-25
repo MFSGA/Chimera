@@ -506,4 +506,22 @@
   单独添加 ref 文件会成为未接线代码，因此 T06 仍不能宣称完成。
 - 状态：T06 仍在进行。剩余工作是把 Profile IPC 与 actor-backed application facade 接通，迁移
   main/legacy hooks 与 UI，随后切换 agent；setup 的 Profile migrator 闸门继续保留到所有消费者
-  迁移完成。此切片只提供 query/mutation 绑定生成，不改变运行时 Profile owner。
+ 迁移完成。下面的内容读取增量接在现有 `readProfileFile` IPC 上；不改变运行时 Profile owner，
+ T06 仍未完成。
+- Profile 内容读取增量：ref `backend/tauri/src/client/mod.rs::read_profile_file` 与
+  `backend/tauri/src/service/profile_file.rs::normalize_yaml_document`（commit
+  `232321d52121fe8bb25cb2a090d814129cb50c55`）映射至
+  `backend/tauri/src/client/profiles.rs::ChimeraClient::read_profile_file`。按本地
+  `ProfileItemType::is_config()` 区分 Config/Transform：Config 调用相同 normalizer；Merge、Script
+  等 Transform 返回原文。读取仍通过现有 `ProfilesReadPort`/`ProfileFsPort` 和 IPC，未接入或启动
+  `ProfilesClient`，也未触碰写入、迁移闸门或 UI 合同。
+- 代码来源：本地 `qwen2.5-coder:14b` 经 Ollama 4096-token 上下文生成该方法；Codex 对照 ref
+  后应用，补充 `client::tests::transform_profile_file_read_returns_raw_content` 回归测试。Aider
+  的 whole/diff 编辑格式均未生成可应用补丁，且未改源文件。
+- 验证：`cargo test --manifest-path backend/Cargo.toml -p chimera
+  transform_profile_file_read_returns_raw_content -j 1`、同命令过滤
+  `normalize_yaml_document_round_trips_mappings_and_rejects_garbage`、
+  `cargo check --manifest-path backend/Cargo.toml -p chimera -j 1`、
+  `cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、`git diff --check` 均通过；
+  `chimera` 仍报告 122 条既有 warning。广域 `cargo fmt --manifest-path backend/Cargo.toml --all
+  -- --check` 被固定 `backend/chimera-runtime` 子模块中的既有换行风格报错阻断；未改该子模块。

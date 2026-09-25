@@ -256,6 +256,7 @@ mod tests {
                 item::{
                     Profile, ProfileMetaGetter,
                     local::LocalProfile,
+                    merge::MergeProfile,
                     remote::{
                         PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
                         RemoteProfileOptionsBuilder, SubscriptionInfo,
@@ -525,6 +526,51 @@ mod tests {
             symlinks: None,
             chain: Vec::new(),
         })
+    }
+
+    #[tokio::test]
+    async fn transform_profile_file_read_returns_raw_content() {
+        let content = "not: [normalized YAML".to_string();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let client = ChimeraClient::with_parts(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                fail_rebuild: false,
+            }),
+            Arc::new(StaticProfilesRead {
+                profiles: Profiles {
+                    items: vec![Profile::Merge(MergeProfile {
+                        shared: ProfileShared {
+                            uid: "m-transform".into(),
+                            name: "Transform".into(),
+                            file: "m-transform.yaml".into(),
+                            desc: None,
+                            updated: 7,
+                        },
+                    })],
+                    ..Profiles::default()
+                },
+            }),
+            Arc::new(RecordingProfileFs {
+                previous_file: content.clone(),
+                reads: Arc::new(Mutex::new(Vec::new())),
+                writes: Arc::new(Mutex::new(Vec::new())),
+                fail_write: false,
+            }),
+            Arc::new(NoopProfilesWrite::default()),
+            Arc::new(NoopSystemDnsCache),
+            Arc::new(RecordingUi {
+                events: events.clone(),
+            }),
+        );
+
+        assert_eq!(
+            client
+                .read_profile_file("m-transform".into())
+                .await
+                .unwrap(),
+            content
+        );
     }
 
     fn test_remote_profile() -> RemoteProfile {
