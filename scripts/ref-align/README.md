@@ -2,7 +2,9 @@
 
 The runner follows the ordered task pack in `docs/profile-local-model-task-pack.md`. It will not plan or apply a later task while an earlier dependency is incomplete. T00 is a read-only call-chain audit; T01 is the first copy-eligible task (its files were already identical to ref, so T04 was the first task that wrote copied code).
 
-The local model only returns a JSON selection among mappings already listed in a task manifest. Ollama constrains that response with a JSON Schema. The runner rejects paths outside the task pack's target allowlist, unknown mapping/replacement IDs, ref baseline drift, modified `ref/`, dirty/untracked target files, symlinks, stale hashes, and uncertain plans. Applying a plan copies exact ref bytes, optionally replacing a declared prefix or inserting exact marker-bounded ref blocks. A changed target can be used only when its current SHA-256 is declared as the reviewed base. The runner only applies literal replacements already declared in the manifest; it does not format or synthesize copied code.
+The local model only returns a JSON selection among mappings already listed in a task manifest. Ollama constrains that response with a JSON Schema. The runner rejects paths outside the task pack's target allowlist, unknown mapping/replacement IDs, ref baseline drift, modified `ref/`, dirty/untracked target files, symlinks, stale hashes, and uncertain plans. Applying a plan copies exact ref bytes, optionally replacing a declared prefix or a marker-bounded block, or inserting exact marker-bounded ref blocks. A changed target can be used only when its current SHA-256 is declared as the reviewed base. The runner only applies literal replacements already declared in the manifest; it does not format or synthesize copied code.
+
+Copy modes are `whole`, `replace-prefix`, `replace-block`, `insert-before-marker`, and `insert-blocks-before-marker`. `replace-block` copies a bounded ref range between unique source markers over a bounded target range between unique target markers; all bytes outside the target range remain untouched.
 
 ## Commands
 

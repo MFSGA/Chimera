@@ -93,6 +93,11 @@ pub fn run() -> std::io::Result<()> {
             SPECTA_BINDINGS_PATH,
         ) {
             Ok(_) => {
+                specta_export::append_query_bindings(
+                    SPECTA_BINDINGS_PATH,
+                    &specta_export::build_profile_query_bindings(),
+                )
+                .expect("failed to append TanStack Query bindings");
                 let npx_command = if cfg!(target_os = "windows") {
                     "npx.cmd"
                 } else {

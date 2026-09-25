@@ -165,6 +165,9 @@ backend/tauri/src/client/profiles.rs
 backend/tauri/src/client/profiles_actor_client.rs
 backend/tauri/src/ipc.rs
 backend/tauri/src/specta_export.rs
+backend/tauri/src/lib.rs
+backend/tauri/Cargo.toml
+backend/Cargo.lock
 frontend/interface/src/ipc/use-profile.ts
 frontend/interface/src/ipc/use-profile-content.ts
 frontend/interface/src/ipc/query-options.ts

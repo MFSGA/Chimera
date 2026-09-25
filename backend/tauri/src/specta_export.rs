@@ -4,6 +4,7 @@
 use std::{fs, io, path::Path};
 
 use tauri_specta::{collect_commands, collect_events};
+use tauri_specta_query::{CommandSet, TanstackQueryFramework};
 
 #[cfg(feature = "agent")]
 use crate::features;
@@ -309,11 +310,54 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
     builder
 }
 
+pub(crate) fn build_profile_query_bindings() -> String {
+    let (query_bindings, _) = CommandSet::<tauri::Wry>::new(
+        collect_commands![crate::ipc::get_profiles, crate::ipc::read_profile_file],
+        collect_commands![
+            crate::ipc::import_profile,
+            crate::ipc::import_profile_with_mode,
+            crate::ipc::view_profile,
+            crate::ipc::reorder_profile,
+            crate::ipc::reorder_profiles_by_list,
+            crate::ipc::activate_profile,
+            crate::ipc::set_profile_valid_fields,
+            crate::ipc::set_profile_transform_chain,
+            crate::ipc::set_global_transform_chain,
+            crate::ipc::patch_profile_metadata,
+            crate::ipc::patch_remote_profile_options,
+            crate::ipc::replace_profile_definition,
+            crate::ipc::update_profile,
+            crate::ipc::patch_profile,
+            crate::ipc::delete_profile,
+            crate::ipc::save_profile_file,
+            crate::ipc::create_profile,
+        ],
+    )
+    .build(TanstackQueryFramework::React);
+
+    query_bindings
+}
+
+pub(crate) fn append_query_bindings(
+    path: impl AsRef<std::path::Path>,
+    query_bindings: &str,
+) -> std::io::Result<()> {
+    use std::io::Write;
+
+    // specta-typescript 0.0.12 predates Typescript::with_raw, so append the
+    // query framework fragment after the regular bindings export.
+    let mut file = std::fs::OpenOptions::new().append(true).open(path)?;
+    writeln!(file, "\n{query_bindings}")?;
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{apply_binding_rewrite, build_specta_builder, normalize_typescript_bindings};
+    use super::{
+        append_query_bindings, apply_binding_rewrite, build_profile_query_bindings,
+        build_specta_builder, normalize_typescript_bindings,
+    };
 
     const BINDINGS_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -329,6 +373,8 @@ mod tests {
                 path,
             )
             .expect("failed to export TypeScript bindings");
+        append_query_bindings(path, &build_profile_query_bindings())
+            .expect("failed to append TanStack Query bindings");
     }
 
     fn format_bindings(path: &Path) {

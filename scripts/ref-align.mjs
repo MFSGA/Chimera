@@ -274,6 +274,7 @@ function parseManifest(raw, workflow, task) {
       ![
         'whole',
         'replace-prefix',
+        'replace-block',
         'insert-before-marker',
         'insert-blocks-before-marker',
       ].includes(copyMode)
@@ -283,6 +284,7 @@ function parseManifest(raw, workflow, task) {
       'sourceEndMarker',
       'targetEndMarker',
       'sourceStartMarker',
+      'targetStartMarker',
       'targetMarker',
     ]) {
       const marker = candidate[markerName];
@@ -297,6 +299,17 @@ function parseManifest(raw, workflow, task) {
     ) {
       fail(
         `Candidate ${candidate.id} needs sourceEndMarker and targetEndMarker.`,
+      );
+    }
+    if (
+      copyMode === 'replace-block' &&
+      (!candidate.sourceStartMarker ||
+        !candidate.sourceEndMarker ||
+        !candidate.targetStartMarker ||
+        !candidate.targetEndMarker)
+    ) {
+      fail(
+        `Candidate ${candidate.id} needs source/target start and end markers.`,
       );
     }
     if (
@@ -712,6 +725,39 @@ function copyMappedBytes(source, target, candidate) {
     );
     return Buffer.concat([
       source.subarray(0, sourceEnd.index),
+      target.subarray(targetEnd.index),
+    ]);
+  }
+  if (mode === 'replace-block') {
+    const sourceStart = uniqueMarkerIndex(
+      source,
+      candidate.sourceStartMarker,
+      `Source start marker for ${candidate.id}`,
+    );
+    const sourceEnd = uniqueMarkerIndex(
+      source,
+      candidate.sourceEndMarker,
+      `Source end marker for ${candidate.id}`,
+    );
+    const targetStart = uniqueMarkerIndex(
+      target,
+      candidate.targetStartMarker,
+      `Target start marker for ${candidate.id}`,
+    );
+    const targetEnd = uniqueMarkerIndex(
+      target,
+      candidate.targetEndMarker,
+      `Target end marker for ${candidate.id}`,
+    );
+    if (
+      sourceEnd.index <= sourceStart.index ||
+      targetEnd.index <= targetStart.index
+    ) {
+      fail(`Copy markers are out of order for ${candidate.id}.`);
+    }
+    return Buffer.concat([
+      target.subarray(0, targetStart.index),
+      source.subarray(sourceStart.index, sourceEnd.index),
       target.subarray(targetEnd.index),
     ]);
   }
