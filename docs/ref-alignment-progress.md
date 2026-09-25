@@ -525,3 +525,17 @@
   `cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、`git diff --check` 均通过；
   `chimera` 仍报告 122 条既有 warning。广域 `cargo fmt --manifest-path backend/Cargo.toml --all
   -- --check` 被固定 `backend/chimera-runtime` 子模块中的既有换行风格报错阻断；未改该子模块。
+- Profile 文件查看错误增量：固定 ref
+  `backend/tauri/src/ipc.rs::view_profile` 在 materialized profile 文件缺失时返回
+  `profile file not found`；Chimera 同路径同名命令原先把绝对路径格式化到错误文本中。
+  已对齐提示文本，保留 Chimera 的 `get_profile_materialized_path` 安全解析、文件存在检查、
+  `help::open_file` 和错误转换，不调整 Profile owner 或 IPC 合同。ref 基线仍为
+  `232321d52121fe8bb25cb2a090d814129cb50c55`，读取时状态干净。
+- 代码来源：本地 `qwen2.5-coder:14b` 使用 Ollama 4096-token 上下文输出目标替换；首个
+  unified diff 缺少旧行，未应用；收窄提示后模型输出精确的一行替换，Codex 对照 ref、应用并
+  检查最终 diff。无品牌替换。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、
+  `cargo check --manifest-path backend/Cargo.toml -p chimera -j 1`、`git diff --check` 通过；
+  crate 检查报告 122 条既有 warning。该错误文案改动未新增测试；没有运行桌面 UI/E2E。
+- 状态：仅对齐 Profile 文件查看的缺失文件错误文案；这不解除 T06 的 actor-backed IPC、
+  主/legacy UI 与 agent 消费者迁移工作，也不改变 setup 的 Profile migrator 闸门。

@@ -493,7 +493,7 @@ pub async fn view_profile(
 ) -> Result {
     let path = client.get_profile_materialized_path(uid).await?;
     if !path.exists() {
-        return Err(anyhow!("file not exists: {:#?}", path).into());
+        return Err(anyhow!("profile file not found").into());
     }
     help::open_file(app_handle, path)?;
     Ok(())
