@@ -16,7 +16,11 @@ use crate::{
 
 pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
-    let mut migrations = crate::core::migration::Runner::with_paths(paths.clone(), false)
+    let mut migrations =
+        crate::core::migration::Runner::with_paths_before_profile_client_migration(
+            paths.clone(),
+            false,
+        )
         .context("failed to setup config migrations")?;
     migrations
         .run_pending()
