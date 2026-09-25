@@ -10,6 +10,7 @@ pub(crate) mod core_lifecycle;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
+mod profiles_actor_client;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
@@ -38,6 +39,7 @@ pub(crate) use self::{
     event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
     ports::SessionPortResolver,
     profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
+    profiles_actor_client::ProfilesClient,
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
 };

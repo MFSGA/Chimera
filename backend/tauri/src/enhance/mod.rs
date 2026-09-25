@@ -4,6 +4,9 @@ mod content_source;
 mod runtime_builder;
 mod script;
 
+#[cfg(test)]
+pub(crate) mod golden_support;
+
 pub use chain::PostProcessingOutput;
 pub(crate) use chain::TransformFailureError;
 pub use content_source::FsProfileContentSource;

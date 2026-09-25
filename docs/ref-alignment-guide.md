@@ -10,8 +10,13 @@
 
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
-commit:     f7dbce2997c633e484f54788035e770b3ee99773
+commit:     232321d52121fe8bb25cb2a090d814129cb50c55
+date:       2026-09-24
 ```
+
+Profile 全流程按该基线复刻的路径映射、迁移顺序和验收项见
+[Profile ref 复刻手册](profile-ref-replication.md)。已有历史 DIFF 记录继续保留各自
+实际使用的 ref commit，不随本基线更新而改写。
 
 每个迁移切片开始前执行：
 

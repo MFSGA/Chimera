@@ -7,6 +7,7 @@ pub mod config;
 /// 9
 pub mod dirs;
 pub mod help;
+pub mod hwid;
 /// 5
 pub mod init;
 pub mod net;

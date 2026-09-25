@@ -25,6 +25,7 @@ use crate::config::{
         profiles::Profiles,
     },
 };
+use chimera_config::profile::{LocalBinding, ProfileSource};
 
 pub(crate) trait ProfilesReadPort: Send + Sync {
     fn snapshot(&self) -> anyhow::Result<Profiles>;
@@ -854,12 +855,23 @@ impl ChimeraClient {
             let _commit = self.inner.profile_commit.lock().await;
             let profiles = self.inner.profiles.snapshot()?;
             let item = profiles.get_item(&uid)?;
-            let kind = item.kind();
-            anyhow::ensure!(
-                !matches!(kind, ProfileItemType::Remote),
-                "remote profiles are updater-owned"
-            );
-            if !matches!(kind, ProfileItemType::Script(_)) {
+            let runtime_item = crate::config::profile::ref_adapter::convert_item(item)?;
+            let source = runtime_item.definition.source();
+            match source {
+                Some(ProfileSource::Remote { .. }) => {
+                    anyhow::bail!("remote profiles are updater-owned");
+                }
+                Some(ProfileSource::Local {
+                    binding: LocalBinding::Managed { .. },
+                }) => {}
+                Some(ProfileSource::Local {
+                    binding: LocalBinding::External { .. },
+                }) => anyhow::bail!("external profiles are edited at their source"),
+                None => {
+                    anyhow::bail!("profile has no writable source");
+                }
+            }
+            if runtime_item.definition.is_config() {
                 serde_yaml::from_str::<serde_yaml::Mapping>(&file_data)
                     .context("failed to parse profile YAML")?;
             }

@@ -84,7 +84,7 @@ fn synthetic_current_id(profiles: &RuntimeProfiles) -> ProfileId {
     unreachable!("synthetic profile id search must find a free id")
 }
 
-fn convert_item(item: &Profile) -> Result<ProfileItem> {
+pub(crate) fn convert_item(item: &Profile) -> Result<ProfileItem> {
     let uid = ProfileId(item.uid().to_string());
     let metadata = ProfileMetadata {
         name: profile_name(item),

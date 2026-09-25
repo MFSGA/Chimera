@@ -352,3 +352,108 @@
   继承 legacy 默认选项。随后补充代理/TUN 状态回读、真实网络和恢复测试，再重新评估
   当前 3 次探测、3000ms 波动阈值及失败恢复语义。当前仍是功能可用但对齐未完成的
   部分迁移。
+
+## DIFF-013：Profile 文件保存授权按来源判定（第十一阶段）
+
+- ref commit：`efc9589fa37697d5e49ddec68cbceabcfaffd31d`；参考工作区有
+  `M backend/nyanpasu-runtime`，本切片未读取或修改该子模块内容。
+- ref 路径和符号：`backend/tauri/src/client/mod.rs` 的
+  `NyanpasuClient::save_profile_file`，使用 `ProfileDefinition::source()` 区分
+  `ProfileSource::Remote`、托管 `ProfileSource::Local` 和外部绑定；IPC 为
+  `backend/tauri/src/ipc.rs::save_profile_file`。
+- Chimera 路径和符号：`backend/tauri/src/client/profiles.rs` 的
+  `ChimeraClient::save_profile_file`，经现有 profile file port 写入。
+- 类别：临时迁移。
+- 差异及必要性：拒绝 updater-owned remote 与 external source，仅允许 managed
+  local source 写入；配置类 definition 校验 YAML，transform 类保留原文。ref
+  使用 `nyanpasu_config::profile::Profiles` actor 快照及 `ProfilesError`；Chimera
+  仍从旧 `config::profile::profiles::Profiles`/`Profile` 转换到共享 domain，且写文件
+  后通过旧 runtime relevance/rebuild 路径处理，因此本切片只对齐授权与内容校验规则，
+  不代表 profile 管理流程整体已对齐。
+- 共通业务入口及适配边界：主界面、legacy UI 和 agent 继续调用共享 IPC；没有增加
+  并行写入入口。持久化仍由当前 legacy Profiles 桥接负责。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：只影响 profile 文件保存命令的
+  来源授权和 YAML 校验；IPC 合同及持久化 schema 不变。profile runtime rebuild 仍沿用
+  ChimeraClient 当前实现。
+- 实际验证结果：`cargo check -p tauri` 通过；未执行桌面 E2E 或保存/重启运行时验证。
+- 收敛条件：迁移 Profiles actor、持久化状态、ProfileFs/materialization ports 与
+  runtime application workflow，并将主界面、legacy UI、agent 接到同一 actor-backed
+  API 后，删除旧 `ProfilesReadPort`/`ProfilesWritePort` 和对应 legacy bridge；补齐
+  managed/external/remote 保存及失败恢复的契约与真实桌面覆盖后重新评估。
+
+## T04 Profile document migration 与 stamp（阶段完成；生产启用延后）
+
+- ref commit：`232321d52121fe8bb25cb2a090d814129cb50c55`；本次开始和结束时
+  `git -C ref status --short` 均为空。
+- ref → Chimera 路径/符号映射：`backend/nyanpasu-core/src/format.rs` 的 stamp API
+  对应 `backend/chimera-core/src/format.rs`；Tauri 的
+  `core/migration/{mod.rs,fs.rs,store.rs,modules/profiles.rs}` 对应相同 Chimera 路径；
+  `runner.rs` 的生产迁移/检查/恢复段落和 Profile document 状态用例对应同名文件；
+  `registry.rs::{get_migrations,find_migration}` 对应同名实现；ref fixture
+  `backend/tauri/src/core/migration/fixtures/v1_6_1/profiles.yaml` 对应 Chimera 同路径。
+- `chimera-core/src/format.rs` 在本切片开始前已有工作区修改；核对后内容与 ref 对应
+  文件 SHA-256 均为 `08FAA7FB69F2E5D284E36D1DCD21B51C3E31F1B65370856EA4EFFDBB16FFDBCA`，
+  本切片保留，没有覆盖该文件。迁移文件由固定 ref 逐段复制；只做 crate 品牌、产品
+  header、YAML crate 与 release-version 字面值适配。stamp key `_nyanpasu` 保留为已有
+  持久化 wire contract。保留 Chimera `typed_config` migrator，并在 registry 中按 ref
+  先 Profile、后 typed config 的次序组合。
+- 必要适配：ref 的 `serde_yaml` 与 Chimera 的 `serde_yaml_ng`/`serde_yaml` 是不同 crate，
+  document stamp 路径统一使用 `serde_yaml_ng`，避免 YAML Mapping 类型不兼容；ref 的
+  `2.0.0` gate 映射到 Chimera 当前 `0.24.1`；migration 测试 dev-dependencies 映射 ref
+  已有版本，`backend/Cargo.lock` 随之更新。
+- 生产兼容边界：当前 `setup()` 仍注入旧 `LegacyProfilesReadPort`/`LegacyProfilesWritePort`，
+  它们解析并写出旧 Profile schema；ref migrator 会把 `profiles.yaml` 改成新 schema。
+  若立即启用会令旧消费者把 Profile 读成空配置，后续保存有覆盖数据风险。因此 setup
+  暂用 `Runner::with_paths_before_profile_client_migration`：普通启动只执行兼容迁移，保留
+  Profile 文件原字节；隔离测试中的完整 Runner 仍执行 Profile migrator。这是临时启动边界，
+  需在 T05–T09 全部 Profile 消费者接入共享 ref API 后，于最终集成时删除并启用迁移。
+- 实际验证：`cargo test -j 1 --manifest-path backend/Cargo.toml -p chimera core::migration::`
+  通过（59 passed，0 failed，311 filtered）；`cargo check -j 1 --manifest-path
+  backend/Cargo.toml -p chimera` 通过（100 warnings）；`cargo fmt --manifest-path
+  backend/Cargo.toml --all -- --check` 与 `git diff --check` 通过。第一次并行测试因
+  Windows 页文件无法映射 reqwest rlib 失败；单 job 重跑通过。未运行桌面 E2E；Profile
+  production migration 仍被上述兼容闸门延后，因此这些单测不等于已验证实际升级链路。
+- 状态：T04 的 ref migrator、stamp/reconciliation、状态恢复、fixtures 和安全启动闸门已完成；
+  Profile 全流程尚未完成。下一阶段按顺序进入 T05 ports/service/actor，迁移主/legacy UI
+  与 agent 前不启用新 Profile schema。
+
+## T05 Profile ports、service 与 actor（基础阶段完成；生产切换留到 T09）
+
+- ref commit：`232321d52121fe8bb25cb2a090d814129cb50c55`；本轮检查时
+  `git -C ref status --short` 为空，递归子模块分别为
+  `backend/nyanpasu-runtime=f5b581fad8bf8272e222f1e3948c7826c6665bb6` 和
+  `backend/nyanpasu-runtime/crates/nyanpasu-utils=cd6c9d3821a8c943bc249d96d456e2bedffd3ada`。
+- ref → Chimera 映射：`state/profiles/{ports.rs,actor.rs,scheduler.rs}` → 同路径，包含
+  `ProfileFsPort`、`SubscriptionFetcher`、`ProfileMaterializationPort`、
+  `ProfilesActor`/`ProfilesActorMessage` 和 scheduler；`service/profile_file.rs` → 同路径，
+  包含 `ProfileFileService`；`client/profiles.rs::ProfilesClient` → 临时
+  `client/profiles_actor_client.rs`，并由 `client/mod.rs` 注册/导出。actor client 的单独
+  文件是有收敛条件的兼容边界：当前 `client/profiles.rs` 已有 legacy 产品实现和用户改动，
+  全部消费者切换后再归并到 ref 对应路径。测试所需 `enhance/golden_support.rs` 从 ref
+  复制并仅在 `enhance/mod.rs` 用 `#[cfg(test)]` 声明。
+- 仅做必要适配：`nyanpasu_config`/`nyanpasu_core` 换成 `chimera_config`/`chimera_core`；
+  Profile User-Agent 与 HWID salt 保留已有 `clash-chimera` 产品标识；为 ref 同样启用
+  Tokio `test-util`，新增 `notify-debouncer-full = 0.7.0` 并由 Cargo 更新锁文件；
+  `scheduler.rs` 按本地 crate 名重排 import。actor client 的 YAML revision 断言使用
+  Chimera 实际 persistence payload 的 `serde_yaml_ng::Value`。
+- 发现并修复一个固定 ref 测试缺陷：`writes_keep_the_schema_stamp_and_reload` 在重载后调用
+  不存在的 `ProfilesClient::get()`；同文件正式 API 是无队列读取的 `snapshot()`。复现为
+  client 测试编译错误后改为断言 `reloaded.snapshot().valid`，没有放宽断言。若 ref 后续
+  增加 `get()` 或改动 client 读取合同，应重新核对此例。
+- 生产边界：`setup.rs` 仍通过 `LegacyProfilesReadPort`/旧写入 port 使用旧 schema，且
+  `with_paths_before_profile_client_migration` 保护真实 `profiles.yaml` 原字节。不能在此时
+  启动新 actor 接管相同文件；`ProfilesClient::new` 加载并验证 ref 新 schema，旧消费者未
+  迁移前接入会造成兼容性/数据风险。因此 T05 完成 actor、service、ports 与 client API
+  基础；不改变用户入口、生产持久化或运行时。最终 actor 注入和启用 migrator 移到 T09，
+  前提是 IPC、主 UI、legacy UI、agent 都已使用同一 API。
+- 实际验证：`cargo check --manifest-path backend/Cargo.toml -p chimera -j 1` 通过；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera --lib state::profiles::actor -j 1`
+  3 passed；`... state::profiles::ports::tests -j 1` 2 passed；
+  `... service::profile_file::tests -j 1` 46 passed；
+  `... client::profiles_actor_client::tests -j 1` 66 passed；
+  `cargo +nightly fmt --manifest-path backend/Cargo.toml --all -- --check` 与
+  `git diff --check` 通过。以上为纯单元测试，没有运行真实桌面、生产文件迁移或网络 E2E。
+- 后续收敛：T06–T09 逐步切换 IPC/UI/agent；T09 在所有入口切换后，把
+  `ProfilesClient` 收敛回 `client/profiles.rs`，从 setup 注入唯一 actor/service/fetcher/notifier，
+  移除 legacy Profile owner，并将 setup 切到完整 Profile migrator。生产切换未完成前，Profile
+  全流程仍是部分迁移。
