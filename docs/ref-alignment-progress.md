@@ -469,7 +469,9 @@
   ref `CommandSet::new(...).build(TanstackQueryFramework::React)` → 本地独立的
   `build_profile_query_bindings()`，只选 `get_profiles`/`read_profile_file` 查询和现存 Profile
   mutations。`lib.rs::run` 与 `tests::export_bindings` 都把这一片段追加到常规 Specta 输出；
-  `bindings.ts` 仅由现有 generator 更新。
+  `bindings.ts` 仅由现有 generator 更新。现在 `queries.readProfileFile` 与
+  `mutations.saveProfileFile` 已生成，因此 `use-profile-content.ts` → 同路径也按 ref 全文件
+  复制并改接这两个包装；main/editor 调用保持 `{ query, upsert }` 形状。
 - 执行来源：前置 query helpers 由本地 `qwen2.5-coder:14b` 通过受限映射计划复制，Codex
   审核。当前 helper 复制也由该模型给出映射计划、runner 精确复制。尝试让本地 Qwen 与
   DeepSeek Aider 直接编辑 generator 时，两者都提议覆盖本地完整 builder；补丁均在写入前中止，
@@ -479,11 +481,15 @@
   `build_specta_builder()` 注册表，另建 Profile-only query set，避免删除本地功能。待 T06
   IPC 切到 actor-backed shared facade、所有业务命令按 ref 分类后，再合并为完整 registry；
   当前生成 wrappers 仍指向旧 Profile IPC DTO，不能视为生产 Profile API 已切换。
+- `use-profile.ts` 仍未复制：新 hook 依赖 `NewProfileRequest`、`ProfileItem` 与 ref 的
+  `MutationOutcome` 返回合同；当前本地 bindings 仍为 legacy Profile DTO。不能因 query/mutation
+  wrapper 已生成就把不兼容的 Profile hook 提前接入。
 - 实际验证：`cargo check --manifest-path backend/Cargo.toml -p chimera -j 1` 通过（123 条已有
   warning）；`cargo fmt --manifest-path backend/Cargo.toml --all -- --check` 通过（稳定版仅提示
   nightly rustfmt 配置不可用）；忽略的 `update_typescript_bindings` 生成器执行通过；
   `typescript_bindings_are_fresh` 1 项通过；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、
-  `node --check scripts/ref-align.mjs`、`git diff --check` 通过。未运行桌面 E2E。
+  `node --check scripts/ref-align.mjs`、`git diff --check` 通过。Profile content hook 子任务的
+  `pnpm typecheck` 与 Prettier 检查通过。未运行桌面 E2E。
 - 状态：T06 仍在进行。剩余工作是把 Profile IPC 与 actor-backed application facade 接通，迁移
   main/legacy hooks 与 UI，随后切换 agent；setup 的 Profile migrator 闸门继续保留到所有消费者
   迁移完成。此切片只提供 query/mutation 绑定生成，不改变运行时 Profile owner。
