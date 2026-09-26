@@ -399,7 +399,7 @@ impl Drop for PendingProfileRefresh {
 
 impl ChimeraClient {
     pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
-        anyhow::bail!("profile client migration is not implemented yet")
+        self.inner.profiles.snapshot()
     }
 
     pub(crate) fn reserve_managed_profile_identity(
