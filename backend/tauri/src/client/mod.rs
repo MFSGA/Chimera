@@ -11,8 +11,9 @@ pub mod convergence;
 pub(crate) mod core_lifecycle;
 pub(crate) mod effects;
 mod event_sink;
+mod legacy_profiles;
 pub(crate) mod ports;
-mod profiles;
+pub(crate) mod profiles;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
@@ -31,7 +32,7 @@ use self::{
     clash_config::ClashConfigClient,
     core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
     event_sink::UiEventSink,
-    profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
+    legacy_profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
     system_dns::SystemDnsCache,
 };
@@ -39,8 +40,8 @@ use self::{
 pub(crate) use self::{
     core_lifecycle::RuntimeTransformDiagnostics,
     event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
+    legacy_profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     ports::SessionPortResolver,
-    profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
 };
