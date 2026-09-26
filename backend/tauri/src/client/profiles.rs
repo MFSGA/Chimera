@@ -469,11 +469,20 @@ impl ChimeraClient {
         &self,
         uid: ProfileUid,
     ) -> anyhow::Result<std::path::PathBuf> {
-        todo!()
+        let profiles = self.inner.profiles.snapshot()?;
+        let profile = profiles.get_item(&uid)?;
+        self.inner.profile_files.resolve_path(profile.file()).await
     }
 
     pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
-        todo!()
+        let profiles = self.inner.profiles.snapshot()?;
+        let profile = profiles.get_item(&uid)?;
+        let content = self.inner.profile_files.read(profile.file()).await?;
+        if profile.kind().is_config() {
+            crate::service::profile_file::normalize_yaml_document(&content)
+        } else {
+            Ok(content)
+        }
     }
 
     pub(crate) async fn commit_new_profile(

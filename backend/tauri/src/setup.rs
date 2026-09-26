@@ -8,8 +8,8 @@ use tauri::{Manager, Runtime};
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyProfilesReadPort, LegacyUiEventSink,
-        OsSystemDnsCache, RuntimePaths,
+        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyProfileFsPort,
+        LegacyProfilesReadPort, LegacyUiEventSink, OsSystemDnsCache, RuntimePaths,
     },
     utils::path::PathResolver,
 };
@@ -52,7 +52,8 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
             core_facade,
         )),
         profiles: Arc::new(LegacyProfilesReadPort),
-        // profile_files: Arc::new(LegacyProfileFsPort),
+        // Temporary bridge until the typed ProfilesClient owns materialized paths.
+        profile_files: Arc::new(LegacyProfileFsPort),
         // profile_writes: Arc::new(LegacyProfilesWritePort),
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
