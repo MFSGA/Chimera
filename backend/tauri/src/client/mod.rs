@@ -4,6 +4,7 @@
 //! staged migration from legacy globals and Chimera-specific core support.
 
 mod application;
+pub(crate) mod application_workflow;
 mod clash_api;
 mod clash_config;
 pub mod convergence;

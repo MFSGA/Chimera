@@ -105,6 +105,7 @@ whoami = "2.0.0"
 auto-launch = { git = "https://github.com/libnyanpasu/auto-launch.git", version = "0.5" }
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
+notify-debouncer-full = "0.7.0"
 
 convert_case = "0.12.0"
 

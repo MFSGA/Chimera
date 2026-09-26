@@ -105,6 +105,26 @@ pub enum DegradationPhase {
     UiEffect,
 }
 
+/// A source commit and its critical runtime result. Peripheral owners settle separately.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+pub struct CommitReceipt {
+    pub operation_id: Option<String>,
+    pub domain: String,
+    pub source_version: u64,
+    pub runtime: RuntimeCommitStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCommitStatus {
+    Applied,
+    Deferred,
+    SavedInactive,
+    Unchanged,
+    Pending,
+    RecoveryRequired,
+}
+
 pub const RUNTIME_CONFIG_DIR: &str = "runtime";
 pub const RUNTIME_CONFIG_FILE: &str = "clash-config.yaml";
 /// Ref-compatible name for the generated runtime product.
