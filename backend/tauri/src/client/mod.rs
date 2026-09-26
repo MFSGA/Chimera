@@ -6,6 +6,7 @@
 mod application;
 mod clash_api;
 mod clash_config;
+pub mod convergence;
 pub(crate) mod core_lifecycle;
 pub(crate) mod effects;
 mod event_sink;
