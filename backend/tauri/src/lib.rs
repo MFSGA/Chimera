@@ -27,6 +27,7 @@ mod enhance;
 /// 6
 mod feat;
 mod features;
+mod service;
 mod setup;
 /// 8
 #[cfg(windows)]
