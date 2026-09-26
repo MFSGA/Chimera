@@ -7,6 +7,7 @@ mod application;
 mod clash_api;
 mod clash_config;
 pub(crate) mod core_lifecycle;
+pub(crate) mod effects;
 mod event_sink;
 pub(crate) mod ports;
 mod profiles;
