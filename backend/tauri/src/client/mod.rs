@@ -48,6 +48,8 @@ use crate::{
     utils::path::PathResolver,
 };
 
+pub use runtime::RuntimePaths;
+
 #[derive(Clone)]
 pub(crate) struct LegacyBridgeSet {
     pub(crate) verge: Arc<dyn VergeLegacyBridge>,
@@ -57,12 +59,15 @@ pub(crate) struct LegacyBridgeSet {
 
 pub(crate) struct ClientSetupArgs {
     pub(crate) paths: PathResolver,
+    pub runtime_paths: RuntimePaths,
     pub(crate) bridges: LegacyBridgeSet,
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
-    pub(crate) profiles: Arc<dyn ProfilesReadPort>,
-    pub(crate) profile_files: Arc<dyn ProfileFsPort>,
-    pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
+
+    // pub(crate) profiles: Arc<dyn ProfilesReadPort>,
+
+    // pub(crate) profile_files: Arc<dyn ProfileFsPort>,
+    // pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
 }
@@ -121,9 +126,9 @@ struct ChimeraClientInner {
     clash_config: ClashConfigClient,
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
-    profiles: Arc<dyn ProfilesReadPort>,
-    profile_files: Arc<dyn ProfileFsPort>,
-    profile_writes: Arc<dyn ProfilesWritePort>,
+    // profiles: Arc<dyn ProfilesReadPort>,
+    // profile_files: Arc<dyn ProfileFsPort>,
+    // profile_writes: Arc<dyn ProfilesWritePort>,
     system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
     profile_commit: tokio::sync::Mutex<()>,
@@ -134,12 +139,13 @@ impl ChimeraClient {
     pub(crate) fn try_new_with_args(args: ClientSetupArgs) -> anyhow::Result<Self> {
         let ClientSetupArgs {
             paths,
+            runtime_paths,
             bridges,
             core,
             service,
-            profiles,
-            profile_files,
-            profile_writes,
+            // profiles,
+            // profile_files,
+            // profile_writes,
             system_dns,
             ui_sink,
         } = args;
@@ -148,8 +154,8 @@ impl ChimeraClient {
             &bridges,
             core.clone(),
         ))?;
-        let runtime_paths =
-            runtime::RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
+        let runtime_paths_for_setup = runtime_paths.clone();
+
         let core_lifecycle =
             tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_service(
                 core.clone(),
@@ -163,9 +169,9 @@ impl ChimeraClient {
             typed,
             core_lifecycle,
             core,
-            profiles,
-            profile_files,
-            profile_writes,
+            // profiles,
+            // profile_files,
+            // profile_writes,
             system_dns,
             ui_sink,
         ))
@@ -188,31 +194,16 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
-        let core_lifecycle = CoreLifecycleClient::direct(
-            core.clone(),
-            typed.application.clone(),
-            typed.clash_config.clone(),
-            runtime::RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
-        );
-        Self::with_parts_and_typed_config(
-            typed,
-            core_lifecycle,
-            core,
-            profiles,
-            profile_files,
-            profile_writes,
-            system_dns,
-            ui_sink,
-        )
+        todo!()
     }
 
     fn with_parts_and_typed_config(
         typed: TypedConfigClients,
         core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
-        profiles: Arc<dyn ProfilesReadPort>,
-        profile_files: Arc<dyn ProfileFsPort>,
-        profile_writes: Arc<dyn ProfilesWritePort>,
+        // profiles: Arc<dyn ProfilesReadPort>,
+        // profile_files: Arc<dyn ProfileFsPort>,
+        // profile_writes: Arc<dyn ProfilesWritePort>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
@@ -222,9 +213,9 @@ impl ChimeraClient {
             clash_config: typed.clash_config,
             core_lifecycle,
             core,
-            profiles,
-            profile_files,
-            profile_writes,
+            // profiles,
+            // profile_files,
+            // profile_writes,
             system_dns,
             ui_sink,
             profile_commit: tokio::sync::Mutex::new(()),

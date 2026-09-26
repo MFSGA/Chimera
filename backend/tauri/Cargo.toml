@@ -217,6 +217,10 @@ windows-core = "0.100"
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 nix = { version = "0.31", features = ["user"] }
 
+[dev-dependencies]
+mockall = "0.15"
+pretty_assertions = "1.4.0"
+
 [features]
 default = ["default-meta", "agent"]
 agent = []

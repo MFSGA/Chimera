@@ -713,13 +713,9 @@ impl CoreManager {
             .await
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let checked =
-            check_and_promote_candidate(&candidate, paths.product(), |candidate_path| async move {
-                self.check_candidate_path(&candidate_path, target_core)
-                    .await
-            })
-            .await;
-        if let Err(error) = candidate.cleanup().await {
+        todo!()
+        // let checked = { todo!() };
+        /* if let Err(error) = candidate.cleanup().await {
             log::warn!(target: "app", "failed to clean runtime candidate: {error:?}");
         }
         let promoted_bytes = checked.map_err(|error| match error {
@@ -757,7 +753,7 @@ impl CoreManager {
             .map_err(RuntimeRestartError::Promote)?;
         Config::runtime().apply();
 
-        Ok(())
+        Ok(()) */
     }
 
     async fn restore_after_restart_failure(
@@ -775,18 +771,7 @@ impl CoreManager {
             transaction,
             |had_product| async move {
                 if had_product {
-                    self.run_core_from_product_inner(
-                        paths.product(),
-                        recovery_target,
-                        Self::committed_run_type(),
-                    )
-                    .await?;
-                    if let Some(info) = recovery_api_info {
-                        api::ApiClient::new(info)?
-                            .wait_until_ready(Duration::from_secs(10))
-                            .await?;
-                    }
-                    Ok(())
+                    todo!()
                 } else {
                     self.stop_running_instance().await?;
                     self.instance.lock().take();
@@ -812,59 +797,7 @@ impl CoreManager {
         clash: &ClashConfig,
         run_type: RunType,
     ) -> Result<()> {
-        let paths = RuntimePaths::from_app_config_dir().map_err(RuntimeRestartError::Prepare)?;
-        if let Err(error) = paths
-            .cleanup_stale_candidates(Duration::from_secs(24 * 60 * 60))
-            .await
-        {
-            log::warn!(target: "app", "failed to clean stale runtime candidates: {error:?}");
-        }
-        let transaction = capture_runtime_transaction(&paths, &self.lifecycle.runtime_lifecycle)
-            .await
-            .map_err(RuntimeRestartError::Prepare)?;
-        let recovery_target = transaction
-            .lifecycle
-            .applied
-            .as_ref()
-            .map(|snapshot| snapshot.target_core)
-            .unwrap_or_else(Self::committed_core);
-        let previous_clash = Config::clash().data().clone();
-        let recovery_api_info = transaction
-            .lifecycle
-            .applied
-            .as_ref()
-            .map(|snapshot| snapshot.clash_info());
-
-        match self
-            .promote_and_start_locked(&paths, target_core, clash, run_type)
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(primary) => {
-                Config::runtime().discard();
-                if !primary.requires_recovery() {
-                    *Config::clash().data() = previous_clash;
-                    return Err(primary.into());
-                }
-                match self
-                    .restore_after_restart_failure(
-                        &paths,
-                        transaction,
-                        previous_clash,
-                        recovery_target,
-                        recovery_api_info,
-                    )
-                    .await
-                {
-                    Ok(()) => Err(primary.into()),
-                    Err(recovery) => Err(RuntimeRestartError::Recovery {
-                        primary: primary.to_string(),
-                        recovery: recovery.to_string(),
-                    }
-                    .into()),
-                }
-            }
-        }
+        anyhow::bail!("core runtime migration is not implemented yet")
     }
 
     #[cfg(target_os = "macos")]

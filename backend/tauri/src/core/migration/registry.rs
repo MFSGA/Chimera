@@ -1,15 +1,25 @@
-use super::{ModuleMigrator, modules};
+use super::{MigrationStep, ModuleMigrator, modules};
 use once_cell::sync::Lazy;
 
 pub static MODULES: Lazy<Vec<&'static dyn ModuleMigrator>> = Lazy::new(|| {
     vec![
-        &modules::typed_config::MIGRATOR,
         &modules::profiles::MIGRATOR,
+        &modules::typed_config::MIGRATOR,
     ]
 });
 
 pub fn modules() -> impl Iterator<Item = &'static dyn ModuleMigrator> {
     MODULES.iter().copied()
+}
+
+fn get_migrations() -> Vec<&'static dyn MigrationStep> {
+    modules()
+        .flat_map(|module| module.steps().iter().copied())
+        .collect()
+}
+
+pub fn find_migration(id: &str) -> Option<&'static dyn MigrationStep> {
+    get_migrations().into_iter().find(|step| step.id() == id)
 }
 
 #[cfg(test)]
