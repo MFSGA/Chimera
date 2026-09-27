@@ -424,3 +424,427 @@ fn prune_targets(mut seqs: Vec<u64>, max_files: usize) -> Vec<u64> {
     seqs.sort_unstable_by_key(|seq| std::cmp::Reverse(*seq));
     seqs.into_iter().skip(max_files).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::{
+        kind::CoreKind,
+        log::{LogField, LogLevel, LogStream, LogTimestamp},
+    };
+
+    fn temp_dir() -> (tempfile::TempDir, Utf8PathBuf) {
+        let guard = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(guard.path().to_path_buf()).unwrap();
+        (guard, path)
+    }
+
+    fn options(max_bytes: u64, max_files: usize) -> SinkOptions {
+        SinkOptions {
+            max_bytes,
+            max_files,
+        }
+    }
+
+    fn frame(message: &str) -> LogFrame {
+        LogFrame {
+            at: 1_700_000_000_000,
+            epoch: 7,
+            kind: CoreKind::Mihomo,
+            stream: LogStream::Stdout,
+            level: LogLevel::Info,
+            timestamp: Some(LogTimestamp {
+                raw: "2026-07-29T00:16:22.646059400+08:00".to_owned(),
+                unix_ms: Some(1_753_719_382_646),
+                inferred: false,
+            }),
+            target: None,
+            message: message.to_owned(),
+            fields: vec![LogField {
+                key: "request".to_owned(),
+                value: "7".to_owned(),
+            }],
+            raw: format!("time=\"...\" level=info msg=\"{message}\""),
+            truncated: false,
+        }
+    }
+
+    fn entry(message: &str) -> Entry {
+        Entry::Log(Arc::new(frame(message)))
+    }
+
+    fn touch(dir: &Utf8Path, seq: u64) {
+        std::fs::write(dir.join(file_name(seq)), b"{}\n").unwrap();
+    }
+
+    fn names(dir: &Utf8Path) -> Vec<String> {
+        let mut names = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    fn lines(path: &Utf8Path) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("every line is one JSON object"))
+            .collect()
+    }
+
+    fn record(frame: &LogFrame) -> serde_json::Value {
+        serde_json::to_value(LogRecord::new(frame)).unwrap()
+    }
+
+    #[test]
+    fn sequence_names_round_trip_and_reject_everything_else() {
+        assert_eq!(file_name(7), "core-000007.jsonl");
+        assert_eq!(file_name(1_234_567), "core-1234567.jsonl");
+        assert_eq!(file_seq("core-000007.jsonl"), Some(7));
+        assert_eq!(file_seq("core-1234567.jsonl"), Some(1_234_567));
+        for alien in [
+            "core-.jsonl",
+            "core-abc.jsonl",
+            "core--1.jsonl",
+            "core-7.jsonl.tmp",
+            "core-7.pid",
+            "config-7.yaml",
+            ".manager.lock",
+        ] {
+            assert_eq!(file_seq(alien), None, "{alien}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_next_sequence_is_one_past_the_highest_existing_file() {
+        let (_guard, dir) = temp_dir();
+        assert_eq!(next_seq(&dir).await.unwrap(), 1);
+        touch(&dir, 2);
+        touch(&dir, 10);
+        std::fs::write(dir.join("core-7.pid"), b"").unwrap();
+        assert_eq!(next_seq(&dir).await.unwrap(), 11);
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_files_by_number_rather_than_by_name() {
+        assert_eq!(prune_targets(vec![8, 9, 10, 11, 12], 3), [9, 8]);
+        assert_eq!(prune_targets(vec![1, 2], 5), Vec::<u64>::new());
+        // Six-wide padding stops agreeing with string order here, which is the
+        // whole reason the comparison is numeric.
+        assert_eq!(prune_targets(vec![999_999, 1_000_000, 5], 2), [5]);
+    }
+
+    /// The envelope adds exactly one key and flattens the frame beside it. The
+    /// duplicate-key check is the reason `t` is reserved: a frame field of that
+    /// name would produce a line no reader could interpret, and serde would not
+    /// complain.
+    #[test]
+    fn a_log_record_is_the_whole_frame_behind_a_single_tag() {
+        let frame = frame("startup frame");
+        let encoded = serde_json::to_string(&LogRecord::new(&frame)).unwrap();
+        assert_eq!(
+            encoded.matches(r#""t":"#).count(),
+            1,
+            "the envelope tag must be the only `t` key: {encoded}"
+        );
+        // The key order this pins is the order the archive has always written.
+        // Flattening the frame is a source-level change only: existing files
+        // stay readable and new lines sit beside them unmigrated.
+        assert!(
+            encoded.starts_with(concat!(
+                r#"{"t":"log","at":1700000000000,"epoch":7,"kind":"mihomo","#,
+                r#""stream":"stdout","level":"info","timestamp":{"#,
+            )),
+            "the on-disk key order moved: {encoded}"
+        );
+        assert!(
+            encoded.ends_with(concat!(
+                r#""target":null,"message":"startup frame","#,
+                r#""fields":[{"key":"request","value":"7"}],"#,
+                r#""raw":"time=\"...\" level=info msg=\"startup frame\"","#,
+                r#""truncated":false}"#
+            )),
+            "the on-disk key order moved: {encoded}"
+        );
+
+        let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        let flattened = serde_json::to_value(&frame).unwrap();
+        for (key, expected) in flattened.as_object().unwrap() {
+            assert_eq!(&value[key], expected, "flattened field {key}");
+        }
+        assert_eq!(
+            value.as_object().unwrap().len(),
+            flattened.as_object().unwrap().len() + 1
+        );
+
+        assert_eq!(value["t"], "log");
+        assert_eq!(value["at"], 1_700_000_000_000_i64);
+        assert_eq!(value["epoch"], 7);
+        assert_eq!(value["kind"], "mihomo");
+        assert_eq!(value["stream"], "stdout");
+        assert_eq!(value["level"], "info");
+        assert_eq!(value["timestamp"]["unix_ms"], 1_753_719_382_646_i64);
+        assert_eq!(value["timestamp"]["inferred"], false);
+        assert_eq!(value["target"], serde_json::Value::Null);
+        assert_eq!(value["message"], "startup frame");
+        assert_eq!(value["fields"][0]["key"], "request");
+        assert_eq!(value["truncated"], false);
+        assert!(value["raw"].as_str().unwrap().contains("startup frame"));
+    }
+
+    /// A frame whose header did not parse has no clock of its own, which is the
+    /// reason the parser stamps `at`. The key is still present, so a reader
+    /// never branches.
+    #[test]
+    fn a_degraded_frame_keeps_a_null_timestamp_and_still_carries_at() {
+        let mut degraded = frame("unparsed line");
+        degraded.timestamp = None;
+        let value = record(&degraded);
+        assert_eq!(value["timestamp"], serde_json::Value::Null);
+        assert_eq!(value["at"], 1_700_000_000_000_i64);
+    }
+
+    #[test]
+    fn a_gap_record_reports_the_dropped_count() {
+        let value = serde_json::to_value(GapRecord::new(128, 1_700_000_000_000)).unwrap();
+        assert_eq!(value["t"], "gap");
+        assert_eq!(value["dropped"], 128);
+        assert_eq!(value["at"], 1_700_000_000_000_i64);
+    }
+
+    #[tokio::test]
+    async fn writing_past_the_size_limit_rotates_and_overshoots_by_at_most_one_record() {
+        let (_guard, dir) = temp_dir();
+        let mut writer = Writer::open(dir.clone(), options(512, 9)).await.unwrap();
+        let rotate_me = frame("rotate me");
+        let one = serde_json::to_vec(&LogRecord::new(&rotate_me))
+            .unwrap()
+            .len() as u64
+            + 1;
+        assert!(one < 512, "the fixture record must fit under the limit");
+        // One record per write until the roll happens, so the assertion below
+        // holds whatever the fixture serializes to.
+        let mut writes = 0;
+        while names(&dir).len() == 1 {
+            writer.write(&[entry("rotate me")]).await;
+            writes += 1;
+            assert!(writes < 100, "the writer never rotated");
+        }
+        drop(writer);
+
+        assert_eq!(names(&dir), ["core-000001.jsonl", "core-000002.jsonl"]);
+        let first = std::fs::metadata(dir.join(file_name(1))).unwrap().len();
+        assert!(first >= 512, "rotated too early at {first}");
+        assert!(
+            first < 512 + one,
+            "overshot by more than one record: {first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotation_prunes_the_oldest_files_beyond_the_retention_limit() {
+        let (_guard, dir) = temp_dir();
+        let mut writer = Writer::open(dir.clone(), options(1, 2)).await.unwrap();
+        for _ in 0..4 {
+            writer.write(&[entry("roll")]).await;
+        }
+        drop(writer);
+
+        // max_bytes = 1 means every write after the first starts by rotating
+        // (the pre-record check sees a full file); only the newest two survive.
+        assert_eq!(names(&dir), ["core-000003.jsonl", "core-000004.jsonl"]);
+    }
+
+    #[tokio::test]
+    async fn a_single_file_budget_never_deletes_the_active_file() {
+        let (_guard, dir) = temp_dir();
+        let mut writer = Writer::open(dir.clone(), options(1, 1)).await.unwrap();
+        for index in 0..4 {
+            let message = format!("line {index}");
+            writer.write(&[entry(&message)]).await;
+
+            let newest = dir.join(file_name(writer.seq));
+            assert!(newest.exists(), "the active file disappeared");
+            assert_eq!(lines(&newest).last().unwrap()["message"], message);
+        }
+        assert!(writer.seq >= 3, "the writer did not rotate at least twice");
+        drop(writer);
+
+        let remaining = names(&dir);
+        assert_eq!(remaining.len(), 1);
+        let records = lines(&dir.join(&remaining[0]));
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0]["message"], "line 3");
+    }
+
+    /// One oversized batch must not land in one oversized file: the limit is
+    /// checked per record, so a burst is split across files and every file
+    /// stays within one record of the limit.
+    #[tokio::test]
+    async fn a_batch_spanning_the_limit_rotates_mid_batch() {
+        let (_guard, dir) = temp_dir();
+        let mut writer = Writer::open(dir.clone(), options(512, 16)).await.unwrap();
+        let burst = frame("burst");
+        let one = serde_json::to_vec(&LogRecord::new(&burst)).unwrap().len() as u64 + 1;
+        assert!(one < 512, "the fixture record must fit under the limit");
+        let batch = (0..20).map(|_| entry("burst")).collect::<Vec<_>>();
+        writer.write(&batch).await;
+        drop(writer);
+
+        let all = names(&dir);
+        assert!(all.len() > 1, "one file swallowed the whole burst");
+        let mut total = 0;
+        for name in &all {
+            let path = dir.join(name.as_str());
+            total += lines(&path).len();
+            let size = std::fs::metadata(&path).unwrap().len();
+            assert!(
+                size < 512 + one,
+                "{name} overshot by more than one record: {size}"
+            );
+        }
+        assert_eq!(total, 20, "records were lost in rotation");
+    }
+
+    #[tokio::test]
+    async fn startup_prunes_files_left_behind_by_a_previous_run() {
+        let (_guard, dir) = temp_dir();
+        for seq in 1..=6 {
+            touch(&dir, seq);
+        }
+        let writer = Writer::open(dir.clone(), options(4096, 3)).await.unwrap();
+        drop(writer);
+
+        // The freshly opened core-000007 counts toward the retention budget.
+        assert_eq!(
+            names(&dir),
+            [
+                "core-000005.jsonl",
+                "core-000006.jsonl",
+                "core-000007.jsonl"
+            ]
+        );
+    }
+
+    /// A crash can leave the previous file's last line half-written; appending
+    /// would splice it onto a fresh record.
+    #[tokio::test]
+    async fn a_restarted_writer_opens_a_new_file_instead_of_appending() {
+        let (_guard, dir) = temp_dir();
+        let mut first = Writer::open(dir.clone(), options(4096, 5)).await.unwrap();
+        first.write(&[entry("first run")]).await;
+        drop(first);
+
+        let mut second = Writer::open(dir.clone(), options(4096, 5)).await.unwrap();
+        second.write(&[entry("second run")]).await;
+        drop(second);
+
+        assert_eq!(names(&dir), ["core-000001.jsonl", "core-000002.jsonl"]);
+        let one = lines(&dir.join(file_name(1)));
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0]["message"], "first run");
+        let two = lines(&dir.join(file_name(2)));
+        assert_eq!(two.len(), 1);
+        assert_eq!(two[0]["message"], "second run");
+    }
+
+    /// Deterministic by construction: the receiver exists before anything is
+    /// sent, the ring holds two, five go in, and the sender is dropped — so
+    /// `run` sees exactly `Lagged(3)`, then the two survivors, then `Closed`.
+    #[tokio::test]
+    async fn a_lagging_writer_records_the_gap_before_the_surviving_frames() {
+        let (_guard, dir) = temp_dir();
+        let (log_tx, logs) = tokio::sync::broadcast::channel(2);
+        for index in 0..5 {
+            log_tx
+                .send(Arc::new(frame(&format!("line {index}"))))
+                .unwrap();
+        }
+        drop(log_tx);
+
+        let writer = Writer::open(dir.clone(), options(1024 * 1024, 5))
+            .await
+            .unwrap();
+        run(writer, logs, CancellationToken::new()).await;
+
+        let records = lines(&dir.join(file_name(1)));
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0]["t"], "gap");
+        assert_eq!(records[0]["dropped"], 3);
+        assert_eq!(records[1]["message"], "line 3");
+        assert_eq!(records[2]["message"], "line 4");
+    }
+
+    #[tokio::test]
+    async fn bounded_batches_preserve_every_record_until_the_channel_closes() {
+        let (_guard, dir) = temp_dir();
+        let (log_tx, logs) = tokio::sync::broadcast::channel(512);
+        for index in 0..300 {
+            log_tx
+                .send(Arc::new(frame(&format!("line {index}"))))
+                .unwrap();
+        }
+        drop(log_tx);
+
+        let writer = Writer::open(dir.clone(), options(1024 * 1024, 5))
+            .await
+            .unwrap();
+        run(writer, logs, CancellationToken::new()).await;
+
+        let records = lines(&dir.join(file_name(1)));
+        assert_eq!(records.len(), 300);
+        assert!(records.iter().all(|record| record["t"] == "log"));
+    }
+
+    #[tokio::test]
+    async fn graceful_sink_shutdown_drains_every_buffered_frame() {
+        let (_guard, dir) = temp_dir();
+        let (log_tx, logs) = tokio::sync::broadcast::channel(16);
+        let handle = spawn(
+            dir.clone(),
+            options(1024 * 1024, 5),
+            logs,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        for index in 0..8 {
+            log_tx
+                .send(Arc::new(frame(&format!("line {index}"))))
+                .unwrap();
+        }
+
+        handle.shutdown().await;
+
+        let records = lines(&dir.join(file_name(1)));
+        assert_eq!(records.len(), 8);
+        for (index, record) in records.iter().enumerate() {
+            assert_eq!(record["message"], format!("line {index}"));
+        }
+    }
+
+    /// The subdirectory has to be hardened explicitly: the parent's DACL is
+    /// inheritable, but an inherited descriptor does not carry
+    /// `SE_DACL_PROTECTED`, which is what the verifier demands.
+    #[tokio::test]
+    async fn the_log_directory_is_hardened_like_the_runtime_directory() {
+        let (_guard, dir) = temp_dir();
+        let logs = prepare_dir(&dir).await.unwrap();
+        assert_eq!(logs, dir.join("logs"));
+        assert!(logs.is_dir());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&logs).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
+        #[cfg(windows)]
+        {
+            chimera_utils::io::atomic_fs::verify_windows_directory_acl(&logs).unwrap();
+        }
+    }
+}

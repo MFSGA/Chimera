@@ -1278,7 +1278,10 @@ name = "chimera-utils"
 version = "0.1.0"
 dependencies = [
  "backon",
+ "camino",
  "chimera_utils",
+ "derive_builder",
+ "dirs 6.0.0",
  "encoding_rs",
  "futures-util",
  "kill_tree",
@@ -1309,11 +1312,9 @@ dependencies = [
  "camino",
  "constcat",
  "derive_builder",
- "dirs-utils",
  "encoding_rs",
  "kill_tree",
  "memchr",
- "network-utils",
  "os-utils",
  "os_pipe",
  "parking_lot",
@@ -2081,17 +2082,6 @@ dependencies = [
  "option-ext",
  "redox_users 0.5.2",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "dirs-utils"
-version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#17809a1ccded8caf83e4803f99ad8e7e29cdee20"
-dependencies = [
- "dirs 6.0.0",
- "thiserror 2.0.20",
- "tracing",
- "windows 0.61.3",
 ]
 
 [[package]]
@@ -4438,15 +4428,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
-]
-
-[[package]]
-name = "network-utils"
-version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#17809a1ccded8caf83e4803f99ad8e7e29cdee20"
-dependencies = [
- "log",
- "tempfile",
 ]
 
 [[package]]

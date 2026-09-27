@@ -136,3 +136,71 @@ impl HealthProbe for ControllerVersionProbe {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::epoch::epoch;
+
+    fn controller(port: u16) -> ResolvedController {
+        ResolvedController {
+            host: clash_api::Host::http(format!("127.0.0.1:{port}")).unwrap(),
+            secret: None,
+        }
+    }
+
+    fn context(controller: ResolvedController) -> ProbeContext {
+        ProbeContext {
+            epoch: epoch(1),
+            pid: 1,
+            phase: ProbePhase::Readiness,
+            controller: Arc::new(controller),
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    struct SecretProbe;
+
+    impl HealthProbe for SecretProbe {
+        fn check<'a>(&'a self, _context: ProbeContext) -> ProbeFuture<'a> {
+            Box::pin(async { ProbeResult::Healthy })
+        }
+    }
+
+    #[test]
+    fn handle_debug_prints_only_the_label() {
+        let handle = ProbeHandle::new("safe-label", SecretProbe);
+        let debug = format!("{handle:?}");
+        assert_eq!(debug, "ProbeHandle { label: \"safe-label\" }");
+        assert!(!debug.contains("SecretProbe"));
+    }
+
+    #[tokio::test]
+    async fn controller_version_probe_matches_version_endpoint_health() {
+        let closed_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let closed_controller = controller(closed_port);
+        let probe = ControllerVersionProbe::new(&closed_controller).unwrap();
+        assert!(!probe.check(context(closed_controller)).await.is_healthy());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let body = r#"{"meta":true,"version":"t"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let controller = controller(port);
+        let probe = ControllerVersionProbe::new(&controller).unwrap();
+        assert!(probe.check(context(controller)).await.is_healthy());
+    }
+}

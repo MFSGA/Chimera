@@ -505,3 +505,47 @@ fn with_durability_result(
         (Err(error), None) => Err(error),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{super::switching::with_switch_durability_result, *};
+
+    #[test]
+    fn durability_warning_preserves_structured_apply_error() {
+        let result = with_durability_result(
+            Err(Error::ApplyRollbackFailed {
+                apply: "desired failed".into(),
+                rollback: "rollback failed".into(),
+            }),
+            Some("directory sync failed".into()),
+        );
+        let Err(Error::DurabilityUncertain { source, warning }) = result else {
+            panic!("structured error was flattened")
+        };
+        assert!(matches!(*source, Error::ApplyRollbackFailed { .. }));
+        assert_eq!(warning, "directory sync failed");
+    }
+
+    #[test]
+    fn durability_warning_wraps_stop_unconfirmed_without_flattening() {
+        let apply = with_durability_result(
+            Err(Error::StopUnconfirmed("apply stop uncertain".into())),
+            Some("apply sync warning".into()),
+        );
+        let Err(Error::DurabilityUncertain { source, warning }) = apply else {
+            panic!("apply stop uncertainty was not structurally wrapped")
+        };
+        assert!(matches!(*source, Error::StopUnconfirmed(_)));
+        assert_eq!(warning, "apply sync warning");
+
+        let switch = with_switch_durability_result(
+            Err(Error::StopUnconfirmed("switch stop uncertain".into())),
+            Some("switch sync warning".into()),
+        );
+        let Err(Error::DurabilityUncertain { source, warning }) = switch else {
+            panic!("switch stop uncertainty was not structurally wrapped")
+        };
+        assert!(matches!(*source, Error::StopUnconfirmed(_)));
+        assert_eq!(warning, "switch sync warning");
+    }
+}

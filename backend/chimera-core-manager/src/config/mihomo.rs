@@ -463,3 +463,435 @@ fn nonempty_collection(value: &Value) -> bool {
         Value::Bool(_) | Value::Number(_) | Value::Tagged(_) => true,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreSpec, InstanceOptions};
+
+    fn mapping(yaml: &str) -> Mapping {
+        serde_yaml_ng::from_str(yaml).unwrap()
+    }
+
+    fn spec(kind: CoreKind, binary: &str) -> InstanceSpec {
+        InstanceSpec {
+            core: CoreSpec {
+                kind,
+                binary_path: binary.into(),
+                version: None,
+                features: Vec::new(),
+            },
+            config_path: "source.yaml".into(),
+            working_dir: ".".into(),
+            pid_file: None,
+            options: InstanceOptions::default(),
+        }
+    }
+
+    #[test]
+    fn policy_is_not_a_process_option_but_backoff_still_is() {
+        let current = spec(CoreKind::Mihomo, "mihomo");
+        let mut desired = current.clone();
+        desired.options.local_ipc = Some(crate::LocalIpcSettings {
+            policy: crate::LocalIpcPolicy::Disable,
+            keep_http_controller: false,
+        });
+        assert!(!process_spec_changed(&current, &desired));
+        desired.options.backoff =
+            chimera_utils::process::Backoff::exponential(chimera_utils::process::BackoffRange {
+                initial: std::time::Duration::from_millis(10),
+                max: std::time::Duration::from_secs(2),
+            });
+        assert!(process_spec_changed(&current, &desired));
+    }
+
+    #[test]
+    fn projection_does_not_treat_absent_false_or_zero_as_observed_values() {
+        let projection = super::RuntimeProjection {
+            expected: vec![
+                (vec!["allow-lan".into()], Value::Bool(false)),
+                (
+                    vec!["mixed-port".into()],
+                    serde_yaml_ng::to_value(0).unwrap(),
+                ),
+            ],
+        };
+        let missing = serde_yaml_ng::from_str::<clash_api::RuntimeConfig>("{}").unwrap();
+        assert!(!projection.verify(&missing).unwrap());
+        let present =
+            serde_yaml_ng::from_str::<clash_api::RuntimeConfig>("allow-lan: false\nmixed-port: 0")
+                .unwrap();
+        assert!(projection.verify(&present).unwrap());
+    }
+
+    #[test]
+    fn patch_reload_and_switch_are_deny_by_default() {
+        assert!(matches!(
+            classify_documents(&mapping("allow-lan: false"), &mapping("allow-lan: true")).unwrap(),
+            ConfigChange::Patch { .. }
+        ));
+        assert!(matches!(
+            classify_documents(
+                &mapping("rules: [MATCH,DIRECT]"),
+                &mapping("rules: [MATCH,REJECT]")
+            )
+            .unwrap(),
+            ConfigChange::Reload
+        ));
+        for desired in [
+            "external-controller: 127.0.0.1:9091",
+            "secret: changed",
+            "dns: { listen: '127.0.0.1:1053' }",
+            "unknown-field: true",
+        ] {
+            assert!(matches!(
+                classify_documents(&Mapping::new(), &mapping(desired)).unwrap(),
+                ConfigChange::Switch
+            ));
+        }
+    }
+
+    #[test]
+    fn deletion_is_never_patch() {
+        assert!(matches!(
+            classify_documents(&mapping("allow-lan: true"), &Mapping::new()).unwrap(),
+            ConfigChange::Switch
+        ));
+    }
+
+    #[test]
+    fn dns_root_shape_changes_are_never_reloadable() {
+        let current = mapping("dns: {listen: '127.0.0.1:1053', ipv6: false}");
+        for desired in ["dns: null", "dns: disabled", "dns: [invalid]"] {
+            assert!(
+                matches!(
+                    classify_documents(&current, &mapping(desired)).unwrap(),
+                    ConfigChange::Switch
+                ),
+                "{desired} bypassed dns.listen protection"
+            );
+        }
+        assert!(matches!(
+            classify_documents(&mapping("dns: {ipv6: false}"), &mapping("dns: null")).unwrap(),
+            ConfigChange::Switch
+        ));
+    }
+
+    #[test]
+    fn identical_config_is_noop_for_every_kind() {
+        for kind in [
+            CoreKind::Mihomo,
+            CoreKind::ClashRust,
+            CoreKind::ClashPremium,
+        ] {
+            let spec = spec(kind, "core");
+            assert!(
+                matches!(
+                    classify(
+                        ConfigClassificationView {
+                            source: &mapping("mixed-port: 7890"),
+                            effective: &Mapping::new(),
+                            spec: &spec,
+                        },
+                        ConfigClassificationView {
+                            source: &mapping("mixed-port: 7890"),
+                            effective: &Mapping::new(),
+                            spec: &spec,
+                        },
+                    )
+                    .unwrap(),
+                    ConfigChange::Noop
+                ),
+                "{kind:?} should noop on an identical config"
+            );
+        }
+    }
+
+    #[test]
+    fn non_mihomo_noop_requires_unchanged_effective_config() {
+        // Same source, but capability resolution rewrote the controller:
+        // the derived config changed, so this must restart, not noop.
+        let spec = spec(CoreKind::ClashRust, "clash-rs");
+        assert!(matches!(
+            classify(
+                ConfigClassificationView {
+                    source: &mapping("mixed-port: 7890"),
+                    effective: &mapping("external-controller: 127.0.0.1:9090"),
+                    spec: &spec,
+                },
+                ConfigClassificationView {
+                    source: &mapping("mixed-port: 7890"),
+                    effective: &mapping("external-controller-pipe: /tmp/core-1.sock"),
+                    spec: &spec,
+                },
+            )
+            .unwrap(),
+            ConfigChange::Switch
+        ));
+    }
+
+    #[test]
+    fn mihomo_effective_controller_rewrite_switches() {
+        // Same guarantee as above for the kind that *can* reconcile in place:
+        // a controller the orchestrator rewrote is never patched or reloaded,
+        // so an epoch's plan and its live instance cannot disagree on it.
+        let spec = spec(CoreKind::Mihomo, "mihomo");
+        assert!(matches!(
+            classify(
+                ConfigClassificationView {
+                    source: &mapping("mixed-port: 7890"),
+                    effective: &mapping("external-controller: 127.0.0.1:9090"),
+                    spec: &spec,
+                },
+                ConfigClassificationView {
+                    source: &mapping("mixed-port: 7890"),
+                    effective: &mapping("external-controller-pipe: /tmp/core-1.sock"),
+                    spec: &spec,
+                },
+            )
+            .unwrap(),
+            ConfigChange::Switch
+        ));
+    }
+
+    #[test]
+    fn controller_process_and_unsupported_core_changes_switch() {
+        let current = spec(CoreKind::Mihomo, "mihomo");
+        let mut changed_binary = current.clone();
+        changed_binary.core.binary_path = "other-mihomo".into();
+        assert!(matches!(
+            classify(
+                ConfigClassificationView {
+                    source: &mapping("external-controller: 127.0.0.1:9090"),
+                    effective: &Mapping::new(),
+                    spec: &current,
+                },
+                ConfigClassificationView {
+                    source: &mapping("external-controller: 127.0.0.1:9091"),
+                    effective: &Mapping::new(),
+                    spec: &current,
+                },
+            )
+            .unwrap(),
+            ConfigChange::Switch
+        ));
+        assert!(matches!(
+            classify(
+                ConfigClassificationView {
+                    source: &Mapping::new(),
+                    effective: &Mapping::new(),
+                    spec: &current,
+                },
+                ConfigClassificationView {
+                    source: &Mapping::new(),
+                    effective: &Mapping::new(),
+                    spec: &changed_binary,
+                },
+            )
+            .unwrap(),
+            ConfigChange::Switch
+        ));
+        assert!(matches!(
+            classify(
+                ConfigClassificationView {
+                    source: &Mapping::new(),
+                    effective: &Mapping::new(),
+                    spec: &current,
+                },
+                ConfigClassificationView {
+                    source: &Mapping::new(),
+                    effective: &Mapping::new(),
+                    spec: &spec(CoreKind::ClashRust, "clash-rs"),
+                },
+            )
+            .unwrap(),
+            ConfigChange::Switch
+        ));
+    }
+
+    #[test]
+    fn nonzero_ports_are_zeroable_but_other_inbounds_block_overlap() {
+        assert_eq!(overlap_block(&mapping("mixed-port: 7890")), None);
+        for yaml in [
+            "listeners: [{name: inbound}]",
+            "tunnels: [tcp/1.1.1.1:1]",
+            "dns: {listen: '127.0.0.1:1053'}",
+            "tcptun-config: inbound",
+            "new-listener: true",
+            "dns: {listen: 1053}",
+            "tun: {enable: yes}",
+        ] {
+            assert!(overlap_block(&mapping(yaml)).is_some(), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn every_config_patch_field_has_a_runtime_projection() {
+        let desired = mapping(
+            r#"
+port: 1
+socks-port: 2
+redir-port: 3
+tproxy-port: 4
+mixed-port: 5
+tun:
+  enable: true
+  device: tun0
+  stack: system
+  dns-hijack: ['any:53']
+  auto-route: true
+  auto-detect-interface: true
+  mtu: 1400
+  gso: true
+  gso-max-size: 32000
+  inet6-address: ['fd00::1/126']
+  iproute2-table-index: 100
+  iproute2-rule-index: 10000
+  auto-redirect: true
+  auto-redirect-input-mark: 1
+  auto-redirect-output-mark: 2
+  auto-redirect-iproute2-fallback-rule-index: 3
+  loopback-address: ['127.0.0.1']
+  strict-route: true
+  route-address: ['10.0.0.0/8']
+  route-address-set: [private]
+  route-exclude-address: ['192.0.2.0/24']
+  route-exclude-address-set: [excluded]
+  include-interface: [Ethernet]
+  exclude-interface: [Loopback]
+  include-uid: [1000]
+  include-uid-range: ['1000:1001']
+  exclude-uid: [1002]
+  exclude-uid-range: ['1002:1003']
+  include-android-user: [0]
+  include-package: [app]
+  exclude-package: [blocked]
+  include-mac-address: ['00:11:22:33:44:55']
+  exclude-mac-address: ['00:11:22:33:44:66']
+  endpoint-independent-nat: true
+  udp-timeout: 30
+  icmp-timeout: 30
+  file-descriptor: 4
+  inet4-route-address: ['10.0.0.0/8']
+  inet6-route-address: ['fd00::/8']
+  inet4-route-exclude-address: ['192.0.2.0/24']
+  inet6-route-exclude-address: ['2001:db8::/32']
+  recvmsgx: true
+  sendmsgx: true
+tuic-server:
+  enable: true
+  listen: '127.0.0.1:443'
+  token: [token]
+  users: {user: pass}
+  certificate: cert
+  private-key: key
+  congestion-controller: bbr
+  max-idle-time: 10
+  authentication-timeout: 5
+  alpn: [h3]
+  max-udp-relay-packet-size: 1200
+  cwnd: 10
+  bbr-profile: default
+ss-config: ss
+vmess-config: vmess
+tcptun-config: tcp
+udptun-config: udp
+allow-lan: true
+skip-auth-prefixes: ['127.0.0.1/32']
+lan-allowed-ips: ['10.0.0.0/8']
+lan-disallowed-ips: ['192.0.2.0/24']
+bind-address: '*'
+mode: rule
+log-level: debug
+ipv6: true
+sniffing: true
+tcp-concurrent: true
+find-process-mode: strict
+interface-name: Ethernet
+"#,
+        );
+        let ConfigChange::Patch { patch, projection } =
+            classify_documents(&Mapping::new(), &desired).unwrap()
+        else {
+            panic!("complete expressible document must patch")
+        };
+        let Value::Mapping(patch_document) = serde_yaml_ng::to_value(&patch).unwrap() else {
+            unreachable!()
+        };
+        let roots: BTreeSet<&str> = patch_document.keys().filter_map(Value::as_str).collect();
+        assert_eq!(roots, PATCH_FIELDS.iter().copied().collect());
+
+        let mut runtime = mapping(
+            r#"
+port: 0
+socks-port: 0
+redir-port: 0
+tproxy-port: 0
+mixed-port: 0
+tun: {}
+tuic-server: {}
+ss-config: ''
+vmess-config: ''
+tcptun-config: null
+udptun-config: null
+authentication: null
+skip-auth-prefixes: null
+lan-allowed-ips: null
+lan-disallowed-ips: null
+allow-lan: false
+bind-address: '*'
+inbound-tfo: false
+inbound-mptcp: false
+mode: rule
+unified-delay: false
+log-level: info
+ipv6: false
+interface-name: ''
+routing-mark: 0
+geox-url: {}
+geo-auto-update: false
+geo-update-interval: 0
+geodata-mode: false
+geodata-loader: ''
+geosite-matcher: ''
+tcp-concurrent: false
+find-process-mode: off
+sniffing: false
+global-ua: ''
+etag-support: false
+keep-alive-idle: 0
+keep-alive-interval: 0
+disable-keep-alive: false
+"#,
+        );
+        merge(&mut runtime, &patch_document);
+        let runtime: clash_api::RuntimeConfig =
+            serde_yaml_ng::from_value(Value::Mapping(runtime)).unwrap();
+        assert!(projection.verify(&runtime).unwrap());
+        assert_eq!(
+            projection.expected.len(),
+            leaf_count(&Value::Mapping(patch_document))
+        );
+    }
+
+    fn merge(target: &mut Mapping, patch: &Mapping) {
+        for (key, value) in patch {
+            if let (Some(target), Some(patch)) = (
+                target.get_mut(key).and_then(Value::as_mapping_mut),
+                value.as_mapping(),
+            ) {
+                merge(target, patch);
+            } else {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    fn leaf_count(value: &Value) -> usize {
+        value
+            .as_mapping()
+            .filter(|mapping| !mapping.is_empty())
+            .map(|mapping| mapping.values().map(leaf_count).sum())
+            .unwrap_or(1)
+    }
+}

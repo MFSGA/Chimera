@@ -158,3 +158,143 @@ pub(super) fn instance_core_state(epoch: Epoch, state: &InstanceState) -> CoreSt
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::epoch::epoch;
+    use tokio::sync::watch;
+
+    use super::*;
+    use crate::state::{ConfigRevision, InstanceState, InstanceStatus, StopReason};
+
+    #[test]
+    fn old_epoch_events_cannot_overwrite_new_epoch_status() {
+        let mut status = CoreStatus::initial();
+        status.revision = Some(ConfigRevision {
+            epoch: epoch(9),
+            generation: 1,
+            source_hash: "source".into(),
+            effective_hash: "effective".into(),
+            runtime_path: "config-9.yaml".into(),
+        });
+        status.state = CoreState::Running {
+            epoch: epoch(9),
+            pid: 90,
+        };
+        for stale in [
+            CoreState::Running {
+                epoch: epoch(8),
+                pid: 80,
+            },
+            CoreState::Restarting {
+                epoch: epoch(8),
+                attempt: 2,
+            },
+            CoreState::Stopped {
+                reason: Some(StopReason::Finished),
+            },
+        ] {
+            let stale_status = InstanceStatus {
+                instance_id: None,
+                state: match stale {
+                    CoreState::Running { pid, .. } => InstanceState::Running { pid },
+                    CoreState::Restarting { attempt, .. } => InstanceState::Restarting { attempt },
+                    CoreState::Stopped { reason } => {
+                        InstanceState::Stopped(reason.unwrap_or(StopReason::Finished))
+                    }
+                    _ => unreachable!(),
+                },
+                health: None,
+            };
+            assert!(!apply_epoch_status(&mut status, epoch(8), &stale_status));
+            assert!(matches!(
+                status.state,
+                CoreState::Running { epoch: observed, pid: 90 } if observed == epoch(9)
+            ));
+        }
+    }
+
+    #[test]
+    fn stale_epoch_status_neither_mutates_nor_wakes_watchers() {
+        let mut status = CoreStatus::initial();
+        status.revision = Some(ConfigRevision {
+            epoch: epoch(9),
+            generation: 1,
+            source_hash: "source".into(),
+            effective_hash: "effective".into(),
+            runtime_path: "config-9.yaml".into(),
+        });
+        status.state = CoreState::Running {
+            epoch: epoch(9),
+            pid: 90,
+        };
+        let (tx, rx) = watch::channel(status);
+        let stale = InstanceStatus {
+            instance_id: None,
+            state: InstanceState::Running { pid: 80 },
+            health: Some(HealthStatus::starting()),
+        };
+
+        let sent = tx.send_if_modified(|status| apply_epoch_status(status, epoch(8), &stale));
+
+        assert!(!sent);
+        assert!(!rx.has_changed().unwrap());
+        assert!(matches!(
+            rx.borrow().state,
+            CoreState::Running { epoch: observed, pid: 90 } if observed == epoch(9)
+        ));
+    }
+
+    #[test]
+    fn pure_health_transition_preserves_lifecycle_changed_at() {
+        let mut status = CoreStatus::initial();
+        status.revision = Some(ConfigRevision {
+            epoch: epoch(3),
+            generation: 1,
+            source_hash: "source".into(),
+            effective_hash: "effective".into(),
+            runtime_path: "config-3.yaml".into(),
+        });
+        status.state = CoreState::Running {
+            epoch: epoch(3),
+            pid: 30,
+        };
+        status.changed_at = 7;
+        let mut health = HealthStatus::starting();
+        health.state = crate::state::HealthState::Unhealthy;
+        let instance = InstanceStatus {
+            instance_id: None,
+            state: InstanceState::Running { pid: 30 },
+            health: Some(health.clone()),
+        };
+
+        assert!(apply_epoch_status(&mut status, epoch(3), &instance));
+        assert_eq!(status.changed_at, 7);
+        assert_eq!(status.health, Some(health));
+    }
+    #[test]
+    fn process_identity_change_wakes_watchers_even_if_pid_and_epoch_are_reused() {
+        let mut status = CoreStatus::initial();
+        status.state = CoreState::Running {
+            epoch: epoch(3),
+            pid: 30,
+        };
+        status.instance_id = Some(uuid::Uuid::new_v4());
+        status.revision = Some(ConfigRevision {
+            epoch: epoch(3),
+            generation: 1,
+            source_hash: "source".into(),
+            effective_hash: "effective".into(),
+            runtime_path: "config-3.yaml".into(),
+        });
+        let replacement = InstanceStatus {
+            instance_id: Some(uuid::Uuid::new_v4()),
+            state: InstanceState::Running { pid: 30 },
+            health: None,
+        };
+        let (tx, rx) = watch::channel(status);
+        assert!(tx.send_if_modified(|status| apply_epoch_status(status, epoch(3), &replacement)));
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(rx.borrow().instance_id, replacement.instance_id);
+    }
+}

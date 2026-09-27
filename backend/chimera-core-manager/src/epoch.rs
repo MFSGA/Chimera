@@ -42,3 +42,11 @@ impl fmt::Display for Epoch {
         self.0.fmt(formatter)
     }
 }
+
+#[cfg(test)]
+pub(crate) const fn epoch(value: u64) -> Epoch {
+    match Epoch::new(value) {
+        Some(epoch) => epoch,
+        None => panic!("a test epoch must be nonzero"),
+    }
+}

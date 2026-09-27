@@ -815,3 +815,23 @@ fn spawn_forwarder(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::EpochAllocator;
+    use crate::epoch::epoch;
+
+    #[test]
+    fn epochs_are_monotone_past_the_seed_and_never_zero() {
+        let mut fresh = EpochAllocator::seeded(0);
+        assert_eq!(fresh.next(), epoch(1));
+        let mut seeded = EpochAllocator::seeded(7);
+        assert_eq!((seeded.next(), seeded.next()), (epoch(8), epoch(9)));
+    }
+
+    #[test]
+    #[should_panic(expected = "epoch space exhausted")]
+    fn epoch_exhaustion_is_an_invariant_violation_not_a_wrap() {
+        EpochAllocator::seeded(u64::MAX).next();
+    }
+}

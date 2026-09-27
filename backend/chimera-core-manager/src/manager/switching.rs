@@ -522,3 +522,29 @@ pub(super) fn with_switch_durability_result(
         (Err(error), None) => Err(error),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn switch_matrix_matches_the_spec() {
+        assert_eq!(
+            graceful_degrade_reason(false, CoreKind::Mihomo, None),
+            Some(DegradeReason::HttpController)
+        );
+        assert_eq!(
+            graceful_degrade_reason(true, CoreKind::ClashRust, None),
+            Some(DegradeReason::UnsupportedKind)
+        );
+        assert_eq!(
+            graceful_degrade_reason(true, CoreKind::Mihomo, Some(OverlapBlock::DnsListen)),
+            Some(DegradeReason::DnsListen)
+        );
+        assert_eq!(
+            graceful_degrade_reason(true, CoreKind::Mihomo, Some(OverlapBlock::InboundSurface)),
+            Some(DegradeReason::InboundConflict)
+        );
+        assert_eq!(graceful_degrade_reason(true, CoreKind::Mihomo, None), None);
+    }
+}

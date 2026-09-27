@@ -660,3 +660,119 @@ impl OperationHandle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use super::*;
+
+    #[test]
+    fn operation_ids_roundtrip_through_hex() {
+        let id = OperationId {
+            nanos: 0x0001_0a10_7f80_ff42,
+            pid: 0x0001_0a10,
+            counter: 0x7f80_ff42,
+        };
+        let text = id.to_string();
+        assert_eq!(text, "00010a107f80ff42-00010a10-7f80ff42");
+        assert_eq!(OperationId::from_str(&text).unwrap(), id);
+    }
+
+    #[test]
+    fn malformed_operation_ids_are_rejected() {
+        for bad in [
+            "",
+            "abc",
+            "00010a107f80ff4200010a107f80ff42",
+            "00010A107f80ff42-00010a10-7f80ff42",
+            "00010g107f80ff42-00010a10-7f80ff42",
+            "00010a107f80ff4-00010a10-7f80ff42",
+            "00010a107f80ff42-00010a1-7f80ff42",
+            "00010a107f80ff42-00010a10-7f80ff4",
+            "00010a107f80ff42-00010a10-7f80ff42-extra",
+        ] {
+            assert_eq!(OperationId::from_str(bad), Err(ParseOperationIdError));
+        }
+    }
+
+    #[test]
+    fn generated_operation_ids_differ() {
+        assert_ne!(OperationId::generate(), OperationId::generate());
+    }
+
+    #[test]
+    fn the_payload_digest_is_stable_and_content_sensitive() {
+        assert_eq!(payload_digest(b"abc"), payload_digest(b"abc"));
+        assert_ne!(payload_digest(b"abc"), payload_digest(b"abd"));
+        // Pinned so a silent algorithm change cannot slip past the idempotency
+        // registry's stored digests.
+        assert_eq!(payload_digest(b""), "cbf29ce484222325");
+    }
+
+    #[test]
+    fn domain_errors_convert_with_their_kind_and_default_retryability() {
+        let error = CoreError::from_domain(&crate::Error::AlreadyRunning, None);
+        assert_eq!(error.kind, Some(CoreErrorKind::AlreadyRunning));
+        assert!(!error.retryable);
+
+        let unclassified = CoreError::from_domain(
+            &crate::Error::Io(std::io::Error::other("boom")),
+            Some(OperationId {
+                nanos: 7,
+                pid: 7,
+                counter: 7,
+            }),
+        );
+        assert_eq!(unclassified.kind, None);
+        assert!(!unclassified.retryable);
+        assert_eq!(
+            unclassified.operation_id,
+            Some(OperationId {
+                nanos: 7,
+                pid: 7,
+                counter: 7,
+            })
+        );
+    }
+
+    #[test]
+    fn the_registry_bound_is_clamped_to_hold_every_live_operation() {
+        // A host that configures fewer registry slots than the queue can hold
+        // gets the queue bound plus the running operation, not its own number.
+        assert_eq!(live_registry_capacity(1, 2), 3);
+        assert_eq!(live_registry_capacity(64, 16), 64);
+    }
+
+    #[test]
+    fn a_corrected_declared_digest_is_a_different_payload() {
+        let request = |expected_digest: Option<&str>| ReconcileRequest {
+            core: CoreSpec {
+                kind: crate::kind::CoreKind::Mihomo,
+                binary_path: Utf8PathBuf::from("core"),
+                version: None,
+                features: Vec::new(),
+            },
+            config: ConfigInput::Inline {
+                bytes: b"mixed-port: 7890\n".to_vec(),
+                expected_digest: expected_digest.map(str::to_owned),
+            },
+            options: InstanceOptions::default(),
+            expected_applied: None,
+        };
+        let wrong = CoreCommand::Reconcile(Box::new(request(Some("0000000000000000"))));
+        let right = CoreCommand::Reconcile(Box::new(request(Some("1111111111111111"))));
+        let absent = CoreCommand::Reconcile(Box::new(request(None)));
+        assert_ne!(wrong.payload_digest(), right.payload_digest());
+        assert_ne!(wrong.payload_digest(), absent.payload_digest());
+    }
+
+    #[test]
+    fn admission_kinds_default_to_retryable() {
+        assert!(CoreError::new(CoreErrorKind::QueueFull, "full", true).retryable);
+        assert!(CoreErrorKind::QueueFull.default_retryable());
+        assert!(CoreErrorKind::BackendUnavailable.default_retryable());
+        assert!(!CoreErrorKind::OperationConflict.default_retryable());
+        assert!(!CoreErrorKind::ShuttingDown.default_retryable());
+    }
+}

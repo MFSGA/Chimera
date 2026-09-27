@@ -939,3 +939,201 @@ fn publish_terminal(shared: &Shared, last_exit: Option<&TerminatedPayload>) {
         health: None,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::epoch::epoch;
+    use std::time::Duration;
+
+    use super::*;
+
+    fn run_state(run_id: u64, pid: u32, started_at: std::time::Instant) -> RunState {
+        RunState {
+            run_id,
+            pid,
+            ack_attempted: false,
+            ready: false,
+            tracker: HealthTracker::new(crate::health::HealthPolicy::default(), started_at),
+        }
+    }
+
+    fn healthy_observation(
+        run_id: u64,
+        pid: u32,
+        completed_at: std::time::Instant,
+    ) -> ProbeObservation {
+        ProbeObservation {
+            run_id,
+            pid,
+            phase: ProbePhase::Readiness,
+            completed_at,
+            completed_at_ms: now_ms(),
+            result: ProbeResult::Healthy,
+        }
+    }
+
+    #[test]
+    fn observation_requires_matching_run_id_and_pid() {
+        let now = std::time::Instant::now();
+        let run = run_state(7, 42, now);
+
+        assert!(observation_applies(&healthy_observation(7, 42, now), &run));
+        assert!(!observation_applies(&healthy_observation(6, 42, now), &run));
+        assert!(!observation_applies(&healthy_observation(7, 41, now), &run));
+        assert!(!observation_applies(&healthy_observation(6, 41, now), &run));
+    }
+
+    #[test]
+    fn terminal_publication_releases_a_held_record() {
+        let (state_tx, _state_rx) = watch::channel(InstanceStatus::initial());
+        let (probe_request_tx, _probe_request_rx) = mpsc::unbounded_channel();
+        let (log_tx, mut logs) = broadcast::channel(LOG_CHANNEL_CAPACITY);
+        let shared = Shared {
+            state_tx,
+            user_stop: AtomicBool::new(true),
+            probe_timeout: AtomicBool::new(false),
+            parser: parking_lot::Mutex::new(LogParser::new(kind::CoreKind::Mihomo, 1)),
+            log_tail: parking_lot::Mutex::new(VecDeque::new()),
+            log_tx,
+            cancel: CancellationToken::new(),
+            probe_cancel: CancellationToken::new(),
+            probe_request_tx,
+            supervisor: tokio::sync::Mutex::new(None),
+            monitor: tokio::sync::Mutex::new(None),
+        };
+        // A fatal record is held back waiting for continuation lines.
+        for frame in shared
+            .parse(
+                LogStream::Stdout,
+                r#"time="2026-07-29T00:17:26+08:00" level=fatal msg="final record""#.to_owned(),
+            )
+            .into_iter()
+            .flatten()
+        {
+            shared.publish_log_frame(frame);
+        }
+        assert!(logs.try_recv().is_err());
+
+        // A user stop reads no diagnostics, so the flush has to happen anyway.
+        publish_terminal(&shared, None);
+        let emitted = logs.try_recv().expect("held record");
+        assert_eq!(emitted.message, "final record");
+        // One allocation reaches both the tail and the subscriber.
+        let buffered = shared
+            .log_tail
+            .lock()
+            .back()
+            .cloned()
+            .expect("the held record also lands in the diagnostic tail");
+        assert!(Arc::ptr_eq(&emitted, &buffered));
+        assert!(matches!(
+            state_rx_state(&shared),
+            InstanceState::Stopped(StopReason::User)
+        ));
+    }
+
+    fn state_rx_state(shared: &Shared) -> InstanceState {
+        shared.state_tx.borrow().state.clone()
+    }
+
+    #[test]
+    #[ignore = "spawned as the managed child by the deadline-drain test"]
+    fn deadline_drain_test_child() {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn deadline_drain_applies_queued_boundary_observation_before_timeout() {
+        let test_binary = std::env::current_exe().expect("test executable");
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let supervisor = Supervisor::builder(move || {
+            Command::new(&test_binary)
+                .args([
+                    "--exact",
+                    "instance::tests::deadline_drain_test_child",
+                    "--ignored",
+                ])
+                .kill_grace(Duration::from_millis(20))
+        })
+        .readiness(ReadinessProbe::Acknowledged)
+        .on_event(move |event| {
+            let _ = event_tx.send(event);
+        })
+        .spawn()
+        .await
+        .expect("spawn test child");
+        let pid = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SupervisorEvent::Started { pid }) = event_rx.recv().await {
+                    break pid;
+                }
+            }
+        })
+        .await
+        .expect("test child did not start");
+
+        let (state_tx, state_rx) = watch::channel(InstanceStatus::initial());
+        let (probe_request_tx, _probe_request_rx) = mpsc::unbounded_channel();
+        let shared = Shared {
+            state_tx,
+            user_stop: AtomicBool::new(false),
+            probe_timeout: AtomicBool::new(false),
+            parser: parking_lot::Mutex::new(LogParser::new(kind::CoreKind::Mihomo, 1)),
+            log_tail: parking_lot::Mutex::new(VecDeque::new()),
+            log_tx: broadcast::channel(LOG_CHANNEL_CAPACITY).0,
+            cancel: CancellationToken::new(),
+            probe_cancel: CancellationToken::new(),
+            probe_request_tx,
+            supervisor: tokio::sync::Mutex::new(Some(supervisor)),
+            monitor: tokio::sync::Mutex::new(None),
+        };
+        let initial_deadline = Instant::now() + Duration::from_millis(10);
+        let deadline = initial_deadline.into_std();
+        let mut current = Some(run_state(1, pid, std::time::Instant::now()));
+        let mut ever_ready = false;
+        let mut respawn_deadline = None;
+        let (observation_tx, mut observations) = mpsc::unbounded_channel();
+        observation_tx
+            .send(healthy_observation(
+                1,
+                pid,
+                deadline + Duration::from_nanos(1),
+            ))
+            .unwrap();
+        observation_tx
+            .send(healthy_observation(1, pid, deadline))
+            .unwrap();
+        tokio::time::sleep_until(initial_deadline + Duration::from_millis(1)).await;
+
+        assert!(
+            ProbeReconcile {
+                current: &mut current,
+                ever_ready: &mut ever_ready,
+                respawn_deadline: &mut respawn_deadline,
+                initial_deadline,
+                shared: &shared,
+                driver: None,
+                epoch: epoch(1),
+            }
+            .drain(&mut observations)
+            .await
+        );
+        assert!(ever_ready);
+        assert!(current.as_ref().is_some_and(|run| run.ready));
+        assert!(matches!(
+            state_rx.borrow().state,
+            InstanceState::Running { pid: running_pid } if running_pid == pid
+        ));
+
+        let supervisor = shared
+            .supervisor
+            .lock()
+            .await
+            .take()
+            .expect("supervisor retained");
+        tokio::time::timeout(Duration::from_secs(5), supervisor.stop())
+            .await
+            .expect("stop test child")
+            .expect("supervisor stop");
+    }
+}

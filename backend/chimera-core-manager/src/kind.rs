@@ -224,3 +224,101 @@ async fn run_check(spec: &crate::spec::InstanceSpec, timeout: Duration) -> Resul
         },
     )))
 }
+
+#[cfg(test)]
+mod ref_tests {
+    use super::*;
+    use camino::Utf8PathBuf;
+
+    #[test]
+    fn run_args_match_legacy_profiles() {
+        let dir = Utf8PathBuf::from("C:/data");
+        let cfg = Utf8PathBuf::from("C:/data/config.yaml");
+        let paths = CorePaths {
+            working_dir: &dir,
+            config_path: &cfg,
+        };
+        let args = run_args(CoreKind::Mihomo, paths).unwrap();
+        assert_eq!(
+            args,
+            ["-m", "-d", "C:/data", "-f", "C:/data/config.yaml"].map(OsString::from)
+        );
+        let args = run_args(CoreKind::ClashRust, paths).unwrap();
+        assert_eq!(
+            args,
+            ["-d", "C:/data", "-c", "C:/data/config.yaml"].map(OsString::from)
+        );
+        let args = run_args(CoreKind::ClashPremium, paths).unwrap();
+        assert_eq!(
+            args,
+            ["-d", "C:/data", "-f", "C:/data/config.yaml"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn meow_shares_the_mihomo_launch_profile() {
+        let dir = Utf8PathBuf::from("/d");
+        let cfg = Utf8PathBuf::from("/d/config.yaml");
+        let paths = CorePaths {
+            working_dir: &dir,
+            config_path: &cfg,
+        };
+        assert_eq!(
+            run_args(CoreKind::Meow, paths).unwrap(),
+            run_args(CoreKind::Mihomo, paths).unwrap()
+        );
+    }
+
+    #[test]
+    fn safe_paths_joins_with_platform_separator() {
+        let joined = mihomo_safe_paths(Utf8Path::new("/a"), Utf8Path::new("/b"));
+        #[cfg(windows)]
+        assert_eq!(joined, "/a;/b");
+        #[cfg(not(windows))]
+        assert_eq!(joined, "/a:/b");
+    }
+
+    #[test]
+    fn check_output_condenses_the_last_error_record() {
+        let log = "time=\"2026-07-18T10:00:00Z\" level=info msg=\"start\"\n\
+                   time=\"2026-07-18T10:00:01Z\" level=error msg=\"configuration file /x.yaml test failed\"";
+        assert_eq!(
+            summarize_output(
+                CoreKind::Mihomo,
+                CapturedOutput {
+                    stdout: log,
+                    stderr: "",
+                },
+            ),
+            "configuration file /x.yaml test failed"
+        );
+    }
+
+    #[test]
+    fn check_output_keeps_unrecognized_text() {
+        assert_eq!(
+            summarize_output(
+                CoreKind::Mihomo,
+                CapturedOutput {
+                    stdout: "plain failure",
+                    stderr: "",
+                },
+            ),
+            "plain failure"
+        );
+    }
+
+    #[test]
+    fn check_output_no_longer_special_cases_clash_rs() {
+        assert_eq!(
+            summarize_output(
+                CoreKind::ClashRust,
+                CapturedOutput {
+                    stdout: "",
+                    stderr: "Error: invalid config",
+                },
+            ),
+            "Error: invalid config"
+        );
+    }
+}

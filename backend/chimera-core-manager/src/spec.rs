@@ -174,3 +174,38 @@ impl Default for ManagerOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instance_options_defaults_match_spec() {
+        let o = InstanceOptions::default();
+        assert_eq!(o.startup_timeout, Duration::from_secs(30));
+        assert_eq!(o.health.interval(), Duration::from_millis(250));
+        assert_eq!(o.health.timeout(), Duration::from_secs(1));
+        assert_eq!(o.health.failure_threshold().get(), 3);
+        assert_eq!(o.health.success_threshold().get(), 1);
+        assert_eq!(o.health.start_period(), Duration::ZERO);
+        assert_eq!(
+            o.restart_policy,
+            RestartPolicy::OnFailure { max_restarts: 5 }
+        );
+    }
+
+    /// The compatibility pin for S10: `ManagerOptions::default()` must keep the
+    /// removed passthrough behavior — the source config's HTTP controller,
+    /// never rewritten. The log-sink defaults are pinned beside it because they
+    /// set a disk budget every embedder inherits without asking.
+    #[test]
+    fn manager_options_default_to_the_non_rewriting_policy() {
+        let o = ManagerOptions::default();
+        assert_eq!(o.local_ipc_policy, LocalIpcPolicy::Disable);
+        assert!(o.controller_template.is_none());
+        assert!(o.runtime_dir.is_none());
+        assert!(o.log_sink_enabled);
+        assert_eq!(o.log_max_bytes, 4 * 1024 * 1024);
+        assert_eq!(o.log_max_files, 5);
+    }
+}

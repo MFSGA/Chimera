@@ -349,3 +349,193 @@ fn validate_socket_path(path: &str) -> Result<(), Error> {
             Error::InvalidManagerOptions(format!("invalid controller socket path: {error}"))
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::epoch::epoch;
+
+    fn snapshot(yaml: &str) -> ConfigSnapshot {
+        ConfigSnapshot::from_bytes(Utf8PathBuf::from("config.yaml"), yaml.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn explicit_channel_settings_normalize_controller_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Utf8PathBuf::from_path_buf(root.path().canonicalize().unwrap()).unwrap();
+        let source = snapshot(
+            "external-controller: 127.0.0.1:9090\nexternal-controller-tls: 127.0.0.1:9443\nexternal-controller-unix: /tmp/unmanaged.sock\nexternal-controller-pipe: unmanaged\nsecret: private\n",
+        );
+        for ipc in [false, true] {
+            for keep_http in [false, true] {
+                let prepared = source
+                    .prepare_full(
+                        None,
+                        &runtime,
+                        epoch(1),
+                        if ipc {
+                            EnumSet::only(RuntimeFeature::LocalIpc)
+                        } else {
+                            EnumSet::new()
+                        },
+                        Some(crate::LocalIpcSettings {
+                            policy: crate::LocalIpcPolicy::Prefer,
+                            keep_http_controller: keep_http,
+                        }),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    prepared.document.contains_key("external-controller"),
+                    !ipc || keep_http
+                );
+                assert_eq!(
+                    prepared.document.contains_key("external-controller-tls"),
+                    !ipc || keep_http
+                );
+                assert_eq!(
+                    prepared.document.contains_key("external-controller-unix"),
+                    ipc && cfg!(unix)
+                );
+                assert_eq!(
+                    prepared.document.contains_key("external-controller-pipe"),
+                    ipc && cfg!(windows)
+                );
+                assert_eq!(prepared.controller.secret.as_deref(), Some("private"));
+            }
+        }
+        assert!(source.document().contains_key("external-controller-unix"));
+    }
+
+    #[test]
+    fn extracts_http_controller_and_secret() {
+        let info = snapshot("external-controller: 127.0.0.1:9090\nsecret: s3cret\n").info();
+        assert_eq!(
+            info.controller,
+            Some(RawController::Http("127.0.0.1:9090".into()))
+        );
+        assert_eq!(info.secret.as_deref(), Some("s3cret"));
+    }
+
+    #[test]
+    fn the_http_path_ignores_a_configured_local_controller() {
+        #[cfg(windows)]
+        let source = snapshot(r"external-controller-pipe: \\.\pipe\source");
+        #[cfg(not(windows))]
+        let source = snapshot("external-controller-unix: /tmp/source.sock");
+
+        let error = source
+            .prepare_full(
+                None,
+                Utf8Path::new("runtime"),
+                epoch(1),
+                EnumSet::new(),
+                None,
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, Error::ControllerMissing));
+    }
+
+    #[test]
+    fn semantic_hash_ignores_mapping_order_and_whitespace() {
+        let first = snapshot("mode: rule\ndns:\n  enable: true\n  listen: ''\n");
+        let second = snapshot("dns: { listen: '', enable: true }\n\nmode: rule\n");
+        assert_eq!(first.source_hash, second.source_hash);
+    }
+
+    #[test]
+    fn non_string_mapping_keys_are_rejected_recursively() {
+        let error = ConfigSnapshot::from_bytes(
+            Utf8PathBuf::from("config.yaml"),
+            b"rules:\n  nested:\n    1: invalid\n",
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn managed_bootstrap_zeroes_listeners_and_keeps_the_source_snapshot() {
+        let source = snapshot(
+            "mixed-port: 7890\nexternal-controller: 127.0.0.1:9090\nsecret: sc\ntun:\n  enable: true\n",
+        );
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Utf8PathBuf::from_path_buf(root.path().canonicalize().unwrap()).unwrap();
+        let prepared = source
+            .prepare_bootstrap(
+                None,
+                &runtime,
+                epoch(7),
+                EnumSet::only(RuntimeFeature::LocalIpc),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            prepared
+                .document
+                .get(Value::String("mixed-port".into()))
+                .and_then(Value::as_i64),
+            Some(0)
+        );
+        assert_eq!(
+            prepared
+                .document
+                .get(Value::String("tun".into()))
+                .and_then(Value::as_mapping)
+                .and_then(|tun| tun.get(Value::String("enable".into())))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(prepared.controller.secret.as_deref(), Some("sc"));
+        assert_eq!(
+            source.info().controller,
+            Some(RawController::Http("127.0.0.1:9090".into()))
+        );
+    }
+
+    #[test]
+    fn endpoint_template_requires_and_substitutes_epoch() {
+        let dir = Utf8Path::new("/tmp/x");
+        assert!(managed_endpoint_path(dir, Some("fixed"), epoch(1)).is_err());
+        #[cfg(windows)]
+        assert_eq!(
+            managed_endpoint_path(dir, Some(r"\\.\pipe\ny-{epoch}"), epoch(42)).unwrap(),
+            r"\\.\pipe\ny-42"
+        );
+        assert!(
+            managed_endpoint_path(dir, None, epoch(42))
+                .unwrap()
+                .contains("42")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_unix_template_must_stay_inside_runtime_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Utf8PathBuf::from_path_buf(root.path().join("runtime")).unwrap();
+        std::fs::create_dir(&runtime).unwrap();
+        assert!(managed_endpoint_path(&runtime, Some("core-{epoch}.sock"), epoch(4)).is_ok());
+        let outside = root.path().join("escaped-{epoch}.sock");
+        let outside = outside.to_str().unwrap();
+        let error = managed_endpoint_path(&runtime, Some(outside), epoch(4)).unwrap_err();
+        assert!(error.to_string().contains("escapes runtime directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn managed_unix_template_rejects_escaping_parent_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime");
+        let outside = root.path().join("outside");
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        symlink(&outside, runtime.join("link")).unwrap();
+        let runtime = Utf8PathBuf::from_path_buf(runtime.canonicalize().unwrap()).unwrap();
+        let template = runtime.join("link/core-{epoch}.sock");
+
+        let error = managed_endpoint_path(&runtime, Some(template.as_str()), epoch(5)).unwrap_err();
+        assert!(error.to_string().contains("escapes runtime directory"));
+    }
+}

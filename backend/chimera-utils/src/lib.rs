@@ -1,20 +1,25 @@
 //! Shared utility surface for Chimera applications and services.
 //!
-//! Product-specific core, OS, directory, network, and runtime helpers are
-//! provided by the Chimera platform utilities package. Process supervision,
-//! epoch-bound pid files, atomic filesystem operations, and named-pipe retry
-//! behavior live here so Chimera's core manager does not depend on a separate
-//! application crate.
+//! Runtime, directory, network, operating-system, and core process helpers.
+//!
+//! Portable runtime, directory, network, and operating-system helpers are
+//! implemented in this crate. Core identity types are re-exported from the
+//! Chimera platform package so the app and its IPC client continue to share
+//! the same `CoreType`, including the `ChimeraClient` variant.
 
 #[cfg(feature = "core_manager")]
-pub use chimera_platform_utils::core;
+#[macro_use]
+extern crate derive_builder;
+
+#[cfg(feature = "core_manager")]
+pub mod core;
 #[cfg(feature = "dirs")]
-pub use chimera_platform_utils::dirs;
+pub mod dirs;
 #[cfg(feature = "network")]
-pub use chimera_platform_utils::network;
+pub mod network;
 #[cfg(feature = "os")]
-pub use chimera_platform_utils::os;
-pub use chimera_platform_utils::runtime;
+pub mod os;
+pub mod runtime;
 
 pub mod io;
 

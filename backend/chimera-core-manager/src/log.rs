@@ -678,3 +678,715 @@ fn take_token(input: &str) -> Option<(&str, &str)> {
     let end = input.find(char::is_whitespace)?;
     Some((&input[..end], input[end..].trim_start()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observed(raw: &str) -> DateTime<FixedOffset> {
+        DateTime::parse_from_rfc3339(raw).expect("test observation instant")
+    }
+
+    fn unix_ms(raw: &str) -> Option<i64> {
+        Some(
+            DateTime::parse_from_rfc3339(raw)
+                .expect("test timestamp")
+                .timestamp_millis(),
+        )
+    }
+
+    fn collect(frames: ParsedFrames) -> Vec<LogFrame> {
+        frames.into_iter().flatten().collect()
+    }
+
+    fn parse_one(kind: CoreKind, stream: LogStream, line: &str, at: &str) -> LogFrame {
+        let mut parser = LogParser::new(kind, 7);
+        let mut frames = collect(parser.push_at(stream, line.to_owned(), observed(at)));
+        frames.extend(parser.finish().into_iter().flatten());
+        assert_eq!(frames.len(), 1, "expected exactly one frame for {line:?}");
+        let frame = frames.remove(0);
+        assert_eq!(frame.at, observed(at).timestamp_millis());
+        frame
+    }
+
+    #[test]
+    fn strip_ansi_keeps_plain_lines_and_drops_truncated_sequences() {
+        let line = "plain line".to_owned();
+        let allocation = line.as_ptr();
+        let stripped = strip_ansi(line);
+        assert_eq!(stripped, "plain line");
+        assert_eq!(stripped.as_ptr(), allocation);
+
+        assert_eq!(strip_ansi("prefix\u{1b}[31".to_owned()), "prefix");
+        assert_eq!(strip_ansi("\u{1b}[2m配置\u{1b}[0m".to_owned()), "配置");
+    }
+
+    #[test]
+    fn parses_mihomo_logfmt_including_escapes() {
+        let info = parse_one(
+            CoreKind::Mihomo,
+            LogStream::Stdout,
+            r#"time="2026-07-29T00:16:22.646059400+08:00" level=info msg="Mixed(http+socks) proxy listening at: 127.0.0.1:17890""#,
+            "2026-07-29T00:16:23+08:00",
+        );
+        assert_eq!(info.level, LogLevel::Info);
+        assert_eq!(info.target, None);
+        assert_eq!(
+            info.message,
+            "Mixed(http+socks) proxy listening at: 127.0.0.1:17890"
+        );
+        let timestamp = info.timestamp.expect("mihomo prints a timestamp");
+        assert!(!timestamp.inferred);
+        assert_eq!(
+            timestamp.unix_ms,
+            unix_ms("2026-07-29T00:16:22.646059400+08:00")
+        );
+
+        let fatal = parse_one(
+            CoreKind::Mihomo,
+            LogStream::Stdout,
+            r#"time="2026-07-29T00:17:26.518376100+08:00" level=fatal msg="Parse config error: yaml: line 2: did not find expected node content""#,
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(fatal.level, LogLevel::Fatal);
+        assert_eq!(
+            fatal.message,
+            "Parse config error: yaml: line 2: did not find expected node content"
+        );
+
+        let escaped = parse_one(
+            CoreKind::Mihomo,
+            LogStream::Stdout,
+            r#"time="2026-07-29T00:17:26+08:00" level=warning msg="say \"hello\" on \\path" request=7"#,
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(escaped.level, LogLevel::Warning);
+        assert_eq!(escaped.message, r#"say "hello" on \path"#);
+        assert_eq!(
+            escaped.fields,
+            [LogField {
+                key: "request".into(),
+                value: "7".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn colored_mihomo_layout_degrades_instead_of_being_dropped() {
+        let frame = parse_one(
+            CoreKind::Mihomo,
+            LogStream::Stdout,
+            "\u{1b}[36mINFO\u{1b}[0m[2026-07-29T00:16:22.646059400+08:00] proxy listening",
+            "2026-07-29T00:16:23+08:00",
+        );
+        assert_eq!(frame.level, LogLevel::Info);
+        assert_eq!(frame.timestamp, None);
+        assert_eq!(
+            frame.raw,
+            "INFO[2026-07-29T00:16:22.646059400+08:00] proxy listening"
+        );
+        assert_eq!(frame.message, frame.raw);
+    }
+
+    #[test]
+    fn parses_premium_pretty_print() {
+        let mmdb = parse_one(
+            CoreKind::ClashPremium,
+            LogStream::Stdout,
+            "00:16:30 INF [MMDB] can't find DB, start download path=C:/.../Country.mmdb",
+            "2026-07-29T00:16:31+08:00",
+        );
+        assert_eq!(mmdb.level, LogLevel::Info);
+        assert_eq!(mmdb.target.as_deref(), Some("MMDB"));
+        assert_eq!(
+            mmdb.message,
+            "can't find DB, start download path=C:/.../Country.mmdb"
+        );
+        assert!(mmdb.fields.is_empty());
+        let timestamp = mmdb.timestamp.expect("premium prints a time of day");
+        assert!(timestamp.inferred);
+        assert_eq!(timestamp.raw, "00:16:30");
+        assert_eq!(timestamp.unix_ms, unix_ms("2026-07-29T00:16:30+08:00"));
+
+        let inbound = parse_one(
+            CoreKind::ClashPremium,
+            LogStream::Stdout,
+            "00:16:33 INF inbound create success inbound=mixed addr=127.0.0.1:17890 network=tcp",
+            "2026-07-29T00:16:34+08:00",
+        );
+        assert_eq!(inbound.target, None);
+        assert_eq!(
+            inbound.message,
+            "inbound create success inbound=mixed addr=127.0.0.1:17890 network=tcp"
+        );
+
+        let fatal = parse_one(
+            CoreKind::ClashPremium,
+            LogStream::Stdout,
+            "00:17:26 FTL [Config] parse config failed error=yaml: line 2: did not find expected node content",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(fatal.level, LogLevel::Fatal);
+        assert_eq!(fatal.target.as_deref(), Some("Config"));
+        assert_eq!(
+            fatal.message,
+            "parse config failed error=yaml: line 2: did not find expected node content"
+        );
+
+        let unknown = parse_one(
+            CoreKind::ClashPremium,
+            LogStream::Stdout,
+            "00:17:26 ??? unlabelled record",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(unknown.level, LogLevel::Info);
+        assert_eq!(unknown.message, "unlabelled record");
+    }
+
+    #[test]
+    fn premium_rolls_over_midnight_but_ignores_small_backward_drift() {
+        let mut parser = LogParser::new(CoreKind::ClashPremium, 1);
+        let before = collect(parser.push_at(
+            LogStream::Stdout,
+            "23:59:59 INF before".to_owned(),
+            observed("2026-07-29T23:59:59+08:00"),
+        ))
+        .remove(0);
+        let after = collect(parser.push_at(
+            LogStream::Stdout,
+            "00:00:01 INF after".to_owned(),
+            observed("2026-07-30T00:00:01+08:00"),
+        ))
+        .remove(0);
+        assert_eq!(
+            before.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-29T23:59:59+08:00")
+        );
+        assert_eq!(
+            after.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-30T00:00:01+08:00")
+        );
+
+        let mut parser = LogParser::new(CoreKind::ClashPremium, 1);
+        parser.push_at(
+            LogStream::Stdout,
+            "10:00:00 INF first".to_owned(),
+            observed("2026-07-29T10:00:00+08:00"),
+        );
+        let drifted = collect(parser.push_at(
+            LogStream::Stdout,
+            "09:59:59 INF drifted".to_owned(),
+            observed("2026-07-29T10:00:01+08:00"),
+        ))
+        .remove(0);
+        assert_eq!(
+            drifted.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-29T09:59:59+08:00")
+        );
+    }
+
+    #[test]
+    fn premium_first_line_from_the_previous_day() {
+        let frame = parse_one(
+            CoreKind::ClashPremium,
+            LogStream::Stdout,
+            "23:59:59 INF late",
+            "2026-07-30T00:00:02+08:00",
+        );
+        assert_eq!(
+            frame.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-29T23:59:59+08:00")
+        );
+    }
+
+    #[test]
+    fn strips_ansi_from_meow_before_parsing() {
+        let info = parse_one(
+            CoreKind::Meow,
+            LogStream::Stdout,
+            "\u{1b}[2m2026-07-28T16:16:26.616489Z\u{1b}[0m \u{1b}[32m INFO\u{1b}[0m \u{1b}[2mmeow\u{1b}[0m\u{1b}[2m:\u{1b}[0m meow-rs starting...",
+            "2026-07-29T00:16:27+08:00",
+        );
+        assert_eq!(info.level, LogLevel::Info);
+        assert_eq!(info.target.as_deref(), Some("meow"));
+        assert_eq!(info.message, "meow-rs starting...");
+        assert_eq!(
+            info.raw,
+            "2026-07-28T16:16:26.616489Z  INFO meow: meow-rs starting..."
+        );
+        assert_eq!(
+            info.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-28T16:16:26.616489Z")
+        );
+
+        let error = parse_one(
+            CoreKind::Meow,
+            LogStream::Stdout,
+            "\u{1b}[2m2026-07-28T16:17:26.719459Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m \u{1b}[2mmeow\u{1b}[0m\u{1b}[2m:\u{1b}[0m meow-rs stopped with an error \u{1b}[3merror\u{1b}[0m\u{1b}[2m=\u{1b}[0mdid not find expected node content at line 3 column 1",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(error.level, LogLevel::Error);
+        assert_eq!(error.target.as_deref(), Some("meow"));
+        assert_eq!(
+            error.message,
+            "meow-rs stopped with an error error=did not find expected node content at line 3 column 1"
+        );
+        assert!(!error.raw.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn infers_levels_for_plain_stderr_text() {
+        let warning = parse_one(
+            CoreKind::Meow,
+            LogStream::Stderr,
+            "warning: --geodata-mode is not supported and will be ignored",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(warning.level, LogLevel::Warning);
+        assert_eq!(warning.timestamp, None);
+
+        let error = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stderr,
+            "Error: invalid config",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(error.level, LogLevel::Error);
+
+        let noise = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stderr,
+            "using env log level: debug",
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(noise.level, LogLevel::Warning);
+    }
+
+    #[test]
+    fn parses_clash_rs_release_and_debug_layouts() {
+        let debug = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:0919421 DEBUG clash-lib\src\lib.rs:445: initializing cache store",
+            "2026-07-29T00:16:36+08:00",
+        );
+        assert_eq!(debug.level, LogLevel::Debug);
+        assert_eq!(debug.target.as_deref(), Some(r"clash-lib\src\lib.rs:445"));
+        assert_eq!(debug.message, "initializing cache store");
+        let timestamp = debug.timestamp.expect("clash-rs prints a timestamp");
+        assert!(timestamp.inferred);
+        assert_eq!(timestamp.raw, "26-07-29 00:16:35:0919421");
+        assert_eq!(
+            timestamp.unix_ms,
+            unix_ms("2026-07-29T00:16:35.0919421+08:00")
+        );
+
+        let warning = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:0926205  WARN clash-lib\src\app\profile\mod.rs:153: failed to read cache file: stream did not contain valid UTF-8",
+            "2026-07-29T00:16:36+08:00",
+        );
+        assert_eq!(warning.level, LogLevel::Warning);
+        assert_eq!(
+            warning.target.as_deref(),
+            Some(r"clash-lib\src\app\profile\mod.rs:153")
+        );
+        assert_eq!(
+            warning.message,
+            "failed to read cache file: stream did not contain valid UTF-8"
+        );
+
+        let six_digits = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:093078 INFO clash-lib\src\lib.rs:446: six digit subsecond",
+            "2026-07-29T00:16:36+08:00",
+        );
+        assert_eq!(
+            six_digits.timestamp.unwrap().unix_ms,
+            unix_ms("2026-07-29T00:16:35.093078+08:00")
+        );
+
+        let instrumented = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:093078 DEBUG ThreadId(1) clash_lib::app clash-lib\src\lib.rs:445: debug build shape",
+            "2026-07-29T00:16:36+08:00",
+        );
+        assert_eq!(
+            instrumented.target.as_deref(),
+            Some(r"clash-lib\src\lib.rs:445")
+        );
+        assert_eq!(instrumented.message, "debug build shape");
+
+        // A `file:line`-shaped reference inside the message must not win over the
+        // real source anchor that closes the header.
+        let quoted_source = parse_one(
+            CoreKind::ClashRust,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:093078 ERROR clash-lib\src\lib.rs:445: failed at config.yaml:3: invalid value",
+            "2026-07-29T00:16:36+08:00",
+        );
+        assert_eq!(
+            quoted_source.target.as_deref(),
+            Some(r"clash-lib\src\lib.rs:445")
+        );
+        assert_eq!(
+            quoted_source.message,
+            "failed at config.yaml:3: invalid value"
+        );
+    }
+
+    #[test]
+    fn chimera_client_keeps_its_kind_while_using_the_clash_rs_log_layout() {
+        let frame = parse_one(
+            CoreKind::ChimeraClient,
+            LogStream::Stdout,
+            r"26-07-29 00:16:35:0919421 DEBUG clash-lib\src\lib.rs:445: initializing cache store",
+            "2026-07-29T00:16:36+08:00",
+        );
+
+        assert_eq!(frame.kind, CoreKind::ChimeraClient);
+        assert_eq!(frame.level, LogLevel::Debug);
+        assert_eq!(frame.message, "initializing cache store");
+    }
+
+    #[test]
+    fn clash_rs_header_shape_alone_does_not_make_a_root() {
+        let mut parser = LogParser::new(CoreKind::ClashRust, 1);
+        let at = observed("2026-07-29T00:17:27+08:00");
+        parser.push_at(LogStream::Stderr, "Error: invalid config".to_owned(), at);
+        for line in [
+            // Separators line up but the numeric slots do not hold digits.
+            "xx-xx-xx xx:xx:xx:1 ERROR fake.rs:1: not a header",
+            // No space between the subsecond and the level.
+            "26-07-29 00:16:35:1ERROR fake.rs:1: no separator",
+        ] {
+            assert!(collect(parser.push_at(LogStream::Stderr, line.to_owned(), at)).is_empty());
+        }
+        let frame = collect(parser.finish()).remove(0);
+        assert_eq!(frame.level, LogLevel::Error);
+        assert_eq!(
+            frame.message,
+            "Error: invalid config\n\
+             xx-xx-xx xx:xx:xx:1 ERROR fake.rs:1: not a header\n\
+             26-07-29 00:16:35:1ERROR fake.rs:1: no separator"
+        );
+    }
+
+    #[test]
+    fn finish_releases_pending_roots_oldest_first() {
+        let mut parser = LogParser::new(CoreKind::Meow, 1);
+        let at = observed("2026-07-29T00:17:27+08:00");
+        parser.push_at(LogStream::Stderr, "Error: stderr first".to_owned(), at);
+        parser.push_at(
+            LogStream::Stdout,
+            "2026-07-28T16:17:26.719459Z ERROR meow: stdout second".to_owned(),
+            at,
+        );
+        let frames = collect(parser.finish());
+        assert_eq!(frames[0].message, "Error: stderr first");
+        assert_eq!(frames[1].message, "stdout second");
+        assert_eq!(error_summary(&frames).as_deref(), Some("stdout second"));
+    }
+
+    /// A held record also fixes its clock: `at` is the instant the root line was
+    /// observed, not the instant the last continuation arrived.
+    #[test]
+    fn aggregates_multi_line_records_within_one_stream() {
+        let mut parser = LogParser::new(CoreKind::ClashRust, 1);
+        let root_at = observed("2026-07-29T00:17:27+08:00");
+        let continuation_at = observed("2026-07-29T00:17:29+08:00");
+        let root =
+            "Error: invalid config: couldn't not parse config content mixed-port: not-a-port";
+        assert!(collect(parser.push_at(LogStream::Stderr, root.to_owned(), root_at)).is_empty());
+        for line in [
+            "proxies: [[[",
+            ": did not find expected node content at line 3 column 1, while parsing a flow node",
+        ] {
+            assert!(
+                collect(parser.push_at(LogStream::Stderr, line.to_owned(), continuation_at))
+                    .is_empty()
+            );
+        }
+        let frame = collect(parser.finish()).remove(0);
+        assert_eq!(frame.at, root_at.timestamp_millis());
+        assert_eq!(frame.level, LogLevel::Error);
+        assert!(!frame.truncated);
+        assert_eq!(
+            frame.message,
+            "Error: invalid config: couldn't not parse config content mixed-port: not-a-port\nproxies: [[[\n: did not find expected node content at line 3 column 1, while parsing a flow node"
+        );
+    }
+
+    #[test]
+    fn premium_stack_stays_attached_to_its_record() {
+        let mut parser = LogParser::new(CoreKind::ClashPremium, 1);
+        let at = observed("2026-07-29T00:17:27+08:00");
+        for line in [
+            "00:17:26 FTL [Config] parse config failed error=bad",
+            "goroutine 1 [running]:",
+            "main.main()",
+        ] {
+            parser.push_at(LogStream::Stdout, line.to_owned(), at);
+        }
+        let frame = collect(parser.finish()).remove(0);
+        assert_eq!(
+            frame.message,
+            "parse config failed error=bad\ngoroutine 1 [running]:\nmain.main()"
+        );
+    }
+
+    #[test]
+    fn oversized_stacks_keep_the_root_and_mark_truncation() {
+        let mut parser = LogParser::new(CoreKind::Mihomo, 1);
+        let at = observed("2026-07-29T00:17:27+08:00");
+        parser.push_at(
+            LogStream::Stdout,
+            r#"time="2026-07-29T00:17:26+08:00" level=panic msg="boom""#.to_owned(),
+            at,
+        );
+        for index in 0..MAX_CONTINUATION_LINES + 4 {
+            parser.push_at(LogStream::Stdout, format!("stack frame {index}"), at);
+        }
+        let frame = collect(parser.finish()).remove(0);
+        assert_eq!(frame.level, LogLevel::Fatal);
+        assert!(frame.truncated);
+        assert!(frame.message.starts_with("boom\nstack frame 0\n"));
+        assert!(frame.message.contains("stack frame 15"));
+        assert!(!frame.message.contains("stack frame 16"));
+    }
+
+    /// A single enormous line is bounded here rather than at each consumer, and
+    /// what the diagnostic paths read is the already-bounded text. The two
+    /// instantiations of the borrow — owned frames and the `Arc`s the tail holds
+    /// — are both exercised.
+    #[test]
+    fn an_oversized_root_is_bounded_for_every_diagnostic_consumer() {
+        let frame = parse_one(
+            CoreKind::Meow,
+            LogStream::Stderr,
+            &format!("warning: {}", "x".repeat(MAX_LOG_TEXT_BYTES * 2)),
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(frame.message.len(), MAX_LOG_TEXT_BYTES);
+        assert_eq!(frame.raw.len(), MAX_LOG_TEXT_BYTES);
+        assert!(frame.truncated);
+
+        assert_eq!(
+            error_summary(std::slice::from_ref(&frame))
+                .expect("a warning is above Info")
+                .len(),
+            MAX_LOG_TEXT_BYTES
+        );
+        assert_eq!(
+            format_tail(&[std::sync::Arc::new(frame)]).len(),
+            MAX_LOG_TEXT_BYTES
+        );
+    }
+
+    /// Continuations are appended up to the budget rather than concatenated and
+    /// then cut, and the prefix that survives never splits a character.
+    #[test]
+    fn a_continuation_is_appended_only_as_far_as_it_fits() {
+        let mut parser = LogParser::new(CoreKind::ClashRust, 1);
+        let root_at = observed("2026-07-29T00:17:27+08:00");
+        assert!(
+            collect(parser.push_at(LogStream::Stderr, "Error: root".to_owned(), root_at))
+                .is_empty()
+        );
+        // Three bytes per char, so the budget never lands on a boundary and the
+        // walk-back actually runs.
+        let continuation = "€".repeat(MAX_LOG_TEXT_BYTES);
+        assert!(
+            collect(parser.push_at(
+                LogStream::Stderr,
+                continuation.clone(),
+                observed("2026-07-29T00:17:28+08:00"),
+            ))
+            .is_empty()
+        );
+
+        let frame = collect(parser.finish()).remove(0);
+        let appended = frame
+            .message
+            .strip_prefix("Error: root\n")
+            .expect("the root and its separator survive");
+        assert!(continuation.starts_with(appended));
+        assert!(
+            frame.message.len() < MAX_LOG_TEXT_BYTES,
+            "the boundary walk did not run"
+        );
+        assert!(frame.raw.len() < MAX_LOG_TEXT_BYTES);
+        assert!(frame.truncated);
+        assert_eq!(frame.at, root_at.timestamp_millis());
+    }
+
+    /// The append budget at its edges. `raw` and `message` run out at different
+    /// points — `raw` also carries the header — so these cases are reached in
+    /// production by one of the two while the other still has room.
+    #[test]
+    fn the_append_budget_never_writes_a_separator_it_cannot_follow() {
+        let filled = |shortfall: usize| "x".repeat(MAX_LOG_TEXT_BYTES - shortfall);
+
+        // Already at the cap, or with room for the separator alone.
+        for shortfall in [0, 1] {
+            let mut text = filled(shortfall);
+            assert!(append_bounded(&mut text, "y", MAX_LOG_TEXT_BYTES));
+            assert_eq!(text, filled(shortfall), "shortfall = {shortfall}");
+        }
+
+        // Room for the separator and two bytes, but the next character is three.
+        let mut split = filled(3);
+        assert!(append_bounded(&mut split, "€", MAX_LOG_TEXT_BYTES));
+        assert_eq!(split, filled(3));
+
+        // A partial line, and a whole one that exactly exhausts the budget.
+        let mut partial = filled(2);
+        assert!(append_bounded(&mut partial, "abc", MAX_LOG_TEXT_BYTES));
+        assert!(partial.ends_with("\na"));
+        assert_eq!(partial.len(), MAX_LOG_TEXT_BYTES);
+
+        let mut exact = filled(4);
+        assert!(!append_bounded(&mut exact, "abc", MAX_LOG_TEXT_BYTES));
+        assert!(exact.ends_with("\nabc"));
+        assert_eq!(exact.len(), MAX_LOG_TEXT_BYTES);
+
+        // An empty continuation is fully represented by the separator itself.
+        let mut blank = filled(1);
+        assert!(!append_bounded(&mut blank, "", MAX_LOG_TEXT_BYTES));
+        assert_eq!(blank.len(), MAX_LOG_TEXT_BYTES);
+        assert!(blank.ends_with('\n'));
+    }
+
+    #[test]
+    fn oversized_metadata_and_fields_are_bounded_at_the_parser() {
+        let huge = "x".repeat(MAX_LOG_FIELD_TEXT_BYTES * 2);
+        let mut line = format!(
+            r#"time="{}" level=info msg="metadata" {}="{}""#,
+            "z".repeat(MAX_LOG_TIMESTAMP_RAW_BYTES * 2),
+            huge,
+            huge,
+        );
+        for index in 0..MAX_LOG_FIELDS {
+            line.push_str(&format!(" field{index}=value"));
+        }
+        let structured = parse_one(
+            CoreKind::Mihomo,
+            LogStream::Stdout,
+            &line,
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(
+            structured.timestamp.as_ref().unwrap().raw.len(),
+            MAX_LOG_TIMESTAMP_RAW_BYTES
+        );
+        assert_eq!(structured.fields.len(), MAX_LOG_FIELDS);
+        assert_eq!(structured.fields[0].key.len(), MAX_LOG_FIELD_TEXT_BYTES);
+        assert_eq!(structured.fields[0].value.len(), MAX_LOG_FIELD_TEXT_BYTES);
+        assert!(structured.truncated);
+
+        let targeted = parse_one(
+            CoreKind::Meow,
+            LogStream::Stdout,
+            &format!(
+                "{} INFO {}: message",
+                "z".repeat(MAX_LOG_TIMESTAMP_RAW_BYTES * 2),
+                "t".repeat(MAX_LOG_TARGET_BYTES * 2),
+            ),
+            "2026-07-29T00:17:27+08:00",
+        );
+        assert_eq!(targeted.target.unwrap().len(), MAX_LOG_TARGET_BYTES);
+        assert_eq!(
+            targeted.timestamp.as_ref().unwrap().raw.len(),
+            MAX_LOG_TIMESTAMP_RAW_BYTES
+        );
+        assert_eq!(targeted.message, "message");
+        assert!(targeted.truncated);
+    }
+
+    #[test]
+    fn continuations_never_cross_streams() {
+        let mut parser = LogParser::new(CoreKind::ClashRust, 1);
+        let at = observed("2026-07-29T00:17:27+08:00");
+        parser.push_at(LogStream::Stderr, "Error: invalid config".to_owned(), at);
+        let stdout =
+            collect(parser.push_at(LogStream::Stdout, "unrelated stdout noise".to_owned(), at));
+        assert_eq!(stdout.len(), 1);
+        assert_eq!(stdout[0].message, "unrelated stdout noise");
+        let pending = collect(parser.finish()).remove(0);
+        assert_eq!(pending.message, "Error: invalid config");
+    }
+
+    #[test]
+    fn summarizes_bad_config_output_for_every_kind() {
+        assert_eq!(
+            summarize_output(
+                CoreKind::Mihomo,
+                CapturedOutput {
+                    stdout: r#"time="2026-07-29T00:17:26.518376100+08:00" level=fatal msg="Parse config error: yaml: line 2: did not find expected node content""#,
+                    stderr: "",
+                },
+            ),
+            "Parse config error: yaml: line 2: did not find expected node content"
+        );
+
+        assert_eq!(
+            summarize_output(
+                CoreKind::ClashPremium,
+                CapturedOutput {
+                    stdout: "00:16:30 INF [MMDB] can't find DB\n00:17:26 FTL [Config] parse config failed error=yaml: line 2: did not find expected node content",
+                    stderr: "",
+                },
+            ),
+            "parse config failed error=yaml: line 2: did not find expected node content"
+        );
+
+        let meow = summarize_output(
+            CoreKind::Meow,
+            CapturedOutput {
+                stdout: "\u{1b}[2m2026-07-28T16:17:26.719459Z\u{1b}[0m \u{1b}[31mERROR\u{1b}[0m \u{1b}[2mmeow\u{1b}[0m\u{1b}[2m:\u{1b}[0m meow-rs stopped with an error \u{1b}[3merror\u{1b}[0m\u{1b}[2m=\u{1b}[0mdid not find expected node content at line 3 column 1",
+                stderr: "warning: --geodata-mode is not supported and will be ignored\nError: did not find expected node content at line 3 column 1, while parsing a flow node",
+            },
+        );
+        assert!(
+            meow.contains("did not find expected node content"),
+            "{meow}"
+        );
+
+        let clash_rs = summarize_output(
+            CoreKind::ClashRust,
+            CapturedOutput {
+                stdout: "",
+                stderr: "Error: invalid config: couldn't not parse config content mixed-port: not-a-port\nproxies: [[[\n: did not find expected node content at line 3 column 1, while parsing a flow node",
+            },
+        );
+        assert!(clash_rs.contains("invalid config"), "{clash_rs}");
+        assert!(clash_rs.contains("proxies: [[["), "{clash_rs}");
+    }
+
+    #[test]
+    fn summary_falls_back_to_verbatim_output() {
+        assert_eq!(
+            summarize_output(
+                CoreKind::Mihomo,
+                CapturedOutput {
+                    stdout: "  ",
+                    stderr: "",
+                },
+            ),
+            "core reported no output"
+        );
+        assert_eq!(
+            summarize_output(
+                CoreKind::Mihomo,
+                CapturedOutput {
+                    stdout: "unstructured note",
+                    stderr: "",
+                },
+            ),
+            "unstructured note"
+        );
+    }
+}

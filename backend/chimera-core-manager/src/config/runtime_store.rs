@@ -452,3 +452,115 @@ async fn remove_socket_artifact(path: &Utf8Path) -> Result<(), Error> {
         Err(error) => Err(error.into()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::epoch::epoch;
+
+    fn temp_store_dir() -> (tempfile::TempDir, Utf8PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("runtime")).unwrap();
+        (dir, path)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn atomic_replace_readers_only_observe_complete_documents() {
+        let (_guard, dir) = temp_store_dir();
+        let store = RuntimeConfigStore::new(dir).await.unwrap();
+        let old = b"marker: old\npayload: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+        let new = b"marker: new\npayload: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n";
+        let staged = store.stage(epoch(7), old).await.unwrap();
+        let path = store.commit_new(staged, epoch(7)).await.unwrap();
+
+        let mut readers = Vec::new();
+        for _ in 0..8 {
+            let path = path.clone();
+            let old = old.to_vec();
+            let new = new.to_vec();
+            readers.push(tokio::spawn(async move {
+                for _ in 0..500 {
+                    #[cfg(windows)]
+                    let observed = loop {
+                        match tokio::fs::read(&path).await {
+                            Ok(observed) => break observed,
+                            Err(error) if matches!(error.raw_os_error(), Some(2 | 5 | 32 | 33)) => {
+                                tokio::task::yield_now().await;
+                            }
+                            Err(error) => panic!("runtime read failed: {error}"),
+                        }
+                    };
+                    #[cfg(not(windows))]
+                    let observed = tokio::fs::read(&path)
+                        .await
+                        .unwrap_or_else(|error| panic!("runtime read failed: {error}"));
+                    assert!(observed == old || observed == new, "partial YAML observed");
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+        for round in 0..100 {
+            store
+                .replace(epoch(7), if round % 2 == 0 { new } else { old })
+                .await
+                .unwrap();
+        }
+        for reader in readers {
+            reader.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn backup_restore_and_cleanup_preserve_complete_versions() {
+        let (_guard, dir) = temp_store_dir();
+        let store = RuntimeConfigStore::new(dir).await.unwrap();
+        let staged = store.stage(epoch(3), b"value: old\n").await.unwrap();
+        let path = store.commit_new(staged, epoch(3)).await.unwrap();
+        let backup = store.backup(epoch(3), 1).await.unwrap();
+        store.replace(epoch(3), b"value: new\n").await.unwrap();
+        store.restore(&backup).await.unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&path).await.unwrap(),
+            "value: old\n"
+        );
+        store.remove_backup(backup).await.unwrap();
+        store.cleanup_epoch(epoch(3)).await.unwrap();
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cleanup_epoch_removes_a_real_unix_socket() {
+        use std::os::unix::{fs::FileTypeExt, net::UnixListener};
+
+        let (_guard, dir) = temp_store_dir();
+        let store = RuntimeConfigStore::new(dir).await.unwrap();
+        let socket_path = store.socket_path(epoch(9));
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&socket_path)
+                .unwrap()
+                .file_type()
+                .is_socket()
+        );
+        drop(listener);
+
+        store.cleanup_epoch(epoch(9)).await.unwrap();
+        assert!(!socket_path.exists());
+    }
+
+    #[test]
+    fn installed_commit_reports_parent_sync_uncertainty_without_becoming_an_error() {
+        let path = Utf8PathBuf::from("config-4.yaml");
+        let commit = installed_commit(
+            path.clone(),
+            Err(std::io::Error::other("injected directory fsync failure")),
+        );
+        assert_eq!(commit.path(), path);
+        assert!(matches!(
+            commit.durability(),
+            RuntimeCommitDurability::Uncertain(message)
+                if message.contains("atomically installed") && message.contains("injected")
+        ));
+    }
+}
