@@ -685,3 +685,21 @@ DIFF-001 至 DIFF-012 是此前基于
   `git diff --check` 通过。Tauri 编译仍有约 323 条既有 warning。
 - 下一切片：迁入 `ControlEndpoint` 的 Service IPC v2 adapter，并对照 Chimera 当前
   `ClientError`、websocket event 和 client features；Service 的 v2 handler 仍是 actor 接线前置条件。
+
+## DIFF-025：补齐 IPC 响应的结构化错误元数据
+
+- 基线：根仓库 `4b38dbcd`；runtime `1ccff94`；ref 为 Clash Nyanpasu root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549` / runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：按 ref 为通用 IPC `R` envelope 增加可选 `error_kind` 与 `retryable`，并添加
+  `RBuilder::other_error_with_kind`。字段在缺失时默认 `None` 且不序列化，因此 v1 成功响应的
+  JSON 不变，旧服务响应仍可被新客户端解析。IPC 子模块独立构建，故 wire 层保留开放字符串，
+  不反向依赖应用侧 `chimera-core-metadata`；调用端负责用本地枚举识别已知值、保留未知值。
+- 兼容及限制：本切片只增加 envelope 能力；现有服务路由仍调用 `other_error`，尚未发出分类，
+  Tauri client 也尚未映射这两个字段。没有切换 v1/v2 endpoint 或修改 ChimeraClient 启动流程。
+- 验证：`cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc
+  --features client,server,specta`，9 passed、doc tests 0；runtime `cargo fmt --manifest-path
+  backend/chimera-runtime/Cargo.toml --all -- --check` 和 runtime `git diff --check` 通过。
+- 下一切片：让 IPC client 错误类型暴露服务端错误元数据，并实现 Tauri `ServiceEndpoint` 的
+  wire 映射；之后迁入服务端 `CoreControl` bridge 和 v2 handlers。只有服务端具备 ref 的排队、
+  幂等与状态查询语义后，才把生产 Service 调用切至 v2。
