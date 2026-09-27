@@ -1,66 +1,26 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-type MutationOutcome<T> =
-  | { status: 'applied'; value: T }
-  | {
-      status: 'committed_degraded';
-      value: T;
-      degradations: Array<{ message: string }>;
-    };
+import type {
+  MutationOutcome,
+  ProfileDocument_Deserialize,
+} from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  findProfileUid,
+  invoke,
+  localConfigProfileRequest,
+  overlayProfileRequest,
+  readProfiles,
+  scopedTransformsOf,
+  setGlobalTransforms,
+  setScopedTransforms,
+  withCleanup,
+} from './profile-fixtures.js';
 
 type CoreState = 'Running' | { Stopped: string | null };
-
-interface ProfileResponse {
-  type: 'remote' | 'local' | 'merge' | 'script';
-  uid: string;
-  name: string;
-  chain?: string[];
-}
-
-interface ProfilesResponse {
-  current: string | null;
-  items: ProfileResponse[];
-  global_transforms: string[];
-}
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, payload) => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return tauri.invoke(name, payload);
-    },
-    command,
-    args,
-  );
-}
-
-function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
-  assert.equal(
-    outcome.status,
-    'applied',
-    `${operation} degraded: ${
-      outcome.status === 'committed_degraded'
-        ? outcome.degradations.map((item) => item.message).join('; ')
-        : 'unknown outcome'
-    }`,
-  );
-  return outcome.value;
-}
-
-async function readProfiles(): Promise<ProfilesResponse> {
-  return invoke<ProfilesResponse>('get_profiles');
-}
 
 async function waitForCoreRunning(): Promise<void> {
   let lastState = 'unknown';
@@ -105,122 +65,137 @@ async function waitForUnifiedDelay(expected: boolean): Promise<void> {
   );
 }
 
-async function createLocalProfile(name: string): Promise<string> {
-  const outcome = await invoke<MutationOutcome<string>>('create_profile', {
-    item: {
-      type: 'local',
-      uid: null,
-      name,
-      file: null,
-      desc: null,
-      updated: null,
-      symlinks: null,
-      chain: [],
-    },
-    fileData: [
+async function createLocalProfile(
+  name: string,
+): Promise<MutationOutcome<string>> {
+  return createProfile(
+    localConfigProfileRequest(name),
+    [
       'unified-delay: false',
       'proxies: []',
       'proxy-groups: []',
       'rules: []',
       '',
     ].join('\n'),
-  });
-  return requireApplied(outcome, 'local profile creation');
-}
-
-async function createMergeProfile(name: string): Promise<string> {
-  const outcome = await invoke<MutationOutcome<string>>('create_profile', {
-    item: { type: 'merge', name, desc: null },
-    fileData: 'unified-delay: true\n',
-  });
-  return requireApplied(outcome, 'merge profile creation');
-}
-
-async function setScopedChain(
-  uid: string,
-  transforms: string[],
-): Promise<void> {
-  const outcome = await invoke<MutationOutcome<null>>(
-    'set_profile_transform_chain',
-    { uid, transforms },
   );
-  requireApplied(outcome, 'scoped transform chain update');
 }
 
-async function setGlobalChain(transforms: string[]): Promise<void> {
-  const outcome = await invoke<MutationOutcome<null>>(
-    'set_global_transform_chain',
-    { transforms },
-  );
-  requireApplied(outcome, 'global transform chain update');
+async function createOverlayProfile(
+  name: string,
+): Promise<MutationOutcome<string>> {
+  return createProfile(overlayProfileRequest(name), 'unified-delay: true\n');
 }
 
 describe('Chimera transform profile runtime lifecycle', () => {
+  // Contract: with a real core running, this integration test creates a local
+  // config and overlay through current Profile IPC, activates the config, and
+  // changes scoped then global transform IDs. The Profile document and
+  // generated runtime YAML are independent result sources. Old `{ item }`
+  // requests or chain commands fail setup; cleanup restores selection and the
+  // original global transforms before deleting only this run's UIDs.
   it('applies and removes merge transforms through scoped and global chains', async () => {
     const suffix = Date.now();
     const localName = `transform-source-${suffix}`;
     const mergeName = `transform-merge-${suffix}`;
-    const initialProfiles = await readProfiles();
-    const previousCurrent = initialProfiles.current;
-    let localUid: string | null = null;
-    let mergeUid: string | null = null;
+    await withCleanup('transform Profile runtime lifecycle', async (defer) => {
+      const initialProfiles = await readProfiles();
+      let selectionMayHaveChanged = false;
+      let globalTransformsMayHaveChanged = false;
 
-    await waitForCoreRunning();
+      defer('restore the original Profile selection', async () => {
+        if (!selectionMayHaveChanged) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('activate_profile', {
+            uid: initialProfiles.current ?? null,
+          }),
+          'Profile selection restoration',
+        );
+      });
+      defer('restore original global transforms', async () => {
+        if (!globalTransformsMayHaveChanged) return;
+        committedValue(
+          await setGlobalTransforms(initialProfiles.global_transforms ?? []),
+          'global transform restoration',
+        );
+      });
+      defer('clear transforms on the test source', async () => {
+        const uid = await findProfileUid(localName);
+        if (!uid) return;
+        committedValue(
+          await setScopedTransforms(uid, []),
+          'scoped transform cleanup',
+        );
+      });
+      defer('delete the test overlay', async () => {
+        const uid = await findProfileUid(mergeName);
+        if (!uid) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', {
+            uid,
+          }),
+          'overlay deletion',
+        );
+      });
+      defer('delete the test source', async () => {
+        const uid = await findProfileUid(localName);
+        if (!uid) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', {
+            uid,
+          }),
+          'source Profile deletion',
+        );
+      });
 
-    try {
-      localUid = await createLocalProfile(localName);
-      mergeUid = await createMergeProfile(mergeName);
+      await waitForCoreRunning();
+      const local = await createLocalProfile(localName);
+      const localUid = local.value;
+      committedValue(local, 'local Profile creation');
+      const overlay = await createOverlayProfile(mergeName);
+      const mergeUid = overlay.value;
+      committedValue(overlay, 'overlay Profile creation');
 
-      requireApplied(
+      selectionMayHaveChanged = true;
+      appliedValue(
         await invoke<MutationOutcome<null>>('activate_profile', {
           uid: localUid,
         }),
-        'source profile activation',
+        'source Profile activation',
       );
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
 
-      await setScopedChain(localUid, [mergeUid]);
+      appliedValue(
+        await setScopedTransforms(localUid, [mergeUid]),
+        'scoped overlay update',
+      );
       await waitForCoreRunning();
       await waitForUnifiedDelay(true);
 
-      let profiles = await readProfiles();
+      let profiles: ProfileDocument_Deserialize = await readProfiles();
       const source = profiles.items.find((item) => item.uid === localUid);
-      assert.deepEqual(source?.chain, [mergeUid]);
+      assert.deepEqual(source && scopedTransformsOf(source), [mergeUid]);
 
-      await setScopedChain(localUid, []);
+      appliedValue(
+        await setScopedTransforms(localUid, []),
+        'scoped overlay removal',
+      );
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
 
-      await setGlobalChain([mergeUid]);
+      globalTransformsMayHaveChanged = true;
+      appliedValue(
+        await setGlobalTransforms([mergeUid]),
+        'global overlay update',
+      );
       await waitForCoreRunning();
       await waitForUnifiedDelay(true);
       profiles = await readProfiles();
       assert.deepEqual(profiles.global_transforms, [mergeUid]);
 
-      await setGlobalChain([]);
+      appliedValue(await setGlobalTransforms([]), 'global overlay removal');
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
-    } finally {
-      await setGlobalChain([]).catch(() => undefined);
-      if (localUid) {
-        await setScopedChain(localUid, []).catch(() => undefined);
-      }
-      if (mergeUid) {
-        await invoke<MutationOutcome<null>>('delete_profile', {
-          uid: mergeUid,
-        }).catch(() => undefined);
-      }
-      if (localUid) {
-        await invoke<MutationOutcome<null>>('delete_profile', {
-          uid: localUid,
-        }).catch(() => undefined);
-      }
-      if (previousCurrent) {
-        await invoke<MutationOutcome<null>>('activate_profile', {
-          uid: previousCurrent,
-        }).catch(() => undefined);
-      }
-    }
+    });
   });
 });

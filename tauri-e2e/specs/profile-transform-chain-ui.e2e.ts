@@ -1,12 +1,24 @@
 import assert from 'node:assert/strict';
-
-type MutationOutcome<T> =
-  | { status: 'applied'; value: T }
-  | {
-      status: 'committed_degraded';
-      value: T;
-      degradations: Array<{ message: string }>;
-    };
+import type {
+  MutationOutcome,
+  ProfileDocument_Deserialize,
+} from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  deleteProfile,
+  invoke,
+  localConfigProfileRequest,
+  overlayProfileRequest,
+  readProfiles,
+  runCleanupActions,
+  scopedTransformsOf,
+  scriptProfileRequest,
+  setGlobalTransforms,
+  setScopedTransforms,
+  type CleanupAction,
+} from './profile-fixtures.js';
 
 type LogSpan = 'log' | 'info' | 'warn' | 'error';
 
@@ -25,58 +37,33 @@ type RuntimeTransformDiagnostics = {
   } | null;
 };
 
-type ProfileResponse = {
-  uid: string;
-  name: string;
-  type: 'remote' | 'local' | 'merge' | 'script';
-  chain?: string[];
-};
-
-type ProfilesResponse = {
-  current: string | null;
-  items: ProfileResponse[];
-  global_transforms: string[];
-};
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
+type CoreState = 'Running' | { Stopped: string | null };
 
 function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
-  assert.equal(
-    outcome.status,
-    'applied',
-    `${operation} degraded: ${
-      outcome.status === 'committed_degraded'
-        ? outcome.degradations.map((item) => item.message).join('; ')
-        : 'unknown outcome'
-    }`,
-  );
-  return outcome.value;
+  return appliedValue(outcome, operation);
 }
 
-async function getWindowHandlesSafe(): Promise<string[]> {
-  try {
-    return await browser.getWindowHandles();
-  } catch {
-    return [];
-  }
+function requireCommitted<T>(
+  outcome: MutationOutcome<T>,
+  operation: string,
+): T {
+  return committedValue(outcome, operation);
+}
+
+async function waitForCoreRunning(): Promise<void> {
+  let lastState = 'unknown';
+  await browser.waitUntil(
+    async () => {
+      const [state] =
+        await invoke<[CoreState, number, string]>('get_core_status');
+      lastState = JSON.stringify(state);
+      return state === 'Running';
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `A running core is required for transform-chain assertions. Last state: ${lastState}`,
+    },
+  );
 }
 
 async function openMainWindow() {
@@ -130,9 +117,12 @@ async function openRoute(pathname: string) {
 async function waitForScopedChain(uid: string, expected: string[]) {
   await browser.waitUntil(
     async () => {
-      const profiles = await invoke<ProfilesResponse>('get_profiles');
+      const profiles: ProfileDocument_Deserialize = await readProfiles();
       const profile = profiles.items.find((item) => item.uid === uid);
-      return JSON.stringify(profile?.chain ?? []) === JSON.stringify(expected);
+      return (
+        JSON.stringify(profile && scopedTransformsOf(profile)) ===
+        JSON.stringify(expected)
+      );
     },
     {
       timeout: 30_000,
@@ -144,7 +134,7 @@ async function waitForScopedChain(uid: string, expected: string[]) {
 async function waitForGlobalChain(expected: string[]) {
   await browser.waitUntil(
     async () => {
-      const profiles = await invoke<ProfilesResponse>('get_profiles');
+      const profiles = await readProfiles();
       return (
         JSON.stringify(profiles.global_transforms) === JSON.stringify(expected)
       );
@@ -243,7 +233,7 @@ async function waitForEditorClosed(scope: 'profile' | 'global') {
       const currentEditor = await browser.$(
         `[data-slot="transform-chain-editor"][data-chain-scope="${scope}"]`,
       );
-      return !(await currentEditor.isDisplayed().catch(() => false));
+      return !(await currentEditor.isDisplayed());
     },
     {
       timeout: 30_000,
@@ -279,97 +269,166 @@ describe('main transform chain editor', () => {
   ].join('\n');
   const failingJavascriptName = `chain-ui-javascript-failing-${suffix}`;
   const failingMergeName = `chain-ui-merge-failing-${suffix}`;
+  let previousGlobalTransforms: string[] = [];
   let previousCurrent: string | null = null;
-  let localUid: string | null = null;
-  let mergeAUid: string | null = null;
-  let mergeBUid: string | null = null;
-  let javascriptUid: string | null = null;
-  let failingJavascriptUid: string | null = null;
-  let failingMergeUid: string | null = null;
+  let localUid: string | undefined;
+  let mergeAUid: string | undefined;
+  let mergeBUid: string | undefined;
+  let javascriptUid: string | undefined;
+  let failingJavascriptUid: string | undefined;
+  let failingMergeUid: string | undefined;
+  let selectionMayHaveChanged = false;
+  let globalTransformsMayHaveChanged = false;
+  const stateCleanups: CleanupAction[] = [];
+  const resourceCleanups: CleanupAction[] = [];
 
   before(async () => {
     await browser.setWindowSize(1240, 720);
-    const initial = await invoke<ProfilesResponse>('get_profiles');
-    previousCurrent = initial.current;
-
-    requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [],
-      }),
-      'global chain reset',
-    );
-
-    localUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: {
-          type: 'local',
-          uid: null,
-          name: localName,
-          file: null,
-          desc: null,
-          updated: null,
-          symlinks: null,
-          chain: [],
+    const initial = await readProfiles();
+    previousCurrent = initial.current ?? null;
+    previousGlobalTransforms = initial.global_transforms ?? [];
+    stateCleanups.push(
+      {
+        label: 'restore original Profile selection',
+        run: async () => {
+          if (!selectionMayHaveChanged) return;
+          requireCommitted(
+            await invoke<MutationOutcome<null>>('activate_profile', {
+              uid: previousCurrent,
+            }),
+            'Profile selection restoration',
+          );
         },
-        fileData: 'proxies: []\nproxy-groups: []\nrules: []\n',
-      }),
-      'local profile creation',
+      },
+      {
+        label: 'restore original global transforms',
+        run: async () => {
+          if (!globalTransformsMayHaveChanged) return;
+          requireCommitted(
+            await setGlobalTransforms(previousGlobalTransforms),
+            'global transform restoration',
+          );
+        },
+      },
+      {
+        label: 'clear transforms from test source',
+        run: async () => {
+          if (!localUid) return;
+          requireCommitted(
+            await setScopedTransforms(localUid, []),
+            'scoped transform cleanup',
+          );
+        },
+      },
     );
-    mergeAUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: { type: 'merge', name: mergeAName, desc: null },
-        fileData: '{}\n',
-      }),
-      'first merge profile creation',
-    );
-    mergeBUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: { type: 'merge', name: mergeBName, desc: null },
-        fileData: '{}\n',
-      }),
-      'second merge profile creation',
-    );
-    javascriptUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: {
-          type: 'script',
+    resourceCleanups.push(
+      {
+        label: 'delete test source',
+        run: async () => {
+          const uid =
+            localUid ??
+            (await readProfiles()).items.find((item) => item.name === localName)
+              ?.uid;
+          if (!uid) return;
+          requireCommitted(await deleteProfile(uid), 'source Profile deletion');
+        },
+      },
+      ...[
+        {
+          label: 'delete first overlay',
+          name: mergeAName,
+          uid: () => mergeAUid,
+        },
+        {
+          label: 'delete second overlay',
+          name: mergeBName,
+          uid: () => mergeBUid,
+        },
+        {
+          label: 'delete JavaScript transform',
           name: javascriptName,
-          desc: null,
-          script_type: 'javascript',
+          uid: () => javascriptUid,
         },
-        fileData: javascriptFileData,
-      }),
-      'JavaScript profile creation',
-    );
-    failingJavascriptUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: {
-          type: 'script',
+        {
+          label: 'delete failing JavaScript transform',
           name: failingJavascriptName,
-          desc: null,
-          script_type: 'javascript',
+          uid: () => failingJavascriptUid,
         },
-        fileData: [
-          'export default function () {',
-          '  throw new Error("chain ui intentional failure");',
-          '}',
-          '',
-        ].join('\n'),
-      }),
-      'failing JavaScript profile creation',
+        {
+          label: 'delete failing overlay',
+          name: failingMergeName,
+          uid: () => failingMergeUid,
+        },
+      ].map(({ label, name, uid }) => ({
+        label,
+        run: async () => {
+          const profileUid =
+            uid() ??
+            (await readProfiles()).items.find((item) => item.name === name)
+              ?.uid;
+          if (!profileUid) return;
+          requireCommitted(
+            await deleteProfile(profileUid),
+            `${label} Profile cleanup`,
+          );
+        },
+      })),
     );
-    failingMergeUid = requireApplied(
-      await invoke<MutationOutcome<string>>('create_profile', {
-        item: { type: 'merge', name: failingMergeName, desc: null },
-        fileData: '- invalid\n- merge\n',
-      }),
-      'failing merge profile creation',
+
+    await waitForCoreRunning();
+    globalTransformsMayHaveChanged = true;
+    requireCommitted(await setGlobalTransforms([]), 'global transform reset');
+
+    const local = await createProfile(
+      localConfigProfileRequest(localName),
+      'proxies: []\nproxy-groups: []\nrules: []\n',
     );
+    localUid = local.value;
+    requireCommitted(local, 'local Profile creation');
+
+    const mergeA = await createProfile(
+      overlayProfileRequest(mergeAName),
+      '{}\n',
+    );
+    mergeAUid = mergeA.value;
+    requireCommitted(mergeA, 'first overlay Profile creation');
+    const mergeB = await createProfile(
+      overlayProfileRequest(mergeBName),
+      '{}\n',
+    );
+    mergeBUid = mergeB.value;
+    requireCommitted(mergeB, 'second overlay Profile creation');
+
+    const javascript = await createProfile(
+      scriptProfileRequest(javascriptName, 'javascript'),
+      javascriptFileData,
+    );
+    javascriptUid = javascript.value;
+    requireCommitted(javascript, 'JavaScript Profile creation');
+    const failingJavascript = await createProfile(
+      scriptProfileRequest(failingJavascriptName, 'javascript'),
+      [
+        'export default function () {',
+        '  throw new Error("chain ui intentional failure");',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    failingJavascriptUid = failingJavascript.value;
+    requireCommitted(failingJavascript, 'failing JavaScript Profile creation');
+    const failingMerge = await createProfile(
+      overlayProfileRequest(failingMergeName),
+      '- invalid\n- merge\n',
+    );
+    failingMergeUid = failingMerge.value;
+    requireCommitted(failingMerge, 'failing overlay Profile creation');
+
+    selectionMayHaveChanged = true;
     requireApplied(
       await invoke<MutationOutcome<null>>('activate_profile', {
         uid: localUid,
       }),
-      'local profile activation',
+      'local Profile activation',
     );
 
     await openMainWindow();
@@ -377,61 +436,80 @@ describe('main transform chain editor', () => {
   });
 
   afterEach(async () => {
-    const handles = await getWindowHandlesSafe();
-    if (handles.includes('main')) {
-      await browser.switchToWindow('main').catch(() => undefined);
+    const errors: unknown[] = [];
+    let handles: string[] = [];
+    try {
+      handles = await browser.getWindowHandles();
+    } catch (error) {
+      errors.push(error);
     }
-
+    if (handles.includes('main')) {
+      try {
+        await browser.switchToWindow('main');
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     if (javascriptUid) {
-      await invoke<MutationOutcome<null>>('save_profile_file', {
-        uid: javascriptUid,
-        fileData: javascriptFileData,
-      }).catch(() => undefined);
+      try {
+        requireApplied(
+          await invoke<MutationOutcome<null>>('save_profile_file', {
+            uid: javascriptUid,
+            fileData: javascriptFileData,
+          }),
+          'restore JavaScript transform fixture',
+        );
+      } catch (error) {
+        errors.push(error);
+      }
 
       const editorLabel = `profile-editor-${javascriptUid}`;
-      const currentHandles = await getWindowHandlesSafe();
-      if (currentHandles.includes(editorLabel)) {
-        await browser.switchToWindow(editorLabel).catch(() => undefined);
-        await browser.closeWindow().catch(() => undefined);
+      try {
+        handles = await browser.getWindowHandles();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (handles.includes(editorLabel)) {
+        try {
+          await browser.switchToWindow(editorLabel);
+          await browser.closeWindow();
+          await browser.waitUntil(
+            async () =>
+              !(await browser.getWindowHandles()).includes(editorLabel),
+            {
+              timeout: 15_000,
+              timeoutMsg: `Profile editor ${editorLabel} remained open after cleanup.`,
+            },
+          );
+        } catch (error) {
+          errors.push(error);
+        }
       }
     }
 
-    const remainingHandles = await getWindowHandlesSafe();
-    if (remainingHandles.includes('main')) {
-      await browser.switchToWindow('main').catch(() => undefined);
+    try {
+      handles = await browser.getWindowHandles();
+      if (handles.includes('main')) await browser.switchToWindow('main');
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) {
+      throw new AggregateError(errors, 'Profile transform spec cleanup failed');
     }
   });
 
   after(async () => {
-    await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-      transforms: [],
-    }).catch(() => undefined);
-    if (localUid) {
-      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-        uid: localUid,
-        transforms: [],
-      }).catch(() => undefined);
-    }
-    for (const uid of [
-      failingMergeUid,
-      failingJavascriptUid,
-      javascriptUid,
-      mergeAUid,
-      mergeBUid,
-      localUid,
-    ]) {
-      if (!uid) continue;
-      await invoke<MutationOutcome<null>>('delete_profile', { uid }).catch(
-        () => undefined,
-      );
-    }
-    if (previousCurrent) {
-      await invoke<MutationOutcome<null>>('activate_profile', {
-        uid: previousCurrent,
-      }).catch(() => undefined);
-    }
+    await runCleanupActions('Profile transform fixtures', [
+      ...stateCleanups,
+      ...resourceCleanups.slice(1).reverse(),
+      resourceCleanups[0],
+    ]);
   });
 
+  // Contract: with the fixture Profile active, selecting and reordering three
+  // transforms in the detail editor must persist their UID order and apply the
+  // JS log to the runtime; the Profile document and diagnostics are separate
+  // authorities. A stale `chain` field or old create IPC fails setup/assertion.
   it('edits and reorders a scoped transform chain from profile details', async () => {
     assert.ok(localUid && mergeAUid && mergeBUid && javascriptUid);
     await openRoute(`/main/profiles/profile/detail/${localUid}`);
@@ -524,21 +602,20 @@ describe('main transform chain editor', () => {
     }
   });
 
+  // Contract: save a failing JS transform through editor IPC while the editor
+  // window stays open; backend file content and scoped diagnostics must identify
+  // that script, then a valid repair clears failure. A stale success result or
+  // missing runtime error fails this case.
   it('keeps the profile editor open and shows transform failures after a degraded file save', async () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [],
-      }),
+      await setGlobalTransforms([]),
       'global chain reset before profile editor diagnostics',
     );
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-        uid: sourceUid,
-        transforms: [transformUid],
-      }),
+      await setScopedTransforms(sourceUid, [transformUid]),
       'scoped JavaScript chain before profile editor diagnostics',
     );
     await waitForScopedChain(sourceUid, [transformUid]);
@@ -633,13 +710,13 @@ describe('main transform chain editor', () => {
     await browser.switchToWindow('main');
   });
 
+  // Contract: saving overlay and JS IDs through the global editor must update
+  // persisted order and visible diagnostics; an external IPC update refreshes
+  // an already open editor, then clears logs.
   it('edits the global transform chain and shows applied runtime diagnostics', async () => {
     assert.ok(localUid && mergeAUid && javascriptUid);
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-        uid: localUid,
-        transforms: [],
-      }),
+      await setScopedTransforms(localUid, []),
       'scoped chain reset before global diagnostics',
     );
     await waitForScopedChain(localUid, []);
@@ -761,9 +838,7 @@ describe('main transform chain editor', () => {
     );
 
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [mergeAUid, javascriptUid],
-      }),
+      await setGlobalTransforms([mergeAUid, javascriptUid]),
       'external global script attachment',
     );
     await browser.waitUntil(
@@ -793,9 +868,7 @@ describe('main transform chain editor', () => {
     assert.ok(externallyApplied.revision > cleared.revision);
 
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [mergeAUid],
-      }),
+      await setGlobalTransforms([mergeAUid]),
       'external global script detachment',
     );
     await browser.waitUntil(
@@ -822,6 +895,10 @@ describe('main transform chain editor', () => {
     await waitForEditorClosed('global');
   });
 
+  // Contract: a failing JS transform in the global chain must be attributed to
+  // its UID in backend diagnostics and the editor row; removing it clears the
+  // failure. Actual script execution, rather than display-only state, is the
+  // failure boundary.
   it('pins a failed transform attempt to the responsible global script', async () => {
     assert.ok(mergeAUid && failingJavascriptUid);
     await openRoute('/main/profiles/merge');
@@ -915,19 +992,17 @@ describe('main transform chain editor', () => {
     assert.equal(repaired.failure, null);
   });
 
+  // Contract: a failing JS transform in the selected Profile's scoped chain is
+  // attributed to the script and source UID, then clears after removal. Both
+  // backend diagnostics and the editor row must reflect the result.
   it('pins a failed transform attempt to the responsible scoped script', async () => {
     assert.ok(localUid && mergeAUid && failingJavascriptUid);
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [],
-      }),
+      await setGlobalTransforms([]),
       'global chain reset before scoped failure diagnostics',
     );
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-        uid: localUid,
-        transforms: [mergeAUid],
-      }),
+      await setScopedTransforms(localUid, [mergeAUid]),
       'scoped chain baseline before scoped failure diagnostics',
     );
     await waitForScopedChain(localUid, [mergeAUid]);
@@ -1019,21 +1094,19 @@ describe('main transform chain editor', () => {
     assert.equal(repaired.failure, null);
   });
 
+  // Contract: editing an active script to fail refreshes the open scoped
+  // diagnostics without closing the editor; restoring valid content advances
+  // runtime revision and removes the failure row.
   it('refreshes diagnostics when an active script file is edited', async () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [],
-      }),
+      await setGlobalTransforms([]),
       'global chain reset before script file diagnostics',
     );
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-        uid: sourceUid,
-        transforms: [transformUid],
-      }),
+      await setScopedTransforms(sourceUid, [transformUid]),
       'scoped JavaScript baseline before script file diagnostics',
     );
     await waitForScopedChain(sourceUid, [transformUid]);
@@ -1070,12 +1143,12 @@ describe('main transform chain editor', () => {
         const currentEditor = await $(
           '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
         );
-        if (!(await currentEditor.isDisplayed().catch(() => false))) {
+        if (!(await currentEditor.isDisplayed())) {
           return false;
         }
         const row = await currentEditor.$(activeRowSelector);
         const failure = await row.$('[data-slot="transform-runtime-failure"]');
-        if (!(await failure.isDisplayed().catch(() => false))) {
+        if (!(await failure.isDisplayed())) {
           return false;
         }
         return /chain ui edited script failure/.test(await failure.getText());
@@ -1151,7 +1224,7 @@ describe('main transform chain editor', () => {
         const logs = await row.$('[data-slot="transform-runtime-logs"]');
         return (
           !(await failure.isExisting()) &&
-          (await logs.isDisplayed().catch(() => false)) &&
+          (await logs.isDisplayed()) &&
           /chain ui edited script repaired/.test(await logs.getText())
         );
       },
@@ -1166,12 +1239,13 @@ describe('main transform chain editor', () => {
     await waitForEditorClosed('profile');
   });
 
+  // Contract: selecting invalid overlay YAML globally must fail runtime apply
+  // and attribute the failure to that overlay; removing it clears diagnostics.
+  // Profile state and the runtime failure UID are independent evidence.
   it('pins an invalid merge transform to the responsible global row', async () => {
     assert.ok(failingMergeUid);
     requireApplied(
-      await invoke<MutationOutcome<null>>('set_global_transform_chain', {
-        transforms: [],
-      }),
+      await setGlobalTransforms([]),
       'global chain baseline before merge failure diagnostics',
     );
     await waitForGlobalChain([]);

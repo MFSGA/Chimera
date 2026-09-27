@@ -2,8 +2,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  invoke,
+  localConfigProfileRequest,
+  readProfiles,
+  runCleanupActions,
+} from './profile-fixtures.js';
 
-const profileName = 'TDD Main Proxy Node';
+const profileName = `TDD Main Proxy Node ${Date.now()}`;
 const groupName = 'TDD Node Group';
 const nodeName = 'TDD SOCKS Node';
 const fixture = `mixed-port: 27892
@@ -28,63 +37,33 @@ rules:
   - MATCH,${groupName}
 `;
 
-type ProfilesResponse = {
-  current: string | null;
-  items: Array<{ name: string; uid: string }>;
-};
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
 describe('main proxy node reference layout', () => {
   let profileUid: string | undefined;
+  let previousCurrent: string | null = null;
+  let selectionMayHaveChanged = false;
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
 
-    const existing = await invoke<ProfilesResponse>('get_profiles');
-    const stale = existing.items.find((item) => item.name === profileName);
-    if (stale) {
-      await invoke('activate_profile', { uid: null }).catch(() => undefined);
-      await invoke('delete_profile', { uid: stale.uid }).catch(() => undefined);
-    }
-
-    await invoke('create_profile', {
-      item: {
-        type: 'local',
-        uid: null,
-        name: profileName,
-        file: null,
-        desc: null,
-        updated: null,
-        symlinks: null,
-        chain: null,
-      },
-      fileData: fixture,
-    });
-
-    const profiles = await invoke<ProfilesResponse>('get_profiles');
-    profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
+    const initial = await readProfiles();
+    previousCurrent = initial.current ?? null;
+    const created = await createProfile(
+      localConfigProfileRequest(profileName),
+      fixture,
+    );
+    profileUid = created.value;
+    committedValue(created, 'local proxy-node Profile creation');
+    const profiles = await readProfiles();
+    profileUid ??= profiles.items.find(
+      (item) => item.name === profileName,
+    )?.uid;
     assert.ok(profileUid, 'The isolated proxy node profile was not created.');
 
-    await invoke('activate_profile', { uid: profileUid });
+    selectionMayHaveChanged = true;
+    appliedValue(
+      await invoke('activate_profile', { uid: profileUid }),
+      'proxy-node Profile activation',
+    );
 
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
@@ -111,11 +90,39 @@ describe('main proxy node reference layout', () => {
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('activate_profile', { uid: null }).catch(() => undefined);
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    await runCleanupActions('main proxy-node fixture', [
+      {
+        label: 'restore Profile selection',
+        run: async () => {
+          if (!selectionMayHaveChanged) return;
+          committedValue(
+            await invoke('activate_profile', { uid: previousCurrent }),
+            'Profile selection restoration',
+          );
+        },
+      },
+      {
+        label: 'delete test Profile',
+        run: async () => {
+          const uid =
+            profileUid ??
+            (await readProfiles()).items.find(
+              (item) => item.name === profileName,
+            )?.uid;
+          if (!uid) return;
+          committedValue(
+            await invoke('delete_profile', { uid }),
+            'Profile deletion',
+          );
+        },
+      },
+    ]);
   });
 
+  // Contract: a real active local Profile provides the fixture's SOCKS5 node;
+  // the main proxy group renders its type and UDP chips at the fixed viewport.
+  // The runtime-backed proxy API and visible node chips fail independently if
+  // the Profile or presentation is stale.
   it('shows ref-style type and UDP chips on proxy nodes', async () => {
     const node = await $(`[data-slot="proxies-virtual-item"]*=${nodeName}`);
     await node.waitForDisplayed({ timeout: 15_000 });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/profiles/profile';
 const draftName = `Main Import Draft ${Date.now()}`;
@@ -27,37 +28,21 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
-
 describe('main profiles import action compatibility', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
+    await openMainRoute(targetPath);
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
-    await browser.setWindowSize(1240, 638);
-
-    const link = await $(`a[href="${targetPath}"]`);
-    await link.waitForClickable({ timeout: 15_000 });
-    await link.click();
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          (expected) => location.pathname === expected,
-          targetPath,
-        ),
-      { timeout: 15_000, timeoutMsg: 'Profiles route did not open.' },
-    );
+    await browser.refresh();
+    await openMainRoute(targetPath);
   });
 
+  // Contract: the main Profiles route accepts the ImportLocalProfile search
+  // action; closing its draft clears that action and leaves both the backend
+  // Profile document and visible list unchanged. Navigating through an absent
+  // sidebar link must not be required for this route contract.
   it('opens a local import draft from the action search param without persisting on close', async () => {
     const before = await invoke<ProfilesResponse>('get_profiles');
     assert.equal(

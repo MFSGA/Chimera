@@ -2,8 +2,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  invoke,
+  localConfigProfileRequest,
+  readProfiles,
+  runCleanupActions,
+} from './profile-fixtures.js';
 
-const profileName = 'TDD Rules Icon';
+const profileName = `TDD Rules Icon ${Date.now()}`;
 const groupName = 'TDD Square';
 const targetPath = '/main/rules';
 const rawSvg =
@@ -29,37 +38,14 @@ rules:
   - MATCH,${groupName}
 `;
 
-type ProfilesResponse = {
-  current: string | null;
-  items: Array<{ uid: string; name: string }>;
-};
-
 type ProxiesResponse = {
   groups: Array<{ name: string; icon?: string | null }>;
 };
 
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
 describe('main rules proxy icon reference behavior', () => {
   let profileUid: string | undefined;
+  let previousCurrent: string | null = null;
+  let selectionMayHaveChanged = false;
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -67,48 +53,31 @@ describe('main rules proxy icon reference behavior', () => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
 
-    const existing = await invoke<ProfilesResponse>('get_profiles');
-    const stale = existing.items.find((item) => item.name === profileName);
-    if (stale) {
-      await invoke('activate_profile', { uid: null }).catch(() => undefined);
-      await invoke('delete_profile', { uid: stale.uid }).catch(() => undefined);
-    }
-
-    await invoke('create_profile', {
-      item: {
-        type: 'local',
-        uid: null,
-        name: profileName,
-        file: null,
-        desc: null,
-        updated: null,
-        symlinks: null,
-        chain: null,
-      },
-      fileData: fixture,
-    });
-
-    const profiles = await invoke<ProfilesResponse>('get_profiles');
-    profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
+    const initial = await readProfiles();
+    previousCurrent = initial.current ?? null;
+    const created = await createProfile(
+      localConfigProfileRequest(profileName),
+      fixture,
+    );
+    profileUid = created.value;
+    committedValue(created, 'local rules-icon Profile creation');
+    const profiles = await readProfiles();
+    profileUid ??= profiles.items.find(
+      (item) => item.name === profileName,
+    )?.uid;
     assert.ok(profileUid, 'The isolated proxy-icon profile was not created.');
 
-    await invoke('activate_profile', { uid: profileUid });
-    await browser.waitUntil(
-      async () => {
-        try {
-          const proxies = await invoke<ProxiesResponse>('get_proxies');
-          return proxies.groups.some(
-            (group) => group.name === groupName && group.icon === rawSvg,
-          );
-        } catch {
-          return false;
-        }
-      },
-      {
-        timeout: 30_000,
-        timeoutMsg:
-          'The raw-SVG proxy group did not become active in the Clash runtime.',
-      },
+    selectionMayHaveChanged = true;
+    appliedValue(
+      await invoke('activate_profile', { uid: profileUid }),
+      'rules-icon Profile activation',
+    );
+    const proxies = await invoke<ProxiesResponse>('get_proxies');
+    assert.ok(
+      proxies.groups.some(
+        (group) => group.name === groupName && group.icon === rawSvg,
+      ),
+      'The raw-SVG proxy group did not become active in the Clash runtime.',
     );
 
     await openMainRoute(targetPath);
@@ -116,11 +85,39 @@ describe('main rules proxy icon reference behavior', () => {
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('activate_profile', { uid: null }).catch(() => undefined);
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    await runCleanupActions('main rules proxy-icon fixture', [
+      {
+        label: 'restore Profile selection',
+        run: async () => {
+          if (!selectionMayHaveChanged) return;
+          committedValue(
+            await invoke('activate_profile', { uid: previousCurrent }),
+            'Profile selection restoration',
+          );
+        },
+      },
+      {
+        label: 'delete test Profile',
+        run: async () => {
+          const uid =
+            profileUid ??
+            (await readProfiles()).items.find(
+              (item) => item.name === profileName,
+            )?.uid;
+          if (!uid) return;
+          committedValue(
+            await invoke('delete_profile', { uid }),
+            'Profile deletion',
+          );
+        },
+      },
+    ]);
   });
 
+  // Contract: activating a test-owned typed local Profile makes its raw SVG
+  // proxy-group icon visible through the runtime proxy API, then the main Rules
+  // UI renders that icon. Runtime response and loaded image state are separate
+  // checks; stale Profile IPC or icon presentation fails the setup or test.
   it('renders raw SVG proxy-group icons without forcing the loaded image round', async () => {
     await browser.waitUntil(
       async () =>

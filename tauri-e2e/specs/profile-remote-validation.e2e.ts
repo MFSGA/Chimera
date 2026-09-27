@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
 
 const profilesPath = '/main/profiles/profile';
 
@@ -21,6 +22,8 @@ async function readProfileIds(): Promise<string[]> {
 }
 
 async function openRemoteProfileForm() {
+  await browser.setWindowSize(1240, 638);
+  await openMainRoute(profilesPath);
   const currentUrl = new URL(await browser.getUrl());
   currentUrl.pathname = profilesPath;
   currentUrl.search = '';
@@ -34,21 +37,13 @@ async function openRemoteProfileForm() {
     { timeout: 15_000, timeoutMsg: 'The profiles page did not render.' },
   );
 
-  const importButton = await $('[data-slot="profile-import-button"]');
-  await importButton.waitForDisplayed({ timeout: 15_000 });
-
-  const createButton = await importButton.$('button');
+  const createButton = await $('[data-slot="profile-import-toggle"]');
   await createButton.waitForClickable({ timeout: 15_000 });
   await createButton.click();
 
-  const buttons = await importButton.$$('button');
-  const buttonCount = await buttons.length;
-  assert.equal(
-    buttonCount >= 3,
-    true,
-    'The profile import actions are missing.',
+  const remoteImportButton = await $(
+    '[data-slot="profile-import-remote-action"]',
   );
-  const remoteImportButton = buttons[1];
   await remoteImportButton.waitForDisplayed({
     timeout: 15_000,
     timeoutMsg: 'The profile import menu did not expand.',
@@ -66,6 +61,10 @@ async function expectProfileIds(expected: string[]) {
 }
 
 describe('Chimera remote profile validation', () => {
+  // Contract: with the main Profile list loaded, choosing remote import and
+  // submitting an empty URL must expose field validation without changing the
+  // Profile UID set, including after reload. The selector assertions fail if
+  // the import menu cannot be opened or validation is removed.
   it('keeps a remote profile with an empty URL invalid and unpersisted', async () => {
     const urlInput = await openRemoteProfileForm();
     const initialProfileIds = await readProfileIds();

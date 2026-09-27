@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
 
 const profilesPath = '/main/profiles/profile';
 
@@ -21,6 +22,8 @@ async function readProfileIds(): Promise<string[]> {
 }
 
 async function openLocalProfileForm() {
+  await browser.setWindowSize(1240, 638);
+  await openMainRoute(profilesPath);
   const currentUrl = new URL(await browser.getUrl());
   currentUrl.pathname = profilesPath;
   currentUrl.search = '';
@@ -45,6 +48,10 @@ async function expectProfileIds(expected: string[]) {
 }
 
 describe('Chimera local profile draft', () => {
+  // Contract: from the main Profiles route, entering a name and closing the
+  // import dialog must leave the authoritative Profile UID set unchanged both
+  // before and after reload. Opening only the legacy window makes the main
+  // dialog unavailable and fails its initial wait.
   it('cancels a local profile draft without persisting it', async () => {
     const draftName = `local-draft-${Date.now()}`;
     const nameInput = await openLocalProfileForm();
@@ -81,6 +88,9 @@ describe('Chimera local profile draft', () => {
     await expectProfileIds(initialProfileIds);
   });
 
+  // Contract: submitting an empty local Profile name must keep the dialog open,
+  // mark the input invalid, and preserve the independently read UID set through
+  // reload. A missing required-name rule makes the invalid-state wait fail.
   it('keeps a local profile with an empty name invalid and unpersisted', async () => {
     const nameInput = await openLocalProfileForm();
     const initialProfileIds = await readProfileIds();

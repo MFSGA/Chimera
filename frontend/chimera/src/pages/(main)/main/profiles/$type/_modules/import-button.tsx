@@ -24,11 +24,13 @@ type ImportType = NonNullable<AddProfileContextValue['type']>;
 
 const SelectButton = ({
   label,
+  dataSlot,
   className,
   onClick,
   children,
 }: {
   label: string;
+  dataSlot: 'profile-import-remote-action' | 'profile-import-local-action';
   className?: string;
   onClick: () => void;
   children: React.ReactNode;
@@ -39,6 +41,7 @@ const SelectButton = ({
         variant="fab"
         icon
         aria-label={label}
+        data-slot={dataSlot}
         className={cn(
           'bg-primary-container dark:bg-surface-variant/30 flex size-10 items-center justify-center',
           className,
@@ -137,6 +140,7 @@ export default function ImportButton() {
             variant="fab"
             icon
             aria-label={m.profile_create_title()}
+            data-slot="profile-import-toggle"
             onClick={() => setExpanded((value) => !value)}
           >
             <NoteStackAddRounded className="size-6" />
@@ -151,6 +155,7 @@ export default function ImportButton() {
           >
             <SelectButton
               label={m.profile_import_remote_title()}
+              dataSlot="profile-import-remote-action"
               onClick={() => {
                 setExpanded(false);
                 setImportType('remote');
@@ -160,6 +165,7 @@ export default function ImportButton() {
             </SelectButton>
             <SelectButton
               label={m.profile_import_local_title()}
+              dataSlot="profile-import-local-action"
               onClick={() => {
                 setExpanded(false);
                 setImportType('local');

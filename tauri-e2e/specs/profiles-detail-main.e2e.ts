@@ -1,32 +1,17 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  createProfile,
+  invoke,
+  localConfigProfileRequest,
+} from './profile-fixtures.js';
 
-const profileName = 'Main Detail Ref Profile';
+const profileName = `Main Detail Ref Profile ${Date.now()}`;
 
 type ProfilesResponse = {
   items: Array<{ name: string; uid: string }>;
 };
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
 
 async function openMainWindow() {
   await invoke('create_main_window');
@@ -70,29 +55,17 @@ describe('main profile detail reference editors', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
 
-    const existing = await invoke<ProfilesResponse>('get_profiles');
-    const stale = existing.items.find((item) => item.name === profileName);
-    if (stale) {
-      await invoke('delete_profile', { uid: stale.uid }).catch(() => undefined);
-    }
-
-    await invoke('create_profile', {
-      item: {
-        type: 'local',
-        uid: null,
-        name: profileName,
-        file: null,
-        desc: null,
-        updated: null,
-        symlinks: null,
-        chain: null,
-      },
-      fileData: 'mixed-port: 27890\nmode: rule\n',
-    });
+    const created = await createProfile(
+      localConfigProfileRequest(profileName),
+      'mixed-port: 27890\nmode: rule\n',
+    );
+    profileUid = created.value;
 
     const profiles = await invoke<ProfilesResponse>('get_profiles');
-    profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
-    assert.ok(profileUid, 'The isolated detail profile was not created.');
+    assert.ok(
+      profiles.items.some((item) => item.uid === profileUid),
+      'The isolated detail profile was not persisted.',
+    );
 
     await openMainWindow();
     await browser.setWindowSize(1240, 638);
@@ -122,10 +95,19 @@ describe('main profile detail reference editors', () => {
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    const uid =
+      profileUid ??
+      (await invoke<ProfilesResponse>('get_profiles')).items.find(
+        (item) => item.name === profileName,
+      )?.uid;
+    if (!uid) return;
+    await invoke('delete_profile', { uid });
   });
 
+  // Contract: a locally created file Profile opens in the main detail route;
+  // clearing and saving invalid metadata must preserve the last valid value
+  // and expose the inline error within the ref field wrapper. The generated
+  // Profile request and authoritative document make obsolete IPC fail setup.
   it('uses the ref field wrapper and animated validation error', async () => {
     const editButton = await getActiveClickableElement(
       '[data-slot="profile-name-edit"]',
@@ -157,7 +139,30 @@ describe('main profile detail reference editors', () => {
       },
     );
 
-    await browser.pause(250);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const modalContent = document.querySelector<HTMLElement>(
+            '[data-slot="modal-content"]',
+          );
+          const card = modalContent?.querySelector<HTMLElement>(
+            '[data-slot="card-root"]',
+          );
+          const error = modalContent?.querySelector<HTMLElement>('.text-error');
+          if (!modalContent || !card || !error) return false;
+          const style = getComputedStyle(error);
+          return (
+            card.getBoundingClientRect().width === 384 &&
+            error.getBoundingClientRect().height > 0 &&
+            style.overflow === 'hidden' &&
+            Number(style.opacity) === 1
+          );
+        }),
+      {
+        timeout: 5_000,
+        timeoutMsg: 'The profile validation field animation did not settle.',
+      },
+    );
 
     const card = await modal.$('[data-slot="card-root"]');
     const error = await modal.$('.text-error');
@@ -183,6 +188,12 @@ describe('main profile detail reference editors', () => {
     );
     assert.equal(errorOverflow.value, 'hidden');
     assert.equal(errorOpacity.value, 1);
+    const profiles = await invoke<ProfilesResponse>('get_profiles');
+    assert.equal(
+      profiles.items.find((item) => item.uid === profileUid)?.name,
+      profileName,
+      'Invalid metadata must not replace the persisted Profile name.',
+    );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {

@@ -2,8 +2,17 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { openMainRoute } from './main-window.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  invoke,
+  localConfigProfileRequest,
+  readProfiles,
+  runCleanupActions,
+} from './profile-fixtures.js';
 
-const profileName = 'TDD Cache Icon Profile';
+const profileName = `TDD Cache Icon Profile ${Date.now()}`;
 const groupName = 'TDD Icon Group';
 const iconUrl = 'https://example.com/chimera-cache-icon.png';
 const svgGroupName = 'TDD SVG Group';
@@ -38,63 +47,33 @@ rules:
   - MATCH,${groupName}
 `;
 
-type ProfilesResponse = {
-  current: string | null;
-  items: Array<{ name: string; uid: string }>;
-};
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
 describe('main cached proxy icons', () => {
   let profileUid: string | undefined;
+  let previousCurrent: string | null = null;
+  let selectionMayHaveChanged = false;
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
+    const initial = await readProfiles();
+    previousCurrent = initial.current ?? null;
+    const created = await createProfile(
+      localConfigProfileRequest(profileName),
+      fixture,
+    );
+    profileUid = created.value;
+    committedValue(created, 'local icon Profile creation');
 
-    const existing = await invoke<ProfilesResponse>('get_profiles');
-    const stale = existing.items.find((item) => item.name === profileName);
-    if (stale) {
-      await invoke('activate_profile', { uid: null }).catch(() => undefined);
-      await invoke('delete_profile', { uid: stale.uid }).catch(() => undefined);
-    }
-
-    await invoke('create_profile', {
-      item: {
-        type: 'local',
-        uid: null,
-        name: profileName,
-        file: null,
-        desc: null,
-        updated: null,
-        symlinks: null,
-        chain: null,
-      },
-      fileData: fixture,
-    });
-
-    const profiles = await invoke<ProfilesResponse>('get_profiles');
-    profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
+    const profiles = await readProfiles();
+    profileUid ??= profiles.items.find(
+      (item) => item.name === profileName,
+    )?.uid;
     assert.ok(profileUid, 'The isolated icon profile was not created.');
 
-    await invoke('activate_profile', { uid: profileUid });
+    selectionMayHaveChanged = true;
+    appliedValue(
+      await invoke('activate_profile', { uid: profileUid }),
+      'icon Profile activation',
+    );
 
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
@@ -104,11 +83,39 @@ describe('main cached proxy icons', () => {
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('activate_profile', { uid: null }).catch(() => undefined);
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    await runCleanupActions('main cached proxy icon fixture', [
+      {
+        label: 'restore Profile selection',
+        run: async () => {
+          if (!selectionMayHaveChanged) return;
+          committedValue(
+            await invoke('activate_profile', { uid: previousCurrent }),
+            'Profile selection restoration',
+          );
+        },
+      },
+      {
+        label: 'delete test Profile',
+        run: async () => {
+          const uid =
+            profileUid ??
+            (await readProfiles()).items.find(
+              (item) => item.name === profileName,
+            )?.uid;
+          if (!uid) return;
+          committedValue(
+            await invoke('delete_profile', { uid }),
+            'Profile deletion',
+          );
+        },
+      },
+    ]);
   });
 
+  // Contract: after IPC setup creates and activates this run's local Profile,
+  // the real proxy API exposes its remote icon URL and the main UI renders the
+  // proxy group artwork via the local cache route. API data and image loading
+  // are independent evidence; a stale create-profile wire fails fixture setup.
   it('routes remote group artwork through the local icon cache', async () => {
     const proxies = await invoke<{
       groups: Array<{ name: string; icon?: string | null }>;

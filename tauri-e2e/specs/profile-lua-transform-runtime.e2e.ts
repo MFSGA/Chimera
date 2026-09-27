@@ -1,14 +1,23 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-type MutationOutcome<T> =
-  | { status: 'applied'; value: T }
-  | {
-      status: 'committed_degraded';
-      value: T;
-      degradations: Array<{ message: string }>;
-    };
+import type {
+  MutationOutcome,
+  ProfileDocument_Deserialize,
+} from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  appliedValue,
+  committedValue,
+  createProfile,
+  findProfileUid,
+  invoke,
+  localConfigProfileRequest,
+  readProfiles,
+  scopedTransformsOf,
+  scriptProfileRequest,
+  setScopedTransforms,
+  withCleanup,
+} from './profile-fixtures.js';
 
 type CoreState = 'Running' | { Stopped: string | null };
 type LogSpan = 'log' | 'info' | 'warn' | 'error';
@@ -19,55 +28,6 @@ interface RuntimeTransformDiagnostics {
     scopes: Record<string, Record<string, Array<[LogSpan, string]>>>;
     global: Record<string, Array<[LogSpan, string]>>;
   };
-}
-
-interface ProfileResponse {
-  type: 'remote' | 'local' | 'merge' | 'script';
-  uid: string;
-  name: string;
-  chain?: string[];
-}
-
-interface ProfilesResponse {
-  current: string | null;
-  items: ProfileResponse[];
-}
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, payload) => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return tauri.invoke(name, payload);
-    },
-    command,
-    args,
-  );
-}
-
-function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
-  assert.equal(
-    outcome.status,
-    'applied',
-    `${operation} degraded: ${
-      outcome.status === 'committed_degraded'
-        ? outcome.degradations.map((item) => item.message).join('; ')
-        : 'unknown outcome'
-    }`,
-  );
-  return outcome.value;
-}
-
-async function readProfiles(): Promise<ProfilesResponse> {
-  return invoke<ProfilesResponse>('get_profiles');
 }
 
 async function waitForCoreRunning(): Promise<void> {
@@ -113,87 +73,100 @@ async function waitForUnifiedDelay(expected: boolean): Promise<void> {
   );
 }
 
-async function setScopedChain(
-  uid: string,
-  transforms: string[],
-): Promise<void> {
-  requireApplied(
-    await invoke<MutationOutcome<null>>('set_profile_transform_chain', {
-      uid,
-      transforms,
-    }),
-    'scoped transform chain update',
-  );
-}
-
 describe('Chimera Lua transform runtime lifecycle', () => {
+  // Contract: a real running core consumes a locally stored Lua transform
+  // attached through the current config definition. The generated runtime YAML
+  // and transform diagnostics must both show its effect; the persisted Profile
+  // item must carry the same transform UID. IPC fixture setup is an integration
+  // boundary, not a UI workflow. Cleanup restores the original selection and
+  // detaches/deletes only this test's profiles while preserving failures.
   it('executes a Lua transform in a scoped runtime chain', async () => {
     const suffix = Date.now();
-    const initialProfiles = await readProfiles();
-    const previousCurrent = initialProfiles.current;
-    let localUid: string | null = null;
-    let luaUid: string | null = null;
+    const localName = `lua-source-${suffix}`;
+    const luaName = `lua-transform-${suffix}`;
+    await withCleanup('Lua transform Profile lifecycle', async (defer) => {
+      const initialProfiles: ProfileDocument_Deserialize = await readProfiles();
+      let selectionMayHaveChanged = false;
 
-    await waitForCoreRunning();
+      defer('restore the original Profile selection', async () => {
+        if (!selectionMayHaveChanged) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('activate_profile', {
+            uid: initialProfiles.current ?? null,
+          }),
+          'Profile selection restoration',
+        );
+      });
+      defer('detach the test transform', async () => {
+        const uid = await findProfileUid(localName);
+        if (!uid) return;
+        committedValue(
+          await setScopedTransforms(uid, []),
+          'scoped transform cleanup',
+        );
+      });
+      defer('delete the test script', async () => {
+        const uid = await findProfileUid(luaName);
+        if (!uid) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+          'Lua Profile deletion',
+        );
+      });
+      defer('delete the test source', async () => {
+        const uid = await findProfileUid(localName);
+        if (!uid) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+          'source Profile deletion',
+        );
+      });
 
-    try {
-      localUid = requireApplied(
-        await invoke<MutationOutcome<string>>('create_profile', {
-          item: {
-            type: 'local',
-            uid: null,
-            name: `lua-source-${suffix}`,
-            file: null,
-            desc: null,
-            updated: null,
-            symlinks: null,
-            chain: [],
-          },
-          fileData: [
-            'unified-delay: false',
-            'proxies: []',
-            'proxy-groups: []',
-            'rules: []',
-            '',
-          ].join('\n'),
-        }),
-        'local profile creation',
+      await waitForCoreRunning();
+      const local = await createProfile(
+        localConfigProfileRequest(localName),
+        [
+          'unified-delay: false',
+          'proxies: []',
+          'proxy-groups: []',
+          'rules: []',
+          '',
+        ].join('\n'),
       );
-
-      luaUid = requireApplied(
-        await invoke<MutationOutcome<string>>('create_profile', {
-          item: {
-            type: 'script',
-            name: `lua-transform-${suffix}`,
-            desc: null,
-            script_type: 'lua',
-          },
-          fileData: [
-            'config["unified-delay"] = true',
-            'info("e2e lua transform executed")',
-            'return config',
-            '',
-          ].join('\n'),
-        }),
-        'Lua profile creation',
+      const localUid = local.value;
+      committedValue(local, 'local Profile creation');
+      const script = await createProfile(
+        scriptProfileRequest(luaName, 'lua'),
+        [
+          'config["unified-delay"] = true',
+          'info("e2e lua transform executed")',
+          'return config',
+          '',
+        ].join('\n'),
       );
+      const luaUid = script.value;
+      committedValue(script, 'Lua Profile creation');
 
-      requireApplied(
+      selectionMayHaveChanged = true;
+      appliedValue(
         await invoke<MutationOutcome<null>>('activate_profile', {
           uid: localUid,
         }),
-        'source profile activation',
+        'source Profile activation',
       );
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
 
-      await setScopedChain(localUid, [luaUid]);
+      appliedValue(
+        await setScopedTransforms(localUid, [luaUid]),
+        'scoped Lua transform update',
+      );
       await waitForCoreRunning();
       await waitForUnifiedDelay(true);
 
       const profiles = await readProfiles();
       const source = profiles.items.find((item) => item.uid === localUid);
-      assert.deepEqual(source?.chain, [luaUid]);
+      assert.deepEqual(source && scopedTransformsOf(source), [luaUid]);
 
       const diagnostics = await invoke<RuntimeTransformDiagnostics | null>(
         'get_runtime_transform_diagnostics',
@@ -204,7 +177,10 @@ describe('Chimera Lua transform runtime lifecycle', () => {
         ['info', 'e2e lua transform executed'],
       ]);
 
-      await setScopedChain(localUid, []);
+      appliedValue(
+        await setScopedTransforms(localUid, []),
+        'scoped Lua transform removal',
+      );
       await waitForCoreRunning();
       await waitForUnifiedDelay(false);
 
@@ -215,25 +191,6 @@ describe('Chimera Lua transform runtime lifecycle', () => {
       assert.ok(detachedDiagnostics);
       assert.ok(detachedDiagnostics.revision > diagnostics.revision);
       assert.deepEqual(detachedDiagnostics.output.scopes[localUid], {});
-    } finally {
-      if (localUid) {
-        await setScopedChain(localUid, []).catch(() => undefined);
-      }
-      if (luaUid) {
-        await invoke<MutationOutcome<null>>('delete_profile', {
-          uid: luaUid,
-        }).catch(() => undefined);
-      }
-      if (localUid) {
-        await invoke<MutationOutcome<null>>('delete_profile', {
-          uid: localUid,
-        }).catch(() => undefined);
-      }
-      if (previousCurrent) {
-        await invoke<MutationOutcome<null>>('activate_profile', {
-          uid: previousCurrent,
-        }).catch(() => undefined);
-      }
-    }
+    });
   });
 });

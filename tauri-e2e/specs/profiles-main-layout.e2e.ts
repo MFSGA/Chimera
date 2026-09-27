@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/profiles/profile';
-const profileName = 'TDD Main Profile';
+const profileName = `TDD Main Profile ${Date.now()}`;
 
 type ProfilesResponse = {
   current: string | null;
@@ -30,36 +31,6 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).length > 1,
-    {
-      timeout: 15_000,
-      timeoutMsg: 'The main window was not created.',
-    },
-  );
-
-  for (const handle of await browser.getWindowHandles()) {
-    await browser.switchToWindow(handle);
-    const pathname = await browser.execute(() => location.pathname);
-    if (pathname.startsWith('/main')) return;
-  }
-
-  throw new Error('The created main window could not be identified.');
-}
-
-async function waitForPath(pathname: string) {
-  await browser.waitUntil(
-    async () =>
-      browser.execute((expected) => location.pathname === expected, pathname),
-    {
-      timeout: 15_000,
-      timeoutMsg: `Navigation to ${pathname} did not complete.`,
-    },
-  );
-}
-
 describe('main profiles reference layout', () => {
   let profileUid: string | undefined;
 
@@ -78,24 +49,14 @@ describe('main profiles reference layout', () => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
 
-    await openMainWindow();
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
 
-    const currentUrl = new URL(await browser.getUrl());
-    currentUrl.pathname = targetPath;
-    currentUrl.search = '';
-    await browser.url(currentUrl.href);
-    await waitForPath(targetPath);
-
-    const importToggle = await $(
-      '[data-slot="profile-import-button"] > div > button',
-    );
+    const importToggle = await $('[data-slot="profile-import-toggle"]');
     await importToggle.waitForClickable({ timeout: 15_000 });
     await importToggle.click();
 
-    const localImport = await $(
-      '[data-slot="profile-import-button"] > div > div button:nth-child(2)',
-    );
+    const localImport = await $('[data-slot="profile-import-local-action"]');
     await localImport.waitForClickable({ timeout: 15_000 });
     await localImport.click();
 
@@ -116,30 +77,27 @@ describe('main profiles reference layout', () => {
   });
 
   after(async () => {
-    if (!profileUid) return;
-    await invoke('activate_profile', { uid: null }).catch(() => undefined);
-    await invoke('delete_profile', { uid: profileUid }).catch(() => undefined);
+    const uid =
+      profileUid ??
+      (await invoke<ProfilesResponse>('get_profiles')).items.find(
+        (item) => item.name === profileName,
+      )?.uid;
+    if (!uid) return;
+    await invoke('delete_profile', { uid });
   });
 
+  // Contract: from the main Profile list, opening the create menu exposes the
+  // remote action with an accessible label and matching tooltip. The WebDriver
+  // hover and visible tooltip assertion fail if the action surface is absent;
+  // this does not claim native pointer-event coverage.
   it('uses the reference tooltip surface for profile import actions', async () => {
-    const importToggle = await $(
-      '[data-slot="profile-import-button"] > div > button',
-    );
+    const importToggle = await $('[data-slot="profile-import-toggle"]');
     await importToggle.waitForClickable({ timeout: 15_000 });
     await importToggle.click();
 
-    const remoteImport = await $(
-      '[data-slot="profile-import-button"] > div > div button:first-child',
-    );
+    const remoteImport = await $('[data-slot="profile-import-remote-action"]');
     await remoteImport.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((element) => {
-      element.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          pointerType: 'mouse',
-        }),
-      );
-    }, remoteImport);
+    await remoteImport.moveTo();
 
     const remoteLabel = await remoteImport.getAttribute('aria-label');
     assert.ok(
@@ -168,6 +126,9 @@ describe('main profiles reference layout', () => {
     await importToggle.click();
   });
 
+  // Contract: the persisted local Profile, overlay and JS transform use the
+  // expected icon compositions and badges. DOM icon slots and classes provide
+  // visual evidence; a missing type mapping fails its own assertion.
   it('uses the reference profile type icon compositions', async () => {
     const icons = await browser.execute(() => {
       const readIcon = (type: string, marker: string) => {
@@ -211,9 +172,15 @@ describe('main profiles reference layout', () => {
     }
   });
 
+  // Contract: at the fixed 1240x638 main-window viewport, Profile sidebar,
+  // list, card, header and import action remain within measured layout bounds.
+  // Missing elements or a geometry regression fails these assertions.
   it('matches the reference desktop structure and remains visually balanced', async () => {
     const card = await $('[data-slot="profile-card"]');
     await card.waitForDisplayed({ timeout: 15_000 });
+    await browser.execute(async () => {
+      await document.fonts.ready;
+    });
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
