@@ -167,3 +167,39 @@ impl Command {
         super::engine::run_capture(self).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn defaults_match_design() {
+        let c = Command::new("prog");
+        assert_eq!(c.event_channel_capacity, 64);
+        assert_eq!(c.kill_grace, Duration::from_secs(5));
+        assert!(c.hide_window);
+        assert!(!c.pipe_stdin);
+        assert!(c.encoding.is_none());
+        assert!(c.pid_file.is_none());
+        assert!(c.timeout.is_none());
+    }
+
+    #[test]
+    fn builder_chain_sets_fields() {
+        let c = Command::new("prog")
+            .arg("-v")
+            .args(["a", "b"])
+            .env("K", "V")
+            .current_dir("C:/tmp")
+            .kill_grace(Duration::from_secs(1))
+            .event_channel_capacity(8)
+            .pipe_stdin(true)
+            .hide_window(false);
+        assert_eq!(c.args.len(), 3);
+        assert_eq!(c.envs.len(), 1);
+        assert_eq!(c.event_channel_capacity, 8);
+        assert!(c.pipe_stdin);
+        assert!(!c.hide_window);
+    }
+}

@@ -32,3 +32,29 @@ impl ProcessOutput {
         self.code == Some(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_output_success_only_on_zero() {
+        let mk = |code| ProcessOutput {
+            code,
+            stdout: String::new(),
+            stderr: String::new(),
+        };
+        assert!(mk(Some(0)).success());
+        assert!(!mk(Some(1)).success());
+        assert!(!mk(None).success());
+    }
+
+    #[test]
+    fn error_display_is_stable() {
+        let e = ProcessError::Spawn {
+            program: "chimera-client".into(),
+            message: "not found".into(),
+        };
+        assert_eq!(e.to_string(), "failed to spawn `chimera-client`: not found");
+    }
+}

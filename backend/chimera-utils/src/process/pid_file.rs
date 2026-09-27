@@ -127,7 +127,17 @@ impl PidFileGuard {
     pub(crate) async fn write(&self, pid: u32) -> std::io::Result<()> {
         match self {
             Self::Legacy { path, pid: slot } => {
-                crate::os::create_pid_file(path, pid).await?;
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(path)
+                    .await?;
+                file.write_all(pid.to_string().as_bytes()).await?;
+                // The platform helper only awaits write_all; Tokio may still
+                // have buffered file writes. Flush before spawn returns so an
+                // immediate recovery/read observes the complete pid.
+                file.flush().await?;
                 slot.store(pid, Ordering::Relaxed);
                 Ok(())
             }
@@ -1159,4 +1169,147 @@ fn invalid_data(message: impl Into<String>) -> std::io::Error {
 
 fn identity_error(message: impl Into<String>) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::PermissionDenied, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_record_round_trips() {
+        let record = EpochPidRecord {
+            pid: 42,
+            epoch: 7,
+            executable: "core=name.exe".into(),
+            start_token: 99,
+            runtime_config: PathBuf::from(r"C:\run dir\config-7.yaml"),
+        };
+        assert_eq!(
+            parse_epoch_record(&serialize_epoch_record(&record).unwrap()).unwrap(),
+            record
+        );
+    }
+
+    #[tokio::test]
+    async fn write_epoch_record_second_publish_does_not_clobber_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_path = dir.path().join("core-1.pid");
+        let first = EpochPidRecord {
+            pid: 111,
+            epoch: 1,
+            executable: "first.exe".into(),
+            start_token: 1,
+            runtime_config: dir.path().join("config-1.yaml"),
+        };
+        let second = EpochPidRecord {
+            pid: 222,
+            epoch: 1,
+            executable: "second.exe".into(),
+            start_token: 2,
+            runtime_config: dir.path().join("config-1.yaml"),
+        };
+
+        write_epoch_record(&pid_path, &first).await.unwrap();
+
+        let error = write_epoch_record(&pid_path, &second)
+            .await
+            .expect_err("publishing over an existing epoch record must fail");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+
+        // The destination must still contain the first record: a rename-based
+        // publish would have silently replaced it (the TOCTOU this guards
+        // against), while hard_link fails atomically without touching it.
+        let raw = tokio::fs::read_to_string(&pid_path).await.unwrap();
+        assert_eq!(parse_epoch_record(&raw).unwrap(), first);
+    }
+
+    #[test]
+    fn second_snapshot_only_descendant_is_captured() {
+        let late_identity = ProcessIdentity {
+            executable: "late-child".into(),
+            start_token: 22,
+        };
+        let captured =
+            merge_descendant_captures(BTreeMap::new(), [(22, Some(late_identity.clone()))].into());
+
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].pid, 22);
+        assert_eq!(captured[0].identity, late_identity);
+    }
+
+    #[test]
+    fn unreadable_second_snapshot_identity_is_not_attributed() {
+        let first_identity = ProcessIdentity {
+            executable: "old-child".into(),
+            start_token: 7,
+        };
+        let captured = merge_descendant_captures(
+            [(7, first_identity)].into(),
+            [(
+                7,
+                attributable_identity(Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated recycled foreign process",
+                ))),
+            )]
+            .into(),
+        );
+
+        assert!(captured.is_empty());
+    }
+
+    #[test]
+    fn unreadable_descendant_confirmation_counts_as_unowned() {
+        let error = || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "simulated recycled foreign process",
+            ))
+        };
+
+        assert!(identity_for_confirmation(error(), true).unwrap().is_none());
+        assert_eq!(
+            identity_for_confirmation(error(), false)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_failure_is_ignored_only_after_recorded_identity_disappears() {
+        #[cfg(windows)]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/D", "/S", "/C", "ping -n 30 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        #[cfg(unix)]
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .spawn()
+            .unwrap();
+
+        let pid = child.id();
+        let identity = wait_for_process_identity(pid).await.unwrap().unwrap();
+        let record = EpochPidRecord {
+            pid,
+            epoch: 1,
+            executable: identity.executable,
+            start_token: identity.start_token,
+            runtime_config: PathBuf::from("config-1.yaml"),
+        };
+
+        let outcome = reap_record_with_kill(&record, false, || async move {
+            crate::os::kill_pid::<String>(pid, None).await?;
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "simulated already-terminating process",
+            ))
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, OrphanReapOutcome::Killed);
+        let _ = child.wait();
+    }
 }

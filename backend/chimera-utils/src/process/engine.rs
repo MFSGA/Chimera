@@ -547,3 +547,24 @@ async fn cleanup_pid_file(pid_guard: &Option<PidFileGuard>) {
         guard.cleanup().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::split_stderr_tail;
+
+    #[test]
+    fn split_stderr_tail_reconstructs_joined_lines() {
+        // Empty capture -> no lines (see split_stderr_tail's known limitation).
+        assert!(split_stderr_tail("").is_empty());
+        assert_eq!(split_stderr_tail("only"), vec!["only".to_owned()]);
+        assert_eq!(
+            split_stderr_tail("first\nsecond"),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
+        // Trailing empty line survives: join("\n") of ["msg", ""] is "msg\n".
+        assert_eq!(
+            split_stderr_tail("msg\n"),
+            vec!["msg".to_owned(), String::new()]
+        );
+    }
+}

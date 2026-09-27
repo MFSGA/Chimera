@@ -98,3 +98,104 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn bare_io_errors_are_not_retried() {
+        let attempts = AtomicUsize::new(0);
+        let request = reqwest::Client::new().post("http://localhost/test");
+        let error = retry_send(request, |_| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Err::<(), _>(std::io::Error::from_raw_os_error(231)) }
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(231));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(windows)]
+    async fn occupied_pipe(
+        test: &str,
+    ) -> (
+        reqwest::Client,
+        tokio::net::windows::named_pipe::NamedPipeServer,
+        tokio::net::windows::named_pipe::NamedPipeClient,
+    ) {
+        use tokio::net::windows::named_pipe::{ClientOptions, ServerOptions};
+        let path = std::path::PathBuf::from(format!(
+            r"\\.\pipe\chimera-client-utils-{test}-{}",
+            std::process::id(),
+        ));
+        let server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&path)
+            .unwrap();
+        let occupant = ClientOptions::new().open(&path).unwrap();
+        server.connect().await.unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .windows_named_pipe(path.as_path())
+            .build()
+            .unwrap();
+        (client, server, occupant)
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn exhausted_budget_preserves_the_connection_error() {
+        let (client, _server, _occupant) = occupied_pipe("exhausted").await;
+        let attempts = AtomicUsize::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_secs(3),
+            retry_send(client.get("http://localhost/test"), |request| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                request.send()
+            }),
+        )
+        .await
+        .unwrap();
+        assert!(is_named_pipe_busy(&result.unwrap_err()));
+        assert!(attempts.load(Ordering::SeqCst) > 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn streaming_body_is_attempted_once() {
+        let (client, _server, _occupant) = occupied_pipe("streaming").await;
+        let attempts = AtomicUsize::new(0);
+        let body = reqwest::Body::wrap_stream(futures_util::stream::once(async {
+            Ok::<_, std::io::Error>("one-shot payload")
+        }));
+        let request = client.post("http://localhost/test").body(body);
+        assert!(request.try_clone().is_none());
+        let result = retry_send(request, |request| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            request.send()
+        })
+        .await;
+        assert!(is_named_pipe_busy(&result.unwrap_err()));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn outer_timeout_cancels_the_retry_wait() {
+        let (client, _server, _occupant) = occupied_pipe("cancel").await;
+        let attempts = AtomicUsize::new(0);
+        let result = tokio::time::timeout(
+            Duration::from_millis(10),
+            retry_send(client.get("http://localhost/test"), |request| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                request.send()
+            }),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+}

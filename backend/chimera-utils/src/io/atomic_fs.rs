@@ -465,3 +465,88 @@ pub async fn sync_dir(_dir: impl AsRef<Path>) -> std::io::Result<()> {
     // is not asserted here.
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn atomic_move_new_never_clobbers_and_publishes_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let target = dir.path().join("target");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&target, b"old").await.unwrap();
+
+        let error = atomic_move_new(&source, &target).await.unwrap_err();
+        assert!(matches!(
+            error,
+            AtomicFsError::Io(error) if error.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"old");
+        assert!(source.exists());
+
+        let target = dir.path().join("absent-target");
+        atomic_move_new(&source, &target).await.unwrap();
+        assert_eq!(tokio::fs::read(&target).await.unwrap(), b"new");
+        assert!(!source.exists());
+    }
+
+    #[tokio::test]
+    async fn atomic_replace_overwrites_existing_destination() {
+        let dir = tempfile::tempdir().unwrap();
+        let replacement = dir.path().join("replacement");
+        let destination = dir.path().join("destination");
+        tokio::fs::write(&replacement, b"new").await.unwrap();
+        tokio::fs::write(&destination, b"old").await.unwrap();
+
+        atomic_replace(AtomicReplacement {
+            replacement: &replacement,
+            destination: &destination,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(tokio::fs::read(&destination).await.unwrap(), b"new");
+        assert!(!replacement.exists());
+    }
+
+    #[tokio::test]
+    async fn sync_dir_succeeds_for_real_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        sync_dir(dir.path()).await.unwrap();
+    }
+
+    #[test]
+    fn ordinary_artifacts_are_not_reparse_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        std::fs::write(&file, b"contents").unwrap();
+
+        assert!(!is_reparse_point(&std::fs::metadata(dir.path()).unwrap()));
+        assert!(!is_reparse_point(&std::fs::metadata(file).unwrap()));
+    }
+
+    #[test]
+    fn dir_lock_reports_contention_and_releases_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lock");
+        let first = acquire_dir_lock(&path).unwrap();
+
+        assert!(matches!(
+            acquire_dir_lock(&path).unwrap_err(),
+            AtomicFsError::Contended(contended) if contended == path
+        ));
+
+        drop(first);
+        acquire_dir_lock(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_directory_acl_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        harden_windows_directory_acl(dir.path()).unwrap();
+        verify_windows_directory_acl(dir.path()).unwrap();
+    }
+}

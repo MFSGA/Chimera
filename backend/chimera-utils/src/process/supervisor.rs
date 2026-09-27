@@ -515,3 +515,46 @@ impl SupervisorBuilder {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        let b = Backoff::exponential(BackoffRange {
+            initial: Duration::from_secs(1),
+            max: Duration::from_secs(30),
+        });
+        assert_eq!(b.delay_for(0), Duration::from_secs(1));
+        assert_eq!(b.delay_for(1), Duration::from_secs(2));
+        assert_eq!(b.delay_for(4), Duration::from_secs(16));
+        assert_eq!(b.delay_for(10), Duration::from_secs(30)); // capped
+
+        let long = Backoff::exponential(BackoffRange {
+            initial: Duration::from_millis(1),
+            max: Duration::from_secs(600),
+        });
+        assert_eq!(long.delay_for(25), Duration::from_secs(600));
+    }
+
+    #[test]
+    fn jitter_stays_within_25_percent() {
+        let b = Backoff::exponential(BackoffRange {
+            initial: Duration::from_secs(4),
+            max: Duration::from_secs(60),
+        })
+        .with_jitter();
+        let samples: Vec<_> = (0..1000).map(|_| b.delay_for(0)).collect();
+
+        for d in &samples {
+            assert!(
+                *d >= Duration::from_secs(3) && *d <= Duration::from_secs(5),
+                "{d:?}"
+            );
+        }
+        assert!(samples.iter().min().unwrap() < &Duration::from_secs(4));
+        assert!(samples.iter().max().unwrap() > &Duration::from_secs(4));
+    }
+}

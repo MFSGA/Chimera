@@ -6,6 +6,12 @@ authors.workspace = true
 license.workspace = true
 description = "Shared utilities for Chimera applications and services."
 
+[[bin]]
+doc = false
+name = "chimera-test-child"
+path = "tests/helpers/test_child.rs"
+required-features = ["process"]
+
 [features]
 default = ["core_manager", "dirs", "network", "serde"]
 core_manager = ["chimera-platform-utils/core_manager"]
@@ -56,6 +62,10 @@ tokio.workspace = true
 tokio-util = { version = "0.7", optional = true }
 tracing.workspace = true
 tracing-attributes = "0.1"
+
+[dev-dependencies]
+futures-util = "0.3"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = { version = "0.2", optional = true }
