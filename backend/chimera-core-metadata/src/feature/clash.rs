@@ -98,12 +98,17 @@ impl FeatureSupport for crate::kind::ClashCoreKind {
                 Feature::UnixSocketIpc => since(&MIHOMO_UNIX, version),
                 Feature::DisableTcpController => Support::No,
             },
-            crate::kind::ClashCoreKind::ClashRust => match feature {
-                Feature::NamedPipeIpc => since(&CLASH_RS_PIPE, version),
-                Feature::NamedPipeSecurityDescriptor => Support::No,
-                Feature::UnixSocketIpc => since(&CLASH_RS_UNIX, version),
-                Feature::DisableTcpController => Support::No,
-            },
+            // Chimera Client's CLI and API runner retain clash-rs local IPC
+            // support. Its own core kind remains distinct; only the verified
+            // controller capability floors are shared.
+            crate::kind::ClashCoreKind::ClashRust | crate::kind::ClashCoreKind::ChimeraClient => {
+                match feature {
+                    Feature::NamedPipeIpc => since(&CLASH_RS_PIPE, version),
+                    Feature::NamedPipeSecurityDescriptor => Support::No,
+                    Feature::UnixSocketIpc => since(&CLASH_RS_UNIX, version),
+                    Feature::DisableTcpController => Support::No,
+                }
+            }
             // Clash Premium only ever exposed `external-controller` over TCP.
             crate::kind::ClashCoreKind::ClashPremium => match feature {
                 Feature::NamedPipeIpc
@@ -138,5 +143,37 @@ fn since(req: &LazyLock<VersionReq>, version: Option<&CoreVersion>) -> Support {
         Some(CoreVersion::Nightly) => Support::Yes,
         Some(CoreVersion::Release(_) | CoreVersion::Unknown) => Support::No,
         None => Support::Since((**req).clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoreVersion, Support, kind::ClashCoreKind};
+
+    #[test]
+    fn chimera_client_supports_the_verified_clash_rs_ipc_contract() {
+        // The binary reports `clash-rs 0.26.1`; this case guards the version
+        // parser and the IPC capability decision made from that banner.
+        let version = CoreVersion::parse("clash-rs 0.26.1");
+        assert!(matches!(version, CoreVersion::Release(_)));
+
+        assert_eq!(
+            ClashCoreKind::ChimeraClient.supports(Feature::UnixSocketIpc, Some(&version)),
+            Support::Yes
+        );
+        assert_eq!(
+            ClashCoreKind::ChimeraClient.supports(Feature::NamedPipeIpc, Some(&version)),
+            Support::Yes
+        );
+        assert_eq!(
+            ClashCoreKind::ChimeraClient
+                .supports(Feature::NamedPipeSecurityDescriptor, Some(&version)),
+            Support::No
+        );
+        assert_eq!(
+            ClashCoreKind::ChimeraClient.supports(Feature::DisableTcpController, Some(&version)),
+            Support::No
+        );
     }
 }

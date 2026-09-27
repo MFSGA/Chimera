@@ -26,6 +26,10 @@ pub enum ClashCoreKind {
     ClashPremium,
     #[serde(rename = "meow")]
     Meow,
+    /// Chimera's separately distributed Clash-rs-compatible core. Keep it
+    /// distinct from upstream Clash-rs in serialized identity and diagnostics.
+    #[serde(rename = "chimera-client", alias = "chimera", alias = "chimera_client")]
+    ChimeraClient,
 }
 
 impl AsRef<str> for ClashCoreKind {
@@ -35,6 +39,7 @@ impl AsRef<str> for ClashCoreKind {
             ClashCoreKind::ClashRust => "clash-rs",
             ClashCoreKind::ClashPremium => "clash",
             ClashCoreKind::Meow => "meow",
+            ClashCoreKind::ChimeraClient => "chimera-client",
         }
     }
 }
@@ -82,6 +87,27 @@ impl ClashCoreResourceVariant {
                 concat!("clash", EXE_SUFFIX)
             }
             ClashCoreResourceVariant::Meow => concat!("meow", EXE_SUFFIX),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClashCoreKind;
+
+    #[test]
+    fn chimera_client_keeps_a_canonical_brand_wire_name_and_reads_legacy_names() {
+        // The current product identifier is the canonical wire value; stored
+        // legacy aliases remain readable and normalize on serialization.
+        let kind = ClashCoreKind::ChimeraClient;
+        assert_eq!(kind.as_ref(), "chimera-client");
+        assert_eq!(kind.to_string(), "chimera-client");
+        assert_eq!(serde_json::to_string(&kind).unwrap(), "\"chimera-client\"");
+
+        for legacy_name in ["chimera", "chimera_client"] {
+            let encoded = format!("\"{legacy_name}\"");
+            let decoded: ClashCoreKind = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded, ClashCoreKind::ChimeraClient);
         }
     }
 }

@@ -238,7 +238,9 @@ impl LogParser {
         match self.kind {
             CoreKind::Mihomo => parse_mihomo(line),
             CoreKind::Meow => parse_meow(line),
-            CoreKind::ClashRust => parse_clash_rs(line, observed_at),
+            // Chimera Client keeps the same tracing log header as its
+            // clash-rs-compatible source while retaining a distinct kind.
+            CoreKind::ClashRust | CoreKind::ChimeraClient => parse_clash_rs(line, observed_at),
             CoreKind::ClashPremium => parse_premium(line, observed_at, &mut self.premium_clock),
         }
     }

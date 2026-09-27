@@ -1,8 +1,14 @@
 # ref 对齐进度
 
-本记录使用的参考基线为 `ref` 提交
-`f7dbce2997c633e484f54788035e770b3ee99773`。参考工作区存在预先的
-`?? NUL`，不属于该提交，也未被复制或修改。
+当前只读参考检出为 Clash Nyanpasu `main` 的最新提交
+`5331747c06a5f42eeabb3e225a1e77a83f480549`，已通过远端 `HEAD` 与
+`refs/heads/main` 核实；检出状态干净。主仓库 `.gitmodules` 留有 `ref` URL，
+但当前 `HEAD` 没有 `ref` gitlink；按本项目约定，`ref/` 是 `.gitignore` 中的
+本地只读基线，不属于主仓库提交。
+
+DIFF-001 至 DIFF-012 是此前基于
+`f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
+新基线重审。后续切片应使用当前 `ref/` 提交，并明确记录与历史基线的差别。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
@@ -352,3 +358,44 @@
   继承 legacy 默认选项。随后补充代理/TUN 状态回读、真实网络和恢复测试，再重新评估
   当前 3 次探测、3000ms 波动阈值及失败恢复语义。当前仍是功能可用但对齐未完成的
   部分迁移。
+
+## DIFF-013：在新 core manager 中保留 Chimera Client 身份与 CLI 支持
+
+- ref commit：Clash Nyanpasu `main` 的当前 HEAD
+  `5331747c06a5f42eeabb3e225a1e77a83f480549`
+- ref 路径和符号：`backend/tauri/src/core/actor_v2/local_host.rs::core_spec`
+  将上游 `ClashRs` / `ClashRsAlpha` 映射为 `CoreKind::ClashRust`；
+  `backend/tauri/src/core/actor_v2/facade.rs::reconcile` 把该 spec 交给新 manager。
+- Chimera 路径和符号：`backend/chimera-core-metadata/src/kind.rs::ClashCoreKind`、
+  `feature/clash.rs::FeatureSupport`、`backend/chimera-core-manager/src/kind.rs`、
+  `backend/chimera-core-manager/src/log.rs`。
+- 类别：品牌兼容扩展。
+- 差异及必要性：上游没有 Chimera Client。Chimera 保留独立 kind 和线上的
+  `chimera-client` 名称；启动参数与 Clash-rs 共用 `-d/-c`，IPC endpoint 使用
+  `--controller-ipc`，日志按已验证的 Clash-rs tracing header 解析。Chimera Client
+  `clash-bin/src/main.rs` 明确提供 `-f` 到 `-c` 的兼容别名，因此现有一次性 `-t`
+  检查参数也可用；`chimera` 和 `chimera_client` 旧值反序列化为同一 kind，写出时
+  仍规范化为 `chimera-client`。Unix socket / named pipe capability 复用 Clash-rs 的版本门槛；
+  TCP 禁用和 named-pipe security descriptor 仍报告不支持。
+- 保留差异：应用设置和下载器仍使用既有 `ClashCore::ChimeraClient`、
+  `chimera_utils::core::ClashCoreType::ChimeraClient` 与 `MFSGA/Chimera_Client` 发行源；
+  不把它改名成 Clash-rs，也不改动核心二进制。本切片仅补齐新 manager 的 kind、CLI、
+  IPC 能力和日志识别，没有把 Tauri 的 `CoreFacade` 切换到新 manager；现有
+  `core runtime migration is not implemented yet` 仍待后续完整生命周期迁移处理。
+- 测试契约：给定 Chimera Client kind、运行/配置路径与本机 IPC endpoint，断言序列化身份、
+  启动参数、配置校验参数和 IPC 覆盖参数符合 Chimera Client 源码中的 CLI 合同；若将它
+  折叠成 `ClashRust`、丢失品牌 wire 值或漏传 IPC flag，目标断言会失败。
+- 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
+  chimera-core-metadata`，2 passed；`cargo fmt --manifest-path
+  backend/Cargo.toml --all -- --check` 与 `git diff --check` 通过。针对 manager 的
+  `cargo test --manifest-path backend/Cargo.toml -p chimera-core-manager kind::tests`
+  在编译本地 `nyanpasu-utils` 时被三个缺失 include 文件挡住：
+  `find-macos-default-device-port.sh`、`set-macos-dns.sh`、`get-macos-dns.sh`。
+  当前最新 ref 中没有这些脚本或相同调用点，故未以猜测内容补齐；manager 单测和完整
+  Tauri 编译仍未验证。现有 Chimera Client 包二进制执行 `-v` 得到
+  `clash-rs 0.26.1`；`-h` 显示 `-c`、`-f` alias、`-t` 和 `--controller-ipc`；使用
+  `-t -d /tmp/chimera-client-smoke-20260926 -f config.yaml` 对临时配置校验通过。
+  这些是 CLI 兼容性冒烟证据，不代表桌面应用已接入新 manager 或 IPC socket 已运行验证。
+- 下一最小步骤：先恢复/确认本地 macOS DNS 脚本的权威来源，解除编译阻塞；随后在 ref 的
+  actor-backed `CoreFacade` 接入点将 `ClashCore::ChimeraClient` 映射到独立 kind，并迁移
+  一条完整 reconcile 启动路径，保持 legacy UI、profile 持久化、agent 和现有下载更新合同。

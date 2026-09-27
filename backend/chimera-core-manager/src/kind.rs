@@ -43,7 +43,11 @@ pub(crate) fn run_args(kind: CoreKind, paths: CorePaths<'_>) -> Result<Vec<OsStr
         CoreKind::Mihomo | CoreKind::Meow => {
             vec!["-m".into(), "-d".into(), dir, "-f".into(), cfg]
         }
-        CoreKind::ClashRust => vec!["-d".into(), dir, "-c".into(), cfg],
+        // Chimera Client retains the clash-rs `-c` CLI while keeping its own
+        // kind for identity, reporting, and core selection.
+        CoreKind::ClashRust | CoreKind::ChimeraClient => {
+            vec!["-d".into(), dir, "-c".into(), cfg]
+        }
         CoreKind::ClashPremium => vec!["-d".into(), dir, "-f".into(), cfg],
     })
 }
@@ -52,10 +56,11 @@ pub(crate) fn run_args(kind: CoreKind, paths: CorePaths<'_>) -> Result<Vec<OsStr
 /// from the config file.
 ///
 /// clash-bin unconditionally overwrites the config's `external_controller_ipc`
-/// with its CLI flag value (clash-bin/src/main.rs), so for clash-rs a system
-/// IPC endpoint only takes effect when passed as `--controller-ipc`.
+/// with its CLI flag value (clash-bin/src/main.rs), so for clash-rs and
+/// Chimera Client a system IPC endpoint only takes effect when passed as
+/// `--controller-ipc`.
 pub(crate) fn controller_args(kind: CoreKind, host: &clash_api::Host) -> Vec<OsString> {
-    if !matches!(kind, CoreKind::ClashRust) {
+    if !matches!(kind, CoreKind::ClashRust | CoreKind::ChimeraClient) {
         return Vec::new();
     }
     match host {
@@ -63,6 +68,75 @@ pub(crate) fn controller_args(kind: CoreKind, host: &clash_api::Host) -> Vec<OsS
             vec!["--controller-ipc".into(), path.as_os_str().to_owned()]
         }
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use camino::Utf8Path;
+
+    use super::{CoreKind, CorePaths, check_args, controller_args, run_args};
+
+    fn strings(args: Vec<OsString>) -> Vec<String> {
+        args.into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn paths() -> CorePaths<'static> {
+        CorePaths {
+            working_dir: Utf8Path::new("/tmp/chimera-client"),
+            config_path: Utf8Path::new("/tmp/chimera-client/config.yaml"),
+        }
+    }
+
+    #[test]
+    fn chimera_client_keeps_brand_identity_and_uses_its_supported_cli() {
+        // Contract: the Chimera Client kind must keep its wire identity while
+        // producing the flags accepted by clash-bin/src/main.rs. Collapsing it
+        // into ClashRust or using another core's config flag fails these checks.
+        assert_eq!(CoreKind::ChimeraClient.as_ref(), "chimera-client");
+        assert_ne!(CoreKind::ChimeraClient, CoreKind::ClashRust);
+        assert_eq!(
+            strings(run_args(CoreKind::ChimeraClient, paths()).unwrap()),
+            vec![
+                "-d".to_owned(),
+                "/tmp/chimera-client".to_owned(),
+                "-c".to_owned(),
+                "/tmp/chimera-client/config.yaml".to_owned(),
+            ]
+        );
+        // Chimera Client exposes `-f` as a compatibility alias for `-c`.
+        assert_eq!(
+            strings(check_args(paths())),
+            vec![
+                "-t".to_owned(),
+                "-d".to_owned(),
+                "/tmp/chimera-client".to_owned(),
+                "-f".to_owned(),
+                "/tmp/chimera-client/config.yaml".to_owned(),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn chimera_client_receives_local_ipc_through_its_cli_flag() {
+        // The independent observation is the Chimera Client CLI contract:
+        // `--controller-ipc` overrides `external_controller_ipc` at startup.
+        let args = controller_args(
+            CoreKind::ChimeraClient,
+            &clash_api::Host::unix_socket("/tmp/chimera-client.sock"),
+        );
+        assert_eq!(
+            strings(args),
+            vec![
+                "--controller-ipc".to_owned(),
+                "/tmp/chimera-client.sock".to_owned(),
+            ]
+        );
     }
 }
 

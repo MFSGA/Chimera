@@ -10,7 +10,9 @@
 
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
-commit:     f7dbce2997c633e484f54788035e770b3ee99773
+branch:     main
+commit:     5331747c06a5f42eeabb3e225a1e77a83f480549
+verified:   current remote HEAD and refs/heads/main
 ```
 
 每个迁移切片开始前执行：
@@ -24,7 +26,7 @@ git -C ref status --short
 
 `ref/` 默认只读。开发共通功能时应主动读取其对应代码，不必等待用户再次要求“参考 ref”。不要为了开始一个功能而自动 fetch、pull 或重置参考目录。只有任务包含同步参考版本时才更新，并记录更新前后 commit。
 
-目前主仓库忽略 `ref/`，`.gitmodules` 中的声明本身不能代替实际 gitlink 固定版本。新工作区需另行准备参考仓库并核对上述 commit；参考缺失时报告缺口，不能自行实现后声称已对齐。本文记录基线，不宣称已经实现自动检出或同步检查。
+目前主仓库忽略 `ref/`，`.gitmodules` 中的声明本身不能代替实际 gitlink 固定版本；当前主仓库 `HEAD` 未跟踪 `ref` gitlink。本次按用户要求将本地只读 `ref/` 检出到上述最新 `main` commit。新工作区需另行准备参考仓库并核对本次任务实际采用的 commit；参考缺失时报告缺口，不能自行实现后声称已对齐。本文记录最近核对的基线，不宣称已经实现自动检出或同步检查。
 
 ## 2. 必须同时满足的目标
 
