@@ -667,3 +667,21 @@ DIFF-001 至 DIFF-012 是此前基于
   报告约 320 条既有 warning；新增测试首次发现的两个 `CoreInfos` fixture 缺字段已修复，复跑通过。
 - 下一切片：迁入 ref `RuntimeIntentBuilder`，让生成文档、摘要和 CAS 输入形成单一 intent；之后
   再迁 `ServiceEndpoint` 与 service actor，并先补齐服务端 handler 才切换实际调用方。
+
+## DIFF-024：迁入纯 RuntimeIntentBuilder
+
+- 基线：根仓库 `8e9f321b`；ref `actor_v2/intent.rs` 来自 root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549` / runtime `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：新增 `actor_v2::intent`，将配置映射序列化成确定的文本，并用本地
+  `chimera_core_manager::payload_digest` 生成请求 digest；输入还包含应用选择的
+  `chimera_utils::core::CoreType` 与 `LocalIpcSettings`。保留 ref 的纯构造语义，不在 builder
+  中读取全局状态或执行 I/O，共 95 行。
+- 兼容与限制：intent builder 目前尚未接入 `CoreFacade` 调用链，旧 core 更新流程不变；保留
+  `CoreType::ChimeraClient` 和应用本地配置类型。等本地与 Service endpoint 都准备好后，再统一从
+  同一个 intent 生成 check 与 reconcile 请求。
+- 验证：`cargo test --manifest-path backend/Cargo.toml -p chimera
+  core::actor_v2::intent::tests -- --test-threads=1`，2 passed、405 filtered；
+  `cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 和
+  `git diff --check` 通过。Tauri 编译仍有约 323 条既有 warning。
+- 下一切片：迁入 `ControlEndpoint` 的 Service IPC v2 adapter，并对照 Chimera 当前
+  `ClientError`、websocket event 和 client features；Service 的 v2 handler 仍是 actor 接线前置条件。

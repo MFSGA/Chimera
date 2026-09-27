@@ -7,6 +7,7 @@
 pub mod control_endpoint;
 pub mod endpoint;
 pub mod facade;
+pub mod intent;
 pub mod local_host;
 mod local_runtime;
 
