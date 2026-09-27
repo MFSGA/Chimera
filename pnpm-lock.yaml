@@ -385,8 +385,8 @@ importers:
         specifier: 6.1.1
         version: 6.1.1(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(less@4.9.1(supports-color@10.2.2))(sass-embedded@1.104.0)(sass@1.104.0)(terser@5.48.0)(tsx@4.23.13)(yaml@2.9.0))
       filesize:
-        specifier: 11.0.23
-        version: 11.0.23
+        specifier: 11.0.24
+        version: 11.0.24
       meta-json-schema:
         specifier: 1.19.30
         version: 1.19.30
@@ -5267,8 +5267,8 @@ packages:
   filelist@1.0.6:
     resolution: {integrity: sha512-5giy2PkLYY1cP39p17Ech+2xlpTRL9HLspOfEgm0L6CwBXBTgsK5ou0JtzYuepxkaQ/tvhCFIJ5uXo0OrM2DxA==}
 
-  filesize@11.0.23:
-    resolution: {integrity: sha512-EzB9Km94xm3V7szupSlcGVJpkvXWuNtSZmr7qBoj229q7lEJEEYGMk8gwGnA4ZTAGQmHZigTDEIuOfCQXec1fQ==}
+  filesize@11.0.24:
+    resolution: {integrity: sha512-R+YVXTiRPxjX02Ul2Ta2cCas43gjdwKaxTIxl9/7bkaAy97U4BXb31N/xXk7Kp9pIkg3o/RScNypKr6RlcZMyA==}
     engines: {node: '>= 10.8.0'}
 
   fill-range@7.1.1:
@@ -12998,7 +12998,7 @@ snapshots:
     dependencies:
       minimatch: 5.1.9
 
-  filesize@11.0.23: {}
+  filesize@11.0.24: {}
 
   fill-range@7.1.1:
     dependencies:
