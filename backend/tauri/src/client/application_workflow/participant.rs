@@ -10,7 +10,7 @@ use chimera_config::profile::Profiles;
 use chimera_core::state::{
     Ack, AckOptions, DecisionHandle, StateAckSubscriber, StateChange, StateDecision, SubscriberName,
 };
-use chimera_core_manager::{CoreError, CoreErrorKind};
+use chimera_core_manager::{CoreError, CoreErrorKind, OperationId};
 use tokio::sync::Mutex;
 
 use super::{
@@ -23,12 +23,12 @@ use crate::client::{core_lifecycle::CoreLifecycleClient, runtime::RuntimeCommitS
 const MUTATION_ACK_TIMEOUT: Duration = Duration::from_secs(90);
 
 pub(crate) struct ApplicationMutationParticipant<T: MutationDomain> {
-    operation_id: String,
+    operation_id: OperationId,
     hints: MutationHints,
     class: CommandClass,
     decision: DecisionHandle,
     core: CoreLifecycleClient,
-    outcomes: Arc<Mutex<HashMap<String, RuntimeCommitStatus>>>,
+    outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
     recovery_required: Arc<Mutex<Option<String>>>,
     attempted_runtime: std::sync::atomic::AtomicBool,
     deferred_runtime: std::sync::atomic::AtomicBool,
@@ -38,12 +38,12 @@ pub(crate) struct ApplicationMutationParticipant<T: MutationDomain> {
 
 impl<T: MutationDomain> ApplicationMutationParticipant<T> {
     pub(crate) fn new(
-        operation_id: String,
+        operation_id: OperationId,
         hints: MutationHints,
         class: CommandClass,
         decision: DecisionHandle,
         core: CoreLifecycleClient,
-        outcomes: Arc<Mutex<HashMap<String, RuntimeCommitStatus>>>,
+        outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
         recovery_required: Arc<Mutex<Option<String>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -60,6 +60,31 @@ impl<T: MutationDomain> ApplicationMutationParticipant<T> {
             _state: PhantomData,
         })
     }
+
+    async fn recover_previous(&self, previous: &Profiles) -> anyhow::Result<()> {
+        let Some(cause) = self.recovery_required.lock().await.clone() else {
+            return Ok(());
+        };
+        anyhow::ensure!(
+            !self.core.status().uncertain,
+            "Profile runtime still needs recovery after rollback failure: {cause}"
+        );
+        let status = self.core.core_status().await?;
+        if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
+            *self.recovery_required.lock().await = None;
+            return Ok(());
+        }
+        self.core
+            .reconcile_profiles(Arc::new(previous.clone()), Default::default())
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Profile runtime recovery failed after rollback error ({cause}): {error}"
+                )
+            })?;
+        *self.recovery_required.lock().await = None;
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -73,11 +98,6 @@ impl<T: MutationDomain> StateAckSubscriber<T> for ApplicationMutationParticipant
     }
 
     async fn on_prepare(&self, change: StateChange<T>) -> Ack {
-        if let Some(message) = self.recovery_required.lock().await.clone() {
-            return Ack::Failed(anyhow::anyhow!(
-                "Profile writes require runtime recovery first: {message}"
-            ));
-        }
         if self.decision.decision() != StateDecision::Undecided {
             return Ack::Rejected(
                 "Profile source transaction settled before runtime admission".into(),
@@ -92,6 +112,9 @@ impl<T: MutationDomain> StateAckSubscriber<T> for ApplicationMutationParticipant
             .map(|state| state.as_ref().clone())
             .unwrap_or_default();
         let candidate = candidate.as_ref().clone();
+        if let Err(error) = self.recover_previous(&previous).await {
+            return Ack::Failed(error);
+        }
         let impact = classify_profiles(&previous, &candidate, &self.hints);
         let explicit_switch = self.class == CommandClass::ExplicitSwitch
             || self.hints.activation != ActivationIntent::None;
@@ -220,4 +243,36 @@ fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> bool {
             .downcast_ref::<CoreError>()
             .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_deferral_requires_a_retryable_queue_full_error() {
+        let queue_full = anyhow::Error::new(CoreError::new(
+            CoreErrorKind::QueueFull,
+            "executor queue is full",
+            true,
+        ));
+        assert!(safe_to_defer_runtime_apply(&queue_full));
+
+        let non_retryable_queue_full = anyhow::Error::new(CoreError::new(
+            CoreErrorKind::QueueFull,
+            "queue full without retryability",
+            false,
+        ));
+        assert!(!safe_to_defer_runtime_apply(&non_retryable_queue_full));
+
+        let other_retryable_error = anyhow::Error::new(CoreError::new(
+            CoreErrorKind::BackendUnavailable,
+            "backend unavailable",
+            true,
+        ));
+        assert!(!safe_to_defer_runtime_apply(&other_retryable_error));
+
+        let untyped = anyhow::anyhow!("executor queue is full");
+        assert!(!safe_to_defer_runtime_apply(&untyped));
+    }
 }

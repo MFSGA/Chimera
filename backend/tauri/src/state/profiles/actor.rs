@@ -11,6 +11,7 @@ use chimera_config::profile::{
     TransformDefinition,
 };
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
+use chimera_core_manager::OperationId;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 
 use crate::{
@@ -385,7 +386,7 @@ impl ProfilesActor {
         ),
         ProfilesError,
     > {
-        let operation = nanoid::nanoid!();
+        let operation = OperationId::generate();
         let participant = state
             .mutations
             .participant(operation.clone(), hints, class)
@@ -673,7 +674,7 @@ impl ProfilesActor {
             .mutations
             .ensure_ready()
             .map_err(|error| ProfilesError::Persist(error.to_string()))?;
-        let operation = nanoid::nanoid!();
+        let operation = OperationId::generate();
         let (mut hints, class) = Self::mutation_hints(&affects, &candidate);
         let prepared = if let Some((path, resource)) = resource {
             let content = match &resource {

@@ -219,6 +219,7 @@ nix = { version = "0.31", features = ["user"] }
 [dev-dependencies]
 mockall = "0.15"
 pretty_assertions = "1.4.0"
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = ["default-meta", "agent"]
