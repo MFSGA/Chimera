@@ -121,6 +121,39 @@ impl LocalRuntimeHost {
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(clash, target_core, endpoint, None)
+            .await
+    }
+
+    pub(crate) async fn reconcile_with_profiles(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        endpoint: &dyn ControlEndpoint,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(
+            clash,
+            target_core,
+            endpoint,
+            Some((profiles, app, staged_content)),
+        )
+        .await
+    }
+
+    async fn reconcile_with_profile_source(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        endpoint: &dyn ControlEndpoint,
+        profile_source: Option<(
+            Arc<chimera_config::profile::Profiles>,
+            chimera_config::application::ChimeraAppConfig,
+            std::collections::BTreeMap<String, String>,
+        )>,
+    ) -> anyhow::Result<()> {
         if self.closed.load(Ordering::Acquire) {
             bail!("the local core control plane is shutting down");
         }
@@ -132,32 +165,46 @@ impl LocalRuntimeHost {
 
         let resolved_ports = self.ports.resolve(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
-        let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with_ports(&clash, target_core, resolved_ports)
+        let generated = match profile_source {
+            Some((profiles, app, staged_content)) => {
+                Config::generate_runtime_output_from_profiles(
+                    &clash,
+                    target_core,
+                    app,
+                    profiles,
+                    resolved_ports,
+                    staged_content,
+                )
                 .await
-            {
-                Ok(output) => (
-                    output.config,
-                    output.exists_keys,
-                    output.postprocessing_output,
-                    output.inspection,
-                ),
-                Err(error) => {
-                    if let Some(transform) =
-                        error.downcast_ref::<crate::enhance::TransformFailureError>()
-                    {
-                        self.lifecycle
-                            .publish_transform_failure(RuntimeTransformFailure {
-                                attempt_revision: revision,
-                                transform_uid: transform.transform_uid.clone(),
-                                scope_uid: transform.scope_uid.clone(),
-                                script_type: transform.script_type,
-                                message: transform.message(),
-                            });
-                    }
-                    return Err(error);
+            }
+            None => {
+                Config::generate_runtime_output_with_ports(&clash, target_core, resolved_ports)
+                    .await
+            }
+        };
+        let (config, exists_keys, transform_output, inspection) = match generated {
+            Ok(output) => (
+                output.config,
+                output.exists_keys,
+                output.postprocessing_output,
+                output.inspection,
+            ),
+            Err(error) => {
+                if let Some(transform) =
+                    error.downcast_ref::<crate::enhance::TransformFailureError>()
+                {
+                    self.lifecycle
+                        .publish_transform_failure(RuntimeTransformFailure {
+                            attempt_revision: revision,
+                            transform_uid: transform.transform_uid.clone(),
+                            scope_uid: transform.scope_uid.clone(),
+                            script_type: transform.script_type,
+                            message: transform.message(),
+                        });
                 }
-            };
+                return Err(error);
+            }
+        };
         self.lifecycle.clear_transform_failure();
 
         let config_bytes = Config::render_runtime_bytes(&config)?;

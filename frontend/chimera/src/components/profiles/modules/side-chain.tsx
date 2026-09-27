@@ -1,4 +1,4 @@
-import { useProfile } from '@chimera/interface';
+import { getRemoteSource, isRemoteItem, useProfile } from '@chimera/interface';
 import { Button, Chip } from '@mui/material';
 import { useAtomValue } from 'jotai';
 import { useMemo, useState } from 'react';
@@ -25,7 +25,7 @@ export const SideChain = () => {
     return profiles.clash?.find((item) => item.uid === currentProfileUid);
   }, [currentProfileUid, profiles.clash]);
 
-  const remoteCount = items.filter((item) => item.type === 'remote').length;
+  const remoteCount = items.filter(isRemoteItem).length;
   const localCount = items.length - remoteCount;
 
   const handleOpenFile = () => {
@@ -37,6 +37,7 @@ export const SideChain = () => {
 
     void view?.();
   };
+  const remoteSource = currentProfile && getRemoteSource(currentProfile);
 
   return (
     <>
@@ -67,7 +68,7 @@ export const SideChain = () => {
           ) : (
             <>
               <div className="mt-2 text-sm opacity-70">
-                {currentProfile?.type === 'remote'
+                {remoteSource
                   ? m.profile_remote_label()
                   : m.profile_local_label()}
               </div>
@@ -78,9 +79,9 @@ export const SideChain = () => {
                 </p>
               )}
 
-              {currentProfile?.type === 'remote' && currentProfile.url && (
+              {remoteSource?.url && (
                 <p className="mt-2 line-clamp-3 text-xs break-all opacity-70">
-                  {currentProfile.url}
+                  {remoteSource.url}
                 </p>
               )}
 

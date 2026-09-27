@@ -1,7 +1,8 @@
 import {
   ProfileTemplate,
   useProfile,
-  type ProfileBuilderRequest_Deserialize,
+  type NewProfileRequest_Deserialize,
+  type ProfileDefinition_Deserialize,
 } from '@chimera/interface';
 import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
 import { useMemo, useState } from 'react';
@@ -35,22 +36,35 @@ const transformRequest = (
   type: ProfileType,
   name: string,
   desc: string | null,
-): { item: ProfileBuilderRequest_Deserialize; fileData: string } => {
+): { request: NewProfileRequest_Deserialize; fileData: string } => {
+  const source = {
+    type: 'local' as const,
+    binding: { type: 'managed' as const, file: 'pending.yaml' },
+  };
+  let definition: ProfileDefinition_Deserialize;
+  let fileData: string;
   if (type === ProfileType.Merge) {
+    definition = { type: 'transform', transform: { type: 'overlay', source } };
+    fileData = ProfileTemplate.merge;
     return {
-      item: { type: 'merge', name, desc },
-      fileData: ProfileTemplate.merge,
+      request: { metadata: { name, desc }, definition },
+      fileData,
     };
   }
 
   const scriptType =
     type === ProfileType.Lua ? ('lua' as const) : ('javascript' as const);
+  definition = {
+    type: 'transform',
+    transform: { type: 'script', source, runtime: scriptType },
+  };
+  fileData =
+    scriptType === 'lua'
+      ? ProfileTemplate.luascript
+      : ProfileTemplate.javascript;
   return {
-    item: { type: 'script', name, desc, script_type: scriptType },
-    fileData:
-      scriptType === 'lua'
-        ? ProfileTemplate.luascript
-        : ProfileTemplate.javascript,
+    request: { metadata: { name, desc }, definition },
+    fileData,
   };
 };
 
@@ -79,14 +93,14 @@ export default function ChainProfileImport() {
     }
 
     try {
-      const { item, fileData } = transformRequest(
+      const { request, fileData } = transformRequest(
         type,
         nextName,
         desc.trim() || null,
       );
       await create.mutateAsync({
         type: 'manual',
-        data: { item, fileData },
+        data: { request, fileData },
       });
       close();
     } catch (cause) {

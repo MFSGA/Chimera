@@ -1,17 +1,25 @@
-import type { ProfileQueryResultItem } from '@chimera/interface';
+import {
+  isConfigItem,
+  isTransformItem,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import { ProfileType } from '../../_modules/consts';
 
 export const isProxyProfile = (profile: ProfileQueryResultItem) =>
-  profile.type === 'local' || profile.type === 'remote';
+  isConfigItem(profile);
 
 export const isJavaScriptProfile = (profile: ProfileQueryResultItem) =>
-  profile.type === 'script' && profile.script_type === 'javascript';
+  isTransformItem(profile) &&
+  profile.transform.type === 'script' &&
+  profile.transform.runtime === 'javascript';
 
 export const isLuaProfile = (profile: ProfileQueryResultItem) =>
-  profile.type === 'script' && profile.script_type === 'lua';
+  isTransformItem(profile) &&
+  profile.transform.type === 'script' &&
+  profile.transform.runtime === 'lua';
 
 export const isMergeProfile = (profile: ProfileQueryResultItem) =>
-  profile.type === 'merge';
+  isTransformItem(profile) && profile.transform.type === 'overlay';
 
 export const categoryProfiles = (items: ProfileQueryResultItem[] = []) => ({
   [ProfileType.Profile]: items.filter(isProxyProfile),

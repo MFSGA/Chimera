@@ -1,9 +1,9 @@
 import {
-  ProfileQueryResultItem,
-  RemoteProfile,
-  RemoteProfileOptionsBuilder,
+  getProfileSource,
+  getRemoteSource,
   useClashConnections,
   useProfile,
+  type ProfileQueryResultItem,
 } from '@chimera/interface';
 import { alpha, cleanDeepClickEvent, cn } from '@chimera/ui';
 import {
@@ -69,11 +69,10 @@ export const ProfileItem = memo(function ProfileItem({
     let progress = 0;
     let total = 0;
     let used = 0;
-    if ('extra' in item && item.extra) {
-      const { download, upload, total: limit } = item.extra;
-
-      total = limit;
-      used = download + upload;
+    const subscription = getRemoteSource(item)?.subscription;
+    if (subscription) {
+      total = subscription.total ?? 0;
+      used = (subscription.download ?? 0) + (subscription.upload ?? 0);
       progress = (used / (total || 1)) * 100;
     }
     return { progress, total, used };
@@ -81,7 +80,9 @@ export const ProfileItem = memo(function ProfileItem({
 
   const { progress, total, used } = calc();
 
-  const isRemote = item.type === 'remote';
+  const remoteSource = getRemoteSource(item);
+  const isRemote = remoteSource !== undefined;
+  const profileSource = getProfileSource(item);
 
   const IconComponent = isRemote ? FilterDrama : InsertDriveFile;
 
@@ -122,22 +123,11 @@ export const ProfileItem = memo(function ProfileItem({
   });
 
   const handleUpdate = useLockFn(async (proxy?: boolean) => {
-    // TODO: define backend serde(option) to move null
-    const selfOption = 'option' in item ? item.option : undefined;
-
-    const options: RemoteProfileOptionsBuilder = {
-      user_agent: null,
-      with_proxy: null,
-      self_proxy: null,
-      update_interval_minutes: 0,
-      ...selfOption,
-    };
-
     void proxy;
 
     try {
       setLoading({ update: true });
-      await item.update?.(options);
+      await item.update?.(null);
     } catch (e) {
       message(m.profile_update_failed() + ' \n ' + formatError(e), {
         title: m.common_error(),
@@ -229,7 +219,7 @@ export const ProfileItem = memo(function ProfileItem({
           onClick={handleSelect}
         >
           <div className="flex items-center justify-between gap-2">
-            <Tooltip title={(item as RemoteProfile).url}>
+            <Tooltip title={remoteSource?.url ?? ''}>
               <Chip
                 className="!pr-2 !pl-2 font-bold"
                 avatar={<IconComponent className="!size-5" color="primary" />}
@@ -251,17 +241,17 @@ export const ProfileItem = memo(function ProfileItem({
             <TextCarousel
               className="flex h-6 w-30 items-center"
               nodes={[
-                !!item.updated && (
+                !!profileSource?.updated_at && (
                   <TimeSpan
                     key="updated"
-                    ts={item.updated}
+                    ts={profileSource.updated_at}
                     k="Subscription Updated At"
                   />
                 ),
-                !!(item as RemoteProfile).extra?.expire && (
+                !!remoteSource?.subscription?.expire && (
                   <TimeSpan
                     key="expire"
-                    ts={(item as RemoteProfile).extra!.expire!}
+                    ts={remoteSource.subscription.expire}
                     k="Subscription Expires In"
                   />
                 ),

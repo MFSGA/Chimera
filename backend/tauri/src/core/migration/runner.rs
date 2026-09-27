@@ -36,9 +36,9 @@ impl Runner {
     }
 
     /// Runs the migration set that remains compatible with the currently
-    /// wired legacy Profile client. Remove this boundary once every Profile
-    /// consumer reads and writes the ref-aligned document through the shared
-    /// client.
+    /// wired legacy Profile client. This is retained only for migration tests;
+    /// production startup uses the ref-aligned Profile document migration.
+    #[cfg(test)]
     pub fn with_paths_before_profile_client_migration(
         paths: PathResolver,
         force: bool,

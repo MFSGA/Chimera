@@ -1,6 +1,7 @@
-import type {
-  NormalizedProfileBuilder,
-  ProfileQueryResultItem,
+import {
+  isConfigItem,
+  isTransformItem,
+  type ProfileQueryResultItem,
 } from '@chimera/interface';
 
 /**
@@ -17,9 +18,7 @@ export function filterProfiles<T extends ProfileQueryResultItem>(items?: T[]) {
    * @param items - Array of items to filter
    * @returns {Array} Filtered array containing only remote and local items
    */
-  const clash = items?.filter(
-    (item) => item.type === 'remote' || item.type === 'local',
-  );
+  const clash = items?.filter(isConfigItem);
 
   /**
    * Filters an array of items to get a chain of either 'merge' type items
@@ -29,9 +28,7 @@ export function filterProfiles<T extends ProfileQueryResultItem>(items?: T[]) {
    * @returns {Array<{ type: string | { script: 'javascript' | 'lua' } }>} A filtered array containing only merge items or items with scripts
    */
   /* todo
-  const chain = items?.filter(
-    (item) => item.type === 'merge' || item.type === 'script',
-  ); */
+  const chain = items?.filter(isTransformItem).filter((item) => item.type === 'transform'); */
 
   return {
     clash,
@@ -39,12 +36,4 @@ export function filterProfiles<T extends ProfileQueryResultItem>(items?: T[]) {
   };
 }
 
-export type ClashProfile = Extract<
-  ProfileQueryResultItem,
-  { type: 'remote' | 'local' }
->;
-
-export type ClashProfileBuilder = Extract<
-  NormalizedProfileBuilder,
-  { type: 'remote' | 'local' }
->;
+export type ClashProfile = Extract<ProfileQueryResultItem, { type: 'config' }>;

@@ -16,21 +16,8 @@ use crate::{
     config::{
         chimera::{self, IVerge},
         clash::ClashInfo,
-        profile::{
-            builder::ProfileBuilder,
-            item::{
-                Profile,
-                local::{LocalProfile, LocalProfileBuilder},
-                merge::MergeProfile,
-                remote::{
-                    RemoteProfile, RemoteProfileBuilder, RemoteProfileImportMode,
-                    RemoteProfileOptions, RemoteProfileOptionsBuilder, SubscriptionInfo,
-                },
-                script::{ScriptProfile, ScriptProfileBuilder},
-                shared::ProfileSharedBuilder,
-            },
-            item_type::{ProfileItemType, ProfileUid, ScriptType},
-        },
+        profile::item::remote::RemoteProfileImportMode,
+        profile::item_type::ProfileUid,
         runtime::{ClashConfigOverrides, PatchClashCoreConfig, PatchRuntimeConfig},
     },
     core::{
@@ -95,182 +82,6 @@ pub enum EditorWindowType {
     CssEditor,
 }
 
-fn deserialize_optional_field<'de, D, T>(
-    deserializer: D,
-) -> std::result::Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    Ok(Some(<Option<T> as serde::Deserialize>::deserialize(
-        deserializer,
-    )?))
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-pub struct ProfileMetadataPatch {
-    pub name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    #[specta(type = Option<Option<String>>)]
-    pub desc: Option<Option<String>>,
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-pub struct RemoteProfileOptionsPatch {
-    #[serde(default, deserialize_with = "deserialize_optional_field")]
-    #[specta(type = Option<Option<String>>)]
-    pub user_agent: Option<Option<String>>,
-    pub with_proxy: Option<bool>,
-    pub self_proxy: Option<bool>,
-    pub update_interval_minutes: Option<u64>,
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProfileDefinition {
-    Config { config: ConfigDefinition },
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ConfigDefinition {
-    File {
-        source: ProfileSource,
-        #[serde(default)]
-        transforms: Vec<ProfileUid>,
-    },
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProfileSource {
-    Remote {
-        file: String,
-        updated_at: Option<usize>,
-        url: url::Url,
-        option: Option<RemoteProfileOptions>,
-        subscription: Option<SubscriptionInfo>,
-    },
-}
-
-#[derive(specta::Type, serde::Serialize)]
-pub struct ProfilesResponse {
-    pub current: Option<ProfileUid>,
-    pub items: Vec<ProfileResponse>,
-    pub valid: Vec<String>,
-    pub global_transforms: Vec<ProfileUid>,
-}
-
-#[derive(specta::Type, serde::Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProfileResponse {
-    Remote {
-        #[serde(flatten)]
-        profile: RemoteProfile,
-    },
-    Local {
-        #[serde(flatten)]
-        profile: LocalProfile,
-    },
-    Merge {
-        #[serde(flatten)]
-        profile: MergeProfile,
-    },
-    Script {
-        #[serde(flatten)]
-        profile: ScriptProfile,
-    },
-}
-
-impl From<crate::config::profile::profiles::Profiles> for ProfilesResponse {
-    fn from(profiles: crate::config::profile::profiles::Profiles) -> Self {
-        let crate::config::profile::profiles::Profiles {
-            current,
-            items,
-            valid,
-            chain,
-        } = profiles;
-        Self {
-            current: current.into_iter().next(),
-            items: items.into_iter().map(ProfileResponse::from).collect(),
-            valid,
-            global_transforms: chain,
-        }
-    }
-}
-
-impl From<Profile> for ProfileResponse {
-    fn from(profile: Profile) -> Self {
-        match profile {
-            Profile::Remote(profile) => Self::Remote { profile },
-            Profile::Local(profile) => Self::Local { profile },
-            Profile::Merge(profile) => Self::Merge { profile },
-            Profile::Script(profile) => Self::Script { profile },
-        }
-    }
-}
-
-#[derive(specta::Type, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ProfileBuilderRequest {
-    Remote {
-        #[serde(flatten)]
-        profile: RemoteProfileBuilder,
-    },
-    Local {
-        #[serde(flatten)]
-        profile: LocalProfileBuilder,
-    },
-    Merge {
-        name: Option<String>,
-        desc: Option<String>,
-    },
-    Script {
-        name: Option<String>,
-        desc: Option<String>,
-        #[serde(default)]
-        script_type: ScriptType,
-    },
-}
-
-impl From<ProfileBuilderRequest> for ProfileBuilder {
-    fn from(request: ProfileBuilderRequest) -> Self {
-        match request {
-            ProfileBuilderRequest::Remote { profile } => Self::Remote(profile),
-            ProfileBuilderRequest::Local { profile } => Self::Local(profile),
-            ProfileBuilderRequest::Merge { name, desc } => {
-                let mut shared = ProfileSharedBuilder::default();
-                if let Some(name) = name {
-                    shared.name(name);
-                }
-                if let Some(desc) = desc {
-                    shared.desc(desc);
-                }
-                let mut builder =
-                    crate::config::profile::item::merge::MergeProfileBuilder::default();
-                builder.shared(shared);
-                Self::Merge(builder)
-            }
-            ProfileBuilderRequest::Script {
-                name,
-                desc,
-                script_type,
-            } => {
-                let mut shared = ProfileSharedBuilder::default();
-                if let Some(name) = name {
-                    shared.name(name);
-                }
-                if let Some(desc) = desc {
-                    shared.desc(desc);
-                }
-                let mut builder = ScriptProfileBuilder::default();
-                builder.shared(shared).script_type(script_type);
-                Self::Script(builder)
-            }
-        }
-    }
-}
-
 #[derive(specta::Type, serde::Serialize)]
 pub struct GetSysProxyResponse {
     pub enable: bool,
@@ -328,8 +139,11 @@ impl specta::Type for IpcError {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn get_profiles(client: State<'_, ChimeraClient>) -> Result<ProfilesResponse> {
-    Ok(client.get_profiles().await?.into())
+pub async fn get_profiles(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::profile::Profiles> {
+    let profiles = client.get_profiles()?;
+    Ok((*profiles).clone())
 }
 
 #[tauri::command]
@@ -439,9 +253,10 @@ pub async fn import_profile(
     client: State<'_, ChimeraClient>,
     url: String,
     name: Option<String>,
-    option: Option<RemoteProfileOptionsBuilder>,
-) -> Result<MutationOutcome<ProfileUid>> {
-    import_profile_inner(&client, url, name, option, RemoteProfileImportMode::Default).await
+    option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
+) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
+    let url = url::Url::parse(&url).context("failed to parse the url")?;
+    Ok(client.import_profile(url, name, option).await?)
 }
 
 #[tauri::command]
@@ -450,38 +265,16 @@ pub async fn import_profile_with_mode(
     client: State<'_, ChimeraClient>,
     url: String,
     name: Option<String>,
-    option: Option<RemoteProfileOptionsBuilder>,
+    mut option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
     mode: RemoteProfileImportMode,
-) -> Result<MutationOutcome<ProfileUid>> {
-    import_profile_inner(&client, url, name, option, mode).await
-}
-
-async fn import_profile_inner(
-    client: &ChimeraClient,
-    url: String,
-    name: Option<String>,
-    option: Option<RemoteProfileOptionsBuilder>,
-    mode: RemoteProfileImportMode,
-) -> Result<MutationOutcome<ProfileUid>> {
+) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
-    let mut builder = RemoteProfileBuilder::default();
-    let (uid, prepared_file) = client.reserve_managed_profile_identity(&ProfileItemType::Remote)?;
-    builder.assign_managed_identity(uid);
-    builder.url(url);
-    if let Some(name) = name {
-        builder.set_name(name);
+    if matches!(mode, RemoteProfileImportMode::Direct) {
+        let patch = option.get_or_insert_with(Default::default);
+        patch.with_proxy = Some(false);
+        patch.self_proxy = Some(false);
     }
-    if let Some(option) = option {
-        builder.option(option.clone());
-    }
-    let prepared = builder
-        .build_prepared_with_mode(mode)
-        .await
-        .context("failed to build a remote profile")?;
-    let (profile, content) = prepared.into_parts();
-    Ok(client
-        .commit_new_profile(profile.into(), prepared_file, Some(content))
-        .await?)
+    Ok(client.import_profile(url, name, option).await?)
 }
 
 #[tauri::command]
@@ -491,7 +284,9 @@ pub async fn view_profile(
     client: State<'_, ChimeraClient>,
     uid: String,
 ) -> Result {
-    let path = client.get_profile_materialized_path(uid).await?;
+    let path = client
+        .profile_path(chimera_config::profile::ProfileId(uid))
+        .await?;
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
     }
@@ -561,7 +356,12 @@ pub async fn reorder_profile(
     active_id: ProfileUid,
     over_id: ProfileUid,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.reorder_profile(active_id, over_id).await?)
+    Ok(client
+        .reorder_profile(
+            chimera_config::profile::ProfileId(active_id),
+            chimera_config::profile::ProfileId(over_id),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -570,7 +370,13 @@ pub async fn reorder_profiles_by_list(
     client: State<'_, ChimeraClient>,
     list: Vec<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.reorder_profiles_by_list(list).await?)
+    Ok(client
+        .reorder_profiles_by_list(
+            list.into_iter()
+                .map(chimera_config::profile::ProfileId)
+                .collect(),
+        )
+        .await?)
 }
 
 #[tauri::command]
@@ -579,7 +385,9 @@ pub async fn activate_profile(
     client: State<'_, ChimeraClient>,
     uid: Option<ProfileUid>,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.activate_profile(uid).await?)
+    Ok(client
+        .activate_profile(uid.map(chimera_config::profile::ProfileId))
+        .await?)
 }
 
 #[tauri::command]
@@ -593,21 +401,11 @@ pub async fn set_profile_valid_fields(
 
 #[tauri::command]
 #[specta::specta]
-pub async fn set_profile_transform_chain(
+pub async fn set_global_transforms(
     client: State<'_, ChimeraClient>,
-    uid: ProfileUid,
-    transforms: Vec<ProfileUid>,
+    ids: Vec<chimera_config::profile::ProfileId>,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.set_profile_transform_chain(uid, transforms).await?)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn set_global_transform_chain(
-    client: State<'_, ChimeraClient>,
-    transforms: Vec<ProfileUid>,
-) -> Result<MutationOutcome<()>> {
-    Ok(client.set_global_transform_chain(transforms).await?)
+    Ok(client.set_global_transforms(ids).await?)
 }
 
 #[tauri::command]
@@ -615,10 +413,10 @@ pub async fn set_global_transform_chain(
 pub async fn patch_profile_metadata(
     client: State<'_, ChimeraClient>,
     uid: ProfileUid,
-    patch: ProfileMetadataPatch,
+    patch: chimera_config::profile::ProfileMetadataPatch,
 ) -> Result<MutationOutcome<()>> {
     Ok(client
-        .patch_profile_metadata(uid, patch.name, patch.desc)
+        .patch_profile_metadata(chimera_config::profile::ProfileId(uid), patch)
         .await?)
 }
 
@@ -627,16 +425,10 @@ pub async fn patch_profile_metadata(
 pub async fn patch_remote_profile_options(
     client: State<'_, ChimeraClient>,
     uid: ProfileUid,
-    patch: RemoteProfileOptionsPatch,
+    patch: chimera_config::profile::RemoteProfileOptionsPatch,
 ) -> Result<MutationOutcome<()>> {
     Ok(client
-        .patch_remote_profile_options(
-            uid,
-            patch.user_agent,
-            patch.with_proxy,
-            patch.self_proxy,
-            patch.update_interval_minutes,
-        )
+        .patch_remote_profile_options(chimera_config::profile::ProfileId(uid), patch)
         .await?)
 }
 
@@ -645,32 +437,10 @@ pub async fn patch_remote_profile_options(
 pub async fn replace_profile_definition(
     client: State<'_, ChimeraClient>,
     uid: ProfileUid,
-    definition: ProfileDefinition,
+    definition: chimera_config::profile::ProfileDefinition,
 ) -> Result<MutationOutcome<()>> {
-    let ProfileDefinition::Config {
-        config:
-            ConfigDefinition::File {
-                source:
-                    ProfileSource::Remote {
-                        file,
-                        updated_at,
-                        url,
-                        option,
-                        subscription,
-                    },
-                transforms,
-            },
-    } = definition;
     Ok(client
-        .replace_remote_profile_definition(
-            uid,
-            file,
-            updated_at,
-            url,
-            option,
-            subscription,
-            transforms,
-        )
+        .replace_profile_definition(chimera_config::profile::ProfileId(uid), definition)
         .await?)
 }
 
@@ -1174,20 +944,10 @@ pub async fn inspect_updater(
 pub async fn update_profile(
     client: State<'_, ChimeraClient>,
     uid: String,
-    option: Option<RemoteProfileOptionsBuilder>,
-) -> Result<MutationOutcome<()>> {
-    Ok(client.refresh_profile(uid, option).await?)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub async fn patch_profile(
-    client: State<'_, ChimeraClient>,
-    uid: String,
-    profile: ProfileBuilderRequest,
+    option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client
-        .patch_profile(uid, ProfileBuilder::from(profile))
+        .update_profile(chimera_config::profile::ProfileId(uid), option)
         .await?)
 }
 
@@ -1197,7 +957,9 @@ pub async fn delete_profile(
     client: State<'_, ChimeraClient>,
     uid: String,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.delete_profile(uid).await?)
+    Ok(client
+        .delete_profile(chimera_config::profile::ProfileId(uid))
+        .await?)
 }
 
 #[tauri::command]
@@ -1206,7 +968,9 @@ pub async fn read_profile_file(
     client: State<'_, ChimeraClient>,
     uid: ProfileUid,
 ) -> Result<String> {
-    Ok(client.read_profile_file(uid).await?)
+    Ok(client
+        .read_profile_file(chimera_config::profile::ProfileId(uid))
+        .await?)
 }
 
 #[tauri::command]
@@ -1216,7 +980,9 @@ pub async fn save_profile_file(
     uid: ProfileUid,
     file_data: String,
 ) -> Result<MutationOutcome<()>> {
-    Ok(client.save_profile_file(uid, file_data).await?)
+    Ok(client
+        .save_profile_file(chimera_config::profile::ProfileId(uid), file_data)
+        .await?)
 }
 
 /// create a new profile
@@ -1224,57 +990,10 @@ pub async fn save_profile_file(
 #[specta::specta]
 pub async fn create_profile(
     client: State<'_, ChimeraClient>,
-    item: ProfileBuilderRequest,
+    request: crate::state::profiles::NewProfileRequest,
     file_data: Option<String>,
-) -> Result<MutationOutcome<ProfileUid>> {
-    let mut item = ProfileBuilder::from(item);
-    let kind = item.kind();
-    let (uid, prepared_file) = client.reserve_managed_profile_identity(&kind)?;
-    item.assign_managed_identity(uid);
-    let (profile, materialized_content): (Profile, Option<String>) = match item {
-        ProfileBuilder::Remote(mut builder) => {
-            let prepared = builder
-                .build_prepared()
-                .await
-                .context("failed to build remote profile")?;
-            let (profile, content) = prepared.into_parts();
-            (profile.into(), Some(content))
-        }
-        ProfileBuilder::Local(builder) => (
-            builder
-                .build()
-                .context("failed to build local profile")?
-                .into(),
-            file_data.filter(|data| !data.is_empty()),
-        ),
-        ProfileBuilder::Merge(builder) => {
-            let content = file_data
-                .filter(|data| !data.is_empty())
-                .ok_or_else(|| anyhow!("merge profile content cannot be empty"))?;
-            (
-                builder
-                    .build()
-                    .context("failed to build merge profile")?
-                    .into(),
-                Some(content),
-            )
-        }
-        ProfileBuilder::Script(builder) => {
-            let content = file_data
-                .filter(|data| !data.is_empty())
-                .ok_or_else(|| anyhow!("script profile content cannot be empty"))?;
-            (
-                builder
-                    .build()
-                    .context("failed to build script profile")?
-                    .into(),
-                Some(content),
-            )
-        }
-    };
-    Ok(client
-        .commit_new_profile(profile, prepared_file, materialized_content)
-        .await?)
+) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
+    Ok(client.create_profile(request, file_data).await?)
 }
 
 #[tauri::command]

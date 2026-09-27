@@ -152,6 +152,7 @@ pub struct AgentTelemetrySnapshot {
 pub enum AgentProbeCode {
     CoreStatusUnavailable,
     CoreConfigUnavailable,
+    ProfilesUnavailable,
     SystemProxyUnavailable,
     ServiceStatusUnavailable,
     TelemetryUnavailable,

@@ -734,17 +734,19 @@ enum CoreLifecycleClientInner {
         status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
+        core: Arc<dyn CoreLifecyclePort>,
     },
     #[cfg(test)]
     Direct {
         workflow: tokio::sync::Mutex<CoreLifecycleWorkflow>,
         service_status: tokio::sync::watch::Receiver<ServiceHostStatus>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
+        core: Arc<dyn CoreLifecyclePort>,
     },
 }
 
 #[derive(Clone)]
-pub(super) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
+pub(crate) struct CoreLifecycleClient(Arc<CoreLifecycleClientInner>);
 
 impl CoreLifecycleClient {
     #[cfg(test)]
@@ -789,11 +791,33 @@ impl CoreLifecycleClient {
         installer: Arc<dyn ports::BinaryInstaller>,
         service: Arc<dyn ports::ServiceLifecyclePort>,
     ) -> anyhow::Result<Self> {
+        Self::spawn_with_profiles(
+            core,
+            application,
+            clash,
+            None,
+            runtime_paths,
+            installer,
+            service,
+        )
+        .await
+    }
+
+    pub(super) async fn spawn_with_profiles(
+        core: Arc<dyn CoreLifecyclePort>,
+        application: ApplicationClient,
+        clash: ClashConfigClient,
+        profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
+        runtime_paths: RuntimePaths,
+        installer: Arc<dyn ports::BinaryInstaller>,
+        service: Arc<dyn ports::ServiceLifecyclePort>,
+    ) -> anyhow::Result<Self> {
         let recovery_notify = core.recovery_notify();
         let workflow = CoreLifecycleWorkflow::new(
             application,
             clash,
-            core,
+            profiles,
+            core.clone(),
             installer,
             runtime_paths,
             service.clone(),
@@ -830,6 +854,7 @@ impl CoreLifecycleClient {
             status,
             service_status: service_status_rx,
             service,
+            core,
         }));
         #[cfg(not(test))]
         client.request_service_status_refresh();
@@ -852,13 +877,15 @@ impl CoreLifecycleClient {
             workflow: tokio::sync::Mutex::new(CoreLifecycleWorkflow::new(
                 application,
                 clash,
-                core,
+                None,
+                core.clone(),
                 Arc::new(FsBinaryInstaller),
                 runtime_paths,
                 service.clone(),
             )),
             service_status: service_status_rx,
             service,
+            core,
         }))
     }
 
@@ -1044,6 +1071,26 @@ impl CoreLifecycleClient {
 
     pub(super) async fn reconcile(&self) -> anyhow::Result<()> {
         self.execute(Command::Reconcile).await
+    }
+
+    pub(crate) async fn reconcile_profiles(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.execute(Command::ReconcileProfiles {
+            profiles,
+            staged_content,
+        })
+        .await
+    }
+
+    pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { core, .. } => core.status().await,
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { core, .. } => core.status().await,
+        }
     }
 
     pub(super) async fn select_core(

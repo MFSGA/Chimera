@@ -398,7 +398,7 @@ impl Drop for PendingProfileRefresh {
 }
 
 impl ChimeraClient {
-    pub(crate) async fn get_profiles(&self) -> anyhow::Result<Profiles> {
+    pub(crate) async fn legacy_get_profiles(&self) -> anyhow::Result<Profiles> {
         self.inner.profiles.snapshot()
     }
 
@@ -474,7 +474,7 @@ impl ChimeraClient {
         self.inner.profile_files.resolve_path(profile.file()).await
     }
 
-    pub(crate) async fn read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
+    pub(crate) async fn legacy_read_profile_file(&self, uid: ProfileUid) -> anyhow::Result<String> {
         let profiles = self.inner.profiles.snapshot()?;
         let profile = profiles.get_item(&uid)?;
         let content = self.inner.profile_files.read(profile.file()).await?;
@@ -502,7 +502,7 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn patch_profile_metadata(
+    pub(crate) async fn legacy_patch_profile_metadata(
         &self,
         uid: ProfileUid,
         name: Option<String>,
@@ -511,7 +511,7 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn patch_remote_profile_options(
+    pub(crate) async fn legacy_patch_remote_profile_options(
         &self,
         uid: ProfileUid,
         user_agent: Option<Option<String>>,
@@ -553,14 +553,14 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn delete_profile(
+    pub(crate) async fn legacy_delete_profile(
         &self,
         uid: ProfileUid,
     ) -> anyhow::Result<MutationOutcome<()>> {
         todo!()
     }
 
-    pub(crate) async fn reorder_profile(
+    pub(crate) async fn legacy_reorder_profile(
         &self,
         active_id: ProfileUid,
         over_id: ProfileUid,
@@ -568,7 +568,7 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn reorder_profiles_by_list(
+    pub(crate) async fn legacy_reorder_profiles_by_list(
         &self,
         list: Vec<ProfileUid>,
     ) -> anyhow::Result<MutationOutcome<()>> {
@@ -596,14 +596,14 @@ impl ChimeraClient {
         }
     }
 
-    pub(crate) async fn activate_profile(
+    pub(crate) async fn legacy_activate_profile(
         &self,
         uid: Option<ProfileUid>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         todo!()
     }
 
-    pub(crate) async fn set_profile_valid_fields(
+    pub(crate) async fn legacy_set_profile_valid_fields(
         &self,
         fields: Vec<String>,
     ) -> anyhow::Result<MutationOutcome<()>> {
@@ -632,7 +632,7 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn save_profile_file(
+    pub(crate) async fn legacy_save_profile_file(
         &self,
         uid: ProfileUid,
         file_data: String,

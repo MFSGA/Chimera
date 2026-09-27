@@ -1,4 +1,4 @@
-import { useProfile } from '@chimera/interface';
+import { getRemoteSource, useProfile } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
 import { Button } from '@/components/ui/button';
@@ -38,7 +38,7 @@ function RouteComponent() {
       </DetailHeader>
 
       <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-4">
-        {profile.type === 'remote' && <SubscriptionCard profile={profile} />}
+        {getRemoteSource(profile) && <SubscriptionCard profile={profile} />}
         <ActionCard type={type} profile={profile} />
       </div>
     </div>

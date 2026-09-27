@@ -37,11 +37,15 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, specta::Type)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum MutationOutcome<T> {
-    Applied {
+    Committed {
         value: T,
+        commits: Vec<CommitReceipt>,
+        notifications_pending: bool,
     },
     CommittedDegraded {
         value: T,
+        commits: Vec<CommitReceipt>,
+        notifications_pending: bool,
         degradations: Vec<Degradation>,
     },
 }
@@ -49,36 +53,83 @@ pub enum MutationOutcome<T> {
 impl<T> MutationOutcome<T> {
     pub fn from_parts(value: T, degradations: Vec<Degradation>) -> Self {
         if degradations.is_empty() {
-            Self::Applied { value }
+            Self::Committed {
+                value,
+                commits: Vec::new(),
+                notifications_pending: true,
+            }
         } else {
             Self::CommittedDegraded {
                 value,
+                commits: Vec::new(),
+                notifications_pending: true,
                 degradations,
             }
         }
     }
 
+    pub fn with_commit(mut self, receipt: CommitReceipt) -> Self {
+        match &mut self {
+            Self::Committed { commits, .. } | Self::CommittedDegraded { commits, .. } => {
+                commits.push(receipt)
+            }
+        }
+        self
+    }
+
+    pub fn value(&self) -> &T {
+        match self {
+            Self::Committed { value, .. } | Self::CommittedDegraded { value, .. } => value,
+        }
+    }
+
+    pub fn into_value(self) -> T {
+        self.into_parts().0
+    }
+
+    pub fn append_commit_result(self, result: MutationOutcome<()>) -> Self {
+        let commits = match &result {
+            MutationOutcome::Committed { commits, .. }
+            | MutationOutcome::CommittedDegraded { commits, .. } => commits.clone(),
+        };
+        let mut outcome = self.extend_degradations(result.into_parts().1);
+        for commit in commits {
+            outcome = outcome.with_commit(commit);
+        }
+        outcome
+    }
+
     pub fn degradations(&self) -> &[Degradation] {
         match self {
-            Self::Applied { .. } => &[],
+            Self::Committed { .. } => &[],
             Self::CommittedDegraded { degradations, .. } => degradations,
         }
     }
 
-    fn into_parts(self) -> (T, Vec<Degradation>) {
+    pub fn into_parts(self) -> (T, Vec<Degradation>) {
         match self {
-            Self::Applied { value } => (value, Vec::new()),
+            Self::Committed { value, .. } => (value, Vec::new()),
             Self::CommittedDegraded {
                 value,
                 degradations,
+                ..
             } => (value, degradations),
         }
     }
 
-    pub(super) fn extend_degradations(self, extra: Vec<Degradation>) -> Self {
+    pub fn extend_degradations(self, extra: Vec<Degradation>) -> Self {
+        let commits = match &self {
+            Self::Committed { commits, .. } | Self::CommittedDegraded { commits, .. } => {
+                commits.clone()
+            }
+        };
         let (value, mut degradations) = self.into_parts();
         degradations.extend(extra);
-        Self::from_parts(value, degradations)
+        commits
+            .into_iter()
+            .fold(Self::from_parts(value, degradations), |outcome, receipt| {
+                outcome.with_commit(receipt)
+            })
     }
 }
 

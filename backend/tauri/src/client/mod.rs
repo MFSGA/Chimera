@@ -11,18 +11,20 @@ pub mod convergence;
 pub(crate) mod core_lifecycle;
 pub(crate) mod effects;
 mod event_sink;
+#[cfg(test)]
 mod legacy_profiles;
 pub(crate) mod ports;
+mod profile_api;
 pub(crate) mod profiles;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
 mod system_dns;
 
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex as StdMutex},
-};
+use std::sync::Arc;
+
+#[cfg(test)]
+use std::{collections::HashSet, sync::Mutex as StdMutex};
 
 #[allow(unused_imports)]
 pub(crate) use self::core_lifecycle::LegacyCoreBridge;
@@ -32,7 +34,6 @@ use self::{
     clash_config::ClashConfigClient,
     core_lifecycle::{CoreLifecycleClient, CoreLifecyclePort},
     event_sink::UiEventSink,
-    legacy_profiles::{ProfileFsPort, ProfilesReadPort, ProfilesWritePort},
     session_state::SessionStateClient,
     system_dns::SystemDnsCache,
 };
@@ -40,17 +41,26 @@ use self::{
 pub(crate) use self::{
     core_lifecycle::RuntimeTransformDiagnostics,
     event_sink::{LegacyUiEventSink, NoopUiEventSink, TauriUiEventSink},
-    legacy_profiles::{LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort},
     ports::SessionPortResolver,
     runtime_inspection::{RuntimeInspection, RuntimeInspectionContent},
     system_dns::OsSystemDnsCache,
 };
 
+#[cfg(test)]
+pub(crate) use self::legacy_profiles::{
+    LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
+    ProfilesReadPort, ProfilesWritePort,
+};
+
 use crate::{
-    config::profile::item_type::ProfileUid,
+    service::profile_file::ProfileFileService,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
+    state::mutation::MutationCoordinator,
     utils::path::PathResolver,
 };
+
+#[cfg(test)]
+use crate::config::profile::item_type::ProfileUid;
 
 pub use runtime::RuntimePaths;
 
@@ -68,8 +78,11 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
 
+    #[cfg(test)]
     pub(crate) profiles: Arc<dyn ProfilesReadPort>,
+    #[cfg(test)]
     pub(crate) profile_files: Arc<dyn ProfileFsPort>,
+    pub(crate) profile_service: Arc<ProfileFileService>,
 
     // pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
@@ -130,12 +143,18 @@ struct ChimeraClientInner {
     clash_config: ClashConfigClient,
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
+    typed_profiles: Option<profiles::ProfilesClient>,
+    #[cfg(test)]
     profiles: Arc<dyn ProfilesReadPort>,
+    #[cfg(test)]
     profile_files: Arc<dyn ProfileFsPort>,
+    profile_service: Arc<ProfileFileService>,
     // profile_writes: Arc<dyn ProfilesWritePort>,
     system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
+    #[cfg(test)]
     profile_commit: tokio::sync::Mutex<()>,
+    #[cfg(test)]
     pending_refreshes: StdMutex<HashSet<ProfileUid>>,
 }
 
@@ -147,8 +166,11 @@ impl ChimeraClient {
             bridges,
             core,
             service,
+            #[cfg(test)]
             profiles,
+            #[cfg(test)]
             profile_files,
+            profile_service,
             // profile_writes,
             system_dns,
             ui_sink,
@@ -158,23 +180,35 @@ impl ChimeraClient {
             &bridges,
             core.clone(),
         ))?;
-        let runtime_paths_for_setup = runtime_paths.clone();
-
+        let mutations = MutationCoordinator::pending();
+        let typed_profiles = tauri::async_runtime::block_on(profiles::ProfilesClient::new(
+            mutations.clone(),
+            utf8_path(paths.profiles_path())?,
+            profile_service.clone(),
+            profile_service.clone(),
+            profile_service.clone(),
+        ))?;
         let core_lifecycle =
-            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_service(
+            tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles(
                 core.clone(),
                 typed.application.clone(),
                 typed.clash_config.clone(),
+                Some(typed_profiles.snapshot_handle()),
                 runtime_paths,
                 Arc::new(core_lifecycle::FsBinaryInstaller),
                 service,
             ))?;
+        mutations.connect(core_lifecycle.clone());
         Ok(Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
             core,
+            #[cfg(test)]
             profiles,
+            #[cfg(test)]
             profile_files,
+            profile_service,
+            Some(typed_profiles),
             // profile_writes,
             system_dns,
             ui_sink,
@@ -205,8 +239,10 @@ impl ChimeraClient {
         typed: TypedConfigClients,
         core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
-        profiles: Arc<dyn ProfilesReadPort>,
-        profile_files: Arc<dyn ProfileFsPort>,
+        #[cfg(test)] profiles: Arc<dyn ProfilesReadPort>,
+        #[cfg(test)] profile_files: Arc<dyn ProfileFsPort>,
+        profile_service: Arc<ProfileFileService>,
+        typed_profiles: Option<profiles::ProfilesClient>,
         // profile_writes: Arc<dyn ProfilesWritePort>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
@@ -217,12 +253,18 @@ impl ChimeraClient {
             clash_config: typed.clash_config,
             core_lifecycle,
             core,
+            typed_profiles,
+            #[cfg(test)]
             profiles,
+            #[cfg(test)]
             profile_files,
+            profile_service,
             // profile_writes,
             system_dns,
             ui_sink,
+            #[cfg(test)]
             profile_commit: tokio::sync::Mutex::new(()),
+            #[cfg(test)]
             pending_refreshes: StdMutex::new(HashSet::new()),
         };
         Self {
@@ -749,7 +791,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(outcome, MutationOutcome::Applied { .. }));
+        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
         assert_eq!(*patch_commits.lock().unwrap(), 1);
         assert_eq!(
             events.lock().unwrap().as_slice(),
@@ -865,10 +907,10 @@ mod tests {
         };
         let (client, events) = recording_client_with_profiles(profiles, false);
         let outcome = client
-            .save_profile_file("l-active".into(), "proxies: []\n".into())
+            .legacy_save_profile_file("l-active".into(), "proxies: []\n".into())
             .await
             .unwrap();
-        assert!(matches!(outcome, MutationOutcome::Applied { .. }));
+        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["rebuild", "refresh-ui", "profile-change"]
@@ -884,10 +926,10 @@ mod tests {
         };
         let (client, events) = recording_client_with_profiles(profiles, false);
         let outcome = client
-            .save_profile_file("l-idle".into(), "proxies: []\n".into())
+            .legacy_save_profile_file("l-idle".into(), "proxies: []\n".into())
             .await
             .unwrap();
-        assert!(matches!(outcome, MutationOutcome::Applied { .. }));
+        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
         assert!(events.lock().unwrap().is_empty());
     }
 
@@ -913,7 +955,7 @@ mod tests {
         let applied = MutationOutcome::from_parts((), Vec::new());
         assert_eq!(
             serde_json::to_string(&applied).unwrap(),
-            r#"{"status":"applied","value":null}"#
+            r#"{"status":"committed","value":null,"commits":[],"notifications_pending":true}"#
         );
         let degraded = MutationOutcome::from_parts(
             (),

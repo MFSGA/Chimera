@@ -1,4 +1,8 @@
-import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import {
+  getRemoteSource,
+  useProfile,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import RuleSettingsRounded from '~icons/material-symbols/rule-settings-rounded';
 import dayjs from 'dayjs';
@@ -27,16 +31,18 @@ export default function SubscriptionCard({
   profile: ProfileQueryResultItem;
 }) {
   const { update } = useProfile();
+  const remote = getRemoteSource(profile);
   const usage = useMemo(() => {
-    if (profile.type !== 'remote') return { progress: 0, total: 0, used: 0 };
-    const total = profile.extra?.total ?? 0;
-    const used = (profile.extra?.download ?? 0) + (profile.extra?.upload ?? 0);
+    if (!remote) return { progress: 0, total: 0, used: 0 };
+    const total = remote.subscription?.total ?? 0;
+    const used =
+      (remote.subscription?.download ?? 0) + (remote.subscription?.upload ?? 0);
     return {
       total,
       used,
       progress: total > 0 ? clampPercentage((used / total) * 100) : 0,
     };
-  }, [profile]);
+  }, [remote]);
 
   const task = useBlockTask(
     `update-remote-profile-${profile.uid}`,
@@ -53,13 +59,13 @@ export default function SubscriptionCard({
   );
   const refresh = useLockFn(task.execute);
 
-  if (profile.type !== 'remote') return null;
+  if (!remote) return null;
 
-  const updatedAt = profile.updated || null;
-  const expire = profile.extra?.expire || null;
+  const updatedAt = remote.updated_at || null;
+  const expire = remote.subscription?.expire || null;
   const nextUpdate =
-    updatedAt && profile.option.update_interval_minutes
-      ? updatedAt + profile.option.update_interval_minutes * 60
+    updatedAt && remote.option.update_interval_minutes
+      ? updatedAt + remote.option.update_interval_minutes * 60
       : null;
 
   return (

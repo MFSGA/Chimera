@@ -1,4 +1,6 @@
 import {
+  isConfigItem,
+  isTransformItem,
   useProfile,
   useRuntimeTransformDiagnostics,
   type LogSpan,
@@ -29,11 +31,17 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
 const isTransformProfile = (profile: ProfileQueryResultItem) =>
-  profile.type === 'merge' || profile.type === 'script';
+  isTransformItem(profile);
 
 const transformTypeLabel = (profile: ProfileQueryResultItem) => {
-  if (profile.type === 'merge') return m.profile_merge_label();
-  if (profile.type === 'script' && profile.script_type === 'lua') {
+  if (isTransformItem(profile) && profile.transform.type === 'overlay') {
+    return m.profile_merge_label();
+  }
+  if (
+    isTransformItem(profile) &&
+    profile.transform.type === 'script' &&
+    profile.transform.runtime === 'lua'
+  ) {
     return m.profile_lua_label();
   }
   return m.profile_javascript_label();
@@ -84,7 +92,7 @@ export default function TransformChainEditor({
   profile,
   children,
 }: TransformChainEditorProps) {
-  const { query, setTransformChain, setGlobalTransformChain } = useProfile();
+  const { query, replaceDefinition, setGlobalTransforms } = useProfile();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
   const diagnostics = useRuntimeTransformDiagnostics(open);
@@ -99,8 +107,8 @@ export default function TransformChainEditor({
   );
   const sourceChain = useMemo(() => {
     if (!profile) return query.data?.global_transforms ?? [];
-    if (profile.type !== 'local' && profile.type !== 'remote') return [];
-    return profile.chain ?? [];
+    if (!isConfigItem(profile)) return [];
+    return profile.config.transforms ?? [];
   }, [profile, query.data?.global_transforms]);
   const available = transforms.filter((item) => !draft.includes(item.uid));
   const runtimeLogsByUid = useMemo(() => {
@@ -128,12 +136,16 @@ export default function TransformChainEditor({
     `update-transform-chain-${profile?.uid ?? 'global'}`,
     async () => {
       try {
-        const outcome = profile
-          ? await setTransformChain.mutateAsync({
-              uid: profile.uid,
-              transforms: draft,
-            })
-          : await setGlobalTransformChain.mutateAsync(draft);
+        const outcome =
+          profile && isConfigItem(profile)
+            ? await replaceDefinition.mutateAsync({
+                uid: profile.uid,
+                definition: {
+                  type: 'config',
+                  config: { ...profile.config, transforms: draft },
+                },
+              })
+            : await setGlobalTransforms.mutateAsync(draft);
         await diagnostics.refetch();
         if (outcome?.status !== 'committed_degraded') {
           setOpen(false);

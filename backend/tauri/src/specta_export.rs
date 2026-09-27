@@ -1,190 +1,20 @@
 //! Single source of truth for runtime command registration and TypeScript bindings.
 
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-use std::{fs, io, path::Path};
+use std::{io, path::Path};
 
 use tauri_specta::{collect_commands, collect_events};
 
 #[cfg(feature = "agent")]
 use crate::features;
 
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const GENERATED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
-    typedError<ProfilesResponse_Serialize, string>(
-      __TAURI_INVOKE('get_profiles'),
-    ),"#;
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const FLATTENED_GET_PROFILES_BINDING: &str = r#"  getProfiles: () =>
-    typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),"#;
-
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const GENERATED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
-  | ({ type: 'remote'; profile: RemoteProfileBuilder } & {
-      desc?: never;
-      name?: never;
-      script_type?: never;
-    })
-  | ({ type: 'local'; profile: LocalProfileBuilder_Deserialize } & {
-      desc?: never;
-      name?: never;
-      script_type?: never;
-    })
-  | ({ type: 'merge'; name: string | null; desc: string | null } & {
-      profile?: never;
-      script_type?: never;
-    })
-  | ({
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type?: ScriptType;
-    } & { profile?: never });
-
-export type ProfileBuilderRequest_Serialize =
-  | ({ type: 'remote'; profile: RemoteProfileBuilder } & {
-      desc?: never;
-      name?: never;
-      script_type?: never;
-    })
-  | ({ type: 'local'; profile: LocalProfileBuilder_Serialize } & {
-      desc?: never;
-      name?: never;
-      script_type?: never;
-    })
-  | ({ type: 'merge'; name: string | null; desc: string | null } & {
-      profile?: never;
-      script_type?: never;
-    })
-  | ({
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type: ScriptType;
-    } & { profile?: never });"#;
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const FLATTENED_PROFILE_BUILDER_BINDING: &str = r#"export type ProfileBuilderRequest_Deserialize =
-  | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type?: ScriptType;
-    };
-
-export type ProfileBuilderRequest_Serialize =
-  | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type: ScriptType;
-    };"#;
-
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const GENERATED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
-  ProfileResponse_Serialize | ProfileResponse_Deserialize;
-
-export type ProfileResponse_Deserialize =
-  | { type: 'remote'; profile: RemoteProfile_Deserialize }
-  | { type: 'local'; profile: LocalProfile_Deserialize }
-  | { type: 'merge'; profile: MergeProfile }
-  | { type: 'script'; profile: ScriptProfile };
-
-export type ProfileResponse_Serialize =
-  | { type: 'remote'; profile: RemoteProfile_Serialize }
-  | { type: 'local'; profile: LocalProfile_Serialize }
-  | { type: 'merge'; profile: MergeProfile }
-  | { type: 'script'; profile: ScriptProfile };"#;
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const FLATTENED_PROFILE_RESPONSE_BINDING: &str = r#"export type ProfileResponse =
-  | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize)
-  | ({ type: 'merge' } & MergeProfile)
-  | ({ type: 'script' } & ScriptProfile);"#;
-
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const GENERATED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse =
-  ProfilesResponse_Serialize | ProfilesResponse_Deserialize;
-
-export type ProfilesResponse_Deserialize = {
-  current: string | null;
-  items: ProfileResponse_Deserialize[];
-  valid: string[];
-  global_transforms: string[];
-};
-
-export type ProfilesResponse_Serialize = {
-  current: string | null;
-  items: ProfileResponse_Serialize[];
-  valid: string[];
-  global_transforms: string[];
-};"#;
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-const FLATTENED_PROFILES_RESPONSE_BINDING: &str = r#"export type ProfilesResponse = {
-  current: string | null;
-  items: ProfileResponse[];
-  valid: string[];
-  global_transforms: string[];
-};"#;
-
-#[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
-fn apply_binding_rewrite(
-    contents: &mut String,
-    generated: &str,
-    replacement: &str,
-    label: &str,
-) -> io::Result<()> {
-    if contents.contains(generated) {
-        *contents = contents.replacen(generated, replacement, 1);
-        return Ok(());
-    }
-    if contents.contains(replacement) {
-        return Ok(());
-    }
-
-    Err(io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("generated TypeScript binding pattern changed: {label}"),
-    ))
-}
-
 /// Align Specta output with serde's flattened Profile enum representation.
 #[cfg(any(test, all(debug_assertions, not(feature = "e2e"))))]
 pub(crate) fn normalize_typescript_bindings(path: impl AsRef<Path>) -> io::Result<()> {
-    let path = path.as_ref();
-    let mut contents = fs::read_to_string(path)?;
-    let rewrites = [
-        (
-            GENERATED_GET_PROFILES_BINDING,
-            FLATTENED_GET_PROFILES_BINDING,
-            "get_profiles return type",
-        ),
-        (
-            GENERATED_PROFILE_BUILDER_BINDING,
-            FLATTENED_PROFILE_BUILDER_BINDING,
-            "ProfileBuilderRequest",
-        ),
-        (
-            GENERATED_PROFILE_RESPONSE_BINDING,
-            FLATTENED_PROFILE_RESPONSE_BINDING,
-            "ProfileResponse",
-        ),
-        (
-            GENERATED_PROFILES_RESPONSE_BINDING,
-            FLATTENED_PROFILES_RESPONSE_BINDING,
-            "ProfilesResponse",
-        ),
-    ];
-
-    for (generated, replacement, label) in rewrites {
-        apply_binding_rewrite(&mut contents, generated, replacement, label)?;
-    }
-
-    fs::write(path, contents)
+    // Profile domain types now carry the reference serde representation
+    // directly, so generation needs no Chimera-specific flattening rewrite.
+    let _ = path.as_ref();
+    Ok(())
 }
 
 macro_rules! build_builder {
@@ -212,13 +42,11 @@ macro_rules! build_builder {
                 crate::ipc::reorder_profiles_by_list,
                 crate::ipc::activate_profile,
                 crate::ipc::set_profile_valid_fields,
-                crate::ipc::set_profile_transform_chain,
-                crate::ipc::set_global_transform_chain,
+                crate::ipc::set_global_transforms,
                 crate::ipc::patch_profile_metadata,
                 crate::ipc::patch_remote_profile_options,
                 crate::ipc::replace_profile_definition,
                 crate::ipc::update_profile,
-                crate::ipc::patch_profile,
                 crate::ipc::delete_profile,
                 crate::ipc::read_profile_file,
                 crate::ipc::save_profile_file,
@@ -313,7 +141,7 @@ pub(crate) fn build_specta_builder() -> tauri_specta::Builder<tauri::Wry> {
 mod tests {
     use std::path::Path;
 
-    use super::{apply_binding_rewrite, build_specta_builder, normalize_typescript_bindings};
+    use super::{build_specta_builder, normalize_typescript_bindings};
 
     const BINDINGS_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -343,22 +171,6 @@ mod tests {
             .status()
             .expect("failed to run Prettier");
         assert!(status.success(), "Prettier failed for generated bindings");
-    }
-
-    #[test]
-    fn binding_rewrite_is_idempotent() {
-        let mut contents = "before generated after".to_string();
-        apply_binding_rewrite(&mut contents, "generated", "flattened", "test").unwrap();
-        apply_binding_rewrite(&mut contents, "generated", "flattened", "test").unwrap();
-        assert_eq!(contents, "before flattened after");
-    }
-
-    #[test]
-    fn binding_rewrite_rejects_unknown_shape() {
-        let mut contents = "before changed after".to_string();
-        let error = apply_binding_rewrite(&mut contents, "generated", "flattened", "test")
-            .expect_err("unknown binding shape must fail");
-        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

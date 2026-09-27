@@ -1,4 +1,7 @@
-import type { ProfileQueryResultItem } from '@chimera/interface';
+import {
+  getRemoteSource,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useNavigate } from '@tanstack/react-router';
 import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
@@ -74,7 +77,7 @@ export default function ActionCard({
         </ActionButton>
       </ProfileNameEditor>
 
-      {profile.type === 'remote' && (
+      {getRemoteSource(profile) && (
         <SubscriptionUrlEditor profile={profile} asChild>
           <ActionButton>
             <EditSquareOutlineRounded className="size-4 shrink-0" />

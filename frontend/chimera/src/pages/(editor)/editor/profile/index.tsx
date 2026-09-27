@@ -1,4 +1,6 @@
 import {
+  getProfileSource,
+  isTransformItem,
   useProfile,
   useProfileContent,
   useRuntimeTransformDiagnostics,
@@ -32,20 +34,28 @@ function RouteComponent() {
   const { query: profiles } = useProfile();
   const content = useProfileContent(uid);
   const profile = profiles.data?.items.find((item) => item.uid === uid);
-  const isTransform = profile?.type === 'merge' || profile?.type === 'script';
+  const isTransform = profile ? isTransformItem(profile) : false;
   const diagnostics = useRuntimeTransformDiagnostics(isTransform);
+  const transform =
+    profile?.type === 'transform' ? profile.transform : undefined;
+  const source = profile ? getProfileSource(profile) : undefined;
+  const profileFile = source
+    ? source.type === 'remote'
+      ? source.file
+      : source.binding.file
+    : undefined;
   const runtimeFailure =
     diagnostics.data?.failure?.transform_uid === uid
       ? diagnostics.data.failure
       : null;
-  const readOnly = profile?.type === 'remote';
+  const readOnly = source?.type === 'remote';
   const language =
-    profile?.type === 'script'
-      ? profile.script_type === 'lua'
+    transform?.type === 'script'
+      ? transform.runtime === 'lua'
         ? 'lua'
         : 'javascript'
       : 'yaml';
-  const schemaType = profile?.type === 'merge' ? 'merge' : 'clash';
+  const schemaType = transform?.type === 'overlay' ? 'merge' : 'clash';
   const markers = useRef<editor.IMarker[]>([]);
   const skipCloseGuard = useRef(false);
   const loadedContent = useRef<{ uid: string; value: string } | undefined>(
@@ -163,7 +173,7 @@ function RouteComponent() {
         <>
           <div className="bg-primary-container dark:bg-on-primary flex h-12 shrink-0 items-center gap-2 px-3">
             <TextMarquee className="min-w-0 flex-1 text-sm font-medium">
-              {profile.name}.{profile.file.split('.').pop() ?? 'yaml'}
+              {profile.name}.{profileFile?.split('.').pop() ?? 'yaml'}
             </TextMarquee>
             {readOnly && (
               <span className="bg-surface rounded-full px-3 py-1 text-xs font-bold">
@@ -195,9 +205,9 @@ function RouteComponent() {
             >
               <p className="font-medium">
                 {m.common_error()} ·{' '}
-                {profile.type === 'merge'
+                {transform?.type === 'overlay'
                   ? m.profile_merge_label()
-                  : profile.type === 'script' && profile.script_type === 'lua'
+                  : transform?.type === 'script' && transform.runtime === 'lua'
                     ? m.profile_lua_label()
                     : m.profile_javascript_label()}{' '}
                 · r{runtimeFailure.attempt_revision}

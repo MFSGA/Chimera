@@ -11,7 +11,9 @@ export const commands = {
   getSysProxy: () =>
     typedError<GetSysProxyResponse, string>(__TAURI_INVOKE('get_sys_proxy')),
   getProfiles: () =>
-    typedError<ProfilesResponse, string>(__TAURI_INVOKE('get_profiles')),
+    typedError<ProfileDocument_Serialize, string>(
+      __TAURI_INVOKE('get_profiles'),
+    ),
   getRuntimeTransformDiagnostics: () =>
     typedError<
       {
@@ -65,31 +67,27 @@ export const commands = {
     url: string,
     name: string | null,
     option: {
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
+      user_agent?: string | null;
       with_proxy: boolean | null;
       self_proxy: boolean | null;
-      /**  subscription update interval in minutes */
       update_interval_minutes: number | null;
     } | null,
   ) =>
-    typedError<MutationOutcome<string>, string>(
+    typedError<MutationOutcome<ProfileId>, string>(
       __TAURI_INVOKE('import_profile', { url, name, option }),
     ),
   importProfileWithMode: (
     url: string,
     name: string | null,
     option: {
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
+      user_agent?: string | null;
       with_proxy: boolean | null;
       self_proxy: boolean | null;
-      /**  subscription update interval in minutes */
       update_interval_minutes: number | null;
     } | null,
     mode: RemoteProfileImportMode,
   ) =>
-    typedError<MutationOutcome<string>, string>(
+    typedError<MutationOutcome<ProfileId>, string>(
       __TAURI_INVOKE('import_profile_with_mode', { url, name, option, mode }),
     ),
   viewProfile: (uid: string) =>
@@ -110,13 +108,9 @@ export const commands = {
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('set_profile_valid_fields', { fields }),
     ),
-  setProfileTransformChain: (uid: string, transforms: string[]) =>
+  setGlobalTransforms: (ids: ProfileId[]) =>
     typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('set_profile_transform_chain', { uid, transforms }),
-    ),
-  setGlobalTransformChain: (transforms: string[]) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('set_global_transform_chain', { transforms }),
+      __TAURI_INVOKE('set_global_transforms', { ids }),
     ),
   patchProfileMetadata: (
     uid: string,
@@ -142,20 +136,14 @@ export const commands = {
   updateProfile: (
     uid: string,
     option: {
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
+      user_agent?: string | null;
       with_proxy: boolean | null;
       self_proxy: boolean | null;
-      /**  subscription update interval in minutes */
       update_interval_minutes: number | null;
     } | null,
   ) =>
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('update_profile', { uid, option }),
-    ),
-  patchProfile: (uid: string, profile: ProfileBuilderRequest_Deserialize) =>
-    typedError<MutationOutcome<null>, string>(
-      __TAURI_INVOKE('patch_profile', { uid, profile }),
     ),
   deleteProfile: (uid: string) =>
     typedError<MutationOutcome<null>, string>(
@@ -169,11 +157,11 @@ export const commands = {
     ),
   /**  create a new profile */
   createProfile: (
-    item: ProfileBuilderRequest_Deserialize,
+    request: NewProfileRequest_Deserialize,
     fileData: string | null,
   ) =>
-    typedError<MutationOutcome<string>, string>(
-      __TAURI_INVOKE('create_profile', { item, fileData }),
+    typedError<MutationOutcome<ProfileId>, string>(
+      __TAURI_INVOKE('create_profile', { request, fileData }),
     ),
   createEditorWindow: (windowType: EditorWindowType, uid: string | null) =>
     typedError<null, string>(
@@ -336,7 +324,9 @@ export const commands = {
    */
   clearStorage: () => typedError<null, string>(__TAURI_INVOKE('clear_storage')),
   statusService: () =>
-    typedError<ServiceStatusInfo, string>(__TAURI_INVOKE('status_service')),
+    typedError<ServiceStatusInfo_Serialize, string>(
+      __TAURI_INVOKE('status_service'),
+    ),
   installService: () =>
     typedError<null, string>(__TAURI_INVOKE('install_service')),
   uninstallService: () =>
@@ -539,6 +529,7 @@ export type AgentPrivacyBoundary = {
 export type AgentProbeCode =
   | 'core_status_unavailable'
   | 'core_config_unavailable'
+  | 'profiles_unavailable'
   | 'system_proxy_unavailable'
   | 'service_status_unavailable'
   | 'telemetry_unavailable';
@@ -807,20 +798,49 @@ export type ClashWsTraffic = {
   down: number;
 };
 
+/**  A source commit and its critical runtime result. Peripheral owners settle separately. */
+export type CommitReceipt = {
+  operation_id: string | null;
+  domain: string;
+  source_version: number;
+  runtime: RuntimeCommitStatus;
+};
+
+/**  A profile that can produce a complete config and can be selected by current. */
 export type ConfigDefinition =
   ConfigDefinition_Serialize | ConfigDefinition_Deserialize;
 
-export type ConfigDefinition_Deserialize = {
-  type: 'file';
-  source: ProfileSource_Deserialize;
-  transforms?: string[];
-};
+/**  A profile that can produce a complete config and can be selected by current. */
+export type ConfigDefinition_Deserialize =
+  /**  A config parsed from a locally materialized file. */
+  | ({
+      type: 'file';
+      source: ProfileSource_Deserialize;
+      transforms?: ProfileId[];
+    } & { base?: never; extend_proxies_from?: never })
+  /**  A config composed from an optional full base and proxy contributors. */
+  | ({
+      type: 'composition';
+      base?: ProfileId | null;
+      extend_proxies_from?: ProfileId[];
+      transforms?: ProfileId[];
+    } & { source?: never });
 
-export type ConfigDefinition_Serialize = {
-  type: 'file';
-  source: ProfileSource_Serialize;
-  transforms: string[];
-};
+/**  A profile that can produce a complete config and can be selected by current. */
+export type ConfigDefinition_Serialize =
+  /**  A config parsed from a locally materialized file. */
+  | ({
+      type: 'file';
+      source: ProfileSource_Serialize;
+      transforms?: ProfileId[];
+    } & { base?: never; extend_proxies_from?: never })
+  /**  A config composed from an optional full base and proxy contributors. */
+  | ({
+      type: 'composition';
+      base?: ProfileId | null;
+      extend_proxies_from?: ProfileId[];
+      transforms?: ProfileId[];
+    } & { source?: never });
 
 /**  Why a config pipeline is being executed. */
 export type ConfigExecutionRole =
@@ -842,11 +862,53 @@ export type ConfigExecutionRole =
       };
     };
 
-export type CoreInfos = {
+export type ConfigRevisionInfo = {
+  epoch: number;
+  generation: number;
+  source_hash: string;
+  effective_hash: string;
+};
+
+/**  The active core's controller endpoint without its private credential. */
+export type CoreControllerInfo =
+  | ({ NamedPipe: string } & { Http?: never; UnixSocket?: never })
+  | ({ UnixSocket: string } & { Http?: never; NamedPipe?: never })
+  | ({ Http: string } & { NamedPipe?: never; UnixSocket?: never });
+
+export type CoreHealthInfo = {
+  state: CoreHealthState;
+  changed_at: number;
+  consecutive_failures: number;
+  last_error: string | null;
+  last_success_at: number | null;
+};
+
+export type CoreHealthState = 'Starting' | 'Healthy' | 'Unhealthy';
+
+export type CoreInfos = CoreInfos_Serialize | CoreInfos_Deserialize;
+
+export type CoreInfos_Deserialize = {
+  instance_id?: string | null;
   type: CoreType | null;
   state: CoreState;
   state_changed_at: number;
   config_path: string | null;
+  controller?: CoreControllerInfo | null;
+  health?: CoreHealthInfo | null;
+  revision?: ConfigRevisionInfo | null;
+  detail?: CoreStateDetail | null;
+};
+
+export type CoreInfos_Serialize = {
+  instance_id?: string | null;
+  type: CoreType | null;
+  state: CoreState;
+  state_changed_at: number;
+  config_path: string | null;
+  controller?: CoreControllerInfo | null;
+  health?: CoreHealthInfo | null;
+  revision?: ConfigRevisionInfo | null;
+  detail?: CoreStateDetail | null;
 };
 
 export type CoreLifecycleOperationResult = {
@@ -863,6 +925,77 @@ export type CoreLifecycleStatus = {
 };
 
 export type CoreState = 'Running' | { Stopped: string | null };
+
+export type CoreStateDetail =
+  | ({
+      Stopped: {
+        reason: string | null;
+      };
+    } & {
+      Restarting?: never;
+      Running?: never;
+      Starting?: never;
+      Stopping?: never;
+      Switching?: never;
+    })
+  | ({
+      Starting: {
+        epoch: number;
+      };
+    } & {
+      Restarting?: never;
+      Running?: never;
+      Stopped?: never;
+      Stopping?: never;
+      Switching?: never;
+    })
+  | ({
+      Running: {
+        epoch: number;
+        pid: number;
+      };
+    } & {
+      Restarting?: never;
+      Starting?: never;
+      Stopped?: never;
+      Stopping?: never;
+      Switching?: never;
+    })
+  | ({
+      Restarting: {
+        epoch: number;
+        attempt: number;
+      };
+    } & {
+      Running?: never;
+      Starting?: never;
+      Stopped?: never;
+      Stopping?: never;
+      Switching?: never;
+    })
+  | ({
+      Switching: {
+        from: number | null;
+        to: number;
+      };
+    } & {
+      Restarting?: never;
+      Running?: never;
+      Starting?: never;
+      Stopped?: never;
+      Stopping?: never;
+    })
+  | ({
+      Stopping: {
+        epoch: number;
+      };
+    } & {
+      Restarting?: never;
+      Running?: never;
+      Starting?: never;
+      Stopped?: never;
+      Switching?: never;
+    });
 
 export type CoreType = { clash: ClashCoreType } | 'singbox';
 
@@ -918,6 +1051,11 @@ export type EnvInfo = {
 
 export type ExternalControllerPortStrategy =
   'fixed' | 'random' | 'allow_fallback';
+
+export type ExternalMode = 'symlink' | 'mirror';
+
+/**  An absolute path outside the managed profile directory. */
+export type ExternalProfilePath = string;
 
 export type GetSysProxyResponse = {
   enable: boolean;
@@ -1142,43 +1280,35 @@ export type IpsbResponse = {
   country_code: string;
 };
 
-export type LocalProfile = LocalProfile_Serialize | LocalProfile_Deserialize;
+export type LocalBinding = LocalBinding_Serialize | LocalBinding_Deserialize;
 
-/** Builder for [`LocalProfile`](struct.LocalProfile.html). */
-export type LocalProfileBuilder =
-  LocalProfileBuilder_Serialize | LocalProfileBuilder_Deserialize;
-
-/** Builder for [`LocalProfile`](struct.LocalProfile.html). */
-export type LocalProfileBuilder_Deserialize =
+export type LocalBinding_Deserialize =
   | ({
-      symlinks: string | null;
-    } & ProfileSharedBuilder & {
-        chain?: string[] | null;
-      })
+      type: 'managed';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+    } & { mode?: never; target?: never })
   | {
-      chains?: string[] | null;
+      type: 'external';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+      target: ExternalProfilePath;
+      mode: ExternalMode;
     };
 
-/** Builder for [`LocalProfile`](struct.LocalProfile.html). */
-export type LocalProfileBuilder_Serialize = {
-  symlinks: string | null;
-  chain: string[] | null;
-} & ProfileSharedBuilder;
-
-export type LocalProfile_Deserialize =
+export type LocalBinding_Serialize =
   | ({
-      symlinks: string | null;
-    } & ProfileShared & {
-        chain?: string[];
-      })
+      type: 'managed';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+    } & { mode?: never; target?: never })
   | {
-      chains?: string[];
+      type: 'external';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+      target: ExternalProfilePath;
+      mode: ExternalMode;
     };
-
-export type LocalProfile_Serialize = {
-  symlinks?: string | null;
-  chain: string[];
-} & ProfileShared;
 
 export type LogSpan = 'log' | 'info' | 'warn' | 'error';
 
@@ -1198,6 +1328,9 @@ export type LoggingLevel_Deserialize =
 export type LoggingLevel_Serialize =
   'silent' | 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
+/**  A path relative to the application-managed profile directory. */
+export type ManagedProfilePath = string;
+
 export type ManifestVersionLatest = {
   mihomo: string;
   mihomo_alpha: string;
@@ -1207,16 +1340,25 @@ export type ManifestVersionLatest = {
   clash_premium: string;
 };
 
-export type MergeProfile = ProfileShared;
-
 /**
  *  Public mutation wire aligned with REF: desired state is committed first;
  *  post-commit side-effect failures degrade instead of turning the mutation
  *  into an error that would imply the commit was rolled back.
  */
 export type MutationOutcome<T> =
-  | { status: 'applied'; value: T }
-  | { status: 'committed_degraded'; value: T; degradations: Degradation[] };
+  | {
+      status: 'committed';
+      value: T;
+      commits: CommitReceipt[];
+      notifications_pending: boolean;
+    }
+  | {
+      status: 'committed_degraded';
+      value: T;
+      commits: CommitReceipt[];
+      notifications_pending: boolean;
+      degradations: Degradation[];
+    };
 
 export type NetworkProbeRequest = {
   url: string;
@@ -1229,6 +1371,21 @@ export type NetworkProbeResult = {
   expected_status: number | null;
   matches_expected_status: boolean | null;
   latency_ms: number;
+};
+
+export type NewProfileRequest =
+  NewProfileRequest_Serialize | NewProfileRequest_Deserialize;
+
+export type NewProfileRequest_Deserialize = {
+  metadata: ProfileMetadata_Deserialize;
+  /**  Add rewrites the materialized path to `{uid}.{ext}`. */
+  definition: ProfileDefinition_Deserialize;
+};
+
+export type NewProfileRequest_Serialize = {
+  metadata: ProfileMetadata_Serialize;
+  /**  Add rewrites the materialized path to `{uid}.{ext}`. */
+  definition: ProfileDefinition_Serialize;
 };
 
 /**  The pipeline operator that produced a snapshot node. */
@@ -1343,46 +1500,66 @@ export type PostProcessingOutput = {
   global: { [key in string]: [LogSpan, string][] };
 };
 
-export type ProfileBuilderRequest =
-  ProfileBuilderRequest_Serialize | ProfileBuilderRequest_Deserialize;
-
-export type ProfileBuilderRequest_Deserialize =
-  | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Deserialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type?: ScriptType;
-    };
-
-export type ProfileBuilderRequest_Serialize =
-  | ({ type: 'remote' } & RemoteProfileBuilder)
-  | ({ type: 'local' } & LocalProfileBuilder_Serialize)
-  | { type: 'merge'; name: string | null; desc: string | null }
-  | {
-      type: 'script';
-      name: string | null;
-      desc: string | null;
-      script_type: ScriptType;
-    };
-
+/**  Top-level semantic split. */
 export type ProfileDefinition =
   ProfileDefinition_Serialize | ProfileDefinition_Deserialize;
 
-export type ProfileDefinition_Deserialize = {
-  type: 'config';
-  config: ConfigDefinition_Deserialize;
+/**  Top-level semantic split. */
+export type ProfileDefinition_Deserialize =
+  | ({ type: 'config'; config: ConfigDefinition_Deserialize } & {
+      transform?: never;
+    })
+  | ({ type: 'transform'; transform: TransformDefinition_Deserialize } & {
+      config?: never;
+    });
+
+/**  Top-level semantic split. */
+export type ProfileDefinition_Serialize =
+  | ({ type: 'config'; config: ConfigDefinition_Serialize } & {
+      transform?: never;
+    })
+  | ({ type: 'transform'; transform: TransformDefinition_Serialize } & {
+      config?: never;
+    });
+
+export type ProfileDocument =
+  ProfileDocument_Serialize | ProfileDocument_Deserialize;
+
+export type ProfileDocument_Deserialize = {
+  current?: ProfileId | null;
+  global_transforms?: ProfileId[];
+  valid: string[];
+  items: ProfileItem_Deserialize[];
 };
 
-export type ProfileDefinition_Serialize = {
-  type: 'config';
-  config: ConfigDefinition_Serialize;
+export type ProfileDocument_Serialize = {
+  current?: ProfileId | null;
+  global_transforms?: ProfileId[];
+  valid: string[];
+  items: ProfileItem_Serialize[];
 };
 
 /**  Stable profile identifier. It is also the key used by [`Profiles::items`]. */
 export type ProfileId = string;
+
+/**  One named profile item. */
+export type ProfileItem = ProfileItem_Serialize | ProfileItem_Deserialize;
+
+/**  One named profile item. */
+export type ProfileItem_Deserialize = {
+  uid: ProfileId;
+} & ProfileMetadata_Deserialize &
+  ProfileDefinition_Deserialize;
+
+/**  One named profile item. */
+export type ProfileItem_Serialize = {
+  uid: ProfileId;
+} & ProfileMetadata_Serialize &
+  ProfileDefinition_Serialize;
+
+/**  Public, user-editable profile metadata. */
+export type ProfileMetadata =
+  ProfileMetadata_Serialize | ProfileMetadata_Deserialize;
 
 export type ProfileMetadataPatch =
   ProfileMetadataPatch_Serialize | ProfileMetadataPatch_Deserialize;
@@ -1390,71 +1567,117 @@ export type ProfileMetadataPatch =
 export type ProfileMetadataPatch_Deserialize = {
   name: string | null;
   desc?: string | null;
+  custom_name?: boolean | null;
 };
 
 export type ProfileMetadataPatch_Serialize = {
-  name: string | null;
-  desc: string | null;
+  name?: string | null;
+  desc?: string | null;
+  custom_name?: boolean | null;
 };
 
-export type ProfileResponse =
-  | ({ type: 'remote' } & RemoteProfile_Serialize)
-  | ({ type: 'local' } & LocalProfile_Serialize)
-  | ({ type: 'merge' } & MergeProfile)
-  | ({ type: 'script' } & ScriptProfile);
-
-export type ProfileShared = {
-  /**  Profile ID */
-  uid: string;
-  /**  profile name */
+/**  Public, user-editable profile metadata. */
+export type ProfileMetadata_Deserialize = {
   name: string;
-  /**  profile holds the file */
-  file: string;
-  /**  profile description */
-  desc: string | null;
-  /**  update time */
-  updated: number;
+  desc?: string | null;
+  /**
+   *  Provenance flag: `true` when the name was chosen by the user (manual
+   *  create or rename) and must not be overwritten by subscription name-sync.
+   *  Profiles persisted before this field predate provenance tracking; absence
+   *  means user-owned so a refresh cannot silently rename them.
+   *  The value is never trusted from an incoming patch — it is set only by
+   *  rename detection and name-sync (see `ProfileItem::apply_metadata_patch`).
+   *  Only the non-default `false` (an unpinned, sync-eligible profile) is
+   *  persisted; a user-owned `true` is left off the wire and restored by the
+   *  default, so legacy and user-named documents stay byte-identical.
+   */
+  custom_name?: boolean;
 };
 
-/** Builder for [`ProfileShared`](struct.ProfileShared.html). */
-export type ProfileSharedBuilder = {
-  /**  Profile ID */
-  uid: string | null;
-  /**  profile name */
-  name: string | null;
-  /**  profile holds the file */
-  file: string | null;
-  /**  profile description */
-  desc: string | null;
-  /**  update time */
-  updated: number | null;
+/**  Public, user-editable profile metadata. */
+export type ProfileMetadata_Serialize = {
+  name: string;
+  desc?: string | null;
+  /**
+   *  Provenance flag: `true` when the name was chosen by the user (manual
+   *  create or rename) and must not be overwritten by subscription name-sync.
+   *  Profiles persisted before this field predate provenance tracking; absence
+   *  means user-owned so a refresh cannot silently rename them.
+   *  The value is never trusted from an incoming patch — it is set only by
+   *  rename detection and name-sync (see `ProfileItem::apply_metadata_patch`).
+   *  Only the non-default `false` (an unpinned, sync-eligible profile) is
+   *  persisted; a user-owned `true` is left off the wire and restored by the
+   *  default, so legacy and user-named documents stay byte-identical.
+   */
+  custom_name?: boolean;
 };
 
+export type ProfileRemoteOptions = {
+  user_agent?: string | null;
+  with_proxy: boolean;
+  self_proxy: boolean;
+  update_interval_minutes: number;
+};
+
+/**
+ *  Who is responsible for maintaining the locally readable file.
+ *
+ *  `Remote + External` is unrepresentable: external binding exists only inside
+ *  the `Local` branch, while `Remote` owns a managed materialization directly.
+ */
 export type ProfileSource = ProfileSource_Serialize | ProfileSource_Deserialize;
 
-export type ProfileSource_Deserialize = {
-  type: 'remote';
-  file: string;
-  updated_at: number | null;
-  url: string;
-  option: RemoteProfileOptions_Deserialize | null;
-  subscription: SubscriptionInfo | null;
-};
+/**
+ *  Who is responsible for maintaining the locally readable file.
+ *
+ *  `Remote + External` is unrepresentable: external binding exists only inside
+ *  the `Local` branch, while `Remote` owns a managed materialization directly.
+ */
+export type ProfileSource_Deserialize =
+  | ({ type: 'local'; binding: LocalBinding_Deserialize } & {
+      file?: never;
+      option?: never;
+      subscription?: never;
+      updated_at?: never;
+      url?: never;
+    })
+  | ({
+      type: 'remote';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+      url: string;
+      option?: ProfileRemoteOptions;
+      subscription?: ProfileSubscriptionInfo;
+    } & { binding?: never });
 
-export type ProfileSource_Serialize = {
-  type: 'remote';
-  file: string;
-  updated_at: number | null;
-  url: string;
-  option: RemoteProfileOptions_Serialize | null;
-  subscription: SubscriptionInfo | null;
-};
+/**
+ *  Who is responsible for maintaining the locally readable file.
+ *
+ *  `Remote + External` is unrepresentable: external binding exists only inside
+ *  the `Local` branch, while `Remote` owns a managed materialization directly.
+ */
+export type ProfileSource_Serialize =
+  | ({ type: 'local'; binding: LocalBinding_Serialize } & {
+      file?: never;
+      option?: never;
+      subscription?: never;
+      updated_at?: never;
+      url?: never;
+    })
+  | ({
+      type: 'remote';
+      file: ManagedProfilePath;
+      updated_at?: number | null;
+      url: string;
+      option: ProfileRemoteOptions;
+      subscription?: ProfileSubscriptionInfo;
+    } & { binding?: never });
 
-export type ProfilesResponse = {
-  current: string | null;
-  items: ProfileResponse[];
-  valid: string[];
-  global_transforms: string[];
+export type ProfileSubscriptionInfo = {
+  upload?: number | null;
+  download?: number | null;
+  total?: number | null;
+  expire?: number | null;
 };
 
 export type Proxies = Proxies_Serialize | Proxies_Deserialize;
@@ -1547,32 +1770,7 @@ export type ProxyItem_Serialize = {
   icon?: string | null;
 };
 
-export type RemoteProfile = RemoteProfile_Serialize | RemoteProfile_Deserialize;
-
-/** Builder for [`RemoteProfile`](struct.RemoteProfile.html). */
-export type RemoteProfileBuilder = {
-  /**  subscription url */
-  url: string | null;
-  option: RemoteProfileOptionsBuilder;
-  chain: string[] | null;
-  /**  subscription user info */
-  extra: SubscriptionInfo | null;
-} & ProfileSharedBuilder;
-
 export type RemoteProfileImportMode = 'default' | 'direct';
-
-export type RemoteProfileOptions =
-  RemoteProfileOptions_Serialize | RemoteProfileOptions_Deserialize;
-
-/** Builder for [`RemoteProfileOptions`](struct.RemoteProfileOptions.html). */
-export type RemoteProfileOptionsBuilder = {
-  /**  see issue #13. must set the builder attr for build the user_agent for client */
-  user_agent: string | null;
-  with_proxy: boolean | null;
-  self_proxy: boolean | null;
-  /**  subscription update interval in minutes */
-  update_interval_minutes: number | null;
-};
 
 export type RemoteProfileOptionsPatch =
   RemoteProfileOptionsPatch_Serialize | RemoteProfileOptionsPatch_Deserialize;
@@ -1585,53 +1783,11 @@ export type RemoteProfileOptionsPatch_Deserialize = {
 };
 
 export type RemoteProfileOptionsPatch_Serialize = {
-  user_agent: string | null;
-  with_proxy: boolean | null;
-  self_proxy: boolean | null;
-  update_interval_minutes: number | null;
-};
-
-export type RemoteProfileOptions_Deserialize =
-  | ({
-      /**  see issue #13. must set the builder attr for build the user_agent for client */
-      user_agent: string | null;
-      with_proxy?: boolean;
-      self_proxy?: boolean;
-    } & {
-      /**  subscription update interval in minutes */
-      update_interval_minutes?: number;
-    })
-  | {
-      /**  subscription update interval in minutes */
-      update_interval?: number;
-    };
-
-export type RemoteProfileOptions_Serialize = {
-  /**  see issue #13. must set the builder attr for build the user_agent for client */
   user_agent?: string | null;
-  with_proxy: boolean;
-  self_proxy: boolean;
-  /**  subscription update interval in minutes */
-  update_interval_minutes: number;
+  with_proxy?: boolean | null;
+  self_proxy?: boolean | null;
+  update_interval_minutes?: number | null;
 };
-
-export type RemoteProfile_Deserialize = {
-  /**  subscription url */
-  url: string;
-  option?: RemoteProfileOptions_Deserialize;
-  chain?: string[];
-  /**  subscription user info */
-  extra?: SubscriptionInfo;
-} & ProfileShared;
-
-export type RemoteProfile_Serialize = {
-  /**  subscription url */
-  url: string;
-  option: RemoteProfileOptions_Serialize;
-  chain: string[];
-  /**  subscription user info */
-  extra: SubscriptionInfo;
-} & ProfileShared;
 
 export type RunType =
   /**  Run as child process directly */
@@ -1640,6 +1796,14 @@ export type RunType =
   | 'service'
   /**  Run as elevated process, if profile advice to run as elevated */
   | 'elevated';
+
+export type RuntimeCommitStatus =
+  | 'applied'
+  | 'deferred'
+  | 'saved_inactive'
+  | 'unchanged'
+  | 'pending'
+  | 'recovery_required';
 
 export type RuntimeInfos = {
   service_data_dir: string;
@@ -1690,10 +1854,6 @@ export type RuntimeTransformFailureDiagnostics = {
   message: string;
 };
 
-export type ScriptProfile = {
-  script_type?: ScriptType;
-} & ProfileShared;
-
 export type ScriptRuntime = 'javascript' | 'lua';
 
 export type ScriptType = 'javascript' | 'lua';
@@ -1723,11 +1883,33 @@ export type ServiceStatus = 'not_installed' | 'stopped' | 'running';
  *  Cached service-host projection for UI consumers. It preserves the service
  *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
  */
-export type ServiceStatusInfo = {
+export type ServiceStatusInfo =
+  ServiceStatusInfo_Serialize | ServiceStatusInfo_Deserialize;
+
+/**
+ *  Cached service-host projection for UI consumers. It preserves the service
+ *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
+ */
+export type ServiceStatusInfo_Deserialize = {
   name: string;
   version: string;
   status: ServiceStatus;
-  server: StatusResBody | null;
+  server: StatusResBody_Deserialize | null;
+  phase: ServicePhase;
+  compat: ServiceCompat;
+  runtime_owned: boolean;
+  restart_attempts: number;
+};
+
+/**
+ *  Cached service-host projection for UI consumers. It preserves the service
+ *  wire fields while exposing lifecycle phase, compatibility, and runtime ownership.
+ */
+export type ServiceStatusInfo_Serialize = {
+  name: string;
+  version: string;
+  status: ServiceStatus;
+  server: StatusResBody_Serialize | null;
   phase: ServicePhase;
   compat: ServiceCompat;
   runtime_owned: boolean;
@@ -1743,9 +1925,17 @@ export type SnapshotDiffHunk = {
   lines: string[];
 };
 
-export type StatusResBody = {
+export type StatusResBody = StatusResBody_Serialize | StatusResBody_Deserialize;
+
+export type StatusResBody_Deserialize = {
   version: string;
-  core_infos: CoreInfos;
+  core_infos: CoreInfos_Deserialize;
+  runtime_infos: RuntimeInfos;
+};
+
+export type StatusResBody_Serialize = {
+  version: string;
+  core_infos: CoreInfos_Serialize;
   runtime_infos: RuntimeInfos;
 };
 
@@ -1773,12 +1963,29 @@ export type StorageValueChangedEvent = {
   value: string | null;
 };
 
-export type SubscriptionInfo = {
-  upload: number;
-  download: number;
-  total: number;
-  expire: number;
-};
+/**  A named config transformer. Transform profiles are reusable but not activatable. */
+export type TransformDefinition =
+  TransformDefinition_Serialize | TransformDefinition_Deserialize;
+
+/**  A named config transformer. Transform profiles are reusable but not activatable. */
+export type TransformDefinition_Deserialize =
+  /**  Declarative YAML overlay/patch. This is the new name for legacy Merge. */
+  | ({ type: 'overlay'; source: ProfileSource_Deserialize } & {
+      runtime?: never;
+    })
+  /**  Imperative JS/Lua transform. */
+  | {
+      type: 'script';
+      source: ProfileSource_Deserialize;
+      runtime: ScriptRuntime;
+    };
+
+/**  A named config transformer. Transform profiles are reusable but not activatable. */
+export type TransformDefinition_Serialize =
+  /**  Declarative YAML overlay/patch. This is the new name for legacy Merge. */
+  | ({ type: 'overlay'; source: ProfileSource_Serialize } & { runtime?: never })
+  /**  Imperative JS/Lua transform. */
+  | { type: 'script'; source: ProfileSource_Serialize; runtime: ScriptRuntime };
 
 export type TransformKind =
   { type: 'overlay' } | { type: 'script'; runtime: ScriptRuntime };

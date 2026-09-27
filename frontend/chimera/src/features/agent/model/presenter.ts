@@ -48,6 +48,7 @@ const findingMessages: Record<AgentFindingCode, () => string> = {
 const probeMessages: Record<AgentProbeCode, () => string> = {
   core_status_unavailable: m.agent_probe_core_status_unavailable,
   core_config_unavailable: m.agent_probe_core_config_unavailable,
+  profiles_unavailable: m.agent_probe_profiles_unavailable,
   system_proxy_unavailable: m.agent_probe_system_proxy_unavailable,
   service_status_unavailable: m.agent_probe_service_status_unavailable,
   telemetry_unavailable: m.agent_probe_telemetry_unavailable,

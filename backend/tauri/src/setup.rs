@@ -8,23 +8,36 @@ use tauri::{Manager, Runtime};
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyProfileFsPort,
-        LegacyProfilesReadPort, LegacyUiEventSink, OsSystemDnsCache, RuntimePaths,
+        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyUiEventSink, OsSystemDnsCache,
+        RuntimePaths,
     },
     utils::path::PathResolver,
 };
 
+#[cfg(test)]
+use crate::client::{LegacyProfileFsPort, LegacyProfilesReadPort};
+
+struct LegacySelfProxyPort;
+
+impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
+    fn mixed_port(&self) -> Option<u16> {
+        Some(
+            crate::config::core::Config::clash()
+                .latest()
+                .get_mixed_port(),
+        )
+    }
+}
+
 pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
+    let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
+        paths.clone(),
+        Arc::new(LegacySelfProxyPort),
+    ));
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
-    // Keep the upstream Profile document cutover gated while the client still
-    // reads and writes the legacy Profile schema.
-    let mut migrations =
-        crate::core::migration::Runner::with_paths_before_profile_client_migration(
-            paths.clone(),
-            false,
-        )
+    let mut migrations = crate::core::migration::Runner::with_paths(paths.clone(), false)
         .context("failed to setup config migrations")?;
     migrations
         .run_pending()
@@ -58,10 +71,11 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
             core_facade,
         )),
+        #[cfg(test)]
         profiles: Arc::new(LegacyProfilesReadPort),
-        // Temporary bridge until the typed ProfilesClient owns materialized paths.
+        #[cfg(test)]
         profile_files: Arc::new(LegacyProfileFsPort),
-        // profile_writes: Arc::new(LegacyProfilesWritePort),
+        profile_service,
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
     })?;

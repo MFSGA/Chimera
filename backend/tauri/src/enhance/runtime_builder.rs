@@ -1,9 +1,8 @@
 //! ref-aligned runtime assembly.
 //!
-//! The builder is pure once its inputs and executor ports are prepared. The
-//! legacy global profile store is converted at the boundary and is not read by
-//! the executor itself.
+//! The builder is pure once its typed inputs and executor ports are prepared.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -12,17 +11,14 @@ use chimera_config::{
     clash::config::{ClashConfig, tun_stack::TunStack},
     profile::Profiles,
     runtime::executor::{
-        BuiltinTransform, ExecutionTarget, GuardInputs, ProfileContentSource, ResolvedPortBindings,
-        RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs, ScriptRunner, TunFlavor,
-        TunParams, execute,
+        BuiltinTransform, ExecutionTarget, GuardInputs, PortError, ProfileContentSource,
+        ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
+        ScriptRunner, TunFlavor, TunParams, execute,
     },
 };
 
 use crate::{
-    config::{
-        chimera::ClashCore as LegacyClashCore, core::Config,
-        profile::ref_adapter::to_runtime_profiles,
-    },
+    config::chimera::ClashCore as LegacyClashCore,
     enhance::{
         EnhanceScriptRunner, FsProfileContentSource,
         artifact_bridge::artifact_to_legacy_output_with_inspection,
@@ -169,26 +165,28 @@ impl RuntimeBuilder {
     }
 }
 
-pub(crate) async fn build_from_legacy_with_inspection(
+/// Build from the committed or transaction-candidate Profiles snapshot.
+///
+/// Staged bytes are supplied by the ProfilesActor for file-first mutations;
+/// they overlay disk only for this candidate build and never change the
+/// materialized file source used by later builds.
+pub(crate) async fn build_from_profiles_with_inspection(
     clash: &ClashConfig,
     core: LegacyClashCore,
+    profiles: Arc<Profiles>,
+    mut app: ChimeraAppConfig,
     resolved_ports: ResolvedPortBindings,
+    staged_content: BTreeMap<String, String>,
 ) -> Result<(
     serde_yaml::Mapping,
     Vec<String>,
     crate::enhance::PostProcessingOutput,
     crate::client::runtime_inspection::RuntimeInspectionData,
 )> {
-    let profiles = Arc::new(to_runtime_profiles(&Config::profiles().latest())?);
-    let mut app = ChimeraAppConfig::default();
-    app.core = map_core(core);
-    app.enable_builtin_enhanced = Config::verge()
-        .latest()
-        .enable_builtin_enhanced
-        .unwrap_or(true);
-
+    let core = map_core(core);
+    app.core = core;
     let input = RuntimeBuildInput {
-        profiles: profiles.clone(),
+        profiles,
         clash: clash.clone(),
         app,
         resolved_ports,
@@ -196,7 +194,10 @@ pub(crate) async fn build_from_legacy_with_inspection(
     let profiles_dir = dirs::app_profiles_dir()?;
 
     tokio::task::spawn_blocking(move || {
-        let content = FsProfileContentSource::new(profiles_dir);
+        let content = CandidateProfileContentSource {
+            base: FsProfileContentSource::new(profiles_dir),
+            staged: staged_content,
+        };
         let scripts = EnhanceScriptRunner::new()?;
         let artifact = RuntimeBuilder::build(&input, &content, &scripts)
             .map_err(|error| anyhow::anyhow!(error))?;
@@ -209,6 +210,24 @@ pub(crate) async fn build_from_legacy_with_inspection(
     })
     .await
     .context("runtime builder task failed")?
+}
+
+struct CandidateProfileContentSource {
+    base: FsProfileContentSource,
+    staged: BTreeMap<String, String>,
+}
+
+impl ProfileContentSource for CandidateProfileContentSource {
+    fn read(
+        &self,
+        path: &chimera_config::profile::ManagedProfilePath,
+    ) -> Result<String, PortError> {
+        self.staged
+            .get(&path.to_string())
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| self.base.read(path))
+    }
 }
 
 fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {

@@ -1,4 +1,9 @@
-import type { ProfileQueryResultItem } from '@chimera/interface';
+import {
+  getRemoteSource,
+  isConfigItem,
+  isTransformItem,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
@@ -48,18 +53,21 @@ export default function ProfileCard({
   const isProxy = isProxyProfile(profile);
 
   const typeLabel = (() => {
-    switch (profile.type) {
-      case 'remote':
-        return m.profile_remote_label();
-      case 'local':
-        return m.profile_local_label();
-      case 'merge':
-        return m.profile_merge_label();
-      case 'script':
-        return profile.script_type === 'lua'
-          ? m.profile_lua_label()
-          : m.profile_javascript_label();
+    if (isConfigItem(profile)) {
+      if (profile.config.type === 'composition') return 'Composition';
+      return getRemoteSource(profile)
+        ? m.profile_remote_label()
+        : m.profile_local_label();
     }
+    if (isTransformItem(profile) && profile.transform.type === 'overlay') {
+      return m.profile_merge_label();
+    }
+    if (isTransformItem(profile) && profile.transform.type === 'script') {
+      return profile.transform.runtime === 'lua'
+        ? m.profile_lua_label()
+        : m.profile_javascript_label();
+    }
+    return '';
   })();
 
   return (

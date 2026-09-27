@@ -193,6 +193,20 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().reconcile(clash, target_core, run_type).await
     }
 
+    async fn reconcile_profiles(
+        &self,
+        clash: chimera_config::clash::config::ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.facade()
+            .reconcile_with_profiles(clash, target_core, run_type, profiles, app, staged_content)
+            .await
+    }
+
     async fn stop(&self) -> anyhow::Result<()> {
         self.facade().stop().await
     }

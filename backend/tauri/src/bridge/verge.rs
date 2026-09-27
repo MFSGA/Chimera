@@ -187,6 +187,17 @@ pub(crate) fn legacy_core_from_typed(core: AppClashCore) -> ClashCore {
     }
 }
 
+pub(crate) fn typed_core_from_legacy(core: ClashCore) -> AppClashCore {
+    match core {
+        ClashCore::ClashPremium => AppClashCore::ClashPremium,
+        ClashCore::ClashRs => AppClashCore::ClashRs,
+        ClashCore::Mihomo => AppClashCore::Mihomo,
+        ClashCore::ChimeraClient => AppClashCore::ChimeraClient,
+        ClashCore::MihomoAlpha => AppClashCore::MihomoAlpha,
+        ClashCore::ClashRsAlpha => AppClashCore::ClashRsAlpha,
+    }
+}
+
 fn language_from_legacy(value: &str) -> Option<I18nLanguage> {
     match value.to_ascii_lowercase().as_str() {
         "en" | "en-us" => Some(I18nLanguage::English),

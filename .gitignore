@@ -38,6 +38,7 @@ release.sh
 # Keep governing guides versionable without exposing local reports and evidence.
 /docs/*
 !/docs/ref-alignment-guide.md
+!/docs/ref-alignment-profiles.md
 !/docs/tauri-e2e-minimal-architecture.md
 !/docs/testing/
 !/docs/testing/**

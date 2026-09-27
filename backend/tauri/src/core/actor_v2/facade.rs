@@ -309,6 +309,39 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(clash, target_core, run_type, None)
+            .await
+    }
+
+    pub(crate) async fn reconcile_with_profiles(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile_with_profile_source(
+            clash,
+            target_core,
+            run_type,
+            Some((profiles, app, staged_content)),
+        )
+        .await
+    }
+
+    async fn reconcile_with_profile_source(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profile_source: Option<(
+            Arc<chimera_config::profile::Profiles>,
+            chimera_config::application::ChimeraAppConfig,
+            std::collections::BTreeMap<String, String>,
+        )>,
+    ) -> anyhow::Result<()> {
         if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
             let previous_run_type = local_runtime.run_type();
@@ -332,14 +365,34 @@ impl CoreFacade {
                         }
                         _ => {}
                     }
-                    local_runtime
-                        .reconcile(clash, target_core, endpoint.as_ref())
-                        .await
+                    match profile_source {
+                        Some((profiles, app, staged_content)) => {
+                            local_runtime
+                                .reconcile_with_profiles(
+                                    clash,
+                                    target_core,
+                                    endpoint.as_ref(),
+                                    profiles,
+                                    app,
+                                    staged_content,
+                                )
+                                .await
+                        }
+                        None => {
+                            local_runtime
+                                .reconcile(clash, target_core, endpoint.as_ref())
+                                .await
+                        }
+                    }
                 })
                 .await;
             self.refresh_ws_binding().await;
             return result;
         }
+        // The manager-only compatibility path predates typed Profiles and has
+        // no candidate-input contract. Production uses LocalRuntimeHost, where
+        // the ref-aligned Profiles snapshot reaches the shared RuntimeBuilder.
+        let _ = profile_source;
         let manager = self.manager.clone();
         let result = self
             .run_local_mutation("core reconcile", async move {

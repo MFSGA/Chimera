@@ -1,8 +1,11 @@
 import {
-  ProfileQueryResultItem,
+  getRemoteSource,
   ProfileTemplate,
+  remoteProfileDefinitionOf,
   useProfile,
   useProfileContent,
+  type NewProfileRequest_Deserialize,
+  type ProfileQueryResultItem,
 } from '@chimera/interface';
 import { BaseDialog } from '@chimera/ui';
 import { Divider, InputAdornment, MenuItem, TextField } from '@mui/material';
@@ -23,11 +26,21 @@ import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { ReadProfile } from './read-profile';
-import { ClashProfile, ClashProfileBuilder } from './utils';
 
 const ProfileMonacoViewer = lazy(() => import('./profile-monaco-viewer'));
 
-type RemoteProfileForm = Extract<ClashProfileBuilder, { type: 'remote' }>;
+type ProfileDialogForm = {
+  type: 'remote' | 'local';
+  name: string;
+  desc: string;
+  url: string;
+  option: {
+    user_agent: string | null;
+    with_proxy: boolean | null;
+    self_proxy: boolean | null;
+    update_interval_minutes: number | null;
+  };
+};
 
 export interface ProfileDialogProps {
   profile?: ProfileQueryResultItem;
@@ -51,9 +64,11 @@ export const ProfileDialog = ({
   open,
   onClose,
 }: ProfileDialogProps) => {
-  const { create, patch } = useProfile();
+  const { create, patchMetadata, patchRemoteOptions, replaceDefinition } =
+    useProfile();
 
   const contentFn = useProfileContent(profile?.uid ?? '');
+  const remoteSource = profile ? getRemoteSource(profile) : undefined;
 
   const localProfile = useRef('');
   const addProfileCtx = use(AddProfileContext);
@@ -61,22 +76,21 @@ export const ProfileDialog = ({
   const [localProfileMessage] = useState('');
 
   const { control, watch, handleSubmit, reset, setValue } =
-    useForm<ClashProfileBuilder>({
-      defaultValues: (profile as ClashProfile) || {
-        type: addProfileCtx?.type || 'remote',
-        uid: null,
-        name: addProfileCtx?.name || m.profile_new_profile_default_name(),
-        desc: addProfileCtx?.desc || '',
-        file: null,
-        updated: null,
-        url: addProfileCtx?.url || '',
-        chain: null,
-        extra: null,
+    useForm<ProfileDialogForm>({
+      defaultValues: {
+        type: addProfileCtx?.type ?? (remoteSource ? 'remote' : 'local'),
+        name:
+          profile?.name ??
+          addProfileCtx?.name ??
+          m.profile_new_profile_default_name(),
+        desc: profile?.desc ?? addProfileCtx?.desc ?? '',
+        url: remoteSource?.url ?? addProfileCtx?.url ?? '',
         option: {
-          user_agent: null,
-          with_proxy: null,
-          self_proxy: null,
-          update_interval_minutes: null,
+          user_agent: remoteSource?.option.user_agent ?? null,
+          with_proxy: remoteSource?.option.with_proxy ?? null,
+          self_proxy: remoteSource?.option.self_proxy ?? null,
+          update_interval_minutes:
+            remoteSource?.option.update_interval_minutes ?? null,
         },
       },
     });
@@ -132,7 +146,7 @@ export const ProfileDialog = ({
 
     const toCreate = async () => {
       if (isRemote) {
-        const data = form as RemoteProfileForm;
+        const data = form;
 
         await create.mutateAsync({
           type: 'url',
@@ -147,10 +161,24 @@ export const ProfileDialog = ({
           },
         });
       } else {
+        const request: NewProfileRequest_Deserialize = {
+          metadata: { name: form.name, desc: form.desc || null },
+          definition: {
+            type: 'config',
+            config: {
+              type: 'file',
+              source: {
+                type: 'local',
+                binding: { type: 'managed', file: 'pending.yaml' },
+              },
+              transforms: [],
+            },
+          },
+        };
         await create.mutateAsync({
           type: 'manual',
           data: {
-            item: form,
+            request,
             fileData: localProfile.current || ProfileTemplate.profile,
           },
         });
@@ -167,10 +195,38 @@ export const ProfileDialog = ({
 
       await contentFn.upsert.mutateAsync(value);
 
-      await patch.mutateAsync({
+      await patchMetadata.mutateAsync({
         uid,
-        profile: form,
+        patch: { name: form.name, desc: form.desc || null },
       });
+      if (remoteSource) {
+        await patchRemoteOptions.mutateAsync({
+          uid,
+          patch: {
+            user_agent: form.option.user_agent,
+            with_proxy: form.option.with_proxy,
+            self_proxy: form.option.self_proxy,
+            update_interval_minutes: form.option.update_interval_minutes,
+          },
+        });
+        const definition = profile ? remoteProfileDefinitionOf(profile) : null;
+        if (
+          definition?.type === 'config' &&
+          definition.config.type === 'file' &&
+          definition.config.source.type === 'remote'
+        ) {
+          await replaceDefinition.mutateAsync({
+            uid,
+            definition: {
+              ...definition,
+              config: {
+                ...definition.config,
+                source: { ...definition.config.source, url: form.url },
+              },
+            },
+          });
+        }
+      }
     };
 
     try {
@@ -369,7 +425,20 @@ export const ProfileDialog = ({
 
   useAsyncEffect(async () => {
     if (profile) {
-      reset(profile as ClashProfileBuilder);
+      const source = getRemoteSource(profile);
+      reset({
+        type: source ? 'remote' : 'local',
+        name: profile.name,
+        desc: profile.desc ?? '',
+        url: source?.url ?? '',
+        option: {
+          user_agent: source?.option.user_agent ?? null,
+          with_proxy: source?.option.with_proxy ?? null,
+          self_proxy: source?.option.self_proxy ?? null,
+          update_interval_minutes:
+            source?.option.update_interval_minutes ?? null,
+        },
+      });
     }
 
     if (isEdit) {

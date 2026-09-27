@@ -1,4 +1,8 @@
-import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
+import {
+  getRemoteSource,
+  useProfile,
+  type ProfileQueryResultItem,
+} from '@chimera/interface';
 import { AnimatePresence } from 'motion/react';
 import { useState, type ComponentProps } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
@@ -29,7 +33,7 @@ export default function UpdateOptionEditor({
 }: ComponentProps<typeof ModalTrigger> & {
   profile: ProfileQueryResultItem;
 }) {
-  const remote = profile.type === 'remote' ? profile : null;
+  const remote = getRemoteSource(profile);
   const { patchRemoteOptions } = useProfile();
   const [open, setOpen] = useState(false);
   const [userAgent, setUserAgent] = useState(remote?.option.user_agent ?? '');
@@ -65,7 +69,7 @@ export default function UpdateOptionEditor({
 
     try {
       await patchRemoteOptions.mutateAsync({
-        uid: remote.uid,
+        uid: profile.uid,
         patch: {
           user_agent: userAgent.trim() || null,
           with_proxy: withProxy,

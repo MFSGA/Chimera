@@ -1,0 +1,21 @@
+# Profile alignment record
+
+## DIFF-PROFILE-01: typed Profile client and runtime migration
+
+- Reference commit: `5331747c06a5f42eeabb3e225a1e77a83f480549`; `/Users/adam/Desktop/int/Chimera/ref` was clean when checked.
+- Reference paths and symbols:
+  - `frontend/interface/src/ipc/use-profile.ts`: `ProfileItem_Serialize`, `ProfileId`, `getRemoteSource`, `isRemoteItem`, `scopedTransformsOf`, and `useProfile` operations.
+  - `backend/tauri/src/client/mod.rs`: `NyanpasuClient::{get_profiles, create_profile, import_profile, update_profile, delete_profile, reorder_profile, patch_profile_metadata, patch_remote_profile_options, replace_profile_definition, activate_profile, set_global_transforms, set_profile_valid_fields, read_profile_file, save_profile_file}`.
+  - `backend/tauri/src/client/profiles.rs` and `backend/tauri/src/state/profiles/{actor.rs,ports.rs,scheduler.rs}`: `ProfilesClient`, `ProfilesActor`, file/materialization ports, and remote refresh scheduling.
+  - `backend/tauri/src/enhance/runtime_builder.rs`: `RuntimeBuilder` over typed `Profiles`.
+- Chimera paths and symbols:
+  - `frontend/interface/src/ipc/use-profile.ts`: same Profile helper names and operation names over Chimera's generated `commands` binding.
+  - `backend/tauri/src/client/profile_api.rs`: corresponding `ChimeraClient` methods; IPC commands call these methods directly.
+  - `backend/tauri/src/client/profiles.rs` and `backend/tauri/src/state/profiles/{actor.rs,ports.rs,scheduler.rs}`: typed actor client and domain operations.
+  - `backend/tauri/src/core/actor_v2/local_runtime.rs` and `backend/tauri/src/enhance/runtime_builder.rs`: typed Profile snapshot and staged-content overlay reach the runtime builder.
+- Category: temporary migration, with legacy UI, E2E, and agent kept as supported extension points.
+- Difference and reason: Chimera retains its `CoreLifecycleClient` and `CoreFacade` boundary for local and Chimera Service execution. The Profile transaction participant in `backend/tauri/src/state/mutation.rs` adapts typed Profile candidate commits to that boundary and restores the prior snapshot on rollback. It does not yet reproduce ref's generic `ApplicationMutationParticipant` / tracked TCC workflow, including its typed safe-deferral and recovery receipts; runtime apply failures fail the Profile transaction closed. This is a bounded but material convergence item, so the Profile workflow is not claimed to be fully transaction-architecture aligned.
+- Shared entry points: main UI and legacy UI call `useProfile`; IPC calls the `ChimeraClient` Profile methods; agent diagnostics reads the same typed Profile snapshot. The legacy presentation remains supported. The `RemoteProfileImportMode::Direct` option remains a Chimera IPC/import extension and maps to remote fetch options at the command boundary.
+- Data and runtime: startup runs the Profile schema migration before constructing `ProfilesClient`. The production runtime builder requires typed Profiles and staged file content; production callers no longer initialize or read the old `Config::profiles()` store. The old profile adapter is test-only. Migration recovery/backup behavior remains owned by `core/migration/modules/profiles.rs`.
+- Verification: `pnpm typecheck`, `cargo check --manifest-path backend/tauri/Cargo.toml -q`, and `git diff --check` passed after the client method and translation updates. The JS toolchain reported Node version warnings (workspace requires 24.21; the invoked package tasks used 22.23.3 and root pnpm used 24.19). Profile migration tests and E2E Profile definition unit tests passed earlier in this work session, before the final facade call-site and translation changes; they are not desktop/runtime proof. No live core, Chimera Service, network subscription, upgrade/restart, or legacy desktop flow was exercised in this pass.
+- Convergence condition: migrate the Profile mutation participant onto ref's tracked application workflow/TCC contracts while keeping Chimera's core/service adapters, then verify commit, safe deferral, rollback, unknown runtime outcome, and explicit recovery through real runtime-backed tests.

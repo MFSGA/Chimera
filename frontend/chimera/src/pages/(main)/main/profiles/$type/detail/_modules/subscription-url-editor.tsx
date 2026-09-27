@@ -1,4 +1,5 @@
 import {
+  getRemoteSource,
   remoteProfileDefinitionOf,
   useProfile,
   type ProfileQueryResultItem,
@@ -33,13 +34,14 @@ export default function SubscriptionUrlEditor({
   profile: ProfileQueryResultItem;
 }) {
   const { replaceDefinition, update } = useProfile();
+  const remote = getRemoteSource(profile);
   const [open, setOpen] = useState(false);
-  const [url, setUrl] = useState(profile.type === 'remote' ? profile.url : '');
+  const [url, setUrl] = useState(remote?.url ?? '');
   const [error, setError] = useState<string | null>(null);
 
   const close = () => {
     setOpen(false);
-    setUrl(profile.type === 'remote' ? profile.url : '');
+    setUrl(remote?.url ?? '');
     setError(null);
   };
 
@@ -47,7 +49,13 @@ export default function SubscriptionUrlEditor({
     `update-remote-profile-url-${profile.uid}`,
     async () => {
       const definition = remoteProfileDefinitionOf(profile);
-      if (!definition) return;
+      if (!definition || definition.type !== 'config') return;
+      if (
+        definition.config.type !== 'file' ||
+        definition.config.source.type !== 'remote'
+      ) {
+        return;
+      }
 
       let parsed: URL;
       try {
@@ -65,10 +73,7 @@ export default function SubscriptionUrlEditor({
             ...definition,
             config: {
               ...definition.config,
-              source: {
-                ...definition.config.source,
-                url: parsed.toString(),
-              },
+              source: { ...definition.config.source, url: parsed.toString() },
             },
           },
         });
@@ -84,7 +89,7 @@ export default function SubscriptionUrlEditor({
   );
   const submit = useLockFn(task.execute);
 
-  if (profile.type !== 'remote') return null;
+  if (!remote) return null;
 
   return (
     <Modal

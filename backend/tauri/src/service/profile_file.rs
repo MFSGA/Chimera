@@ -73,6 +73,12 @@ impl ProfileFileService {
         Ok(full)
     }
 
+    /// Resolve a managed profile path after enforcing the same containment and
+    /// private-storage checks used by reads and writes.
+    pub fn resolve_path(&self, path: &ManagedProfilePath) -> anyhow::Result<PathBuf> {
+        self.resolve(path)
+    }
+
     fn validate_existing_parent_chain(&self, full: &Path) -> anyhow::Result<()> {
         let root = self.paths.app_profiles_dir();
         let relative = full.strip_prefix(&root).with_context(|| {

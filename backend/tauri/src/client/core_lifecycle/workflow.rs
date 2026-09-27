@@ -19,6 +19,10 @@ pub(super) enum Command {
     SelectCore(ClashCore),
     RecoverCore,
     Reconcile,
+    ReconcileProfiles {
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    },
     ReplaceCoreBinary(PreparedCoreBinary),
     InstallService(Box<dyn ServiceTransitionLease>),
     UninstallService(Box<dyn ServiceTransitionLease>),
@@ -41,6 +45,7 @@ pub(super) enum Command {
 pub(super) struct CoreLifecycleWorkflow {
     application: ApplicationClient,
     clash: ClashConfigClient,
+    profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
     core: Arc<dyn CoreLifecyclePort>,
     installer: Arc<dyn BinaryInstaller>,
     service: Arc<dyn ServiceLifecyclePort>,
@@ -50,6 +55,7 @@ impl CoreLifecycleWorkflow {
     pub(super) fn new(
         application: ApplicationClient,
         clash: ClashConfigClient,
+        profiles: Option<chimera_core::state::StateSnapshot<chimera_config::profile::Profiles>>,
         core: Arc<dyn CoreLifecyclePort>,
         installer: Arc<dyn BinaryInstaller>,
         _runtime_paths: RuntimePaths,
@@ -58,6 +64,7 @@ impl CoreLifecycleWorkflow {
         Self {
             application,
             clash,
+            profiles,
             core,
             installer,
             service,
@@ -83,10 +90,14 @@ impl CoreLifecycleWorkflow {
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::ReconcileProfiles {
+                profiles,
+                staged_content,
+            } => self.reconcile_profiles(profiles, staged_content).await,
             Command::Shutdown => self.core.stop().await,
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
-            Command::SelectCore(core) => self.core.change_core(core).await,
+            Command::SelectCore(core) => self.select_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService(mut transition) => transition.install_daemon().await,
             Command::UninstallService(mut transition) => {
@@ -215,7 +226,86 @@ impl CoreLifecycleWorkflow {
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
-        self.core.reconcile(clash, target_core, run_type).await
+        if let Some(profiles) = &self.profiles {
+            self.core
+                .reconcile_profiles(
+                    clash,
+                    target_core,
+                    run_type,
+                    Arc::new(profiles.load().state.clone()),
+                    app,
+                    Default::default(),
+                )
+                .await
+        } else {
+            self.core.reconcile(clash, target_core, run_type).await
+        }
+    }
+
+    async fn reconcile_profiles(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        let clash = self.clash.get()?;
+        let app = self.application.get_typed();
+        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        self.core
+            .reconcile_profiles(clash, target_core, run_type, profiles, app, staged_content)
+            .await
+    }
+
+    async fn select_core(&self, core: ClashCore) -> anyhow::Result<()> {
+        let Some(profiles) = &self.profiles else {
+            return self.core.change_core(core).await;
+        };
+
+        let previous_app = self.application.get_typed();
+        let mut candidate_app = previous_app.clone();
+        candidate_app.core = crate::bridge::verge::typed_core_from_legacy(core);
+        let profile_snapshot = Arc::new(profiles.load().state.clone());
+        let clash = self.clash.get()?;
+        let run_type = crate::core::RunType::classify(
+            candidate_app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+
+        self.core
+            .reconcile_profiles(
+                clash.clone(),
+                core,
+                run_type,
+                profile_snapshot.clone(),
+                candidate_app.clone(),
+                Default::default(),
+            )
+            .await?;
+
+        if let Err(error) = self.application.patch_core(candidate_app.core).await {
+            let previous_core = crate::bridge::verge::legacy_core_from_typed(previous_app.core);
+            let rollback = self
+                .core
+                .reconcile_profiles(
+                    clash,
+                    previous_core,
+                    run_type,
+                    profile_snapshot,
+                    previous_app,
+                    Default::default(),
+                )
+                .await;
+            return match rollback {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(anyhow::anyhow!(
+                    "failed to persist selected core: {error}; failed to restore the previous Profile runtime: {rollback_error}"
+                )),
+            };
+        }
+        Ok(())
     }
 
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {

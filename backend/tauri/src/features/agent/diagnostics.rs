@@ -10,7 +10,7 @@ use crate::{
         ChimeraClient,
         core_lifecycle::{ServiceHostStatus, ServicePhase},
     },
-    config::{core::Config, profile::item::Profile},
+    config::core::Config,
     core::{
         clash::{
             core::RunType,
@@ -41,7 +41,6 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     let verge = Config::verge().latest().clone();
     let clash = Config::clash().latest().clone();
     let runtime = Config::runtime().latest().clone();
-    let profiles = Config::profiles().data().clone();
     let expected_mixed_port = verge
         .verge_mixed_port
         .unwrap_or_else(|| clash.get_mixed_port());
@@ -68,6 +67,22 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     let (core_status, system_proxy) = tokio::join!(core_status, system_proxy);
 
     let mut failures = Vec::new();
+    let profiles = match client.get_profiles() {
+        Ok(profiles) => summarize_profiles(&profiles),
+        Err(error) => {
+            log::warn!(target: "app", "failed to read typed profiles for agent diagnostics: {error}");
+            failures.push(AgentProbeFailure {
+                code: AgentProbeCode::ProfilesUnavailable,
+            });
+            AgentProfileSnapshot {
+                total_count: 0,
+                active_count: 0,
+                remote_count: 0,
+                local_count: 0,
+                active_references_valid: false,
+            }
+        }
+    };
     let mut core = match core_status {
         Ok(status) => AgentCoreSnapshot {
             state: map_core_state(&status.state),
@@ -141,7 +156,6 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         observed_host_active,
         core.state,
     );
-    let profiles = summarize_profiles(&profiles);
     let telemetry = summarize_telemetry(app, &mut failures);
     let findings = derive_findings(
         &core,
@@ -327,23 +341,24 @@ pub(super) fn host_scope(host: &str) -> AgentHostScope {
     }
 }
 
-fn summarize_profiles(
-    profiles: &crate::config::profile::profiles::Profiles,
-) -> AgentProfileSnapshot {
+fn summarize_profiles(profiles: &chimera_config::profile::Profiles) -> AgentProfileSnapshot {
     let remote_count = profiles
         .items
-        .iter()
-        .filter(|profile| matches!(profile, Profile::Remote(_)))
+        .values()
+        .filter(|profile| {
+            matches!(
+                profile.definition.source(),
+                Some(chimera_config::profile::ProfileSource::Remote { .. })
+            )
+        })
         .count() as u32;
-    let active_references_valid = profiles.current.iter().all(|uid| {
-        profiles
-            .items
-            .iter()
-            .any(|profile| crate::config::profile::item::ProfileMetaGetter::uid(profile) == uid)
-    });
+    let active_references_valid = profiles
+        .current
+        .as_ref()
+        .is_none_or(|uid| profiles.items.contains_key(uid));
     AgentProfileSnapshot {
         total_count: profiles.items.len() as u32,
-        active_count: profiles.current.len() as u32,
+        active_count: u32::from(profiles.current.is_some()),
         remote_count,
         local_count: profiles.items.len() as u32 - remote_count,
         active_references_valid,

@@ -1,8 +1,7 @@
 import {
-  RemoteProfileOptionsBuilder,
+  isRemoteItem,
   useProfile,
   type MutationOutcome,
-  type RemoteProfile,
 } from '@chimera/interface';
 import { SidePage } from '@chimera/ui';
 import {
@@ -134,34 +133,14 @@ function ProfilePage() {
 
   const handleGlobalProfileUpdate = useLockFn(async () => {
     startGlobalUpdate(async () => {
-      const remoteProfiles =
-        (profiles?.clash?.filter(
-          (item) => item.type === 'remote',
-        ) as RemoteProfile[]) || [];
+      const remoteProfiles = profiles?.clash?.filter(isRemoteItem) ?? [];
 
       const updates: Array<Promise<MutationOutcome<null> | undefined>> = [];
 
       for (const profile of remoteProfiles) {
-        const profileOption = profile.option;
-        const option: RemoteProfileOptionsBuilder = {
-          user_agent:
-            profileOption && 'user_agent' in profileOption
-              ? (profileOption.user_agent ?? null)
-              : null,
-          with_proxy:
-            profileOption && 'with_proxy' in profileOption
-              ? (profileOption.with_proxy ?? null)
-              : null,
-          self_proxy:
-            profileOption && 'self_proxy' in profileOption
-              ? (profileOption.self_proxy ?? null)
-              : null,
-          update_interval_minutes: 0,
-        };
-
         const result = await update.mutateAsync({
           uid: profile.uid,
-          option,
+          option: null,
         });
         updates.push(Promise.resolve(result));
       }

@@ -106,6 +106,20 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()>;
+    /// Candidate Profile input for the ref-aligned runtime builder. Existing
+    /// lifecycle adapters can retain their compatibility behavior until they
+    /// implement the typed snapshot path.
+    async fn reconcile_profiles(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        _profiles: Arc<chimera_config::profile::Profiles>,
+        _app: chimera_config::application::ChimeraAppConfig,
+        _staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        self.reconcile(clash, target_core, run_type).await
+    }
     async fn stop(&self) -> anyhow::Result<()>;
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;

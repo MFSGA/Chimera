@@ -126,6 +126,20 @@ impl ApplicationClient {
         }
     }
 
+    pub(crate) async fn patch_core(
+        &self,
+        core: chimera_config::application::ClashCore,
+    ) -> anyhow::Result<()> {
+        self.patch_typed(ChimeraAppConfigPatch {
+            core: Some(core),
+            ..Default::default()
+        })
+        .await?;
+        Config::verge().data().save_file()?;
+        handle::Handle::refresh_verge();
+        Ok(())
+    }
+
     async fn get(&self) -> anyhow::Result<ApplicationSnapshot> {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { .. } => {
