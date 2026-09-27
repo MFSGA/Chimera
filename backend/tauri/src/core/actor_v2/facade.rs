@@ -1,9 +1,9 @@
 //! Control helpers owned by the lower core-host boundary.
 //!
 //! This is the Chimera adapter for ref `core/actor_v2/facade.rs`.
-//! Normal local runtime operations use `chimera-core-manager`'s submit/wait
-//! protocol. Service core stop and API binding reads use the IPC v2 endpoint;
-//! Service reconcile and core selection still use the legacy manager.
+//! Production runtime operations use the shared endpoint submit/wait
+//! protocol. The legacy manager remains only as a compatibility path for
+//! facades constructed without the production `LocalRuntimeHost`.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -21,7 +21,10 @@ use chimera_config::clash::config::ClashConfig;
 use chimera_core_manager::{CoreCommand, CoreCommandEnvelope, CoreErrorKind, OperationId};
 use futures::FutureExt;
 
-use super::{control_endpoint::ControlEndpoint, endpoint::CoreStatusSnapshot};
+use super::{
+    control_endpoint::{ControlEndpoint, CoreStatusSnapshot as HostStatusSnapshot},
+    endpoint::CoreStatusSnapshot,
+};
 use crate::{
     client::runtime::{RuntimeSnapshot, RuntimeTransformFailure},
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
@@ -305,21 +308,32 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
-        if run_type == RunType::Normal
-            && let Some(local_runtime) = self.local_runtime.as_ref()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
-            let legacy_manager = self.manager.clone();
-            let was_local = local_runtime.is_local();
+            let previous_run_type = local_runtime.run_type();
+            let service_endpoint = self.service_endpoint.clone();
+            let stop_uncertain = self.outcome_uncertain.clone();
+            let endpoint: Arc<dyn ControlEndpoint> = match run_type {
+                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                RunType::Service => Arc::new(service_endpoint.clone()),
+                RunType::Elevated => {
+                    anyhow::bail!("elevated core execution is not implemented")
+                }
+            };
             let result = self
                 .run_local_mutation("core reconcile", async move {
-                    // A Service instance belongs to the legacy host. Stop it
-                    // before starting a local process with the same runtime.
-                    if !was_local {
-                        let lease = legacy_manager.begin_lifecycle().await;
-                        lease.stop_core().await?;
+                    match (previous_run_type, run_type) {
+                        (RunType::Service, RunType::Normal) => {
+                            stop_service_core(service_endpoint, stop_uncertain).await?;
+                        }
+                        (RunType::Normal, RunType::Service) => {
+                            local_runtime.stop_core().await?;
+                        }
+                        _ => {}
                     }
-                    local_runtime.reconcile(clash, target_core).await
+                    local_runtime
+                        .reconcile(clash, target_core, endpoint.as_ref())
+                        .await
                 })
                 .await;
             self.refresh_ws_binding().await;
@@ -334,25 +348,34 @@ impl CoreFacade {
                     .await
             })
             .await;
-        if result.is_ok()
-            && let Some(local_runtime) = self.local_runtime.as_ref()
-        {
-            local_runtime.set_run_type(run_type);
-        }
         self.refresh_ws_binding().await;
         result
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
-            let local_runtime = local_runtime.clone();
-            return self
-                .run_local_mutation("local core shutdown", async move {
-                    local_runtime.stop_core().await
-                })
-                .await;
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            match local_runtime.run_type() {
+                RunType::Normal => {
+                    let local_runtime = local_runtime.clone();
+                    return self
+                        .run_local_mutation("local core shutdown", async move {
+                            local_runtime.stop_core().await
+                        })
+                        .await;
+                }
+                RunType::Service => {
+                    let endpoint = self.service_endpoint.clone();
+                    let outcome_uncertain = self.outcome_uncertain.clone();
+                    return self
+                        .run_local_mutation("service core stop", async move {
+                            stop_service_core(endpoint, outcome_uncertain).await
+                        })
+                        .await;
+                }
+                RunType::Elevated => {
+                    anyhow::bail!("elevated core execution is not implemented")
+                }
+            }
         }
 
         let (_, _, run_type) = self.manager.status().await;
@@ -375,10 +398,15 @@ impl CoreFacade {
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             let local_runtime = local_runtime.clone();
+            let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                RunType::Service => Arc::new(self.service_endpoint.clone()),
+                RunType::Elevated => {
+                    anyhow::bail!("elevated core execution is not implemented")
+                }
+            };
             let result = self
                 .run_local_mutation("local core selection", async move {
                     Config::verge().draft().clash_core = Some(clash_core);
@@ -386,7 +414,10 @@ impl CoreFacade {
                         &Config::verge().latest(),
                         &Config::clash().latest().0,
                     )?;
-                    match local_runtime.reconcile(clash, clash_core).await {
+                    match local_runtime
+                        .reconcile(clash, clash_core, endpoint.as_ref())
+                        .await
+                    {
                         Ok(()) => {
                             Config::verge().apply();
                             log_err!(Config::verge().latest().save_file());
@@ -415,10 +446,32 @@ impl CoreFacade {
     }
 
     pub(crate) async fn status(&self) -> CoreStatusSnapshot {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
-            return local_runtime.status().await;
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            match local_runtime.run_type() {
+                RunType::Normal => return local_runtime.status().await,
+                RunType::Elevated => {
+                    return CoreStatusSnapshot {
+                        state: chimera_ipc::api::status::CoreState::Stopped(None),
+                        state_changed_at: 0,
+                        run_type: RunType::Elevated,
+                    };
+                }
+                RunType::Service => {}
+            }
+            return match self.service_endpoint.status().await {
+                Ok(status) => project_service_status(status, RunType::Service),
+                Err(error) => {
+                    tracing::warn!(%error, "service core status is unavailable");
+                    CoreStatusSnapshot {
+                        // The app-facing legacy projection has no unknown
+                        // state variant. Keep the service timestamp unset so
+                        // consumers do not mistake this for a fresh status.
+                        state: chimera_ipc::api::status::CoreState::Stopped(None),
+                        state_changed_at: 0,
+                        run_type: RunType::Service,
+                    }
+                }
+            };
         }
         let (state, state_changed_at, run_type) = self.manager.status().await;
         CoreStatusSnapshot {
@@ -438,46 +491,49 @@ impl CoreFacade {
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             return local_runtime.runtime_transform_output();
         }
         self.manager.runtime_transform_output()
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             return local_runtime.promoted_runtime_snapshot();
         }
         self.manager.promoted_runtime_snapshot()
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             return local_runtime.runtime_transform_failure();
         }
         self.manager.runtime_transform_failure()
     }
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
             return local_runtime.effective_clash_info();
         }
         self.manager.effective_clash_info()
     }
 
     pub(crate) async fn active_clash_info(&self) -> anyhow::Result<ClashInfo> {
-        if let Some(local_runtime) = self.local_runtime.as_ref()
-            && local_runtime.is_local()
-        {
-            return local_runtime.active_clash_info().await;
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            match local_runtime.run_type() {
+                RunType::Normal => return local_runtime.active_clash_info().await,
+                RunType::Elevated => {
+                    anyhow::bail!("elevated core execution is not implemented")
+                }
+                RunType::Service => {}
+            }
+            let connection = self
+                .service_endpoint
+                .api_connection()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?
+                .context("the service core has no active API connection")?;
+            return service_clash_info(local_runtime.effective_clash_info(), connection);
         }
 
         let (_, _, run_type) = self.manager.status().await;
@@ -577,6 +633,27 @@ fn service_clash_info(
     info.server = format!("{host}:{port}");
     info.secret = connection.secret;
     Ok(info)
+}
+
+fn project_service_status(status: HostStatusSnapshot, run_type: RunType) -> CoreStatusSnapshot {
+    use chimera_ipc::api::status::{CoreState, CoreStateDetail};
+
+    let state = match status.state {
+        Some(CoreStateDetail::Running { .. }) => CoreState::Running,
+        Some(CoreStateDetail::Stopped { reason }) => CoreState::Stopped(reason),
+        Some(
+            CoreStateDetail::Starting { .. }
+            | CoreStateDetail::Restarting { .. }
+            | CoreStateDetail::Switching { .. }
+            | CoreStateDetail::Stopping { .. },
+        )
+        | None => CoreState::Stopped(None),
+    };
+    CoreStatusSnapshot {
+        state,
+        state_changed_at: status.state_changed_at,
+        run_type,
+    }
 }
 
 async fn stop_service_core(

@@ -1,8 +1,9 @@
-//! Chimera application adapter for the reference `CoreControl` host.
+//! Chimera runtime generation and snapshot adapter shared by reference-aligned
+//! Local and Service control endpoints.
 //!
-//! Runtime generation and the legacy application projection stay at the
+//! App config conversion and the legacy application projection stay at the
 //! Tauri boundary; process, epoch, health, and config transactions belong to
-//! `chimera-core-manager`.
+//! the selected endpoint and `chimera-core-manager`.
 
 use std::fmt;
 use std::sync::{
@@ -13,10 +14,14 @@ use std::sync::{
 use anyhow::{Context, bail};
 use chimera_config::clash::config::ClashConfig;
 use chimera_core_manager::{
-    ApplyOutcome, CheckRequest, ConfigInput, CoreCommand, CoreCommandEnvelope, CoreControl,
-    CoreState, InstanceOptions, OperationId, OperationOutput, ReconcileRequest,
-    spec::LocalIpcSettings,
+    ConfigInput, CoreCommand, CoreCommandEnvelope, CoreControl, CoreState, InstanceOptions,
+    OperationId, OperationOutput, ReconcileRequest, spec::LocalIpcSettings,
 };
+use chimera_core_manager::{CoreErrorKind, RevisionId};
+use chimera_ipc::api::core::v2::{
+    OperationOutputInfo, OperationPhase, ReconcileOutcomeInfo, ReconcileOutcomeKind,
+};
+use chimera_ipc::api::status::CoreStateDetail;
 use parking_lot::RwLock;
 
 use crate::{
@@ -26,18 +31,23 @@ use crate::{
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
-        actor_v2::{CoreStatusSnapshot, local_host},
+        actor_v2::{
+            CoreStatusSnapshot, control_endpoint::CheckSubmission, control_endpoint::CheckSupport,
+            control_endpoint::ControlEndpoint, control_endpoint::CoreSubmission,
+            control_endpoint::ExecutionHost, local_host,
+        },
         clash::core::RunType,
     },
     enhance::PostProcessingOutput,
 };
 
-/// Owns the local runtime adapter around the shared control plane.
+/// Owns Chimera's runtime generation and snapshot adapter around the shared
+/// endpoint control plane.
 ///
-/// `control` is the only process lifecycle owner. `lifecycle` keeps the
-/// application-facing transformed snapshot, and `ports` preserves the
-/// session's existing port-pick behavior while config compilation remains in
-/// the Chimera runtime pipeline.
+/// `control` backs the Local endpoint; the selected endpoint owns the active
+/// process lifecycle. `lifecycle` keeps the application-facing transformed
+/// snapshot, and `ports` preserves the session's existing port-pick behavior
+/// while config compilation remains in the Chimera runtime pipeline.
 pub(crate) struct LocalRuntimeHost {
     control: CoreControl,
     runtime_paths: RuntimePaths,
@@ -93,8 +103,12 @@ impl LocalRuntimeHost {
         *self.run_type.read() == RunType::Normal
     }
 
-    pub(crate) fn set_run_type(&self, run_type: RunType) {
-        *self.run_type.write() = run_type;
+    pub(crate) fn run_type(&self) -> RunType {
+        *self.run_type.read()
+    }
+
+    pub(crate) fn local_endpoint(&self) -> super::control_endpoint::LocalEndpoint {
+        super::control_endpoint::LocalEndpoint::new(self.control.clone())
     }
 
     pub(crate) fn outcome_uncertain(&self) -> bool {
@@ -105,6 +119,7 @@ impl LocalRuntimeHost {
         &self,
         clash: ClashConfig,
         target_core: ClashCore,
+        endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
         if self.closed.load(Ordering::Acquire) {
             bail!("the local core control plane is shutting down");
@@ -149,77 +164,91 @@ impl LocalRuntimeHost {
         let core_spec = local_host::core_spec(&target_core)?;
         let digest = chimera_core_manager::payload_digest(&config_bytes);
         let candidate = self.runtime_paths.create_candidate(&config_bytes).await?;
-        if let Err(error) = self
-            .control
-            .check(CheckRequest {
-                core: core_spec.clone(),
-                config: ConfigInput::Inline {
-                    bytes: config_bytes.clone(),
-                    expected_digest: Some(digest.clone()),
-                },
+        let staged_config = if endpoint.host() == ExecutionHost::Service {
+            match camino::Utf8PathBuf::from_path_buf(candidate.path().to_path_buf()) {
+                Ok(path) => Some(path),
+                Err(path) => {
+                    cleanup_candidate(candidate, "service check path is not UTF-8").await;
+                    bail!(
+                        "service config check path is not valid UTF-8: {}",
+                        path.to_string_lossy()
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        match endpoint
+            .check_config(CheckSubmission {
+                core_spec: core_spec.clone(),
+                core_type: (&target_core).into(),
+                config_bytes: config_bytes.clone(),
+                digest: digest.clone(),
+                staged_config,
             })
             .await
         {
-            cleanup_candidate(candidate, "advisory check failed").await;
-            return Err(error.into());
+            CheckSupport::Ran(Ok(())) => {}
+            CheckSupport::Ran(Err(error)) => {
+                cleanup_candidate(candidate, "advisory check failed").await;
+                return Err(error.into());
+            }
+            CheckSupport::Unsupported { reason } => {
+                cleanup_candidate(candidate, "advisory check is unsupported").await;
+                bail!("core config check is unavailable: {reason}");
+            }
         }
 
-        let envelope = CoreCommandEnvelope {
-            operation_id: OperationId::generate(),
-            command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
-                core: core_spec,
-                config: ConfigInput::Inline {
-                    bytes: config_bytes.clone(),
-                    expected_digest: Some(digest),
-                },
-                options: InstanceOptions {
-                    local_ipc: Some(LocalIpcSettings {
-                        policy: chimera_core_manager::LocalIpcPolicy::Disable,
-                        keep_http_controller: true,
-                    }),
-                    ..InstanceOptions::default()
-                },
-                expected_applied: None,
-            })),
-        };
-        let handle = match self.control.submit(envelope) {
-            Ok(handle) => handle,
+        let status = match endpoint.status().await {
+            Ok(status) => status,
             Err(error) => {
-                cleanup_candidate(candidate, "operation admission failed").await;
+                cleanup_candidate(candidate, "could not read reconcile baseline").await;
                 return Err(error.into());
             }
         };
-        let operation_id = handle.id();
-        let output = match handle.wait().await {
-            Ok(output) => output,
+        let expected_applied = match expected_applied_revision(&status) {
+            Ok(revision) => revision,
             Err(error) => {
-                cleanup_candidate(candidate, "runtime operation failed").await;
-                if error.kind.is_some_and(|kind| {
-                    matches!(
-                        kind,
-                        chimera_core_manager::CoreErrorKind::ApplyRollbackFailed
-                            | chimera_core_manager::CoreErrorKind::StopUnconfirmed
-                            | chimera_core_manager::CoreErrorKind::Quarantined
-                    )
-                }) || self.control.executor_is_closed()
-                {
-                    self.outcome_uncertain.store(true, Ordering::Release);
-                }
-                return Err(error.into());
+                cleanup_candidate(candidate, "reconcile baseline is not authoritative").await;
+                return Err(error);
             }
         };
-        let outcome = match output {
-            OperationOutput::Reconciled(outcome) => outcome,
-            unexpected => {
-                cleanup_candidate(candidate, "operation returned an unexpected result").await;
-                self.outcome_uncertain.store(true, Ordering::Release);
-                bail!("core operation {operation_id} returned unexpected output: {unexpected:?}");
-            }
+
+        let operation_id = OperationId::generate();
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id,
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: core_spec,
+                    config: ConfigInput::Inline {
+                        bytes: config_bytes,
+                        expected_digest: Some(digest),
+                    },
+                    options: InstanceOptions {
+                        local_ipc: Some(LocalIpcSettings {
+                            policy: chimera_core_manager::LocalIpcPolicy::Disable,
+                            keep_http_controller: true,
+                        }),
+                        ..InstanceOptions::default()
+                    },
+                    expected_applied,
+                })),
+            },
+            core_type: Some((&target_core).into()),
         };
-        if let Err(error) = accept_apply_outcome(&outcome) {
-            cleanup_candidate(candidate, "runtime apply was rolled back").await;
+        if let Err(error) = self
+            .submit_and_wait(endpoint, submission, operation_id)
+            .await
+        {
+            cleanup_candidate(candidate, "runtime operation failed").await;
             return Err(error);
         }
+
+        *self.run_type.write() = match endpoint.host() {
+            ExecutionHost::Local => RunType::Normal,
+            ExecutionHost::Service => RunType::Service,
+        };
 
         let promoted =
             crate::client::runtime::promote_candidate(&candidate, self.runtime_paths.product())
@@ -252,8 +281,77 @@ impl LocalRuntimeHost {
         self.lifecycle.publish_promoted(snapshot.clone());
         self.lifecycle.publish_applied(snapshot)?;
         Config::runtime().apply();
-        *self.run_type.write() = RunType::Normal;
         Ok(())
+    }
+
+    async fn submit_and_wait(
+        &self,
+        endpoint: &dyn ControlEndpoint,
+        submission: CoreSubmission,
+        operation_id: OperationId,
+    ) -> anyhow::Result<()> {
+        let mut operation = match endpoint.submit(submission).await {
+            Ok(operation) => operation,
+            Err(error) => {
+                if endpoint.host() == ExecutionHost::Service
+                    && (error.retryable
+                        || error.kind.is_some_and(|kind| {
+                            matches!(
+                                kind,
+                                CoreErrorKind::BackendUnavailable | CoreErrorKind::Internal
+                            )
+                        }))
+                {
+                    self.outcome_uncertain.store(true, Ordering::Release);
+                }
+                return Err(error.into());
+            }
+        };
+
+        if operation.id != operation_id.to_string() {
+            self.outcome_uncertain.store(true, Ordering::Release);
+            bail!("core host returned a different reconcile operation id");
+        }
+        if matches!(
+            operation.phase,
+            OperationPhase::Queued | OperationPhase::Running
+        ) {
+            operation = match endpoint
+                .wait_operation(operation_id, std::time::Duration::from_secs(60))
+                .await
+            {
+                Some(operation) => operation,
+                None => {
+                    self.outcome_uncertain.store(true, Ordering::Release);
+                    bail!("core reconcile outcome could not be observed");
+                }
+            };
+        }
+        if operation.id != operation_id.to_string() {
+            self.outcome_uncertain.store(true, Ordering::Release);
+            bail!("core host returned a different reconcile operation id");
+        }
+
+        match (operation.phase, operation.output) {
+            (OperationPhase::Succeeded, Some(OperationOutputInfo::Reconciled(outcome))) => {
+                accept_reconcile_outcome(&outcome)
+            }
+            (OperationPhase::Failed, _) => bail!(
+                "core reconcile failed: {}",
+                operation
+                    .error
+                    .map(|error| error.message)
+                    .unwrap_or_else(|| "core host returned no failure detail".into())
+            ),
+            (OperationPhase::Queued | OperationPhase::Running, _) => {
+                self.outcome_uncertain.store(true, Ordering::Release);
+                bail!("core reconcile is still running; its outcome is uncertain");
+            }
+            (OperationPhase::Succeeded, output) => {
+                self.outcome_uncertain.store(true, Ordering::Release);
+                bail!("core reconcile completed with an unexpected result: {output:?}");
+            }
+        }
     }
 
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
@@ -382,22 +480,55 @@ async fn cleanup_candidate(candidate: crate::client::runtime::CandidateFile, rea
     }
 }
 
-fn accept_apply_outcome(outcome: &ApplyOutcome) -> anyhow::Result<()> {
-    match outcome {
-        ApplyOutcome::RolledBack { failed_apply, .. } => {
-            bail!("core runtime apply was rolled back: {failed_apply}");
+fn expected_applied_revision(
+    status: &super::control_endpoint::CoreStatusSnapshot,
+) -> anyhow::Result<Option<RevisionId>> {
+    let Some(state) = status.state.as_ref() else {
+        bail!("core host did not publish an authoritative runtime state");
+    };
+    match state {
+        CoreStateDetail::Stopped { .. } => {}
+        CoreStateDetail::Running { .. } if status.revision.is_some() => {}
+        CoreStateDetail::Running { .. } => {
+            bail!("running core host did not publish its applied revision");
         }
-        ApplyOutcome::DurabilityUncertain { outcome, warning } => {
-            tracing::warn!(%warning, "core runtime applied with uncertain disk durability");
-            accept_apply_outcome(outcome)
+        CoreStateDetail::Starting { .. }
+        | CoreStateDetail::Restarting { .. }
+        | CoreStateDetail::Switching { .. }
+        | CoreStateDetail::Stopping { .. } => {
+            bail!("core host is changing state; reconcile must be retried after it settles");
         }
-        ApplyOutcome::Started { .. }
-        | ApplyOutcome::Noop { .. }
-        | ApplyOutcome::Patched { .. }
-        | ApplyOutcome::Reloaded { .. }
-        | ApplyOutcome::Restarted { .. }
-        | ApplyOutcome::Switched { .. } => Ok(()),
     }
+
+    status
+        .revision
+        .as_ref()
+        .map(|revision| {
+            let epoch = chimera_core_manager::Epoch::new(revision.epoch)
+                .ok_or_else(|| anyhow::anyhow!("the applied revision reported epoch 0"))?;
+            Ok(RevisionId {
+                epoch,
+                generation: revision.generation,
+                effective_hash: revision.effective_hash.clone(),
+            })
+        })
+        .transpose()
+}
+
+fn accept_reconcile_outcome(outcome: &ReconcileOutcomeInfo) -> anyhow::Result<()> {
+    if outcome.outcome == ReconcileOutcomeKind::RolledBack {
+        bail!(
+            "core runtime apply was rolled back: {}",
+            outcome
+                .failed_apply
+                .as_deref()
+                .unwrap_or("the host returned no rollback detail")
+        );
+    }
+    if let Some(warning) = &outcome.warning {
+        tracing::warn!(%warning, "core runtime applied with uncertain disk durability");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -442,52 +573,47 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 
-    // Contract: an explicit rollback proves the old config stayed active;
-    // successful start outcomes may be projected as applied. The wrong
-    // acceptance rule would publish a rolled-back document as current.
+    // Contract: the IPC v2 rollback variant proves the old config stayed
+    // active; other terminal reconcile outcomes may be projected as applied.
     #[test]
-    fn apply_outcome_distinguishes_a_rollback_from_an_applied_runtime() {
-        let rolled_back = ApplyOutcome::RolledBack {
-            revision: chimera_core_manager::ConfigRevision {
-                epoch: chimera_core_manager::Epoch::new(1).unwrap(),
-                generation: 1,
-                source_hash: "source".into(),
-                effective_hash: "effective".into(),
-                runtime_path: camino::Utf8PathBuf::from("/runtime/config.yaml"),
-            },
-            failed_apply: "injected apply failure".into(),
+    fn reconcile_outcome_distinguishes_a_rollback_from_an_applied_runtime() {
+        let revision = chimera_ipc::api::status::ConfigRevisionInfo {
+            epoch: 1,
+            generation: 1,
+            source_hash: "source".into(),
+            effective_hash: "effective".into(),
         };
-        assert!(accept_apply_outcome(&rolled_back).is_err());
-
-        let started = ApplyOutcome::Started {
-            revision: chimera_core_manager::ConfigRevision {
-                epoch: chimera_core_manager::Epoch::new(2).unwrap(),
-                generation: 1,
-                source_hash: "source".into(),
-                effective_hash: "effective".into(),
-                runtime_path: camino::Utf8PathBuf::from("/runtime/config.yaml"),
-            },
+        let rolled_back = ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::RolledBack,
+            revision: revision.clone(),
+            warning: None,
+            failed_apply: Some("injected apply failure".into()),
         };
-        assert!(accept_apply_outcome(&started).is_ok());
+        let started = ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::Started,
+            revision,
+            warning: None,
+            failed_apply: None,
+        };
+        assert!(accept_reconcile_outcome(&rolled_back).is_err());
+        assert!(accept_reconcile_outcome(&started).is_ok());
     }
 
-    // Contract: a durability warning wraps the core's apply result. It must
-    // keep the applied result visible while retaining the warning in logs.
+    // Contract: a durability warning accompanies a terminal applied result.
     #[test]
     fn durability_warning_preserves_the_underlying_apply_result() {
-        let outcome = ApplyOutcome::DurabilityUncertain {
-            outcome: Box::new(ApplyOutcome::Started {
-                revision: chimera_core_manager::ConfigRevision {
-                    epoch: chimera_core_manager::Epoch::new(3).unwrap(),
-                    generation: 1,
-                    source_hash: "source".into(),
-                    effective_hash: "effective".into(),
-                    runtime_path: camino::Utf8PathBuf::from("/runtime/config.yaml"),
-                },
-            }),
-            warning: "directory sync was not confirmed".into(),
+        let outcome = ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::Started,
+            revision: chimera_ipc::api::status::ConfigRevisionInfo {
+                epoch: 3,
+                generation: 1,
+                source_hash: "source".into(),
+                effective_hash: "effective".into(),
+            },
+            warning: Some("directory sync was not confirmed".into()),
+            failed_apply: None,
         };
 
-        assert!(accept_apply_outcome(&outcome).is_ok());
+        assert!(accept_reconcile_outcome(&outcome).is_ok());
     }
 }

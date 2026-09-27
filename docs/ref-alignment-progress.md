@@ -768,6 +768,39 @@ DIFF-001 至 DIFF-012 是此前基于
   `cargo fmt --manifest-path backend/Cargo.toml --all` 通过（stable rustfmt 对配置中的 nightly-only
   选项发出提示）；`cargo check --manifest-path backend/Cargo.toml -p chimera` 通过，输出 323 条
   现存 warning。未运行测试。
-- 下一步：把 Service reconcile 的配置构建/暂存、check 与 v2 CAS submit 接到共享 RuntimeIntent，核对
-  主界面、legacy UI 和 agent 共用入口；之后迁移 websocket event client，并在支持的平台验证服务端
-  v2 路由与 ChimeraClient core identity。
+- 后续进展：Service reconcile 与生产 facade 接线见 DIFF-029；仍需迁移 websocket event client，
+  并在支持的平台验证服务端 v2 路由与 ChimeraClient core identity。
+
+## DIFF-029：生产 LocalRuntimeHost 共用 Service v2 reconcile
+
+- 基线：根仓库 `00e573e2d158d08c1f12b2c927bc8c8f4908c73d`；嵌套
+  `backend/chimera-runtime` `646ab569cf649a50d342a5a3c6535470a0c7a778`。只读 ref 为 Clash
+  Nyanpasu root `5331747c06a5f42eeabb3e225a1e77a83f480549`、runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`；`ref/` 工作树检查为 clean。
+- ref 对应：`backend/tauri/src/core/actor_v2/facade.rs::reconcile`、
+  `actor_v2/endpoint.rs::ControlEndpoint::{check_config,submit,wait_operation,status}`、
+  `actor_v2/endpoint.rs::ServiceEndpoint::check_config`、`client/runtime.rs::RuntimePaths`。
+  本地落点为 `actor_v2/facade.rs` 与 `actor_v2/local_runtime.rs`。
+- 迁移范围：生产 `CoreFacade` 对 Normal 选择 `LocalEndpoint`、对 Service 选择
+  `ServiceEndpoint`；从本地切到 Service 前停止本地 core，从 Service 切回本地前以 v2 Stop
+  确认旧 host 已停。`LocalRuntimeHost` 统一生成配置、写私有 candidate、调用 host check，随后读取
+  status revision 并作为 `expected_applied` CAS 提交；校验操作 ID、long-poll 终态、失败与 rollback，
+  只在确认应用后提升并发布 Chimera runtime snapshot。Service 的配置状态、活动 API connection、
+  core selection 与快照读取也改为走相同 facade/host。无法确认 submit/wait 结果时锁定
+  `outcome_uncertain`；未发布详细状态、运行中没有 revision、零 epoch 或 transitional 状态均拒绝提交。
+- 保留的本地差异：继续用 `Config::render_runtime_bytes` 生成包含 Chimera header 的原始字节，check、
+  digest 与 reconcile 共用完全相同的字节；未用 ref `RuntimeIntentBuilder` 直接序列化 Mapping，避免
+  改变 Chimera runtime product 的格式。提交显式携带 `CoreType::ChimeraClient`，不将其折叠成
+  `ClashRust`。Service staged check 沿用 ref 的共享文件路径方案；Windows service 对该 candidate
+  的可读 ACL 和跨进程完整运行尚未在本机验证。`CoreFacade::new_local()` 的无生产 host 兼容入口仍
+  保留 legacy manager 流程；`RunType::Elevated` 当前尚未实现，继续明确报错。
+- 受影响入口：主 UI、legacy UI 和 agent 的 core lifecycle 继续汇入同一个 `CoreFacade`；本轮仅做
+  `chimera` 包编译，没有桌面交互或实际 Service daemon 启动验证。IPC websocket event client 仍待迁移，
+  Service 的事件订阅不因本轮而声称对齐。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 通过；
+  `cargo check --manifest-path backend/Cargo.toml -p chimera` 通过，输出 312 条 warning；
+  `cargo check --manifest-path backend/Cargo.toml -p chimera --tests` 通过，输出 234 条 test-build
+  warning；`git diff --check` 通过。未运行测试或跨进程/Windows 检查。
+- 下一步：迁移并验证 IPC websocket event client 与 Service 状态事件的生命周期，再覆盖 Service
+  v2 check/submit/status/stop 的跨进程启动流程；重点核对 staged candidate ACL、取消/超时后的状态恢复，
+  以及 Local/Service 交替切换后主 UI、legacy UI、agent 共用状态是否一致。
