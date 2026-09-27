@@ -1,0 +1,28 @@
+[package]
+name = "chimera-core-manager"
+version = "1.0.0-rc.6"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chimera-core-metadata = { path = "../chimera-core-metadata" }
+clash-api = { package = "chimera-clash-api", path = "../chimera-clash-api" }
+nyanpasu-utils = { workspace = true, features = ["process"] }
+camino = { version = "1.1", features = ["serde1"] }
+chrono = { version = "0.4", features = ["serde"] }
+enumset = "1"
+parking_lot = "0.12"
+schemars = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = { workspace = true }
+specta = { version = "^2.0.0-rc.25", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["v4"] }
+zerocopy = { version = "0.8", features = ["derive", "simd"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Security_Authorization"] }

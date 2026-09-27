@@ -1,0 +1,130 @@
+use std::fmt;
+
+use reqwest::Method;
+
+use crate::{Client, HttpStream, Result, retry::RequestMetadata};
+
+/// A byte count as represented by Mihomo's signed Go `int64` counters.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Deserialize,
+    serde::Serialize,
+    specta::Type,
+)]
+#[serde(transparent)]
+pub struct Bytes(i64);
+
+impl Bytes {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for Bytes {
+    fn from(value: i64) -> Self {
+        Self(value)
+    }
+}
+
+impl From<Bytes> for i64 {
+    fn from(value: Bytes) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for Bytes {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// A byte-per-second rate as represented by Mihomo's signed Go `int64` counters.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Deserialize,
+    serde::Serialize,
+    specta::Type,
+)]
+#[serde(transparent)]
+pub struct BytesPerSecond(#[serde(deserialize_with = "crate::stream::deserialize_number")] i64);
+
+impl BytesPerSecond {
+    pub const fn new(value: i64) -> Self {
+        Self(value)
+    }
+
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+impl From<i64> for BytesPerSecond {
+    fn from(value: i64) -> Self {
+        Self(value)
+    }
+}
+
+impl From<BytesPerSecond> for i64 {
+    fn from(value: BytesPerSecond) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for BytesPerSecond {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// One `/traffic` sample.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
+)]
+#[serde(rename_all = "camelCase")]
+pub struct Traffic {
+    pub up: BytesPerSecond,
+    pub down: BytesPerSecond,
+    pub up_total: Option<Bytes>,
+    pub down_total: Option<Bytes>,
+}
+
+impl Client {
+    /// Open Mihomo's newline-delimited `/traffic` HTTP stream.
+    pub async fn traffic(&self) -> Result<HttpStream<Traffic>> {
+        const OPERATION: &str = "traffic";
+        let metadata = RequestMetadata::new(OPERATION, Method::GET, true);
+        let response = self.send(metadata, || self.get("/traffic")).await?;
+        Ok(HttpStream::from_response(response, OPERATION))
+    }
+
+    /// Open the typed `/traffic` WebSocket.
+    ///
+    /// This method retries only the handshake according to the injected policy.
+    /// Once returned, reconnection belongs to the caller.
+    pub async fn traffic_ws(&self) -> Result<crate::WebSocketStream<Traffic>> {
+        const OPERATION: &str = "traffic_ws";
+        let metadata = RequestMetadata::new(OPERATION, Method::GET, true);
+
+        self.websocket(metadata, || self.get("/traffic"))
+            .await
+            .map(|socket| crate::WebSocketStream::new(socket, "traffic_ws"))
+    }
+}

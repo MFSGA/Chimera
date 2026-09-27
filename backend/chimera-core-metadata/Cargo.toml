@@ -1,0 +1,13 @@
+[package]
+name = "chimera-core-metadata"
+version = "1.0.0-rc.6"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+constcat = "0.6"
+enumset = { version = "1", features = ["serde"] }
+schemars = { version = "1", features = ["derive"] }
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+specta = { version = "^2.0.0-rc.25", features = ["derive"] }
