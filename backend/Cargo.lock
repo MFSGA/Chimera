@@ -1243,6 +1243,7 @@ dependencies = [
  "anyhow",
  "axum",
  "bytes",
+ "chimera-service-core-metadata",
  "chimera_utils",
  "derive_builder",
  "futures-util",
@@ -1271,6 +1272,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "chimera-service-core-metadata"
+version = "1.0.0-rc.6"
+dependencies = [
+ "constcat",
+ "enumset",
+ "schemars 1.2.1",
+ "semver 1.0.28",
+ "serde",
+ "specta",
 ]
 
 [[package]]

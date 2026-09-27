@@ -1,9 +1,8 @@
 //! IPC v2 adapter for a service-owned core.
 //!
-//! This is an additive boundary: the service process must expose the v2
-//! handlers before a caller can select this endpoint. The current Chimera
-//! service still serves v1, so construction is available for the migration
-//! path but does not change production routing.
+//! The service process exposes these v2 handlers. The production facade uses
+//! this adapter for Service core stop; reconcile and core selection remain on
+//! the legacy manager during migration.
 
 use std::{borrow::Cow, time::Duration};
 
@@ -24,6 +23,7 @@ use super::control_endpoint::{
 };
 
 /// Service adapter using the app's shared IPC client.
+#[derive(Clone)]
 pub struct ServiceEndpoint {
     client: &'static Client<'static>,
 }
@@ -35,6 +35,14 @@ impl ServiceEndpoint {
 
     pub fn service_default() -> Self {
         Self::new(Client::service_default())
+    }
+}
+
+impl std::fmt::Debug for ServiceEndpoint {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ServiceEndpoint")
+            .finish_non_exhaustive()
     }
 }
 
@@ -62,11 +70,21 @@ impl ControlEndpoint for ServiceEndpoint {
         ExecutionHost::Service
     }
 
-    async fn check_config(&self, _submission: CheckSubmission) -> CheckSupport {
-        CheckSupport::Unsupported {
-            reason: "the Chimera service does not expose the reference config-check endpoint"
-                .into(),
-        }
+    async fn check_config(&self, submission: CheckSubmission) -> CheckSupport {
+        let Some(path) = submission.staged_config else {
+            return CheckSupport::Unsupported {
+                reason: "the service host validates a config file, and none was staged".into(),
+            };
+        };
+        CheckSupport::Ran(
+            self.client
+                .check_config(&chimera_ipc::api::core::check::CoreCheckReq {
+                    core_type: Cow::Owned(submission.core_type),
+                    config_file: Cow::Owned(path.into_std_path_buf()),
+                })
+                .await
+                .map_err(map_client_error),
+        )
     }
 
     async fn submit(&self, submission: CoreSubmission) -> Result<OperationInfo, CoreError> {

@@ -730,16 +730,44 @@ DIFF-001 至 DIFF-012 是此前基于
   API connection typed calls；server error 通过前两步加入的 envelope 字段映射为本地错误类型，不解析
   message 文本。status 缺少详细状态时维持 `None`，不从 v1 粗状态伪造停止或启动证明。
 - Chimera 差异：`CoreKind::ChimeraClient` 显式映射至同一
-  `chimera_utils::core::CoreType::Clash(ChimeraClient)`，不降级成 `ClashRust`。当前 IPC/service
-  没有 config-check 路由或 event websocket client，因此 adapter 对 check 返回 `Unsupported`，沿用
-  trait 默认无事件流；这两项能力需分别迁移后才能达到 ref 的完整行为。
+  `chimera_utils::core::CoreType::Clash(ChimeraClient)`，不降级成 `ClashRust`。当时 IPC/service
+  尚无 config-check 路由，因此 adapter 返回 `Unsupported`；该限制已在 DIFF-028 补齐。
+  IPC websocket event client 仍未迁入，adapter 暂沿用 trait 默认无事件流。
 - 上游协议缺陷及修正：ref 的 IPC 注释和序列化样例声称 operation id 是连续 32 位 hex，但同一
   ref 的 `CoreControl::OperationId` parser/display 合同实际要求 `16-8-8` 分段形式。连续样例会被
   Service parser 拒绝。本地 DTO 注释/样例改为 manager 实际接受的格式；隔离工作区 `ref/` 未修改。
-- 兼容与限制：只导出可构造的 adapter，没有修改 `CoreFacade` 的 host 选择或生产调用路径。当前
-  Service v1 没有 `/v2/core/*` handler，所以尚不能用此 adapter 控制远程 core；不声称 Service v2
-  已可运行，下一切片需把 `CoreControl` bridge/operation handlers 迁入 `chimera-service` 并做路由测试。
+- 兼容与限制：此记录完成时仅导出可构造的 adapter，没有修改 `CoreFacade` 的 host 选择或生产调用
+  路径；随后服务端 v2 bridge/handlers 与 Stop/API 读取接线见 DIFF-028。Service reconcile 和 core
+  selection 仍走 legacy manager，不把适配器存在视为完整 host 迁移。
 - 验证：`cargo check --manifest-path backend/Cargo.toml -p chimera` 通过；
   `cargo test --manifest-path backend/Cargo.toml -p chimera
   core::actor_v2::service_endpoint::tests -- --test-threads=1`，2 passed、407 filtered；
   两个 workspace 的 `git diff --check` 通过。Tauri build 报约 329 条既有 warning。
+
+## DIFF-028：接入 Chimera Service CoreControl bridge 与 v2 Stop
+
+- 基线：根仓库 `65625161bbaa7f150b5451eeb55d1c249408ba42`；嵌套
+  `backend/chimera-runtime` 为 `ba2aee491a6ebad0aa1a3e2955a78304c9f4bfee`。只读 ref 为 root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549`、runtime
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- ref 对应：`backend/nyanpasu-runtime/crates/nyanpasu-service-runtime/src/server/manager_bridge.rs`、
+  `server/routing/core/v2.rs`、`backend/tauri/src/core/actor_v2/endpoint.rs::ServiceEndpoint` 与
+  `facade.rs::stop/command`。Chimera 保留 `chimera-*` 包名、`ChimeraClient` CoreType 身份和现有
+  v1 `Log(TraceLog)` 事件扩展。
+- 迁移范围：Service 进程接入 manager-backed submit、operation 查询、详细状态、effective config、API
+  connection 与 staged `/core/check` handlers；复制并适配 ref 的 manager bridge、事件投影、控制器访问、
+  Unix/Windows pipe ACL。Tauri `ServiceEndpoint` 实现了 staged config check；生产 `CoreFacade` 在
+  `RunType::Service` 下把 Stop 改为 v2 submit/wait，并通过 v2 API connection 生成兼容的
+  `ClashInfo`，保留当前产品端口字段及独立 secret。丢失操作终态、ID 不匹配或未知操作结果时锁定
+  `outcome_uncertain`，不把未确认停止当作成功。
+- 当前边界：Service reconcile、core selection、daemon 生命周期仍经 legacy manager；IPC client
+  websocket event stream 尚未迁移；本机 macOS 构建未验证 Windows ACL/pipe 分支，也未实际启动
+  daemon 做跨进程路由检查。DIFF-027 的 `/core/check` 缺口已消除；尚不能称 Service host 完整对齐。
+- 验证：`cargo check --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service` 与
+  `cargo build --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service` 均通过；
+  `cargo fmt --manifest-path backend/Cargo.toml --all` 通过（stable rustfmt 对配置中的 nightly-only
+  选项发出提示）；`cargo check --manifest-path backend/Cargo.toml -p chimera` 通过，输出 323 条
+  现存 warning。未运行测试。
+- 下一步：把 Service reconcile 的配置构建/暂存、check 与 v2 CAS submit 接到共享 RuntimeIntent，核对
+  主界面、legacy UI 和 agent 共用入口；之后迁移 websocket event client，并在支持的平台验证服务端
+  v2 路由与 ChimeraClient core identity。

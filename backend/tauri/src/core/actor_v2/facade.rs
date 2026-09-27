@@ -2,8 +2,8 @@
 //!
 //! This is the Chimera adapter for ref `core/actor_v2/facade.rs`.
 //! Normal local runtime operations use `chimera-core-manager`'s submit/wait
-//! protocol; Service-mode behavior remains behind the legacy compatibility
-//! manager until its host protocol is migrated.
+//! protocol. Service core stop and API binding reads use the IPC v2 endpoint;
+//! Service reconcile and core selection still use the legacy manager.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -18,9 +18,10 @@ use std::{
 
 use anyhow::Context;
 use chimera_config::clash::config::ClashConfig;
+use chimera_core_manager::{CoreCommand, CoreCommandEnvelope, CoreErrorKind, OperationId};
 use futures::FutureExt;
 
-use super::endpoint::CoreStatusSnapshot;
+use super::{control_endpoint::ControlEndpoint, endpoint::CoreStatusSnapshot};
 use crate::{
     client::runtime::{RuntimeSnapshot, RuntimeTransformFailure},
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
@@ -74,6 +75,7 @@ pub(crate) struct ServiceRestartPolicySnapshot {
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
+    service_endpoint: super::service_endpoint::ServiceEndpoint,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
@@ -234,6 +236,7 @@ impl CoreFacade {
         Self {
             manager: Arc::new(CoreManager::new()),
             local_runtime: None,
+            service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -254,6 +257,7 @@ impl CoreFacade {
                 control,
                 runtime_paths,
             ))),
+            service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -350,6 +354,18 @@ impl CoreFacade {
                 })
                 .await;
         }
+
+        let (_, _, run_type) = self.manager.status().await;
+        if run_type == RunType::Service {
+            let endpoint = self.service_endpoint.clone();
+            let outcome_uncertain = self.outcome_uncertain.clone();
+            return self
+                .run_local_mutation("service core stop", async move {
+                    stop_service_core(endpoint, outcome_uncertain).await
+                })
+                .await;
+        }
+
         let manager = self.manager.clone();
         self.run_local_mutation("core stop", async move {
             let lease = manager.begin_lifecycle().await;
@@ -463,6 +479,18 @@ impl CoreFacade {
         {
             return local_runtime.active_clash_info().await;
         }
+
+        let (_, _, run_type) = self.manager.status().await;
+        if run_type == RunType::Service {
+            let connection = self
+                .service_endpoint
+                .api_connection()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?
+                .context("the service core has no active API connection")?;
+            return service_clash_info(self.manager.effective_clash_info(), connection);
+        }
+
         self.manager.active_clash_info().await
     }
 
@@ -522,6 +550,103 @@ impl CoreFacade {
         };
         if let Err(error) = result {
             tracing::warn!(%error, "failed to interrupt connections after profile change");
+        }
+    }
+}
+
+fn service_clash_info(
+    mut info: ClashInfo,
+    connection: chimera_ipc::api::core::v2::CoreApiConnection,
+) -> anyhow::Result<ClashInfo> {
+    use chimera_ipc::api::status::CoreControllerInfo;
+
+    let CoreControllerInfo::Http(address) = connection.controller else {
+        anyhow::bail!("the service core API uses a non-HTTP controller transport");
+    };
+    let url = url::Url::parse(&address).context("invalid service core API URL")?;
+    if url.scheme() != "http" {
+        anyhow::bail!("the service core API uses an unsupported URL scheme");
+    }
+    let host = match url.host().context("service core API URL has no host")? {
+        url::Host::Ipv6(address) => format!("[{address}]"),
+        host => host.to_string(),
+    };
+    let port = url
+        .port_or_known_default()
+        .context("service core API URL has no usable port")?;
+    info.server = format!("{host}:{port}");
+    info.secret = connection.secret;
+    Ok(info)
+}
+
+async fn stop_service_core(
+    endpoint: super::service_endpoint::ServiceEndpoint,
+    outcome_uncertain: Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    use chimera_ipc::api::core::v2::{OperationOutputInfo, OperationPhase};
+
+    let operation_id = OperationId::generate();
+    let submission = super::control_endpoint::CoreSubmission {
+        expected_owner: None,
+        envelope: CoreCommandEnvelope {
+            operation_id,
+            command: CoreCommand::Stop,
+        },
+        core_type: None,
+    };
+    let mut operation =
+        match super::control_endpoint::ControlEndpoint::submit(&endpoint, submission).await {
+            Ok(operation) => operation,
+            Err(error) => {
+                if matches!(
+                    error.kind,
+                    Some(CoreErrorKind::BackendUnavailable | CoreErrorKind::Internal)
+                ) {
+                    outcome_uncertain.store(true, Ordering::Release);
+                }
+                anyhow::bail!("service core stop admission failed: {}", error.message);
+            }
+        };
+
+    if matches!(
+        operation.phase,
+        OperationPhase::Queued | OperationPhase::Running
+    ) {
+        operation = match super::control_endpoint::ControlEndpoint::wait_operation(
+            &endpoint,
+            operation_id,
+            Duration::from_secs(60),
+        )
+        .await
+        {
+            Some(operation) => operation,
+            None => {
+                outcome_uncertain.store(true, Ordering::Release);
+                anyhow::bail!("service core stop outcome could not be observed");
+            }
+        };
+    }
+    if operation.id != operation_id.to_string() {
+        outcome_uncertain.store(true, Ordering::Release);
+        anyhow::bail!("service returned a different core stop operation id");
+    }
+
+    match (operation.phase, operation.output) {
+        (OperationPhase::Succeeded, Some(OperationOutputInfo::Stopped)) => Ok(()),
+        (OperationPhase::Failed, _) => anyhow::bail!(
+            "service core stop failed: {}",
+            operation
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "service returned no failure detail".into())
+        ),
+        (OperationPhase::Queued | OperationPhase::Running, _) => {
+            outcome_uncertain.store(true, Ordering::Release);
+            anyhow::bail!("service core stop is still running; its outcome is uncertain");
+        }
+        (OperationPhase::Succeeded, _) => {
+            outcome_uncertain.store(true, Ordering::Release);
+            anyhow::bail!("service core stop completed with an unexpected result");
         }
     }
 }
