@@ -39,7 +39,13 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     app.manage(tokio::sync::RwLock::new(
         crate::core::updater::UpdaterManager::new(),
     ));
-    let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local());
+    let local_control =
+        tauri::async_runtime::block_on(crate::core::actor_v2::local_host::build(&paths))
+            .context("failed to initialize the local core control plane")?;
+    let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
+        local_control,
+        runtime_paths.clone(),
+    ));
 
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,

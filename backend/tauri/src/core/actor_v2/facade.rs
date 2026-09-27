@@ -1,8 +1,9 @@
 //! Control helpers owned by the lower core-host boundary.
 //!
-//! This is the staged Chimera counterpart of ref `core/actor_v2/facade.rs`.
-//! It centralizes ownership of the legacy `CoreManager` and its lifecycle
-//! lock without pretending that Chimera already has ref's submit/wait protocol.
+//! This is the Chimera adapter for ref `core/actor_v2/facade.rs`.
+//! Normal local runtime operations use `chimera-core-manager`'s submit/wait
+//! protocol; Service-mode behavior remains behind the legacy compatibility
+//! manager until its host protocol is migrated.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -22,7 +23,7 @@ use futures::FutureExt;
 use super::endpoint::CoreStatusSnapshot;
 use crate::{
     client::runtime::{RuntimeSnapshot, RuntimeTransformFailure},
-    config::{chimera::ClashCore, clash::ClashInfo},
+    config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
         clash::{
             api::ApiClient,
@@ -31,6 +32,7 @@ use crate::{
         connection_interruption::ConnectionInterruptionService,
     },
     enhance::PostProcessingOutput,
+    log_err,
 };
 
 const SERVICE_RESTART_BUDGET: u8 = 3;
@@ -71,6 +73,7 @@ pub(crate) struct ServiceRestartPolicySnapshot {
 #[derive(Debug)]
 pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
+    local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
@@ -230,6 +233,27 @@ impl CoreFacade {
     pub(crate) fn new_local() -> Self {
         Self {
             manager: Arc::new(CoreManager::new()),
+            local_runtime: None,
+            outcome_uncertain: Arc::new(AtomicBool::new(false)),
+            local_operations: Arc::new(LocalOperationRegistry::new()),
+            service_restart_attempts: Arc::new(AtomicU8::new(0)),
+            service_restart_exhausted: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Build the production local facade over the shared CoreControl host.
+    /// Tests that exercise the staged legacy boundary can continue to use
+    /// [`Self::new_local`].
+    pub(crate) fn new_local_with_control(
+        control: chimera_core_manager::CoreControl,
+        runtime_paths: crate::client::RuntimePaths,
+    ) -> Self {
+        Self {
+            manager: Arc::new(CoreManager::new()),
+            local_runtime: Some(Arc::new(super::local_runtime::LocalRuntimeHost::new(
+                control,
+                runtime_paths,
+            ))),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -239,6 +263,10 @@ impl CoreFacade {
 
     pub(crate) fn outcome_uncertain(&self) -> bool {
         self.outcome_uncertain.load(Ordering::Acquire)
+            || self
+                .local_runtime
+                .as_ref()
+                .is_some_and(|runtime| runtime.outcome_uncertain())
     }
 
     async fn run_local_mutation<F>(&self, operation: &'static str, future: F) -> anyhow::Result<()>
@@ -273,6 +301,26 @@ impl CoreFacade {
         target_core: ClashCore,
         run_type: RunType,
     ) -> anyhow::Result<()> {
+        if run_type == RunType::Normal
+            && let Some(local_runtime) = self.local_runtime.as_ref()
+        {
+            let local_runtime = local_runtime.clone();
+            let legacy_manager = self.manager.clone();
+            let was_local = local_runtime.is_local();
+            let result = self
+                .run_local_mutation("core reconcile", async move {
+                    // A Service instance belongs to the legacy host. Stop it
+                    // before starting a local process with the same runtime.
+                    if !was_local {
+                        let lease = legacy_manager.begin_lifecycle().await;
+                        lease.stop_core().await?;
+                    }
+                    local_runtime.reconcile(clash, target_core).await
+                })
+                .await;
+            self.refresh_ws_binding().await;
+            return result;
+        }
         let manager = self.manager.clone();
         let result = self
             .run_local_mutation("core reconcile", async move {
@@ -282,11 +330,26 @@ impl CoreFacade {
                     .await
             })
             .await;
+        if result.is_ok()
+            && let Some(local_runtime) = self.local_runtime.as_ref()
+        {
+            local_runtime.set_run_type(run_type);
+        }
         self.refresh_ws_binding().await;
         result
     }
 
     pub(crate) async fn stop(&self) -> anyhow::Result<()> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            let local_runtime = local_runtime.clone();
+            return self
+                .run_local_mutation("local core shutdown", async move {
+                    local_runtime.stop_core().await
+                })
+                .await;
+        }
         let manager = self.manager.clone();
         self.run_local_mutation("core stop", async move {
             let lease = manager.begin_lifecycle().await;
@@ -296,6 +359,34 @@ impl CoreFacade {
     }
 
     pub(crate) async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            let local_runtime = local_runtime.clone();
+            let result = self
+                .run_local_mutation("local core selection", async move {
+                    Config::verge().draft().clash_core = Some(clash_core);
+                    let clash = crate::bridge::clash::clash_config_from_legacy(
+                        &Config::verge().latest(),
+                        &Config::clash().latest().0,
+                    )?;
+                    match local_runtime.reconcile(clash, clash_core).await {
+                        Ok(()) => {
+                            Config::verge().apply();
+                            log_err!(Config::verge().latest().save_file());
+                            Ok(())
+                        }
+                        Err(error) => {
+                            Config::verge().discard();
+                            Config::runtime().discard();
+                            Err(error)
+                        }
+                    }
+                })
+                .await;
+            self.refresh_ws_binding().await;
+            return result;
+        }
         let manager = self.manager.clone();
         let result = self
             .run_local_mutation("core selection", async move {
@@ -308,6 +399,11 @@ impl CoreFacade {
     }
 
     pub(crate) async fn status(&self) -> CoreStatusSnapshot {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.status().await;
+        }
         let (state, state_changed_at, run_type) = self.manager.status().await;
         CoreStatusSnapshot {
             state: state.into_owned(),
@@ -317,26 +413,56 @@ impl CoreFacade {
     }
 
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.recovery_notify();
+        }
         self.manager.recovery_notify()
     }
 
     pub(crate) fn runtime_transform_output(&self) -> Option<(u64, PostProcessingOutput)> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.runtime_transform_output();
+        }
         self.manager.runtime_transform_output()
     }
 
     pub(crate) fn promoted_runtime_snapshot(&self) -> Option<Arc<RuntimeSnapshot>> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.promoted_runtime_snapshot();
+        }
         self.manager.promoted_runtime_snapshot()
     }
 
     pub(crate) fn runtime_transform_failure(&self) -> Option<RuntimeTransformFailure> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.runtime_transform_failure();
+        }
         self.manager.runtime_transform_failure()
     }
 
     pub(crate) fn effective_clash_info(&self) -> ClashInfo {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.effective_clash_info();
+        }
         self.manager.effective_clash_info()
     }
 
     pub(crate) async fn active_clash_info(&self) -> anyhow::Result<ClashInfo> {
+        if let Some(local_runtime) = self.local_runtime.as_ref()
+            && local_runtime.is_local()
+        {
+            return local_runtime.active_clash_info().await;
+        }
         self.manager.active_clash_info().await
     }
 

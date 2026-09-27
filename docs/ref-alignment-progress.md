@@ -385,17 +385,80 @@ DIFF-001 至 DIFF-012 是此前基于
 - 测试契约：给定 Chimera Client kind、运行/配置路径与本机 IPC endpoint，断言序列化身份、
   启动参数、配置校验参数和 IPC 覆盖参数符合 Chimera Client 源码中的 CLI 合同；若将它
   折叠成 `ClashRust`、丢失品牌 wire 值或漏传 IPC flag，目标断言会失败。
-- 实际验证结果：`cargo test --manifest-path backend/Cargo.toml -p
-  chimera-core-metadata`，2 passed；`cargo fmt --manifest-path
-  backend/Cargo.toml --all -- --check` 与 `git diff --check` 通过。针对 manager 的
+- 实际验证结果：本 DIFF 首次检查时，manager 单测被本地 `nyanpasu-utils` 的三个缺失
+  include 文件挡住：`find-macos-default-device-port.sh`、`set-macos-dns.sh`、
+  `get-macos-dns.sh`。DIFF-014 已将该 macOS helper 接到有这些脚本的 Chimera Utils；随后
   `cargo test --manifest-path backend/Cargo.toml -p chimera-core-manager kind::tests`
-  在编译本地 `nyanpasu-utils` 时被三个缺失 include 文件挡住：
-  `find-macos-default-device-port.sh`、`set-macos-dns.sh`、`get-macos-dns.sh`。
-  当前最新 ref 中没有这些脚本或相同调用点，故未以猜测内容补齐；manager 单测和完整
-  Tauri 编译仍未验证。现有 Chimera Client 包二进制执行 `-v` 得到
+  2 passed，`cargo check --manifest-path backend/Cargo.toml -p chimera-core-manager --lib`
+  和 workspace Clippy 通过。现有 Chimera Client 包二进制执行 `-v` 得到
   `clash-rs 0.26.1`；`-h` 显示 `-c`、`-f` alias、`-t` 和 `--controller-ipc`；使用
   `-t -d /tmp/chimera-client-smoke-20260926 -f config.yaml` 对临时配置校验通过。
   这些是 CLI 兼容性冒烟证据，不代表桌面应用已接入新 manager 或 IPC socket 已运行验证。
-- 下一最小步骤：先恢复/确认本地 macOS DNS 脚本的权威来源，解除编译阻塞；随后在 ref 的
-  actor-backed `CoreFacade` 接入点将 `ClashCore::ChimeraClient` 映射到独立 kind，并迁移
-  一条完整 reconcile 启动路径，保持 legacy UI、profile 持久化、agent 和现有下载更新合同。
+- 下一最小步骤：在 ref 的 actor-backed `CoreFacade` 接入点将
+  `ClashCore::ChimeraClient` 映射到独立 kind，并迁移一条完整 reconcile 启动路径，保持
+  legacy UI、profile 持久化、agent 和现有下载更新合同。
+
+## DIFF-014：将 macOS 网络 helper 接到 Chimera Utils
+
+- ref commit：Clash Nyanpasu `main` `5331747c06a5f42eeabb3e225a1e77a83f480549`；
+  Chimera Utils 依赖固定在 `17809a1ccded8caf83e4803f99ad8e7e29cdee20`。
+- ref 路径和符号：`backend/nyanpasu-utils/src/network/mod.rs::macos`。
+- Chimera 路径和符号：`backend/nyanpasu-utils/src/network/mod.rs::macos` 保留原 API，
+  由 `chimera_utils::network::macos` 实现；权威 helper 与脚本位于
+  `MFSGA/Chimera_Utils` 的 `network-utils/src/lib.rs` 和 `network-utils/src/scripts/`。
+- 类别：品牌兼容 / 临时迁移。
+- 差异及必要性：主 workspace 仍需 `nyanpasu-utils` 的 core、process 等模块，但它本地
+  镜像里的网络模块引用了未检出的三个 macOS 脚本。Chimera Utils 已包含同名脚本和相同
+  函数合同；将旧 `nyanpasu_utils::network::macos` 保留为薄适配层，减少重复实现并解除
+  macOS all-targets 编译缺口。仅将网络能力委托给 Chimera Utils，不把仍被广泛使用的
+  core/process 模块整体换名或删除。
+- 共通业务入口及适配边界：该 crate 的既有函数路径和参数/返回类型不变；底层脚本由锁定的
+  Chimera Utils 版本提供。现有三项 macOS 网络测试保留；本轮只编译，不在开发机上执行会
+  修改系统 DNS 的用例。
+- 影响范围：`nyanpasu-utils` Cargo feature `network`、macOS helper 兼容路径、manager 已有
+  `tempfile` 测试依赖和 Cargo 锁文件；未改变 UI、agent、profile、运行时内核或服务协议。
+- 实际验证结果：`cargo check --manifest-path backend/Cargo.toml -p nyanpasu-utils
+  --all-features --all-targets` 通过；`cargo test --manifest-path backend/Cargo.toml -p
+  chimera-core-manager kind::tests` 2 passed；`cargo check --manifest-path
+  backend/Cargo.toml -p chimera-core-manager --lib` 通过；`cargo clippy --manifest-path
+  backend/Cargo.toml --all-targets --all-features` 通过（有既有 warnings）；
+  `cargo fmt --manifest-path backend/Cargo.toml --all -- --check` 与 `git diff --check`
+  通过。系统 DNS 测试未执行，避免改动开发机网络设置。
+- 编译发现并修正的本地 manifest 缺口：`chimera-core-manager` 的既有 quarantine 单测直接
+  使用 `tempfile`，但原 Cargo 清单未声明 dev-dependency；本轮仅添加该测试依赖，未改测试
+  或产品代码。
+- 收敛条件：当 `nyanpasu-utils` 的剩余模块迁移完成后，移除此兼容 crate/路径；在此之前继续
+  保持 legacy API，不为整体重命名而扩大本轮范围。
+
+## DIFF-015：将本地 Normal core host 接入 CoreControl
+
+- 本地基线：Chimera `ca4c29a8`；本轮参考基线：`ref/` commit
+  `5331747c06a5f42eeabb3e225a1e77a83f480549`（Clash Nyanpasu `main` 的本地检出，非远端最新版声明）。
+- ref 路径和符号：`backend/tauri/src/core/actor_v2/local_host.rs::build`、`core_spec`，以及
+  `backend/tauri/src/core/actor_v2/facade.rs` 的 CoreControl 生命周期入口。
+- Chimera 路径和符号：`backend/tauri/src/core/actor_v2/local_host.rs`、
+  `local_runtime.rs::LocalRuntimeHost`、`facade.rs::CoreFacade` 和 `setup.rs::setup`；共享执行器为
+  `chimera-core-manager::CoreControl`。
+- 类别：本地运行时迁移 / 品牌兼容。
+- 迁移切片：新增两个实现与测试模块，共 648 行；把 Normal 本地运行的配置生成、预检、
+  reconcile、回滚识别、运行时产物提升、状态/API 信息投影和停止命令接至 CoreControl。
+  `CoreFacade` 生产装配现在在 setup 中构造该 host；普通测试仍可使用旧构造器。
+- Chimera 偏离及兼容：`ClashPremium`、`ClashRs`、`Mihomo` 与 alpha 选择映射到共享 kind；
+  `ClashCore::ChimeraClient` 映射为独立 `CoreKind::ChimeraClient`，可执行文件继续从
+  `chimera_utils::core::CoreType` 解析，不折叠成 `ClashRust`。Tauri 的运行时配置、端口解析和
+  后处理仍调用 Chimera 原实现。停止核心使用 CoreControl 的 `Stop`，保留 executor 供后续启动；
+  只在测试清理时关闭 executor。
+- Service 边界：Service/Elevated 仍由现有兼容 `CoreManager` 分支处理，分支成功后才更新 host 类型；
+  不在未实现的 Service host 迁移前抢先关闭本地核心。当前 `core::clash::CoreManager::rebuild_and_run_locked_with`
+  仍是 `todo` 前的显式错误路径（`anyhow::bail!`），本切片没有宣称 Service 已迁移或可用。
+- 测试契约：host 测试覆盖所有 `ClashCore` 品牌到二进制/kind 的映射、非 UTF-8 路径拒绝和隔离目录；
+  runtime 测试覆盖初始状态投影、停止已停止核心的幂等性及 executor 保持开放、apply 回滚拒绝以及
+  durability warning 包装。
+- 实际验证：`cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera --lib core::actor_v2::local_host::tests -- --test-threads=1`
+  4 passed；`cargo test --manifest-path backend/Cargo.toml -p chimera --lib
+  core::actor_v2::local_runtime::tests -- --test-threads=1` 3 passed；
+  `cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 与 `git diff --check` 通过。
+  cargo 检查仍报告仓库已有 warnings；未启动桌面应用或实际 core 二进制，也未验证 macOS DNS/TUN 系统行为。
+- 下一最小步骤：从 Service adapter 的宿主交接协议开始实现和测试 Service 模式，再决定是否将其纳入
+  CoreControl；随后验证生产 setup、实际 Chimera Client 启动/停止和支持平台组合。
