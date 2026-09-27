@@ -66,6 +66,24 @@ impl ControlEndpoint for ServiceEndpoint {
             .map_err(map_client_error)
     }
 
+    async fn api_changes(&self) -> Result<Option<super::control_endpoint::ApiChanges>, CoreError> {
+        use futures_util::StreamExt;
+
+        let changes = self
+            .client
+            .events()
+            .await
+            .map_err(map_client_error)?
+            .filter_map(|event| async move {
+                match event {
+                    Ok(chimera_ipc::api::ws::events::Event::CoreStatusChanged(_)) => Some(Ok(())),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(map_client_error(error))),
+                }
+            });
+        Ok(Some(Box::pin(changes)))
+    }
+
     fn host(&self) -> ExecutionHost {
         ExecutionHost::Service
     }

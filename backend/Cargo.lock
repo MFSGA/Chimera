@@ -1242,6 +1242,7 @@ version = "1.9.0"
 dependencies = [
  "anyhow",
  "axum",
+ "backon",
  "bytes",
  "chimera-service-core-metadata",
  "chimera_utils",
@@ -1259,6 +1260,7 @@ dependencies = [
  "specta",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-tungstenite 0.29.0",
  "tokio-util",
  "tracing",
  "tracing-attributes",

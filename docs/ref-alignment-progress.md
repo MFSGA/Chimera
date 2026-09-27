@@ -801,6 +801,31 @@ DIFF-001 至 DIFF-012 是此前基于
   `cargo check --manifest-path backend/Cargo.toml -p chimera` 通过，输出 312 条 warning；
   `cargo check --manifest-path backend/Cargo.toml -p chimera --tests` 通过，输出 234 条 test-build
   warning；`git diff --check` 通过。未运行测试或跨进程/Windows 检查。
-- 下一步：迁移并验证 IPC websocket event client 与 Service 状态事件的生命周期，再覆盖 Service
-  v2 check/submit/status/stop 的跨进程启动流程；重点核对 staged candidate ACL、取消/超时后的状态恢复，
-  以及 Local/Service 交替切换后主 UI、legacy UI、agent 共用状态是否一致。
+- 后续进展：IPC event client 和 Service `api_changes` 适配见 DIFF-030；应用侧状态事件消费和 Service
+  跨进程验证仍待完成。
+
+## DIFF-030：迁入 Chimera IPC WebSocket EventStream
+
+- 基线：根仓库 `77968039`；嵌套 `backend/chimera-runtime` `646ab569cf649a50d342a5a3c6535470a0c7a778`。
+  只读 ref 仍为 Clash Nyanpasu root `5331747c06a5f42eeabb3e225a1e77a83f480549`、runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- ref 对应：`nyanpasu_ipc/src/client/shortcuts.rs::Client::events/EventStream`、
+  `client/mod.rs::ClientError`、`actor_v2/endpoint.rs::ServiceEndpoint::api_changes`。本地对应
+  `chimera_ipc/src/client/shortcuts.rs`、`client/mod.rs` 和 Tauri
+  `actor_v2/service_endpoint.rs`。
+- 迁移范围：新增基于 interprocess local socket 的 typed WebSocket `EventStream`，解码现有 Chimera
+  `Event` DTO；处理 ping/pong，单帧解码错误保留为该帧错误，传输错误结束流。Windows 只对连接前
+  `ERROR_PIPE_BUSY` (231) 使用 50–200ms 指数退避、最多 1 秒的重试；握手失败或已建立流不会重放。
+  `ServiceEndpoint.api_changes()` 复用该流并仅投影 `CoreStatusChanged`，过滤其它现有事件变体。
+  新增的 `backon` 与 `tokio-tungstenite` 仅由 IPC `client` feature 启用。
+- 当前边界：endpoint 现在可以向后续 API authority/monitor 提供变化信号，但 Chimera 尚无 ref
+  `ApiLease` 对应的消费任务；当前 WS connector 仍只在 facade 的成功 core mutation 后显式 restart。
+  所以本切片不声称已完成 Service core 重启后的自动 API binding 变更响应。Windows named pipe 的
+  busy retry、握手以及实际状态事件均未在目标系统/跨进程运行验证。
+- 验证：`cargo check --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc --features client`
+  通过；同 workspace `cargo check -p chimera-service` 通过；根 `cargo check --manifest-path
+  backend/Cargo.toml -p chimera` 通过，输出 312 条 warning。两侧受影响包的 rustfmt check 与根、
+  嵌套 `git diff --check` 通过。未运行测试。
+- 下一步：把 `api_changes()` 接入可撤销的 API binding monitor，使 Service 端 status event 能触发
+  instance-bound controller/secret 复核与 WS connector 重建；再做真实 Service 启停及 IPC 事件流验证，
+  覆盖旧连接撤销、短暂断线、订阅结束和 host 切换。
