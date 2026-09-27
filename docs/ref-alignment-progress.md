@@ -644,3 +644,26 @@ DIFF-001 至 DIFF-012 是此前基于
 - 下一切片：将 ref `ControlEndpoint` / Local CoreControl adapter 与 intent 构造迁入
   `actor_v2`，再把 Service endpoint 接上这些 typed calls；在 Service v2 handler 可提供完整
   reconcile 语义之前，不把本地 actor 默认切到 v2 Service。
+
+## DIFF-023：迁入 CoreControl 的 endpoint port 与本地 adapter
+
+- 基线：根仓库 `3c3a2840`；runtime IPC 已有 DIFF-021 schema 和 DIFF-022 typed calls；ref 仍为
+  root `5331747c06a5f42eeabb3e225a1e77a83f480549` / runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：新增 `actor_v2/control_endpoint.rs`，按 ref `actor_v2/endpoint.rs` 的公共 DTO、
+  `ControlEndpoint` trait 和 `CoreControl` 本地实现迁入，包含 operation/outcome/status 投影、
+  effective config、API connection、运行状态 watch 与 advisory config check。保留 Chimera
+  `CoreControl` / `chimera_ipc` / `chimera_utils` 类型身份；控制器状态投影明确去除 URL 中的
+  userinfo。新增 URL 凭据脱敏回归用例。新增模块约 451 行，另修正两个现有 Service 测试 fixture
+  以填入 DIFF-021 的 optional `CoreInfos` 字段；总增量控制在单步 500 行内。
+- 兼容与限制：旧 `actor_v2::endpoint::CoreStatusSnapshot` 留在原位，新增完整控制端口放在独立
+  模块，避免改变当前 UI/CoreLifecycle 状态消费者。本地 adapter 目前提供可复用边界，但尚未由
+  `CoreFacade` 接管，也未迁入 IPC v2 `ServiceEndpoint`；远端 Service 仍在 v1。
+- 验证：`cargo check --manifest-path backend/Cargo.toml -p chimera` 通过；定向用例
+  `cargo test --manifest-path backend/Cargo.toml -p chimera
+  core::actor_v2::control_endpoint::tests::controller_status_projection_removes_embedded_credentials
+  -- --exact --nocapture` 通过，1 passed、404 filtered；`cargo fmt --manifest-path
+  backend/Cargo.toml --package chimera -- --check` 与 `git diff --check` 通过。Tauri check
+  报告约 320 条既有 warning；新增测试首次发现的两个 `CoreInfos` fixture 缺字段已修复，复跑通过。
+- 下一切片：迁入 ref `RuntimeIntentBuilder`，让生成文档、摘要和 CAS 输入形成单一 intent；之后
+  再迁 `ServiceEndpoint` 与 service actor，并先补齐服务端 handler 才切换实际调用方。

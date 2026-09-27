@@ -4,6 +4,7 @@
 //! This module owns the legacy CoreManager behind a narrow facade so client
 //! lifecycle orchestration no longer depends on the concrete manager.
 
+pub mod control_endpoint;
 pub mod endpoint;
 pub mod facade;
 pub mod local_host;

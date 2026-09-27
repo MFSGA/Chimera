@@ -72,10 +72,15 @@ mod tests {
         let server = server_version.map(|version| StatusResBody {
             version: Cow::Owned(version.to_owned()),
             core_infos: CoreInfos {
+                instance_id: None,
                 r#type: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 config_path: None,
+                controller: None,
+                health: None,
+                revision: None,
+                detail: None,
             },
             runtime_infos: RuntimeInfos {
                 service_data_dir: Cow::Owned(PathBuf::new()),
