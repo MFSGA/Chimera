@@ -604,3 +604,26 @@ DIFF-001 至 DIFF-012 是此前基于
   `backend/tauri/tmp/dist`。构建仍报告现存的 Vite config、动态导入和大 chunk 警告；标准 pnpm
   安装在该新版本通过 release-age 检查前仍未验证。本地 `meta-json-schema` 仍为 `1.19.30`，
   ref 当前清单为 `1.19.31`；它不在上述 root 最近提交的变更中，本轮未混入这项旧差异。
+
+## DIFF-021：迁入 additive Core IPC v2 wire schema
+
+- Chimera 基线：根仓库 `05cc0805`；嵌套 `backend/chimera-runtime` 基线
+  `2d9171da99c93775807359d63e783df505c447bc`。ref 基线：Clash Nyanpasu root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549`，`backend/nyanpasu-runtime` gitlink
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：新增 `chimera_ipc::api::core::v2` 的 submit、operation、status、effective-config
+  与 API-connection 请求/响应模型及序列化回归测试；在 `status::CoreInfos` 加入 ref 对齐的
+  optional instance/controller/health/revision/detail 投影。平台核心类型仍取自同一
+  `chimera_utils::core::CoreType`，因此保留 `ChimeraClient` 的 wire 身份。此切片共新增 461 行。
+- 兼容与限制：v1 endpoint、请求和响应字段均未改。旧 Service 目前对新 status 字段返回 `None`，
+  `serde(default, skip_serializing_if)` 让旧 status JSON 继续可解码且不增加空字段。v2 模型目前
+  是协议层，submit/operation/status routes 及客户端快捷方法尚未接入；不能据此认定 Service actor
+  已可运行。
+- 实际验证：`cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc`
+  通过，6 passed、doc tests 0；`cargo check --manifest-path backend/chimera-runtime/Cargo.toml
+  -p chimera-service` 通过；根 workspace `cargo check --manifest-path backend/Cargo.toml
+  --workspace` 通过；runtime `cargo fmt --manifest-path backend/chimera-runtime/Cargo.toml --all
+  -- --check` 与 runtime `git diff --check` 通过。根 workspace 输出约 306 条现存 warning。
+- 下一切片：迁移 typed IPC client calls 和本地 `ControlEndpoint` adapter，随后才接入 Service
+  actor；在 v1 服务的核心语义可以由 v2 操作协议安全表达前，保留现有 v1 服务和
+  `ChimeraClient` 调用链。
