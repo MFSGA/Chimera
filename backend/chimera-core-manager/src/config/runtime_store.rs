@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, atomic::AtomicUsize};
 
 use camino::{Utf8Path, Utf8PathBuf};
-use nyanpasu_utils::io::atomic_fs;
+use chimera_utils::io::atomic_fs;
 use tokio::io::AsyncWriteExt;
 
 use crate::{Epoch, Error};

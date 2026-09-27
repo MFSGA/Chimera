@@ -109,7 +109,7 @@ pub fn init_resources() -> Result<()> {
 /// after tauri setup
 #[tracing::instrument(skip(client))]
 pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
-    use nyanpasu_utils::runtime::block_on;
+    use chimera_utils::runtime::block_on;
 
     tracing::debug!("init services");
     block_on(async move {

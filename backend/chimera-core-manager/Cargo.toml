@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 chimera-core-metadata = { path = "../chimera-core-metadata" }
 clash-api = { package = "chimera-clash-api", path = "../chimera-clash-api" }
-nyanpasu-utils = { workspace = true, features = ["process"] }
+chimera-utils = { workspace = true, features = ["process"] }
 camino = { version = "1.1", features = ["serde1"] }
 chrono = { version = "0.4", features = ["serde"] }
 enumset = "1"

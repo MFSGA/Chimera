@@ -1,6 +1,6 @@
 use anyhow::Result;
+use chimera_utils::dirs::{suggest_config_dir, suggest_data_dir};
 use fs_err as fs;
-use nyanpasu_utils::dirs::{suggest_config_dir, suggest_data_dir};
 use once_cell::sync::Lazy;
 use tauri::{Env, utils::platform::resource_dir};
 

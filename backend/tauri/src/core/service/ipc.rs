@@ -167,7 +167,7 @@ fn on_ipc_state_changed(state: IpcState, client: &ChimeraClient) {
     tracing::info!("IPC state changed: {:?}", state);
     let client = client.clone();
     std::thread::spawn(move || {
-        nyanpasu_utils::runtime::block_on(async move {
+        chimera_utils::runtime::block_on(async move {
             let enabled_service = match client.get_app_config() {
                 Ok(config) => config.enable_service_mode,
                 Err(error) => {

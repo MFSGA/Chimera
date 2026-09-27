@@ -263,7 +263,7 @@ pub fn run() -> std::io::Result<()> {
                     log::debug!(target: "app", "window close requested: {label}");
                     match app_handle.try_state::<crate::client::ChimeraClient>() {
                         Some(client) => {
-                            if let Err(error) = nyanpasu_utils::runtime::block_on(
+                            if let Err(error) = chimera_utils::runtime::block_on(
                                 crate::window::persist_window_state(
                                     app_handle,
                                     client.inner(),

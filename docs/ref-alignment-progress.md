@@ -462,3 +462,45 @@ DIFF-001 至 DIFF-012 是此前基于
   cargo 检查仍报告仓库已有 warnings；未启动桌面应用或实际 core 二进制，也未验证 macOS DNS/TUN 系统行为。
 - 下一最小步骤：从 Service adapter 的宿主交接协议开始实现和测试 Service 模式，再决定是否将其纳入
   CoreControl；随后验证生产 setup、实际 Chimera Client 启动/停止和支持平台组合。
+
+## DIFF-016：将共享工具实现迁入本地 chimera-utils crate
+
+- Chimera 基线：`4f7d18bd890b8545e44e64c4c1adad0e70ee29a2`。
+- ref 基线：`ref/` commit `5331747c06a5f42eeabb3e225a1a77a83f480549`，检出干净。
+  该 ref 的 `backend/Cargo.toml` 将 `nyanpasu-utils` 指向
+  `backend/nyanpasu-runtime/crates/nyanpasu-utils`；子模块 gitlink 为
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`，当前未初始化，因此本轮不能逐文件核对该
+  子模块内容。实际迁移源是 Chimera 基线中已跟踪并被 workspace 使用的
+  `backend/nyanpasu-utils`，不把它误报成已验证的 ref 子模块快照。
+- 迁移映射：`backend/nyanpasu-utils/src/process/*`、`io/{mod.rs,atomic_fs.rs}`、
+  `reqwest_ext.rs` → `backend/chimera-utils/src/` 对应路径；本地 crate 根模块重导出
+  `chimera-platform-utils` 的 `core`、`dirs`、`network`、`os` 与 `runtime` API。
+  原 `nyanpasu-utils` 的产品/平台模块改由现有 Chimera Utils 平台 crate 提供，避免复制
+  第二份 core、目录和 OS 实现。
+- 类别：本地共享 crate 迁移 / 兼容适配。
+- 实际切片：迁入 3,179 行通用进程监督、epoch PID 文件、原子文件操作和命名管道重试实现；
+  Cargo 将同源代码识别为文件移动。移除原本重复的 1,225 行 core/dirs/network/os/runtime
+  包装实现，由本地 crate 有条件地重导出平台 API。新增 `process`、`reqwest` 等 feature 边界，
+  同时保留上游平台包的 feature 开关。
+- 调用方：`chimera-core-manager`、`chimera-clash-api`、`chimera-config` 和 Tauri 主应用都改依赖
+  本地 `chimera-utils`。原平台包改用 `chimera-platform-utils` Cargo alias；它与 IPC 使用的
+  `chimera_utils` 仍解析到相同 Git 包身份，因此 `CoreType` 等跨 crate 类型不被复制或转换。
+  `chimera-core` 删除了无源码引用的旧 utility 依赖。
+- 品牌与产品偏离：平台 `CoreType::ChimeraClient`、下载/配置映射及二进制未改；该迁移只改变
+  utility crate 所有权与 Cargo 依赖名，不会把 Chimera Client 折叠成 Clash-rs。nested runtime
+  子模块当前没有 Rust 源码引用 `nyanpasu-utils`，其 workspace manifest 仍声明未使用的旧 Git
+  依赖；本轮不改写该独立子模块，以免产生需要另行发布的 gitlink 变更。
+- 影响范围：Rust workspace 共享 utility 依赖；没有改 UI、legacy UI 交互、agent 行为、配置格式、
+  Controller/Service 协议或核心启动参数。Windows 目标编译和真实子进程恢复行为尚未在本机验证。
+- 实际验证：`cargo check --manifest-path backend/Cargo.toml -p chimera-utils --no-default-features
+  --features process,reqwest` 通过；`cargo check --manifest-path backend/Cargo.toml
+  -p chimera-utils` 通过；`cargo check --manifest-path backend/Cargo.toml -p chimera-core-manager
+  -p chimera-clash-api` 通过；`cargo check --manifest-path backend/Cargo.toml -p chimera-config
+  -p chimera` 通过；`cargo check --manifest-path backend/Cargo.toml --workspace` 通过；
+  `cargo fmt --manifest-path backend/Cargo.toml --all -- --check` 与 `git diff --check` 通过。
+  Tauri 检查使用仅在该工作树创建的 ignored `sidecar/`、`resources/` 链接和 `tmp/dist` 占位页；
+  未执行测试套件或启动桌面/核心进程。Cargo 输出有仓库现存 cfg、unused 和 lifetime warnings，
+  本轮未通过放宽 lint 隐藏它们。
+- 下一最小步骤：初始化或隔离检出 ref 的 `backend/nyanpasu-runtime` gitlink 后，逐项核对
+  `nyanpasu-utils` 子 crate 与本地 `chimera-utils` 的 `process` / atomic-fs API 演进差异；完成后
+  再迁移其中实际仍被 Chimera 需要的新增通用能力，不迁入上游专属产品实现。

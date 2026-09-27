@@ -63,7 +63,7 @@ pub enum Error {
     #[error("core failed to start; diagnostic log tail:\n{stderr_tail}")]
     StartupFailed { stderr_tail: String },
     #[error(transparent)]
-    Process(#[from] nyanpasu_utils::process::ProcessError),
+    Process(#[from] chimera_utils::process::ProcessError),
     #[error(transparent)]
     Api(#[from] clash_api::Error),
     #[error("failed to process config YAML: {0}")]
@@ -118,9 +118,9 @@ impl Error {
     }
 }
 
-impl From<nyanpasu_utils::io::atomic_fs::AtomicFsError> for Error {
-    fn from(error: nyanpasu_utils::io::atomic_fs::AtomicFsError) -> Self {
-        use nyanpasu_utils::io::atomic_fs::AtomicFsError;
+impl From<chimera_utils::io::atomic_fs::AtomicFsError> for Error {
+    fn from(error: chimera_utils::io::atomic_fs::AtomicFsError) -> Self {
+        use chimera_utils::io::atomic_fs::AtomicFsError;
         match error {
             AtomicFsError::UnsafePath(path) => Error::UnsafeRuntimeArtifact(utf8_lossy(path)),
             AtomicFsError::Contended(path) => Error::RuntimeDirectoryOwned(utf8_lossy(path)),

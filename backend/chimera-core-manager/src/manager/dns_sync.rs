@@ -208,7 +208,7 @@ impl CoreManager {
         ctrl: &mut Ctrl,
         record: Option<DnsOverrideRecord>,
     ) -> io::Result<()> {
-        use nyanpasu_utils::io::atomic_fs;
+        use chimera_utils::io::atomic_fs;
         use tokio::io::AsyncWriteExt;
 
         let dir = self.inner.store.dir();

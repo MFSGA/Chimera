@@ -177,7 +177,7 @@ pub fn cleanup_processes(app_handle: &AppHandle) {
     let client = app_handle
         .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone());
-    log_err!(nyanpasu_utils::runtime::block_on(async {
+    log_err!(chimera_utils::runtime::block_on(async {
         if let Some(connector) = connector {
             connector.stop().await;
         }

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use camino::Utf8PathBuf;
-use nyanpasu_utils::process::{Backoff, BackoffRange, RestartPolicy};
+use chimera_utils::process::{Backoff, BackoffRange, RestartPolicy};
 use tokio_util::sync::CancellationToken;
 
 use crate::{health::HealthPolicy, kind::CoreKind};

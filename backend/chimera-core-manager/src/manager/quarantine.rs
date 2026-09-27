@@ -1,4 +1,4 @@
-use nyanpasu_utils::process::{OrphanReapOutcome, reap_epoch_pid_file};
+use chimera_utils::process::{OrphanReapOutcome, reap_epoch_pid_file};
 
 use crate::{Epoch, error::Error, runtime_store::RuntimeConfigStore, state::CoreState};
 

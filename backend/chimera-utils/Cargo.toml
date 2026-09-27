@@ -1,0 +1,70 @@
+[package]
+name = "chimera-utils"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared utilities for Chimera applications and services."
+
+[features]
+default = ["core_manager", "dirs", "network", "serde"]
+core_manager = ["chimera-platform-utils/core_manager"]
+dirs = ["chimera-platform-utils/dirs"]
+network = ["chimera-platform-utils/network"]
+os = ["chimera-platform-utils/os"]
+serde = ["chimera-platform-utils/serde"]
+specta = ["chimera-platform-utils/specta"]
+deadlock_detection = [
+  "chimera-platform-utils/deadlock_detection",
+  "parking_lot/deadlock_detection",
+]
+atomic_fs = ["dep:nix", "dep:windows"]
+process = [
+  "atomic_fs",
+  "os",
+  "dep:encoding_rs",
+  "dep:kill_tree",
+  "dep:libc",
+  "dep:os_pipe",
+  "dep:processkit",
+  "dep:shared_child",
+  "dep:sysinfo",
+  "dep:tokio-util",
+]
+reqwest = ["dep:backon", "dep:reqwest", "dep:reqwest-websocket"]
+
+[dependencies]
+chimera-platform-utils.workspace = true
+backon = { version = "1.6", optional = true }
+encoding_rs = { version = "0.8", optional = true }
+memchr = "2.7"
+parking_lot = "0.12"
+processkit = {
+  git = "https://github.com/ZelAnton/ProcessKit-rs",
+  rev = "2adad322f1e3d7c471f3b9c8c625e44f356e416b",
+  features = ["tracing"],
+  optional = true,
+}
+reqwest = { workspace = true, optional = true }
+reqwest-websocket = { version = "0.6", optional = true }
+kill_tree = { version = "0.2.4", features = ["tokio"], optional = true }
+os_pipe = { version = "1.2.0", optional = true }
+shared_child = { version = "1", optional = true }
+sysinfo = { version = "0.39", optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = { version = "0.7", optional = true }
+tracing.workspace = true
+tracing-attributes = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = { version = "0.2", optional = true }
+nix = { version = "0.31", features = ["fs", "process", "signal", "user"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_System_Threading",
+], optional = true }

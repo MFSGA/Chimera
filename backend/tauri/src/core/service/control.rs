@@ -69,7 +69,7 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
     let user = {
         #[cfg(windows)]
         {
-            nyanpasu_utils::os::get_current_user_sid().await?
+            chimera_utils::os::get_current_user_sid().await?
         }
         #[cfg(not(windows))]
         {

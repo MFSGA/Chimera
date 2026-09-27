@@ -197,7 +197,7 @@ pub fn register_web_storage_listener(app_handle: &tauri::AppHandle) {
     let rx = storage.get_rx();
     let app_handle = app_handle.clone();
     std::thread::spawn(move || {
-        nyanpasu_utils::runtime::block_on(async {
+        chimera_utils::runtime::block_on(async {
             let mut rx = rx;
 
             while let Ok((key, value)) = rx.recv().await {

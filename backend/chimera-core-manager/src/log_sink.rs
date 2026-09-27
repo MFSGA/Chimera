@@ -150,8 +150,8 @@ pub(crate) async fn prepare_dir(parent: &Utf8Path) -> Result<Utf8PathBuf, Error>
     }
     #[cfg(windows)]
     {
-        nyanpasu_utils::io::atomic_fs::harden_windows_directory_acl(&dir)?;
-        nyanpasu_utils::io::atomic_fs::verify_windows_directory_acl(&dir)?;
+        chimera_utils::io::atomic_fs::harden_windows_directory_acl(&dir)?;
+        chimera_utils::io::atomic_fs::verify_windows_directory_acl(&dir)?;
     }
 
     Ok(dir)

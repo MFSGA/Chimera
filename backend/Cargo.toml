@@ -6,7 +6,7 @@ members = [
   "chimera-core-manager",
   "chimera-core-metadata",
   "chimera-macro",
-  "nyanpasu-utils",
+  "chimera-utils",
   "tauri",
 ]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
@@ -54,5 +54,5 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 fs-err = { version = "3.1.2", features = ["tokio"] }
 serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
-nyanpasu-utils = { path = "nyanpasu-utils", features = ["specta"] }
-chimera_utils = { git = "https://github.com/MFSGA/Chimera_Utils.git", default-features = false }
+chimera-utils = { path = "chimera-utils", default-features = false }
+chimera-platform-utils = { package = "chimera_utils", git = "https://github.com/MFSGA/Chimera_Utils.git", default-features = false }

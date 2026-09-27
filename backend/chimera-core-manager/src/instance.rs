@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use nyanpasu_utils::process::{
+use chimera_utils::process::{
     Command, EpochPidFile, EpochPidFileSpec, OrphanReapOutcome, ProcessError, ProcessEvent,
     ReadinessProbe, Supervisor, SupervisorEvent, TerminatedPayload, reap_epoch_pid_file,
 };

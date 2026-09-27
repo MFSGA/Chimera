@@ -2,7 +2,7 @@ use serde_yaml::Mapping;
 
 use anyhow::Result;
 use chimera_config::clash::config::ClashConfig;
-use nyanpasu_utils::runtime::block_on;
+use chimera_utils::runtime::block_on;
 use once_cell::sync::OnceCell;
 
 use crate::{

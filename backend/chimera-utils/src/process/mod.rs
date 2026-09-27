@@ -8,7 +8,7 @@
 //! termination signal.
 //!
 //! ```no_run
-//! use nyanpasu_utils::process::{Command, ProcessEvent};
+//! use chimera_utils::process::{Command, ProcessEvent};
 //!
 //! # async fn demo() -> Result<(), Box<dyn std::error::Error>> {
 //! let (handle, mut events) = Command::new("mihomo")
@@ -33,7 +33,7 @@
 //! # }
 //! ```
 //!
-//! Design: docs/superpowers/specs/2026-07-16-nyanpasu-utils-process-module-design.md
+//! The process API is kept independent of Tauri and the application runtime.
 
 mod command;
 mod engine;

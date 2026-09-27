@@ -3,7 +3,7 @@
 use std::{ffi::OsString, time::Duration};
 
 use camino::Utf8Path;
-use nyanpasu_utils::process::ProcessError;
+use chimera_utils::process::ProcessError;
 
 use crate::{
     error::Error,
@@ -192,7 +192,7 @@ async fn run_check(spec: &crate::spec::InstanceSpec, timeout: Duration) -> Resul
         .config_path
         .parent()
         .ok_or_else(|| Error::ConfigNotFound(spec.config_path.clone()))?;
-    let output = nyanpasu_utils::process::Command::new(spec.core.binary_path.as_str())
+    let output = chimera_utils::process::Command::new(spec.core.binary_path.as_str())
         .args(check_args(spec.core_paths()))
         .env(
             MIHOMO_SAFE_PATHS_ENV_NAME,

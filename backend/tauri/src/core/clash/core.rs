@@ -857,7 +857,7 @@ impl CoreManager {
 }
 
 // TODO: support system path search via a config or flag
-// FIXME: move this fn to nyanpasu-utils
+// FIXME: move this fn to chimera-utils
 /// Search the binary path of the core: Data Dir -> Sidecar Dir
 pub fn find_binary_path(
     core_type: &chimera_utils::core::CoreType,

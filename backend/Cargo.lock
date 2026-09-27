@@ -116,54 +116,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "anstream"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
-dependencies = [
- "anstyle",
- "anstyle-parse",
- "anstyle-query",
- "anstyle-wincon",
- "colorchoice",
- "is_terminal_polyfill",
- "utf8parse",
-]
-
-[[package]]
 name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
-
-[[package]]
-name = "anstyle-parse"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
-dependencies = [
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle-query"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "anstyle-wincon"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
-dependencies = [
- "anstyle",
- "once_cell_polyfill",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "anyhow"
@@ -1077,7 +1033,7 @@ dependencies = [
  "chimera-core-manager",
  "chimera-ipc",
  "chimera-macro",
- "chimera_utils",
+ "chimera-utils",
  "chrono",
  "convert_case",
  "dashmap",
@@ -1100,7 +1056,6 @@ dependencies = [
  "nix 0.31.3",
  "notify-debouncer-full",
  "num_cpus",
- "nyanpasu-utils",
  "once_cell",
  "oneshot",
  "open",
@@ -1171,12 +1126,12 @@ name = "chimera-clash-api"
 version = "1.0.0-rc.6"
 dependencies = [
  "backon",
+ "chimera-utils",
  "chrono",
  "futures-core",
  "futures-util",
  "indexmap 2.14.2",
  "ipnet",
- "nyanpasu-utils",
  "reqwest",
  "reqwest-websocket",
  "serde",
@@ -1193,7 +1148,7 @@ dependencies = [
 name = "chimera-config"
 version = "0.1.0"
 dependencies = [
- "chimera_utils",
+ "chimera-utils",
  "ciborium",
  "csscolorparser",
  "enumflags2",
@@ -1234,7 +1189,6 @@ dependencies = [
  "dashmap",
  "fs-err",
  "indexmap 2.14.2",
- "nyanpasu-utils",
  "serde",
  "serde_yaml_ng",
  "tempfile",
@@ -1250,9 +1204,9 @@ dependencies = [
  "camino",
  "chimera-clash-api",
  "chimera-core-metadata",
+ "chimera-utils",
  "chrono",
  "enumset",
- "nyanpasu-utils",
  "parking_lot",
  "schemars 1.2.1",
  "serde",
@@ -1317,6 +1271,32 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "chimera-utils"
+version = "0.1.0"
+dependencies = [
+ "backon",
+ "chimera_utils",
+ "encoding_rs",
+ "kill_tree",
+ "libc",
+ "memchr",
+ "nix 0.31.3",
+ "os_pipe",
+ "parking_lot",
+ "processkit",
+ "reqwest",
+ "reqwest-websocket",
+ "shared_child",
+ "sysinfo 0.39.6",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-attributes",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -1430,12 +1410,6 @@ name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
-
-[[package]]
-name = "colorchoice"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "combine"
@@ -2360,28 +2334,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "env_filter"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
-dependencies = [
- "log",
- "regex",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.11.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
-dependencies = [
- "anstream",
- "anstyle",
- "env_filter",
- "log",
 ]
 
 [[package]]
@@ -3786,12 +3738,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is_terminal_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
 name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4719,39 +4665,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nyanpasu-utils"
-version = "0.1.0"
-dependencies = [
- "backon",
- "camino",
- "chimera_utils",
- "constcat",
- "derive_builder",
- "dirs 6.0.0",
- "encoding_rs",
- "kill_tree",
- "libc",
- "memchr",
- "nix 0.31.3",
- "os_pipe",
- "parking_lot",
- "processkit",
- "reqwest",
- "reqwest-websocket",
- "serde",
- "shared_child",
- "specta",
- "sysinfo 0.39.6",
- "test-log",
- "thiserror 2.0.20",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-attributes",
- "windows 0.62.2",
-]
-
-[[package]]
 name = "objc2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5048,12 +4961,6 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
-
-[[package]]
-name = "once_cell_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oneshot"
@@ -8171,38 +8078,6 @@ dependencies = [
  "unicode-segmentation",
  "vtparse",
  "winapi",
-]
-
-[[package]]
-name = "test-log"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b9c218384242b5c89b68303ab6f6fc53a312d923f0c14dc6bb860c6aeee40f1"
-dependencies = [
- "env_logger",
- "test-log-macros",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "test-log-core"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c26ef8b00e4d382e59f6a8ddb3cd790b3a5bb29f21a358a9a69ea2f29f13f27b"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "test-log-macros"
-version = "0.2.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "944ad38adcbb71eaa682c56bceeb079e4ca82b4b3edc2a0fde5cb297b77dac8d"
-dependencies = [
- "syn 2.0.119",
- "test-log-core",
 ]
 
 [[package]]

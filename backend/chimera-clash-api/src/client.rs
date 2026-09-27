@@ -1,7 +1,7 @@
 use std::{future::Future, path::PathBuf, sync::Arc};
 
+use chimera_utils::reqwest_ext::{NamedPipeRequestExt, is_named_pipe_busy};
 use futures_util::StreamExt;
-use nyanpasu_utils::reqwest_ext::{NamedPipeRequestExt, is_named_pipe_busy};
 use reqwest::{
     Method, RequestBuilder, Response, Url,
     header::{AUTHORIZATION, HeaderValue},

@@ -93,7 +93,7 @@ async fn binary_modified(spec: &CoreSpec) -> Result<SystemTime, Error> {
 }
 
 async fn probe_version(binary_path: &camino::Utf8Path) -> Result<String, Error> {
-    let output = nyanpasu_utils::process::Command::new(binary_path.as_str())
+    let output = chimera_utils::process::Command::new(binary_path.as_str())
         .arg("-v")
         .timeout(Duration::from_secs(5))
         .output()
