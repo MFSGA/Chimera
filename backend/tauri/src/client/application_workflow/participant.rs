@@ -4,14 +4,17 @@
 //! Chimera's serialized CoreLifecycle boundary and restores the previous
 //! runtime if that source transaction rolls back.
 
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, marker::PhantomData, panic::AssertUnwindSafe, sync::Arc, time::Duration,
+};
 
 use chimera_config::profile::Profiles;
 use chimera_core::state::{
     Ack, AckOptions, DecisionHandle, StateAckSubscriber, StateChange, StateDecision, SubscriberName,
 };
 use chimera_core_manager::{CoreError, CoreErrorKind, OperationId};
-use tokio::sync::Mutex;
+use futures_util::FutureExt;
+use tokio::sync::{Mutex, Notify};
 
 use super::{
     impact::{ActivationIntent, MutationHints, RuntimeImpact, classify_profiles},
@@ -21,6 +24,31 @@ use super::{
 use crate::client::{core_lifecycle::CoreLifecycleClient, runtime::RuntimeCommitStatus};
 
 const MUTATION_ACK_TIMEOUT: Duration = Duration::from_secs(90);
+
+#[derive(Default)]
+struct RuntimeAttempt {
+    result: Mutex<Option<Result<(), String>>>,
+    completed: Notify,
+}
+
+impl RuntimeAttempt {
+    async fn complete(&self, result: Result<(), String>) {
+        *self.result.lock().await = Some(result);
+        self.completed.notify_waiters();
+    }
+
+    async fn wait(&self) -> anyhow::Result<()> {
+        loop {
+            let completed = self.completed.notified();
+            tokio::pin!(completed);
+            completed.as_mut().enable();
+            if let Some(result) = self.result.lock().await.clone() {
+                return result.map_err(anyhow::Error::msg);
+            }
+            completed.await;
+        }
+    }
+}
 
 pub(crate) struct ApplicationMutationParticipant<T: MutationDomain> {
     operation_id: OperationId,
@@ -32,6 +60,7 @@ pub(crate) struct ApplicationMutationParticipant<T: MutationDomain> {
     recovery_required: Arc<Mutex<Option<String>>>,
     attempted_runtime: std::sync::atomic::AtomicBool,
     deferred_runtime: std::sync::atomic::AtomicBool,
+    runtime_attempt: std::sync::Mutex<Option<Arc<RuntimeAttempt>>>,
     name: String,
     _state: PhantomData<T>,
 }
@@ -57,8 +86,36 @@ impl<T: MutationDomain> ApplicationMutationParticipant<T> {
             recovery_required,
             attempted_runtime: std::sync::atomic::AtomicBool::new(false),
             deferred_runtime: std::sync::atomic::AtomicBool::new(false),
+            runtime_attempt: std::sync::Mutex::new(None),
             _state: PhantomData,
         })
+    }
+
+    async fn reconcile_candidate(&self, candidate: Arc<Profiles>) -> anyhow::Result<()> {
+        let attempt = Arc::new(RuntimeAttempt::default());
+        *self
+            .runtime_attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(attempt.clone());
+        self.attempted_runtime
+            .store(true, std::sync::atomic::Ordering::Release);
+
+        let wait_attempt = attempt.clone();
+        let core = self.core.clone();
+        let staged_content = self.hints.staged_content.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = AssertUnwindSafe(core.reconcile_profiles(candidate, staged_content))
+                .catch_unwind()
+                .await;
+            let result = match result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("Profile runtime reconciliation task panicked".into()),
+            };
+            attempt.complete(result).await;
+        });
+
+        wait_attempt.wait().await
     }
 
     async fn recover_previous(&self, previous: &Profiles) -> anyhow::Result<()> {
@@ -162,13 +219,7 @@ impl<T: MutationDomain> StateAckSubscriber<T> for ApplicationMutationParticipant
             return Ack::Ok;
         }
 
-        self.attempted_runtime
-            .store(true, std::sync::atomic::Ordering::Release);
-        match self
-            .core
-            .reconcile_profiles(Arc::new(candidate), self.hints.staged_content.clone())
-            .await
-        {
+        match self.reconcile_candidate(Arc::new(candidate)).await {
             Ok(()) => {
                 self.outcomes
                     .lock()
@@ -219,6 +270,19 @@ impl<T: MutationDomain> StateAckSubscriber<T> for ApplicationMutationParticipant
             return;
         }
 
+        let attempt = self
+            .runtime_attempt
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(attempt) = attempt {
+            // A prepare ACK timeout stops the source transaction's wait, not
+            // the runtime attempt. Settle it before queuing the baseline restore.
+            if let Err(error) = attempt.wait().await {
+                tracing::warn!(%error, operation_id = %self.operation_id, "profile runtime attempt ended before rollback");
+            }
+        }
+
         let DomainChange::Profiles { previous, .. } = T::domain_change(change);
         let Some(previous) = previous else {
             *self.recovery_required.lock().await =
@@ -243,6 +307,43 @@ fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> bool {
             .downcast_ref::<CoreError>()
             .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
     })
+}
+
+#[cfg(test)]
+mod attempt_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn runtime_attempt_survives_a_cancelled_waiter() {
+        let attempt = Arc::new(RuntimeAttempt::default());
+        let worker_attempt = attempt.clone();
+        let (release, wait) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ = wait.await;
+            worker_attempt.complete(Ok(())).await;
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), attempt.wait())
+                .await
+                .is_err()
+        );
+        release.send(()).unwrap();
+        attempt.wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_attempt_preserves_worker_errors_for_rollback() {
+        let attempt = RuntimeAttempt::default();
+        attempt
+            .complete(Err("candidate runtime failed".into()))
+            .await;
+
+        assert_eq!(
+            attempt.wait().await.unwrap_err().to_string(),
+            "candidate runtime failed"
+        );
+    }
 }
 
 #[cfg(test)]
