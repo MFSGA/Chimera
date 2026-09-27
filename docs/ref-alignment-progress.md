@@ -703,3 +703,43 @@ DIFF-001 至 DIFF-012 是此前基于
 - 下一切片：让 IPC client 错误类型暴露服务端错误元数据，并实现 Tauri `ServiceEndpoint` 的
   wire 映射；之后迁入服务端 `CoreControl` bridge 和 v2 handlers。只有服务端具备 ref 的排队、
   幂等与状态查询语义后，才把生产 Service 调用切至 v2。
+
+## DIFF-026：IPC client 暴露服务端错误元数据
+
+- 基线：根仓库 `5df71e76`；runtime `a191e67`；ref 仍为 root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549` / runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：在本地 `ClientError` 上添加 `server_error_kind()` 与
+  `server_retryable()`，从既有 `ServerResponseFailed` envelope 读取原始字符串和可选 bool；未知 kind
+  原样交给应用调用方，transport error 明确返回 `None`。保持 `ClientError` 当前结构和 v1 请求签名，
+  没有引入新依赖或把 app 层 metadata crate 拉入独立 runtime 子模块。
+- 验证：`cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc
+  --features client`，11 passed、doc tests 0；runtime fmt check 通过。测试时观察到 3 条既有
+  server-only helper unused warnings。
+- 下一切片：在 Tauri `actor_v2` 增加 Service `ControlEndpoint`，把本地 manager 错误分类与 v2
+  DTO 映射到 Chimera wire 类型。websocket client/events 和 Service v2 routes 仍需分别迁移；当前
+  endpoint 不会被生产调用链选用。
+
+## DIFF-027：迁入 IPC v2 Service endpoint adapter
+
+- 基线：根仓库 `5df71e76`；runtime `188945a`；ref root
+  `5331747c06a5f42eeabb3e225a1e77a83f480549` / runtime
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：新增 `actor_v2::service_endpoint::ServiceEndpoint`，按 ref 把 reconcile/stop/recover
+  envelope 转为 Chimera IPC v2 DTO，并接入 submit、operation long-poll、status、effective config、
+  API connection typed calls；server error 通过前两步加入的 envelope 字段映射为本地错误类型，不解析
+  message 文本。status 缺少详细状态时维持 `None`，不从 v1 粗状态伪造停止或启动证明。
+- Chimera 差异：`CoreKind::ChimeraClient` 显式映射至同一
+  `chimera_utils::core::CoreType::Clash(ChimeraClient)`，不降级成 `ClashRust`。当前 IPC/service
+  没有 config-check 路由或 event websocket client，因此 adapter 对 check 返回 `Unsupported`，沿用
+  trait 默认无事件流；这两项能力需分别迁移后才能达到 ref 的完整行为。
+- 上游协议缺陷及修正：ref 的 IPC 注释和序列化样例声称 operation id 是连续 32 位 hex，但同一
+  ref 的 `CoreControl::OperationId` parser/display 合同实际要求 `16-8-8` 分段形式。连续样例会被
+  Service parser 拒绝。本地 DTO 注释/样例改为 manager 实际接受的格式；隔离工作区 `ref/` 未修改。
+- 兼容与限制：只导出可构造的 adapter，没有修改 `CoreFacade` 的 host 选择或生产调用路径。当前
+  Service v1 没有 `/v2/core/*` handler，所以尚不能用此 adapter 控制远程 core；不声称 Service v2
+  已可运行，下一切片需把 `CoreControl` bridge/operation handlers 迁入 `chimera-service` 并做路由测试。
+- 验证：`cargo check --manifest-path backend/Cargo.toml -p chimera` 通过；
+  `cargo test --manifest-path backend/Cargo.toml -p chimera
+  core::actor_v2::service_endpoint::tests -- --test-threads=1`，2 passed、407 filtered；
+  两个 workspace 的 `git diff --check` 通过。Tauri build 报约 329 条既有 warning。
