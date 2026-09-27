@@ -3,15 +3,13 @@
  */
 export const CHIMERA_BACKEND_EVENT_NAME = 'nyanpasu://mutation';
 
+/** Profile query key shared by Profile reads and mutation events. */
+export const PROFILES_QUERY_KEY = 'getProfiles';
+
 /**
  * Is appimage query key, used by useIsAppImage hook
  */
 export const IS_APPIMAGE_QUERY_KEY = 'is-appimage';
-
-/**
- * Chimera profile query key, used to fetch profiles from query
- */
-export const RROFILES_QUERY_KEY = 'profiles';
 
 /**
  * CHIMERA setting query key, used by useSettings hook

@@ -6,6 +6,13 @@ export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 
 export { commands } from './bindings';
+export { mutations, queries } from './profile-bindings';
+export {
+  MutationUnconfirmedError,
+  invokeMutation,
+  invokeQuery,
+  unwrapQueryOptions,
+} from './query-options';
 export type * from './bindings';
 /** @deprecated Use ClashRuntimeConfig for values returned by the running core. */
 export type { ClashRuntimeConfig as ClashConfig } from './bindings';

@@ -1,4 +1,5 @@
-type Result<T, E> = { status: 'ok'; data: T } | { status: 'error'; error: E };
+export type Result<T, E> =
+  { status: 'ok'; data: T } | { status: 'error'; error: E };
 
 export function unwrapResult<T, E>(res: Result<T, E>): T {
   if (res.status === 'error') {
