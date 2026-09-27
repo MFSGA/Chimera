@@ -2074,3 +2074,68 @@ impl Actor for ProfilesActor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_definition() -> ProfileDefinition {
+        ProfileDefinition::Config {
+            config: ConfigDefinition::File(FileConfig {
+                source: ProfileSource::Local {
+                    binding: LocalBinding::Managed {
+                        materialized: MaterializedFile {
+                            file: ManagedProfilePath::new("p1.yaml").unwrap(),
+                            updated_at: None,
+                        },
+                    },
+                },
+                transforms: vec![],
+            }),
+        }
+    }
+
+    fn overlay_definition() -> ProfileDefinition {
+        ProfileDefinition::Transform {
+            transform: TransformDefinition::Overlay(chimera_config::profile::OverlayTransform {
+                source: ProfileSource::Local {
+                    binding: LocalBinding::Managed {
+                        materialized: MaterializedFile {
+                            file: ManagedProfilePath::new("t1.yaml").unwrap(),
+                            updated_at: None,
+                        },
+                    },
+                },
+            }),
+        }
+    }
+
+    /// Config subscriptions must carry proxies (legacy remote.rs semantics);
+    /// overlays only require a mapping.
+    #[test]
+    fn config_content_requires_proxies_key() {
+        let definition = config_definition();
+        assert!(ProfilesActor::validate_fetched_content(&definition, "{}\n").is_err());
+        assert!(ProfilesActor::validate_fetched_content(&definition, "proxies: []\n").is_ok());
+        assert!(
+            ProfilesActor::validate_fetched_content(&definition, "proxy-providers: {}\n").is_ok()
+        );
+    }
+
+    #[test]
+    fn overlay_content_needs_only_a_mapping() {
+        let definition = overlay_definition();
+        assert!(ProfilesActor::validate_fetched_content(&definition, "a: 1\n").is_ok());
+    }
+
+    #[test]
+    fn synced_name_syncs_only_unpinned_profiles_with_a_server_name() {
+        assert_eq!(
+            synced_name(false, &Some("Server Name".into())),
+            Some("Server Name".into())
+        );
+        assert_eq!(synced_name(true, &Some("Server Name".into())), None);
+        assert_eq!(synced_name(false, &None), None);
+        assert_eq!(synced_name(false, &Some("   ".into())), None);
+    }
+}

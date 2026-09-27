@@ -244,8 +244,13 @@ fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enhance::{EnhanceScriptRunner, FsProfileContentSource};
     use chimera_config::{
-        profile::{ManagedProfilePath, ProfileId, ScriptRuntime},
+        profile::{
+            ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
+            ProfileDefinition, ProfileId, ProfileItem, ProfileMetadata, ProfileSource,
+            ScriptRuntime, ScriptTransform, TransformDefinition,
+        },
         runtime::executor::{PortError, ScriptRunOutcome},
         runtime::value::ConfigValue,
     };
@@ -401,5 +406,95 @@ mod tests {
             RuntimeBuilder::build(&input, &EmptyContent, &EchoRunner),
             Err(RuntimeBuildError::Validation(_))
         ));
+    }
+
+    /// Exercises the same on-disk source and JavaScript runner used by the
+    /// production builder, including scoped transform output and step logs.
+    #[test]
+    fn golden_selected_file_with_script_transform_end_to_end() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join("cfg1.yaml"),
+            "proxies: []\nmode: direct\nextra-key: keep\n",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("scr1.js"),
+            "function main(config) { config[\"mode\"] = \"rule\"; console.log(\"scoped ran\"); return config; }\n",
+        )
+        .unwrap();
+
+        let managed = |name: &str| MaterializedFile {
+            file: ManagedProfilePath::new(name).unwrap(),
+            updated_at: None,
+        };
+        let mut profiles = Profiles::default();
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("cfg1".into()),
+            metadata: ProfileMetadata {
+                name: "CFG1".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Config {
+                config: ConfigDefinition::File(FileConfig {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: managed("cfg1.yaml"),
+                        },
+                    },
+                    transforms: vec![ProfileId("scr1".into())],
+                }),
+            },
+        });
+        profiles.append_item(ProfileItem {
+            uid: ProfileId("scr1".into()),
+            metadata: ProfileMetadata {
+                name: "SCR1".into(),
+                desc: None,
+                custom_name: true,
+            },
+            definition: ProfileDefinition::Transform {
+                transform: TransformDefinition::Script(ScriptTransform {
+                    source: ProfileSource::Local {
+                        binding: LocalBinding::Managed {
+                            materialized: managed("scr1.js"),
+                        },
+                    },
+                    runtime: ScriptRuntime::JavaScript,
+                }),
+            },
+        });
+        profiles.set_current(Some(ProfileId("cfg1".into())));
+
+        let input = RuntimeBuildInput {
+            profiles: Arc::new(profiles),
+            clash: ClashConfig::default(),
+            app: ChimeraAppConfig {
+                enable_builtin_enhanced: false,
+                ..ChimeraAppConfig::default()
+            },
+            resolved_ports: ResolvedPortBindings {
+                mixed_port: 7890,
+                ..Default::default()
+            },
+        };
+        let content = FsProfileContentSource::new(temp.path().to_path_buf());
+        let scripts = EnhanceScriptRunner::new().unwrap();
+        let artifact = RuntimeBuilder::build(&input, &content, &scripts).unwrap();
+        let config = artifact.final_config.to_json();
+
+        assert_eq!(config["mode"], json!("rule"));
+        assert_eq!(config["extra-key"], json!("keep"));
+        assert_eq!(config["mixed-port"], json!(7890));
+        assert!(
+            artifact.step_logs.iter().any(|log| {
+                log.entries
+                    .iter()
+                    .any(|entry| entry.message.contains("scoped ran"))
+            }),
+            "script logs must be anchored for the postprocessing_output consumer: {:#?}",
+            artifact.step_logs
+        );
     }
 }

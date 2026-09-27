@@ -8,7 +8,7 @@ use crate::{
     config::profile::item_type::{ProfileUid, ScriptType},
     enhance::{
         chain::Logs,
-        script::{javascript::JavaScriptRunner, lua::LuaRunner},
+        script::{js::JSRunner, lua::LuaRunner},
     },
 };
 
@@ -38,7 +38,7 @@ pub struct RunnerManager {
 impl Default for RunnerManager {
     fn default() -> Self {
         Self {
-            javascript: Some(Arc::new(JavaScriptRunner::new())),
+            javascript: Some(Arc::new(JSRunner::new())),
             lua: Some(Arc::new(LuaRunner::new())),
         }
     }

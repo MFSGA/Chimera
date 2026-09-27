@@ -1,4 +1,4 @@
 pub mod adapter;
-mod javascript;
+mod js;
 mod lua;
 pub mod runner;
