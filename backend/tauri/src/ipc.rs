@@ -285,7 +285,7 @@ pub async fn view_profile(
     uid: String,
 ) -> Result {
     let path = client
-        .profile_path(chimera_config::profile::ProfileId(uid))
+        .get_profile_materialized_path(chimera_config::profile::ProfileId(uid))
         .await?;
     if !path.exists() {
         return Err(anyhow!("file not exists: {:#?}", path).into());
@@ -947,7 +947,7 @@ pub async fn update_profile(
     option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
 ) -> Result<MutationOutcome<()>> {
     Ok(client
-        .update_profile(chimera_config::profile::ProfileId(uid), option)
+        .refresh_profile(chimera_config::profile::ProfileId(uid), option)
         .await?)
 }
 

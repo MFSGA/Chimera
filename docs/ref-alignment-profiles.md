@@ -5,12 +5,12 @@
 - Reference commit: `5331747c06a5f42eeabb3e225a1e77a83f480549`; `/Users/adam/Desktop/int/Chimera/ref` was clean when checked.
 - Reference paths and symbols:
   - `frontend/interface/src/ipc/use-profile.ts`: `ProfileItem_Serialize`, `ProfileId`, `getRemoteSource`, `isRemoteItem`, `scopedTransformsOf`, and `useProfile` operations.
-  - `backend/tauri/src/client/mod.rs`: `NyanpasuClient::{get_profiles, create_profile, import_profile, update_profile, delete_profile, reorder_profile, patch_profile_metadata, patch_remote_profile_options, replace_profile_definition, activate_profile, set_global_transforms, set_profile_valid_fields, read_profile_file, save_profile_file}`.
+  - `backend/tauri/src/client/mod.rs`: `NyanpasuClient::{get_profiles, add_profile, create_profile, import_profile, refresh_profile, delete_profile, reorder_profile, patch_profile_metadata, patch_remote_profile_options, replace_profile_definition, activate_profile, set_global_transforms, set_profile_valid_fields, get_profile_materialized_path, read_profile_file, save_profile_file}`.
   - `backend/tauri/src/client/profiles.rs` and `backend/tauri/src/state/profiles/{actor.rs,ports.rs,scheduler.rs}`: `ProfilesClient`, `ProfilesActor`, file/materialization ports, and remote refresh scheduling.
   - `backend/tauri/src/enhance/runtime_builder.rs`: `RuntimeBuilder` over typed `Profiles`.
 - Chimera paths and symbols:
   - `frontend/interface/src/ipc/use-profile.ts`: same Profile helper names and operation names over Chimera's generated `commands` binding.
-  - `backend/tauri/src/client/profile_api.rs`: corresponding `ChimeraClient` methods; IPC commands call these methods directly.
+  - `backend/tauri/src/client/mod.rs`: corresponding `ChimeraClient` methods, in the same facade module as ref and with matching method names; IPC commands call these methods directly.
   - `backend/tauri/src/client/profiles.rs` and `backend/tauri/src/state/profiles/{actor.rs,ports.rs,scheduler.rs}`: typed actor client and domain operations.
   - `backend/tauri/src/core/actor_v2/local_runtime.rs` and `backend/tauri/src/enhance/runtime_builder.rs`: typed Profile snapshot and staged-content overlay reach the runtime builder.
 - Category: temporary migration, with legacy UI, E2E, and agent kept as supported extension points.

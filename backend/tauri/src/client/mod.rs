@@ -14,7 +14,6 @@ mod event_sink;
 #[cfg(test)]
 mod legacy_profiles;
 pub(crate) mod ports;
-mod profile_api;
 pub(crate) mod profiles;
 pub mod runtime;
 pub(crate) mod runtime_inspection;
@@ -22,6 +21,13 @@ mod session_state;
 mod system_dns;
 
 use std::sync::Arc;
+
+use anyhow::{Context as _, anyhow};
+use chimera_config::profile::{
+    ProfileDefinition, ProfileId, ProfileMetadata, ProfileMetadataPatch, ProfileSource, Profiles,
+    RemoteProfileOptions, RemoteProfileOptionsPatch,
+};
+use struct_patch::Patch as _;
 
 #[cfg(test)]
 use std::{collections::HashSet, sync::Mutex as StdMutex};
@@ -56,6 +62,7 @@ use crate::{
     service::profile_file::ProfileFileService,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
     state::mutation::MutationCoordinator,
+    state::profiles::{CommitReport, NewProfileRequest, ProfilesError, ReorderOp},
     utils::path::PathResolver,
 };
 
@@ -135,6 +142,20 @@ async fn new_typed_config_clients(
         session_state,
         clash_config,
     })
+}
+
+fn url_derived_name(url: &url::Url) -> String {
+    url.path_segments()
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        .map(|segment| {
+            segment
+                .trim_end_matches(".yaml")
+                .trim_end_matches(".yml")
+                .to_string()
+        })
+        .filter(|name| !name.is_empty())
+        .or_else(|| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| "Remote Profile".into())
 }
 
 struct ChimeraClientInner {
@@ -270,6 +291,318 @@ impl ChimeraClient {
         Self {
             inner: Arc::new(inner),
         }
+    }
+}
+
+impl ChimeraClient {
+    fn profiles_client(&self) -> anyhow::Result<&profiles::ProfilesClient> {
+        self.inner
+            .typed_profiles
+            .as_ref()
+            .ok_or_else(|| anyhow!("typed ProfilesClient is not configured"))
+    }
+
+    async fn collect_post_commit_degradations(&self, report: &CommitReport) -> Vec<Degradation> {
+        let mut degradations = report
+            .degradations
+            .iter()
+            .map(|degradation| {
+                tracing::warn!(
+                    phase = ?degradation.phase,
+                    code = ?degradation.code,
+                    retryable = degradation.code.retryable(),
+                    message = %degradation.message,
+                    "profile commit completed with a degraded side effect",
+                );
+                application_workflow::profiles::map_profile_degradation(degradation)
+            })
+            .collect::<Vec<_>>();
+        degradations.extend(report.runtime_degradations.clone());
+        degradations
+    }
+
+    async fn after_commit(&self, report: &CommitReport) -> MutationOutcome<()> {
+        MutationOutcome::from_parts((), self.collect_post_commit_degradations(report).await)
+            .with_commit(report.receipt.clone())
+    }
+
+    fn auto_activation_failure_degradation(error: &impl std::fmt::Display) -> Degradation {
+        tracing::warn!(
+            %error,
+            "profile auto-activation failed after commit; retaining committed profile id",
+        );
+        Degradation {
+            phase: DegradationPhase::SystemEffect,
+            code: "profile_auto_activation_failed".into(),
+            message: error.to_string(),
+            retryable: true,
+        }
+    }
+
+    async fn try_auto_activate_if_none(&self, uid: ProfileId) -> MutationOutcome<()> {
+        let profiles = match self.profiles_client() {
+            Ok(profiles) => profiles.clone(),
+            Err(error) => {
+                return MutationOutcome::from_parts(
+                    (),
+                    vec![Self::auto_activation_failure_degradation(&error)],
+                );
+            }
+        };
+        match profiles.set_current_if_none(uid).await {
+            Ok(None) => MutationOutcome::from_parts((), Vec::new()),
+            Ok(Some(report)) => self.after_commit(&report).await,
+            Err(error) => MutationOutcome::from_parts(
+                (),
+                vec![Self::auto_activation_failure_degradation(&error)],
+            ),
+        }
+    }
+
+    pub(crate) fn get_profiles(&self) -> anyhow::Result<Arc<Profiles>> {
+        Ok(self.profiles_client()?.snapshot())
+    }
+
+    pub(crate) async fn add_profile(
+        &self,
+        request: NewProfileRequest,
+        initial_file: Option<String>,
+    ) -> anyhow::Result<MutationOutcome<ProfileId>> {
+        if matches!(
+            request.definition.source(),
+            Some(ProfileSource::Remote { .. })
+        ) {
+            return Err(anyhow!(
+                "remote profiles must be created via import_profile"
+            ));
+        }
+        let report = self.profiles_client()?.add(request, initial_file).await?;
+        let created = report
+            .created
+            .clone()
+            .ok_or_else(|| anyhow!("profile add committed without a created uid"))?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(MutationOutcome::from_parts(
+            created,
+            self.collect_post_commit_degradations(&report).await,
+        )
+        .with_commit(report.receipt.clone()))
+    }
+
+    pub(crate) async fn create_profile(
+        &self,
+        request: NewProfileRequest,
+        initial_file: Option<String>,
+    ) -> anyhow::Result<MutationOutcome<ProfileId>> {
+        let is_config = matches!(request.definition, ProfileDefinition::Config { .. });
+        let mut outcome = self.add_profile(request, initial_file).await?;
+        if is_config {
+            let uid = outcome.value().clone();
+            outcome = outcome.append_commit_result(self.try_auto_activate_if_none(uid).await);
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn import_profile(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        patch: Option<RemoteProfileOptionsPatch>,
+    ) -> anyhow::Result<MutationOutcome<ProfileId>> {
+        let update_interval_explicit = patch
+            .as_ref()
+            .and_then(|patch| patch.update_interval_minutes)
+            .is_some();
+        let (name, custom_name) = match name {
+            Some(name) if !name.trim().is_empty() => (name, true),
+            _ => (url_derived_name(&url), false),
+        };
+        let mut options = RemoteProfileOptions::default();
+        if let Some(patch) = patch {
+            options.apply(patch);
+        }
+        let report = self
+            .profiles_client()?
+            .import(
+                url,
+                ProfileMetadata {
+                    name,
+                    desc: None,
+                    custom_name,
+                },
+                options,
+                update_interval_explicit,
+            )
+            .await?;
+        let created = report
+            .created
+            .clone()
+            .ok_or_else(|| anyhow!("profile import committed without a created uid"))?;
+        self.inner.ui_sink.refresh_profiles();
+        let outcome = MutationOutcome::from_parts(
+            created.clone(),
+            self.collect_post_commit_degradations(&report).await,
+        )
+        .with_commit(report.receipt.clone());
+        Ok(outcome.append_commit_result(self.try_auto_activate_if_none(created).await))
+    }
+
+    pub(crate) async fn delete_profile(
+        &self,
+        uid: ProfileId,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.delete(uid).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn reorder_profile(
+        &self,
+        active: ProfileId,
+        over: ProfileId,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self
+            .profiles_client()?
+            .reorder(ReorderOp::Move { active, over })
+            .await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn reorder_profiles_by_list(
+        &self,
+        list: Vec<ProfileId>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self
+            .profiles_client()?
+            .reorder(ReorderOp::ByList(list))
+            .await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn refresh_profile(
+        &self,
+        uid: ProfileId,
+        patch: Option<RemoteProfileOptionsPatch>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.refresh(uid, patch).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn patch_profile_metadata(
+        &self,
+        uid: ProfileId,
+        patch: ProfileMetadataPatch,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.patch_metadata(uid, patch).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn patch_remote_profile_options(
+        &self,
+        uid: ProfileId,
+        patch: RemoteProfileOptionsPatch,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self
+            .profiles_client()?
+            .patch_remote_options(uid, patch)
+            .await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn replace_profile_definition(
+        &self,
+        uid: ProfileId,
+        definition: ProfileDefinition,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self
+            .profiles_client()?
+            .replace_definition(uid, definition)
+            .await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn activate_profile(
+        &self,
+        uid: Option<ProfileId>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.set_current(uid).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn set_global_transforms(
+        &self,
+        ids: Vec<ProfileId>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.set_global_transforms(ids).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn set_profile_valid_fields(
+        &self,
+        fields: Vec<String>,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.set_valid_fields(fields).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn save_profile_file(
+        &self,
+        uid: ProfileId,
+        data: String,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.save_file(uid, data).await?;
+        self.inner.ui_sink.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    pub(crate) async fn read_profile_file(&self, uid: ProfileId) -> anyhow::Result<String> {
+        let snapshot = self.profiles_client()?.snapshot();
+        let item = snapshot
+            .items
+            .get(&uid)
+            .ok_or(ProfilesError::ProfileNotFound(uid))?;
+        let source = item
+            .definition
+            .source()
+            .ok_or(ProfilesError::ProfileHasNoFile)?;
+        let raw = crate::state::profiles::ports::ProfileFsPort::read(
+            self.inner.profile_service.as_ref(),
+            &source.materialized().file,
+        )?;
+        if item.definition.is_config() {
+            crate::service::profile_file::normalize_yaml_document(&raw)
+                .context("failed to normalize profile YAML")
+        } else {
+            Ok(raw)
+        }
+    }
+
+    pub(crate) async fn get_profile_materialized_path(
+        &self,
+        uid: ProfileId,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let snapshot = self.profiles_client()?.snapshot();
+        let item = snapshot
+            .items
+            .get(&uid)
+            .ok_or(ProfilesError::ProfileNotFound(uid))?;
+        let source = item
+            .definition
+            .source()
+            .ok_or(ProfilesError::ProfileHasNoFile)?;
+        self.inner
+            .profile_service
+            .resolve_path(&source.materialized().file)
+            .map_err(Into::into)
     }
 }
 

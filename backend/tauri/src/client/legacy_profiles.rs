@@ -465,7 +465,7 @@ impl ChimeraClient {
         Ok(())
     }
 
-    pub(crate) async fn get_profile_materialized_path(
+    pub(crate) async fn legacy_get_profile_materialized_path(
         &self,
         uid: ProfileUid,
     ) -> anyhow::Result<std::path::PathBuf> {
@@ -532,7 +532,7 @@ impl ChimeraClient {
         todo!()
     }
 
-    pub(crate) async fn refresh_profile(
+    pub(crate) async fn legacy_refresh_profile(
         &self,
         uid: ProfileUid,
         options: Option<RemoteProfileOptionsBuilder>,
