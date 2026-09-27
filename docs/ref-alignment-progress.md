@@ -826,6 +826,28 @@ DIFF-001 至 DIFF-012 是此前基于
   通过；同 workspace `cargo check -p chimera-service` 通过；根 `cargo check --manifest-path
   backend/Cargo.toml -p chimera` 通过，输出 312 条 warning。两侧受影响包的 rustfmt check 与根、
   嵌套 `git diff --check` 通过。未运行测试。
-- 下一步：把 `api_changes()` 接入可撤销的 API binding monitor，使 Service 端 status event 能触发
-  instance-bound controller/secret 复核与 WS connector 重建；再做真实 Service 启停及 IPC 事件流验证，
-  覆盖旧连接撤销、短暂断线、订阅结束和 host 切换。
+- 下一步：把 `api_changes()` 接入 API binding monitor，使 Service 端 status event 能触发
+  controller/secret 复核与 WS connector 重建；再做真实 Service 启停及 IPC 事件流验证，覆盖旧连接撤销、
+  短暂断线、订阅结束和 host 切换。API monitor 的迁入见 DIFF-031。
+
+## DIFF-031：消费 Service API 绑定变更并刷新 WS connector
+
+- 基线：根仓库 `b4a15998`；嵌套 `backend/chimera-runtime` `72d79a7`。只读 ref 为 Clash Nyanpasu
+  root `5331747c06a5f42eeabb3e225a1e77a83f480549`、runtime pin
+  `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- ref 对应：`backend/tauri/src/core/actor_v2/api.rs::ApiLease` 通过 API lifecycle stream 唤醒、每两秒
+  校验 instance-bound API capability，并在事件流失败或绑定失效时撤销 capability。本地新增的
+  `CoreFacade::monitor_service_api_binding` 使用 `ServiceEndpoint::api_changes()` 作为快速信号，并每两秒
+  读取 Service authoritative `CoreApiConnection`；控制器或 secret 改变时调用既有 WS connector restart，
+  查询持续失败时只触发一次重连。API stream 订阅和绑定查询均有 10 秒上限；流断开、出错或 host 离开
+  Service 时丢弃订阅并重新评估。
+- 本地适配及边界：仅在生产 `LocalRuntimeHost` 存在时于 Tauri setup 启动 monitor，且只在选中 Service
+  host 时订阅。当前应用的 HTTP API client 是短生命周期按调用构造，因此对齐点是失效后的 WS stream
+  重建；这不是 ref `ApiLease` 的逐请求 preflight/postflight、clone-wide 撤销实现，也不声称覆盖所有
+  旧 HTTP 请求的取消语义。保留 `ChimeraClient` 身份、现有 connector 和 facade 入口，不改品牌或协议。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、
+  `cargo check --manifest-path backend/Cargo.toml -p chimera` 及 `git diff --check` 通过；编译输出
+  311 条既有 warning。未运行测试；本机尚未完成 Service daemon 跨进程事件验证，Windows named-pipe
+  分支也未运行。
+- 下一步：用真实 Service 启停和 API 地址/secret 变化验证 IPC 事件、轮询兜底与 WS 重建；评估是否需要
+  在 Chimera 的长生命周期 API 使用者中迁入 ref `ApiLease` 的 capability 撤销模型。

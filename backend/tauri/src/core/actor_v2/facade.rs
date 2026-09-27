@@ -42,6 +42,7 @@ use crate::{
 const SERVICE_RESTART_BUDGET: u8 = 3;
 const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
 const LOCAL_OPERATION_HISTORY: usize = 64;
+const SERVICE_API_MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ServiceRestartDecision {
@@ -548,6 +549,139 @@ impl CoreFacade {
         }
 
         self.manager.active_clash_info().await
+    }
+
+    pub(crate) fn start_service_api_monitor(self: &Arc<Self>) {
+        if self.local_runtime.is_none() {
+            return;
+        }
+        let facade = self.clone();
+        tauri::async_runtime::spawn(async move {
+            facade.monitor_service_api_binding().await;
+        });
+    }
+
+    async fn monitor_service_api_binding(self: Arc<Self>) {
+        use futures::StreamExt;
+
+        let mut observed_binding = None;
+        let mut query_failed = false;
+        loop {
+            if !self.service_runtime_selected() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+            let subscription = tokio::time::timeout(
+                SERVICE_API_MONITOR_TIMEOUT,
+                self.service_endpoint.api_changes(),
+            )
+            .await;
+            let mut changes = match subscription {
+                Ok(Ok(Some(changes))) => changes,
+                Ok(Ok(None)) => {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "failed to subscribe to service core API changes");
+                    if self.service_runtime_selected() {
+                        self.refresh_ws_binding().await;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "service core API change subscription timed out");
+                    if self.service_runtime_selected() {
+                        self.refresh_ws_binding().await;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            };
+            let mut authority_check = tokio::time::interval(Duration::from_secs(2));
+            let mut host_check = tokio::time::interval(Duration::from_secs(1));
+            loop {
+                tokio::select! {
+                    _ = host_check.tick() => {
+                        if !self.service_runtime_selected() {
+                            break;
+                        }
+                    }
+                    event = changes.next() => match event {
+                        Some(Ok(())) => {
+                            self.refresh_service_api_binding(
+                                &mut observed_binding,
+                                &mut query_failed,
+                            ).await;
+                        }
+                        Some(Err(error)) => {
+                            tracing::warn!(%error, "service core API change stream failed");
+                            break;
+                        }
+                        None => {
+                            tracing::warn!("service core API change stream ended");
+                            break;
+                        }
+                    },
+                    _ = authority_check.tick() => {
+                        self.refresh_service_api_binding(
+                            &mut observed_binding,
+                            &mut query_failed,
+                        ).await;
+                    }
+                }
+            }
+            if self.service_runtime_selected() {
+                self.refresh_ws_binding().await;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn refresh_service_api_binding(
+        &self,
+        observed_binding: &mut Option<chimera_ipc::api::core::v2::CoreApiConnection>,
+        query_failed: &mut bool,
+    ) {
+        match tokio::time::timeout(
+            SERVICE_API_MONITOR_TIMEOUT,
+            self.service_endpoint.api_connection(),
+        )
+        .await
+        {
+            Ok(Ok(current)) => {
+                *query_failed = false;
+                if current != *observed_binding {
+                    *observed_binding = current;
+                    if self.service_runtime_selected() {
+                        self.refresh_ws_binding().await;
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::debug!(%error, "service core API binding is not available");
+                if !*query_failed && self.service_runtime_selected() {
+                    self.refresh_ws_binding().await;
+                }
+                *query_failed = true;
+                *observed_binding = None;
+            }
+            Err(error) => {
+                tracing::debug!(%error, "service core API binding query timed out");
+                if !*query_failed && self.service_runtime_selected() {
+                    self.refresh_ws_binding().await;
+                }
+                *query_failed = true;
+                *observed_binding = None;
+            }
+        }
+    }
+
+    fn service_runtime_selected(&self) -> bool {
+        self.local_runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.run_type() == RunType::Service)
     }
 
     async fn refresh_ws_binding(&self) {

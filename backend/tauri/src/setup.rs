@@ -46,6 +46,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         local_control,
         runtime_paths.clone(),
     ));
+    let core_facade_monitor = core_facade.clone();
 
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
@@ -65,5 +66,6 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         ui_sink: Arc::new(LegacyUiEventSink),
     })?;
     app.manage(client);
+    core_facade_monitor.start_service_api_monitor();
     Ok(())
 }
