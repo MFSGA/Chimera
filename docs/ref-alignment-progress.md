@@ -627,3 +627,20 @@ DIFF-001 至 DIFF-012 是此前基于
 - 下一切片：迁移 typed IPC client calls 和本地 `ControlEndpoint` adapter，随后才接入 Service
   actor；在 v1 服务的核心语义可以由 v2 操作协议安全表达前，保留现有 v1 服务和
   `ChimeraClient` 调用链。
+
+## DIFF-022：补齐 Core IPC v2 typed client calls
+
+- 基线：DIFF-021 runtime commit `8d535ca`；Clash Nyanpasu root `5331747c06a5f42eeabb3e225a1e77a83f480549`
+  与 runtime pin `f5b581fad8bf8272e222f1e3948c7826c6665bb6`。
+- 迁移范围：在 `chimera_ipc::client::Client` 添加 `submit_core`、`core_operation`、
+  `core_status_v2`、`core_api_connection` 和 `effective_config_v2` 五个 typed 方法，以及
+  对应成功 envelope aliases，共 67 行。请求/响应路径与 v2 DTO 共用同一 endpoint 常量；POST
+  仍用 `simd-json` 编码，GET 无 body。原有 v1 methods 未动。
+- 兼容限制：方法已在 IPC client feature 下可编译，但本地 Service 尚未挂载这些路由；调用方
+  尚未切换到 v2。此前 v2 schema 的旧状态兼容测试继续保护 v1 JSON。
+- 验证：`cargo test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-ipc
+  --features client`，6 passed、doc tests 0；`cargo fmt --manifest-path
+  backend/chimera-runtime/Cargo.toml --all -- --check` 和 `git diff --check` 通过。
+- 下一切片：将 ref `ControlEndpoint` / Local CoreControl adapter 与 intent 构造迁入
+  `actor_v2`，再把 Service endpoint 接上这些 typed calls；在 Service v2 handler 可提供完整
+  reconcile 语义之前，不把本地 actor 默认切到 v2 Service。
