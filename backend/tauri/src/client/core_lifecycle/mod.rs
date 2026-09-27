@@ -937,7 +937,7 @@ impl CoreLifecycleClient {
         }
     }
 
-    pub(super) fn status(&self) -> CoreLifecycleStatus {
+    pub(crate) fn status(&self) -> CoreLifecycleStatus {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { status, .. } => status.lock().clone(),
             #[cfg(test)]
@@ -945,7 +945,7 @@ impl CoreLifecycleClient {
         }
     }
 
-    pub(super) fn request_runtime_rebuild(&self) {
+    pub(crate) fn request_runtime_rebuild(&self) {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { actor_ref, .. } => {
                 if actor_ref.cast(Message::RuntimeDirty).is_err() {
