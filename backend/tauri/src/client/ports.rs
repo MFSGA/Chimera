@@ -79,10 +79,12 @@ impl SessionPortResolver {
                 .is_some_and(|(prev, _)| prev.mixed == fingerprint.mixed),
         ) {
             Some(ports) => ports.mixed_port,
-            None => *clash
-                .mixed_port
-                .pick_and_try_port()
-                .context("failed to resolve mixed port")?,
+            None => *clash.mixed_port.pick_and_try_port().with_context(|| {
+                format!(
+                    "failed to resolve mixed port (strategy: {:?}, start port: {})",
+                    clash.mixed_port.kind, clash.mixed_port.start_port
+                )
+            })?,
         };
         let port = match unchanged(
             previous

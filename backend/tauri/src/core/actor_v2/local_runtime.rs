@@ -493,16 +493,16 @@ impl LocalRuntimeHost {
         let applied_revision = match confirmed_applied_revision(
             endpoint.host(),
             &applied_status,
-            &digest,
+            &reconcile_outcome.revision,
             &core_spec,
         ) {
             Ok(revision) => revision,
             Err(error) => {
                 cleanup_candidate(candidate, "applied runtime identity was not confirmed").await;
                 self.outcome_uncertain.store(true, Ordering::Release);
-                return Err(error).context(
-                    "the core accepted the runtime operation, but its applied identity did not match the submitted document",
-                );
+                return Err(anyhow::anyhow!(
+                    "the core accepted the runtime operation, but status confirmation failed: {error:#}"
+                ));
             }
         };
         let receipt = Arc::new(RuntimeApplyReceipt {
@@ -711,13 +711,16 @@ impl LocalRuntimeHost {
             },
             core_type: Some((&receipt.target_core).into()),
         };
-        if let Err(error) = self
+        let reconcile_outcome = match self
             .submit_and_wait(endpoint, submission, operation_id)
             .await
         {
-            cleanup_candidate(candidate, "runtime restore operation failed").await;
-            return Err(error);
-        }
+            Ok(outcome) => outcome,
+            Err(error) => {
+                cleanup_candidate(candidate, "runtime restore operation failed").await;
+                return Err(error);
+            }
+        };
 
         let applied_status = match endpoint.status().await {
             Ok(status) => status,
@@ -732,16 +735,16 @@ impl LocalRuntimeHost {
         let applied_revision = match confirmed_applied_revision(
             endpoint.host(),
             &applied_status,
-            &digest,
+            &reconcile_outcome.revision,
             &receipt.core_spec,
         ) {
             Ok(revision) => revision,
             Err(error) => {
                 cleanup_candidate(candidate, "restored runtime identity was not confirmed").await;
                 self.outcome_uncertain.store(true, Ordering::Release);
-                return Err(error).context(
-                    "the runtime restore was accepted, but its applied identity could not be confirmed",
-                );
+                return Err(anyhow::anyhow!(
+                    "the runtime restore was accepted, but status confirmation failed: {error:#}"
+                ));
             }
         };
         let restored_receipt = Arc::new(RuntimeApplyReceipt {
@@ -967,8 +970,18 @@ impl LocalRuntimeHost {
 
         match connection.controller.host {
             chimera_core_manager::Host::Http(url) => {
-                info.server = url.to_string();
-                info.port = url.port_or_known_default().unwrap_or(info.port);
+                if url.scheme() != "http" {
+                    bail!("the local core API uses an unsupported URL scheme");
+                }
+                let host = match url.host().context("local core API URL has no host")? {
+                    url::Host::Ipv6(address) => format!("[{address}]"),
+                    host => host.to_string(),
+                };
+                let port = url
+                    .port_or_known_default()
+                    .context("local core API URL has no usable port")?;
+                info.server = format!("{host}:{port}");
+                info.port = port;
             }
             chimera_core_manager::Host::NamedPipe(_)
             | chimera_core_manager::Host::UnixSocket(_) => {
@@ -1029,16 +1042,26 @@ fn expected_applied_revision(
 fn confirmed_applied_revision(
     _host: ExecutionHost,
     status: &super::control_endpoint::CoreStatusSnapshot,
-    digest: &str,
+    expected: &chimera_ipc::api::status::ConfigRevisionInfo,
     core_spec: &chimera_core_manager::CoreSpec,
-) -> anyhow::Result<chimera_ipc::api::status::RevisionIdInfo> {
+) -> anyhow::Result<chimera_ipc::api::status::ConfigRevisionInfo> {
     anyhow::ensure!(
-        matches!(status.state, Some(CoreStateDetail::Running { .. })),
-        "core host did not confirm a running runtime"
+        matches!(status.state, Some(CoreStateDetail::Running { epoch, .. }) if epoch == expected.epoch),
+        "core host did not confirm the runtime epoch returned by reconcile"
+    );
+    let applied_revision = status
+        .revision
+        .as_ref()
+        .context("core host did not report the applied runtime revision")?;
+    anyhow::ensure!(
+        status.source_hash.as_deref() == Some(expected.source_hash.as_str()),
+        "core host source hash does not match the reconcile result"
     );
     anyhow::ensure!(
-        status.source_hash.as_deref() == Some(digest),
-        "core host source digest does not match the submitted runtime"
+        applied_revision.epoch == expected.epoch
+            && applied_revision.generation == expected.generation
+            && applied_revision.effective_hash == expected.effective_hash,
+        "core host revision identity does not match the reconcile result"
     );
     anyhow::ensure!(
         status
@@ -1046,10 +1069,12 @@ fn confirmed_applied_revision(
             .is_none_or(|kind| kind == core_spec.kind),
         "core host applied a different core than the submitted runtime"
     );
-    status
-        .revision
-        .clone()
-        .context("core host did not report the applied runtime revision")
+    Ok(chimera_ipc::api::status::ConfigRevisionInfo {
+        epoch: applied_revision.epoch,
+        generation: applied_revision.generation,
+        source_hash: expected.source_hash.clone(),
+        effective_hash: applied_revision.effective_hash.clone(),
+    })
 }
 
 fn accept_reconcile_outcome(outcome: &ReconcileOutcomeInfo) -> anyhow::Result<()> {
@@ -1313,9 +1338,10 @@ mod tests {
                 policy: LocalIpcPolicy::Disable,
                 keep_http_controller: true,
             },
-            applied_revision: RevisionIdInfo {
+            applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,
+                source_hash: "candidate-digest".into(),
                 effective_hash: "old-effective".into(),
             },
             ports: Default::default(),
@@ -1401,9 +1427,10 @@ mod tests {
                 policy: LocalIpcPolicy::Disable,
                 keep_http_controller: true,
             },
-            applied_revision: RevisionIdInfo {
+            applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,
+                source_hash: "candidate-source".into(),
                 effective_hash: "candidate-effective".into(),
             },
             ports: Default::default(),

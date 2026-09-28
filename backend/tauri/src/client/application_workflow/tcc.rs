@@ -463,7 +463,7 @@ impl ApplicationWorkflow {
                                 stage: MutationStage::TryingCritical,
                                 cause: RefusalCause::Try(TryCauseKind::Deterministic),
                                 message: format!(
-                                    "Profile runtime validation failed while stopped: {error}"
+                                    "Profile runtime validation failed while stopped: {error:#}"
                                 ),
                             },
                             restored: Some(KnownRuntimeState::Stopped),
@@ -1248,9 +1248,10 @@ mod tests {
                 policy: chimera_core_manager::LocalIpcPolicy::Disable,
                 keep_http_controller: true,
             },
-            applied_revision: chimera_ipc::api::status::RevisionIdInfo {
+            applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,
+                source_hash: "test-source-hash".into(),
                 effective_hash: "test-effective-hash".into(),
             },
             ports: Default::default(),

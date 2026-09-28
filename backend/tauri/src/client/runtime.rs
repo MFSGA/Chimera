@@ -400,7 +400,7 @@ pub(crate) struct RuntimeApplyReceipt {
     pub host: crate::core::actor_v2::control_endpoint::ExecutionHost,
     pub run_intent: super::application_workflow::policy::CoreRunIntent,
     pub local_ipc: chimera_core_manager::LocalIpcSettings,
-    pub applied_revision: chimera_ipc::api::status::RevisionIdInfo,
+    pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
     pub ports: chimera_config::runtime::executor::ResolvedPortBindings,
     pub artifact: Option<Arc<RuntimeSnapshot>>,
 }
@@ -413,9 +413,15 @@ impl RuntimeApplyReceipt {
     ) -> bool {
         matches!(
             status.state,
-            Some(chimera_ipc::api::status::CoreStateDetail::Running { .. })
+            Some(chimera_ipc::api::status::CoreStateDetail::Running { epoch, .. })
+                if epoch == self.applied_revision.epoch
         ) && host == self.host
-            && status.source_hash.as_deref() == Some(self.config_digest.as_str())
+            && status.source_hash.as_deref() == Some(self.applied_revision.source_hash.as_str())
+            && status.revision.as_ref().is_some_and(|revision| {
+                revision.epoch == self.applied_revision.epoch
+                    && revision.generation == self.applied_revision.generation
+                    && revision.effective_hash == self.applied_revision.effective_hash
+            })
             && status
                 .applied_kind
                 .is_none_or(|kind| kind == self.core_spec.kind)
