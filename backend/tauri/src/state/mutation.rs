@@ -9,7 +9,8 @@ use tokio::sync::{Mutex, watch};
 
 use crate::client::{
     application_workflow::{
-        impact::MutationHints, participant::ApplicationMutationParticipant, policy::CommandClass,
+        ApplicationWorkflowClient, impact::MutationHints,
+        participant::ApplicationMutationParticipant, policy::CommandClass,
     },
     core_lifecycle::CoreLifecycleClient,
     runtime::{CommitReceipt, Degradation, DegradationPhase, RuntimeCommitStatus},
@@ -18,7 +19,7 @@ use crate::client::{
 #[derive(Clone)]
 enum Connection {
     Pending,
-    Ready(CoreLifecycleClient),
+    Ready(ApplicationWorkflowClient),
     #[cfg(test)]
     Isolated,
 }
@@ -52,9 +53,16 @@ impl MutationCoordinator {
         coordinator
     }
 
-    pub fn connect(&self, core: CoreLifecycleClient) {
+    pub async fn connect(&self, core: CoreLifecycleClient) -> anyhow::Result<()> {
         assert!(matches!(*self.connection.borrow(), Connection::Pending));
-        self.connection.send_replace(Connection::Ready(core));
+        let workflow = ApplicationWorkflowClient::spawn(
+            core,
+            self.outcomes.clone(),
+            self.recovery_required.clone(),
+        )
+        .await?;
+        self.connection.send_replace(Connection::Ready(workflow));
+        Ok(())
     }
 
     pub fn ensure_ready(&self) -> anyhow::Result<()> {
@@ -76,18 +84,14 @@ impl MutationCoordinator {
             !matches!(&connection, Connection::Pending),
             "Profile mutation workflow is not ready"
         );
-        let outcomes = self.outcomes.clone();
-        let recovery_required = self.recovery_required.clone();
         Ok(move |decision| -> StateParticipant<Profiles> {
             match connection {
-                Connection::Ready(core) => ApplicationMutationParticipant::<Profiles>::new(
+                Connection::Ready(workflow) => ApplicationMutationParticipant::<Profiles>::new(
                     operation_id,
                     hints,
                     class,
                     decision,
-                    core,
-                    outcomes,
-                    recovery_required,
+                    workflow,
                 ),
                 #[cfg(test)]
                 Connection::Isolated => Arc::new(IsolatedParticipant),
@@ -106,12 +110,16 @@ impl MutationCoordinator {
         let runtime = match connection {
             #[cfg(test)]
             Connection::Isolated => RuntimeCommitStatus::Unchanged,
-            Connection::Pending | Connection::Ready(_) => self
-                .outcomes
-                .lock()
-                .await
-                .remove(&operation_id)
-                .unwrap_or(RuntimeCommitStatus::Pending),
+            Connection::Pending | Connection::Ready(_) => {
+                let outcome = self.outcomes.lock().await.remove(&operation_id);
+                match outcome {
+                    Some(outcome) => outcome,
+                    None if self.recovery_required.lock().await.is_some() => {
+                        RuntimeCommitStatus::RecoveryRequired
+                    }
+                    None => RuntimeCommitStatus::Pending,
+                }
+            }
         };
         let receipt = CommitReceipt {
             operation_id: Some(operation_id.to_string()),
@@ -126,6 +134,17 @@ impl MutationCoordinator {
                 message: "the profile was saved; runtime reconciliation was queued for retry"
                     .into(),
                 retryable: true,
+            }],
+            RuntimeCommitStatus::RecoveryRequired => vec![Degradation {
+                phase: DegradationPhase::RuntimeApply,
+                code: "runtime_recovery_required".into(),
+                message: self
+                    .recovery_required
+                    .lock()
+                    .await
+                    .clone()
+                    .unwrap_or_else(|| "Profile runtime state requires recovery".into()),
+                retryable: false,
             }],
             _ => Vec::new(),
         };
@@ -151,5 +170,29 @@ impl<T: Clone + Send + Sync + 'static> chimera_core::state::StateAckSubscriber<T
 
     async fn on_prepare(&self, _: chimera_core::state::StateChange<T>) -> chimera_core::state::Ack {
         chimera_core::state::Ack::Ok
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn latched_profile_recovery_is_reported_without_an_operation_outcome_entry() {
+        let coordinator = MutationCoordinator::pending();
+        *coordinator.recovery_required.lock().await =
+            Some("failed to restore the prior Profile runtime".into());
+
+        let (receipt, degradations) = coordinator
+            .finish(OperationId::generate(), "profiles", 7)
+            .await;
+
+        assert_eq!(receipt.runtime, RuntimeCommitStatus::RecoveryRequired);
+        assert_eq!(degradations.len(), 1);
+        assert_eq!(degradations[0].code, "runtime_recovery_required");
+        assert_eq!(
+            degradations[0].message,
+            "failed to restore the prior Profile runtime"
+        );
     }
 }

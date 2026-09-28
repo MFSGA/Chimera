@@ -219,7 +219,7 @@ impl ChimeraClient {
                 Arc::new(core_lifecycle::FsBinaryInstaller),
                 service,
             ))?;
-        mutations.connect(core_lifecycle.clone());
+        tauri::async_runtime::block_on(mutations.connect(core_lifecycle.clone()))?;
         Ok(Self::with_parts_and_typed_config(
             typed,
             core_lifecycle,
