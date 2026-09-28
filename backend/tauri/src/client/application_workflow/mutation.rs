@@ -145,6 +145,22 @@ pub(crate) struct RetryableCause {
     pub(crate) message: String,
 }
 
+pub(crate) const DEFERRED_RETRY_BUDGET: u8 = 3;
+
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredTarget {
+    pub(crate) operation_id: OperationId,
+    pub(crate) digest: String,
+    pub(crate) baseline: KnownRuntimeState,
+    pub(crate) cause: RetryableCause,
+    pub(crate) attempts_remaining: u8,
+    pub(crate) attempts: u32,
+    pub(crate) health: crate::client::convergence::ConvergenceHealth,
+    pub(crate) next_attempt: Option<tokio::time::Instant>,
+    pub(crate) domain: ConfigDomain,
+    pub(crate) decision: DecisionHandle,
+}
+
 /// A core-confirmed Profile candidate held until the source transaction
 /// publishes its decision. Chimera keeps the private candidate file with the
 /// reference-shaped receipt so Confirm can promote it and Cancel can restore
@@ -164,7 +180,7 @@ pub(crate) enum RuntimePrepareOutcome {
     Applied(AppliedCandidate),
     Deferred {
         baseline: KnownRuntimeState,
-        digest: Option<String>,
+        digest: String,
         cause: RetryableCause,
     },
     SavedInactive,

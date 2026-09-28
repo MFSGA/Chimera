@@ -220,6 +220,54 @@ impl ApplicationWorkflow {
                 Err(message)
             }
         };
+        if conclusion == MutationConclusion::Confirmed {
+            match &outcome {
+                RuntimePrepareOutcome::Applied(_) | RuntimePrepareOutcome::SavedInactive => {
+                    self.deferred = None;
+                }
+                RuntimePrepareOutcome::Deferred {
+                    baseline,
+                    digest,
+                    cause,
+                } => {
+                    let previous = self
+                        .deferred
+                        .take()
+                        .filter(|previous| previous.digest == *digest);
+                    let attempts_remaining = previous
+                        .as_ref()
+                        .map_or(super::mutation::DEFERRED_RETRY_BUDGET, |previous| {
+                            previous.attempts_remaining
+                        });
+                    let next_attempt = (attempts_remaining > 0).then(|| {
+                        previous
+                            .as_ref()
+                            .and_then(|previous| previous.next_attempt)
+                            .unwrap_or_else(|| tokio::time::Instant::now() + Duration::from_secs(1))
+                    });
+                    self.deferred = Some(super::mutation::DeferredTarget {
+                        operation_id: operation_id.clone(),
+                        digest: digest.clone(),
+                        baseline: baseline.clone(),
+                        cause: cause.clone(),
+                        attempts_remaining,
+                        attempts: previous.as_ref().map_or(0, |previous| previous.attempts),
+                        health: if attempts_remaining > 0 {
+                            crate::client::convergence::ConvergenceHealth::RetryScheduled
+                        } else {
+                            crate::client::convergence::ConvergenceHealth::Blocked
+                        },
+                        next_attempt,
+                        domain:
+                            crate::client::application_workflow::mutation::ConfigDomain::Profiles,
+                        decision: request.decision.clone(),
+                    });
+                }
+                RuntimePrepareOutcome::Saved
+                | RuntimePrepareOutcome::Rejected { .. }
+                | RuntimePrepareOutcome::RecoveryRequired(_) => {}
+            }
+        }
         let detail = match &outcome {
             RuntimePrepareOutcome::Deferred { cause, .. } => Some(cause.message.clone()),
             RuntimePrepareOutcome::Rejected { cause, .. } => Some(cause.message.clone()),
@@ -335,6 +383,33 @@ impl ApplicationWorkflow {
                 };
             }
         };
+        let inputs = if matches!(&observed_baseline, KnownRuntimeState::NeverApplied) {
+            None
+        } else {
+            Some(
+                match core
+                    .capture_profile_inputs(
+                        Arc::new(candidate.clone()),
+                        request.hints.staged_content.clone(),
+                    )
+                    .await
+                {
+                    Ok(inputs) => inputs,
+                    Err(error) => {
+                        return RuntimePrepareOutcome::Rejected {
+                            cause: ApplyFailure {
+                                stage: MutationStage::Preparing,
+                                cause: RefusalCause::Try(TryCauseKind::Deterministic),
+                                message: format!(
+                                    "Profile runtime inputs could not be captured: {error}"
+                                ),
+                            },
+                            restored: Some(observed_baseline),
+                        };
+                    }
+                },
+            )
+        };
         match &observed_baseline {
             KnownRuntimeState::Applied(_) => *baseline = Some(observed_baseline),
             KnownRuntimeState::Stopped => {
@@ -345,10 +420,7 @@ impl ApplicationWorkflow {
                     CoreRunIntent::StoppedByUser,
                 );
                 match core
-                    .validate_profile_runtime(
-                        Arc::new(candidate.clone()),
-                        request.hints.staged_content.clone(),
-                    )
+                    .validate_profile_runtime(inputs.expect("captured for stopped runtime"))
                     .await
                 {
                     Ok(record) => *check = record,
@@ -412,15 +484,25 @@ impl ApplicationWorkflow {
             }
         }
 
+        let inputs = inputs.expect("captured for applied runtime");
+        let target_digest = match inputs.target_key() {
+            Ok(digest) => digest,
+            Err(error) => {
+                return RuntimePrepareOutcome::Rejected {
+                    cause: ApplyFailure {
+                        stage: MutationStage::Preparing,
+                        cause: RefusalCause::Try(TryCauseKind::Deterministic),
+                        message: format!(
+                            "Profile runtime target identity could not be captured: {error}"
+                        ),
+                    },
+                    restored: baseline.clone(),
+                };
+            }
+        };
+
         *attempted_runtime = true;
-        match core
-            .prepare_profile_runtime(
-                Arc::new(candidate.clone()),
-                request.hints.staged_content.clone(),
-                operation_id,
-            )
-            .await
-        {
+        match core.prepare_profile_runtime(inputs, operation_id).await {
             Ok((candidate, record)) => {
                 *check = record;
                 RuntimePrepareOutcome::Applied(candidate)
@@ -438,7 +520,7 @@ impl ApplicationWorkflow {
                 match disposition(&failure) {
                     FailureDisposition::Deferrable => RuntimePrepareOutcome::Deferred {
                         baseline: baseline.clone().expect("captured before runtime Try"),
-                        digest: None,
+                        digest: target_digest.clone(),
                         cause: RetryableCause {
                             stage: MutationStage::TryingCritical,
                             message: format!(
@@ -486,7 +568,7 @@ impl ApplicationWorkflow {
                     return match disposition(&failure) {
                         FailureDisposition::Deferrable => RuntimePrepareOutcome::Deferred {
                             baseline: baseline.clone().expect("captured before runtime Try"),
-                            digest: None,
+                            digest: target_digest.clone(),
                             cause: RetryableCause {
                                 stage: MutationStage::TryingCritical,
                                 message: format!(
@@ -627,7 +709,7 @@ impl ApplicationWorkflow {
         }
     }
 
-    async fn recover_previous(&self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
+    async fn recover_previous(&mut self, core: &dyn ProfileRuntime) -> anyhow::Result<()> {
         let Some(context) = self.recovery_required.lock().await.clone() else {
             return Ok(());
         };
@@ -643,22 +725,38 @@ impl ApplicationWorkflow {
             .map(|decision| decision.decision())
         {
             Some(StateDecision::Committed { .. }) => {
-                let target = context.target.clone().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "committed Profile runtime recovery has no confirmed target: {}",
-                        context.error
-                    )
-                })?;
-                core.restore_runtime_baseline(&KnownRuntimeState::Applied(target))
-                    .await
-                    .map_err(|error| {
+                if let Some(target) = context.target.clone() {
+                    core.restore_runtime_baseline(&KnownRuntimeState::Applied(target))
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "Profile runtime target recovery for {:?} failed after {:?} ({}): {error}",
+                                context.domain,
+                                context.stage,
+                                context.error
+                            )
+                        })?;
+                } else if self.deferred.is_some() {
+                    let baseline = context.baseline.as_ref().ok_or_else(|| {
                         anyhow::anyhow!(
-                            "Profile runtime target recovery for {:?} failed after {:?} ({}): {error}",
-                            context.domain,
-                            context.stage,
+                            "deferred Profile runtime recovery has no confirmed baseline: {}",
                             context.error
                         )
                     })?;
+                    core.restore_runtime_baseline(baseline)
+                        .await
+                        .map_err(|error| {
+                            anyhow::anyhow!(
+                                "deferred Profile baseline recovery failed after {}: {error}",
+                                context.error
+                            )
+                        })?;
+                } else {
+                    anyhow::bail!(
+                        "committed Profile runtime recovery has no confirmed target: {}",
+                        context.error
+                    );
+                }
             }
             Some(StateDecision::Aborted {
                 resources: AbortResourceState::Restored,
@@ -694,6 +792,10 @@ impl ApplicationWorkflow {
             core.discard_profile_runtime(operation_id).await;
         }
         *self.recovery_required.lock().await = None;
+        if let Some(deferred) = &mut self.deferred {
+            deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
+            deferred.next_attempt = None;
+        }
         Ok(())
     }
 
@@ -724,11 +826,30 @@ fn runtime_state_matches(expected: &KnownRuntimeState, actual: &KnownRuntimeStat
     }
 }
 
-fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> bool {
+pub(in crate::client) fn safe_to_defer_runtime_apply(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
             .downcast_ref::<CoreError>()
             .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
+    })
+}
+
+pub(in crate::client) fn safe_to_retry_deferred_runtime(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CoreError>()
+            .is_some_and(|error| error.kind == Some(CoreErrorKind::QueueFull) && error.retryable)
+            || cause
+                .downcast_ref::<super::mutation::RuntimeCheckFailure>()
+                .is_some_and(|failure| failure.cause() == TryCauseKind::Transient)
+    })
+}
+
+pub(in crate::client) fn deferred_runtime_waiting_dependency(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<super::mutation::RuntimeCheckFailure>()
+            .is_some_and(|failure| matches!(failure.record(), CheckRecord::Unserviceable(_)))
     })
 }
 
@@ -896,6 +1017,24 @@ mod tests {
             })
         }
 
+        async fn capture_profile_inputs(
+            &self,
+            profiles: Arc<Profiles>,
+            staged_content: std::collections::BTreeMap<String, String>,
+        ) -> anyhow::Result<super::super::inputs::RuntimeInputs> {
+            Ok(super::super::inputs::RuntimeInputs {
+                app: chimera_config::application::ChimeraAppConfig::default(),
+                clash: chimera_config::clash::config::ClashConfig::default(),
+                profiles,
+                content: super::super::inputs::FrozenProfileContent(
+                    staged_content
+                        .into_iter()
+                        .map(|(path, content)| (path, Ok(content)))
+                        .collect(),
+                ),
+            })
+        }
+
         async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
             Ok(self
                 .baseline
@@ -921,8 +1060,7 @@ mod tests {
 
         async fn validate_profile_runtime(
             &self,
-            _profiles: Arc<Profiles>,
-            _staged_content: std::collections::BTreeMap<String, String>,
+            _inputs: super::super::inputs::RuntimeInputs,
         ) -> anyhow::Result<CheckRecord> {
             self.validations.fetch_add(1, Ordering::SeqCst);
             if self.fail_validation.load(Ordering::Acquire) {
@@ -941,13 +1079,13 @@ mod tests {
 
         async fn prepare_profile_runtime(
             &self,
-            profiles: Arc<Profiles>,
-            staged_content: std::collections::BTreeMap<String, String>,
+            inputs: super::super::inputs::RuntimeInputs,
             _operation_id: &OperationId,
         ) -> anyhow::Result<(super::super::mutation::AppliedCandidate, CheckRecord)> {
             if self.fail_prepare.swap(false, Ordering::AcqRel) {
                 anyhow::bail!("injected Profile runtime prepare failure");
             }
+            let (_, _, profiles, staged_content) = inputs.into_parts()?;
             self.reconcile_profiles(profiles, staged_content).await?;
             let receipt = candidate_runtime_receipt();
             *self
@@ -1161,6 +1299,36 @@ mod tests {
 
         let untyped = anyhow::anyhow!("executor queue is full");
         assert!(!safe_to_defer_runtime_apply(&untyped));
+
+        let retryable_check =
+            crate::client::application_workflow::mutation::RuntimeCheckFailure::from_core_error(
+                CoreError::new(
+                    CoreErrorKind::BackendUnavailable,
+                    "service check endpoint is reconnecting",
+                    true,
+                ),
+            );
+        assert!(safe_to_retry_deferred_runtime(&anyhow::Error::new(
+            retryable_check.clone()
+        )));
+        assert!(deferred_runtime_waiting_dependency(&anyhow::Error::new(
+            retryable_check
+        )));
+
+        let rejected_check =
+            crate::client::application_workflow::mutation::RuntimeCheckFailure::from_core_error(
+                CoreError::new(
+                    CoreErrorKind::ConfigCheckFailed,
+                    "invalid Profile target",
+                    false,
+                ),
+            );
+        assert!(!safe_to_retry_deferred_runtime(&anyhow::Error::new(
+            rejected_check.clone()
+        )));
+        assert!(!deferred_runtime_waiting_dependency(&anyhow::Error::new(
+            rejected_check
+        )));
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::config::chimera::ClashCore;
+use crate::enhance::FsProfileContentSource;
 
 use super::{
     super::{
@@ -21,6 +22,9 @@ pub(super) enum Command {
     SelectCore(ClashCore),
     RecoverCore,
     Reconcile,
+    RetryDeferredProfiles {
+        digest: String,
+    },
     ReconcileProfiles {
         profiles: Arc<chimera_config::profile::Profiles>,
         staged_content: std::collections::BTreeMap<String, String>,
@@ -95,6 +99,9 @@ impl CoreLifecycleWorkflow {
                 anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
             }
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
+            Command::RetryDeferredProfiles { digest } => {
+                self.retry_deferred_profiles(&digest).await
+            }
             Command::ReconcileProfiles {
                 profiles,
                 staged_content,
@@ -264,6 +271,50 @@ impl CoreLifecycleWorkflow {
             .await
     }
 
+    async fn retry_deferred_profiles(&self, expected_digest: &str) -> anyhow::Result<()> {
+        let profiles = self
+            .profiles
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Profile state is unavailable for deferred runtime retry")
+            })?
+            .load()
+            .state
+            .clone();
+        let profiles = Arc::new(profiles);
+        let inputs = self
+            .capture_profile_inputs(profiles, Default::default())
+            .await?;
+        if inputs.target_key()? != expected_digest {
+            return Ok(());
+        }
+        let (app, clash, profiles, profile_content) =
+            inputs.clone().into_parts().map_err(|error| {
+                anyhow::Error::new(
+                    crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                        candidate_unavailable(error.to_string()),
+                )
+            })?;
+        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        self.core
+            .validate_profile_runtime(
+                clash.clone(),
+                target_core,
+                run_type,
+                profiles.clone(),
+                app.clone(),
+                profile_content.clone(),
+            )
+            .await?;
+        self.core
+            .reconcile_profiles(clash, target_core, run_type, profiles, app, profile_content)
+            .await
+    }
+
     async fn select_core(&self, core: ClashCore) -> anyhow::Result<()> {
         let Some(profiles) = &self.profiles else {
             return self.core.change_core(core).await;
@@ -340,6 +391,27 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         self.core.status().await
     }
 
+    async fn capture_profile_inputs(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<crate::client::application_workflow::inputs::RuntimeInputs> {
+        let profiles_dir = crate::utils::dirs::app_profiles_dir()?;
+        let source = FsProfileContentSource::new(profiles_dir);
+        let content =
+            crate::client::application_workflow::inputs::FrozenProfileContent::capture_content(
+                &profiles,
+                &source,
+                staged_content,
+            );
+        Ok(crate::client::application_workflow::inputs::RuntimeInputs {
+            app: self.application.get_typed(),
+            clash: self.clash.get()?,
+            profiles,
+            content,
+        })
+    }
+
     async fn observe_runtime_baseline(
         &self,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState> {
@@ -355,32 +427,38 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
 
     async fn validate_profile_runtime(
         &self,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
+        inputs: crate::client::application_workflow::inputs::RuntimeInputs,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
-        let clash = self.clash.get()?;
-        let app = self.application.get_typed();
+        let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
+            anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                    candidate_unavailable(error.to_string()),
+            )
+        })?;
         let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
         );
         self.core
-            .validate_profile_runtime(clash, target_core, run_type, profiles, app, staged_content)
+            .validate_profile_runtime(clash, target_core, run_type, profiles, app, profile_content)
             .await
     }
 
     async fn prepare_profile_runtime(
         &self,
-        profiles: Arc<chimera_config::profile::Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
+        inputs: crate::client::application_workflow::inputs::RuntimeInputs,
         operation_id: &chimera_core_manager::OperationId,
     ) -> anyhow::Result<(
         crate::client::application_workflow::mutation::AppliedCandidate,
         crate::client::application_workflow::mutation::CheckRecord,
     )> {
-        let clash = self.clash.get()?;
-        let app = self.application.get_typed();
+        let (app, clash, profiles, profile_content) = inputs.into_parts().map_err(|error| {
+            anyhow::Error::new(
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::
+                    candidate_unavailable(error.to_string()),
+            )
+        })?;
         let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
@@ -393,7 +471,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
                 run_type,
                 profiles,
                 app,
-                staged_content,
+                profile_content,
                 operation_id.clone(),
             )
             .await

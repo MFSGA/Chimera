@@ -35,4 +35,32 @@ impl RetryBudget {
     pub fn next_delay(&self) -> Option<Duration> {
         (self.remaining > 0).then(|| RETRY_DELAYS[RETRY_DELAYS.len() - usize::from(self.remaining)])
     }
+
+    pub fn record_automatic_attempt(&mut self) -> Option<Duration> {
+        self.attempts = self.attempts.saturating_add(1);
+        self.remaining = self.remaining.saturating_sub(1);
+        self.next_delay()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deferred_runtime_retry_budget_uses_reference_backoff_and_stops() {
+        let mut budget = RetryBudget::default();
+        assert_eq!(budget.remaining, 3);
+        assert_eq!(
+            budget.record_automatic_attempt(),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            budget.record_automatic_attempt(),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(budget.record_automatic_attempt(), None);
+        assert_eq!(budget.remaining, 0);
+        assert_eq!(budget.attempts, 3);
+    }
 }

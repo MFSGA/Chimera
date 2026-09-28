@@ -171,6 +171,8 @@ enum Message {
         shutdown: bool,
         application_workflow: Option<ApplicationWorkflow>,
         request_runtime_rebuild: bool,
+        deferred_retry: Option<String>,
+        reconciled: bool,
     },
     #[cfg(test)]
     ProbeService {
@@ -186,6 +188,9 @@ enum Message {
     StartupReconcile,
     RuntimeDirty,
     DirtyTick,
+    DeferredRetry {
+        digest: String,
+    },
 }
 
 struct ApplicationWorkflowActor;
@@ -221,6 +226,7 @@ struct Response {
 struct Request {
     command: Command,
     response: Response,
+    deferred_retry: Option<String>,
 }
 
 struct ActiveOperation {
@@ -310,6 +316,19 @@ impl ApplicationWorkflowState {
         }
     }
 
+    fn schedule_deferred_retry(
+        &self,
+        myself: &ActorRef<Message>,
+        digest: String,
+        next_attempt: tokio::time::Instant,
+    ) {
+        let actor = myself.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(next_attempt).await;
+            let _ = actor.cast(Message::DeferredRetry { digest });
+        });
+    }
+
     fn publish(&self) {
         let mut status = self.status.lock();
         status.active = self.active.as_ref().map(|operation| operation.response.id);
@@ -397,7 +416,26 @@ impl ApplicationWorkflowState {
                 id: self.allocate_operation_id(),
                 reply: None,
             },
+            deferred_retry: None,
         });
+    }
+
+    fn push_deferred_retry(&mut self, digest: String) -> bool {
+        if self.pending.len() >= MAX_PENDING {
+            tracing::warn!("dropping deferred Profile retry because the lifecycle queue is full");
+            return false;
+        }
+        self.pending.push_back(Request {
+            command: Command::RetryDeferredProfiles {
+                digest: digest.clone(),
+            },
+            response: Response {
+                id: self.allocate_operation_id(),
+                reply: None,
+            },
+            deferred_retry: Some(digest),
+        });
+        true
     }
 
     fn drive(&mut self, myself: &ActorRef<Message>) {
@@ -419,6 +457,7 @@ impl ApplicationWorkflowState {
             Request {
                 command: Command::Shutdown,
                 response,
+                deferred_retry: None,
             }
         } else if let Some(request) = self.pending.pop_front() {
             request
@@ -457,6 +496,16 @@ impl ApplicationWorkflowState {
 
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
+        let deferred_retry = request.deferred_retry.clone();
+        let reconciled = matches!(
+            &request.command,
+            Command::Reconcile
+                | Command::RetryDeferredProfiles { .. }
+                | Command::ReconcileProfiles { .. }
+                | Command::RecoverCore
+                | Command::SelectCore(_)
+                | Command::ReplaceCoreBinary(_)
+        );
         let service_phase = match &request.command {
             Command::InstallService(_) => Some(ServicePhase::Installing),
             Command::StartService { .. } => Some(ServicePhase::StartingDaemon),
@@ -596,6 +645,8 @@ impl ApplicationWorkflowState {
                     shutdown,
                     application_workflow,
                     request_runtime_rebuild,
+                    deferred_retry,
+                    reconciled,
                 })
                 .is_err()
             {
@@ -704,6 +755,8 @@ impl Actor for ApplicationWorkflowActor {
                 shutdown,
                 application_workflow,
                 request_runtime_rebuild,
+                deferred_retry,
+                reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
                     let active = state
@@ -730,6 +783,14 @@ impl Actor for ApplicationWorkflowActor {
                     }
 
                     let failed = result.is_err();
+                    let deferred_retry_error = result.as_ref().err().map(ToString::to_string);
+                    let deferred_retry_retryable = result.as_ref().err().is_some_and(
+                        crate::client::application_workflow::tcc::safe_to_retry_deferred_runtime,
+                    );
+                    let deferred_retry_waiting = result.as_ref().err().is_some_and(
+                        crate::client::application_workflow::tcc::
+                            deferred_runtime_waiting_dependency,
+                    );
                     if shutdown {
                         let shutdown_error = result.as_ref().err().map(ToString::to_string);
                         state.shutdown_result = Some(shutdown_error.clone());
@@ -745,6 +806,28 @@ impl Actor for ApplicationWorkflowActor {
                         state.settle(active.response, result);
                     }
 
+                    if let Some(digest) = deferred_retry {
+                        if let Some(application_workflow) = state.application_workflow.as_mut() {
+                            if let Some(next_attempt) = application_workflow
+                                .finish_deferred_retry(
+                                    &digest,
+                                    !failed,
+                                    deferred_retry_retryable,
+                                    deferred_retry_waiting,
+                                    state.uncertain,
+                                    deferred_retry_error,
+                                )
+                                .await
+                            {
+                                state.schedule_deferred_retry(&myself, digest, next_attempt);
+                            }
+                        }
+                    } else if reconciled && !failed {
+                        if let Some(application_workflow) = state.application_workflow.as_mut() {
+                            application_workflow.runtime_reconciled();
+                        }
+                    }
+
                     if retry_reconcile_on_failure
                         && failed
                         && !state.uncertain
@@ -753,7 +836,15 @@ impl Actor for ApplicationWorkflowActor {
                         state.mark_runtime_dirty(&myself);
                     }
                     if request_runtime_rebuild && !state.shutting_down {
-                        state.mark_runtime_dirty(&myself);
+                        let deferred = state
+                            .application_workflow
+                            .as_ref()
+                            .and_then(ApplicationWorkflow::deferred_retry);
+                        if let Some((digest, next_attempt)) = deferred {
+                            state.schedule_deferred_retry(&myself, digest, next_attempt);
+                        } else {
+                            state.mark_runtime_dirty(&myself);
+                        }
                     }
                     if recover && failed && !state.uncertain && !state.shutting_down {
                         tracing::error!("failed to recover core; scheduling retry");
@@ -824,6 +915,76 @@ impl Actor for ApplicationWorkflowActor {
                 } else if state.dirty {
                     state.dirty = false;
                     state.push_background(Command::Reconcile);
+                }
+            }
+            Message::DeferredRetry { digest } => {
+                if state.uncertain || state.shutting_down {
+                    if let Some(application_workflow) = state.application_workflow.as_mut() {
+                        application_workflow
+                            .finish_deferred_retry(
+                                &digest,
+                                false,
+                                false,
+                                false,
+                                state.uncertain,
+                                None,
+                            )
+                            .await;
+                    }
+                } else if state.application_workflow.is_none() {
+                    state.schedule_deferred_retry(
+                        &myself,
+                        digest,
+                        tokio::time::Instant::now() + DIRTY_WINDOW,
+                    );
+                } else {
+                    use crate::client::application_workflow::workflow::ProfileRuntime;
+
+                    let core_status = match state.workflow.as_ref() {
+                        Some(workflow) => workflow.core_status().await.ok(),
+                        None => None,
+                    };
+                    match core_status {
+                        Some(status)
+                            if matches!(
+                                status.state,
+                                chimera_ipc::api::status::CoreState::Running
+                            ) =>
+                        {
+                            let should_retry = state
+                                .application_workflow
+                                .as_mut()
+                                .is_some_and(|workflow| workflow.begin_deferred_retry(&digest));
+                            if should_retry && !state.push_deferred_retry(digest.clone()) {
+                                let next_attempt =
+                                    state.application_workflow.as_mut().and_then(|workflow| {
+                                        workflow.reschedule_deferred_retry(
+                                            &digest,
+                                            Duration::from_secs(1),
+                                        )
+                                    });
+                                if let Some(next_attempt) = next_attempt {
+                                    state.schedule_deferred_retry(&myself, digest, next_attempt);
+                                }
+                            }
+                        }
+                        Some(_) => {
+                            if let Some(application_workflow) = state.application_workflow.as_mut()
+                            {
+                                application_workflow.wait_for_deferred_dependency(&digest);
+                            }
+                        }
+                        None => {
+                            let next_attempt =
+                                state.application_workflow.as_mut().and_then(|workflow| {
+                                    workflow
+                                        .reschedule_deferred_retry(&digest, Duration::from_secs(5))
+                                });
+                            if let Some(next_attempt) = next_attempt {
+                                state.schedule_deferred_retry(&myself, digest, next_attempt);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1036,6 +1197,7 @@ impl CoreLifecycleClient {
                     .cast(Message::Request(Request {
                         command: Command::ProfileMutation(Box::new(request)),
                         response: Response { id, reply: None },
+                        deferred_retry: None,
                     }))
                     .map_err(|error| anyhow::anyhow!("failed to enqueue Profile mutation: {error}"))
             }
@@ -1069,6 +1231,7 @@ impl CoreLifecycleClient {
                                     id,
                                     reply: Some(reply),
                                 },
+                                deferred_retry: None,
                             })
                         },
                         Some(timeout),
@@ -1139,6 +1302,7 @@ impl CoreLifecycleClient {
         let request = Request {
             command: Command::ServiceEndpointDown(transition),
             response: Response { id, reply: None },
+            deferred_retry: None,
         };
         if actor_ref.cast(Message::Request(request)).is_err() {
             tracing::warn!("failed to enqueue service endpoint-down recovery");
@@ -1821,6 +1985,7 @@ mod tests {
                     id: 2,
                     reply: Some(reply.into()),
                 },
+                deferred_retry: None,
             }))
             .is_err()
         {

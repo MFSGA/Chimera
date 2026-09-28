@@ -9,8 +9,12 @@ use tokio::sync::Mutex;
 
 use crate::client::core_lifecycle::{CoreLifecycleStatus, ports::CoreStatusSnapshot};
 
-use super::mutation::{
-    AppliedCandidate, CheckRecord, ConfigDomain, KnownRuntimeState, MutationReceipt, MutationStage,
+use super::{
+    inputs::RuntimeInputs,
+    mutation::{
+        AppliedCandidate, CheckRecord, ConfigDomain, DeferredTarget, KnownRuntimeState,
+        MutationReceipt, MutationStage,
+    },
 };
 use crate::client::runtime::RuntimeApplyReceipt;
 
@@ -32,17 +36,17 @@ pub(crate) struct RecoveryContext {
 pub(crate) trait ProfileRuntime: Send + Sync + 'static {
     fn status(&self) -> CoreLifecycleStatus;
     async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn capture_profile_inputs(
+        &self,
+        profiles: Arc<Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<RuntimeInputs>;
     async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState>;
     async fn restore_runtime_baseline(&self, baseline: &KnownRuntimeState) -> anyhow::Result<()>;
-    async fn validate_profile_runtime(
-        &self,
-        profiles: Arc<Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
-    ) -> anyhow::Result<CheckRecord>;
+    async fn validate_profile_runtime(&self, inputs: RuntimeInputs) -> anyhow::Result<CheckRecord>;
     async fn prepare_profile_runtime(
         &self,
-        profiles: Arc<Profiles>,
-        staged_content: std::collections::BTreeMap<String, String>,
+        inputs: RuntimeInputs,
         operation_id: &OperationId,
     ) -> anyhow::Result<(AppliedCandidate, CheckRecord)>;
     async fn confirm_profile_runtime(
@@ -62,6 +66,7 @@ pub(crate) trait ProfileRuntime: Send + Sync + 'static {
 pub(in crate::client) struct ApplicationWorkflow {
     pub(super) outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
     pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
+    pub(super) deferred: Option<DeferredTarget>,
 }
 
 impl ApplicationWorkflow {
@@ -72,7 +77,132 @@ impl ApplicationWorkflow {
         Self {
             outcomes,
             recovery_required,
+            deferred: None,
         }
+    }
+
+    pub(in crate::client) fn deferred_retry(&self) -> Option<(String, tokio::time::Instant)> {
+        self.deferred.as_ref().and_then(|deferred| {
+            deferred
+                .next_attempt
+                .map(|next_attempt| (deferred.digest.clone(), next_attempt))
+        })
+    }
+
+    pub(in crate::client) fn begin_deferred_retry(&mut self, digest: &str) -> bool {
+        let Some(deferred) = &mut self.deferred else {
+            return false;
+        };
+        if deferred.digest != digest
+            || deferred.attempts_remaining == 0
+            || deferred.health != crate::client::convergence::ConvergenceHealth::RetryScheduled
+            || deferred
+                .next_attempt
+                .is_none_or(|next_attempt| next_attempt > tokio::time::Instant::now())
+        {
+            return false;
+        }
+        deferred.next_attempt = None;
+        deferred.health = crate::client::convergence::ConvergenceHealth::Pending;
+        true
+    }
+
+    pub(in crate::client) async fn finish_deferred_retry(
+        &mut self,
+        digest: &str,
+        succeeded: bool,
+        retryable: bool,
+        waiting_dependency: bool,
+        uncertain: bool,
+        error: Option<String>,
+    ) -> Option<tokio::time::Instant> {
+        let deferred = self.deferred.as_mut()?;
+        if deferred.digest != digest {
+            return None;
+        }
+        if succeeded {
+            self.deferred = None;
+            return None;
+        }
+        if let Some(error) = &error {
+            deferred.cause.message = error.clone();
+        }
+        if uncertain {
+            deferred.health = crate::client::convergence::ConvergenceHealth::RecoveryRequired;
+            deferred.next_attempt = None;
+            let context = RecoveryContext {
+                operation_id: Some(deferred.operation_id.clone()),
+                runtime_operation: None,
+                domain: deferred.domain,
+                stage: MutationStage::TryingCritical,
+                decision: Some(deferred.decision.clone()),
+                baseline: Some(deferred.baseline.clone()),
+                target: None,
+                error: error.unwrap_or_else(|| {
+                    "deferred Profile runtime retry has an uncertain outcome".into()
+                }),
+            };
+            *self.recovery_required.lock().await = Some(context);
+            return None;
+        }
+        if waiting_dependency {
+            deferred.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
+            let next_attempt = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            deferred.next_attempt = Some(next_attempt);
+            return Some(next_attempt);
+        }
+        if !retryable {
+            deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
+            deferred.next_attempt = None;
+            return None;
+        }
+        let mut budget = crate::client::convergence::RetryBudget {
+            remaining: deferred.attempts_remaining,
+            attempts: deferred.attempts,
+        };
+        let delay = budget.record_automatic_attempt();
+        deferred.attempts = budget.attempts;
+        deferred.attempts_remaining = budget.remaining;
+        if let Some(delay) = delay {
+            deferred.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
+            let next_attempt = tokio::time::Instant::now() + delay;
+            deferred.next_attempt = Some(next_attempt);
+            Some(next_attempt)
+        } else {
+            deferred.health = crate::client::convergence::ConvergenceHealth::Blocked;
+            deferred.next_attempt = None;
+            None
+        }
+    }
+
+    pub(in crate::client) fn reschedule_deferred_retry(
+        &mut self,
+        digest: &str,
+        delay: std::time::Duration,
+    ) -> Option<tokio::time::Instant> {
+        let deferred = self.deferred.as_mut()?;
+        if deferred.digest != digest || deferred.attempts_remaining == 0 {
+            return None;
+        }
+        let next_attempt = tokio::time::Instant::now() + delay;
+        deferred.health = crate::client::convergence::ConvergenceHealth::RetryScheduled;
+        deferred.next_attempt = Some(next_attempt);
+        Some(next_attempt)
+    }
+
+    pub(in crate::client) fn wait_for_deferred_dependency(&mut self, digest: &str) {
+        if let Some(deferred) = self
+            .deferred
+            .as_mut()
+            .filter(|deferred| deferred.digest == digest)
+        {
+            deferred.health = crate::client::convergence::ConvergenceHealth::WaitingDependency;
+            deferred.next_attempt = None;
+        }
+    }
+
+    pub(in crate::client) fn runtime_reconciled(&mut self) {
+        self.deferred = None;
     }
 
     pub(in crate::client) async fn mark_recovery_required(
