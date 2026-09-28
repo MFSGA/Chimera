@@ -22,7 +22,8 @@ use futures_util::FutureExt;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 
 use super::{
-    ChimeraClient, application::ApplicationClient, clash_config::ClashConfigClient,
+    ChimeraClient, application::ApplicationClient,
+    application_workflow::workflow::ApplicationWorkflow, clash_config::ClashConfigClient,
     runtime::RuntimePaths,
 };
 use workflow::{Command, CoreLifecycleWorkflow};
@@ -152,6 +153,10 @@ pub(crate) use ports::{
 };
 
 enum Message {
+    ConnectApplicationWorkflow {
+        workflow: ApplicationWorkflow,
+        reply: RpcReplyPort<anyhow::Result<()>>,
+    },
     Request(Request),
     Completed {
         id: OperationId,
@@ -164,6 +169,8 @@ enum Message {
         retry_reconcile_on_failure: bool,
         recover: bool,
         shutdown: bool,
+        application_workflow: Option<ApplicationWorkflow>,
+        request_runtime_rebuild: bool,
     },
     #[cfg(test)]
     ProbeService {
@@ -181,10 +188,11 @@ enum Message {
     DirtyTick,
 }
 
-struct CoreLifecycleActor;
+struct ApplicationWorkflowActor;
 
-struct CoreLifecycleActorState {
+struct ApplicationWorkflowState {
     workflow: Option<CoreLifecycleWorkflow>,
+    application_workflow: Option<ApplicationWorkflow>,
     active: Option<ActiveOperation>,
     pending: VecDeque<Request>,
     next_id: Arc<AtomicU64>,
@@ -198,7 +206,7 @@ struct CoreLifecycleActorState {
     dirty_tick_scheduled: bool,
 }
 
-struct CoreLifecycleActorArgs {
+struct ApplicationWorkflowArgs {
     workflow: CoreLifecycleWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
@@ -221,7 +229,7 @@ struct ActiveOperation {
     shutdown: bool,
 }
 
-impl CoreLifecycleActorState {
+impl ApplicationWorkflowState {
     fn allocate_operation_id(&self) -> OperationId {
         self.next_id.fetch_add(1, Ordering::Relaxed)
     }
@@ -333,7 +341,14 @@ impl CoreLifecycleActorState {
         }
     }
 
-    fn reject(&self, request: Request, error: anyhow::Error) {
+    fn reject(&self, mut request: Request, error: anyhow::Error) {
+        if let Command::ProfileMutation(mutation) = &mut request.command {
+            let message = error.to_string();
+            mutation.answer(
+                crate::client::application_workflow::mutation::TryAck::Failed(message.clone()),
+            );
+            mutation.settle(Err(message));
+        }
         if let Command::ReplaceCoreBinary(artifact) = &request.command {
             let message = error.to_string();
             if std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -422,6 +437,24 @@ impl CoreLifecycleActorState {
             return;
         };
 
+        let profile_mutation = matches!(&request.command, Command::ProfileMutation(_));
+        let application_workflow = if profile_mutation {
+            match self.application_workflow.take() {
+                Some(workflow) => Some(workflow),
+                None => {
+                    self.workflow = Some(workflow);
+                    self.reject(
+                        request,
+                        anyhow::anyhow!("application workflow is not connected"),
+                    );
+                    self.publish();
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
         let service_phase = match &request.command {
@@ -461,18 +494,68 @@ impl CoreLifecycleActorState {
         let command = request.command;
         let actor = myself.clone();
         let task = tokio::spawn(async move {
-            let (result, workflow_panicked) = match AssertUnwindSafe(workflow.execute(command))
-                .catch_unwind()
-                .await
-            {
-                Ok(result) => (result, false),
-                Err(_) => (
-                    Err(anyhow::anyhow!(
-                        "core lifecycle workflow panicked; execution state is uncertain"
-                    )),
-                    true,
-                ),
-            };
+            let (result, workflow_panicked, request_runtime_rebuild, application_workflow) =
+                match command {
+                    Command::ProfileMutation(mut mutation) => {
+                        let mut application_workflow = application_workflow
+                            .expect("Profile mutation takes the application workflow");
+                        let run = AssertUnwindSafe(
+                            application_workflow.run_mutation(&mut mutation, &workflow),
+                        )
+                        .catch_unwind()
+                        .await;
+                        match run {
+                            Ok((request_runtime_rebuild, settlement)) => (
+                                settlement.map_err(anyhow::Error::msg),
+                                false,
+                                request_runtime_rebuild,
+                                Some(application_workflow),
+                            ),
+                            Err(_) => {
+                                let message = format!(
+                                    "application workflow operation {} panicked; runtime outcome requires recovery",
+                                    mutation.operation_id
+                                );
+                                application_workflow
+                                    .mark_recovery_required(message.clone())
+                                    .await;
+                                mutation.answer(
+                                    crate::client::application_workflow::mutation::TryAck::Failed(
+                                        message.clone(),
+                                    ),
+                                );
+                                let _ = tokio::time::timeout(
+                                crate::client::application_workflow::tcc::MUTATION_DECISION_TIMEOUT,
+                                mutation.decision.wait(),
+                            )
+                            .await;
+                                mutation.settle(Err(message.clone()));
+                                (
+                                    Err(anyhow::anyhow!(message)),
+                                    true,
+                                    false,
+                                    Some(application_workflow),
+                                )
+                            }
+                        }
+                    }
+                    command => {
+                        match AssertUnwindSafe(workflow.execute(command))
+                            .catch_unwind()
+                            .await
+                        {
+                            Ok(result) => (result, false, false, None),
+                            Err(_) => (
+                                Err(anyhow::anyhow!(
+                                    "core lifecycle workflow panicked; execution state is uncertain"
+                                )),
+                                true,
+                                false,
+                                None,
+                            ),
+                        }
+                    }
+                };
             if let Some(progress) = progress {
                 let error = result.as_ref().err().map(ToString::to_string);
                 if std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -511,6 +594,8 @@ impl CoreLifecycleActorState {
                     retry_reconcile_on_failure,
                     recover,
                     shutdown,
+                    application_workflow,
+                    request_runtime_rebuild,
                 })
                 .is_err()
             {
@@ -530,18 +615,19 @@ impl CoreLifecycleActorState {
     }
 }
 
-impl Actor for CoreLifecycleActor {
+impl Actor for ApplicationWorkflowActor {
     type Msg = Message;
-    type State = CoreLifecycleActorState;
-    type Arguments = CoreLifecycleActorArgs;
+    type State = ApplicationWorkflowState;
+    type Arguments = ApplicationWorkflowArgs;
 
     async fn pre_start(
         &self,
         _myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(CoreLifecycleActorState {
+        Ok(ApplicationWorkflowState {
             workflow: Some(args.workflow),
+            application_workflow: None,
             active: None,
             pending: VecDeque::new(),
             next_id: args.next_id,
@@ -563,6 +649,17 @@ impl Actor for CoreLifecycleActor {
         state: &mut Self::State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
+            Message::ConnectApplicationWorkflow { workflow, reply } => {
+                let result = if state.application_workflow.is_some() {
+                    Err(anyhow::anyhow!("application workflow is already connected"))
+                } else if state.shutting_down {
+                    Err(anyhow::anyhow!("core lifecycle is shutting down"))
+                } else {
+                    state.application_workflow = Some(workflow);
+                    Ok(())
+                };
+                let _ = reply.send(result);
+            }
             Message::Request(request) => {
                 if matches!(&request.command, Command::Shutdown) {
                     if let Some(error) = state.shutdown_result.clone() {
@@ -605,6 +702,8 @@ impl Actor for CoreLifecycleActor {
                 retry_reconcile_on_failure,
                 recover,
                 shutdown,
+                application_workflow,
+                request_runtime_rebuild,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
                     let active = state
@@ -614,6 +713,9 @@ impl Actor for CoreLifecycleActor {
                     debug_assert_eq!(active.shutdown, shutdown);
                     let _ = active.task.await;
                     state.workflow = Some(workflow);
+                    if application_workflow.is_some() {
+                        state.application_workflow = application_workflow;
+                    }
                     state.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
                     match service_probe {
@@ -648,6 +750,9 @@ impl Actor for CoreLifecycleActor {
                         && !state.uncertain
                         && !state.shutting_down
                     {
+                        state.mark_runtime_dirty(&myself);
+                    }
+                    if request_runtime_rebuild && !state.shutting_down {
                         state.mark_runtime_dirty(&myself);
                     }
                     if recover && failed && !state.uncertain && !state.shutting_down {
@@ -828,8 +933,8 @@ impl CoreLifecycleClient {
             tokio::sync::watch::channel(ServiceHostStatus::probing());
         let (actor_ref, _handle) = Actor::spawn(
             None,
-            CoreLifecycleActor,
-            CoreLifecycleActorArgs {
+            ApplicationWorkflowActor,
+            ApplicationWorkflowArgs {
                 workflow,
                 next_id: next_id.clone(),
                 status: status.clone(),
@@ -887,6 +992,58 @@ impl CoreLifecycleClient {
             service,
             core,
         }))
+    }
+
+    pub(crate) async fn connect_application_workflow(
+        &self,
+        workflow: ApplicationWorkflow,
+    ) -> anyhow::Result<()> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor { actor_ref, .. } => {
+                match actor_ref
+                    .call(
+                        |reply| Message::ConnectApplicationWorkflow { workflow, reply },
+                        Some(CALL_WAIT),
+                    )
+                    .await?
+                {
+                    CallResult::Success(result) => result,
+                    CallResult::Timeout => {
+                        anyhow::bail!("application workflow connection timed out")
+                    }
+                    CallResult::SenderError => {
+                        anyhow::bail!("application workflow connection reply dropped")
+                    }
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {
+                anyhow::bail!("application workflow requires the lifecycle actor")
+            }
+        }
+    }
+
+    pub(crate) fn begin_profile_mutation(
+        &self,
+        request: crate::client::application_workflow::mutation::MutationRequest,
+    ) -> anyhow::Result<()> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                actor_ref, next_id, ..
+            } => {
+                let id = next_id.fetch_add(1, Ordering::Relaxed);
+                actor_ref
+                    .cast(Message::Request(Request {
+                        command: Command::ProfileMutation(Box::new(request)),
+                        response: Response { id, reply: None },
+                    }))
+                    .map_err(|error| anyhow::anyhow!("failed to enqueue Profile mutation: {error}"))
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { .. } => {
+                anyhow::bail!("Profile mutations require the lifecycle actor")
+            }
+        }
     }
 
     async fn execute(&self, command: Command) -> anyhow::Result<()> {

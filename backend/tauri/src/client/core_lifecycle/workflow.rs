@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::config::chimera::ClashCore;
 
 use super::{
@@ -13,6 +14,7 @@ use super::{
 };
 
 pub(super) enum Command {
+    ProfileMutation(Box<crate::client::application_workflow::mutation::MutationRequest>),
     Shutdown,
     #[cfg(test)]
     StopCore,
@@ -89,6 +91,9 @@ impl CoreLifecycleWorkflow {
 
     pub(super) async fn execute(&self, command: Command) -> anyhow::Result<()> {
         match command {
+            Command::ProfileMutation(_) => {
+                anyhow::bail!("Profile mutations must run through ApplicationWorkflowActor")
+            }
             Command::RecoverCore | Command::Reconcile => self.reconcile().await,
             Command::ReconcileProfiles {
                 profiles,
@@ -319,5 +324,32 @@ impl CoreLifecycleWorkflow {
         } else {
             self.installer.install(&artifact).await
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl ProfileRuntime for CoreLifecycleWorkflow {
+    fn status(&self) -> crate::client::core_lifecycle::CoreLifecycleStatus {
+        crate::client::core_lifecycle::CoreLifecycleStatus {
+            uncertain: self.core.outcome_uncertain(),
+            ..Default::default()
+        }
+    }
+
+    async fn core_status(&self) -> anyhow::Result<super::ports::CoreStatusSnapshot> {
+        self.core.status().await
+    }
+
+    async fn reconcile_profiles(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<()> {
+        CoreLifecycleWorkflow::reconcile_profiles(self, profiles, staged_content).await
+    }
+
+    fn request_runtime_rebuild(&self) {
+        // The owning ApplicationWorkflowActor schedules dirty work after this
+        // mutation releases the serialized execution domain.
     }
 }

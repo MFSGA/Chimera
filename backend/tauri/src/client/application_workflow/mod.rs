@@ -1,15 +1,13 @@
 //! Application mutation coordination and Profile workflow modules.
 
-use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-use anyhow::Context as _;
 use chimera_core_manager::OperationId;
-use futures_util::FutureExt;
-use ractor::{Actor, ActorProcessingErr, ActorRef};
 use tokio::sync::Mutex;
 
 use crate::client::{core_lifecycle::CoreLifecycleClient, runtime::RuntimeCommitStatus};
 
+use mutation::MutationRequest;
 use workflow::ApplicationWorkflow;
 
 pub(crate) mod impact;
@@ -18,64 +16,18 @@ pub(crate) mod mutation;
 pub(crate) mod participant;
 pub(crate) mod policy;
 pub(in crate::client) mod profiles;
-mod tcc;
-mod workflow;
+pub(in crate::client) mod tcc;
+pub(in crate::client) mod workflow;
 
-use mutation::{MutationRequest, TryAck};
-
-enum Message {
-    BeginMutation(Box<MutationRequest>),
-}
-
-struct ApplicationWorkflowActor;
-
-impl Actor for ApplicationWorkflowActor {
-    type Msg = Message;
-    type State = ApplicationWorkflow;
-    type Arguments = ApplicationWorkflow;
-
-    async fn pre_start(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        workflow: Self::Arguments,
-    ) -> Result<Self::State, ActorProcessingErr> {
-        Ok(workflow)
-    }
-
-    async fn handle(
-        &self,
-        _myself: ActorRef<Self::Msg>,
-        message: Self::Msg,
-        workflow: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        match message {
-            Message::BeginMutation(mut request) => {
-                let operation_id = request.operation_id.clone();
-                if AssertUnwindSafe(workflow.run_mutation(&mut request))
-                    .catch_unwind()
-                    .await
-                    .is_err()
-                {
-                    let message = format!(
-                        "application workflow operation {operation_id} panicked; runtime outcome requires recovery"
-                    );
-                    workflow.mark_recovery_required(message.clone()).await;
-                    request.answer(TryAck::Failed(message.clone()));
-                    let _ = tokio::time::timeout(
-                        tcc::MUTATION_DECISION_TIMEOUT,
-                        request.decision.wait(),
-                    )
-                    .await;
-                    request.settle(Err(message));
-                }
-            }
-        }
-        Ok(())
-    }
+#[derive(Clone)]
+enum ApplicationWorkflowClientInner {
+    CoreLifecycle(CoreLifecycleClient),
+    #[cfg(test)]
+    TestActor(ractor::ActorRef<TestMessage>),
 }
 
 #[derive(Clone)]
-pub(crate) struct ApplicationWorkflowClient(ActorRef<Message>);
+pub(crate) struct ApplicationWorkflowClient(ApplicationWorkflowClientInner);
 
 impl ApplicationWorkflowClient {
     pub(crate) async fn spawn(
@@ -83,8 +35,9 @@ impl ApplicationWorkflowClient {
         outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
         recovery_required: Arc<Mutex<Option<String>>>,
     ) -> anyhow::Result<Self> {
-        let workflow = ApplicationWorkflow::new(core, outcomes, recovery_required);
-        Self::spawn_workflow(workflow).await
+        core.connect_application_workflow(ApplicationWorkflow::new(outcomes, recovery_required))
+            .await?;
+        Ok(Self(ApplicationWorkflowClientInner::CoreLifecycle(core)))
     }
 
     #[cfg(test)]
@@ -93,19 +46,101 @@ impl ApplicationWorkflowClient {
         outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
         recovery_required: Arc<Mutex<Option<String>>>,
     ) -> anyhow::Result<Self> {
-        let workflow = ApplicationWorkflow::with_runtime(runtime, outcomes, recovery_required);
-        Self::spawn_workflow(workflow).await
-    }
+        use ractor::Actor;
 
-    async fn spawn_workflow(workflow: ApplicationWorkflow) -> anyhow::Result<Self> {
-        let (actor_ref, _actor_handle) =
-            Actor::spawn(None, ApplicationWorkflowActor, workflow).await?;
-        Ok(Self(actor_ref))
+        let (actor_ref, _actor_handle) = Actor::spawn(
+            None,
+            TestApplicationWorkflowActor,
+            TestApplicationWorkflowState {
+                workflow: ApplicationWorkflow::new(outcomes, recovery_required),
+                runtime,
+            },
+        )
+        .await?;
+        Ok(Self(ApplicationWorkflowClientInner::TestActor(actor_ref)))
     }
 
     pub(crate) fn begin_mutation(&self, request: MutationRequest) -> anyhow::Result<()> {
-        self.0
-            .cast(Message::BeginMutation(Box::new(request)))
-            .context("application workflow actor is unavailable")
+        match &self.0 {
+            ApplicationWorkflowClientInner::CoreLifecycle(core) => {
+                core.begin_profile_mutation(request)
+            }
+            #[cfg(test)]
+            ApplicationWorkflowClientInner::TestActor(actor) => actor
+                .cast(TestMessage::BeginMutation(Box::new(request)))
+                .map_err(|error| {
+                    anyhow::anyhow!("application workflow actor is unavailable: {error}")
+                }),
+        }
     }
 }
+
+#[cfg(test)]
+enum TestMessage {
+    BeginMutation(Box<MutationRequest>),
+}
+
+#[cfg(test)]
+struct TestApplicationWorkflowActor;
+
+#[cfg(test)]
+struct TestApplicationWorkflowState {
+    workflow: ApplicationWorkflow,
+    runtime: Arc<dyn workflow::ProfileRuntime>,
+}
+
+#[cfg(test)]
+impl ractor::Actor for TestApplicationWorkflowActor {
+    type Msg = TestMessage;
+    type State = TestApplicationWorkflowState;
+    type Arguments = TestApplicationWorkflowState;
+
+    async fn pre_start(
+        &self,
+        _myself: ractor::ActorRef<Self::Msg>,
+        state: Self::Arguments,
+    ) -> Result<Self::State, ractor::ActorProcessingErr> {
+        Ok(state)
+    }
+
+    async fn handle(
+        &self,
+        _myself: ractor::ActorRef<Self::Msg>,
+        message: Self::Msg,
+        state: &mut Self::State,
+    ) -> Result<(), ractor::ActorProcessingErr> {
+        match message {
+            TestMessage::BeginMutation(mut request) => {
+                let operation_id = request.operation_id.clone();
+                match std::panic::AssertUnwindSafe(
+                    state
+                        .workflow
+                        .run_mutation(&mut request, state.runtime.as_ref()),
+                )
+                .catch_unwind()
+                .await
+                {
+                    Ok((rebuild, _)) if rebuild => state.runtime.request_runtime_rebuild(),
+                    Ok(_) => {}
+                    Err(_) => {
+                        let message = format!(
+                            "application workflow operation {operation_id} panicked; runtime outcome requires recovery"
+                        );
+                        state.workflow.mark_recovery_required(message.clone()).await;
+                        request.answer(mutation::TryAck::Failed(message.clone()));
+                        let _ = tokio::time::timeout(
+                            tcc::MUTATION_DECISION_TIMEOUT,
+                            request.decision.wait(),
+                        )
+                        .await;
+                        request.settle(Err(message));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+use futures_util::FutureExt;

@@ -15,7 +15,7 @@ use super::{
 };
 use crate::client::runtime::RuntimeCommitStatus;
 
-pub(super) const MUTATION_DECISION_TIMEOUT: Duration = Duration::from_secs(90);
+pub(in crate::client) const MUTATION_DECISION_TIMEOUT: Duration = Duration::from_secs(90);
 
 enum DecisionOutcome {
     Committed,
@@ -26,7 +26,11 @@ enum DecisionOutcome {
 impl ApplicationWorkflow {
     /// Runs prepare, awaits the transaction's authoritative decision, and
     /// confirms or restores the Profile runtime before releasing the workflow.
-    pub(super) async fn run_mutation(&mut self, request: &mut MutationRequest) {
+    pub(in crate::client) async fn run_mutation(
+        &mut self,
+        request: &mut MutationRequest,
+        core: &dyn ProfileRuntime,
+    ) -> (bool, Result<(), String>) {
         let operation_id = request.operation_id.clone();
         let (previous, candidate) = match &request.change {
             DomainChange::Profiles {
@@ -43,11 +47,12 @@ impl ApplicationWorkflow {
 
         let ack = if request.decision.decision() != StateDecision::Undecided {
             TryAck::Rejected("Profile source transaction settled before runtime admission".into())
-        } else if let Err(error) = self.recover_previous(&previous).await {
+        } else if let Err(error) = self.recover_previous(core, &previous).await {
             self.mark_recovery_required(error.to_string()).await;
             TryAck::Failed(error.to_string())
         } else {
             self.prepare_candidate(
+                core,
                 &operation_id,
                 &previous,
                 &candidate,
@@ -78,15 +83,12 @@ impl ApplicationWorkflow {
                 Ok(StateDecision::Undecided) => unreachable!("decision wait returned undecided"),
             };
 
+        let request_runtime_rebuild =
+            deferred_runtime && matches!(&decision, DecisionOutcome::Committed);
         let settlement = match decision {
-            DecisionOutcome::Committed => {
-                if deferred_runtime {
-                    self.core.request_runtime_rebuild();
-                }
-                Ok(())
-            }
+            DecisionOutcome::Committed => Ok(()),
             DecisionOutcome::Aborted => {
-                self.cancel_mutation(&operation_id, attempted_runtime, &previous)
+                self.cancel_mutation(core, &operation_id, attempted_runtime, &previous)
                     .await
             }
             DecisionOutcome::Unresolved(message) => {
@@ -94,11 +96,13 @@ impl ApplicationWorkflow {
                 Err(message)
             }
         };
-        request.settle(settlement);
+        request.settle(settlement.clone());
+        (request_runtime_rebuild, settlement)
     }
 
     async fn prepare_candidate(
         &self,
+        core: &dyn ProfileRuntime,
         operation_id: &OperationId,
         previous: &Profiles,
         candidate: &Profiles,
@@ -115,13 +119,13 @@ impl ApplicationWorkflow {
                 .await;
             return TryAck::Ok;
         }
-        if self.core.status().uncertain {
+        if core.status().uncertain {
             let message = "Profile runtime mutation cannot proceed while the core lifecycle outcome is uncertain";
             self.mark_recovery_required(message.into()).await;
             return TryAck::Failed(message.into());
         }
 
-        let status = match self.core.core_status().await {
+        let status = match core.core_status().await {
             Ok(status) => status,
             Err(error) => return TryAck::Failed(error.to_string()),
         };
@@ -147,8 +151,7 @@ impl ApplicationWorkflow {
         }
 
         *attempted_runtime = true;
-        match self
-            .core
+        match core
             .reconcile_profiles(
                 Arc::new(candidate.clone()),
                 request.hints.staged_content.clone(),
@@ -177,6 +180,7 @@ impl ApplicationWorkflow {
 
     async fn cancel_mutation(
         &self,
+        core: &dyn ProfileRuntime,
         operation_id: &OperationId,
         attempted_runtime: bool,
         previous: &Profiles,
@@ -186,8 +190,7 @@ impl ApplicationWorkflow {
             return Ok(());
         }
 
-        match self
-            .core
+        match core
             .reconcile_profiles(Arc::new(previous.clone()), Default::default())
             .await
         {
@@ -204,21 +207,24 @@ impl ApplicationWorkflow {
         }
     }
 
-    async fn recover_previous(&self, previous: &Profiles) -> anyhow::Result<()> {
+    async fn recover_previous(
+        &self,
+        core: &dyn ProfileRuntime,
+        previous: &Profiles,
+    ) -> anyhow::Result<()> {
         let Some(cause) = self.recovery_required.lock().await.clone() else {
             return Ok(());
         };
         anyhow::ensure!(
-            !self.core.status().uncertain,
+            !core.status().uncertain,
             "Profile runtime still needs recovery after rollback failure: {cause}"
         );
-        let status = self.core.core_status().await?;
+        let status = core.core_status().await?;
         if !matches!(status.state, chimera_ipc::api::status::CoreState::Running) {
             *self.recovery_required.lock().await = None;
             return Ok(());
         }
-        self.core
-            .reconcile_profiles(Arc::new(previous.clone()), Default::default())
+        core.reconcile_profiles(Arc::new(previous.clone()), Default::default())
             .await
             .map_err(|error| {
                 anyhow::anyhow!(
