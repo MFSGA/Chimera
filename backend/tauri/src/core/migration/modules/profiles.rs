@@ -675,7 +675,15 @@ fn migrate_remote_options(uid: &str, option: Option<&Value>) -> Result<Mapping, 
                 let Some(key) = key.as_str() else {
                     return Err(fail("option", "option keys must be strings"));
                 };
-                if !["user_agent", "with_proxy", "self_proxy", "update_interval"].contains(&key) {
+                if ![
+                    "user_agent",
+                    "with_proxy",
+                    "self_proxy",
+                    "update_interval",
+                    "update_interval_minutes",
+                ]
+                .contains(&key)
+                {
                     return Err(fail(
                         &format!("option.{key}"),
                         "unknown legacy option field",
@@ -696,16 +704,41 @@ fn migrate_remote_options(uid: &str, option: Option<&Value>) -> Result<Mapping, 
             };
             out.insert("with_proxy".into(), Value::Bool(flag("with_proxy")?));
             out.insert("self_proxy".into(), Value::Bool(flag("self_proxy")?));
-            let interval = match option.get("update_interval") {
-                None | Some(Value::Null) => 120,
-                Some(Value::Number(n)) => n.as_u64().ok_or_else(|| {
-                    fail("option.update_interval", "must be a non-negative integer")
-                })?,
-                Some(_) => return Err(fail("option.update_interval", "must be an integer")),
+            let parse_interval = |field: &str| -> Result<u64, CleanSchemaError> {
+                match option.get(field) {
+                    None | Some(Value::Null) => Ok(120),
+                    Some(Value::Number(n)) => n.as_u64().ok_or_else(|| {
+                        fail(&format!("option.{field}"), "must be a non-negative integer")
+                    }),
+                    Some(_) => Err(fail(&format!("option.{field}"), "must be an integer")),
+                }
+            };
+            let legacy_interval = option
+                .contains_key("update_interval")
+                .then(|| parse_interval("update_interval"))
+                .transpose()?;
+            let current_interval = option
+                .contains_key("update_interval_minutes")
+                .then(|| parse_interval("update_interval_minutes"))
+                .transpose()?;
+            let interval = match (legacy_interval, current_interval) {
+                (Some(legacy), Some(current)) if legacy != current => {
+                    return Err(fail(
+                        "option.update_interval_minutes",
+                        "conflicts with option.update_interval",
+                    ));
+                }
+                (_, Some(current)) => current,
+                (Some(legacy), None) => legacy,
+                (None, None) => 120,
             };
             if interval == 0 {
                 return Err(fail(
-                    "option.update_interval",
+                    if option.contains_key("update_interval_minutes") {
+                        "option.update_interval_minutes"
+                    } else {
+                        "option.update_interval"
+                    },
                     "zero interval is not representable in the clean schema; fix the profile before migrating",
                 ));
             }
@@ -1340,6 +1373,32 @@ config:
     }
 
     #[test]
+    fn remote_option_accepts_current_interval_key() {
+        let out = migrated(
+            "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {update_interval_minutes: 240}\n",
+        );
+        let option = out["config"]["source"]["option"].as_mapping().unwrap();
+        assert_eq!(option["update_interval_minutes"], Value::from(240));
+
+        let out = migrated(
+            "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {update_interval: 240, update_interval_minutes: 240}\n",
+        );
+        let option = out["config"]["source"]["option"].as_mapping().unwrap();
+        assert_eq!(option["update_interval_minutes"], Value::from(240));
+    }
+
+    #[test]
+    fn remote_option_conflicting_interval_keys_fail_explicitly() {
+        let err = migrate_item_for_test(item(
+            "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {update_interval: 60, update_interval_minutes: 240}\n",
+        ))
+        .unwrap_err();
+        assert_eq!(err.uid.as_deref(), Some("r1"));
+        assert_eq!(err.field_path, "option.update_interval_minutes");
+        assert_eq!(err.reason, "conflicts with option.update_interval");
+    }
+
+    #[test]
     fn remote_option_null_fails_explicitly() {
         let err = migrate_item_for_test(item(
             "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: null\n",
@@ -1667,6 +1726,39 @@ items:
         assert_eq!(
             CLEAN_SCHEMA.check(&ctx).unwrap(),
             Some(StepCheck::Satisfied)
+        );
+    }
+
+    #[test]
+    fn clean_schema_run_preserves_current_interval_key_in_legacy_remote() {
+        let (_temp, mut ctx) = temp_ctx();
+        let path = ctx.profiles_path();
+        let legacy = r#"items:
+- uid: r1
+  type: remote
+  name: Cloud
+  file: r1.yaml
+  url: https://example.com/sub.yaml
+  option:
+    with_proxy: false
+    self_proxy: true
+    update_interval_minutes: 240
+"#;
+        std::fs::write(&path, legacy).unwrap();
+
+        run_clean_schema(&mut ctx).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("yaml.bak")).unwrap(),
+            legacy
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let profiles: chimera_config::profile::Profiles = serde_yaml_ng::from_str(&raw).unwrap();
+        profiles.validate().unwrap();
+        let mapping: Mapping = serde_yaml_ng::from_str(&raw).unwrap();
+        assert_eq!(
+            mapping["items"][0]["config"]["source"]["option"]["update_interval_minutes"],
+            Value::from(240)
         );
     }
 

@@ -1861,7 +1861,12 @@ export type ScriptType = 'javascript' | 'lua';
 export type ServiceCompat =
   | { kind: 'unknown' }
   | { kind: 'compatible'; server_version: string }
-  | { kind: 'incompatible'; server_version: string; required_major: number }
+  | {
+      kind: 'incompatible';
+      server_version: string;
+      required_major: number;
+      required_min: string;
+    }
   | { kind: 'unparsable'; server_version: string };
 
 export type ServicePhase =

@@ -66,7 +66,7 @@ export const SettingSystemService = () => {
     }
   };
 
-  const isDisabled = serviceMode.isNotInstalled;
+  const isDisabled = serviceMode.isDisabled;
 
   const [refreshPending, startRefresh] = useTransition();
   const handleRefreshClick = useMemoizedFn(() => {
@@ -100,7 +100,8 @@ export const SettingSystemService = () => {
         {isDisabled && (
           <ListItem sx={{ pl: 0, pr: 0 }}>
             <Typography>
-              {m.settings_system_proxy_service_mode_description()}
+              {serviceMode.hint ??
+                m.settings_system_proxy_service_mode_description()}
             </Typography>
           </ListItem>
         )}

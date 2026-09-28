@@ -5,7 +5,7 @@ import * as m from '@/paraglide/messages';
 
 export const ServiceModeSwitch = () => {
   const serviceMode = useSystemServiceMode();
-  const isDisabled = serviceMode.isNotInstalled;
+  const isDisabled = serviceMode.isDisabled;
 
   return (
     <>
@@ -19,7 +19,8 @@ export const ServiceModeSwitch = () => {
       {isDisabled && (
         <ListItem sx={{ pl: 0, pr: 0 }}>
           <Typography>
-            {m.settings_system_proxy_service_mode_description()}
+            {serviceMode.hint ??
+              m.settings_system_proxy_service_mode_description()}
           </Typography>
         </ListItem>
       )}

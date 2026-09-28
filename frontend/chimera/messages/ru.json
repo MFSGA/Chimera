@@ -40,6 +40,7 @@
   "settings_system_proxy_service_mode_label": "Режим службы",
   "settings_system_proxy_service_mode_description": "Служба используется для управления ядром, чтобы достичь минимального получения прав, только предоставляя ядру необходимые права, для сценариев, таких как режим TUN.",
   "settings_system_proxy_service_mode_disabled_tooltip": "Чтобы включить режим службы, убедитесь, что служба Clash Chimera установлена и запущена",
+  "settings_system_proxy_service_mode_incompatible": "Chimera Service {current} несовместим. Обновите его до версии {required} или новее.",
   "settings_system_proxy_system_service_ctrl_label": "Системный сервис",
   "settings_system_proxy_system_service_ctrl_detail": "Подробности сервиса",
   "settings_system_proxy_system_service_ctrl_install": "Установить",

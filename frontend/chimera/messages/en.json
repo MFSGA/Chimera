@@ -40,6 +40,7 @@
   "settings_system_proxy_service_mode_label": "Service Mode",
   "settings_system_proxy_service_mode_description": "Service is used to manage the Clash core, to achieve minimum permission acquisition, only providing the necessary permissions to the core, for scenarios such as the TUN mode.",
   "settings_system_proxy_service_mode_disabled_tooltip": "To enable service mode, make sure the Clash Chimera service is installed and started",
+  "settings_system_proxy_service_mode_incompatible": "Chimera Service {current} is incompatible. Update it to {required} or later.",
   "settings_system_proxy_system_service_ctrl_label": "System Service",
   "settings_system_proxy_system_service_ctrl_detail": "Service Detail",
   "settings_system_proxy_system_service_ctrl_install": "Install",

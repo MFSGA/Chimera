@@ -464,6 +464,7 @@ mod tests {
                 compat: ServiceCompat::Incompatible {
                     server_version: "2.0.0".to_owned(),
                     required_major: 1,
+                    required_min: crate::core::service::compat::REQUIRED_SERVICE_MIN.to_owned(),
                 },
                 runtime_owned: true,
             }

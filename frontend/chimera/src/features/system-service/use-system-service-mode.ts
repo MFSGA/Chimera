@@ -10,6 +10,22 @@ export function useSystemServiceMode() {
   const isInstalled =
     query.data?.status === 'running' || query.data?.status === 'stopped';
   const isNotInstalled = query.data?.status === 'not_installed';
+  const compat = query.data?.compat;
+  const compatibilityBlocked =
+    compat?.kind === 'incompatible' || compat?.kind === 'unparsable';
+  const hint =
+    compat?.kind === 'incompatible'
+      ? m.settings_system_proxy_service_mode_incompatible({
+          current: compat.server_version,
+          required: compat.required_min,
+        })
+      : compatibilityBlocked
+        ? m.agent_finding_service_mode_inconsistent()
+        : isNotInstalled
+          ? m.settings_system_proxy_service_mode_disabled_tooltip()
+          : null;
+  const isDisabled =
+    isNotInstalled || (compatibilityBlocked && !serviceMode.value);
 
   const toggle = useLockFn(async () => {
     try {
@@ -28,6 +44,8 @@ export function useSystemServiceMode() {
   return {
     isInstalled,
     isNotInstalled,
+    isDisabled,
+    hint,
     isPending: serviceMode.isPending,
     value: Boolean(serviceMode.value),
     toggle,

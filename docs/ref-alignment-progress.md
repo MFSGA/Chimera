@@ -851,3 +851,67 @@ DIFF-001 至 DIFF-012 是此前基于
   分支也未运行。
 - 下一步：用真实 Service 启停和 API 地址/secret 变化验证 IPC 事件、轮询兜底与 WS 重建；评估是否需要
   在 Chimera 的长生命周期 API 使用者中迁入 ref `ApiLease` 的 capability 撤销模型。
+
+## DIFF-032：profiles clean-schema 接受规范更新间隔字段
+
+- 基线：本次只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean。
+- ref 对应：`backend/tauri/src/core/migration/modules/profiles.rs::migrate_remote_options`；
+  Chimera 对应 `backend/tauri/src/core/migration/modules/profiles.rs::migrate_remote_options`。
+- 类别：缺陷修正。
+- 差异及原因：ref 的允许字段列表只接收旧名 `update_interval`，但目标 Profile 模型使用
+  `update_interval_minutes`。用户启动日志复现了仍处于旧 Profile item 结构的记录携带该规范字段，导致
+  `profiles/clean_schema` 在升级时拒绝启动。Chimera 的迁移输入现在兼容旧名与规范名；同时出现时仅接受
+  数值相同的值，冲突显式失败，迁移输出仍只写规范字段，零值限制保持不变。
+- 共通业务入口及适配边界：只影响启动时、ProfilesClient 构造前的 YAML schema migration；不改变主 UI、
+  legacy UI 或 agent 的 Profile API。失败仍在写回原文件前返回，已有备份/恢复流程不变。
+- 重新评估条件：ref 的 schema migration 允许旧 item 携带规范字段，或上游不再支持这种混合状态时，重新
+  对照该输入兼容规则，并在可以移除兼容输入时收敛。
+- 验证：`cargo test --manifest-path backend/Cargo.toml -p chimera --lib
+  core::migration::modules::profiles::tests::` 通过（32/32）；其中新增字段映射、冲突和完整
+  `run_clean_schema` 用例通过。
+  `cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 与 `git diff --check` 通过。
+  编译输出有现存 warning；未运行桌面启动或读取/修改用户的实际 profiles.yaml。
+
+## DIFF-033：拒绝不兼容的 Windows Service 协议版本
+
+- 基线：根仓库 `fedf3b33d061d73ef0170dd45e0a12b62d7ab51c`；嵌套
+  `backend/chimera-runtime` `0309d538646aff7aa37ad338483a0909f90e348c`；只读 `ref/` 为
+  `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean。
+- ref 对应：`backend/tauri/src/core/service/compat.rs::ServiceCompat::classify` 和
+  `actor_v2/endpoint.rs::ServiceEndpoint::{check_config,submit,status}`。Chimera 对应
+  `backend/tauri/src/core/service/compat.rs::ServiceCompat::classify`、
+  `backend/tauri/src/core/actor_v2/service_endpoint.rs` 及嵌套 runtime 的
+  `chimera_service/src` 路由。ref 使用显式最低 Service 版本拒绝不兼容 daemon；本地原先只检查
+  major version，未能检测同为 v1 但 endpoint 集合不完整的旧发行版。
+- 故障与修正：截图中的 Windows Service 返回 HTTP 404、空 body。当前客户端 reconcile 在检查配置时
+  调用 `/core/check`，而已安装的 1.10.0 daemon 没有该 endpoint，故 legacy runtime patch 无法完成。
+  将配套 `chimera-service` 和 `chimera-ipc` 工作区版本提升为 1.10.1，并把兼容下限设为 1.10.1；
+  1.10.0 及其它低版本或非 v1 daemon 会被标为 incompatible，服务模式开关不允许启用，并展示当前与要求版本。
+  主 UI 和 legacy UI 复用 `useSystemServiceMode` 中的版本判断与提示。兼容结构的 `required_min` 已通过
+  现有 IPC binding generator 更新。
+- 保留的 Chimera 差异：ref 当前使用 v2 release 线；Chimera Service 仍处于 v1 产品线，因此下限按本地
+  `backend/chimera-runtime` 中包含所需 control endpoints 的源码版本设为 1.10.1，没有照搬 ref 的版本号。
+  `MFSGA/Chimera_Service` 的 v1.10.1 已发布（[release](https://github.com/MFSGA/Chimera_Service/releases/tag/v1.10.1)；
+  [发布工作流](https://github.com/MFSGA/Chimera_Service/actions/runs/36474524306) 的 11 个平台目标均成功，
+  上传 22 个二进制与 SHA-256 资产）。`pnpm prepare:check` 此前命中本地版本戳缓存，没有验证干净 checkout
+  下载。重新评估条件：完成真实 Windows Service 安装/更新和重启后的 named-pipe 跨进程验证，并在
+  endpoint 合约变化时重新核对最低版本。
+- 受影响入口：主 UI、legacy UI 的系统服务模式开关；共用 `ServiceCompat` 和 `CoreFacade` runtime 路径。
+  本轮没有启动应用、安装/替换 Windows 服务或验证主机权限与 named pipe ACL；用户现有服务需在新应用构建后
+  更新到兼容版本才能启用。
+- 验证：`cargo test --manifest-path backend/Cargo.toml -p chimera --lib
+  core::service::compat::tests::` 通过（7/7）；`cargo build --manifest-path backend/Cargo.toml -p chimera`
+  通过（225 条既有 warning）；bindings generator test 通过（1/1）；
+  `cargo build --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service --bin chimera-service`
+  通过，生成 Windows x86_64 v1.10.1；`chimera-service update --check` 只读确认当前安装版为
+  1.10.0，并计划 stop/replace/start，没有实际更新服务；`pnpm prepare:check` 通过并命中本地
+  v1.10.1 sidecar cache（未验证远程 release asset）；
+  `cargo check --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-service --bin chimera-service`
+  通过；`pnpm typecheck`、`pnpm --filter=chimera-ui build`、`pnpm lint:frontend-boundaries`、根
+  `cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 及两侧
+  `git diff --check` 通过。补齐 Service 测试所需的 `tempfile` 开发依赖并移除过期的
+  `ClashCoreType::Meow` 测试项后，`cargo test --locked --manifest-path backend/chimera-runtime/Cargo.toml
+  -p chimera-service --bin chimera-service` 通过（48/48）。发布后再次运行
+  `cargo check --locked -p chimera` 时，Tauri build script 遇到 Windows `Access is denied`，未完成根应用构建。
+  Service CI 中三平台 Clippy 均通过；该次整体 workflow 因 macOS/Windows lint fixer 并发推送同一 rustfmt
+  修复而失败，自动格式提交 `87349079358cbdaf8c2557506bc20f049903aaf4` 已合入 Service `main`。

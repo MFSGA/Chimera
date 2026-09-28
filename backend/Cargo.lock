@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.9.0"
+version = "1.10.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service-core-metadata"
-version = "1.0.0-rc.6"
+version = "1.0.0"
 dependencies = [
  "constcat",
  "enumset",
