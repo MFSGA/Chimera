@@ -5,16 +5,18 @@ use std::{collections::HashMap, sync::Arc};
 use chimera_core_manager::OperationId;
 use tokio::sync::Mutex;
 
-use crate::client::{core_lifecycle::CoreLifecycleClient, runtime::RuntimeCommitStatus};
+use crate::client::core_lifecycle::CoreLifecycleClient;
 
 use mutation::MutationRequest;
 use workflow::ApplicationWorkflow;
+pub(crate) use workflow::RecoveryContext;
 
 pub(crate) mod impact;
 pub(in crate::client) mod inputs;
 pub(crate) mod mutation;
 pub(crate) mod participant;
 pub(crate) mod policy;
+pub(crate) mod ports;
 pub(in crate::client) mod profiles;
 pub(in crate::client) mod tcc;
 pub(in crate::client) mod workflow;
@@ -32,8 +34,8 @@ pub(crate) struct ApplicationWorkflowClient(ApplicationWorkflowClientInner);
 impl ApplicationWorkflowClient {
     pub(crate) async fn spawn(
         core: CoreLifecycleClient,
-        outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
-        recovery_required: Arc<Mutex<Option<String>>>,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
     ) -> anyhow::Result<Self> {
         core.connect_application_workflow(ApplicationWorkflow::new(outcomes, recovery_required))
             .await?;
@@ -43,8 +45,8 @@ impl ApplicationWorkflowClient {
     #[cfg(test)]
     pub(super) async fn spawn_with_runtime(
         runtime: Arc<dyn workflow::ProfileRuntime>,
-        outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
-        recovery_required: Arc<Mutex<Option<String>>>,
+        outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
+        recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
     ) -> anyhow::Result<Self> {
         use ractor::Actor;
 

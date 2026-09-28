@@ -26,7 +26,10 @@ use super::{
     endpoint::CoreStatusSnapshot,
 };
 use crate::{
-    client::runtime::{RuntimeSnapshot, RuntimeTransformFailure},
+    client::{
+        application_workflow::mutation::KnownRuntimeState,
+        runtime::{RuntimeApplyReceipt, RuntimeSnapshot, RuntimeTransformFailure},
+    },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
         clash::{
@@ -124,8 +127,14 @@ type LocalOperationId = u64;
 #[derive(Debug, Clone)]
 enum MutationResult {
     Running,
-    Completed(Result<(), String>),
+    Completed(Result<(), MutationFailure>),
     Uncertain(String),
+}
+
+#[derive(Debug, Clone)]
+enum MutationFailure {
+    ProfileCheck(crate::client::application_workflow::mutation::RuntimeCheckFailure),
+    Other(String),
 }
 
 impl MutationResult {
@@ -180,7 +189,14 @@ impl LocalOperationRegistry {
         }
         tokio::spawn(async move {
             let result = match AssertUnwindSafe(future).catch_unwind().await {
-                Ok(result) => MutationResult::Completed(result.map_err(|error| error.to_string())),
+                Ok(result) => MutationResult::Completed(result.map_err(|error| {
+                    match error.downcast::<
+                        crate::client::application_workflow::mutation::RuntimeCheckFailure,
+                    >() {
+                        Ok(error) => MutationFailure::ProfileCheck(error),
+                        Err(error) => MutationFailure::Other(error.to_string()),
+                    }
+                })),
                 Err(_) => {
                     MutationResult::Uncertain(format!("{operation} panicked after admission"))
                 }
@@ -289,7 +305,12 @@ impl CoreFacade {
         let id = self.local_operations.submit(operation, future);
         match self.local_operations.wait(id, LOCAL_OPERATION_WAIT).await {
             Some(MutationResult::Completed(Ok(()))) => Ok(()),
-            Some(MutationResult::Completed(Err(error))) => Err(anyhow::anyhow!(error)),
+            Some(MutationResult::Completed(Err(MutationFailure::ProfileCheck(error)))) => {
+                Err(anyhow::Error::new(error))
+            }
+            Some(MutationResult::Completed(Err(MutationFailure::Other(error)))) => {
+                Err(anyhow::anyhow!(error))
+            }
             Some(MutationResult::Uncertain(error)) => {
                 self.outcome_uncertain.store(true, Ordering::Release);
                 Err(anyhow::anyhow!(error))
@@ -329,6 +350,115 @@ impl CoreFacade {
             Some((profiles, app, staged_content)),
         )
         .await
+    }
+
+    pub(crate) async fn validate_profile_runtime(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .context("the compatibility core manager cannot validate a typed Profile runtime")?;
+        let endpoint: Arc<dyn ControlEndpoint> = match run_type {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+        };
+        local_runtime
+            .validate_profile_runtime(
+                clash,
+                target_core,
+                endpoint.as_ref(),
+                profiles,
+                app,
+                staged_content,
+            )
+            .await
+    }
+
+    pub(crate) async fn prepare_profile_runtime(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        operation_id: OperationId,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        let local_runtime = self.local_runtime.as_ref().cloned().context(
+            "the compatibility core manager cannot hold a Profile runtime until source commit",
+        )?;
+        let previous_run_type = local_runtime.run_type();
+        let endpoint: Arc<dyn ControlEndpoint> = match run_type {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+        };
+        let service_endpoint = self.service_endpoint.clone();
+        let stop_uncertain = self.outcome_uncertain.clone();
+        let candidate_slot = Arc::new(tokio::sync::Mutex::new(None));
+        let future_slot = candidate_slot.clone();
+        self.run_local_mutation("Profile runtime prepare", async move {
+            match (previous_run_type, run_type) {
+                (RunType::Service, RunType::Normal) => {
+                    stop_service_core(service_endpoint, stop_uncertain).await?;
+                }
+                (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
+                _ => {}
+            }
+            let candidate = local_runtime
+                .prepare_profile_runtime(
+                    clash,
+                    target_core,
+                    endpoint.as_ref(),
+                    profiles,
+                    app,
+                    staged_content,
+                    operation_id,
+                )
+                .await?;
+            *future_slot.lock().await = Some(candidate);
+            Ok(())
+        })
+        .await?;
+        self.refresh_ws_binding().await;
+        candidate_slot
+            .lock()
+            .await
+            .take()
+            .context("Profile runtime prepare completed without a candidate")
+    }
+
+    pub(crate) async fn confirm_profile_runtime(
+        &self,
+        operation_id: OperationId,
+        candidate: crate::client::application_workflow::mutation::AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .context("the compatibility core manager cannot confirm a held Profile runtime")?;
+        local_runtime
+            .confirm_profile_runtime(&operation_id, candidate)
+            .await?;
+        self.refresh_ws_binding().await;
+        Ok(())
+    }
+
+    pub(crate) async fn discard_profile_runtime(&self, operation_id: &OperationId) {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            local_runtime.discard_profile_runtime(operation_id).await;
+        }
     }
 
     async fn reconcile_with_profile_source(
@@ -533,6 +663,77 @@ impl CoreFacade {
             state_changed_at,
             run_type,
         }
+    }
+
+    pub(crate) async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+                RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+                RunType::Service => Arc::new(self.service_endpoint.clone()),
+                RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+            };
+            let status = endpoint.status().await?;
+            return match status.state.as_ref() {
+                Some(chimera_ipc::api::status::CoreStateDetail::Stopped { .. }) => {
+                    Ok(KnownRuntimeState::Stopped)
+                }
+                Some(chimera_ipc::api::status::CoreStateDetail::Running { .. }) => {
+                    Ok(local_runtime
+                        .confirmed_runtime_receipt()
+                        .filter(|receipt| receipt.confirms(endpoint.host(), &status))
+                        .map_or(KnownRuntimeState::NeverApplied, KnownRuntimeState::Applied))
+                }
+                Some(
+                    chimera_ipc::api::status::CoreStateDetail::Starting { .. }
+                    | chimera_ipc::api::status::CoreStateDetail::Restarting { .. }
+                    | chimera_ipc::api::status::CoreStateDetail::Switching { .. }
+                    | chimera_ipc::api::status::CoreStateDetail::Stopping { .. },
+                ) => anyhow::bail!("core host is transitioning; Profile baseline is unconfirmed"),
+                None => anyhow::bail!("core host did not publish an authoritative runtime state"),
+            };
+        }
+
+        anyhow::bail!(
+            "the compatibility core manager does not expose detailed status needed to confirm a Profile baseline"
+        )
+    }
+
+    pub(crate) async fn restore_runtime_receipt(
+        &self,
+        receipt: Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        let local_runtime =
+            self.local_runtime.as_ref().cloned().context(
+                "the compatibility core manager cannot restore a confirmed runtime receipt",
+            )?;
+        let destination = match receipt.host {
+            super::control_endpoint::ExecutionHost::Local => RunType::Normal,
+            super::control_endpoint::ExecutionHost::Service => RunType::Service,
+        };
+        let endpoint: Arc<dyn ControlEndpoint> = match destination {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+        };
+        let previous = local_runtime.run_type();
+        let service_endpoint = self.service_endpoint.clone();
+        let stop_uncertain = self.outcome_uncertain.clone();
+        let result = self
+            .run_local_mutation("runtime receipt restore", async move {
+                match (previous, destination) {
+                    (RunType::Service, RunType::Normal) => {
+                        stop_service_core(service_endpoint, stop_uncertain).await?;
+                    }
+                    (RunType::Normal, RunType::Service) => local_runtime.stop_core().await?,
+                    _ => {}
+                }
+                local_runtime
+                    .restore_runtime_receipt(endpoint.as_ref(), receipt)
+                    .await
+            })
+            .await;
+        self.refresh_ws_binding().await;
+        result
     }
 
     pub(crate) fn recovery_notify(&self) -> Arc<tokio::sync::Notify> {

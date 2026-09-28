@@ -369,6 +369,57 @@ impl RuntimeSnapshot {
             && self.target_core == other.target_core
             && self.product_sha256 == other.product_sha256
     }
+
+    pub(crate) fn with_revision(&self, revision: RuntimeRevision) -> Self {
+        Self::from_data(
+            revision,
+            self.target_core,
+            self.product_bytes.clone(),
+            RuntimeSnapshotData {
+                config: self.config.clone(),
+                exists_keys: self.exists_keys.clone(),
+                postprocessing_output: self.postprocessing_output.clone(),
+                inspection: self.inspection.clone(),
+            },
+        )
+    }
+}
+
+/// What the selected core host confirmed it applied. Keep the exact submitted
+/// bytes and host settings here: a Profile transaction may have to restore this
+/// runtime even when the previous Profile source now describes something else.
+/// `artifact` is Chimera's derived UI snapshot paired with the receipt; it is
+/// not evidence that the core accepted the document.
+#[derive(Debug, Clone)]
+pub(crate) struct RuntimeApplyReceipt {
+    pub revision: RuntimeRevision,
+    pub config_text: Arc<str>,
+    pub config_digest: String,
+    pub target_core: ClashCore,
+    pub core_spec: chimera_core_manager::CoreSpec,
+    pub host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+    pub run_intent: super::application_workflow::policy::CoreRunIntent,
+    pub local_ipc: chimera_core_manager::LocalIpcSettings,
+    pub applied_revision: chimera_ipc::api::status::RevisionIdInfo,
+    pub ports: chimera_config::runtime::executor::ResolvedPortBindings,
+    pub artifact: Option<Arc<RuntimeSnapshot>>,
+}
+
+impl RuntimeApplyReceipt {
+    pub(crate) fn confirms(
+        &self,
+        host: crate::core::actor_v2::control_endpoint::ExecutionHost,
+        status: &crate::core::actor_v2::control_endpoint::CoreStatusSnapshot,
+    ) -> bool {
+        matches!(
+            status.state,
+            Some(chimera_ipc::api::status::CoreStateDetail::Running { .. })
+        ) && host == self.host
+            && status.source_hash.as_deref() == Some(self.config_digest.as_str())
+            && status
+                .applied_kind
+                .is_none_or(|kind| kind == self.core_spec.kind)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +435,7 @@ pub struct RuntimeTransformFailure {
 pub struct RuntimeLifecycleState {
     pub promoted: Option<Arc<RuntimeSnapshot>>,
     pub applied: Option<Arc<RuntimeSnapshot>>,
+    pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
     pub last_transform_failure: Option<RuntimeTransformFailure>,
 }
 
@@ -406,6 +458,16 @@ impl RuntimeLifecycle {
         self.state.write().promoted = Some(snapshot);
     }
 
+    pub fn publish_confirmed(&self, receipt: Arc<RuntimeApplyReceipt>) {
+        let mut state = self.state.write();
+        state.applied = None;
+        state.confirmed = Some(receipt);
+    }
+
+    pub fn confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        self.state.read().confirmed.clone()
+    }
+
     pub fn publish_applied(&self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {
         let mut state = self.state.write();
         let promoted = state
@@ -414,6 +476,15 @@ impl RuntimeLifecycle {
             .context("cannot publish Applied before Promoted")?;
         if !promoted.identity_eq(&snapshot) {
             bail!("Applied snapshot does not match the promoted runtime product");
+        }
+        if let Some(receipt) = state.confirmed.as_ref() {
+            if receipt.revision != snapshot.revision
+                || receipt.config_digest
+                    != chimera_core_manager::payload_digest(snapshot.product_bytes())
+                || receipt.target_core != snapshot.target_core
+            {
+                bail!("Applied snapshot does not match the confirmed runtime receipt");
+            }
         }
         state.applied = Some(snapshot);
         state.last_transform_failure = None;

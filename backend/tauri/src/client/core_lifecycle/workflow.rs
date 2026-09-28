@@ -340,6 +340,81 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
         self.core.status().await
     }
 
+    async fn observe_runtime_baseline(
+        &self,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState> {
+        self.core.observe_runtime_baseline().await
+    }
+
+    async fn restore_runtime_baseline(
+        &self,
+        baseline: &crate::client::application_workflow::mutation::KnownRuntimeState,
+    ) -> anyhow::Result<()> {
+        self.core.restore_runtime_baseline(baseline).await
+    }
+
+    async fn validate_profile_runtime(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        let clash = self.clash.get()?;
+        let app = self.application.get_typed();
+        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        self.core
+            .validate_profile_runtime(clash, target_core, run_type, profiles, app, staged_content)
+            .await
+    }
+
+    async fn prepare_profile_runtime(
+        &self,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        staged_content: std::collections::BTreeMap<String, String>,
+        operation_id: &chimera_core_manager::OperationId,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        let clash = self.clash.get()?;
+        let app = self.application.get_typed();
+        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            crate::core::service::ipc::get_ipc_state(),
+        );
+        self.core
+            .prepare_profile_runtime(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                staged_content,
+                operation_id.clone(),
+            )
+            .await
+    }
+
+    async fn confirm_profile_runtime(
+        &self,
+        operation_id: &chimera_core_manager::OperationId,
+        candidate: crate::client::application_workflow::mutation::AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        self.core
+            .confirm_profile_runtime(operation_id.clone(), candidate)
+            .await
+    }
+
+    async fn discard_profile_runtime(&self, operation_id: &chimera_core_manager::OperationId) {
+        self.core
+            .discard_profile_runtime(operation_id.clone())
+            .await
+    }
+
     async fn reconcile_profiles(
         &self,
         profiles: Arc<chimera_config::profile::Profiles>,

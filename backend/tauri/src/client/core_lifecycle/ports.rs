@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use chimera_config::clash::config::ClashConfig;
+use chimera_core_manager::OperationId;
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use std::{path::PathBuf, sync::Arc};
@@ -10,6 +11,8 @@ use tempfile::TempDir;
 pub(crate) use crate::core::actor_v2::CoreStatusSnapshot;
 
 use crate::{
+    client::application_workflow::mutation::{AppliedCandidate, CheckRecord, KnownRuntimeState},
+    client::runtime::RuntimeApplyReceipt,
     client::runtime::RuntimeSnapshot,
     config::{
         chimera::ClashCore,
@@ -120,9 +123,64 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     ) -> anyhow::Result<()> {
         self.reconcile(clash, target_core, run_type).await
     }
+    async fn validate_profile_runtime(
+        &self,
+        _clash: ClashConfig,
+        _target_core: ClashCore,
+        _run_type: RunType,
+        _profiles: Arc<chimera_config::profile::Profiles>,
+        _app: chimera_config::application::ChimeraAppConfig,
+        _staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<CheckRecord> {
+        anyhow::bail!("this core lifecycle adapter cannot validate a typed Profile runtime")
+    }
+    async fn prepare_profile_runtime(
+        &self,
+        _clash: ClashConfig,
+        _target_core: ClashCore,
+        _run_type: RunType,
+        _profiles: Arc<chimera_config::profile::Profiles>,
+        _app: chimera_config::application::ChimeraAppConfig,
+        _staged_content: std::collections::BTreeMap<String, String>,
+        _operation_id: OperationId,
+    ) -> anyhow::Result<(AppliedCandidate, CheckRecord)> {
+        anyhow::bail!(
+            "this core lifecycle adapter cannot hold a Profile runtime until source commit"
+        )
+    }
+    async fn confirm_profile_runtime(
+        &self,
+        _operation_id: OperationId,
+        _candidate: AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot confirm a held Profile runtime")
+    }
+    async fn discard_profile_runtime(&self, _operation_id: OperationId) {}
     async fn stop(&self) -> anyhow::Result<()>;
     async fn change_core(&self, clash_core: ClashCore) -> anyhow::Result<()>;
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn confirmed_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        Ok(None)
+    }
+    async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
+        anyhow::bail!(
+            "this core lifecycle adapter does not expose authoritative runtime baseline evidence"
+        )
+    }
+    async fn restore_runtime_receipt(
+        &self,
+        _receipt: Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("this core lifecycle adapter cannot restore a confirmed runtime receipt")
+    }
+    async fn restore_runtime_baseline(&self, baseline: &KnownRuntimeState) -> anyhow::Result<()> {
+        match baseline {
+            KnownRuntimeState::Applied(receipt) => {
+                self.restore_runtime_receipt(receipt.clone()).await
+            }
+            KnownRuntimeState::Stopped | KnownRuntimeState::NeverApplied => self.stop().await,
+        }
+    }
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>>;
     fn outcome_uncertain(&self) -> bool {
         false

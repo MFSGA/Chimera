@@ -207,6 +207,60 @@ impl CoreLifecyclePort for LegacyCoreBridge {
             .await
     }
 
+    async fn validate_profile_runtime(
+        &self,
+        clash: chimera_config::clash::config::ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        self.facade()
+            .validate_profile_runtime(clash, target_core, run_type, profiles, app, staged_content)
+            .await
+    }
+
+    async fn prepare_profile_runtime(
+        &self,
+        clash: chimera_config::clash::config::ClashConfig,
+        target_core: ClashCore,
+        run_type: RunType,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        operation_id: chimera_core_manager::OperationId,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        self.facade()
+            .prepare_profile_runtime(
+                clash,
+                target_core,
+                run_type,
+                profiles,
+                app,
+                staged_content,
+                operation_id,
+            )
+            .await
+    }
+
+    async fn confirm_profile_runtime(
+        &self,
+        operation_id: chimera_core_manager::OperationId,
+        candidate: crate::client::application_workflow::mutation::AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        self.facade()
+            .confirm_profile_runtime(operation_id, candidate)
+            .await
+    }
+
+    async fn discard_profile_runtime(&self, operation_id: chimera_core_manager::OperationId) {
+        self.facade().discard_profile_runtime(&operation_id).await;
+    }
+
     async fn stop(&self) -> anyhow::Result<()> {
         self.facade().stop().await
     }
@@ -217,6 +271,19 @@ impl CoreLifecyclePort for LegacyCoreBridge {
 
     async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
         Ok(self.facade().status().await)
+    }
+
+    async fn observe_runtime_baseline(
+        &self,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState> {
+        self.facade().observe_runtime_baseline().await
+    }
+
+    async fn restore_runtime_receipt(
+        &self,
+        receipt: Arc<crate::client::runtime::RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        self.facade().restore_runtime_receipt(receipt).await
     }
 
     fn recovery_notify(&self) -> Option<Arc<tokio::sync::Notify>> {

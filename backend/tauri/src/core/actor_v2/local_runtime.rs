@@ -5,11 +5,11 @@
 //! Tauri boundary; process, epoch, health, and config transactions belong to
 //! the selected endpoint and `chimera-core-manager`.
 
-use std::fmt;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::{collections::HashMap, fmt};
 
 use anyhow::{Context, bail};
 use chimera_config::clash::config::ClashConfig;
@@ -27,7 +27,9 @@ use parking_lot::RwLock;
 use crate::{
     client::{
         RuntimePaths,
-        runtime::{RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransformFailure},
+        runtime::{
+            RuntimeApplyReceipt, RuntimeSnapshot, RuntimeSnapshotData, RuntimeTransformFailure,
+        },
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
@@ -53,6 +55,8 @@ pub(crate) struct LocalRuntimeHost {
     runtime_paths: RuntimePaths,
     ports: crate::client::SessionPortResolver,
     lifecycle: crate::client::runtime::RuntimeLifecycle,
+    pending_profile_candidates:
+        tokio::sync::Mutex<HashMap<OperationId, crate::client::runtime::CandidateFile>>,
     run_type: RwLock<RunType>,
     recovery_notify: Arc<tokio::sync::Notify>,
     outcome_uncertain: AtomicBool,
@@ -92,6 +96,7 @@ impl LocalRuntimeHost {
             runtime_paths,
             ports: crate::client::SessionPortResolver::default(),
             lifecycle: crate::client::runtime::RuntimeLifecycle::default(),
+            pending_profile_candidates: tokio::sync::Mutex::new(HashMap::new()),
             run_type: RwLock::new(RunType::Normal),
             recovery_notify,
             outcome_uncertain: AtomicBool::new(false),
@@ -115,14 +120,19 @@ impl LocalRuntimeHost {
         self.outcome_uncertain.load(Ordering::Acquire)
     }
 
+    pub(crate) fn confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        self.lifecycle.confirmed_receipt()
+    }
+
     pub(crate) async fn reconcile(
         &self,
         clash: ClashConfig,
         target_core: ClashCore,
         endpoint: &dyn ControlEndpoint,
     ) -> anyhow::Result<()> {
-        self.reconcile_with_profile_source(clash, target_core, endpoint, None)
+        self.reconcile_with_profile_source(clash, target_core, endpoint, None, None)
             .await
+            .map(|_| ())
     }
 
     pub(crate) async fn reconcile_with_profiles(
@@ -139,8 +149,131 @@ impl LocalRuntimeHost {
             target_core,
             endpoint,
             Some((profiles, app, staged_content)),
+            None,
         )
         .await
+        .map(|_| ())
+    }
+
+    pub(crate) async fn prepare_profile_runtime(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        endpoint: &dyn ControlEndpoint,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+        operation_id: OperationId,
+    ) -> anyhow::Result<(
+        crate::client::application_workflow::mutation::AppliedCandidate,
+        crate::client::application_workflow::mutation::CheckRecord,
+    )> {
+        self.reconcile_with_profile_source(
+            clash,
+            target_core,
+            endpoint,
+            Some((profiles, app, staged_content)),
+            Some(operation_id),
+        )
+        .await?
+        .context("Profile runtime preparation returned no candidate")
+    }
+
+    pub(crate) async fn validate_profile_runtime(
+        &self,
+        clash: ClashConfig,
+        target_core: ClashCore,
+        endpoint: &dyn ControlEndpoint,
+        profiles: Arc<chimera_config::profile::Profiles>,
+        app: chimera_config::application::ChimeraAppConfig,
+        staged_content: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<crate::client::application_workflow::mutation::CheckRecord> {
+        if self.closed.load(Ordering::Acquire) {
+            bail!("the local core control plane is shutting down");
+        }
+        if self.outcome_uncertain() {
+            bail!(
+                "the local core runtime outcome is uncertain; restart Chimera before checking a Profile"
+            );
+        }
+
+        let resolved_ports = self.ports.resolve(&clash)?;
+        let revision = self.lifecycle.allocate_revision()?;
+        let output = match Config::generate_runtime_output_from_profiles(
+            &clash,
+            target_core,
+            app,
+            profiles,
+            resolved_ports,
+            staged_content,
+        )
+        .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                if let Some(transform) =
+                    error.downcast_ref::<crate::enhance::TransformFailureError>()
+                {
+                    self.lifecycle
+                        .publish_transform_failure(RuntimeTransformFailure {
+                            attempt_revision: revision,
+                            transform_uid: transform.transform_uid.clone(),
+                            scope_uid: transform.scope_uid.clone(),
+                            script_type: transform.script_type,
+                            message: transform.message(),
+                        });
+                }
+                return Err(error);
+            }
+        };
+        self.lifecycle.clear_transform_failure();
+
+        let config_bytes = Config::render_runtime_bytes(&output.config)?;
+        let digest = chimera_core_manager::payload_digest(&config_bytes);
+        let core_spec = local_host::core_spec(&target_core)?;
+        let candidate = self
+            .runtime_paths
+            .create_candidate(&config_bytes)
+            .await
+            .map_err(|error| {
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::candidate_unavailable(
+                    format!("could not stage Profile config for checking: {error}"),
+                )
+            })?;
+        let staged_config = if endpoint.host() == ExecutionHost::Service {
+            match camino::Utf8PathBuf::from_path_buf(candidate.path().to_path_buf()) {
+                Ok(path) => Some(path),
+                Err(path) => {
+                    cleanup_candidate(candidate, "service check path is not UTF-8").await;
+                    return Err(
+                        crate::client::application_workflow::mutation::RuntimeCheckFailure::candidate_unavailable(
+                            format!(
+                                "service config check path is not valid UTF-8: {}",
+                                path.to_string_lossy()
+                            ),
+                        )
+                        .into(),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        let check = endpoint
+            .check_config(CheckSubmission {
+                core_spec: core_spec.clone(),
+                core_type: (&target_core).into(),
+                config_bytes,
+                digest,
+                staged_config,
+            })
+            .await;
+        if let Err(error) = candidate.cleanup().await {
+            tracing::warn!(%error, "failed to clean a checked Profile runtime candidate");
+        }
+        profile_runtime_check_outcome(endpoint.host(), check)
+            .map(|outcome| outcome.check_record())
+            .map_err(anyhow::Error::new)
     }
 
     async fn reconcile_with_profile_source(
@@ -153,13 +286,29 @@ impl LocalRuntimeHost {
             chimera_config::application::ChimeraAppConfig,
             std::collections::BTreeMap<String, String>,
         )>,
-    ) -> anyhow::Result<()> {
+        profile_operation_id: Option<OperationId>,
+    ) -> anyhow::Result<
+        Option<(
+            crate::client::application_workflow::mutation::AppliedCandidate,
+            crate::client::application_workflow::mutation::CheckRecord,
+        )>,
+    > {
         if self.closed.load(Ordering::Acquire) {
             bail!("the local core control plane is shutting down");
         }
         if self.outcome_uncertain() {
             bail!(
                 "the local core runtime outcome is uncertain; restart Chimera before applying another runtime"
+            );
+        }
+        if let Some(operation_id) = profile_operation_id.as_ref() {
+            anyhow::ensure!(
+                !self
+                    .pending_profile_candidates
+                    .lock()
+                    .await
+                    .contains_key(operation_id),
+                "Profile operation already owns a pending runtime candidate"
             );
         }
 
@@ -172,14 +321,18 @@ impl LocalRuntimeHost {
                     target_core,
                     app,
                     profiles,
-                    resolved_ports,
+                    resolved_ports.clone(),
                     staged_content,
                 )
                 .await
             }
             None => {
-                Config::generate_runtime_output_with_ports(&clash, target_core, resolved_ports)
-                    .await
+                Config::generate_runtime_output_with_ports(
+                    &clash,
+                    target_core,
+                    resolved_ports.clone(),
+                )
+                .await
             }
         };
         let (config, exists_keys, transform_output, inspection) = match generated {
@@ -210,22 +363,51 @@ impl LocalRuntimeHost {
         let config_bytes = Config::render_runtime_bytes(&config)?;
         let core_spec = local_host::core_spec(&target_core)?;
         let digest = chimera_core_manager::payload_digest(&config_bytes);
-        let candidate = self.runtime_paths.create_candidate(&config_bytes).await?;
+        let local_ipc = LocalIpcSettings {
+            policy: chimera_core_manager::LocalIpcPolicy::Disable,
+            keep_http_controller: true,
+        };
+        let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
+        let snapshot = Arc::new(RuntimeSnapshot::from_data(
+            revision,
+            target_core,
+            config_bytes.clone().into(),
+            RuntimeSnapshotData {
+                config,
+                exists_keys,
+                postprocessing_output: transform_output,
+                inspection: Arc::new(inspection),
+            },
+        ));
+        let candidate = self
+            .runtime_paths
+            .create_candidate(&config_bytes)
+            .await
+            .map_err(|error| {
+                crate::client::application_workflow::mutation::RuntimeCheckFailure::candidate_unavailable(
+                    format!("could not stage Profile config for checking: {error}"),
+                )
+            })?;
         let staged_config = if endpoint.host() == ExecutionHost::Service {
             match camino::Utf8PathBuf::from_path_buf(candidate.path().to_path_buf()) {
                 Ok(path) => Some(path),
                 Err(path) => {
                     cleanup_candidate(candidate, "service check path is not UTF-8").await;
-                    bail!(
-                        "service config check path is not valid UTF-8: {}",
-                        path.to_string_lossy()
+                    return Err(
+                        crate::client::application_workflow::mutation::RuntimeCheckFailure::candidate_unavailable(
+                            format!(
+                                "service config check path is not valid UTF-8: {}",
+                                path.to_string_lossy()
+                            ),
+                        )
+                        .into(),
                     );
                 }
             }
         } else {
             None
         };
-        match endpoint
+        let check = endpoint
             .check_config(CheckSubmission {
                 core_spec: core_spec.clone(),
                 core_type: (&target_core).into(),
@@ -233,18 +415,24 @@ impl LocalRuntimeHost {
                 digest: digest.clone(),
                 staged_config,
             })
-            .await
-        {
-            CheckSupport::Ran(Ok(())) => {}
-            CheckSupport::Ran(Err(error)) => {
+            .await;
+        let check_outcome = match profile_runtime_check_outcome(endpoint.host(), check) {
+            Ok(outcome) => outcome,
+            Err(error) => {
                 cleanup_candidate(candidate, "advisory check failed").await;
-                return Err(error.into());
+                return Err(anyhow::Error::new(error));
             }
-            CheckSupport::Unsupported { reason } => {
-                cleanup_candidate(candidate, "advisory check is unsupported").await;
-                bail!("core config check is unavailable: {reason}");
-            }
+        };
+        if let crate::client::application_workflow::ports::RuntimeCheckOutcome::Unavailable(
+            crate::client::application_workflow::ports::RuntimeCheckUnavailable::HostUnsupported {
+                reason,
+                ..
+            },
+        ) = &check_outcome
+        {
+            tracing::debug!(%reason, "core host does not support advisory config checks");
         }
+        let check_record = check_outcome.check_record();
 
         let status = match endpoint.status().await {
             Ok(status) => status,
@@ -267,16 +455,13 @@ impl LocalRuntimeHost {
             envelope: CoreCommandEnvelope {
                 operation_id,
                 command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
-                    core: core_spec,
+                    core: core_spec.clone(),
                     config: ConfigInput::Inline {
                         bytes: config_bytes,
-                        expected_digest: Some(digest),
+                        expected_digest: Some(digest.clone()),
                     },
                     options: InstanceOptions {
-                        local_ipc: Some(LocalIpcSettings {
-                            policy: chimera_core_manager::LocalIpcPolicy::Disable,
-                            keep_http_controller: true,
-                        }),
+                        local_ipc: Some(local_ipc),
                         ..InstanceOptions::default()
                     },
                     expected_applied,
@@ -284,14 +469,295 @@ impl LocalRuntimeHost {
             },
             core_type: Some((&target_core).into()),
         };
+        let reconcile_outcome = match self
+            .submit_and_wait(endpoint, submission, operation_id)
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                cleanup_candidate(candidate, "runtime operation failed").await;
+                return Err(error);
+            }
+        };
+
+        let applied_status = match endpoint.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_candidate(candidate, "could not confirm applied runtime").await;
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(anyhow::Error::from(error).context(
+                    "the core accepted the runtime operation, but its applied status could not be confirmed",
+                ));
+            }
+        };
+        let applied_revision = match confirmed_applied_revision(
+            endpoint.host(),
+            &applied_status,
+            &digest,
+            &core_spec,
+        ) {
+            Ok(revision) => revision,
+            Err(error) => {
+                cleanup_candidate(candidate, "applied runtime identity was not confirmed").await;
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(error).context(
+                    "the core accepted the runtime operation, but its applied identity did not match the submitted document",
+                );
+            }
+        };
+        let receipt = Arc::new(RuntimeApplyReceipt {
+            revision,
+            config_text,
+            config_digest: digest,
+            target_core,
+            core_spec,
+            host: endpoint.host(),
+            run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
+            local_ipc,
+            applied_revision,
+            ports: resolved_ports,
+            artifact: Some(snapshot.clone()),
+        });
+
+        *self.run_type.write() = match endpoint.host() {
+            ExecutionHost::Local => RunType::Normal,
+            ExecutionHost::Service => RunType::Service,
+        };
+
+        if let Some(operation_id) = profile_operation_id {
+            let replaced = reconcile_replaced(&reconcile_outcome);
+            let mut pending = self.pending_profile_candidates.lock().await;
+            anyhow::ensure!(
+                !pending.contains_key(&operation_id),
+                "Profile operation already owns a pending runtime candidate"
+            );
+            pending.insert(operation_id, candidate);
+            return Ok(Some((
+                crate::client::application_workflow::mutation::AppliedCandidate {
+                    replaced,
+                    receipt,
+                    product: snapshot,
+                },
+                check_record,
+            )));
+        }
+        self.publish_profile_candidate(candidate, receipt, snapshot)
+            .await?;
+        Ok(None)
+    }
+
+    pub(crate) async fn confirm_profile_runtime(
+        &self,
+        operation_id: &OperationId,
+        candidate: crate::client::application_workflow::mutation::AppliedCandidate,
+    ) -> anyhow::Result<()> {
+        let candidate_file = self
+            .pending_profile_candidates
+            .lock()
+            .await
+            .remove(operation_id)
+            .context("held Profile runtime candidate is unavailable at Confirm")?;
+        self.publish_profile_candidate(candidate_file, candidate.receipt, candidate.product)
+            .await
+    }
+
+    pub(crate) async fn discard_profile_runtime(&self, operation_id: &OperationId) {
+        self.pending_profile_candidates
+            .lock()
+            .await
+            .remove(operation_id);
+    }
+
+    async fn publish_profile_candidate(
+        &self,
+        candidate_file: crate::client::runtime::CandidateFile,
+        receipt: Arc<RuntimeApplyReceipt>,
+        product: Arc<RuntimeSnapshot>,
+    ) -> anyhow::Result<()> {
+        self.lifecycle.publish_confirmed(receipt);
+        let promoted = crate::client::runtime::promote_candidate(
+            &candidate_file,
+            self.runtime_paths.product(),
+        )
+        .await;
+        let cleanup = candidate_file.cleanup().await;
+        let product_bytes = match promoted {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(error).context(
+                    "the core applied the committed Profile runtime, but Chimera could not promote its runtime product",
+                );
+            }
+        };
+        if let Err(error) = cleanup {
+            tracing::warn!(%error, "failed to clean a promoted Profile runtime candidate");
+        }
+
+        if product_bytes.as_slice() != product.product_bytes() {
+            bail!("promoted runtime product differs from the confirmed runtime receipt");
+        }
+        self.lifecycle.publish_promoted(product.clone());
+        if let Err(error) = self.lifecycle.publish_applied(product) {
+            return Err(error).context(
+                "the core applied the committed Profile runtime, but Chimera could not publish its applied snapshot",
+            );
+        }
+        Config::runtime().apply();
+        Ok(())
+    }
+
+    pub(crate) async fn restore_runtime_receipt(
+        &self,
+        endpoint: &dyn ControlEndpoint,
+        receipt: Arc<RuntimeApplyReceipt>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.closed.load(Ordering::Acquire),
+            "the local core control plane is shutting down"
+        );
+        anyhow::ensure!(
+            !self.outcome_uncertain(),
+            "the local core runtime outcome is uncertain; restart Chimera before restoring a runtime"
+        );
+        anyhow::ensure!(
+            endpoint.host() == receipt.host,
+            "runtime receipt belongs to a different execution host"
+        );
+        anyhow::ensure!(
+            matches!(
+                receipt.run_intent,
+                crate::client::application_workflow::policy::CoreRunIntent::Running
+            ),
+            "a stopped runtime receipt cannot be restored by applying a config"
+        );
+        let artifact = receipt
+            .artifact
+            .as_ref()
+            .context("runtime receipt has no Chimera snapshot to restore")?;
+        let revision = self.lifecycle.allocate_revision()?;
+        let snapshot = Arc::new(artifact.with_revision(revision));
+        let config_bytes = receipt.config_text.as_bytes().to_vec();
+        let digest = chimera_core_manager::payload_digest(&config_bytes);
+        anyhow::ensure!(
+            digest == receipt.config_digest,
+            "runtime receipt bytes do not match their recorded digest"
+        );
+        let candidate = self.runtime_paths.create_candidate(&config_bytes).await?;
+        let staged_config = if endpoint.host() == ExecutionHost::Service {
+            match camino::Utf8PathBuf::from_path_buf(candidate.path().to_path_buf()) {
+                Ok(path) => Some(path),
+                Err(path) => {
+                    cleanup_candidate(candidate, "service restore path is not UTF-8").await;
+                    bail!(
+                        "service runtime restore path is not valid UTF-8: {}",
+                        path.to_string_lossy()
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        match endpoint
+            .check_config(CheckSubmission {
+                core_spec: receipt.core_spec.clone(),
+                core_type: (&receipt.target_core).into(),
+                config_bytes: config_bytes.clone(),
+                digest: digest.clone(),
+                staged_config,
+            })
+            .await
+        {
+            CheckSupport::Ran(Ok(())) => {}
+            CheckSupport::Ran(Err(error)) => {
+                cleanup_candidate(candidate, "runtime restore check failed").await;
+                return Err(error.into());
+            }
+            CheckSupport::Unsupported { reason } => {
+                tracing::debug!(%reason, "core host does not support advisory restore checks");
+            }
+        }
+
+        let status = match endpoint.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_candidate(candidate, "could not read runtime restore baseline").await;
+                return Err(error.into());
+            }
+        };
+        let expected_applied = match expected_applied_revision(&status) {
+            Ok(revision) => revision,
+            Err(error) => {
+                cleanup_candidate(candidate, "runtime restore baseline is not authoritative").await;
+                return Err(error);
+            }
+        };
+        let operation_id = OperationId::generate();
+        let submission = CoreSubmission {
+            expected_owner: None,
+            envelope: CoreCommandEnvelope {
+                operation_id,
+                command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
+                    core: receipt.core_spec.clone(),
+                    config: ConfigInput::Inline {
+                        bytes: config_bytes,
+                        expected_digest: Some(digest.clone()),
+                    },
+                    options: InstanceOptions {
+                        local_ipc: Some(receipt.local_ipc),
+                        ..InstanceOptions::default()
+                    },
+                    expected_applied,
+                })),
+            },
+            core_type: Some((&receipt.target_core).into()),
+        };
         if let Err(error) = self
             .submit_and_wait(endpoint, submission, operation_id)
             .await
         {
-            cleanup_candidate(candidate, "runtime operation failed").await;
+            cleanup_candidate(candidate, "runtime restore operation failed").await;
             return Err(error);
         }
 
+        let applied_status = match endpoint.status().await {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_candidate(candidate, "could not confirm restored runtime").await;
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(anyhow::Error::from(error).context(
+                    "the runtime restore was accepted, but its applied status could not be confirmed",
+                ));
+            }
+        };
+        let applied_revision = match confirmed_applied_revision(
+            endpoint.host(),
+            &applied_status,
+            &digest,
+            &receipt.core_spec,
+        ) {
+            Ok(revision) => revision,
+            Err(error) => {
+                cleanup_candidate(candidate, "restored runtime identity was not confirmed").await;
+                self.outcome_uncertain.store(true, Ordering::Release);
+                return Err(error).context(
+                    "the runtime restore was accepted, but its applied identity could not be confirmed",
+                );
+            }
+        };
+        let restored_receipt = Arc::new(RuntimeApplyReceipt {
+            revision,
+            config_text: receipt.config_text.clone(),
+            config_digest: digest,
+            target_core: receipt.target_core,
+            core_spec: receipt.core_spec.clone(),
+            host: receipt.host,
+            run_intent: receipt.run_intent,
+            local_ipc: receipt.local_ipc,
+            applied_revision,
+            ports: receipt.ports.clone(),
+            artifact: Some(snapshot.clone()),
+        });
+        self.lifecycle.publish_confirmed(restored_receipt);
         *self.run_type.write() = match endpoint.host() {
             ExecutionHost::Local => RunType::Normal,
             ExecutionHost::Service => RunType::Service,
@@ -306,27 +772,24 @@ impl LocalRuntimeHost {
             Err(error) => {
                 self.outcome_uncertain.store(true, Ordering::Release);
                 return Err(error).context(
-                    "the core applied the runtime, but Chimera could not promote its runtime product",
+                    "the core restored the runtime, but Chimera could not promote its runtime product",
                 );
             }
         };
         if let Err(error) = cleanup {
-            tracing::warn!(%error, "failed to clean a promoted runtime candidate");
+            tracing::warn!(%error, "failed to clean a restored runtime candidate");
         }
-
-        let snapshot = Arc::new(RuntimeSnapshot::from_data(
-            revision,
-            target_core,
-            product_bytes.into(),
-            RuntimeSnapshotData {
-                config,
-                exists_keys,
-                postprocessing_output: transform_output,
-                inspection: Arc::new(inspection),
-            },
-        ));
+        if product_bytes.as_slice() != snapshot.product_bytes() {
+            self.outcome_uncertain.store(true, Ordering::Release);
+            bail!("restored runtime product differs from its confirmed receipt");
+        }
         self.lifecycle.publish_promoted(snapshot.clone());
-        self.lifecycle.publish_applied(snapshot)?;
+        if let Err(error) = self.lifecycle.publish_applied(snapshot) {
+            self.outcome_uncertain.store(true, Ordering::Release);
+            return Err(error).context(
+                "the core restored the runtime, but Chimera could not publish its applied snapshot",
+            );
+        }
         Config::runtime().apply();
         Ok(())
     }
@@ -336,7 +799,7 @@ impl LocalRuntimeHost {
         endpoint: &dyn ControlEndpoint,
         submission: CoreSubmission,
         operation_id: OperationId,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<ReconcileOutcomeInfo> {
         let mut operation = match endpoint.submit(submission).await {
             Ok(operation) => operation,
             Err(error) => {
@@ -381,7 +844,8 @@ impl LocalRuntimeHost {
 
         match (operation.phase, operation.output) {
             (OperationPhase::Succeeded, Some(OperationOutputInfo::Reconciled(outcome))) => {
-                accept_reconcile_outcome(&outcome)
+                accept_reconcile_outcome(&outcome)?;
+                Ok(outcome)
             }
             (OperationPhase::Failed, _) => bail!(
                 "core reconcile failed: {}",
@@ -562,6 +1026,32 @@ fn expected_applied_revision(
         .transpose()
 }
 
+fn confirmed_applied_revision(
+    _host: ExecutionHost,
+    status: &super::control_endpoint::CoreStatusSnapshot,
+    digest: &str,
+    core_spec: &chimera_core_manager::CoreSpec,
+) -> anyhow::Result<chimera_ipc::api::status::RevisionIdInfo> {
+    anyhow::ensure!(
+        matches!(status.state, Some(CoreStateDetail::Running { .. })),
+        "core host did not confirm a running runtime"
+    );
+    anyhow::ensure!(
+        status.source_hash.as_deref() == Some(digest),
+        "core host source digest does not match the submitted runtime"
+    );
+    anyhow::ensure!(
+        status
+            .applied_kind
+            .is_none_or(|kind| kind == core_spec.kind),
+        "core host applied a different core than the submitted runtime"
+    );
+    status
+        .revision
+        .clone()
+        .context("core host did not report the applied runtime revision")
+}
+
 fn accept_reconcile_outcome(outcome: &ReconcileOutcomeInfo) -> anyhow::Result<()> {
     if outcome.outcome == ReconcileOutcomeKind::RolledBack {
         bail!(
@@ -578,9 +1068,52 @@ fn accept_reconcile_outcome(outcome: &ReconcileOutcomeInfo) -> anyhow::Result<()
     Ok(())
 }
 
+fn reconcile_replaced(outcome: &ReconcileOutcomeInfo) -> bool {
+    matches!(
+        outcome.outcome,
+        ReconcileOutcomeKind::Started
+            | ReconcileOutcomeKind::Restarted
+            | ReconcileOutcomeKind::Switched
+    )
+}
+
+fn profile_runtime_check_outcome(
+    host: ExecutionHost,
+    support: CheckSupport,
+) -> Result<
+    crate::client::application_workflow::ports::RuntimeCheckOutcome,
+    crate::client::application_workflow::mutation::RuntimeCheckFailure,
+> {
+    use crate::client::application_workflow::ports::{
+        RuntimeCheckOutcome, RuntimeCheckUnavailable,
+    };
+
+    match support {
+        CheckSupport::Ran(Ok(())) => Ok(RuntimeCheckOutcome::Passed),
+        CheckSupport::Ran(Err(error)) => Err(
+            crate::client::application_workflow::mutation::RuntimeCheckFailure::from_core_error(
+                error,
+            ),
+        ),
+        CheckSupport::Unsupported { reason } => Ok(RuntimeCheckOutcome::Unavailable(
+            RuntimeCheckUnavailable::HostUnsupported { host, reason },
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::Mutex as StdMutex, time::Duration};
+
+    use chimera_core_manager::{CoreKind, LocalIpcPolicy};
+    use chimera_ipc::api::{
+        core::v2::{
+            OperationInfo, OperationOutputInfo, OperationPhase, ReconcileOutcomeInfo,
+            ReconcileOutcomeKind,
+        },
+        status::{ConfigRevisionInfo, RevisionIdInfo},
+    };
 
     // Contract: with an isolated app root and a newly built local host, status
     // must come from CoreControl as stopped/normal; a host that silently kept
@@ -620,6 +1153,298 @@ mod tests {
         host.shutdown().await.unwrap();
     }
 
+    struct RecordingEndpoint {
+        status: StdMutex<super::super::control_endpoint::CoreStatusSnapshot>,
+        submitted: StdMutex<Vec<(Vec<u8>, Option<LocalIpcSettings>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ControlEndpoint for RecordingEndpoint {
+        fn host(&self) -> ExecutionHost {
+            ExecutionHost::Local
+        }
+
+        async fn check_config(&self, _submission: CheckSubmission) -> CheckSupport {
+            CheckSupport::Ran(Ok(()))
+        }
+
+        async fn submit(
+            &self,
+            submission: CoreSubmission,
+        ) -> Result<OperationInfo, chimera_core_manager::CoreError> {
+            let chimera_core_manager::CoreCommandEnvelope {
+                operation_id,
+                command,
+            } = submission.envelope;
+            let CoreCommand::Reconcile(request) = command else {
+                unreachable!("restore should submit a reconcile")
+            };
+            let ConfigInput::Inline {
+                bytes,
+                expected_digest,
+            } = request.config;
+            let digest = chimera_core_manager::payload_digest(&bytes);
+            assert_eq!(expected_digest.as_deref(), Some(digest.as_str()));
+            self.submitted
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((bytes, request.options.local_ipc));
+
+            let generation = {
+                let mut status = self
+                    .status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let generation = status
+                    .revision
+                    .as_ref()
+                    .map_or(1, |revision| revision.generation + 1);
+                let revision = ConfigRevisionInfo {
+                    epoch: 1,
+                    generation,
+                    source_hash: digest.clone(),
+                    effective_hash: format!("effective-{generation}"),
+                };
+                status.state = Some(CoreStateDetail::Running { epoch: 1, pid: 42 });
+                status.revision = Some(revision.id());
+                status.source_hash = Some(digest.clone());
+                status.applied_kind = Some(request.core.kind);
+                generation
+            };
+            let revision = ConfigRevisionInfo {
+                epoch: 1,
+                generation,
+                source_hash: digest,
+                effective_hash: format!("effective-{generation}"),
+            };
+            Ok(OperationInfo {
+                id: operation_id.to_string(),
+                phase: OperationPhase::Succeeded,
+                output: Some(OperationOutputInfo::Reconciled(ReconcileOutcomeInfo {
+                    outcome: ReconcileOutcomeKind::Started,
+                    revision,
+                    warning: None,
+                    failed_apply: None,
+                })),
+                error: None,
+            })
+        }
+
+        async fn wait_operation(
+            &self,
+            _id: OperationId,
+            _timeout: Duration,
+        ) -> Option<OperationInfo> {
+            None
+        }
+
+        async fn status(
+            &self,
+        ) -> Result<
+            super::super::control_endpoint::CoreStatusSnapshot,
+            chimera_core_manager::CoreError,
+        > {
+            Ok(self
+                .status
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn restore_runtime_receipt_reapplies_the_exact_confirmed_bytes_and_settings() {
+        let root = tempfile::TempDir::new().unwrap();
+        let paths = crate::utils::path::PathResolver::with_base_dirs(
+            root.path().join("config"),
+            root.path().join("data"),
+        );
+        let control = local_host::build(&paths).await.unwrap();
+        let runtime_paths = RuntimePaths::new(
+            camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/clash.yaml"))
+                .unwrap(),
+            camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/candidates"))
+                .unwrap(),
+        );
+        let host = LocalRuntimeHost::new(control, runtime_paths.clone());
+        let status = super::super::control_endpoint::CoreStatusSnapshot {
+            controller: None,
+            state: Some(CoreStateDetail::Running { epoch: 1, pid: 42 }),
+            state_changed_at: 1,
+            revision: Some(RevisionIdInfo {
+                epoch: 1,
+                generation: 2,
+                effective_hash: "before-restore".into(),
+            }),
+            source_hash: Some("candidate-digest".into()),
+            healthy: Some(true),
+            applied_kind: Some(CoreKind::Mihomo),
+        };
+        let endpoint = RecordingEndpoint {
+            status: StdMutex::new(status),
+            submitted: StdMutex::new(Vec::new()),
+        };
+        let config_text: Arc<str> = "mode: rule\nexternal-controller: 127.0.0.1:9090\n".into();
+        let target_core = ClashCore::Mihomo;
+        let runtime_revision = crate::client::runtime::RuntimeRevisionAllocator::default()
+            .allocate()
+            .unwrap();
+        let artifact = Arc::new(RuntimeSnapshot::new_with_transform_output(
+            runtime_revision,
+            target_core,
+            config_text.as_bytes().to_vec(),
+            serde_yaml::Mapping::new(),
+            PostProcessingOutput::default(),
+        ));
+        let receipt = Arc::new(RuntimeApplyReceipt {
+            revision: runtime_revision,
+            config_digest: chimera_core_manager::payload_digest(config_text.as_bytes()),
+            config_text: config_text.clone(),
+            target_core,
+            core_spec: chimera_core_manager::CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: camino::Utf8PathBuf::from("/test/mihomo"),
+                version: None,
+                features: Vec::new(),
+            },
+            host: ExecutionHost::Local,
+            run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
+            local_ipc: LocalIpcSettings {
+                policy: LocalIpcPolicy::Disable,
+                keep_http_controller: true,
+            },
+            applied_revision: RevisionIdInfo {
+                epoch: 1,
+                generation: 1,
+                effective_hash: "old-effective".into(),
+            },
+            ports: Default::default(),
+            artifact: Some(artifact),
+        });
+
+        host.restore_runtime_receipt(&endpoint, receipt.clone())
+            .await
+            .unwrap();
+
+        let submitted = endpoint
+            .submitted
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].0, config_text.as_bytes());
+        assert_eq!(submitted[0].1, Some(receipt.local_ipc));
+        drop(submitted);
+        assert_eq!(
+            tokio::fs::read(runtime_paths.product()).await.unwrap(),
+            config_text.as_bytes()
+        );
+        assert_eq!(
+            host.confirmed_runtime_receipt().unwrap().config_digest,
+            receipt.config_digest
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn held_profile_candidate_is_published_only_by_confirm_and_discard_cleans_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        let paths = crate::utils::path::PathResolver::with_base_dirs(
+            root.path().join("config"),
+            root.path().join("data"),
+        );
+        let control = local_host::build(&paths).await.unwrap();
+        let runtime_paths = RuntimePaths::new(
+            camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/clash.yaml"))
+                .unwrap(),
+            camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/candidates"))
+                .unwrap(),
+        );
+        let host = LocalRuntimeHost::new(control, runtime_paths.clone());
+        let config_text: Arc<str> = "mode: rule\n".into();
+        let config_bytes = config_text.as_bytes();
+        let candidate_file = runtime_paths.create_candidate(config_bytes).await.unwrap();
+        let candidate_path = candidate_file.path().to_path_buf();
+        let operation_id = OperationId::generate();
+        host.pending_profile_candidates
+            .lock()
+            .await
+            .insert(operation_id.clone(), candidate_file);
+
+        assert!(host.confirmed_runtime_receipt().is_none());
+        assert!(host.lifecycle.snapshot().applied.is_none());
+        assert!(host.lifecycle.snapshot().promoted.is_none());
+        assert!(!runtime_paths.product().exists());
+
+        let revision = host.lifecycle.allocate_revision().unwrap();
+        let target_core = ClashCore::Mihomo;
+        let product = Arc::new(RuntimeSnapshot::new_with_transform_output(
+            revision,
+            target_core,
+            config_bytes.to_vec(),
+            serde_yaml::Mapping::new(),
+            PostProcessingOutput::default(),
+        ));
+        let receipt = Arc::new(RuntimeApplyReceipt {
+            revision,
+            config_text: config_text.clone(),
+            config_digest: chimera_core_manager::payload_digest(config_bytes),
+            target_core,
+            core_spec: chimera_core_manager::CoreSpec {
+                kind: CoreKind::Mihomo,
+                binary_path: camino::Utf8PathBuf::from("/test/mihomo"),
+                version: None,
+                features: Vec::new(),
+            },
+            host: ExecutionHost::Local,
+            run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
+            local_ipc: LocalIpcSettings {
+                policy: LocalIpcPolicy::Disable,
+                keep_http_controller: true,
+            },
+            applied_revision: RevisionIdInfo {
+                epoch: 1,
+                generation: 1,
+                effective_hash: "candidate-effective".into(),
+            },
+            ports: Default::default(),
+            artifact: Some(product.clone()),
+        });
+
+        host.confirm_profile_runtime(
+            &operation_id,
+            crate::client::application_workflow::mutation::AppliedCandidate {
+                replaced: true,
+                receipt: receipt.clone(),
+                product: product.clone(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!candidate_path.exists());
+        assert_eq!(
+            tokio::fs::read(runtime_paths.product()).await.unwrap(),
+            config_bytes
+        );
+        assert_eq!(
+            host.confirmed_runtime_receipt().unwrap().config_digest,
+            receipt.config_digest
+        );
+        assert!(host.lifecycle.snapshot().applied.is_some());
+
+        let discard_id = OperationId::generate();
+        let discarded = runtime_paths.create_candidate(config_bytes).await.unwrap();
+        let discarded_path = discarded.path().to_path_buf();
+        host.pending_profile_candidates
+            .lock()
+            .await
+            .insert(discard_id.clone(), discarded);
+        host.discard_profile_runtime(&discard_id).await;
+        assert!(!discarded_path.exists());
+
+        host.shutdown().await.unwrap();
+    }
+
     // Contract: the IPC v2 rollback variant proves the old config stayed
     // active; other terminal reconcile outcomes may be projected as applied.
     #[test]
@@ -644,6 +1469,15 @@ mod tests {
         };
         assert!(accept_reconcile_outcome(&rolled_back).is_err());
         assert!(accept_reconcile_outcome(&started).is_ok());
+        assert!(reconcile_replaced(&started));
+
+        let patched = ReconcileOutcomeInfo {
+            outcome: ReconcileOutcomeKind::Patched,
+            revision: started.revision.clone(),
+            warning: None,
+            failed_apply: None,
+        };
+        assert!(!reconcile_replaced(&patched));
     }
 
     // Contract: a durability warning accompanies a terminal applied result.

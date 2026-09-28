@@ -9,8 +9,9 @@ use tokio::sync::{Mutex, watch};
 
 use crate::client::{
     application_workflow::{
-        ApplicationWorkflowClient, impact::MutationHints,
-        participant::ApplicationMutationParticipant, policy::CommandClass,
+        ApplicationWorkflowClient, RecoveryContext, impact::MutationHints,
+        mutation::MutationReceipt, participant::ApplicationMutationParticipant,
+        policy::CommandClass,
     },
     core_lifecycle::CoreLifecycleClient,
     runtime::{CommitReceipt, Degradation, DegradationPhase, RuntimeCommitStatus},
@@ -27,8 +28,8 @@ enum Connection {
 #[derive(Clone)]
 pub(crate) struct MutationCoordinator {
     connection: watch::Sender<Connection>,
-    outcomes: Arc<Mutex<HashMap<OperationId, RuntimeCommitStatus>>>,
-    recovery_required: Arc<Mutex<Option<String>>>,
+    outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
+    recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
 }
 
 impl Default for MutationCoordinator {
@@ -107,17 +108,17 @@ impl MutationCoordinator {
         source_version: u64,
     ) -> (CommitReceipt, Vec<Degradation>) {
         let connection = self.connection.borrow().clone();
-        let runtime = match connection {
+        let (runtime, mut degradations) = match connection {
             #[cfg(test)]
-            Connection::Isolated => RuntimeCommitStatus::Unchanged,
+            Connection::Isolated => (RuntimeCommitStatus::Unchanged, Vec::new()),
             Connection::Pending | Connection::Ready(_) => {
                 let outcome = self.outcomes.lock().await.remove(&operation_id);
                 match outcome {
-                    Some(outcome) => outcome,
+                    Some(outcome) => (outcome.runtime_status(), outcome.degradations),
                     None if self.recovery_required.lock().await.is_some() => {
-                        RuntimeCommitStatus::RecoveryRequired
+                        (RuntimeCommitStatus::RecoveryRequired, Vec::new())
                     }
-                    None => RuntimeCommitStatus::Pending,
+                    None => (RuntimeCommitStatus::Pending, Vec::new()),
                 }
             }
         };
@@ -127,27 +128,30 @@ impl MutationCoordinator {
             source_version,
             runtime,
         };
-        let degradations = match receipt.runtime {
-            RuntimeCommitStatus::Deferred => vec![Degradation {
-                phase: DegradationPhase::RuntimeApply,
-                code: "runtime_deferred".into(),
-                message: "the profile was saved; runtime reconciliation was queued for retry"
-                    .into(),
-                retryable: true,
-            }],
-            RuntimeCommitStatus::RecoveryRequired => vec![Degradation {
-                phase: DegradationPhase::RuntimeApply,
-                code: "runtime_recovery_required".into(),
-                message: self
-                    .recovery_required
-                    .lock()
-                    .await
-                    .clone()
-                    .unwrap_or_else(|| "Profile runtime state requires recovery".into()),
-                retryable: false,
-            }],
-            _ => Vec::new(),
-        };
+        if degradations.is_empty() {
+            degradations = match receipt.runtime {
+                RuntimeCommitStatus::Deferred => vec![Degradation {
+                    phase: DegradationPhase::RuntimeApply,
+                    code: "runtime_deferred".into(),
+                    message: "the profile was saved; runtime reconciliation was queued for retry"
+                        .into(),
+                    retryable: true,
+                }],
+                RuntimeCommitStatus::RecoveryRequired => vec![Degradation {
+                    phase: DegradationPhase::RuntimeApply,
+                    code: "runtime_recovery_required".into(),
+                    message: self
+                        .recovery_required
+                        .lock()
+                        .await
+                        .clone()
+                        .map(|context| context.error)
+                        .unwrap_or_else(|| "Profile runtime state requires recovery".into()),
+                    retryable: false,
+                }],
+                _ => Vec::new(),
+            };
+        }
         (receipt, degradations)
     }
 }
@@ -180,8 +184,16 @@ mod tests {
     #[tokio::test]
     async fn latched_profile_recovery_is_reported_without_an_operation_outcome_entry() {
         let coordinator = MutationCoordinator::pending();
-        *coordinator.recovery_required.lock().await =
-            Some("failed to restore the prior Profile runtime".into());
+        *coordinator.recovery_required.lock().await = Some(RecoveryContext {
+            operation_id: None,
+            runtime_operation: None,
+            domain: crate::client::application_workflow::mutation::ConfigDomain::Profiles,
+            stage: crate::client::application_workflow::mutation::MutationStage::TryingCritical,
+            decision: None,
+            baseline: None,
+            target: None,
+            error: "failed to restore the prior Profile runtime".into(),
+        });
 
         let (receipt, degradations) = coordinator
             .finish(OperationId::generate(), "profiles", 7)
