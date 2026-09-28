@@ -1,3 +1,127 @@
+## [0.25.0] - 2026-09-28 16:56:51
+
+### ✅ Testing
+
+- **profiles:** Align fixtures with Profile IPC by @MFSGA
+
+- **profiles:** Port reference client regressions by @MFSGA
+
+- **utils:** Align Chimera process coverage with ref by @MFSGA
+
+### ✨ Features
+
+- **core:** Refresh service API websocket binding by @MFSGA
+
+- **core:** Consume service IPC events by @MFSGA
+
+- **core:** Route service reconcile through IPC v2 by @MFSGA
+
+- **core:** Use service IPC v2 for stop and API binding by @MFSGA
+
+- **core:** Add IPC v2 service control endpoint by @MFSGA
+
+- **core:** Add portable runtime intent builder by @MFSGA
+
+- **core:** Add local control endpoint adapter by @MFSGA
+
+- **core:** Preserve Chimera Client manager support by @MFSGA
+
+- **core:** Migrate reference manager foundation by @MFSGA
+
+- **ipc:** Add classified service error metadata by @MFSGA
+
+- **profile:** Migrate typed profiles client by @MFSGA
+
+- **profile:** Migrate reference profile actor foundation by @MFSGA
+
+- **profile:** Wire profile file reads by @MFSGA
+
+- **profile:** Add reference effects actor by @MFSGA
+
+- **profile:** Add reference effect status ports by @MFSGA
+
+- **profile:** Add reference effect plan by @MFSGA
+
+- **profile:** Add profile file service by @MFSGA
+
+- **profile:** Add profile state ports by @MFSGA
+
+- **profile:** Migrate profile state and runtime persistence by @MFSGA
+
+- **profiles:** Retry deferred runtime targets by @MFSGA
+
+- **profiles:** Align workflow receipts with ref by @MFSGA
+
+- **profiles:** Serialize mutations with lifecycle by @MFSGA
+
+- **profiles:** Track runtime mutation settlement by @MFSGA
+
+- **profiles:** Align Profile workflows with ref by @MFSGA
+
+- **ref-alignment:** Port utility modules and regression coverage by @MFSGA
+
+- **state:** Align transaction persistence by @MFSGA
+
+- **tauri:** Route local core lifecycle through CoreControl by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **build:** Verify service sidecar checksum by @MFSGA
+
+- **core:** Confirm applied runtime revision by @MFSGA
+
+- **profile:** Wire profile snapshot read path by @MFSGA
+
+- **profiles:** Retain runtime attempts through rollback by @MFSGA
+
+- **profiles:** Align transform scripts with ref by @MFSGA
+
+- **updater:** Preserve core restart mode by @MFSGA
+
+### 📚 Documentation
+
+- **profiles:** Record participant migration evidence by @MFSGA
+
+- **ref-alignment:** Record typed core IPC client by @MFSGA
+
+- **ref-alignment:** Record core IPC v2 schema by @MFSGA
+
+### 🔨 Refactor
+
+- **core:** Bind clash api to active core lifecycle by @MFSGA
+
+- **core:** Harden lifecycle recovery and service probes by @MFSGA
+
+- **core:** Unify core and service lifecycle ownership by @MFSGA
+
+- **core:** Centralize lifecycle state and client boundaries by @MFSGA
+
+- **core:** Serialize core lifecycle workflows by @MFSGA
+
+- **profiles:** Align IPC queries with ref by @MFSGA
+
+- **profiles:** Align mutation participant with ref by @MFSGA
+
+- **profiles:** Align client facade with ref by @MFSGA
+
+- **runtime:** Retire legacy enhance pipeline by @MFSGA
+
+- **runtime:** Align Chimera Client TUN in shared executor by @MFSGA
+
+- **utils:** Move shared helpers into Chimera Utils by @MFSGA
+
+- **utils:** Delegate macOS network helpers to Chimera Utils by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Align filesize with ref by @MFSGA
+
+- **submodule:** Pin Chimera Service IPC v2 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.24.1...v0.25.0
+
 ## [0.24.1] - 2026-09-23 11:08:19
 
 ### ✅ Testing
