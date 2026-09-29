@@ -81,6 +81,7 @@ struct State {
     revision: u64,
     pending: BTreeMap<EffectKind, ApplicationEffect>,
     entries: BTreeMap<EffectKind, Entry>,
+    waiters: BTreeMap<(EffectKind, EffectRevision), Vec<RpcReplyPort<EffectStatus>>>,
     active: [Option<tokio::task::JoinHandle<()>>; 3],
     status: watch::Sender<EffectsSnapshot>,
     closed: bool,
@@ -93,6 +94,10 @@ enum Message {
         refresh: bool,
         full: bool,
         requested: Vec<EffectKind>,
+    },
+    ReconcileHotkeys {
+        inputs: Box<ApplicationEffectInputs>,
+        reply: RpcReplyPort<EffectStatus>,
     },
     Completed {
         group: usize,
@@ -185,6 +190,56 @@ impl State {
         if binding_ready {
             self.retry(EffectKind::ProxyGuard, false);
         }
+    }
+
+    fn enqueue_hotkeys(&mut self, inputs: ApplicationEffectInputs) -> EffectRevision {
+        self.desired.app.hotkeys = inputs.app.hotkeys;
+        let effect = ApplicationEffectPlan::full(&self.desired)
+            .effects()
+            .iter()
+            .find(|effect| effect.kind() == EffectKind::Hotkeys)
+            .cloned()
+            .expect("a full application effect plan contains hotkeys");
+
+        self.revision += 1;
+        let revision = EffectRevision::new(self.revision);
+        let superseded: Vec<_> = self
+            .waiters
+            .keys()
+            .filter(|(kind, previous)| *kind == EffectKind::Hotkeys && *previous < revision)
+            .copied()
+            .collect();
+        let applied_revision = self
+            .entries
+            .get(&EffectKind::Hotkeys)
+            .map(|entry| entry.status.applied_revision)
+            .unwrap_or_default();
+        for key in superseded {
+            if let Some(replies) = self.waiters.remove(&key) {
+                let status = EffectStatus {
+                    kind: EffectKind::Hotkeys,
+                    desired_revision: key.1,
+                    applied_revision,
+                    health: EffectHealth::Superseded,
+                };
+                for reply in replies {
+                    let _ = reply.send(status.clone());
+                }
+            }
+        }
+
+        let entry = self
+            .entries
+            .entry(EffectKind::Hotkeys)
+            .or_insert_with(|| Entry::new(EffectKind::Hotkeys));
+        entry.budget = RetryBudget::default();
+        entry.automatic = false;
+        entry.next = None;
+        entry.health = ConvergenceHealth::Pending;
+        entry.status.desired_revision = revision;
+        entry.status.health = EffectHealth::Pending;
+        self.pending.insert(EffectKind::Hotkeys, effect);
+        revision
     }
 
     fn retry(&mut self, kind: EffectKind, automatic: bool) {
@@ -287,6 +342,7 @@ impl Actor for EffectsActor {
             revision: 0,
             pending: BTreeMap::new(),
             entries: BTreeMap::new(),
+            waiters: BTreeMap::new(),
             active: [None, None, None],
             status: args.status,
             closed: false,
@@ -321,6 +377,27 @@ impl Actor for EffectsActor {
                 state.drive(&myself);
             }
             Message::Publish { .. } => {}
+            Message::ReconcileHotkeys { inputs, reply } if !state.closed => {
+                let revision = state.enqueue_hotkeys(*inputs);
+                state
+                    .waiters
+                    .entry((EffectKind::Hotkeys, revision))
+                    .or_default()
+                    .push(reply);
+                state.drive(&myself);
+            }
+            Message::ReconcileHotkeys { reply, .. } => {
+                let _ = reply.send(EffectStatus {
+                    kind: EffectKind::Hotkeys,
+                    desired_revision: EffectRevision::default(),
+                    applied_revision: EffectRevision::default(),
+                    health: EffectHealth::Degraded {
+                        code: "effects_shut_down",
+                        message: "the application effect actor is shutting down".into(),
+                        retryable: false,
+                    },
+                });
+            }
             Message::Completed {
                 group: completed_group,
                 revision,
@@ -329,7 +406,9 @@ impl Actor for EffectsActor {
             } if !state.closed => {
                 state.active[completed_group] = None;
                 for kind in kinds {
-                    let entry = state.entries.get_mut(&kind).unwrap();
+                    let Some(entry) = state.entries.get_mut(&kind) else {
+                        continue;
+                    };
                     // A newer desired revision was queued meanwhile; this result is stale.
                     if entry.status.desired_revision != revision {
                         continue;
@@ -377,6 +456,12 @@ impl Actor for EffectsActor {
                         _ => ConvergenceHealth::Blocked,
                     };
                     entry.automatic = false;
+                    let status = entry.status.clone();
+                    if let Some(replies) = state.waiters.remove(&(kind, revision)) {
+                        for reply in replies {
+                            let _ = reply.send(status.clone());
+                        }
+                    }
                 }
                 if completed_group == 0
                     && state
@@ -420,6 +505,23 @@ impl Actor for EffectsActor {
                     if let Some(task) = task.take() {
                         task.abort();
                         let _ = task.await;
+                    }
+                }
+                for ((kind, revision), replies) in std::mem::take(&mut state.waiters) {
+                    let status = EffectStatus {
+                        kind,
+                        desired_revision: revision,
+                        applied_revision: EffectRevision::default(),
+                        health: EffectHealth::Degraded {
+                            code: "effects_shut_down",
+                            message:
+                                "the application effect actor shut down before the effect settled"
+                                    .into(),
+                            retryable: false,
+                        },
+                    };
+                    for reply in replies {
+                        let _ = reply.send(status.clone());
                     }
                 }
                 state.publish();
@@ -470,6 +572,32 @@ impl EffectsClient {
         self.actor
             .cast(Message::RetryNow(kind))
             .map_err(|error| anyhow::anyhow!("{error}"))
+    }
+
+    pub async fn reconcile_hotkeys(&self, inputs: ApplicationEffectInputs) -> EffectStatus {
+        match self
+            .actor
+            .call(
+                |reply| Message::ReconcileHotkeys {
+                    inputs: Box::new(inputs),
+                    reply,
+                },
+                Some(Duration::from_secs(20)),
+            )
+            .await
+        {
+            Ok(CallResult::Success(status)) => status,
+            other => EffectStatus {
+                kind: EffectKind::Hotkeys,
+                desired_revision: EffectRevision::default(),
+                applied_revision: EffectRevision::default(),
+                health: EffectHealth::Degraded {
+                    code: "hotkey_effect_wait_failed",
+                    message: format!("the shared effect actor did not settle hotkeys: {other:?}"),
+                    retryable: true,
+                },
+            },
+        }
     }
     pub fn snapshot(&self) -> EffectsSnapshot {
         self.status.borrow().clone()

@@ -946,7 +946,7 @@ DIFF-001 至 DIFF-012 是此前基于
   中以 `Access is denied` 失败；同一 `cargo check` 指定独立 `--target-dir .tmp/hotkey-check-target`
   后通过，`chimera` 编译报告 225 条 warning。未新增或运行测试、未运行桌面应用。
 - 提交：快捷键基础设施已提交为 `351ecff72`。
-- 后续配置与界面切片见 DIFF-035；共享 effect executor 和自动重试仍未接入。
+- 后续配置与界面切片见 DIFF-035；后续的 Hotkeys effect actor 接入见 DIFF-036。
 
 ## DIFF-035：快捷键配置 IPC 与主设置页
 
@@ -965,12 +965,11 @@ DIFF-001 至 DIFF-012 是此前基于
 - 类别：临时迁移 / Chimera UI 路径映射。Specta bindings 已通过既有 generator 更新。`set_hotkeys`
   在持久化前运行插件 accelerator parser、modifier、action 与 canonical 重复绑定校验；提交后让
   `HotkeyClient` reconcile。部分 OS 注册失败通过 `MutationOutcome::CommittedDegraded` 返给调用方，配置仍保持
-  已提交。revision 以 typed application actor 的版本递增，避免与启动 reconcile 的 revision 1 冲突。
+  已提交。该切片当时使用直接 reconcile 桥接；它已在 DIFF-036 中替换为效果 actor 路径。
 - 共通入口与差异：快捷键配置仍是 typed application 中原有的 `{action},{accelerator}` 字符串列表，schema
-  未变。当前 Chimera 尚未把生产 `ApplicationEffectExecutor` 接到 application commit 通知；本切片暂由
-  `ChimeraClient::set_hotkeys` 直接调用同一个 hotkey actor。失败不会自动重试，用户再次保存/启动时会重新
-  reconcile。移除条件：共享 executor 被生产装配，并能通过 post-commit application effect 通知接管 hotkey
-  reconcile 与降级重试后，移除此直接桥接和启动直连。
+  未变。该切片当时尚未把生产 executor 接到 application commit 通知，因此 `ChimeraClient::set_hotkeys`
+  直接调用 hotkey actor，失败也没有自动重试。此桥接已在 DIFF-036 由共享 effect actor 接管；Hotkeys 以外的
+  application effect owners 和提交通知仍待迁移。
 - 受影响入口：主 UI 的 Chimera 设置页新增快捷键卡片，并通过共享 interface hooks 调用 generated IPC。
   legacy UI 的页面、窗口入口和既有交互未改；它没有对应的快捷键设置入口，新增 IPC 仍读写同一 typed config。
   agent 没有快捷键工具，不增加 agent 能力或第二套配置逻辑。Android/iOS 分支返回空功能列表并拒绝写入；本轮
@@ -980,4 +979,34 @@ DIFF-001 至 DIFF-012 是此前基于
   chimera -- --check` 通过。未新增或运行功能测试，未启动主/legacy 界面，未实测操作系统快捷键注册、占用冲突、
   退出释放或运行期恢复。
 - 下一步：把 hotkey reconcile 接入生产共享 `ApplicationEffectExecutor`，验证 degradation 重试和 post-commit
-  状态；之后注册覆盖这条路径的单元/UI fixture 与真实桌面 E2E，并分别记录其实际执行结果。
+  状态；DIFF-036 已迁入 Hotkeys 的效果 actor 与限次重试，完整多效果 executor 和其它提交入口通知仍待迁移。
+  之后注册覆盖这条路径的单元/UI fixture 与真实桌面 E2E，并分别记录其实际执行结果。
+
+## DIFF-036：快捷键接入效果 actor 与自动重试
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；未更新
+  `ref/`。
+- ref 到 Chimera 映射：`ref/backend/tauri/src/client/effects/{actor.rs,executor.rs,ports.rs}` 的
+  `EffectsClient`、`EffectsActor`、`ApplicationEffectExecutor::apply_hotkeys` 与关闭时 `unregister_all`；
+  对应 `backend/tauri/src/client/effects/actor.rs::EffectsClient::reconcile_hotkeys`、
+  `backend/tauri/src/client/effects/executor.rs::HotkeyEffectExecutor`、
+  `backend/tauri/src/setup.rs` 的 adapter composition，以及 `client/hotkey/mod.rs::set_hotkeys`。
+- 类别：临时迁移 / Chimera adapter。启动 reconcile 和快捷键保存现在都通过共享效果 actor 的 Hotkeys
+  effect group 执行；actor 管理 revision、旧请求 superseded、失败状态和 `RetryBudget` 的限次自动重试。
+  配置提交仍先完成，首次 OS 注册失败会作为 `CommittedDegraded` 返回，同时 actor 按共享 backoff 重试。
+  对同一 effect group 的保存调用由 hotkey mutation mutex 串行化。
+- 保留差异：当前 `HotkeyEffectExecutor` 只接受 actor 筛选后的 Hotkeys plan，其它 effect 显式报告
+  `Unsupported`；不能把它当作完整 `ApplicationEffectExecutor`。其余 effect owner 和全局提交通知尚未生产装配，
+  所以 legacy verge patch 对快捷键字段的间接修改不会立即通知该 actor。收敛条件：迁入其余 effect adapter，
+  并让 typed 与 legacy application commit 都通过共同的 post-commit notification 发布 effect inputs 后，
+  将 hotkey-only adapter 替换为完整 executor。
+- 受影响入口：桌面启动和主 UI 的快捷键保存使用该 actor；legacy UI 页面和窗口入口未改，也没有新增快捷键卡片；
+  agent 未增加快捷键工具。Android/iOS 不装配 hotkey executor。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera` 与
+  `cargo check --manifest-path backend/Cargo.toml -p chimera --target-dir .tmp/hotkey-clippy-target`
+  通过；`cargo clippy --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features
+  --target-dir .tmp/hotkey-clippy-target` 通过（存在既有 warning）。本轮没有新增或运行功能测试，未启动桌面
+  应用，也未实测 OS 重试、注册冲突、退出释放或跨平台构建。快捷键设置 mutation 返回第一次 effect 结果；
+  自动重试后的最终状态目前没有 IPC/UI 状态订阅入口。
+- 下一步：将 retry 后的 effect 状态接到可观察状态入口；完成完整 executor 与所有 app config commit 通知，
+  再覆盖主 UI、legacy 兼容入口和真实桌面运行链路。

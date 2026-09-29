@@ -11,7 +11,6 @@ pub mod ports;
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
-use chimera_config::application::ChimeraAppConfigPatch;
 use chimera_config::clash::config::overrides::Mode;
 use ractor::{Actor, ActorRef, rpc::CallResult};
 
@@ -22,7 +21,7 @@ use self::{
 use super::{
     ChimeraClient,
     effects::{
-        plan::EffectKind,
+        plan::{ApplicationEffectInputs, EffectKind},
         status::{EffectHealth, EffectRevision, EffectStatus},
     },
 };
@@ -139,57 +138,47 @@ impl ChimeraClient {
         &self,
         hotkeys: Vec<String>,
     ) -> Result<super::MutationOutcome<()>> {
-        let desired = validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
+        let _guard = self.inner.hotkey_mutation.lock().await;
+        validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
         let snapshot = self
             .inner
             .application
-            .patch_typed(ChimeraAppConfigPatch {
+            .patch_typed(chimera_config::application::ChimeraAppConfigPatch {
                 hotkeys: Some(hotkeys),
                 ..Default::default()
             })
             .await?;
-        let revision = snapshot
-            .version
-            .checked_add(2)
-            .ok_or_else(|| anyhow::anyhow!("application config revision exhausted"))?;
-        crate::config::core::Config::verge().data().save_file()?;
+        let mut degradations = Vec::new();
+        if let Err(error) = crate::config::core::Config::verge().data().save_file() {
+            degradations.push(super::Degradation {
+                phase: super::DegradationPhase::LegacyMirror,
+                code: "legacy_hotkey_mirror_save_failed".into(),
+                message: error.to_string(),
+                retryable: false,
+            });
+        }
         crate::core::handle::Handle::refresh_verge();
 
-        let status = self
-            .inner
-            .hotkeys
-            // The startup reconcile uses revision 1; the typed application
-            // actor version then orders concurrent hotkey commits.
-            .reconcile(EffectRevision::new(revision), desired)
-            .await;
-        let degradations = super::effects::status::degradation_of(&status)
-            .into_iter()
-            .collect();
+        let inputs =
+            ApplicationEffectInputs::project(&snapshot.state, &self.get_clash_config()?, None);
+        let status = self.inner.effects.reconcile_hotkeys(inputs).await;
+        degradations.extend(super::effects::status::degradation_of(&status));
         Ok(super::MutationOutcome::from_parts((), degradations))
     }
 
-    /// Transitional startup reconcile until the shared application effect
-    /// executor owns both startup and post-commit hotkey updates.
-    pub(crate) async fn reconcile_hotkeys(&self, revision: u64) {
-        let raw = match self.get_app_config() {
-            Ok(config) => config.hotkeys,
+    /// Runs a full hotkey reconcile through the shared application effect actor.
+    pub(crate) async fn reconcile_hotkeys(&self) {
+        let inputs = match self.get_app_config().and_then(|application| {
+            self.get_clash_config()
+                .map(|clash| ApplicationEffectInputs::project(&application, &clash, None))
+        }) {
+            Ok(inputs) => inputs,
             Err(error) => {
                 tracing::warn!(%error, "failed to read saved global shortcuts");
                 return;
             }
         };
-        let bindings = match validate_bindings(&raw, self.inner.accelerators.as_ref()) {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                tracing::warn!(%error, "saved global shortcuts are invalid; none were registered");
-                return;
-            }
-        };
-        let status = self
-            .inner
-            .hotkeys
-            .reconcile(EffectRevision::new(revision), bindings)
-            .await;
+        let status = self.inner.effects.reconcile_hotkeys(inputs).await;
         if let EffectHealth::Degraded { code, message, .. } = status.health {
             tracing::warn!(%code, %message, "saved global shortcuts did not fully register");
         }

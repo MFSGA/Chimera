@@ -81,6 +81,11 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let accelerators = Arc::new(PlatformAcceleratorValidator);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let effects = Arc::new(crate::client::effects::executor::HotkeyEffectExecutor::new(
+        hotkeys,
+        accelerators.clone(),
+    ));
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));
 
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
@@ -101,7 +106,7 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        hotkeys,
+        effects,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         accelerators,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]

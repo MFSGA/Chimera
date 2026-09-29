@@ -97,7 +97,7 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    pub(crate) hotkeys: hotkey::HotkeyClient,
+    pub(crate) effects: Arc<dyn effects::ports::ApplicationEffectsPort>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -182,7 +182,9 @@ struct ChimeraClientInner {
     system_dns: Arc<dyn SystemDnsCache>,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    hotkeys: hotkey::HotkeyClient,
+    effects: effects::actor::EffectsClient,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    hotkey_mutation: tokio::sync::Mutex<()>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -210,7 +212,7 @@ impl ChimeraClient {
             system_dns,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            hotkeys,
+                effects: effects_port,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             accelerators,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -221,6 +223,20 @@ impl ChimeraClient {
             &bridges,
             core.clone(),
         ))?;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let effects = tauri::async_runtime::block_on(async {
+            let initial = effects::plan::ApplicationEffectInputs::project(
+                &typed.application.get_typed(),
+                &typed.clash_config.get()?,
+                None,
+            );
+            effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
+                port: effects_port,
+                ui: ui_sink.clone(),
+                initial,
+            })
+            .await
+        })?;
         let mutations = MutationCoordinator::pending();
         let typed_profiles = tauri::async_runtime::block_on(profiles::ProfilesClient::new(
             mutations.clone(),
@@ -253,12 +269,13 @@ impl ChimeraClient {
             // profile_writes,
             system_dns,
             ui_sink,
-            hotkeys,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            effects,
             accelerators,
             window,
         );
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        tauri::async_runtime::block_on(client.reconcile_hotkeys(1));
+        tauri::async_runtime::block_on(client.reconcile_hotkeys());
         Ok(client)
     }
 
@@ -293,7 +310,8 @@ impl ChimeraClient {
         // profile_writes: Arc<dyn ProfilesWritePort>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))] hotkeys: hotkey::HotkeyClient,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        effects: effects::actor::EffectsClient,
         #[cfg(not(any(target_os = "android", target_os = "ios")))] accelerators: Arc<
             dyn hotkey::ports::AcceleratorValidator,
         >,
@@ -317,7 +335,9 @@ impl ChimeraClient {
             system_dns,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            hotkeys,
+            effects,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            hotkey_mutation: tokio::sync::Mutex::new(()),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             accelerators,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -336,11 +356,13 @@ impl ChimeraClient {
 impl ChimeraClient {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) async fn unregister_hotkeys(&self) {
-        let status = self.inner.hotkeys.unregister_all().await;
-        if let crate::client::effects::status::EffectHealth::Degraded { code, message, .. } =
-            status.health
-        {
-            tracing::warn!(%code, %message, "failed to release global shortcuts at shutdown");
+        for status in self.inner.effects.shutdown().await {
+            if let crate::client::effects::status::EffectHealth::Degraded {
+                code, message, ..
+            } = status.health
+            {
+                tracing::warn!(%code, %message, "failed to release application effects at shutdown");
+            }
         }
     }
 }
