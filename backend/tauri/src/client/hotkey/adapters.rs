@@ -26,9 +26,23 @@ impl AcceleratorValidator for PlatformAcceleratorValidator {
     }
 
     fn canonical(&self, accelerator: &str) -> Result<String, HotkeyParseError> {
+        // The settings UI keeps the main keyboard's `+` key as `PLUS` so it
+        // cannot be confused with the accelerator separator. global-hotkey
+        // represents that physical key as `Equal` (with Shift when needed).
+        let normalized = accelerator
+            .split('+')
+            .map(|token| {
+                if token.eq_ignore_ascii_case("PLUS") {
+                    "EQUAL"
+                } else {
+                    token
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("+");
         // The plugin's own parse panics inside `register`, so an accelerator it
         // cannot read has to be rejected before it gets there (issue #287).
-        let shortcut = Shortcut::from_str(accelerator)
+        let shortcut = Shortcut::from_str(&normalized)
             .map_err(|_| HotkeyParseError::InvalidAccelerator(accelerator.to_owned()))?;
         // Asked of what the user wrote, not of the canonical form: the
         // canonical spelling of a modifier-less accelerator would still have to

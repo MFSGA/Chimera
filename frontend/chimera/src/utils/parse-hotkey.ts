@@ -20,7 +20,11 @@ const KEY_MAP: Record<string, string> = {
   '~': '`',
 };
 
-export const parseHotkey = (key: string) => {
+export const parseHotkey = (key: string, code?: string) => {
+  if (code === 'NumpadAdd') {
+    return 'NUMPADADD';
+  }
+
   let temp = key.toUpperCase();
 
   if (temp.startsWith('ARROW')) {

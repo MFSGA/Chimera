@@ -1040,3 +1040,48 @@ DIFF-001 至 DIFF-012 是此前基于
   未实测 OS 注册与重试，也未验证 Android/iOS 构建。
 - 状态：部分迁移。后续迁入 ref `ApplicationEffectExecutor` 及对应 owner adapters，并将 typed commits 接入统一
   post-commit notification，再为 retry 后状态提供 UI/IPC 订阅。
+
+## DIFF-038：修正 Meta/CMD 快捷键提交前校验
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；未更新 `ref/`。
+- ref 到 Chimera 的映射：`ref/backend/tauri/src/client/hotkey/ports.rs::SUPER_KEYS` 与
+  `has_super_key` 对应 `backend/tauri/src/client/hotkey/ports.rs` 同名定义；前端
+  `ref/frontend/nyanpasu/src/utils/parse-hotkey.ts::parseHotkey` 对应
+  `frontend/chimera/src/utils/parse-hotkey.ts::parseHotkey`，录入 `Meta` 时生成 `CMD`。
+- 类别：缺陷修正。ref 的修饰键检查名单遗漏 `cmd`，但其使用的快捷键解析器接受 `CMD`。因此按住
+  Meta/Cmd 录入组合键后，平台解析成功仍会在配置提交前被 `MissingSuperKey` 拒绝。最小复现：在设置页录入
+  `Meta+K`；前端序列化为 `CMD+K`，锁定的 `global-hotkey 0.8.0` 能解析该 accelerator，而本地名单在修正前
+  不包含 `cmd`，导致校验失败，配置不保存、OS 不注册。将 `cmd` 加入既有别名名单后，提交前形状校验识别
+  该组合键；平台 parser 与调用路径保持不变。
+- 受影响入口：主 UI 快捷键设置的 Meta/Cmd 组合键保存、启动读取后的注册；legacy UI 和 agent 没有快捷键设置
+  入口，仍复用同一 typed application 配置；配置 schema、Windows/macOS/Linux 桌面注册方式及移动端分支不变。
+- 验证：核对 `backend/Cargo.lock` 锁定的 `tauri-plugin-global-shortcut 2.3.2`、`global-hotkey 0.8.0` 解析器
+  源码，确认 `CMD` 映射为平台 super modifier；`cargo check --locked --manifest-path backend/Cargo.toml -p chimera
+  --target-dir .tmp/hotkey-clippy-target`、`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、
+  根 `pnpm typecheck`、相关文件 `prettier --check`、`git diff --check` 及设置独立 target 的
+  `pnpm lint:clippy` 通过（有仓库既有 warning）。Clippy 首次使用默认 `backend/target` 时遇到 Windows
+  `Access is denied`，指定 `.tmp/hotkey-clippy-target` 后重跑通过。未新增或运行测试，未启动桌面应用，也未实测系统级注册。
+- 例外复查条件：这是对 `ref` 同一遗漏的最小修复，不回传修改 `ref/`；当基线 `has_super_key` 或按键录入表示
+  更新时重新核对 alias 清单。快捷键功能整体仍部分迁移，retry 后状态订阅、完整 effects executor 与真实桌面
+  注册验证见 DIFF-036/037 后续项。
+
+## DIFF-039：修正加号快捷键的录入与平台解析
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；未更新 `ref/`。
+- ref 到 Chimera 的映射：`ref/frontend/nyanpasu/src/pages/(main)/main/settings/nyanpasu/_modules/hotket-manager.tsx`
+  的 `handleKeyDown` / `saveHotkeys` 和 `ref/frontend/nyanpasu/src/utils/parse-hotkey.ts::parseHotkey` 对应
+  Chimera 设置页同名逻辑及 `frontend/chimera/src/utils/parse-hotkey.ts::parseHotkey`；
+  `ref/backend/tauri/src/client/hotkey/adapters.rs::PlatformAcceleratorValidator::canonical` 对应 Chimera 同名
+  validator。ref UI 把字面加号保存为 `PLUS` 以避开 `+` 分隔符，但锁定的 `global-hotkey 0.8.0` 主键 parser
+  不接受 `PLUS`；最小复现为录入 `Shift` 加主键盘 `+`，保存为 `SHIFT+PLUS` 后平台校验报无效快捷键。
+- 类别：缺陷修正。Chimera 在录入边界用 `KeyboardEvent.code` 将小键盘加号记录为 parser 支持的 `NUMPADADD`；
+  保留上游的主键盘 `PLUS` 配置格式，并在平台 adapter 中映射到 `EQUAL`（组合中保留 Shift），让解析器返回
+  可注册的 canonical accelerator。既有 `PLUS` 配置无需迁移，配置 schema 和 UI 分隔符格式不变。
+- 影响入口：主设置页录入主键盘/小键盘加号并保存；启动恢复会通过同一 canonical parser 注册。legacy UI 与 agent
+  没有快捷键配置入口；动作仍通过既有共享应用 API 执行。
+- 验证：`cargo check --locked --manifest-path backend/Cargo.toml -p chimera --target-dir
+  .tmp/hotkey-clippy-target`、Rust 格式检查、根 `pnpm typecheck`、相关文件 Prettier 检查、设置独立 target 的
+  `pnpm lint:clippy` 及 `git diff --check` 通过（Clippy 有仓库既有 warning）。未新增或运行测试，未运行桌面应用，
+  也未验证具体键盘布局上的操作系统快捷键回调。
+- 例外复查条件：这是对 ref 与其锁定 parser 间已复现不兼容的最小修正，不修改 `ref/`；当升级快捷键 parser，
+  或调整 UI accelerator 分隔符/加号编码时，重新评估 `PLUS` 映射及键盘布局覆盖。

@@ -67,7 +67,7 @@ const HotkeyItem = ({
     event.preventDefault();
     event.stopPropagation();
 
-    const key = parseHotkey(event.key);
+    const key = parseHotkey(event.key, event.code);
     if (key === 'UNIDENTIFIED') {
       return;
     }

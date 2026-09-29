@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// rule would reject accelerators users already have saved.
 const SUPER_KEYS: &[&str] = &[
     "commandorcontrol",
+    "cmd",
     "command",
     "control",
     "ctrl",
