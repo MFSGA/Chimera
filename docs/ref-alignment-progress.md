@@ -997,8 +997,9 @@ DIFF-001 至 DIFF-012 是此前基于
   对同一 effect group 的保存调用由 hotkey mutation mutex 串行化。
 - 保留差异：当前 `HotkeyEffectExecutor` 只接受 actor 筛选后的 Hotkeys plan，其它 effect 显式报告
   `Unsupported`；不能把它当作完整 `ApplicationEffectExecutor`。其余 effect owner 和全局提交通知尚未生产装配，
-  所以 legacy verge patch 对快捷键字段的间接修改不会立即通知该 actor。收敛条件：迁入其余 effect adapter，
-  并让 typed 与 legacy application commit 都通过共同的 post-commit notification 发布 effect inputs 后，
+ 所以通用 typed application patch 尚未发布 effect notification。legacy `IVerge` 类型没有 `hotkeys` 字段，
+ 不能通过该兼容 patch 修改快捷键。收敛条件：迁入其余 effect adapter，并让 typed application commit
+ 通过共同的 post-commit notification 发布 effect inputs 后，
   将 hotkey-only adapter 替换为完整 executor。
 - 受影响入口：桌面启动和主 UI 的快捷键保存使用该 actor；legacy UI 页面和窗口入口未改，也没有新增快捷键卡片；
   agent 未增加快捷键工具。Android/iOS 不装配 hotkey executor。
@@ -1010,3 +1011,32 @@ DIFF-001 至 DIFF-012 是此前基于
   自动重试后的最终状态目前没有 IPC/UI 状态订阅入口。
 - 下一步：将 retry 后的 effect 状态接到可观察状态入口；完成完整 executor 与所有 app config commit 通知，
   再覆盖主 UI、legacy 兼容入口和真实桌面运行链路。
+
+## DIFF-037：快捷键 typed patch 提交后 reconcile
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；本轮未更新
+  `ref/`。
+- ref 到 Chimera 映射：
+
+  | ref | Chimera | 本次动作 |
+  | --- | --- | --- |
+  | `client/mod.rs::patch_app_config` 的提交前快捷键校验 | `client/application.rs::ChimeraClient::patch_app_config` | typed patch 含 `hotkeys` 时先验证，再提交 |
+  | `client/application_workflow/workflow.rs::{notify_committed,notify_requested}` 与 `effects::ports::CommitNotifications` | `client/hotkey/mod.rs::{set_hotkeys,reconcile_hotkeys}` 和 `effects::actor::EffectsClient::reconcile_hotkeys` | 当前只通知 Hotkeys owner；通用 notification 接线仍待迁移 |
+
+- 类别：临时迁移 / typed application adapter。保存快捷键后统一读取当前 typed application 与 Clash config，
+  再通过既有 effects actor reconcile。若读取 Clash config 在配置已提交后失败，改为返回
+  `hotkey_config_read_failed` degradation；不会再把已提交的配置包装成普通失败。启动 reconcile 和
+  `set_hotkeys` 继续使用同一个方法。
+- 保留差异：`IVerge` 不含 `hotkeys`，所以 legacy `patch_verge` 不能修改快捷键，也不需要伪造快捷键通知。
+  `patch_app_config` 当前标记为 `allow(dead_code)`，本轮为该 typed 入口补齐校验和 reconcile；主设置页当前仍由
+  `set_hotkeys` 直接写 typed config。共享 `CommitNotifications` 尚未由所有提交路径调用；其余 effect owner 也未
+  生产装配，故 DIFF-036 所述 hotkey-only executor 仍不是完整 `ApplicationEffectExecutor`。
+- 影响入口：桌面启动及主设置页快捷键保存；legacy UI/`IVerge` 字段未变，agent 仍无快捷键工具。配置 schema
+  与持久化格式未变。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera`、
+  `cargo check --manifest-path backend/Cargo.toml -p chimera --target-dir .tmp/hotkey-clippy-target`、
+  `cargo clippy --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features --target-dir
+  .tmp/hotkey-clippy-target` 通过；编译和 Clippy 保留仓库现有 warning。未新增或运行测试，未启动桌面应用，
+  未实测 OS 注册与重试，也未验证 Android/iOS 构建。
+- 状态：部分迁移。后续迁入 ref `ApplicationEffectExecutor` 及对应 owner adapters，并将 typed commits 接入统一
+  post-commit notification，再为 retry 后状态提供 UI/IPC 订阅。

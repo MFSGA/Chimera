@@ -296,7 +296,17 @@ impl ChimeraClient {
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let reconcile_hotkeys = patch.hotkeys.is_some();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(hotkeys) = patch.hotkeys.as_deref() {
+            super::hotkey::validate_bindings(hotkeys, self.inner.accelerators.as_ref())?;
+        }
         self.inner.application.patch_typed(patch).await?;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if reconcile_hotkeys {
+            self.reconcile_hotkeys().await;
+        }
         Config::verge().data().save_file()?;
         handle::Handle::refresh_verge();
         Ok(())

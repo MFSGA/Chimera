@@ -140,8 +140,7 @@ impl ChimeraClient {
     ) -> Result<super::MutationOutcome<()>> {
         let _guard = self.inner.hotkey_mutation.lock().await;
         validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
-        let snapshot = self
-            .inner
+        self.inner
             .application
             .patch_typed(chimera_config::application::ChimeraAppConfigPatch {
                 hotkeys: Some(hotkeys),
@@ -159,29 +158,34 @@ impl ChimeraClient {
         }
         crate::core::handle::Handle::refresh_verge();
 
-        let inputs =
-            ApplicationEffectInputs::project(&snapshot.state, &self.get_clash_config()?, None);
-        let status = self.inner.effects.reconcile_hotkeys(inputs).await;
+        let status = self.reconcile_hotkeys().await;
         degradations.extend(super::effects::status::degradation_of(&status));
         Ok(super::MutationOutcome::from_parts((), degradations))
     }
 
     /// Runs a full hotkey reconcile through the shared application effect actor.
-    pub(crate) async fn reconcile_hotkeys(&self) {
-        let inputs = match self.get_app_config().and_then(|application| {
+    pub(crate) async fn reconcile_hotkeys(&self) -> EffectStatus {
+        let inputs = self.get_app_config().and_then(|application| {
             self.get_clash_config()
                 .map(|clash| ApplicationEffectInputs::project(&application, &clash, None))
-        }) {
-            Ok(inputs) => inputs,
-            Err(error) => {
-                tracing::warn!(%error, "failed to read saved global shortcuts");
-                return;
-            }
+        });
+        let status = match inputs {
+            Ok(inputs) => self.inner.effects.reconcile_hotkeys(inputs).await,
+            Err(error) => EffectStatus {
+                kind: EffectKind::Hotkeys,
+                desired_revision: EffectRevision::default(),
+                applied_revision: EffectRevision::default(),
+                health: EffectHealth::Degraded {
+                    code: "hotkey_config_read_failed",
+                    message: format!("{error:#}"),
+                    retryable: false,
+                },
+            },
         };
-        let status = self.inner.effects.reconcile_hotkeys(inputs).await;
-        if let EffectHealth::Degraded { code, message, .. } = status.health {
+        if let EffectHealth::Degraded { code, message, .. } = &status.health {
             tracing::warn!(%code, %message, "saved global shortcuts did not fully register");
         }
+        status
     }
 
     /// Applies a pressed shortcut through the same Chimera mutation paths used
