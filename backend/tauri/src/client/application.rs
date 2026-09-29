@@ -154,7 +154,7 @@ impl ApplicationClient {
         }
     }
 
-    async fn patch_typed(
+    pub(super) async fn patch_typed(
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<ApplicationSnapshot> {

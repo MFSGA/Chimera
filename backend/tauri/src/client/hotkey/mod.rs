@@ -11,6 +11,7 @@ pub mod ports;
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
+use chimera_config::application::ChimeraAppConfigPatch;
 use chimera_config::clash::config::overrides::Mode;
 use ractor::{Actor, ActorRef, rpc::CallResult};
 
@@ -134,9 +135,41 @@ pub(crate) fn validate_bindings(
 }
 
 impl ChimeraClient {
-    /// Reconciles persisted bindings once the typed application state is loaded.
-    /// Hotkey setting IPC will move this to the shared effect executor in the
-    /// next migration stage.
+    pub(crate) async fn set_hotkeys(
+        &self,
+        hotkeys: Vec<String>,
+    ) -> Result<super::MutationOutcome<()>> {
+        let desired = validate_bindings(&hotkeys, self.inner.accelerators.as_ref())?;
+        let snapshot = self
+            .inner
+            .application
+            .patch_typed(ChimeraAppConfigPatch {
+                hotkeys: Some(hotkeys),
+                ..Default::default()
+            })
+            .await?;
+        let revision = snapshot
+            .version
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("application config revision exhausted"))?;
+        crate::config::core::Config::verge().data().save_file()?;
+        crate::core::handle::Handle::refresh_verge();
+
+        let status = self
+            .inner
+            .hotkeys
+            // The startup reconcile uses revision 1; the typed application
+            // actor version then orders concurrent hotkey commits.
+            .reconcile(EffectRevision::new(revision), desired)
+            .await;
+        let degradations = super::effects::status::degradation_of(&status)
+            .into_iter()
+            .collect();
+        Ok(super::MutationOutcome::from_parts((), degradations))
+    }
+
+    /// Transitional startup reconcile until the shared application effect
+    /// executor owns both startup and post-commit hotkey updates.
     pub(crate) async fn reconcile_hotkeys(&self, revision: u64) {
         let raw = match self.get_app_config() {
             Ok(config) => config.hotkeys,

@@ -169,6 +169,7 @@ export const commands = {
     ),
   getVergeConfig: () =>
     typedError<IVerge_Serialize, string>(__TAURI_INVOKE('get_verge_config')),
+  getHotkeyFunctions: () => __TAURI_INVOKE<string[]>('get_hotkey_functions'),
   patchVergeConfig: (payload: IVerge_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_verge_config', { payload })),
   getClashInfo: () =>
@@ -318,6 +319,11 @@ export const commands = {
    */
   getAllStorageItems: () =>
     typedError<StorageEntry[], string>(__TAURI_INVOKE('get_all_storage_items')),
+  getHotkeys: () => typedError<string[], string>(__TAURI_INVOKE('get_hotkeys')),
+  setHotkeys: (hotkeys: string[]) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_hotkeys', { hotkeys }),
+    ),
   /**
    *  Debug: clears all frontend KV entries (keys with the `web:` prefix).
    *  Internal storage entries used by other subsystems are left intact.

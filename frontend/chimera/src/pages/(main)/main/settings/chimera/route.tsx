@@ -6,6 +6,7 @@ import BreakWhenModeChangeSwitch from './_modules/break-when-mode-change-switch'
 import BreakWhenProfileChangeSwitch from './_modules/break-when-profile-change-switch';
 import BreakWhenProxyChangeSwitch from './_modules/break-when-proxy-change-switch';
 import EnableBuiltinEnhancedSwitch from './_modules/enable-builtin-enhanced-switch';
+import HotkeyManager from './_modules/hotket-manager';
 import LightenAnimationEffectsSwitch from './_modules/lighten-animation-effects-switch';
 import LogFileConfig from './_modules/log-file-config';
 import LogLevelSelector from './_modules/log-level-selector';
@@ -71,6 +72,18 @@ const UserInterfaceSettings = () => {
   );
 };
 
+const HotkeySettings = () => {
+  return (
+    <div data-slot="app-settings-container">
+      <SettingsLabel>{m.settings_chimera_keyboard_shortcuts()}</SettingsLabel>
+
+      <SettingsGroup>
+        <HotkeyManager />
+      </SettingsGroup>
+    </div>
+  );
+};
+
 function RouteComponent() {
   return (
     <>
@@ -82,6 +95,8 @@ function RouteComponent() {
         <EnhanceSettings />
 
         <TraySettings />
+
+        <HotkeySettings />
 
         <UserInterfaceSettings />
       </div>

@@ -337,6 +337,21 @@ pub fn get_verge_config(client: State<'_, ChimeraClient>) -> Result<IVerge> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn get_hotkey_functions() -> Vec<&'static str> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        crate::client::hotkey::ports::HotkeyAction::all()
+            .iter()
+            .map(|action| action.as_str())
+            .collect()
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    Vec::new()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub async fn patch_verge_config(
     app_handle: AppHandle,
     client: State<'_, ChimeraClient>,
@@ -347,6 +362,30 @@ pub async fn patch_verge_config(
         log::warn!(target: "app", "failed to emit verge config update: {error:?}");
     }
     Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_hotkeys(client: State<'_, ChimeraClient>) -> Result<Vec<String>> {
+    Ok(client.get_app_config()?.hotkeys)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn set_hotkeys(
+    client: State<'_, ChimeraClient>,
+    hotkeys: Vec<String>,
+) -> Result<MutationOutcome<()>> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        Ok(client.set_hotkeys(hotkeys).await?)
+    }
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (client, hotkeys);
+        Err(anyhow!("global shortcuts are only supported on desktop").into())
+    }
 }
 
 #[tauri::command]

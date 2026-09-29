@@ -945,8 +945,39 @@ DIFF-001 至 DIFF-012 是此前基于
   通过。首次 `cargo check --manifest-path backend/Cargo.toml -p chimera` 在 Windows Tauri build script
   中以 `Access is denied` 失败；同一 `cargo check` 指定独立 `--target-dir .tmp/hotkey-check-target`
   后通过，`chimera` 编译报告 225 条 warning。未新增或运行测试、未运行桌面应用。
-- 下一阶段：先通过现有 Specta generator 增加 `get_hotkeys`、`get_hotkey_functions`、`set_hotkeys`，让
-  facade 在提交前验证插件 parser、super-key、未知 action 和重复 accelerator；提交后由共享
-  `ApplicationEffectExecutor` 调用 hotkey owner 并把部分 OS 注册失败作为 degradation 返回。随后增加共享
-  React Query hook 和主/legacy 设置适配，保留现有 legacy 设置交互；更新并注册单元/桌面覆盖，分别报告
-  fixture、真实桌面和 OS 注册证据。executor 接线完成后移除此阶段的启动直连 reconcile。
+- 提交：快捷键基础设施已提交为 `351ecff72`。
+- 后续配置与界面切片见 DIFF-035；共享 effect executor 和自动重试仍未接入。
+
+## DIFF-035：快捷键配置 IPC 与主设置页
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；未更新
+  `ref/`。
+- ref 到 Chimera 的路径/符号映射：
+
+  | ref | Chimera | 本次动作 |
+  | --- | --- | --- |
+  | `backend/tauri/src/ipc.rs::{get_hotkey_functions,get_hotkeys,set_hotkeys}` | `backend/tauri/src/ipc.rs` 同名命令 | 使用既有 `ChimeraClient` 与 typed application config |
+  | `client/mod.rs::patch_app_config` 的提交前 parser 校验与提交后 effect | `client/hotkey/mod.rs::ChimeraClient::set_hotkeys`、`client/application.rs::ApplicationClient::patch_typed` | 先验证，再持久化；随后直接 reconcile hotkey owner |
+  | `frontend/interface/src/hooks/{use-hotkeys.ts,use-hotkey-functions.ts}` | `frontend/interface/src/hooks/` 同名 hooks | 复用本地 React Query 与 hotkey IPC descriptors |
+  | `frontend/nyanpasu/src/utils/parse-hotkey.ts` | `frontend/chimera/src/utils/parse-hotkey.ts` | 保留按键录入解析 |
+  | `frontend/nyanpasu/src/pages/(main)/main/settings/nyanpasu/_modules/hotket-manager.tsx` | `frontend/chimera/src/pages/(main)/main/settings/chimera/_modules/hotket-manager.tsx` | 保留录入、清除和保存交互，按 Chimera 品牌设置路径接入 |
+
+- 类别：临时迁移 / Chimera UI 路径映射。Specta bindings 已通过既有 generator 更新。`set_hotkeys`
+  在持久化前运行插件 accelerator parser、modifier、action 与 canonical 重复绑定校验；提交后让
+  `HotkeyClient` reconcile。部分 OS 注册失败通过 `MutationOutcome::CommittedDegraded` 返给调用方，配置仍保持
+  已提交。revision 以 typed application actor 的版本递增，避免与启动 reconcile 的 revision 1 冲突。
+- 共通入口与差异：快捷键配置仍是 typed application 中原有的 `{action},{accelerator}` 字符串列表，schema
+  未变。当前 Chimera 尚未把生产 `ApplicationEffectExecutor` 接到 application commit 通知；本切片暂由
+  `ChimeraClient::set_hotkeys` 直接调用同一个 hotkey actor。失败不会自动重试，用户再次保存/启动时会重新
+  reconcile。移除条件：共享 executor 被生产装配，并能通过 post-commit application effect 通知接管 hotkey
+  reconcile 与降级重试后，移除此直接桥接和启动直连。
+- 受影响入口：主 UI 的 Chimera 设置页新增快捷键卡片，并通过共享 interface hooks 调用 generated IPC。
+  legacy UI 的页面、窗口入口和既有交互未改；它没有对应的快捷键设置入口，新增 IPC 仍读写同一 typed config。
+  agent 没有快捷键工具，不增加 agent 能力或第二套配置逻辑。Android/iOS 分支返回空功能列表并拒绝写入；本轮
+  只编译桌面目标，没有验证 Android/iOS app 构建。
+- 验证：现有 Specta `update_typescript_bindings` generator 执行成功（单独运行生成器，不是功能测试套件）；
+  `pnpm typecheck`、`pnpm lint:frontend-boundaries`、`cargo fmt --manifest-path backend/Cargo.toml --package
+  chimera -- --check` 通过。未新增或运行功能测试，未启动主/legacy 界面，未实测操作系统快捷键注册、占用冲突、
+  退出释放或运行期恢复。
+- 下一步：把 hotkey reconcile 接入生产共享 `ApplicationEffectExecutor`，验证 degradation 重试和 post-commit
+  状态；之后注册覆盖这条路径的单元/UI fixture 与真实桌面 E2E，并分别记录其实际执行结果。
