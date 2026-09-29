@@ -1,5 +1,12 @@
 {
   "_version": 1,
+  "hotkey_error": {
+    "malformed_entry": "Malformed hotkey entry: {entry}",
+    "unknown_function": "Unknown hotkey action: {function}",
+    "invalid_hotkey": "Invalid hotkey: {hotkey}",
+    "missing_super_key": "A global hotkey must include a modifier key",
+    "duplicate_accelerator": "Hotkey is already assigned: {hotkey}"
+  },
   "tray": {
     "dashboard": "Open",
     "direct_mode": "Direct Mode",

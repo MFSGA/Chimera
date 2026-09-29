@@ -1,5 +1,12 @@
 {
   "_version": 1,
+  "hotkey_error": {
+    "malformed_entry": "Неверный формат горячей клавиши: {entry}",
+    "unknown_function": "Неизвестное действие горячей клавиши: {function}",
+    "invalid_hotkey": "Недопустимая горячая клавиша: {hotkey}",
+    "missing_super_key": "Глобальная горячая клавиша должна содержать клавишу-модификатор",
+    "duplicate_accelerator": "Горячая клавиша уже назначена: {hotkey}"
+  },
   "tray": {
     "dashboard": "Open",
     "direct_mode": "Direct Mode",

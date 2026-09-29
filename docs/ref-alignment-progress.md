@@ -915,3 +915,38 @@ DIFF-001 至 DIFF-012 是此前基于
   `cargo check --locked -p chimera` 时，Tauri build script 遇到 Windows `Access is denied`，未完成根应用构建。
   Service CI 中三平台 Clippy 均通过；该次整体 workflow 因 macOS/Windows lint fixer 并发推送同一 rustfmt
   修复而失败，自动格式提交 `87349079358cbdaf8c2557506bc20f049903aaf4` 已合入 Service `main`。
+
+## DIFF-034：快捷键基础设施第一阶段
+
+- 基线：只读 `ref/` commit `ed1931f66e08d2d233a9463c73b2376fd09a0a62`，工作树 clean；该 commit
+  与本指南此前记录的 `5331747c06a5f42eeabb3e225a1e77a83f480549` 不同，本轮按实际检出的
+  `ed1931f…` 读取，没有更新 `ref/`。
+- ref 对应：`backend/tauri/src/client/hotkey/{ports.rs,actor.rs,adapters.rs,mod.rs}` 的
+  `HotkeyAction`、`HotkeyBindings::{parse,diff}`、`HotkeyActor`、`HotkeyClient`、
+  `TauriShortcutRegistrar`、`ChannelActionSink`、`TauriWindowControl`；以及
+  `setup.rs::hotkey_action_pump`、`client/hotkey/mod.rs::dispatch_hotkey_action` 和
+  `client/effects/executor.rs::apply_hotkeys`。
+- Chimera 对应：新增 `backend/tauri/src/client/hotkey/{ports.rs,actor.rs,adapters.rs,mod.rs}`；
+  由 `backend/tauri/src/setup.rs` 构造 actor 与 channel、启动 action pump，
+  `backend/tauri/src/client/mod.rs::ChimeraClient::try_new_with_args` 在加载 typed application
+  state 后注册持久化绑定；`backend/tauri/src/lib.rs` 在进程退出时释放快捷键。
+- 类别：临时迁移 / Chimera adapter。领域类型、解析规则、canonical accelerator、差异计算、Actor
+  所有权、Pressed-only 回调和非阻塞 channel 沿用 ref。动作适配继续调用 Chimera 已有的
+  `patch_verge`、`patch_clash_overrides` 和窗口 helper，以保留当前 legacy config、Clash、TUN、系统代理
+  与窗口实现。新增的快捷键错误信息覆盖 `backend/tauri/locales/{en,ru,zh-cn,zh-tw}.json`。
+- 差异及边界：本地已有 `EffectKind::Hotkeys` 和配置 effect plan，但 `ApplicationEffectExecutor` 尚未迁入
+  或接入生产。此阶段直接从 `ChimeraClient` 启动时 reconcile，且只读取 typed application 中已持久化的
+  `hotkeys`；设置 IPC、前端录入、验证后保存及运行期变更后的 effect reconcile 尚未迁移。当前主界面和
+  legacy UI 因而还不能配置快捷键。本阶段为可执行的后端基础，不代表快捷键功能已完成对齐。
+- 影响的主界面、legacy UI、agent、数据、内核和平台：主/legacy UI 与 agent 入口未增加快捷键设置；按键动作
+  复用 Chimera 的共享配置/运行时 mutation path。配置 schema 不变，读取已有 typed `hotkeys` 列表。只在非
+  Android/iOS 桌面目标编译全局快捷键能力；本轮未做真实 OS 注册或业务动作验证。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera` 通过；`git diff --check`
+  通过。首次 `cargo check --manifest-path backend/Cargo.toml -p chimera` 在 Windows Tauri build script
+  中以 `Access is denied` 失败；同一 `cargo check` 指定独立 `--target-dir .tmp/hotkey-check-target`
+  后通过，`chimera` 编译报告 225 条 warning。未新增或运行测试、未运行桌面应用。
+- 下一阶段：先通过现有 Specta generator 增加 `get_hotkeys`、`get_hotkey_functions`、`set_hotkeys`，让
+  facade 在提交前验证插件 parser、super-key、未知 action 和重复 accelerator；提交后由共享
+  `ApplicationEffectExecutor` 调用 hotkey owner 并把部分 OS 注册失败作为 degradation 返回。随后增加共享
+  React Query hook 和主/legacy 设置适配，保留现有 legacy 设置交互；更新并注册单元/桌面覆盖，分别报告
+  fixture、真实桌面和 OS 注册证据。executor 接线完成后移除此阶段的启动直连 reconcile。

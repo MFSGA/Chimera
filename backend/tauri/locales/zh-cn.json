@@ -1,5 +1,12 @@
 {
   "_version": 1,
+  "hotkey_error": {
+    "malformed_entry": "快捷键配置格式错误：{entry}",
+    "unknown_function": "未知快捷键操作：{function}",
+    "invalid_hotkey": "无效的快捷键：{hotkey}",
+    "missing_super_key": "全局快捷键必须包含一个修饰键",
+    "duplicate_accelerator": "快捷键已被占用：{hotkey}"
+  },
   "tray": {
     "dashboard": "打开",
     "direct_mode": "直连模式",

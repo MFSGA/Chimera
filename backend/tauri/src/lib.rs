@@ -252,6 +252,10 @@ pub fn run() -> std::io::Result<()> {
             // utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::ExitRequested { .. } => {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(client) = app_handle.try_state::<crate::client::ChimeraClient>() {
+                chimera_utils::runtime::block_on(client.unregister_hotkeys());
+            }
             utils::help::cleanup_processes(app_handle);
         }
         tauri::RunEvent::WindowEvent { label, event, .. }

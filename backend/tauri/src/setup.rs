@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use tauri::{Manager, Runtime};
+use tauri::Manager;
 
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
@@ -12,6 +12,15 @@ use crate::{
         RuntimePaths,
     },
     utils::path::PathResolver,
+};
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::client::hotkey::{
+    HotkeyArgs, HotkeyClient,
+    adapters::{
+        ChannelActionSink, PlatformAcceleratorValidator, TauriShortcutRegistrar, TauriWindowControl,
+    },
+    ports::{HotkeyAction, WindowControl},
 };
 
 #[cfg(test)]
@@ -29,7 +38,7 @@ impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
     }
 }
 
-pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
+pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
     let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
         paths.clone(),
@@ -61,6 +70,19 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
     ));
     let core_facade_monitor = core_facade.clone();
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let (hotkey_tx, hotkey_rx) = tokio::sync::mpsc::unbounded_channel();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let hotkeys = tauri::async_runtime::block_on(HotkeyClient::spawn(HotkeyArgs {
+        registrar: Arc::new(TauriShortcutRegistrar::new(app.handle().clone())),
+        sink: Arc::new(ChannelActionSink::new(hotkey_tx)),
+    }))
+    .context("failed to start the global shortcut owner")?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let accelerators = Arc::new(PlatformAcceleratorValidator);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));
+
     let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
         paths,
         runtime_paths: runtime_paths.clone(),
@@ -78,8 +100,28 @@ pub fn setup<R: Runtime, M: Manager<R>>(app: &M) -> anyhow::Result<()> {
         profile_service,
         system_dns: Arc::new(OsSystemDnsCache),
         ui_sink: Arc::new(LegacyUiEventSink),
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        hotkeys,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        accelerators,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        window,
     })?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    tauri::async_runtime::spawn(hotkey_action_pump(hotkey_rx, client.clone()));
     app.manage(client);
     core_facade_monitor.start_service_api_monitor();
     Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn hotkey_action_pump(
+    mut actions: tokio::sync::mpsc::UnboundedReceiver<HotkeyAction>,
+    client: ChimeraClient,
+) {
+    while let Some(action) = actions.recv().await {
+        if let Err(error) = client.dispatch_hotkey_action(action).await {
+            tracing::warn!(%error, %action, "hotkey action failed");
+        }
+    }
 }

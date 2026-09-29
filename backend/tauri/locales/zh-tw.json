@@ -1,5 +1,12 @@
 {
   "_version": 1,
+  "hotkey_error": {
+    "malformed_entry": "快捷鍵設定格式錯誤：{entry}",
+    "unknown_function": "未知快捷鍵操作：{function}",
+    "invalid_hotkey": "無效的快捷鍵：{hotkey}",
+    "missing_super_key": "全域快捷鍵必須包含一個修飾鍵",
+    "duplicate_accelerator": "快捷鍵已被占用：{hotkey}"
+  },
   "tray": {
     "dashboard": "打開",
     "direct_mode": "直連模式",
