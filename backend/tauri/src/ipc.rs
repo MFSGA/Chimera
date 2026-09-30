@@ -288,7 +288,7 @@ pub async fn view_profile(
         .get_profile_materialized_path(chimera_config::profile::ProfileId(uid))
         .await?;
     if !path.exists() {
-        return Err(anyhow!("file not exists: {:#?}", path).into());
+        return Err(anyhow!("profile file not found").into());
     }
     help::open_file(app_handle, path)?;
     Ok(())
@@ -580,7 +580,7 @@ pub fn open_that(path: String) -> Result {
 #[tauri::command]
 #[specta::specta]
 pub fn cleanup_processes(app_handle: AppHandle) -> Result {
-    crate::utils::help::cleanup_processes(&app_handle);
+    crate::utils::help::cleanup_processes(&app_handle)?;
     Ok(())
 }
 
