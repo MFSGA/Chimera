@@ -159,6 +159,7 @@ pub fn run() -> std::io::Result<()> {
             specta_builder.mount_events(app);
 
             setup::setup(app)?;
+            core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
             #[cfg(feature = "agent")]

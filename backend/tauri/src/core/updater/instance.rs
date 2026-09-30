@@ -1,4 +1,7 @@
-use super::shared::{self, CoreTypeMeta};
+use super::{
+    shared::{self, CoreTypeMeta},
+    transaction::{self, UpdatePhase, UpdateTransaction},
+};
 use crate::{
     client::{
         ChimeraClient,
@@ -262,24 +265,60 @@ impl Updater {
             }
             inner.state = UpdaterState::Downloading;
         }
+        let _ = transaction::write(&UpdateTransaction {
+            phase: UpdatePhase::Downloading,
+            core_type: self.core_type.to_string(),
+            updated_at: chrono::Utc::now().timestamp(),
+        });
         // The download engine reports live progress through `downloader.status()`,
         // which `get_report` surfaces to the frontend while this runs.
         if let Err(e) = self.downloader.start().await {
             tracing::error!("download failed: {}", e);
+            let _ = transaction::write(&UpdateTransaction {
+                phase: UpdatePhase::Failed,
+                core_type: self.core_type.to_string(),
+                updated_at: chrono::Utc::now().timestamp(),
+            });
             self.dispatch_state(UpdaterState::Failed(e.to_string()));
             return;
         }
         tracing::debug!("download finished and start to incoming update logic");
+        let _ = transaction::write(&UpdateTransaction {
+            phase: UpdatePhase::Decompressing,
+            core_type: self.core_type.to_string(),
+            updated_at: chrono::Utc::now().timestamp(),
+        });
         if let Err(e) = self.decompress_and_set_permission().await {
             tracing::error!("failed to decompress and set permission: {}", e);
+            let _ = transaction::write(&UpdateTransaction {
+                phase: UpdatePhase::Failed,
+                core_type: self.core_type.to_string(),
+                updated_at: chrono::Utc::now().timestamp(),
+            });
             self.dispatch_state(UpdaterState::Failed(e.to_string()));
             return;
         }
+        let _ = transaction::write(&UpdateTransaction {
+            phase: UpdatePhase::Replacing,
+            core_type: self.core_type.to_string(),
+            updated_at: chrono::Utc::now().timestamp(),
+        });
         if let Err(e) = self.replace_core().await {
             tracing::error!("failed to replace core: {}", e);
+            let _ = transaction::write(&UpdateTransaction {
+                phase: UpdatePhase::Failed,
+                core_type: self.core_type.to_string(),
+                updated_at: chrono::Utc::now().timestamp(),
+            });
             self.dispatch_state(UpdaterState::Failed(e.to_string()));
             return;
         }
+        let _ = transaction::write(&UpdateTransaction {
+            phase: UpdatePhase::Completed,
+            core_type: self.core_type.to_string(),
+            updated_at: chrono::Utc::now().timestamp(),
+        });
+        let _ = transaction::clear();
         self.dispatch_state(UpdaterState::Done);
     }
 

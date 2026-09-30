@@ -12,8 +12,25 @@ use specta::Type;
 
 mod instance;
 mod shared;
+mod transaction;
 
 pub use instance::UpdaterSummary;
+
+pub fn recover_interrupted_update() {
+    match transaction::read() {
+        Ok(Some(transaction)) => {
+            tracing::warn!(
+                phase = ?transaction.phase,
+                core_type = %transaction.core_type,
+                "found interrupted update transaction"
+            );
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(%error, "failed to read update transaction");
+        }
+    }
+}
 
 pub struct UpdaterManager {
     manifest_version: ManifestVersion,
