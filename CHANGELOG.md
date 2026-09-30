@@ -1,3 +1,25 @@
+## [0.25.1] - 2026-09-30 10:55:11
+
+### ✨ Features
+
+- **hotkeys:** Route registration through effect retries by @MFSGA
+
+- **hotkeys:** Add settings IPC and manager by @MFSGA
+
+- **hotkeys:** Add desktop registration foundation by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **hotkeys:** Normalize meta and plus accelerators by @MFSGA
+
+- **hotkeys:** Report post-commit reconcile failures by @MFSGA
+
+- Handle profile migration and service compatibility by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.0...v0.25.1
+
 ## [0.25.0] - 2026-09-28 16:56:51
 
 ### ✅ Testing
