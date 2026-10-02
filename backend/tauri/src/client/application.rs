@@ -542,6 +542,31 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     let application_patch = split.application.clone().unwrap_or_default();
     let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
 
+    #[cfg(target_os = "macos")]
+    if split
+        .clash_config
+        .as_ref()
+        .and_then(|patch| patch.enable_tun_mode)
+        == Some(true)
+        && !(application_patch
+            .enable_service_mode
+            .or(base.enable_service_mode)
+            .unwrap_or(false)
+            && crate::core::service::ipc::get_ipc_state().is_connected())
+    {
+        // Authorize before preparing or committing settings. The OS password
+        // dialog blocks, so keep it off the async runtime worker.
+        let core = application_patch
+            .clash_core
+            .or(base.clash_core)
+            .unwrap_or_default();
+        let core: chimera_utils::core::CoreType = (&core).into();
+        tokio::task::spawn_blocking(move || utils::dirs::grant_macos_tun_permission(&core))
+            .await
+            .context("macOS TUN authorization task failed")?
+            .context("failed to grant selected core the macOS TUN permission")?;
+    }
+
     #[cfg(target_os = "windows")]
     validate_windows_service_mode_tun_transition(
         plan.service_mode,
