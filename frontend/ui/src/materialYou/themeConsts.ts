@@ -4,9 +4,9 @@ import { BreakpointsOptions } from '@mui/material/styles';
 export const MUI_BREAKPOINTS: BreakpointsOptions = {
   values: {
     xs: 0,
-    sm: 400,
-    md: 800,
+    sm: 600,
+    md: 900,
     lg: 1200,
-    xl: 1600,
+    xl: 1536,
   },
 };
