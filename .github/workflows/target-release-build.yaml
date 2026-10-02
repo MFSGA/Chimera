@@ -21,13 +21,21 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  macos_x86_64_build:
+    name: macOS x86_64 Build
+    uses: ./.github/workflows/deps-build-macos.yaml
+    with:
+      nightly: false
+      aarch64: false
+      tag: ${{ inputs.tag }}
+    secrets: inherit
   macos_aarch64_build:
     name: macOS aarch64 Build
     uses: ./.github/workflows/deps-build-macos.yaml
     with:
       nightly: false
       aarch64: true
-      tag: ${{ github.event.release.tag_name }}
+      tag: ${{ inputs.tag }}
     secrets: inherit
   windows_build:
     name: Windows Build
@@ -38,24 +46,24 @@ jobs:
       # todo:
       fixed-webview: false
       arch: 'x86_64'
-      tag: ${{ inputs.tag || github.event.release.tag_name }}
+      tag: ${{ inputs.tag }}
     secrets: inherit
   linux_build:
     name: Linux Build
     uses: ./.github/workflows/deps-build-linux.yaml
     with:
       nightly: false
-      tag: ${{ inputs.tag || github.event.release.tag_name }}
+      tag: ${{ inputs.tag }}
       arch: 'x86_64'
     secrets: inherit
 
   upload_release_assets:
     name: Upload Release Assets
     # todo windows_build
-    needs: [windows_build, linux_build, macos_aarch64_build]
+    needs: [windows_build, linux_build, macos_x86_64_build, macos_aarch64_build]
     uses: ./.github/workflows/deps-upload-release-assets.yaml
     with:
-      tag: ${{ inputs.tag || github.event.release.tag_name }}
+      tag: ${{ inputs.tag }}
     secrets: inherit
 
   publish_release:
@@ -68,7 +76,7 @@ jobs:
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           gh release edit "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}"
 
@@ -79,5 +87,5 @@ jobs:
     needs: [publish_release]
     with:
       nightly: false
-      release_body: ${{ inputs.release_body || github.event.release.body }}
+      release_body: ${{ inputs.release_body }}
     secrets: inherit

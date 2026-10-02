@@ -5,6 +5,9 @@ on:
 
 name: Daily
 
+permissions:
+  contents: write
+
 jobs:
   generate_manifest:
     name: Generate Manifest
@@ -35,7 +38,12 @@ jobs:
       # if nothing changed, skip commit
       - name: Check for changes
         id: git-check
-        run: echo ::set-output name=has-changes::$(if git diff --quiet; then echo "false"; else echo "true"; fi)
+        run: |
+          if [[ -n "$(git status --porcelain --untracked-files=all -- manifest/version.json)" ]]; then
+            echo "has-changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: oleksiyrudenko/gha-git-credentials@v2.1
         if: steps.git-check.outputs.has-changes == 'true'
         with:
@@ -46,7 +54,7 @@ jobs:
       - name: Commit Manifest
         if: steps.git-check.outputs.has-changes == 'true'
         run: |
-          git add .
+          git add -- manifest/version.json
           git commit -m "chore(manifest): update manifest [skip ci]"
           git push
   generate_manifest_v1:
@@ -80,7 +88,12 @@ jobs:
       # if nothing changed, skip commit
       - name: Check for changes
         id: git-check
-        run: echo ::set-output name=has-changes::$(if git diff --quiet; then echo "false"; else echo "true"; fi)
+        run: |
+          if [[ -n "$(git status --porcelain --untracked-files=all -- manifest/version.json)" ]]; then
+            echo "has-changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-changes=false" >> "$GITHUB_OUTPUT"
+          fi
       - uses: oleksiyrudenko/gha-git-credentials@v2.1
         if: steps.git-check.outputs.has-changes == 'true'
         with:
@@ -91,6 +104,6 @@ jobs:
       - name: Commit Manifest
         if: steps.git-check.outputs.has-changes == 'true'
         run: |
-          git add .
+          git add -- manifest/version.json
           git commit -m "chore(manifest): update manifest [skip ci]"
           git push
