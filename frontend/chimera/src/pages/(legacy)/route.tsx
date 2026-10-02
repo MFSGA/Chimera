@@ -1,6 +1,6 @@
 import { useSettings } from '@chimera/interface';
-import { cn, useBreakpoint } from '@chimera/ui';
-import { CssBaseline } from '@mui/material';
+import { cn } from '@chimera/ui';
+import { CssBaseline, useMediaQuery } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import { createFileRoute, useLocation } from '@tanstack/react-router';
 import { useAtom, useSetAtom } from 'jotai';
@@ -28,7 +28,8 @@ const QueryLoaderProvider = ({ children }: PropsWithChildren) => {
 };
 
 function Layout() {
-  const breakpoint = useBreakpoint();
+  // Keep the legacy drawer threshold independent of the main UI's ref breakpoints.
+  const isDrawerLayout = useMediaQuery('(max-width:799.95px)');
   const [isDrawer, setIsDrawer] = useAtom(atomIsDrawer);
   const setMemorizedPath = useSetAtom(memorizedRoutePathAtom);
   const pathname = useLocation({
@@ -42,8 +43,8 @@ function Layout() {
   }, [pathname, setMemorizedPath]);
 
   useEffect(() => {
-    setIsDrawer(breakpoint === 'sm' || breakpoint === 'xs');
-  }, [breakpoint, setIsDrawer]);
+    setIsDrawer(isDrawerLayout);
+  }, [isDrawerLayout, setIsDrawer]);
 
   return (
     <QueryLoaderProvider>

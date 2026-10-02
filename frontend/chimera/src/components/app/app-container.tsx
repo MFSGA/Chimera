@@ -1,11 +1,8 @@
-import { alpha, cn, getSystem } from '@chimera/ui';
-import { Box } from '@mui/material';
+import { cn, getSystem } from '@chimera/ui';
 import Paper from '@mui/material/Paper';
-import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query';
-import { TauriEvent, UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useAtomValue } from 'jotai';
-import { ReactNode, useEffect, useRef } from 'react';
+import { ReactNode } from 'react';
 import { atomIsDrawerOnlyIcon } from '@/store';
 import { LayoutControl } from '../layout/layout-control';
 import styles from './app-container.module.scss';
@@ -22,30 +19,7 @@ export const AppContainer = ({
   children?: ReactNode;
   isDrawer?: boolean;
 }) => {
-  const { data: isMaximized } = useSuspenseQuery({
-    queryKey: ['isMaximized'],
-    queryFn: () => appWindow.isMaximized(),
-  });
-  const queryClient = useQueryClient();
-  const unlistenRef = useRef<UnlistenFn | null>(null);
   const onlyIcon = useAtomValue(atomIsDrawerOnlyIcon);
-
-  useEffect(() => {
-    appWindow
-      .listen(TauriEvent.WINDOW_RESIZED, () => {
-        queryClient.invalidateQueries({ queryKey: ['isMaximized'] });
-      })
-      .then((unlisten) => {
-        unlistenRef.current = unlisten;
-      })
-      .catch((error) => {
-        console.error(error);
-      });
-
-    return () => {
-      unlistenRef.current?.();
-    };
-  }, [queryClient]);
 
   return (
     <Paper
@@ -68,18 +42,9 @@ export const AppContainer = ({
         {OS === 'windows' && (
           <LayoutControl className="!z-top fixed top-2 right-4" />
         )}
-        {/* TODO: add a framer motion animation to toggle the maximized state */}
-        {OS === 'macos' && !isMaximized && (
-          <Box
-            className="z-top fixed top-1.5 left-3 h-7 w-[4.5rem] rounded-full"
-            sx={(theme) => ({
-              backgroundColor: alpha(theme.vars.palette.primary.main, 0.1),
-            })}
-          />
-        )}
 
         <div
-          className={OS === 'macos' ? 'h-[2.75rem]' : 'h-9'}
+          className={OS === 'macos' ? 'h-10' : 'h-9'}
           data-tauri-drag-region
         />
 

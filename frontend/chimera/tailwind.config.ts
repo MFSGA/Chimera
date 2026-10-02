@@ -1,26 +1,17 @@
 import type { Config } from 'tailwindcss';
 import createPlugin from 'tailwindcss/plugin';
-import { MUI_BREAKPOINTS } from '../ui/src/materialYou/themeConsts';
-
-const getMUIScreen = () => {
-  const breakpoints = MUI_BREAKPOINTS.values as Record<string, number>;
-
-  const result = {} as Record<string, string>;
-
-  for (const key in breakpoints) {
-    if (Object.prototype.hasOwnProperty.call(breakpoints, key)) {
-      result[key] = `${breakpoints[key]}px`;
-    }
-  }
-
-  return result;
-};
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: ['./src/**/*.{tsx,ts}', '../ui/**/*.{tsx,ts}'],
   darkMode: 'selector',
   theme: {
+    screens: {
+      sm: '600px',
+      md: '900px',
+      lg: '1200px',
+      xl: '1536px',
+    },
     extend: {
       maxHeight: {
         '1/8': 'calc(100vh / 8)',
@@ -42,7 +33,6 @@ module.exports = {
         container: 'var(--background-color)',
       },
     },
-    screen: getMUIScreen(),
   },
   plugins: [
     createPlugin(({ addBase }) => {

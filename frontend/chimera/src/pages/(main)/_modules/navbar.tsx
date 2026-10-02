@@ -153,6 +153,8 @@ export const DefaultNavbar = () => {
 };
 
 export const MobileNavbar = () => {
+  const { switchToLegacy, isPending } = useUiSwitch();
+
   return (
     <AnimatedTabs
       className={cn(
@@ -237,6 +239,13 @@ export const MobileNavbar = () => {
               <Apps />
               <span>{m.navbar_label_providers()}</span>
             </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={isPending}
+            onSelect={() => void switchToLegacy()}
+          >
+            <ExitToAppRounded />
+            <span>Switch to Legacy UI</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

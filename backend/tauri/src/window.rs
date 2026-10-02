@@ -18,6 +18,7 @@ pub struct WindowConfig {
     pub center: bool,
     pub resizable: bool,
     pub always_on_top: Option<bool>,
+    pub decorations: Option<bool>,
 }
 
 impl Default for WindowConfig {
@@ -30,6 +31,7 @@ impl Default for WindowConfig {
             center: true,
             resizable: true,
             always_on_top: None,
+            decorations: None,
         }
     }
 }
@@ -63,6 +65,11 @@ impl WindowConfig {
 
     pub fn center(mut self, center: bool) -> Self {
         self.center = center;
+        self
+    }
+
+    pub fn decorations(mut self, decorations: bool) -> Self {
+        self.decorations = Some(decorations);
         self
     }
 }
@@ -344,7 +351,25 @@ pub trait AppWindow {
             .additional_browser_args(WEBVIEW2_BROWSER_ARGS)
             .build();
 
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        let window = {
+            let decorations = config.decorations.unwrap_or(true);
+            if decorations {
+                builder
+                    .decorations(true)
+                    .hidden_title(true)
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .visible(config.visible_on_create)
+                    .build()
+            } else {
+                builder
+                    .decorations(false)
+                    .visible(config.visible_on_create)
+                    .build()
+            }
+        };
+
+        #[cfg(all(not(windows), not(target_os = "macos")))]
         let window = builder.build();
 
         let window = match window {
