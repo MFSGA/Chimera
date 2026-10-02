@@ -589,15 +589,21 @@ async function getClashRustAlphaInfo(): Promise<BinInfo> {
 function getChimeraClientInfo(): BinInfo {
   const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_MANIFEST;
   const archLabel = mapArch(platform, arch);
-  const name = ARCH_MAPPING[archLabel].replace('{}', VERSION!);
+  const assetTemplate = ARCH_MAPPING[archLabel];
+  const assetVersion = VERSION!.replace(/^v/, '');
+  const name = assetTemplate.replace('{}', assetVersion);
   const isWin = platform === 'win32';
+  const exeFile = archLabel.startsWith('darwin-')
+    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
+    : name;
+  const downloadURL = `${URL_PREFIX}${VERSION!.startsWith('v') ? VERSION : `v${VERSION}`}/${name}`;
   return {
     name: 'chimera-client',
     version: VERSION,
     targetFile: `chimera-client-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile: name,
+    exeFile,
     tmpFile: name,
-    downloadURL: `${URL_PREFIX}${VERSION}/${name}`,
+    downloadURL,
   };
 }
 
