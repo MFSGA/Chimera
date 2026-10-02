@@ -25,6 +25,57 @@ Reference checkout: `ref/` at `5331747c06a5f42eeabb3e225a1e77a83f480549`; its wo
 
 ## Reference difference and limits
 
+### 2026-10-02: local-host DNS authorization repair
+
+Reference checked at `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`, clean worktree;
+runtime submodule `889901cb57b1b1753354c2b7b0a442569601e417`. The mapping remains
+the two manager `dns.rs` copies and the Tauri local-host adapter listed above.
+Both ref and Chimera invoked `scutil` directly from the unprivileged app host.
+Granting setuid to the selected core does not elevate the host's DNS command.
+The reported runtime error was `DNS override activation failed`, followed by
+`read-back mismatch after apply: None`; the WebSocket resets followed runtime recovery.
+The owned key was absent on read-only inspection. Permission denial is the likely
+cause; the supplied log omitted scutil stdout, so the original OS failure was not captured.
+
+This bounded defect correction invokes mutating scutil scripts through macOS
+administrator authorization when the host is not elevated. Reads stay unprivileged;
+an already-applied value and an absent key on restore skip the write. Root service
+hosts retain the direct command path. The local host allows 60 seconds for the
+authorization and DNS read-back operation. Failed, denied, cancelled, or timed-out
+authorization is latched for this controller lifetime to prevent password prompts
+from every background recovery; restart the app to retry. Ownership records and
+restore/read-back checks remain in place, including uncertain side effects after timeout.
+
+Apple's [scutil source](https://github.com/apple-oss-distributions/configd/blob/main/scutil.tproj/cache.c)
+prints failed dynamic-store writes to stdout. Mutating commands now reject nonempty
+stdout even on exit code zero; non-dictionary read-back errors are rejected rather
+than interpreted as an empty resolver list. Recheck this exception when ref adds
+an authorized host DNS boundary. This does not prove resolver selection or leak prevention.
+
+Test contract: `dns::macos::authorization_tests` is a pure command-construction and
+output-validation boundary. The permission-failure case supplies `Access denied`
+with a successful process exit assumed, and requires a DNS error containing that
+diagnostic; the prior status-only handling accepted this output. The quoting case
+checks that a script with an apostrophe remains literal data inside the AppleScript
+shell command. These tests perform no OS authorization or DNS mutation and cannot
+prove real apply, cancellation, timeout recovery, or network behavior. Runnable entry
+points are `cargo test --manifest-path backend/Cargo.toml -p chimera-core-manager dns:: --lib`
+and the same command with `backend/chimera-runtime/Cargo.toml` for the service copy.
+Real desktop verification for main UI, legacy UI, and confirmed agent actions remains
+on a dedicated runner: enable TUN, authorize DNS, verify owned key/runtime/network;
+disable TUN, authorize removal if needed, verify restoration. Denial and timeout must
+retain ownership/recovery evidence and must not repeatedly reopen dialogs.
+
+Service-workspace execution was blocked by a preexisting duplicate `[dev-dependencies]`
+table in `backend/chimera-runtime/chimera_service/Cargo.toml:106`. No host DNS was
+changed during this repair. Application-side results are reported with the delivery.
+
+Actual checks: manager `dns:: --lib` passed 2 pure authorization tests;
+manager `dns_ --lib` passed 7 tests, including 5 fixture lifecycle failure/restore
+tests (one authorization case overlaps the first run). `cargo check -p chimera`
+passed with existing warnings; scoped rustfmt and root/submodule diff checks passed.
+These are not desktop, authorization-dialog, or real-network passes.
+
 The reference injects the controller into its local host but currently derives a loopback resolver from `dns.listen`; Chimera needs TUN port-53 interception and therefore points the OS resolver at the sentinel instead. Service-manager injection is an additional Chimera path so Local and Service runtimes share the same lifecycle behavior.
 
 The `scutil` dynamic-store mechanism is still unverified on a real Mac. We have not confirmed that the dedicated resolver is selected before physical-service resolvers or that macOS will not retry another resolver after the sentinel times out. Until those checks pass, this is a fail-closed design intent, not proof that DNS cannot leak. Application DoH/DoT/DoQ, browser secure DNS, and multicast DNS are outside UDP/TCP 53 interception.
