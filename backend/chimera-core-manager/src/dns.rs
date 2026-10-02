@@ -99,9 +99,8 @@ pub trait DnsController: Send + Sync {
     fn restore<'a>(&'a self, record: &'a DnsOverrideRecord) -> BoxFuture<'a, Result<(), DnsError>>;
 }
 
-/// macOS implementation. The `scutil` mechanism and effective resolver order
-/// remain unverified on a real Mac; this implementation is enabled only for a
-/// full-route TUN config that also intercepts UDP/TCP 53 and uses fake-IP DNS.
+/// macOS implementation following the reference: when the core DNS service
+/// listens on port 53, point the host resolver at its loopback listener.
 ///
 /// Mechanism choice (audit §3, design §8): a `scutil` dynamic-store `State:`
 /// key expresses *structural ownership* — creating
@@ -119,8 +118,6 @@ pub trait DnsController: Send + Sync {
 pub mod macos {
     use super::*;
     use serde_yaml_ng::Value;
-
-    const DNS_HIJACK_SENTINEL: &str = "192.0.2.1";
 
     pub struct MacosDnsController {
         /// The dynamic-store key this controller owns, e.g.
@@ -320,56 +317,45 @@ pub mod macos {
         }
     }
 
-    /// Whether an effective macOS config requires system DNS interception,
-    /// and which sentinel resolver the host DNS controller must install.
+    /// Whether the effective config exposes the DNS listener expected by the
+    /// reference macOS resolver flow.
     /// Kept independent of the controller instance so the manager can reject
-    /// protected configs if its host DNS integration was accidentally omitted.
+    /// configs that require the host DNS integration if it was omitted.
     pub fn desired_dns_intent(effective: &Mapping) -> Option<DnsIntent> {
         let dns = effective.get("dns")?.as_mapping()?;
-        let tun = effective.get("tun")?.as_mapping()?;
-        if dns.get("enable")?.as_bool()? != true
-            || mapping_field(dns, &["enhanced-mode", "enhanced_mode"])?.as_str()? != "fake-ip"
-            || tun.get("enable")?.as_bool()? != true
-            || !route_all_enabled(tun)
-            || !dns_hijack_catches_all_53(tun)
-        {
+        if dns.get("enable")?.as_bool()? != true {
             return None;
         }
-
-        // This documentation-only address has no public DNS service. If
-        // macOS bypasses the TUN, name resolution fails closed instead of
-        // leaking queries to a real resolver. TUN captures it by port 53.
-        Some(DnsIntent {
-            servers: vec![DNS_HIJACK_SENTINEL.to_owned()],
+        let listen = dns.get(Value::String("listen".into()))?.as_str()?;
+        let (_, port) = listen.rsplit_once(':')?;
+        (port == "53").then(|| DnsIntent {
+            servers: vec!["127.0.0.1".to_owned()],
         })
     }
 
-    fn mapping_field<'a>(mapping: &'a Mapping, keys: &[&str]) -> Option<&'a Value> {
-        keys.iter().find_map(|key| mapping.get(*key))
-    }
+    #[cfg(test)]
+    mod desired_tests {
+        use super::*;
 
-    fn route_all_enabled(tun: &Mapping) -> bool {
-        mapping_field(tun, &["route-all", "auto-route", "route_all"])
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }
+        #[test]
+        fn enabled_dns_listener_on_port_53_uses_loopback_resolver() {
+            let config: Mapping =
+                serde_yaml_ng::from_str("dns:\n  enable: true\n  listen: 0.0.0.0:53\n").unwrap();
+            assert_eq!(
+                desired_dns_intent(&config).unwrap().servers,
+                vec!["127.0.0.1"]
+            );
+        }
 
-    fn dns_hijack_catches_all_53(tun: &Mapping) -> bool {
-        match mapping_field(tun, &["dns-hijack", "dns_hijack"]) {
-            Some(Value::Bool(enabled)) => *enabled,
-            Some(Value::Sequence(rules)) if rules.is_empty() => true,
-            Some(Value::Sequence(rules)) => {
-                let catches_udp = rules
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .any(|rule| matches!(rule, "any:53" | "udp://any:53"));
-                let catches_tcp = rules
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .any(|rule| rule == "tcp://any:53");
-                catches_udp && catches_tcp
+        #[test]
+        fn disabled_or_non_53_dns_listener_does_not_override_system_dns() {
+            for config in [
+                "dns:\n  enable: false\n  listen: 0.0.0.0:53\n",
+                "dns:\n  enable: true\n  listen: 127.0.0.1:1053\n",
+            ] {
+                let config: Mapping = serde_yaml_ng::from_str(config).unwrap();
+                assert!(desired_dns_intent(&config).is_none());
             }
-            _ => false,
         }
     }
 }

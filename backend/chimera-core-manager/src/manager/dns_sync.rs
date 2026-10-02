@@ -76,7 +76,7 @@ pub(super) async fn reconcile_orphan_record(
 
 impl CoreManager {
     /// Installs and verifies the host DNS override before launching a runtime
-    /// whose effective config depends on UDP/TCP 53 interception. Keeping this
+    /// whose effective config points the host resolver at the core listener. Keeping this
     /// ahead of process readiness prevents the system resolver from continuing
     /// to use its physical-service DNS while the new TUN is already active.
     /// On macOS, the manager also rejects such a plan when no host DNS
@@ -464,7 +464,7 @@ mod tests {
     impl DnsController for FailingDnsController {
         fn desired(&self, _effective: &serde_yaml_ng::Mapping) -> Option<crate::DnsIntent> {
             self.wants_dns.then(|| crate::DnsIntent {
-                servers: vec!["192.0.2.1".into()],
+                servers: vec!["127.0.0.1".into()],
             })
         }
 
@@ -553,7 +553,7 @@ mod tests {
 
     fn protected_config() -> serde_yaml_ng::Mapping {
         serde_yaml_ng::from_str(
-            "dns:\n  enable: true\n  enhanced-mode: fake-ip\ntun:\n  enable: true\n  route-all: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n",
+            "dns:\n  enable: true\n  listen: 0.0.0.0:53\n  enhanced-mode: fake-ip\ntun:\n  enable: true\n  route-all: true\n  dns-hijack:\n    - any:53\n    - tcp://any:53\n",
         )
         .unwrap()
     }
@@ -620,7 +620,7 @@ mod tests {
         let record = DnsOverrideRecord {
             interface: "test-dns-key".into(),
             previous: vec!["192.0.2.53".into()],
-            applied: vec!["192.0.2.1".into()],
+            applied: vec!["127.0.0.1".into()],
             runtime_epoch: 1,
             owner_generation: None,
             state: DnsOverrideState::Applied,
@@ -667,7 +667,7 @@ mod tests {
         let record = DnsOverrideRecord {
             interface: "test-dns-key".into(),
             previous: vec!["192.0.2.53".into()],
-            applied: vec!["192.0.2.1".into()],
+            applied: vec!["127.0.0.1".into()],
             runtime_epoch: 1,
             owner_generation: None,
             state: DnsOverrideState::Applied,
@@ -713,7 +713,7 @@ mod tests {
         let record = DnsOverrideRecord {
             interface: "test-dns-key".into(),
             previous: vec!["192.0.2.53".into()],
-            applied: vec!["192.0.2.1".into()],
+            applied: vec!["127.0.0.1".into()],
             runtime_epoch: 1,
             owner_generation: None,
             state: DnsOverrideState::Applied,
