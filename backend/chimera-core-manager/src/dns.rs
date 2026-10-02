@@ -126,16 +126,41 @@ pub mod macos {
         /// The dynamic-store key this controller owns, e.g.
         /// `State:/Network/Service/nyanpasu-dns/DNS`.
         store_key: String,
+        authorization_failed: std::sync::atomic::AtomicBool,
     }
 
     impl MacosDnsController {
         pub fn new(store_key: String) -> Self {
-            Self { store_key }
+            Self {
+                store_key,
+                authorization_failed: std::sync::atomic::AtomicBool::new(false),
+            }
         }
 
-        async fn scutil(script: String) -> Result<String, DnsError> {
+        async fn scutil(&self, script: String, mutating: bool) -> Result<String, DnsError> {
             use tokio::io::AsyncWriteExt;
-            let mut child = tokio::process::Command::new("/usr/sbin/scutil")
+            let elevated = mutating && !chimera_utils::os::is_elevated();
+            if elevated
+                && self
+                    .authorization_failed
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(DnsError::Command(
+                    "macOS DNS authorization previously failed; restart Chimera to retry".into(),
+                ));
+            }
+            let mut command = if elevated {
+                // Leave this latched on cancellation, timeout, or failure so
+                // background recovery cannot keep requesting authorization.
+                self.authorization_failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                let mut command = tokio::process::Command::new("/usr/bin/osascript");
+                command.args(["-e", &authorization_script(&script)]);
+                command
+            } else {
+                tokio::process::Command::new("/usr/sbin/scutil")
+            };
+            let mut child = command
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -143,26 +168,47 @@ pub mod macos {
                 // timeout; without this the child would outlive it.
                 .kill_on_drop(true)
                 .spawn()?;
-            child
-                .stdin
-                .as_mut()
-                .expect("stdin was piped")
-                .write_all(script.as_bytes())
-                .await?;
+            if !elevated {
+                child
+                    .stdin
+                    .as_mut()
+                    .expect("stdin was piped")
+                    .write_all(script.as_bytes())
+                    .await?;
+            }
             let output = child.wait_with_output().await?;
             if !output.status.success() {
+                if elevated {
+                    // Recovery runs in the background: do not repeatedly
+                    // reopen a password dialog after denial or cancellation.
+                    self.authorization_failed
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 return Err(DnsError::Command(
                     String::from_utf8_lossy(&output.stderr).into_owned(),
                 ));
             }
-            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            // scutil reports dynamic-store errors on stdout even when its
+            // process exits successfully. A write normally produces no text.
+            validate_scutil_output(&stdout, mutating)?;
+            if elevated {
+                self.authorization_failed
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(stdout)
         }
 
         /// Read-back: does the owned key currently exist with `servers`?
         async fn read_back(&self) -> Result<Option<Vec<String>>, DnsError> {
-            let output = Self::scutil(format!("show {}\n", self.store_key)).await?;
+            let output = self
+                .scutil(format!("show {}\n", self.store_key), false)
+                .await?;
             if output.contains("No such key") {
                 return Ok(None);
+            }
+            if !output.contains("<dictionary>") {
+                return Err(DnsError::Command(output.trim().to_owned()));
             }
             let servers = output
                 .lines()
@@ -191,11 +237,16 @@ pub mod macos {
             Box::pin(async move {
                 let previous = self.read_back().await?.unwrap_or_default();
                 let addresses = intent.servers.join(" ");
-                Self::scutil(format!(
-                    "d.init\nd.add ServerAddresses * {addresses}\nset {}\n",
-                    self.store_key
-                ))
-                .await?;
+                if previous != intent.servers {
+                    self.scutil(
+                        format!(
+                            "d.init\nd.add ServerAddresses * {addresses}\nset {}\n",
+                            self.store_key
+                        ),
+                        true,
+                    )
+                    .await?;
+                }
                 let observed = self.read_back().await?;
                 if observed.as_deref() != Some(intent.servers.as_slice()) {
                     return Err(DnsError::Command(format!(
@@ -220,7 +271,11 @@ pub mod macos {
             Box::pin(async move {
                 // Structural restore: delete the owned key. No remembered
                 // value can be stale because nothing is written back.
-                Self::scutil(format!("remove {}\n", self.store_key)).await?;
+                if self.read_back().await?.is_none() {
+                    return Ok(());
+                }
+                self.scutil(format!("remove {}\n", self.store_key), true)
+                    .await?;
                 if self.read_back().await?.is_some() {
                     return Err(DnsError::Command(
                         "read-back still shows the override after restore".into(),
@@ -228,6 +283,40 @@ pub mod macos {
                 }
                 Ok(())
             })
+        }
+    }
+
+    fn authorization_script(script: &str) -> String {
+        let quoted = format!("'{}'", script.replace('\'', "'\\''"));
+        let shell = format!("/usr/bin/printf '%s' {quoted} | /usr/sbin/scutil");
+        let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("do shell script \"{escaped}\" with administrator privileges")
+    }
+
+    fn validate_scutil_output(stdout: &str, mutating: bool) -> Result<(), DnsError> {
+        if mutating && !stdout.trim().is_empty() {
+            return Err(DnsError::Command(stdout.trim().to_owned()));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod authorization_tests {
+        use super::*;
+
+        #[test]
+        fn successful_exit_cannot_hide_dynamic_store_permission_failure() {
+            let error = validate_scutil_output("  Access denied\n", true).unwrap_err();
+            assert_eq!(error.to_string(), "dns command failed: Access denied");
+            assert!(validate_scutil_output("\n", true).is_ok());
+        }
+
+        #[test]
+        fn dns_script_is_literal_shell_data_inside_applescript() {
+            let script = authorization_script("show State:/Test/it's\n");
+            assert!(script.contains("it'\\\\''s"));
+            assert!(script.ends_with("with administrator privileges"));
+            assert!(script.contains("/usr/sbin/scutil"));
         }
     }
 

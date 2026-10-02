@@ -26,6 +26,10 @@ pub(crate) async fn build(paths: &PathResolver) -> Result<CoreControl> {
     let manager_options = ManagerOptions {
         runtime_dir: Some(to_utf8(runtime_root.join("control"))?),
         local_ipc_policy: LocalIpcPolicy::Disable,
+        // A local macOS host may need the user to answer a DNS authorization
+        // dialog. Service hosts already run with administrator privileges.
+        #[cfg(target_os = "macos")]
+        dns_timeout: std::time::Duration::from_secs(60),
         ..ManagerOptions::default()
     };
 
