@@ -1,5 +1,7 @@
 # macOS TUN 授权边界
 
+> 历史记录：原 Chimera 专用的核心 setuid 授权已于 2026-10-02 移除，当前行为收敛到 ref；以下记录说明差异背景，不再描述现行流程。
+
 - 参考提交：`cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`，参考工作树干净。
 - 参考映射：`ref/backend/tauri/src/core/manager.rs::grant_permission` →
   `backend/tauri/src/utils/dirs.rs::grant_macos_tun_permission`；
