@@ -9,6 +9,9 @@
 # useful folder for local development.
 resources
 sidecar
+# These are source inputs for the macOS DNS system extension, not local app data.
+!macos/dns-proxy/Resources/
+!macos/dns-proxy/Resources/**
 # real target is git-info
 tmp/
 tauri.nightly.conf.json
