@@ -1,3 +1,29 @@
+## [0.25.2] - 2026-10-02 19:13:22
+
+### ✨ Features
+
+- **macos:** Add DNS proxy lifecycle by @MFSGA
+
+- Persist updater transaction recovery state by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **macos:** Authorize system DNS override by @MFSGA
+
+- **macos:** Authorize core before enabling TUN by @MFSGA
+
+- **macos:** Prepare Chimera Client sidecar by @MFSGA
+
+- **macos:** Grant core permissions for TUN by @MFSGA
+
+- **runtime:** Pin DNS guard service revision by @MFSGA
+
+- Harden update cleanup and chimera client platform mapping by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.1...v0.25.2
+
 ## [0.25.1] - 2026-09-30 10:55:11
 
 ### ✨ Features
