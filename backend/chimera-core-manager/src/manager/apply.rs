@@ -23,7 +23,8 @@ impl CoreManager {
     ) -> Result<ApplyOutcome, Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
-        self.apply_locked(&mut ctrl, input, expected_revision).await
+        let result = self.apply_locked(&mut ctrl, input, expected_revision).await;
+        self.finish_dns_converge(&mut ctrl, result).await
     }
 
     /// The running-core apply transaction, entered with the control lock held.
@@ -78,6 +79,21 @@ impl CoreManager {
                 prepared.plan.revision.generation,
             )
             .await?;
+        if let Err(error) = self.dns_deactivate_for_plan(ctrl, &prepared.plan).await {
+            let _ = self.inner.store.remove_backup(backup).await;
+            return Err(error);
+        }
+        if let Err(error) = self.dns_activate_for_plan(ctrl, &prepared.plan).await {
+            // Activation may have changed the host resolver even when it
+            // reported an error. Re-converge against the still-active plan
+            // before refusing the config update.
+            if let Err(dns_error) = self.dns_converge(ctrl).await {
+                tracing::warn!("DNS convergence after rejected config failed: {dns_error}");
+            }
+            let _ = self.inner.store.remove_backup(backup).await;
+            return Err(error);
+        }
+        let current = ctrl.current.as_ref().ok_or(Error::NotStarted)?;
         let PreparedApply {
             plan: desired,
             staged,
@@ -90,6 +106,13 @@ impl CoreManager {
         {
             Ok(commit) => commit,
             Err(error) => {
+                // The runtime config was not replaced, so undo any DNS intent
+                // installed for the rejected target plan.
+                if let Err(dns_error) = self.dns_converge(ctrl).await {
+                    tracing::warn!(
+                        "DNS convergence after config commit failure failed: {dns_error}"
+                    );
+                }
                 let _ = self.inner.store.remove_backup(backup).await;
                 return Err(error);
             }
@@ -277,6 +300,7 @@ impl CoreManager {
         desired: EpochPlan,
         backup: crate::RuntimeConfigBackup,
     ) -> Result<ApplyOutcome, Error> {
+        self.dns_deactivate_for_plan(ctrl, &desired).await?;
         let old_plan = match self.retire_current(ctrl).await {
             Ok(retired) => retired.expect("current held by control lock"),
             Err(RetireFailure {
@@ -300,7 +324,7 @@ impl CoreManager {
             Some(&desired),
         );
 
-        match self.spawn_replacement(&desired).await {
+        match self.spawn_replacement(ctrl, &desired).await {
             Ok(instance) => {
                 let revision = desired.revision.clone();
                 let pid = instance.pid().unwrap_or_default();
@@ -341,7 +365,7 @@ impl CoreManager {
                     },
                     Some(&old_plan),
                 );
-                let rollback = match self.spawn_replacement(&old_plan).await {
+                let rollback = match self.spawn_replacement(ctrl, &old_plan).await {
                     Ok(instance) => {
                         let revision = old_plan.revision.clone();
                         let pid = instance.pid().unwrap_or_default();
@@ -389,6 +413,10 @@ impl CoreManager {
     ) -> Result<ApplyOutcome, Error> {
         let epoch = ctrl.epochs.next();
         let desired = self.prepare_launch(&input, epoch, &snapshot).await?;
+        if let Err(error) = self.dns_deactivate_for_plan(ctrl, &desired).await {
+            let _ = self.cleanup_epoch(epoch).await;
+            return Err(error);
+        }
         let old_plan = match self.retire_current(ctrl).await {
             Ok(retired) => retired.expect("current held by control lock"),
             Err(RetireFailure {
@@ -413,7 +441,7 @@ impl CoreManager {
             Some(&desired),
         );
 
-        match self.spawn_replacement(&desired).await {
+        match self.spawn_replacement(ctrl, &desired).await {
             Ok(instance) => {
                 let revision = desired.revision.clone();
                 let pid = instance.pid().unwrap_or_default();
@@ -445,7 +473,7 @@ impl CoreManager {
                     },
                     Some(&old_plan),
                 );
-                match self.spawn_replacement(&old_plan).await {
+                match self.spawn_replacement(ctrl, &old_plan).await {
                     Ok(instance) => {
                         let revision = old_plan.revision.clone();
                         let pid = instance.pid().unwrap_or_default();

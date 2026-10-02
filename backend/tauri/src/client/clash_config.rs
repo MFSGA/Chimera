@@ -273,7 +273,9 @@ impl ClashConfigClient {
     ) -> Result<()> {
         if patch.enable_tun_mode.is_some() {
             log::debug!(target: "app", "toggle tun mode");
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            ensure_macos_tun_permission(patch.enable_tun_mode == Some(true))?;
+            #[cfg(target_os = "linux")]
             {
                 use crate::utils::dirs::check_core_permission;
                 let current_core = Config::verge().data().clash_core.unwrap_or_default();
@@ -605,6 +607,18 @@ async fn validate_external_controller_change(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_macos_tun_permission(enabled: bool) -> Result<()> {
+    if !enabled || crate::core::service::ipc::get_ipc_state().is_connected() {
+        return Ok(());
+    }
+
+    let core = Config::verge().latest().clash_core.unwrap_or_default();
+    let core: chimera_utils::core::CoreType = (&core).into();
+    crate::utils::dirs::grant_macos_tun_permission(&core)
+        .context("failed to grant selected core the macOS TUN permission")
 }
 
 async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPlan) -> Result<()> {

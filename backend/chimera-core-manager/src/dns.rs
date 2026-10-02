@@ -99,10 +99,9 @@ pub trait DnsController: Send + Sync {
     fn restore<'a>(&'a self, record: &'a DnsOverrideRecord) -> BoxFuture<'a, Result<(), DnsError>>;
 }
 
-/// macOS implementation sketch. **Unverified on this branch** — written on a
-/// Windows host where `cfg(target_os = "macos")` code is never compiled or
-/// run; the Phase-0 spike on real macOS decides the mechanism and hardens
-/// this.
+/// macOS implementation. The `scutil` mechanism and effective resolver order
+/// remain unverified on a real Mac; this implementation is enabled only for a
+/// full-route TUN config that also intercepts UDP/TCP 53 and uses fake-IP DNS.
 ///
 /// Mechanism choice (audit §3, design §8): a `scutil` dynamic-store `State:`
 /// key expresses *structural ownership* — creating
@@ -119,6 +118,9 @@ pub trait DnsController: Send + Sync {
 #[cfg(target_os = "macos")]
 pub mod macos {
     use super::*;
+    use serde_yaml_ng::Value;
+
+    const DNS_HIJACK_SENTINEL: &str = "192.0.2.1";
 
     pub struct MacosDnsController {
         /// The dynamic-store key this controller owns, e.g.
@@ -178,18 +180,7 @@ pub mod macos {
 
     impl DnsController for MacosDnsController {
         fn desired(&self, effective: &Mapping) -> Option<DnsIntent> {
-            // Placeholder product rule, finalized with the app wiring (PR-D):
-            // only a DNS server the OS can actually reach on port 53 is worth
-            // pointing the system at.
-            let dns = effective.get("dns")?.as_mapping()?;
-            if !dns.get("enable")?.as_bool()? {
-                return None;
-            }
-            let listen = dns.get("listen")?.as_str()?;
-            let port = listen.rsplit_once(':')?.1;
-            (port == "53").then(|| DnsIntent {
-                servers: vec!["127.0.0.1".to_owned()],
-            })
+            desired_dns_intent(effective)
         }
 
         fn apply<'a>(
@@ -237,6 +228,59 @@ pub mod macos {
                 }
                 Ok(())
             })
+        }
+    }
+
+    /// Whether an effective macOS config requires system DNS interception,
+    /// and which sentinel resolver the host DNS controller must install.
+    /// Kept independent of the controller instance so the manager can reject
+    /// protected configs if its host DNS integration was accidentally omitted.
+    pub fn desired_dns_intent(effective: &Mapping) -> Option<DnsIntent> {
+        let dns = effective.get("dns")?.as_mapping()?;
+        let tun = effective.get("tun")?.as_mapping()?;
+        if dns.get("enable")?.as_bool()? != true
+            || mapping_field(dns, &["enhanced-mode", "enhanced_mode"])?.as_str()? != "fake-ip"
+            || tun.get("enable")?.as_bool()? != true
+            || !route_all_enabled(tun)
+            || !dns_hijack_catches_all_53(tun)
+        {
+            return None;
+        }
+
+        // This documentation-only address has no public DNS service. If
+        // macOS bypasses the TUN, name resolution fails closed instead of
+        // leaking queries to a real resolver. TUN captures it by port 53.
+        Some(DnsIntent {
+            servers: vec![DNS_HIJACK_SENTINEL.to_owned()],
+        })
+    }
+
+    fn mapping_field<'a>(mapping: &'a Mapping, keys: &[&str]) -> Option<&'a Value> {
+        keys.iter().find_map(|key| mapping.get(*key))
+    }
+
+    fn route_all_enabled(tun: &Mapping) -> bool {
+        mapping_field(tun, &["route-all", "auto-route", "route_all"])
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    fn dns_hijack_catches_all_53(tun: &Mapping) -> bool {
+        match mapping_field(tun, &["dns-hijack", "dns_hijack"]) {
+            Some(Value::Bool(enabled)) => *enabled,
+            Some(Value::Sequence(rules)) if rules.is_empty() => true,
+            Some(Value::Sequence(rules)) => {
+                let catches_udp = rules
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|rule| matches!(rule, "any:53" | "udp://any:53"));
+                let catches_tcp = rules
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|rule| rule == "tcp://any:53");
+                catches_udp && catches_tcp
+            }
+            _ => false,
         }
     }
 }

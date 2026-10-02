@@ -1,0 +1,220 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 60;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		100000000000000000000001 /* DNSProxyProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* DNSProxyProvider.swift */; };
+		100000000000000000000002 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* main.swift */; };
+		100000000000000000000003 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* NetworkExtension.framework */; };
+		100000000000000000000004 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* Network.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* DNSProxyProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ChimeraDNSProxy/DNSProxyProvider.swift; sourceTree = "<group>"; };
+		200000000000000000000002 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/ChimeraDNSProxyExtension/main.swift; sourceTree = "<group>"; };
+		200000000000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Resources/Info.plist; sourceTree = "<group>"; };
+		200000000000000000000004 /* ChimeraDNSProxyExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Resources/ChimeraDNSProxyExtension.entitlements; sourceTree = "<group>"; };
+		200000000000000000000005 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
+		200000000000000000000006 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
+		200000000000000000000007 /* chimera-dns-proxy.systemextension */ = {isa = PBXFileReference; explicitFileType = wrapper.system-extension; includeInIndex = 0; path = chimera-dns-proxy.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		300000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000003 /* NetworkExtension.framework in Frameworks */,
+				100000000000000000000004 /* Network.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		400000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* DNSProxyProvider.swift */,
+				200000000000000000000002 /* main.swift */,
+				200000000000000000000003 /* Info.plist */,
+				200000000000000000000004 /* ChimeraDNSProxyExtension.entitlements */,
+				200000000000000000000005 /* NetworkExtension.framework */,
+				200000000000000000000006 /* Network.framework */,
+				400000000000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		400000000000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000007 /* chimera-dns-proxy.systemextension */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		500000000000000000000001 /* ChimeraDNSProxyExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 600000000000000000000001 /* Build configuration list for PBXNativeTarget */;
+			buildPhases = (
+				300000000000000000000002 /* Sources */,
+				300000000000000000000001 /* Frameworks */,
+				300000000000000000000003 /* Resources */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = ChimeraDNSProxyExtension;
+			productName = chimera-dns-proxy;
+			productReference = 200000000000000000000007 /* chimera-dns-proxy.systemextension */;
+			productType = "com.apple.product-type.system-extension";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		700000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					500000000000000000000001 = {CreatedOnToolsVersion = 27.0; };
+				};
+			};
+			buildConfigurationList = 600000000000000000000002 /* Build configuration list for PBXProject */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, Base,);
+			mainGroup = 400000000000000000000001;
+			productRefGroup = 400000000000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (500000000000000000000001 /* ChimeraDNSProxyExtension */,);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		300000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				100000000000000000000001 /* DNSProxyProvider.swift in Sources */,
+				100000000000000000000002 /* main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXResourcesBuildPhase section */
+		300000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		800000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		800000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		800000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Resources/ChimeraDNSProxyExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chimera.app.dnsproxy;
+				PRODUCT_NAME = "chimera-dns-proxy";
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = systemextension;
+			};
+			name = Debug;
+		};
+		800000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Resources/ChimeraDNSProxyExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.chimera.app.dnsproxy;
+				PRODUCT_NAME = "chimera-dns-proxy";
+				SDKROOT = macosx;
+				SKIP_INSTALL = NO;
+				SWIFT_VERSION = 5.0;
+				WRAPPER_EXTENSION = systemextension;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		600000000000000000000001 /* Build configuration list for PBXNativeTarget */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				800000000000000000000003 /* Debug */,
+				800000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		600000000000000000000002 /* Build configuration list for PBXProject */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				800000000000000000000001 /* Debug */,
+				800000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 700000000000000000000001 /* Project object */;
+}

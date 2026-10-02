@@ -81,11 +81,11 @@ impl CoreManager {
             };
             return Err(error);
         }
-        self.inner
-            .publish(CoreState::Stopped { reason: None }, None);
         // Every uncertain epoch is now proven dead; nothing may keep holding
         // the DNS override.
-        self.dns_restore(&mut ctrl).await;
+        self.dns_restore(&mut ctrl).await?;
+        self.inner
+            .publish(CoreState::Stopped { reason: None }, None);
         Ok(())
     }
 }
