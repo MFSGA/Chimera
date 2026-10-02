@@ -3,6 +3,9 @@
 //! Chimera keeps its application paths and core selector, while the shared
 //! lifecycle transaction is owned by `chimera-core-manager`.
 
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
+
 use anyhow::Result;
 use camino::Utf8PathBuf;
 use chimera_core_manager::{
@@ -26,7 +29,14 @@ pub(crate) async fn build(paths: &PathResolver) -> Result<CoreControl> {
         ..ManagerOptions::default()
     };
 
-    let manager = RuntimeManager::builder(manager_options).build().await?;
+    let manager = RuntimeManager::builder(manager_options);
+    #[cfg(target_os = "macos")]
+    let manager = manager.dns_controller(Arc::new(
+        chimera_core_manager::dns::macos::MacosDnsController::new(
+            "State:/Network/Service/chimera-dns/DNS".into(),
+        ),
+    ));
+    let manager = manager.build().await?;
     let source_dir = to_utf8(runtime_root.join("staging"))?;
     let working_dir = to_utf8(paths.app_data_dir().to_owned())?;
 

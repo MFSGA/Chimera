@@ -43,13 +43,15 @@ impl CoreManager {
         let mut ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
         let spec = ctrl.last_spec.clone().ok_or(Error::NotStarted)?;
-        self.switch_locked(&mut ctrl, spec).await
+        let result = self.switch_locked(&mut ctrl, spec).await;
+        self.finish_dns_converge(&mut ctrl, result).await
     }
 
     pub async fn switch(&self, spec: InstanceSpec) -> Result<SwitchOutcome, Error> {
         let mut ctrl = self.inner.ctrl.lock().await;
         reject_quarantine(&ctrl)?;
-        self.switch_locked(&mut ctrl, spec).await
+        let result = self.switch_locked(&mut ctrl, spec).await;
+        self.finish_dns_converge(&mut ctrl, result).await
     }
 
     async fn switch_locked(
@@ -120,6 +122,11 @@ impl CoreManager {
                 return Err(error);
             }
         };
+        if let Err(error) = self.dns_deactivate_for_plan(ctrl, &plan).await {
+            let _ = self.cleanup_epoch(epoch).await;
+            self.republish_retained(ctrl);
+            return Err(error);
+        }
         let old_epoch = ctrl.current.as_ref().map(|active| active.instance.epoch());
         self.inner.publish(
             CoreState::Switching {
@@ -175,6 +182,17 @@ impl CoreManager {
             full_staged,
             restoration,
         } = prepared;
+        if let Err(error) = self.dns_activate_for_plan(ctrl, &launch).await {
+            // The old runtime is still the active owner at this point. Restore
+            // its DNS policy after an uncertain target activation attempt.
+            if let Err(dns_error) = self.dns_converge(ctrl).await {
+                tracing::warn!("DNS convergence after rejected switch failed: {dns_error}");
+            }
+            drop(full_staged);
+            let _ = self.cleanup_epoch(epoch).await;
+            self.republish_retained(ctrl);
+            return Err(error);
+        }
         self.inner.publish(
             CoreState::Switching {
                 from: old_epoch,
@@ -210,6 +228,26 @@ impl CoreManager {
                     return Err(self.latch_quarantine(ctrl, epoch, error));
                 }
             }
+        }
+
+        if let Err(error) = self.dns_deactivate_for_plan(ctrl, &launch).await {
+            drop(full_staged);
+            return match instance
+                .stop_and_confirm_dead(self.inner.options.stop_timeout)
+                .await
+            {
+                Ok(()) => {
+                    let _ = self.cleanup_epoch(epoch).await;
+                    self.republish_retained(ctrl);
+                    Err(error)
+                }
+                Err(stop_error) => {
+                    let error = Error::StopUnconfirmed(format!(
+                        "{error}; failed to stop graceful bootstrap after DNS restore failure: {stop_error}"
+                    ));
+                    Err(self.latch_quarantine(ctrl, epoch, error))
+                }
+            };
         }
 
         let old_epoch = match self.retire_current(ctrl).await {
@@ -311,7 +349,7 @@ impl CoreManager {
             };
             return with_switch_durability_result(Err(error), durability_warning);
         }
-        let replacement = match self.spawn_replacement(&launch).await {
+        let replacement = match self.spawn_replacement(ctrl, &launch).await {
             Ok(replacement) => replacement,
             Err(error @ Error::StopUnconfirmed(_)) => {
                 let error = self.latch_quarantine(ctrl, epoch, error);
@@ -478,8 +516,11 @@ impl CoreManager {
 
     pub(super) async fn spawn_replacement(
         &self,
+        ctrl: &mut Ctrl,
         plan: &EpochPlan,
     ) -> Result<Box<dyn RuntimeInstance>, Error> {
+        self.dns_deactivate_for_plan(ctrl, plan).await?;
+        self.dns_activate_for_plan(ctrl, plan).await?;
         let instance = self.spawn_instance(plan).await?;
         if let Err(error) = instance.wait_ready().await {
             return match instance

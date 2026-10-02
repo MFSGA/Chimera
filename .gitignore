@@ -40,6 +40,8 @@ release.sh
 !/docs/ref-alignment-guide.md
 !/docs/ref-alignment-profiles.md
 !/docs/tauri-e2e-minimal-architecture.md
+!/docs/design/
+!/docs/design/2026-09-28-macos-tun-dns-capture.md
 !/docs/testing/
 !/docs/testing/**
 # new rust-analyzer

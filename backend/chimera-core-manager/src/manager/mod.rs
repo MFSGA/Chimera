@@ -441,7 +441,8 @@ impl CoreManager {
             return Err(Error::AlreadyRunning);
         }
         self.discard_stale(&mut ctrl).await?;
-        self.start_locked(&mut ctrl, spec).await
+        let result = self.start_locked(&mut ctrl, spec).await;
+        self.finish_dns_converge(&mut ctrl, result).await
     }
 
     async fn start_locked(&self, ctrl: &mut Ctrl, spec: InstanceSpec) -> Result<(), Error> {
@@ -466,11 +467,30 @@ impl CoreManager {
 
     async fn start_prepared(&self, ctrl: &mut Ctrl, plan: EpochPlan) -> Result<(), Error> {
         let epoch = plan.revision.epoch;
+        if let Err(error) = self.dns_activate_for_plan(ctrl, &plan).await {
+            // No new runtime can consume the override. Try to restore the
+            // previous resolver; if that is uncertain, dns_restore keeps the
+            // durable ownership record for startup reconciliation.
+            if let Err(restore_error) = self.dns_restore(ctrl).await {
+                tracing::warn!("DNS restore after rejected launch failed: {restore_error}");
+            }
+            let _ = self.cleanup_epoch(epoch).await;
+            self.publish_terminal_error(&error);
+            return Err(error);
+        }
+        if let Err(error) = self.dns_deactivate_for_plan(ctrl, &plan).await {
+            let _ = self.cleanup_epoch(epoch).await;
+            self.publish_terminal_error(&error);
+            return Err(error);
+        }
         self.inner
             .publish(CoreState::Starting { epoch }, Some(&plan));
         let instance = match self.spawn_instance(&plan).await {
             Ok(instance) => instance,
             Err(error) => {
+                if let Err(restore_error) = self.dns_restore(ctrl).await {
+                    tracing::warn!("DNS restore after launch failure failed: {restore_error}");
+                }
                 let _ = self.cleanup_epoch(epoch).await;
                 self.publish_terminal_error(&error);
                 return Err(error);
@@ -483,6 +503,11 @@ impl CoreManager {
                 .await
             {
                 Ok(()) => {
+                    if let Err(restore_error) = self.dns_restore(ctrl).await {
+                        tracing::warn!(
+                            "DNS restore after readiness failure failed: {restore_error}"
+                        );
+                    }
                     let _ = self.cleanup_epoch(epoch).await;
                     self.publish_terminal_error(&readiness_error);
                     return Err(readiness_error);
@@ -511,7 +536,7 @@ impl CoreManager {
         let mut ctrl = self.inner.ctrl.lock().await;
         // Restore at the head of the stop transaction: resolution must never
         // point at a core that is being torn down.
-        self.dns_restore(&mut ctrl).await;
+        self.dns_restore(&mut ctrl).await?;
         let Some(active) = ctrl.current.take() else {
             return Err(Error::NotStarted);
         };
@@ -673,7 +698,7 @@ impl CoreManager {
         // between core stop and archive teardown.
         let mut ctrl = self.inner.ctrl.lock().await;
         // Same head restore as `stop`.
-        self.dns_restore(&mut ctrl).await;
+        self.dns_restore(&mut ctrl).await?;
         let result: Result<(), Error> = async {
             if let Some(active) = ctrl.current.take() {
                 let Active {
