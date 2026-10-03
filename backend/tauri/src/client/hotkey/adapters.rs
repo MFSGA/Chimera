@@ -80,6 +80,9 @@ impl<R: tauri::Runtime> ShortcutRegistrar for TauriShortcutRegistrar<R> {
         action: HotkeyAction,
         sink: Arc<dyn HotkeyActionSink>,
     ) -> anyhow::Result<()> {
+        // The plugin performs its own synchronous main-thread handoff. Keep
+        // this call on the actor's blocking worker; nesting it inside another
+        // main-thread callback would block the event loop waiting on itself.
         let manager = self.app_handle.global_shortcut();
         // Last writer wins: the grab may still be held from a binding this
         // process has already dropped from its own map.
