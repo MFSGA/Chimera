@@ -53,15 +53,19 @@ impl Sysopt {
 
     /// init the auto launch
     pub fn init_launch(&self) -> Result<()> {
+        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+        self.init_launch_with(enable)
+    }
+
+    fn init_launch_with(&self, enable: bool) -> Result<()> {
         #[cfg(feature = "e2e")]
         {
+            let _ = enable;
             return Ok(());
         }
 
         #[cfg(not(feature = "e2e"))]
         {
-            let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
-
             let app_exe = current_exe()?;
             let app_exe = dunce::canonicalize(app_exe)?;
             let app_name = app_exe
@@ -134,8 +138,16 @@ impl Sysopt {
 
     /// update the startup
     pub fn update_launch(&self) -> Result<()> {
+        let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
+        self.update_launch_to(enable)
+    }
+
+    /// Apply an explicit typed application setting without reading the legacy
+    /// config mirror.
+    pub fn update_launch_to(&self, enable: bool) -> Result<()> {
         #[cfg(feature = "e2e")]
         {
+            let _ = enable;
             return Ok(());
         }
 
@@ -145,10 +157,9 @@ impl Sysopt {
 
             if auto_launch.is_none() {
                 drop(auto_launch);
-                return self.init_launch();
+                return self.init_launch_with(enable);
             }
 
-            let enable = Config::verge().latest().enable_auto_launch.unwrap_or(false);
             let auto_launch = auto_launch.as_ref().unwrap();
 
             if enable {
@@ -190,6 +201,46 @@ impl Sysopt {
         sysproxy.set_system_proxy()?;
         *cur_sysproxy = Some(sysproxy);
 
+        Ok(())
+    }
+
+    /// Reconcile a typed application effect without reading the legacy config
+    /// mirror. The original OS proxy is captured only on the first enable and
+    /// remains the value restored by `reset_sysproxy`.
+    pub fn reconcile_system_proxy(
+        &self,
+        enable: bool,
+        port: Option<u16>,
+        bypass: &str,
+    ) -> Result<()> {
+        let mut current = self.cur_sysproxy.lock();
+        let mut original = self.old_sysproxy.lock();
+
+        if current.is_none() && !enable {
+            return Ok(());
+        }
+
+        let port = match (port, current.as_ref()) {
+            (Some(port), _) => port,
+            (None, Some(current)) => current.port,
+            (None, None) => anyhow::bail!("the session has not resolved a mixed port yet"),
+        };
+        let desired = Sysproxy {
+            enable,
+            host: "127.0.0.1".into(),
+            port,
+            bypass: if bypass.is_empty() {
+                DEFAULT_BYPASS.to_owned()
+            } else {
+                bypass.to_owned()
+            },
+        };
+
+        if current.is_none() {
+            *original = Sysproxy::get_system_proxy().ok();
+        }
+        desired.set_system_proxy()?;
+        *current = Some(desired);
         Ok(())
     }
 

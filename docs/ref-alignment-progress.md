@@ -1085,3 +1085,60 @@ DIFF-001 至 DIFF-012 是此前基于
   也未验证具体键盘布局上的操作系统快捷键回调。
 - 例外复查条件：这是对 ref 与其锁定 parser 间已复现不兼容的最小修正，不修改 `ref/`；当升级快捷键 parser，
   或调整 UI accelerator 分隔符/加号编码时，重新评估 `PLUS` 映射及键盘布局覆盖。
+
+## DIFF-040：按当前 ref 补齐快捷键回归覆盖
+
+- 基线：只读 `ref/` commit `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`，`main` 工作树 clean；本轮未更新
+  `ref/`。DIFF-034 至 DIFF-039 是基于 `ed1931f…` 的历史记录；本条开始按当前 commit 核对。
+- ref 到 Chimera 映射：`ref/backend/tauri/src/client/hotkey/tests.rs` 的 parse/diff/actor 契约对应新增的
+  `backend/tauri/src/client/hotkey/tests.rs`；`ref/frontend/nyanpasu/src/utils/parse-hotkey.ts::parseHotkey`
+  对应新增的 `frontend/chimera/src/utils/parse-hotkey.test.ts`，由根脚本 `pnpm test:hotkeys` 执行。
+  生产绑定仍从前端 HotkeyManager 经 typed application IPC 写入，由 `HotkeyClient` 和共享 effects actor
+  校验、持久化及 reconcile；配置 wire format 未变。
+- 本轮覆盖：历史 action/accelerator 格式、解析拒绝条件、`CMD` 和 `PLUS` 兼容、平台 canonical 重复绑定、
+  diff 语义、所有解绑先于注册、无效新绑定不拆除当前有效快捷键、部分失败后只重试缺失绑定、过期 revision
+  不触碰注册器、退出释放后拒绝迟到 reconcile，以及 Pressed action 进入 sink。
+- 保留差异与上游缺陷复现：当前 ref 的 `TauriShortcutRegistrar` 把整个快捷键插件调用包在
+  `MainThreadExecutor::run` 中。仓库锁定的 `tauri-plugin-global-shortcut 2.3.2` 在 `src/lib.rs` 的
+  `run_main_thread!` 宏又调用 `AppHandle::run_on_main_thread` 并同步 `recv`。若快捷键调用已经处于主线程任务中，
+  插件会排入另一个主线程任务并等待；事件循环正被外层同步等待占住，内层任务无法执行。最小复现是从
+  `run_on_main_thread` 回调内调用 `global_shortcut().on_shortcut(...)` / `unregister(...)`。因此 Chimera 保留
+  注册 actor 的串行所有权，并让插件自身从 actor 的阻塞 worker 完成主线程 handoff，不照搬这一嵌套等待。
+  当插件改为可在主线程内联执行、改成异步接口，或 ref 修复嵌套 handoff 后重新评估。
+- 影响入口：桌面主设置页的全局快捷键录入、保存与 actor 注册规则；legacy UI 既有快捷操作及 agent 入口未改。
+  测试使用 fake registrar/sink，不注册系统快捷键、不修改主机状态。
+- 验证：Rust `client::hotkey::tests` 12 项、`pnpm test:hotkeys` 2 项；实际命令与最终结果见本次交付。
+  未启动桌面应用，未实测 macOS 全局注册、键盘布局回调或权限条件。
+- 状态：快捷键 parser/actor 具备可执行回归测试；整体仍是部分迁移。完整 effects executor、所有 typed
+  application commit 通知、retry 后状态订阅及真实桌面注册验证仍待后续切片。
+
+## DIFF-041：应用 effects 完整分发器
+
+- 基线：只读 `ref/` commit `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`，工作树
+  clean；本轮未更新或修改 `ref/`。
+- ref 到 Chimera 映射：`ref/backend/tauri/src/client/effects/executor.rs::ApplicationEffectExecutor::{apply,apply_hotkeys,apply_tray,system_proxy_desires}`、
+  `ref/backend/tauri/src/client/ui_effects/{ports.rs,adapters.rs}` 对应
+  `backend/tauri/src/client/effects/{executor.rs,adapters.rs}`；上游
+  `SystemProxyClient::reconcile` 对应本地
+  `core::sysopt::Sysopt::reconcile_system_proxy` 临时兼容入口。生产 composition
+  在 `setup.rs` 注入 `ApplicationEffectExecutor` 与 Tauri adapter。
+- 本轮实现：按 plan 顺序分发 Locale、Logger、AutoLaunch、SystemProxy、ProxyGuard、
+  Hotkeys、Widget、Tray；逐 effect 返回健康、可重试降级或 Unsupported 状态。自启动和
+  系统代理同步 OS 调用进入 blocking pool；托盘工作排入 Tauri 主线程；关闭时恢复
+  sysopt 保存的代理并释放快捷键。未改变配置 wire format。
+- 保留差异与边界：系统代理仍由现有全局 `Sysopt` 持有，代理 guard 使用兼容循环而非 ref
+  actor 的取消/定时状态；PAC 启用会报告 `pac_proxy_unsupported`，不会假报应用成功；本地
+  没有 widget runtime，禁用状态为空操作，启用状态报告 `widget_runtime_unavailable`。
+  托盘仍从 Chimera 的全局配置读取视图，没有迁入 ref 的 `TrayView` 缓存所有权。
+- 提交通知边界：完整 dispatcher 已注入生产 `ApplicationEffectsPort`，但所有 typed
+  application/clash/profile/runtime commit 通知尚未接通。当前普通设置变更继续走已有
+  legacy side effects；快捷键路径仍只向共享 actor 提交 Hotkeys effect。因此本条完成的是
+  executor 分发实现，不代表所有 effect 已从所有 UI/agent 入口切到该路径。
+- 影响入口：对现有 legacy UI 与主 UI 操作未做交互或持久化格式改动；主界面快捷键仍通过
+  共享 actor。非快捷键 effect 的统一提交入口、agent 变更通知和重试状态订阅仍待后续接线。
+- 测试契约：`docs/testing/contracts/application-effects-executor.md`。fake adapters 不改宿主
+  设置；测试覆盖全量 effect 顺序、未解析 mixed port、PAC 下关闭代理及 widget 未实现状态。
+  CI Ubuntu job 执行 `client::effects::` 测试筛选和既有快捷键测试。
+- 收敛条件：迁入 ref 对应的 system-proxy actor 与 UI effect owners、实现所需 PAC/widget
+  runtime 后，将 legacy side effects 和 Sysopt adapter 收敛到单一 owner；再接通各 typed
+  commit notification，并为主 UI、legacy UI 和 agent 入口补真实桌面验证。

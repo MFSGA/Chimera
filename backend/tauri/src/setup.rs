@@ -81,10 +81,17 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let accelerators = Arc::new(PlatformAcceleratorValidator);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    let effects = Arc::new(crate::client::effects::executor::HotkeyEffectExecutor::new(
-        hotkeys,
-        accelerators.clone(),
-    ));
+    let effect_adapters = Arc::new(
+        crate::client::effects::adapters::TauriApplicationEffectAdapters::new(app.handle().clone()),
+    );
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let effects = Arc::new(
+        crate::client::effects::executor::ApplicationEffectExecutor::new(
+            hotkeys,
+            accelerators.clone(),
+            effect_adapters,
+        ),
+    );
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));
 
