@@ -8,6 +8,9 @@ mod actor;
 pub mod adapters;
 pub mod ports;
 
+#[cfg(test)]
+mod tests;
+
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
