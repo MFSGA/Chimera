@@ -1142,3 +1142,42 @@ DIFF-001 至 DIFF-012 是此前基于
 - 收敛条件：迁入 ref 对应的 system-proxy actor 与 UI effect owners、实现所需 PAC/widget
   runtime 后，将 legacy side effects 和 Sysopt adapter 收敛到单一 owner；再接通各 typed
   commit notification，并为主 UI、legacy UI 和 agent 入口补真实桌面验证。
+
+## DIFF-042：按 domain 发布 post-commit effects 通知
+
+- 基线：只读 `ref/` commit `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`，工作树
+  clean；本轮未更新或修改 `ref/`。
+- ref 到 Chimera 映射：`ref/backend/tauri/src/client/effects/ports.rs::CommitNotifications`
+  的 `application_committed`、`clash_committed`、`profiles_committed`、`runtime_bound` 和
+  `publish_full`，以及 `effects/actor.rs::Slice` 的单 domain merge，对应
+  `backend/tauri/src/client/effects/{ports.rs,actor.rs}`。Profile TCC 提交点对应
+  `application_workflow/{workflow.rs,tcc.rs}`；Chimera 的注入经过
+  `state/mutation.rs::MutationCoordinator` 和 `client/mod.rs::try_new_with_args`。
+- 本轮实现：通知接口现在按 application、Clash、Profiles 和已绑定 runtime ports 分片；effects actor
+  将收到的 slice 合并进各自最新输入后再生成 diff。只有 source 决策为 `Committed` 才触发 TCC 的
+  Profiles 通知。ProfilesClient 的序列化 source mutation 复用该 TCC owner，避免在 facade 收到
+  `CommitReport` 时再次通知。主/legacy UI 的 Profiles 状态事件继续按原路径发送，新增通知只负责 shared
+  effects actor 的托盘刷新。
+- 保留差异：本轮只生产接入 Profiles slice。Application 和 Clash 仍由原有
+  `run_verge_patch_side_effects` / `run_clash_patch_side_effects` 持有；runtime ports 通知也未接入，避免在
+  其旧 sysopt/lifecycle owner 仍执行时重复应用系统代理、guard 或托盘副作用。因此本条是部分迁移，不代表
+  所有 effect 已经改由 executor 执行。`reconcile(inputs)` 保留完整输入 slice，供当前兼容调用方使用。
+- 影响入口：经 typed Profile TCC 完成的 add/import/delete/reorder/refresh/metadata/activate/transforms/file
+  source commits 会请求一次 shared tray partial refresh；前端 Profile refresh 仍覆盖主 UI 与 legacy UI。
+  agent 若经由同一 `ChimeraClient` Profile API 会复用该通知；没有增加 agent 专属业务实现。未改变 Profiles
+  持久化格式或 runtime commit/rollback 语义。
+- 测试契约：扩展 `docs/testing/contracts/application-effects-executor.md`。actor 单测验证 domain slice
+  不覆盖 sibling state，Profile commit 只产生 Tray Part plan；TCC 单测验证 committed Profile source
+  mutation 发出一次通知。fake effect port 不触碰 Tauri、系统代理或主机设置。
+- 验证：`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、
+  `git diff --check`；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib
+  client::effects:: -- --test-threads=1`（40 passed）；
+  `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib
+  client::application_workflow::tcc::tests -- --test-threads=1`（11 passed）；
+  `pnpm lint:clippy` 通过（仓库既有 warning）。Ubuntu CI 的 effects/hotkey 步骤新增执行 TCC 测试筛选。
+- 验证环境差异：Cargo 首次因 `backend/chimera-runtime/chimera_service/Cargo.toml` 中重复的
+  `[dev-dependencies]` table 无法解析 workspace。为运行 Rust 检查，保留了删除重复、内容相同的
+  `tempfile = "3"` table；该目录是 submodule，变更只删除冗余声明，没有改变依赖集合。
+- 后续：已运行 TCC committed-notification 测试和 `client::effects::` CI filter；将 application/clash
+  producers 接到 slice 前，先迁移或移除对应的 legacy direct side effects；之后再接 runtime-bound/full
+  lifecycle producer 和可观察 effect status。

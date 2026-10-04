@@ -14,6 +14,7 @@ use crate::client::{
         policy::CommandClass,
     },
     core_lifecycle::CoreLifecycleClient,
+    effects::ports::CommitNotifications,
     runtime::{CommitReceipt, Degradation, DegradationPhase, RuntimeCommitStatus},
 };
 
@@ -30,6 +31,7 @@ pub(crate) struct MutationCoordinator {
     connection: watch::Sender<Connection>,
     outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
     recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
+    notifications: Option<Arc<dyn CommitNotifications>>,
 }
 
 impl Default for MutationCoordinator {
@@ -44,6 +46,14 @@ impl MutationCoordinator {
             connection: watch::channel(Connection::Pending).0,
             outcomes: Arc::new(Mutex::new(HashMap::new())),
             recovery_required: Arc::new(Mutex::new(None)),
+            notifications: None,
+        }
+    }
+
+    pub fn pending_with_notifications(notifications: Arc<dyn CommitNotifications>) -> Self {
+        Self {
+            notifications: Some(notifications),
+            ..Self::pending()
         }
     }
 
@@ -60,6 +70,7 @@ impl MutationCoordinator {
             core,
             self.outcomes.clone(),
             self.recovery_required.clone(),
+            self.notifications.clone(),
         )
         .await?;
         self.connection.send_replace(Connection::Ready(workflow));

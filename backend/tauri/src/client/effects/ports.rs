@@ -99,23 +99,46 @@ mod tests {
 
 /// Post-commit notification only: never a source-transaction vote.
 pub(crate) trait CommitNotifications: Send + Sync + 'static {
-    fn committed(
+    fn application_committed(
         &self,
-        inputs: super::plan::ApplicationEffectInputs,
-        refresh: bool,
+        fields: super::plan::ApplicationEffectFields,
         requested: Vec<super::plan::EffectKind>,
     );
+
+    fn clash_committed(&self, fields: super::plan::ClashEffectFields);
+
+    fn profiles_committed(&self);
+
+    fn runtime_bound(
+        &self,
+        ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+        refresh: bool,
+    );
+
+    fn publish_full(&self, ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>);
 }
 
 #[cfg(test)]
 pub(crate) struct NoopCommitNotifications;
 #[cfg(test)]
 impl CommitNotifications for NoopCommitNotifications {
-    fn committed(
+    fn application_committed(
         &self,
-        _: super::plan::ApplicationEffectInputs,
-        _: bool,
+        _: super::plan::ApplicationEffectFields,
         _: Vec<super::plan::EffectKind>,
     ) {
     }
+
+    fn clash_committed(&self, _: super::plan::ClashEffectFields) {}
+
+    fn profiles_committed(&self) {}
+
+    fn runtime_bound(
+        &self,
+        _: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+        _: bool,
+    ) {
+    }
+
+    fn publish_full(&self, _: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {}
 }

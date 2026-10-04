@@ -7,7 +7,8 @@ use tokio::sync::watch;
 
 use super::{
     plan::{
-        ApplicationEffect, ApplicationEffectInputs, ApplicationEffectPlan, EffectKind, TrayRefresh,
+        ApplicationEffect, ApplicationEffectFields, ApplicationEffectInputs, ApplicationEffectPlan,
+        ClashEffectFields, EffectKind, TrayRefresh,
     },
     ports::{ApplicationEffectsPort, CommitNotifications},
     status::{EffectHealth, EffectRevision, EffectStatus},
@@ -16,6 +17,7 @@ use crate::client::{
     UiEventSink,
     convergence::{ConvergenceHealth, RetryBudget},
 };
+use chimera_config::runtime::executor::ResolvedPortBindings;
 
 #[derive(Clone, Debug, Default)]
 pub struct EffectsSnapshot {
@@ -90,7 +92,7 @@ struct State {
 
 enum Message {
     Publish {
-        inputs: Box<ApplicationEffectInputs>,
+        slice: Slice,
         refresh: bool,
         full: bool,
         requested: Vec<EffectKind>,
@@ -110,6 +112,27 @@ enum Message {
     Shutdown(RpcReplyPort<Vec<EffectStatus>>),
     #[cfg(test)]
     Barrier(RpcReplyPort<()>),
+}
+
+/// One owner sends only its latest slice. The actor merges slices before it
+/// diffs effects, so an update cannot overwrite another domain's newer state.
+enum Slice {
+    Application(Box<ApplicationEffectFields>),
+    Clash(ClashEffectFields),
+    Ports(Option<ResolvedPortBindings>),
+    Profiles,
+    Full(Box<ApplicationEffectInputs>),
+}
+
+fn merge_slice(mut inputs: ApplicationEffectInputs, slice: Slice) -> ApplicationEffectInputs {
+    match slice {
+        Slice::Application(app) => inputs.app = *app,
+        Slice::Clash(clash) => inputs.clash = clash,
+        Slice::Ports(ports) => inputs.ports = ports,
+        Slice::Profiles => {}
+        Slice::Full(complete) => inputs = *complete,
+    }
+    inputs
 }
 
 fn group(kind: EffectKind) -> usize {
@@ -358,17 +381,18 @@ impl Actor for EffectsActor {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             Message::Publish {
-                inputs,
+                slice,
                 refresh,
                 full,
                 requested,
             } if !state.closed => {
+                let inputs = merge_slice(state.desired.clone(), slice);
                 let changed: Vec<_> = ApplicationEffectPlan::diff(&state.desired, &inputs)
                     .effects()
                     .iter()
                     .map(ApplicationEffect::kind)
                     .collect();
-                state.enqueue(*inputs, refresh, full);
+                state.enqueue(inputs, refresh, full);
                 for kind in requested {
                     if !changed.contains(&kind) {
                         state.retry(kind, false);
@@ -607,7 +631,7 @@ impl EffectsClient {
     }
     pub fn reconcile(&self, inputs: ApplicationEffectInputs) {
         if let Err(error) = self.actor.cast(Message::Publish {
-            inputs: Box::new(inputs),
+            slice: Slice::Full(Box::new(inputs)),
             refresh: true,
             full: true,
             requested: Vec::new(),
@@ -645,17 +669,131 @@ impl EffectsClient {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chimera_config::{application::ChimeraAppConfig, clash::config::ClashConfig};
+    use tokio::sync::mpsc;
+
+    struct RecordingEffectsPort {
+        plans: mpsc::UnboundedSender<ApplicationEffectPlan>,
+    }
+
+    #[async_trait::async_trait]
+    impl ApplicationEffectsPort for RecordingEffectsPort {
+        async fn apply(
+            &self,
+            revision: EffectRevision,
+            plan: ApplicationEffectPlan,
+        ) -> Vec<EffectStatus> {
+            let _ = self.plans.send(plan.clone());
+            plan.effects()
+                .iter()
+                .map(|effect| EffectStatus {
+                    kind: effect.kind(),
+                    desired_revision: revision,
+                    applied_revision: revision,
+                    health: EffectHealth::Healthy,
+                })
+                .collect()
+        }
+
+        async fn shutdown(&self) -> Vec<EffectStatus> {
+            Vec::new()
+        }
+    }
+
+    fn inputs() -> ApplicationEffectInputs {
+        ApplicationEffectInputs::project(
+            &ChimeraAppConfig::default(),
+            &ClashConfig::default(),
+            None,
+        )
+    }
+
+    #[test]
+    fn publishing_one_domain_preserves_the_other_domain_and_runtime_ports() {
+        let initial = inputs();
+        let mut app = initial.app.clone();
+        app.enable_tray_text = !app.enable_tray_text;
+        let after_app = merge_slice(initial.clone(), Slice::Application(Box::new(app.clone())));
+
+        assert_eq!(after_app.app, app);
+        assert_eq!(after_app.clash, initial.clash);
+        assert_eq!(after_app.ports, initial.ports);
+
+        let mut clash = initial.clash.clone();
+        clash.enable_tun_mode = !clash.enable_tun_mode;
+        let after_clash = merge_slice(after_app, Slice::Clash(clash.clone()));
+
+        assert_eq!(after_clash.app, app);
+        assert_eq!(after_clash.clash, clash);
+        assert_eq!(after_clash.ports, initial.ports);
+
+        assert_eq!(
+            merge_slice(after_clash.clone(), Slice::Profiles),
+            after_clash
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_commit_notifies_the_tray_without_replaying_other_effects() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(RecordingEffectsPort { plans: sender }),
+            ui: Arc::new(crate::client::NoopUiEventSink),
+            initial: inputs(),
+        })
+        .await
+        .expect("effects actor");
+
+        CommitNotifications::profiles_committed(&effects);
+        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("profile commit effect plan")
+            .expect("recorded effect plan");
+
+        assert_eq!(
+            plan.effects(),
+            &[ApplicationEffect::Tray(TrayRefresh::Part)]
+        );
+        let _ = effects.shutdown().await;
+    }
+}
+
 impl CommitNotifications for EffectsClient {
-    fn committed(
-        &self,
-        inputs: ApplicationEffectInputs,
-        refresh: bool,
-        requested: Vec<EffectKind>,
-    ) {
+    fn application_committed(&self, fields: ApplicationEffectFields, requested: Vec<EffectKind>) {
+        self.publish(
+            Slice::Application(Box::new(fields)),
+            false,
+            false,
+            requested,
+        );
+    }
+
+    fn clash_committed(&self, fields: ClashEffectFields) {
+        self.publish(Slice::Clash(fields), false, false, Vec::new());
+    }
+
+    fn profiles_committed(&self) {
+        self.publish(Slice::Profiles, true, false, Vec::new());
+    }
+
+    fn runtime_bound(&self, ports: Option<ResolvedPortBindings>, refresh: bool) {
+        self.publish(Slice::Ports(ports), refresh, false, Vec::new());
+    }
+
+    fn publish_full(&self, ports: Option<ResolvedPortBindings>) {
+        self.publish(Slice::Ports(ports), true, true, Vec::new());
+    }
+}
+
+impl EffectsClient {
+    fn publish(&self, slice: Slice, refresh: bool, full: bool, requested: Vec<EffectKind>) {
         if let Err(error) = self.actor.cast(Message::Publish {
-            inputs: Box::new(inputs),
+            slice,
             refresh,
-            full: false,
+            full,
             requested,
         }) {
             tracing::warn!(%error, "committed effects could not be queued");

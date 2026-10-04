@@ -140,6 +140,7 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: |
           cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::effects::
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::application_workflow::tcc::tests
           cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::hotkey::tests
           pnpm test:hotkeys
 

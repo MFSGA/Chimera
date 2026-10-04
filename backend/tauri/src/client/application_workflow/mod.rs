@@ -36,17 +36,23 @@ impl ApplicationWorkflowClient {
         core: CoreLifecycleClient,
         outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
         recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     ) -> anyhow::Result<Self> {
-        core.connect_application_workflow(ApplicationWorkflow::new(outcomes, recovery_required))
-            .await?;
+        core.connect_application_workflow(ApplicationWorkflow::new(
+            outcomes,
+            recovery_required,
+            notifications,
+        ))
+        .await?;
         Ok(Self(ApplicationWorkflowClientInner::CoreLifecycle(core)))
     }
 
     #[cfg(test)]
-    pub(super) async fn spawn_with_runtime(
+    pub(super) async fn spawn_with_runtime_and_notifications(
         runtime: Arc<dyn workflow::ProfileRuntime>,
         outcomes: Arc<Mutex<HashMap<OperationId, mutation::MutationReceipt>>>,
         recovery_required: Arc<Mutex<Option<workflow::RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     ) -> anyhow::Result<Self> {
         use ractor::Actor;
 
@@ -54,7 +60,7 @@ impl ApplicationWorkflowClient {
             None,
             TestApplicationWorkflowActor,
             TestApplicationWorkflowState {
-                workflow: ApplicationWorkflow::new(outcomes, recovery_required),
+                workflow: ApplicationWorkflow::new(outcomes, recovery_required, notifications),
                 runtime,
             },
         )

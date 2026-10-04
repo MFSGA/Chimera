@@ -66,6 +66,7 @@ pub(crate) trait ProfileRuntime: Send + Sync + 'static {
 pub(in crate::client) struct ApplicationWorkflow {
     pub(super) outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
     pub(super) recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
+    pub(super) notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     pub(super) deferred: Option<DeferredTarget>,
 }
 
@@ -73,10 +74,12 @@ impl ApplicationWorkflow {
     pub(super) fn new(
         outcomes: Arc<Mutex<HashMap<OperationId, MutationReceipt>>>,
         recovery_required: Arc<Mutex<Option<RecoveryContext>>>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
     ) -> Self {
         Self {
             outcomes,
             recovery_required,
+            notifications,
             deferred: None,
         }
     }
