@@ -1,3 +1,33 @@
+## [0.25.4] - 2026-10-04 09:05:11
+
+### ✅ Testing
+
+- **hotkeys:** Cover parser and actor reconciliation by @MFSGA
+
+### ✨ Features
+
+- **effects:** Publish committed profile slices by @MFSGA
+
+- **effects:** Add application effects executor by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **macos:** Restore TUN core authorization by @MFSGA
+
+- **macos:** Align window traffic lights by @MFSGA
+
+- **macos:** Simplify TUN DNS flow by @MFSGA
+
+- **ui:** Align macOS header with Nyanpasu by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **runtime:** Update service submodule by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.3...v0.25.4
+
 ## [0.25.3] - 2026-10-02 20:01:19
 
 ### ✨ Features
