@@ -107,6 +107,12 @@ impl ApplicationWorkflow {
                 Ok(StateDecision::Undecided) => unreachable!("decision wait returned undecided"),
             };
 
+        if matches!(&decision, DecisionOutcome::Committed)
+            && let Some(notifications) = &self.notifications
+        {
+            notifications.profiles_committed();
+        }
+
         let request_runtime_rebuild = matches!(
             (&outcome, &decision),
             (
@@ -1196,16 +1202,63 @@ mod tests {
         Arc<Mutex<std::collections::HashMap<OperationId, MutationReceipt>>>,
         Arc<Mutex<Option<RecoveryContext>>>,
     ) {
+        workflow_with_notifications(runtime, None).await
+    }
+
+    async fn workflow_with_notifications(
+        runtime: Arc<TestProfileRuntime>,
+        notifications: Option<Arc<dyn crate::client::effects::ports::CommitNotifications>>,
+    ) -> (
+        ApplicationWorkflowClient,
+        Arc<Mutex<std::collections::HashMap<OperationId, MutationReceipt>>>,
+        Arc<Mutex<Option<RecoveryContext>>>,
+    ) {
         let outcomes = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let recovery_required = Arc::new(Mutex::new(None));
-        let workflow = ApplicationWorkflowClient::spawn_with_runtime(
+        let workflow = ApplicationWorkflowClient::spawn_with_runtime_and_notifications(
             runtime,
             outcomes.clone(),
             recovery_required.clone(),
+            notifications,
         )
         .await
         .expect("application workflow actor");
         (workflow, outcomes, recovery_required)
+    }
+
+    #[derive(Default)]
+    struct RecordingCommitNotifications {
+        profiles: AtomicUsize,
+    }
+
+    impl crate::client::effects::ports::CommitNotifications for RecordingCommitNotifications {
+        fn application_committed(
+            &self,
+            _: crate::client::effects::plan::ApplicationEffectFields,
+            _: Vec<crate::client::effects::plan::EffectKind>,
+        ) {
+            unreachable!("profile mutation does not publish application fields")
+        }
+
+        fn clash_committed(&self, _: crate::client::effects::plan::ClashEffectFields) {
+            unreachable!("profile mutation does not publish Clash fields")
+        }
+
+        fn profiles_committed(&self) {
+            self.profiles.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn runtime_bound(
+            &self,
+            _: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+            _: bool,
+        ) {
+            unreachable!("profile mutation does not publish runtime ports")
+        }
+
+        fn publish_full(&self, _: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {
+            unreachable!("profile mutation does not publish a full effect snapshot")
+        }
     }
 
     fn candidate_profiles() -> Profiles {
@@ -1337,7 +1390,9 @@ mod tests {
         let (mut manager, _directory) = profile_manager().await;
         let candidate = candidate_profiles();
         let runtime = Arc::new(TestProfileRuntime::new());
-        let (workflow, outcomes, _) = workflow(runtime.clone()).await;
+        let notifications = Arc::new(RecordingCommitNotifications::default());
+        let (workflow, outcomes, _) =
+            workflow_with_notifications(runtime.clone(), Some(notifications.clone())).await;
         let operation_id = OperationId::generate();
         let version = manager.snapshot_handle().load().version;
 
@@ -1382,6 +1437,7 @@ mod tests {
             outcomes.lock().await.get(&operation_id).unwrap().check,
             CheckRecord::Passed
         );
+        assert_eq!(notifications.profiles.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

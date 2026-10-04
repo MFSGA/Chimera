@@ -237,6 +237,9 @@ impl ChimeraClient {
             })
             .await
         })?;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let mutations = MutationCoordinator::pending_with_notifications(Arc::new(effects.clone()));
+        #[cfg(any(target_os = "android", target_os = "ios"))]
         let mutations = MutationCoordinator::pending();
         let typed_profiles = tauri::async_runtime::block_on(profiles::ProfilesClient::new(
             mutations.clone(),
