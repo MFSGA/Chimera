@@ -9,6 +9,7 @@ pub mod download;
 pub mod handle;
 /// 5
 pub mod logger;
+pub mod manager;
 pub mod migration;
 /// 7
 pub mod server;
