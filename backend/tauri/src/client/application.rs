@@ -542,6 +542,31 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     let application_patch = split.application.clone().unwrap_or_default();
     let plan = plan_verge_patch(&application_patch, split.clash_config.as_ref())?;
 
+    #[cfg(target_os = "macos")]
+    if macos_tun_authorization_required(
+        split
+            .clash_config
+            .as_ref()
+            .and_then(|patch| patch.enable_tun_mode),
+        application_patch
+            .enable_service_mode
+            .or(base.enable_service_mode)
+            .unwrap_or(false),
+        crate::core::service::ipc::get_ipc_state().is_connected(),
+    ) {
+        let core = application_patch
+            .clash_core
+            .as_ref()
+            .or(base.clash_core.as_ref())
+            .cloned()
+            .unwrap_or_default();
+        let core: chimera_utils::core::CoreType = (&core).into();
+        tokio::task::spawn_blocking(move || crate::core::manager::grant_permission(&core))
+            .await
+            .context("macOS TUN authorization task failed")?
+            .context("failed to grant selected core the macOS TUN permission")?;
+    }
+
     #[cfg(target_os = "windows")]
     validate_windows_service_mode_tun_transition(
         plan.service_mode,
@@ -731,6 +756,15 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn macos_tun_authorization_required(
+    target_tun: Option<bool>,
+    service_mode: bool,
+    service_connected: bool,
+) -> bool {
+    target_tun == Some(true) && !(service_mode && service_connected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,6 +822,17 @@ mod tests {
             validate_windows_service_mode_tun_transition(Some(false), true, Some(false)).is_ok()
         );
         assert!(validate_windows_service_mode_tun_transition(Some(true), true, None).is_ok());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_tun_authorization_required_only_for_local_enable() {
+        assert!(macos_tun_authorization_required(Some(true), false, false));
+        assert!(macos_tun_authorization_required(Some(true), true, false));
+        assert!(!macos_tun_authorization_required(Some(true), true, true));
+        assert!(macos_tun_authorization_required(Some(true), false, true));
+        assert!(!macos_tun_authorization_required(Some(false), false, false));
+        assert!(!macos_tun_authorization_required(None, false, false));
     }
 
     #[test]
