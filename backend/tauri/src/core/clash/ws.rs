@@ -12,7 +12,10 @@ use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult}
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
-use tokio::{sync::mpsc::Receiver, task::JoinHandle};
+use tokio::{
+    sync::{mpsc::Receiver, watch},
+    task::JoinHandle,
+};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
@@ -99,6 +102,14 @@ pub struct ClashWsConnectionSnapshot {
     // bug is fixed or a proper named recursive JsonValue type is available.
     #[specta(type = Option<specta_typescript::Any>)]
     pub connections: Option<Vec<serde_json::Value>>,
+}
+
+/// Internal accounting frame. The instance id remains stable across transport reconnects and
+/// rotates only when the connector is explicitly restarted with a new core lifecycle.
+#[derive(Debug, Clone)]
+pub struct ClashConnectionsFrame {
+    pub instance_id: String,
+    pub snapshot: ClashWsConnectionSnapshot,
 }
 
 #[derive(Debug, Clone, Type, Serialize, Deserialize)]
@@ -307,6 +318,8 @@ struct ClashConnectionsConnectorShared {
     state: AtomicClashConnectionsConnectorState,
     connections_tx: tokio::sync::broadcast::Sender<ClashConnectionsConnectorEvent>,
     ws_tx: tokio::sync::broadcast::Sender<ClashWsEvent>,
+    frames: watch::Sender<Option<Arc<ClashConnectionsFrame>>>,
+    instance_id: Mutex<String>,
     info: Mutex<ClashConnectionsInfo>,
     history: Mutex<ClashWsHistory>,
     recording: Mutex<ClashWsRecording>,
@@ -314,12 +327,15 @@ struct ClashConnectionsConnectorShared {
 
 impl ClashConnectionsConnectorShared {
     fn new() -> Self {
+        let (frames, _) = watch::channel(None);
         Self {
             state: AtomicClashConnectionsConnectorState::new(
                 ClashConnectionsConnectorState::Disconnected,
             ),
             connections_tx: tokio::sync::broadcast::channel(16).0,
             ws_tx: tokio::sync::broadcast::channel(64).0,
+            frames,
+            instance_id: Mutex::new(nanoid::nanoid!()),
             info: Mutex::new(ClashConnectionsInfo::default()),
             history: Mutex::new(ClashWsHistory::default()),
             recording: Mutex::new(ClashWsRecording::default()),
@@ -338,6 +354,9 @@ impl ClashConnectionsConnectorShared {
 
     fn dispatch_state_changed(&self, state: ClashConnectionsConnectorState) {
         let event_state = state.clone();
+        if state == ClashConnectionsConnectorState::Disconnected {
+            self.frames.send_replace(None);
+        }
         self.state.store(state, Ordering::Release);
         let _ = self
             .connections_tx
@@ -353,6 +372,10 @@ impl ClashConnectionsConnectorShared {
 
     fn subscribe_ws(&self) -> tokio::sync::broadcast::Receiver<ClashWsEvent> {
         self.ws_tx.subscribe()
+    }
+
+    fn subscribe_frames(&self) -> watch::Receiver<Option<Arc<ClashConnectionsFrame>>> {
+        self.frames.subscribe()
     }
 
     fn set_recording(&self, kind: ClashWsKind, enabled: bool) -> ClashWsRecording {
@@ -411,7 +434,16 @@ impl ClashConnectionsConnectorShared {
                 MAX_CONNECTIONS_HISTORY,
             );
         }
+        self.frames
+            .send_replace(Some(Arc::new(ClashConnectionsFrame {
+                instance_id: self.instance_id.lock().clone(),
+                snapshot: snapshot.clone(),
+            })));
         let _ = self.ws_tx.send(ClashWsEvent::ConnectionsUpdated(snapshot));
+    }
+
+    fn renew_instance(&self) {
+        *self.instance_id.lock() = nanoid::nanoid!();
     }
 
     fn update_log(&self, raw: serde_json::Value) {
@@ -650,6 +682,7 @@ impl Actor for ClashConnectionsActor {
                 let _ = reply.send(());
             }
             ClashConnectionsActorMessage::Restart(reply) => {
+                state.shared.renew_instance();
                 Self::stop_all(state).await;
                 let result = Self::start_all(myself, state).await;
                 let _ = reply.send(result);
@@ -805,6 +838,10 @@ impl ClashConnectionsConnectorInner {
 
     pub fn subscribe_ws(&self) -> tokio::sync::broadcast::Receiver<ClashWsEvent> {
         self.shared.subscribe_ws()
+    }
+
+    pub fn subscribe_frames(&self) -> watch::Receiver<Option<Arc<ClashConnectionsFrame>>> {
+        self.shared.subscribe_frames()
     }
 
     pub fn set_recording(&self, kind: ClashWsKind, enabled: bool) -> ClashWsRecording {

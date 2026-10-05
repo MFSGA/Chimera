@@ -5,6 +5,7 @@ mod clash_strategy;
 pub use self::clash_strategy::{ClashStrategy, ExternalControllerPortStrategy};
 
 use anyhow::Result;
+use chimera_config::application::TrafficRetention;
 use chimera_macro::VergePatch;
 use enumflags2::bitflags;
 pub use logging::LoggingLevel;
@@ -143,6 +144,8 @@ pub struct IVerge {
     pub proxy_guard_interval: Option<u64>,
     /// 15. Check update when app launch
     pub enable_auto_check_update: Option<bool>,
+    /// How long recorded connection traffic is kept.
+    pub traffic_retention: Option<TrafficRetention>,
     /// 16. 切换代理时中断连接
     /// None: 不中断
     /// Chain: 仅中断使用该代理链的连接
@@ -215,6 +218,7 @@ impl IVerge {
             always_on_top: Some(false),
             enable_random_port: Some(false),
             lighten_animation_effects: Some(false),
+            traffic_retention: Some(TrafficRetention::default()),
             window_type: Some(WindowType::Legacy),
             ..Self::default()
         }
@@ -243,6 +247,9 @@ impl IVerge {
         }
         if config.lighten_animation_effects.is_none() {
             config.lighten_animation_effects = template.lighten_animation_effects;
+        }
+        if config.traffic_retention.is_none() {
+            config.traffic_retention = template.traffic_retention;
         }
 
         if config.window_type.is_none() {

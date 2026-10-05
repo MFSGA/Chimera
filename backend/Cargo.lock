@@ -1055,11 +1055,13 @@ dependencies = [
  "base64 0.23.1",
  "bolt-load",
  "camino",
+ "chimera-clash-api",
  "chimera-config",
  "chimera-core",
  "chimera-core-manager",
  "chimera-ipc",
  "chimera-macro",
+ "chimera-traffic",
  "chimera-utils",
  "chrono",
  "convert_case",
@@ -1323,6 +1325,18 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "specta",
+]
+
+[[package]]
+name = "chimera-traffic"
+version = "0.1.0"
+dependencies = [
+ "redb",
+ "serde",
+ "serde_json",
+ "specta",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

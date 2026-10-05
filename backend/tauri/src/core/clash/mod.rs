@@ -40,11 +40,15 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         .state::<crate::client::ChimeraClient>()
         .inner()
         .clone();
+    let endpoint_client = client.clone();
     let endpoint: ws::ClashEndpointResolver = Arc::new(move || {
-        let client = client.clone();
+        let client = endpoint_client.clone();
         Box::pin(async move { client.active_clash_info().await })
     });
     let ws_connector = ws::ClashConnectionsConnector::new(endpoint);
+    if let Err(error) = client.start_traffic(ws_connector.subscribe_frames()) {
+        tracing::error!(%error, "failed to start optional traffic recording");
+    }
     manager.manage(ws_connector.clone());
     let app_handle = manager.app_handle().clone();
 
