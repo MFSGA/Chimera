@@ -3,6 +3,10 @@ packages:
   - 'scripts'
   - 'tauri-e2e'
 overrides:
+  # @wdio/tauri-service@1.4.0 pins globals@9.29.1, whose expect peer is
+  # incompatible with the WDIO 9.31 / expect-webdriverio 6 set used here.
+  # Remove this once tauri-service updates its pinned WDIO dependencies.
+  '@wdio/globals@9.29.1': 9.31.3
   '@wdio/native-utils': 2.7.0
 #patchedDependencies:
 #  monaco-worker-manager@2.0.1: patches/monaco-worker-manager@2.0.1.patch
@@ -26,5 +30,4 @@ minimumReleaseAgeExclude:
   - '@tanstack/router-plugin@1.168.20'
   - meta-json-schema@1.19.28
   - postcss@8.5.19
-  - '@prettier/plugin-oxc@0.2.2'
   - prettier@3.9.6
