@@ -30,7 +30,12 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import type { ConnectionRow } from '..';
 
-const INTERNAL_KEYS = new Set(['closed', 'downloadSpeed', 'uploadSpeed']);
+const INTERNAL_KEYS = new Set([
+  'closed',
+  'closedAt',
+  'downloadSpeed',
+  'uploadSpeed',
+]);
 
 /** Format connection detail values using the same units as the table. */
 function formatValue(key: string, value: unknown): React.ReactNode {
@@ -103,6 +108,10 @@ export default function TableRow({
   const [open, setOpen] = useState(false);
 
   const handleCloseConnection = useLockFn(async () => {
+    if (data.closed) {
+      return;
+    }
+
     if (open) {
       setOpen(false);
     }
@@ -129,10 +138,12 @@ export default function TableRow({
             <span>{m.connections_view_details()}</span>
           </ContextMenuItem>
 
-          <ContextMenuItem onSelect={() => handleCloseConnection()}>
-            <CloseRounded className="size-4" />
-            <span>{m.connections_close_connection()}</span>
-          </ContextMenuItem>
+          {!data.closed && (
+            <ContextMenuItem onSelect={() => handleCloseConnection()}>
+              <CloseRounded className="size-4" />
+              <span>{m.connections_close_connection()}</span>
+            </ContextMenuItem>
+          )}
         </RegisterContextMenuContent>
       </RegisterContextMenu>
 
@@ -178,9 +189,11 @@ export default function TableRow({
             <CardFooter className="gap-2">
               <ModalClose variant="flat">{m.common_close()}</ModalClose>
 
-              <Button onClick={handleCloseConnection}>
-                {m.connections_close_connection()}
-              </Button>
+              {!data.closed && (
+                <Button onClick={handleCloseConnection}>
+                  {m.connections_close_connection()}
+                </Button>
+              )}
             </CardFooter>
           </Card>
         </ModalContent>

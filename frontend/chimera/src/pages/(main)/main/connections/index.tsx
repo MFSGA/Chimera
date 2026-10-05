@@ -1,37 +1,25 @@
 /**
- * 连接页面
- *
- * 迁移自 ref: `src/pages/(main)/main/connections/index.tsx` (Step 2)
- *
- * 职责：
- * - 显示所有活跃的网络连接列表
- * - 支持搜索过滤连接（主机、链、规则等）
- * - 支持关闭全部连接（右键菜单/工具栏按钮）
- * - 使用 @tanstack/react-table + @tanstack/react-virtual 虚拟化表格
- * - 列宽可拖拽调整，状态持久化到 localStorage
- * - 支持列排序
- * - 空状态展示
- *
- * 迁移步骤（Step 2 - 迁移至 ref 实现）：
- * - 使用 @tanstack/react-table 替代 Material React Table
- * - 使用 @tanstack/react-virtual 实现虚拟滚动
- * - 列宽调整持久化（localStorage）
- * - 添加上下行速度计算（基于前后两次快照差值）
- * - 添加空状态展示
- * - 工具栏：搜索 + 关闭全部连接按钮
- * - 右键上下文菜单：查看详情 / 关闭连接（在 table-row.tsx 中实现）
- *
- * 后续迁移计划：
- * - 迁移连接详情对话框（table-row.tsx 已实现基础版）
+ * Displays the current Clash connections alongside persisted traffic history.
+ * The traffic API follows ref's traffic actor and query model; this existing
+ * Chimera table remains a temporary presentation adapter while the ref's
+ * ActiveViewer / AllViewer / ClosedViewer decomposition is migrated.
  */
 
 import {
   useClashConnections,
+  useTrafficActiveConnectionIds,
+  useTrafficClosedConnections,
   type ClashConnectionItem,
+  type ClashConnectionMetadata,
+  type ClosedConnection,
+  type TrafficFilter,
+  type TrafficRange,
+  type TrafficScope,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { createFileRoute } from '@tanstack/react-router';
 import {
+  columnOrderingFeature,
   columnResizingFeature,
   columnSizingFeature,
   columnVisibilityFeature,
@@ -49,6 +37,7 @@ import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { useAtomValue } from 'jotai';
 import {
   useCallback,
   useDeferredValue,
@@ -56,26 +45,29 @@ import {
   useMemo,
   useState,
 } from 'react';
+import ConnectionColumnFilterDialog from '@/components/connections/connections-column-filter';
+import { CONNECTION_COLUMNS } from '@/components/connections/connections-table';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { Button } from '@/components/ui/button';
 import { ContextMenuItem } from '@/components/ui/context-menu';
 import HighlightText from '@/components/ui/highlight-text';
 import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useLocalStorage } from '@/hooks/use-local-storage';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
+import { connectionTableColumnsAtom } from '@/store';
 import { containsSearchTerm } from '@/utils';
 import parseTraffic from '@/utils/parse-traffic';
+import {
+  toTrafficFilters,
+  type SearchFilter,
+} from '../_modules/traffic-filters';
 import { useSearchTerm } from '../_modules/use-search-term';
+import ConnectionsToolbar from './_modules/connections-toolbar';
+import ConnectionsStatusTabs from './_modules/status-tabs';
 import TableRow from './_modules/table-row';
 import { Route as ConnectionsRoute } from './route';
 
@@ -88,12 +80,44 @@ dayjs.extend(relativeTime);
  */
 export type ConnectionRow = ClashConnectionItem & {
   closed: boolean;
+  closedAt?: number;
   downloadSpeed: number;
   uploadSpeed: number;
 };
 
+function closedConnectionRow(connection: ClosedConnection): ConnectionRow {
+  const dimensions = connection.dimensions;
+  const metadata: ClashConnectionMetadata = {
+    network: dimensions.protocol,
+    type: '',
+    host: dimensions.target,
+    sourceIP: dimensions.source,
+    sourcePort: '',
+    destinationPort: '',
+    process: dimensions.process,
+    processPath: dimensions.process,
+    inboundName: dimensions.inbound,
+  };
+
+  return {
+    id: `${connection.closed_at}:${connection.id}`,
+    metadata,
+    upload: connection.bytes.upload,
+    download: connection.bytes.download,
+    start: new Date(connection.started_at).toISOString(),
+    chains: dimensions.chains,
+    rule: dimensions.rule.kind,
+    rulePayload: dimensions.rule.payload,
+    closed: true,
+    closedAt: connection.closed_at,
+    downloadSpeed: 0,
+    uploadSpeed: 0,
+  };
+}
+
 const features = tableFeatures({
   rowSortingFeature,
+  columnOrderingFeature,
   columnSizingFeature,
   columnResizingFeature,
   columnVisibilityFeature,
@@ -122,8 +146,17 @@ export const Route = createFileRoute('/(main)/main/connections/')({
  * - 列宽调整通过 ResizeObserver + localStorage 持久化
  */
 function Viewer({ search }: { search: string }) {
-  // 从 URL search 参数获取 proxy 过滤条件
-  const { proxy } = ConnectionsRoute.useSearch();
+  const {
+    proxy,
+    scope = 'active',
+    range,
+    filters: searchFilters = [],
+  } = ConnectionsRoute.useSearch();
+  const filters = useMemo(
+    () => toTrafficFilters(searchFilters),
+    [searchFilters],
+  );
+  const filtered = filters.length > 0;
 
   // 列宽状态（持久化到 localStorage）
   const [columnSizing, setColumnSizing] = useLocalStorage<ColumnSizingState>(
@@ -133,6 +166,18 @@ function Viewer({ search }: { search: string }) {
 
   // WebSocket 连接数据
   const { data: clashConnections } = useClashConnections();
+  const activeIds = useTrafficActiveConnectionIds(filters, {
+    enabled: filtered && scope !== 'closed',
+  });
+  const closedQuery = useTrafficClosedConnections({
+    range: range ?? 'all',
+    filters,
+    enabled: scope !== 'active',
+  });
+  const closedConnections = useMemo(
+    () => closedQuery.data?.pages.flatMap((page) => page.connections) ?? [],
+    [closedQuery.data],
+  );
 
   // 获取 ScrollArea 的 viewportRef（与 AnimatedOutletPreset 配合）
   const { viewportRef } = useScrollArea();
@@ -168,7 +213,9 @@ function Viewer({ search }: { search: string }) {
 
     const prevMap = new Map(prevConnections.map((c) => [c.id, c]));
 
-    const all = latestConnections
+    const matchedActiveIds = filtered ? new Set(activeIds.data ?? []) : null;
+    const live = latestConnections
+      .filter((conn) => !matchedActiveIds || matchedActiveIds.has(conn.id))
       .filter((conn) => (proxy ? conn.chains?.includes(proxy) : true))
       .map((conn) => {
         const prev = prevMap.get(conn.id);
@@ -178,11 +225,37 @@ function Viewer({ search }: { search: string }) {
           downloadSpeed: prev ? conn.download - prev.download : 0,
           uploadSpeed: prev ? conn.upload - prev.upload : 0,
         };
-      })
-      .filter((c) => (search ? containsSearchTerm(c, search) : true));
+      });
 
-    return all;
-  }, [clashConnections, search, proxy]);
+    const liveIds = new Set(
+      latestConnections.map((connection) => connection.id),
+    );
+    const closed = closedConnections
+      .filter((connection) => !liveIds.has(connection.id))
+      .map(closedConnectionRow)
+      .filter((connection) =>
+        proxy ? connection.chains?.includes(proxy) : true,
+      );
+
+    const selected =
+      scope === 'active'
+        ? live
+        : scope === 'closed'
+          ? closed
+          : [...live, ...closed];
+
+    return selected.filter((connection) =>
+      search ? containsSearchTerm(connection, search) : true,
+    );
+  }, [
+    activeIds.data,
+    clashConnections,
+    closedConnections,
+    filtered,
+    proxy,
+    scope,
+    search,
+  ]);
 
   /**
    * 表格列定义
@@ -192,6 +265,7 @@ function Viewer({ search }: { search: string }) {
     () =>
       [
         {
+          id: 'host',
           header: 'Host',
           accessorFn: ({ metadata }) => metadata.host || metadata.destinationIP,
           size: 320,
@@ -207,6 +281,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'chains',
           header: 'Chains',
           accessorFn: ({ chains }) => [...chains].reverse().join(' / '),
           size: 360,
@@ -218,6 +293,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'downloaded',
           header: 'Downloaded',
           accessorFn: ({ download }) => parseTraffic(download).join(' '),
           sortFn: (rowA, rowB) =>
@@ -231,6 +307,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'uploaded',
           header: 'Uploaded',
           accessorFn: ({ upload }) => parseTraffic(upload).join(' '),
           sortFn: (rowA, rowB) => rowA.original.upload - rowB.original.upload,
@@ -240,6 +317,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'dl_speed',
           header: 'DL Speed',
           accessorFn: ({ downloadSpeed }) =>
             parseTraffic(downloadSpeed).join(' ') + '/s',
@@ -253,6 +331,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'ul_speed',
           header: 'UL Speed',
           accessorFn: ({ uploadSpeed }) =>
             parseTraffic(uploadSpeed).join(' ') + '/s',
@@ -266,6 +345,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'process',
           header: 'Process',
           accessorFn: ({ metadata }) => metadata.process,
           size: 160,
@@ -277,6 +357,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'rule',
           header: 'Rule',
           accessorFn: ({ rule, rulePayload }) =>
             rulePayload ? `${rule} (${rulePayload})` : rule,
@@ -293,6 +374,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'time',
           header: 'Time',
           accessorFn: ({ start }) => dayjs(start).fromNow(),
           sortFn: (rowA, rowB) =>
@@ -309,6 +391,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'source',
           header: 'Source',
           accessorFn: ({ metadata: { sourceIP, sourcePort } }) =>
             `${sourceIP}:${sourcePort}`,
@@ -321,6 +404,7 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'destination_ip',
           header: 'Destination IP',
           accessorFn: ({ metadata: { destinationIP, destinationPort } }) =>
             `${destinationIP}:${destinationPort}`,
@@ -333,6 +417,20 @@ function Viewer({ search }: { search: string }) {
           ),
         },
         {
+          id: 'destination_asn',
+          header: 'Destination ASN',
+          accessorFn: ({ metadata: { destinationIPASN } }) =>
+            String(destinationIPASN ?? ''),
+          size: 160,
+          cell: (info) => (
+            <HighlightText
+              text={String(info.row.original.metadata.destinationIPASN ?? '')}
+              search={search}
+            />
+          ),
+        },
+        {
+          id: 'type',
           header: 'Type',
           accessorFn: ({ metadata }) =>
             `${metadata.type} (${metadata.network})`,
@@ -348,6 +446,22 @@ function Viewer({ search }: { search: string }) {
     [search],
   );
 
+  const tableColumns = useAtomValue(connectionTableColumnsAtom);
+  const columnOrder = useMemo(
+    () => [
+      ...tableColumns.map(([id]) => id),
+      ...CONNECTION_COLUMNS.map(([id]) => id).filter(
+        (id) => !tableColumns.some(([storedId]) => storedId === id),
+      ),
+    ],
+    [tableColumns],
+  );
+  const columnVisibility = useMemo(
+    () =>
+      Object.fromEntries(tableColumns.map(([id, visible]) => [id, visible])),
+    [tableColumns],
+  );
+
   // 初始化 @tanstack/react-table
   const table = useTable({
     features,
@@ -355,6 +469,8 @@ function Viewer({ search }: { search: string }) {
     columns,
     state: {
       columnSizing,
+      columnOrder,
+      columnVisibility,
     },
     onColumnSizingChange: handleColumnSizingChange,
     enableColumnResizing: true,
@@ -373,6 +489,28 @@ function Viewer({ search }: { search: string }) {
   });
 
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const fetchNextPage = closedQuery.fetchNextPage;
+  const hasNextPage = closedQuery.hasNextPage;
+  const isFetchingNextPage = closedQuery.isFetchingNextPage;
+  const lastVirtualIndex = virtualItems.at(-1)?.index ?? -1;
+
+  useEffect(() => {
+    if (
+      scope !== 'active' &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      lastVirtualIndex >= rows.length - 1
+    ) {
+      void fetchNextPage();
+    }
+  }, [
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    lastVirtualIndex,
+    rows.length,
+    scope,
+  ]);
 
   // 视口宽度监听（用于列宽自适应）
   const [viewportWidth, setViewportWidth] = useState(0);
@@ -409,6 +547,10 @@ function Viewer({ search }: { search: string }) {
 
   // 空状态
   if (rows.length === 0) {
+    const loadingHistory = scope !== 'active' && closedQuery.isPending;
+    const filterUnavailable =
+      (scope !== 'closed' && filtered && activeIds.isError) ||
+      (scope !== 'active' && closedQuery.isError);
     return (
       <div
         className="absolute inset-0 flex flex-col items-center justify-center gap-4"
@@ -420,7 +562,11 @@ function Viewer({ search }: { search: string }) {
           className="text-surface-variant text-sm"
           data-slot="connections-no-connections-message"
         >
-          {m.connections_empty_message()}
+          {loadingHistory
+            ? m.connections_history_loading()
+            : filterUnavailable
+              ? m.connections_filter_unavailable()
+              : m.connections_empty_message()}
         </p>
       </div>
     );
@@ -542,7 +688,12 @@ function Viewer({ search }: { search: string }) {
  * - 使用 useScrollArea 获取 viewportRef 供 Virtualizer 使用
  */
 function RouteComponent() {
-  const { q } = ConnectionsRoute.useSearch();
+  const {
+    q,
+    scope = 'active',
+    range,
+    filters = [],
+  } = ConnectionsRoute.useSearch();
   const navigate = ConnectionsRoute.useNavigate();
   const [search, setSearch] = useSearchTerm(
     q,
@@ -558,64 +709,97 @@ function RouteComponent() {
   const deferredSearch = useDeferredValue(search);
   const showTable = useDeferredValue(true, false);
 
+  const updateSelection = (patch: {
+    range?: TrafficRange | null;
+    filters?: SearchFilter[];
+  }) =>
+    navigate({
+      search: (previous) => ({
+        ...previous,
+        range:
+          patch.range === null ? undefined : (patch.range ?? previous.range),
+        filters: patch.filters
+          ? patch.filters.length > 0
+            ? patch.filters
+            : undefined
+          : previous.filters,
+      }),
+      replace: true,
+    });
+
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const { deleteConnections } = useClashConnections();
 
   const handleCloseAllConnections = useLockFn(async () => {
     await deleteConnections.mutateAsync(undefined);
   });
 
-  return (
-    <div
-      className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
-      data-slot="connections-container"
+  const scrollArea = (
+    <ScrollArea
+      key={scope}
+      className="min-h-0 flex-1"
+      scrollbars="both"
+      type="hover"
+      data-slot="connections-scroll-wrapper"
     >
-      <RegisterContextMenu>
-        <RegisterContextMenuTrigger asChild>
-          <ScrollArea
-            className="min-h-0 flex-1"
-            scrollbars="both"
-            type="hover"
-            data-slot="connections-scroll-wrapper"
-          >
-            {showTable && <Viewer search={deferredSearch} />}
-          </ScrollArea>
-        </RegisterContextMenuTrigger>
+      {showTable && <Viewer search={deferredSearch} />}
+    </ScrollArea>
+  );
 
-        <RegisterContextMenuContent>
-          <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
-            <CloseRounded className="size-4" />
-            <span>{m.connections_close_all_connections()}</span>
-          </ContextMenuItem>
-        </RegisterContextMenuContent>
-      </RegisterContextMenu>
-
+  return (
+    <>
       <div
-        className="bg-mixed-background flex h-16 shrink-0 items-center gap-3 px-4"
-        data-slot="connections-toolbar"
+        className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden"
+        data-slot="connections-container"
       >
-        <input
-          type="text"
-          className={cn(
-            'bg-surface-variant dark:bg-surface-variant/30',
-            'h-10 min-w-0 flex-1 rounded-full px-4 text-sm outline-none',
-          )}
-          placeholder={m.connections_search_placeholder()}
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
+        {scope === 'closed' ? (
+          scrollArea
+        ) : (
+          <RegisterContextMenu>
+            <RegisterContextMenuTrigger asChild>
+              {scrollArea}
+            </RegisterContextMenuTrigger>
+            <RegisterContextMenuContent>
+              <ContextMenuItem onSelect={() => handleCloseAllConnections()}>
+                <CloseRounded className="size-4" />
+                <span>{m.connections_close_all_connections()}</span>
+              </ContextMenuItem>
+            </RegisterContextMenuContent>
+          </RegisterContextMenu>
+        )}
+
+        <ConnectionsToolbar
+          tabs={
+            <ConnectionsStatusTabs
+              value={scope}
+              onValueChange={(next) =>
+                navigate({
+                  search: (previous) => ({ ...previous, scope: next }),
+                })
+              }
+              selection={{ range, filters }}
+            />
+          }
+          selection={{ range, filters }}
+          onSelectionChange={(next) =>
+            updateSelection({
+              range: next.range ?? null,
+              filters: next.filters,
+            })
+          }
+          search={search}
+          onSearchChange={setSearch}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onCloseAll={
+            scope === 'closed' ? undefined : handleCloseAllConnections
+          }
         />
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button onClick={handleCloseAllConnections} icon>
-              <CloseRounded />
-            </Button>
-          </TooltipTrigger>
-
-          <TooltipContent>
-            {m.connections_close_all_connections()}
-          </TooltipContent>
-        </Tooltip>
       </div>
-    </div>
+      <ConnectionColumnFilterDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </>
   );
 }

@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/tooltip';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
+import { RANGES, searchFilterSchema } from '../_modules/traffic-filters';
 import ProxyIcon from '../rules/_modules/proxy-icon';
 
 export const Route = createFileRoute('/(main)/main/connections')({
@@ -32,6 +33,9 @@ export const Route = createFileRoute('/(main)/main/connections')({
   validateSearch: z.object({
     proxy: z.string().optional().nullable(),
     q: z.string().optional(),
+    scope: z.enum(['all', 'active', 'closed']).optional(),
+    range: z.enum(RANGES).optional(),
+    filters: z.array(searchFilterSchema).optional(),
   }),
 });
 

@@ -26,7 +26,7 @@ async function waitForMainApp(timeout = 30_000) {
         return (
           (root?.childElementCount ?? 0) > 0 &&
           document.documentElement.classList.contains('chimera-main') &&
-          document.querySelector('[data-slot="app-header"]') !== null
+          document.querySelector('[data-slot="app-root"]') !== null
         );
       }),
     { timeout, timeoutMsg: 'The Chimera main frontend did not render.' },
@@ -66,6 +66,14 @@ async function waitForMainRouteSettled(timeout = 15_000) {
         );
         const appContent = hostGroups[0];
         if (appContent.length !== 1 || appContent[0].children.length === 0) {
+          return false;
+        }
+
+        const currentRoute = appContent[0].firstElementChild;
+        if (
+          !currentRoute ||
+          Number.parseFloat(getComputedStyle(currentRoute).opacity) < 0.99
+        ) {
           return false;
         }
 
@@ -116,7 +124,7 @@ export async function openMainRoute(pathname: string) {
         (expected) =>
           location.pathname === expected &&
           document.documentElement.classList.contains('chimera-main') &&
-          document.querySelector('[data-slot="app-header"]') !== null,
+          document.querySelector('[data-slot="app-root"]') !== null,
         pathname,
       ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },

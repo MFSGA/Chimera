@@ -41,6 +41,7 @@ release.sh
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
 !/docs/ref-alignment-profiles.md
+!/docs/ref-alignment-connections.md
 !/docs/tauri-e2e-minimal-architecture.md
 !/docs/design/
 !/docs/design/2026-09-28-macos-tun-dns-capture.md

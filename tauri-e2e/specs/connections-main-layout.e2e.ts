@@ -12,14 +12,50 @@ describe('main connections reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainRoute(targetPath);
+  });
+
+  beforeEach(async () => {
+    try {
+      await openMainRoute(targetPath);
+    } catch (error) {
+      const state = await browser.execute(() => {
+        const root = document.getElementById('root');
+        return {
+          url: location.href,
+          title: document.title,
+          readyState: document.readyState,
+          rootChildCount: root?.childElementCount ?? null,
+          rootText: root?.innerText.slice(0, 200) ?? null,
+          appClass: document.documentElement.className,
+          appRoot: document.querySelector('[data-slot="app-root"]') !== null,
+          scripts: Array.from(document.scripts).map((script) => script.src),
+        };
+      });
+      console.error('Main app startup diagnostic:', JSON.stringify(state));
+      throw error;
+    }
+    const search = await displayedElement('[data-slot="connections-search"]');
+    if (await search.getValue()) {
+      await search.clearValue();
+    }
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            !location.search.includes('q=') &&
+            document
+              .querySelector(
+                '[data-slot="connections-scope-tab"][data-scope="active"]',
+              )
+              ?.getAttribute('data-state') === 'on',
+        ),
+      { timeout: 10_000, timeoutMsg: 'Connections did not reset to Active.' },
+    );
     await browser.setWindowSize(1240, 638);
   });
 
   it('keeps the ref empty-state, toolbar, and context-menu structure', async () => {
-    const search = await displayedElement(
-      '[data-slot="connections-toolbar"] input',
-    );
+    const search = await displayedElement('[data-slot="connections-search"]');
     await focusElement(search);
     await browser.keys('__chimera_e2e_no_matching_connection__');
 
@@ -50,11 +86,18 @@ describe('main connections reference layout', () => {
       const toolbar = document.querySelector<HTMLElement>(
         '[data-slot="connections-toolbar"]',
       );
+      const toolbarContent = document.querySelector<HTMLElement>(
+        '[data-slot="connections-toolbar-content"]',
+      );
       const empty = document.querySelector<HTMLElement>(
         '[data-slot="connections-no-connections"]',
       );
-      const closeButton = toolbar?.querySelector<HTMLButtonElement>('button');
-      const search = toolbar?.querySelector<HTMLInputElement>('input');
+      const closeButton = toolbar?.querySelector<HTMLButtonElement>(
+        '[data-slot="connections-close-all"]',
+      );
+      const search = toolbar?.querySelector<HTMLInputElement>(
+        '[data-slot="connections-search"]',
+      );
       const rect = (element: HTMLElement | null | undefined) =>
         element
           ? {
@@ -65,7 +108,9 @@ describe('main connections reference layout', () => {
             }
           : null;
 
-      const toolbarStyle = toolbar ? getComputedStyle(toolbar) : null;
+      const toolbarStyle = toolbarContent
+        ? getComputedStyle(toolbarContent)
+        : null;
       const searchStyle = search ? getComputedStyle(search) : null;
       const closeButtonStyle = closeButton
         ? getComputedStyle(closeButton)
@@ -76,6 +121,7 @@ describe('main connections reference layout', () => {
         container: rect(container),
         scroll: rect(scroll),
         toolbar: rect(toolbar),
+        toolbarContent: rect(toolbarContent),
         empty: rect(empty),
         closeButton: rect(closeButton),
         closeButtonDisabled: closeButton?.disabled ?? null,
@@ -130,5 +176,50 @@ describe('main connections reference layout', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  /* Contract CONN-URL-SCOPE: selecting a scope tab updates router state. */
+  it('keeps the selected scope in the route', async () => {
+    const closedTab = await displayedElement(
+      '[data-slot="connections-scope-tab"][data-scope="closed"]',
+    );
+    await closedTab.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document
+              .querySelector(
+                '[data-slot="connections-scope-tab"][data-scope="closed"]',
+              )
+              ?.getAttribute('data-state') === 'on' &&
+            location.search.includes('scope=closed'),
+        ),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Closed scope was not written to the route.',
+      },
+    );
+
+    const activeTab = await displayedElement(
+      '[data-slot="connections-scope-tab"][data-scope="active"]',
+    );
+    await activeTab.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document
+              .querySelector(
+                '[data-slot="connections-scope-tab"][data-scope="active"]',
+              )
+              ?.getAttribute('data-state') === 'on' &&
+            location.search.includes('scope=active'),
+        ),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Active scope was not written to the route.',
+      },
+    );
   });
 });
