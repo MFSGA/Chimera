@@ -1,17 +1,17 @@
 # 测试依赖上游依据与版本边界
 
-核对日期：2026-09-13。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
+核对日期：2026-10-05。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
 
 ## U01 锁定版本与证据优先级
 
-| 依赖                                                | 当前依据                                                                    | 核对版本                                            |
-| --------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------- |
-| WebdriverIO、WDIO runner / Mocha adapter 等直接依赖 | [测试包](../../tauri-e2e/package.json)、[pnpm 锁文件](../../pnpm-lock.yaml) | WDIO 9.31.7（globals 9.31.3、spec-reporter 9.31.2） |
-| `@wdio/tauri-service`                               | 同上                                                                        | 1.4.0                                               |
-| `tauri-plugin-wdio-webdriver`                       | [Cargo 锁文件](../../backend/Cargo.lock)；Cargo.toml 仅声明 `1`             | 1.3.0                                               |
-| Mocha                                               | pnpm-lock.yaml 中传递依赖                                                   | 11.8.0                                              |
-| expect-webdriverio                                  | pnpm-lock.yaml 中传递依赖                                                   | 6.0.10                                              |
-| Node / pnpm                                         | [根 package.json](../../package.json)                                       | Node 24.21.0；pnpm 12.3.4                           |
+| 依赖                                                | 当前依据                                                                                                                    | 核对版本                                            |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| WebdriverIO、WDIO runner / Mocha adapter 等直接依赖 | [测试包](../../tauri-e2e/package.json)、[pnpm 锁文件](../../pnpm-lock.yaml)                                                 | WDIO 9.31.7（globals 9.31.3、spec-reporter 9.31.2） |
+| `@wdio/tauri-service`                               | 同上                                                                                                                        | 1.4.0                                               |
+| `tauri-plugin-wdio-webdriver`                       | [Cargo manifest](../../backend/tauri/Cargo.toml)、[vendored source](../../backend/tauri/vendor/tauri-plugin-wdio-webdriver) | crates.io 1.4.0 + 上游兼容修复 `e4bdb66`            |
+| Mocha                                               | pnpm-lock.yaml 中传递依赖                                                                                                   | 11.8.0                                              |
+| expect-webdriverio                                  | pnpm-lock.yaml 中传递依赖                                                                                                   | 6.0.10                                              |
+| Node / pnpm                                         | [根 package.json](../../package.json)                                                                                       | Node 24.21.0；pnpm 12.3.4                           |
 
 **产品期望由需求/契约决定；工具能力由实际锁定版本决定。** 判断顺序：锁文件与实际安装包 → 同版本发布源码/发布产物 → 对应源码提交 → 官方当前文档。官网会更新，不能默认其中每个 API 已在本项目可用。传递包并非全部与直接依赖同版本；例如 `@wdio/tauri-service` 的运行时依赖可能与工作区直接声明的 WDIO 版本不同，实际解析仍需看锁文件。
 
@@ -45,7 +45,7 @@
 
 官方参考：[Tauri service 配置](https://webdriver.io/docs/desktop-testing/tauri/configuration/)、[WDIO hooks 与 runner 配置](https://webdriver.io/docs/configuration/)。工具的日志捕获开关不等于项目已保存并上传所有失败产物。
 
-## U04 Rust 插件的点击与会话边界
+## U04 Rust 插件 1.3.0 的点击与会话边界
 
 直接下载并阅读官方 [1.3.0 crate 发布包](https://static.crates.io/crates/tauri-plugin-wdio-webdriver/tauri-plugin-wdio-webdriver-1.3.0.crate)，其 SHA-256 与本项目 Cargo.lock 完全相同：
 
@@ -71,6 +71,14 @@
 源码事实：返回 Promise 的完成和拒绝被交给测试结果处理；callback 路径会拒绝同时返回 Promise 的完成方式。项目要求：统一 async/await，并等待所有子操作，不能让未等待的 Promise 在用例通过后才报错。
 
 官方参考：[异步测试](https://mochajs.org/features/asynchronous-code/)、[hooks](https://mochajs.org/features/hooks/)。完整清理、错误聚合和用例状态隔离属于项目自己的 T07/T10 约束，不是 Mocha 自动保证。
+
+## U06 Windows WebView2 与 Tauri 版本兼容
+
+CI 在 Tauri 2.12 下编译 `tauri-plugin-wdio-webdriver@1.3.0` 失败：Tauri 将 `webview2-com` 从 0.38 升到 0.39，而插件仍以 0.38 的接口接收 Tauri 传入的 0.39 WebView2 对象；插件还依赖旧的 `windows` 0.61。错误包括 WebView2 handler 的 `Param` trait 不匹配和 `StructuredStorage` 未启用。
+
+在插件发布版 1.4.0 之后，上游提交 [`e4bdb66ec5b1d96b7fd766d70370a8e8361e0459`](https://github.com/webdriverio/desktop-mobile/commit/e4bdb66ec5b1d96b7fd766d70370a8e8361e0459) 修复了该边界：插件自身改用 `webview2-com` 0.39 / `windows` 0.62，并在 Tauri 的 `PlatformWebview` 进入插件时重新绑定 controller 类型；同时显式启用 `Win32_System_Com_StructuredStorage`。当前使用 SHA-256 为 `52c5e97428174a52b7f4357bbc4535fcce52c6a06c8ee7a379502f7cda1b6045` 的 crates.io 1.4.0 源码包，并移植该提交对 `Cargo.toml` 与 `src/platform/windows.rs` 的补丁；不依赖 Cargo 从 GitHub 克隆整个上游仓库。
+
+这是临时的测试工具兼容 pin。上游发布包含此修复的 crate 后，更新 Cargo 依赖与锁文件到该 registry 版本，并重新核对 Windows E2E 构建；在那之前保留固定提交，避免 Tauri 次版本变化再次拆分 WebView2 COM 类型。
 
 ## 升级依赖时必须复核
 

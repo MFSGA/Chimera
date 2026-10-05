@@ -25,7 +25,7 @@ rustc_version = "0.4"
 [dependencies]
 chimera-core-manager = { path = "../chimera-core-manager" }
 tauri = { version = "2.11.2", features = ["tray-icon", "image-png", "image-ico"] }
-tauri-plugin-wdio-webdriver = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { path = "vendor/tauri-plugin-wdio-webdriver", optional = true }
 tauri-plugin-opener = "2.5.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
