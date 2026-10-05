@@ -240,6 +240,60 @@ export const commands = {
     typedError<null, string>(
       __TAURI_INVOKE('clash_api_delete_connections', { id }),
     ),
+  getTrafficSummary: () =>
+    typedError<TrafficSummary, string>(__TAURI_INVOKE('get_traffic_summary')),
+  queryTrafficReport: (request: ReportRequest) =>
+    typedError<TrafficReport, string>(
+      __TAURI_INVOKE('query_traffic_report', { request }),
+    ),
+  queryTrafficUsage: (
+    query: TrafficQuery,
+    groupBy: Dimension,
+    metric: Metric,
+    after: {
+      usage: Usage;
+      key: string;
+    } | null,
+    limit: number,
+  ) =>
+    typedError<UsagePage, string>(
+      __TAURI_INVOKE('query_traffic_usage', {
+        query,
+        groupBy,
+        metric,
+        after,
+        limit,
+      }),
+    ),
+  queryTrafficUsageByKeys: (
+    query: TrafficQuery,
+    groupBy: Dimension,
+    keys: string[],
+  ) =>
+    typedError<UsageGroup[], string>(
+      __TAURI_INVOKE('query_traffic_usage_by_keys', { query, groupBy, keys }),
+    ),
+  queryTrafficClosedConnections: (
+    range: TrafficRange,
+    filters: TrafficFilter[],
+    before: {
+      closed_at: number;
+      id: string;
+    } | null,
+    limit: number,
+  ) =>
+    typedError<ClosedPage, string>(
+      __TAURI_INVOKE('query_traffic_closed_connections', {
+        range,
+        filters,
+        before,
+        limit,
+      }),
+    ),
+  queryTrafficActiveConnectionIds: (filters: TrafficFilter[]) =>
+    typedError<string[], string>(
+      __TAURI_INVOKE('query_traffic_active_connection_ids', { filters }),
+    ),
   getClashWsConnectionsState: () =>
     typedError<ClashConnectionsConnectorState, string>(
       __TAURI_INVOKE('get_clash_ws_connections_state'),
@@ -677,6 +731,11 @@ export type BuildInfo = {
 export type BuiltinStepKind =
   'guard_overrides' | 'whitelist_field_filter' | 'finalizing';
 
+export type Bytes = {
+  upload: number;
+  download: number;
+};
+
 export type ClashConnectionsConnectorEvent =
   | { kind: 'state_changed'; data: ClashConnectionsConnectorState }
   | { kind: 'update'; data: ClashConnectionsInfo };
@@ -802,6 +861,26 @@ export type ClashWsSnapshot = {
 export type ClashWsTraffic = {
   up: number;
   down: number;
+};
+
+export type ClosedConnection = {
+  id: string;
+  started_at: number;
+  first_seen_at: number;
+  closed_at: number;
+  bytes: Bytes;
+  dimensions: Dimensions;
+};
+
+/**  Exclusive position for newest-first paging. */
+export type ClosedCursor = {
+  closed_at: number;
+  id: string;
+};
+
+export type ClosedPage = {
+  connections: ClosedConnection[];
+  next: ClosedCursor | null;
 };
 
 /**  A source commit and its critical runtime result. Peripheral owners settle separately. */
@@ -1033,6 +1112,46 @@ export type DeviceInfo = {
   memory: string;
 };
 
+/**  A way to slice usage: ranking, filtering and topology layers all name dimensions. */
+export type Dimension =
+  /**  Derived: the process when known, else the source. */
+  | 'origin'
+  | 'process'
+  | 'source'
+  | 'inbound'
+  | 'target'
+  | 'protocol'
+  | 'rule'
+  /**  The strategy groups without the exit, outermost first; empty without groups. */
+  | 'chain'
+  | 'exit'
+  | 'profile'
+  | 'source_region'
+  | 'destination_region'
+  /**  How the destination region was located; empty while it is unknown. */
+  | 'destination_basis';
+
+export type Dimensions = {
+  /**  Process path or name. */
+  process: string;
+  source: string;
+  /**  `inbound_user`, else `inbound_name`. */
+  inbound?: string;
+  /**  Host, else destination IP. */
+  target: string;
+  protocol: string;
+  rule: RuleKey;
+  /**  Clash wire order: exit first, outermost group last. */
+  chains: string[];
+  /**  The profile that was current when the connection first appeared; never rewritten. */
+  profile?: string | null;
+  /**  An upper-case country code, or `unknown`. */
+  source_region?: string;
+  destination_region?: string;
+  /**  How `destination_region` was located; `None` while it is unknown. */
+  destination_basis?: GeoBasis | null;
+};
+
 /**  A snapshot of a download session's progress, polled by IPC. */
 export type DownloadStatus = {
   state: DownloaderState;
@@ -1062,6 +1181,13 @@ export type ExternalMode = 'symlink' | 'mirror';
 
 /**  An absolute path outside the managed profile directory. */
 export type ExternalProfilePath = string;
+
+/**  What the address a destination was located by is to the outbound. */
+export type GeoBasis =
+  /**  The outbound dialed this address. */
+  | 'dialed'
+  /**  The outbound was handed the host; the core resolved this address only for its rules. */
+  | 'resolved';
 
 export type GetSysProxyResponse = {
   enable: boolean;
@@ -1125,6 +1251,8 @@ export type IVerge_Deserialize =
       enable_proxy_guard: boolean | null;
       /**  15. Check update when app launch */
       enable_auto_check_update: boolean | null;
+      /**  How long recorded connection traffic is kept. */
+      traffic_retention: TrafficRetention | null;
       /**
        *  16. 切换代理时中断连接
        *  None: 不中断
@@ -1228,6 +1356,8 @@ export type IVerge_Serialize = {
   proxy_guard_interval: number | null;
   /**  15. Check update when app launch */
   enable_auto_check_update: boolean | null;
+  /**  How long recorded connection traffic is kept. */
+  traffic_retention: TrafficRetention | null;
   /**
    *  16. 切换代理时中断连接
    *  None: 不中断
@@ -1345,6 +1475,9 @@ export type ManifestVersionLatest = {
   clash_rs_alpha: string;
   clash_premium: string;
 };
+
+/**  What a topology orders and merges its nodes by. */
+export type Metric = 'bytes' | 'connections';
 
 /**
  *  Public mutation wire aligned with REF: desired state is committed first;
@@ -1776,6 +1909,22 @@ export type ProxyItem_Serialize = {
   icon?: string | null;
 };
 
+export type Ranking = {
+  dimension: Dimension;
+  /**  Distinct values of the dimension among the filtered rows. */
+  distinct: number;
+  /**  Heaviest first. */
+  groups: UsageGroup[];
+  /**  The groups ranked after `groups`. */
+  other: Usage;
+};
+
+/**  Whole bytes per second, rounded down. */
+export type Rate = {
+  upload: number;
+  download: number;
+};
+
 export type RemoteProfileImportMode = 'default' | 'direct';
 
 export type RemoteProfileOptionsPatch =
@@ -1793,6 +1942,22 @@ export type RemoteProfileOptionsPatch_Serialize = {
   with_proxy?: boolean | null;
   self_proxy?: boolean | null;
   update_interval_minutes?: number | null;
+};
+
+export type ReportRequest = {
+  query: TrafficQuery;
+  /**  What the rankings and the topology order and merge their groups by. */
+  metric: Metric;
+  /**  One ranking per dimension. */
+  rankings: Dimension[];
+  /**  Groups per ranking, capped at `MAX_LIMIT`. */
+  ranking_limit: number;
+  topology: TopologyRequest | null;
+};
+
+export type RuleKey = {
+  kind: string;
+  payload: string;
 };
 
 export type RunType =
@@ -1974,6 +2139,77 @@ export type StorageValueChangedEvent = {
   value: string | null;
 };
 
+export type Topology = {
+  /**  By layer, heaviest first, the merged node last. */
+  nodes: TopologyNode[];
+  edges: TopologyEdge[];
+};
+
+export type TopologyEdge = {
+  source: string;
+  target: string;
+  usage: Usage;
+};
+
+export type TopologyNode = {
+  /**  Unique over layer and key, see `node_id`. */
+  id: string;
+  /**  Index into the requested layers. */
+  layer: number;
+  /**  The dimension value; `None` for the node that merges the layer's remaining nodes. */
+  key: string | null;
+  usage: Usage;
+};
+
+export type TopologyRequest = {
+  /**  Two to five distinct dimensions, from the first column to the last. */
+  layers: Dimension[];
+  /**  Nodes beyond this many per layer merge into one "other" node; `None` keeps them all. */
+  limit_per_layer: number | null;
+};
+
+export type TrafficFilter = {
+  dimension: Dimension;
+  value: string;
+};
+
+/**  Filters on different dimensions combine with AND; a dimension holds at most one value. */
+export type TrafficQuery = {
+  range: TrafficRange;
+  scope: TrafficScope;
+  filters: TrafficFilter[];
+};
+
+/**  How far back a query looks; always ends now. */
+export type TrafficRange =
+  | 'last_hour'
+  | 'last6_hours'
+  | 'last24_hours'
+  | 'last7_days'
+  | 'last30_days'
+  | 'all';
+
+export type TrafficReport = {
+  total: Usage;
+  current_rate: Rate | null;
+  rankings: Ranking[];
+  topology: Topology | null;
+};
+
+/**  How long recorded traffic is kept. */
+export type TrafficRetention = '1d' | '7d' | '30d' | '90d' | 'forever';
+
+/**  Which connections a query counts: `All` is `Active` plus `Closed`. */
+export type TrafficScope = 'all' | 'active' | 'closed';
+
+export type TrafficSummary = {
+  last_sample_at: number | null;
+  active_connections: number;
+  /**  Closed connections within the retention, including those not flushed yet. */
+  closed_connections: number;
+  current_rate: Rate | null;
+};
+
 /**  A named config transformer. Transform profiles are reusable but not activatable. */
 export type TransformDefinition =
   TransformDefinition_Serialize | TransformDefinition_Deserialize;
@@ -2026,6 +2262,34 @@ export type UpdaterSummary = {
   id: number;
   state: UpdaterState;
   downloader: DownloadStatus;
+};
+
+export type Usage = {
+  bytes: Bytes;
+  connections: number;
+};
+
+/**
+ *  Exclusive position for heaviest-first paging of grouped usage: the last group of a page, with
+ *  its whole usage, so it places the next page under either metric.
+ */
+export type UsageCursor = {
+  usage: Usage;
+  key: string;
+};
+
+export type UsageGroup = {
+  key: string;
+  usage: Usage;
+  current_rate: Rate | null;
+};
+
+export type UsagePage = {
+  total: Usage;
+  groups: UsageGroup[];
+  /**  Groups ranked after this page. */
+  other: Usage;
+  next: UsageCursor | null;
 };
 
 export type WindowState = {

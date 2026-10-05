@@ -1324,6 +1324,74 @@ pub async fn clash_api_delete_connections(
         .await?)
 }
 
+#[tauri::command]
+#[specta::specta]
+pub async fn get_traffic_summary(
+    client: tauri::State<'_, ChimeraClient>,
+) -> Result<chimera_traffic::TrafficSummary> {
+    Ok(client.traffic_summary().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_traffic_report(
+    client: tauri::State<'_, ChimeraClient>,
+    request: chimera_traffic::ReportRequest,
+) -> Result<chimera_traffic::TrafficReport> {
+    Ok(client.query_traffic_report(request).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_traffic_usage(
+    client: tauri::State<'_, ChimeraClient>,
+    query: chimera_traffic::TrafficQuery,
+    group_by: chimera_traffic::Dimension,
+    metric: chimera_traffic::Metric,
+    after: Option<chimera_traffic::UsageCursor>,
+    limit: usize,
+) -> Result<chimera_traffic::UsagePage> {
+    Ok(client
+        .query_traffic_usage(query, group_by, metric, after, limit)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_traffic_usage_by_keys(
+    client: tauri::State<'_, ChimeraClient>,
+    query: chimera_traffic::TrafficQuery,
+    group_by: chimera_traffic::Dimension,
+    keys: Vec<String>,
+) -> Result<Vec<chimera_traffic::UsageGroup>> {
+    Ok(client
+        .query_traffic_usage_by_keys(query, group_by, keys)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_traffic_closed_connections(
+    client: tauri::State<'_, ChimeraClient>,
+    range: chimera_traffic::TrafficRange,
+    filters: Vec<chimera_traffic::TrafficFilter>,
+    before: Option<chimera_traffic::ClosedCursor>,
+    limit: usize,
+) -> Result<chimera_traffic::ClosedPage> {
+    Ok(client
+        .query_traffic_closed_connections(range, filters, before, limit)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn query_traffic_active_connection_ids(
+    client: tauri::State<'_, ChimeraClient>,
+    filters: Vec<chimera_traffic::TrafficFilter>,
+) -> Result<Vec<String>> {
+    Ok(client.query_traffic_active_connection_ids(filters).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Barrier};

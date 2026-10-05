@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use chimera_traffic::{RedbTrafficStore, TrafficStore};
 use tauri::Manager;
 
 use crate::{
@@ -40,6 +41,7 @@ impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
 
 pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
+    let traffic_store = open_traffic_store(&paths);
     let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
         paths.clone(),
         Arc::new(LegacySelfProxyPort),
@@ -111,6 +113,7 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         profile_files: Arc::new(LegacyProfileFsPort),
         profile_service,
         system_dns: Arc::new(OsSystemDnsCache),
+        traffic_store,
         ui_sink: Arc::new(LegacyUiEventSink),
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects,
@@ -124,6 +127,27 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     app.manage(client);
     core_facade_monitor.start_service_api_monitor();
     Ok(())
+}
+
+/// Traffic recording is optional; an unavailable store disables history without blocking launch.
+fn open_traffic_store(paths: &PathResolver) -> Option<Arc<dyn TrafficStore>> {
+    let dir = paths.app_data_dir().join("traffic");
+    let open = || -> anyhow::Result<RedbTrafficStore> {
+        std::fs::create_dir_all(&dir)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(RedbTrafficStore::open(&dir.join("traffic.redb"))?)
+    };
+    match open() {
+        Ok(store) => Some(Arc::new(store)),
+        Err(error) => {
+            tracing::error!(%error, "failed to open the traffic store; recording is disabled");
+            None
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]

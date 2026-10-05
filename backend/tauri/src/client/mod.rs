@@ -21,6 +21,7 @@ pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
 mod system_dns;
+pub(crate) mod traffic;
 
 use std::sync::Arc;
 
@@ -95,6 +96,7 @@ pub(crate) struct ClientSetupArgs {
 
     // pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
+    pub(crate) traffic_store: Option<Arc<dyn chimera_traffic::TrafficStore>>,
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) effects: Arc<dyn effects::ports::ApplicationEffectsPort>,
@@ -180,6 +182,8 @@ struct ChimeraClientInner {
     profile_service: Arc<ProfileFileService>,
     // profile_writes: Arc<dyn ProfilesWritePort>,
     system_dns: Arc<dyn SystemDnsCache>,
+    traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
+    traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     effects: effects::actor::EffectsClient,
@@ -210,6 +214,7 @@ impl ChimeraClient {
             profile_service,
             // profile_writes,
             system_dns,
+            traffic_store,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 effects: effects_port,
@@ -277,6 +282,7 @@ impl ChimeraClient {
             accelerators,
             window,
         );
+        *client.inner.traffic_store.lock() = traffic_store;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         tauri::async_runtime::block_on(client.reconcile_hotkeys());
         Ok(client)
@@ -336,6 +342,8 @@ impl ChimeraClient {
             profile_service,
             // profile_writes,
             system_dns,
+            traffic_store: parking_lot::Mutex::new(None),
+            traffic: parking_lot::RwLock::new(None),
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,

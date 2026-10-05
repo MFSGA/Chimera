@@ -143,6 +143,7 @@ mod tests {
         let base = IVerge::template();
         let patch = IVerge {
             theme_mode: Some("dark".into()),
+            traffic_retention: Some(chimera_config::application::TrafficRetention::NinetyDays),
             enable_tun_mode: Some(true),
             enable_random_port: Some(true),
             verge_mixed_port: Some(17890),
@@ -159,6 +160,10 @@ mod tests {
         assert_eq!(application.enable_random_port, None);
         assert_eq!(application.verge_mixed_port, None);
         assert_eq!(application.break_when_mode_change, None);
+        assert_eq!(
+            application.traffic_retention,
+            Some(chimera_config::application::TrafficRetention::NinetyDays)
+        );
 
         let clash = plan.clash_config.expect("clash patch should exist");
         assert_eq!(clash.enable_tun_mode, Some(true));

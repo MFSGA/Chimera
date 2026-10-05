@@ -6,11 +6,13 @@ use struct_patch::Patch;
 mod clash_core;
 mod i18n;
 mod logging;
+mod traffic;
 mod widget;
 
 pub use clash_core::*;
 pub use i18n::*;
 pub use logging::*;
+pub use traffic::*;
 pub use widget::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
@@ -114,6 +116,9 @@ pub struct ChimeraAppConfig {
     pub tray_menu_mode: TrayMenuMode,
     pub tray_menu_close_behavior: TrayMenuCloseBehavior,
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
+    /// How long recorded connection traffic is kept.
+    #[serde(default)]
+    pub traffic_retention: TrafficRetention,
     /// PAC URL for automatic proxy configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
@@ -155,6 +160,7 @@ impl Default for ChimeraAppConfig {
             tray_menu_mode: TrayMenuMode::default(),
             tray_menu_close_behavior: TrayMenuCloseBehavior::default(),
             network_statistic_widget: NetworkStatisticWidgetConfig::default(),
+            traffic_retention: TrafficRetention::default(),
             pac_url: None,
             enable_tray_text: false,
             enable_tray_traffic: false,

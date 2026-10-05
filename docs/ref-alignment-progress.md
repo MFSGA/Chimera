@@ -1195,3 +1195,29 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验证：独立依赖 worktree 中 `pnpm install --frozen-lockfile --ignore-scripts`、`pnpm peers check`（无 peer 问题）、`pnpm --filter chimera-ui build`、`pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（17 passed）；Cargo `metadata --locked`、`cargo check --locked --manifest-path backend/Cargo.toml -p chimera` 通过；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-utils --features process,reqwest -- --test-threads=1` 全部通过（66 passed），`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config -- --test-threads=1`（139 passed）通过。`cargo tree` 确认应用解析 reqwest 0.12.28、Clash API/utilities 解析 0.13.5。临时 worktree 缺少被忽略的 sidecar/resources 文件，因此 Tauri check 只读链接了当前工作树中的资源目录，没有改写资源。最初仅启用 `reqwest` 的测试调用漏掉 `process` feature，3 个 process-helper smoke tests 因 helper 不存在失败；带上 `process,reqwest` 后按完整 feature set 重跑通过。`git diff --check` 和 pnpm frozen lockfile check 通过。
 - 未完成的验证：本机只安装了 `aarch64-apple-darwin` Rust target；windows-core 0.62 已由 Cargo 元数据解析，并确认其 `Error::from_thread` API 存在，但 Windows 目标编译仍需 CI 验证。没有运行 macOS 桌面 bundle、Tauri 桌面 E2E、Linux 构建或 TUN 实机验证。临时 worktree 的 `pnpm prepare:check` 曾因该 worktree 未初始化 `backend/chimera-runtime` 子模块而失败；本轮没有重跑这个会检查/更新本地 sidecar 资源的脚本。
 - 收敛状态：所检查的共享依赖版本差异已按 ref 约束收敛；剩余差异均已说明来源或上游 TODO。依赖更新本身完成，Windows 和桌面运行验证仍待相应平台环境覆盖。
+
+## DIFF-044：Connections 页面搜索状态与最新 ref 同步
+
+- 基线：按用户要求更新本地只读 `ref/`。更新前 `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1`，更新后
+  `def0dbf2716ff972255be47924401b60db7d482c`（`main`，与 `origin/main` 一致）；参考工作树干净。此次 fetch
+  更新了主仓库远程引用；上游 runtime 子模块已在该 ref 提交记录的位置，未修改其内容。
+- ref 到 Chimera 映射：`ref/frontend/nyanpasu/src/pages/(main)/main/_modules/use-search-term.ts::useSearchTerm`
+  对应 `frontend/chimera/src/pages/(main)/main/_modules/use-search-term.ts::useSearchTerm`；ref
+  connections `index.tsx` 的 URL 查询参数 `q` 对应 Chimera 同名页面和
+  `frontend/chimera/src/pages/(main)/main/connections/route.tsx::validateSearch`。
+- 本轮实现：输入停止 300ms 后将搜索词写入当前 route entry 的 `q`，使用 replace 保持输入不制造历史记录；
+  返回到页面条目时恢复该搜索词。表格过滤使用 deferred value，并延后挂载重表格；代理侧栏更新筛选时保留现有
+  route search 字段，避免清掉搜索词。搜索页离场后不再写入 route 状态。
+- 保留差异及状态：**部分迁移**。当前 Chimera 仍是只有 active scope 的旧表格和独立 proxy sidebar；最新 ref
+  的 `active/all/closed` viewers、traffic range/dimension filters、分页关闭连接、filter-chip overflow、跨页
+  focus navigation 都未迁入。尤其 `all/closed` 和 traffic filters 依赖 ref 的
+  `nyanpasu-traffic` 持久化 store、traffic actor、RPC/IPC bindings 和 live-connection frame feed；Chimera
+  尚无对应业务服务/查询 API。本轮没有用前端缓存伪装历史数据，也没有改变 legacy UI。
+- 影响入口：仅主界面 connections route/search 和 proxy sidebar；legacy `/connections` 与 agent 入口未改，仍通过
+  现有共享 `useClashConnections` 数据入口工作。
+- 验证：`pnpm typecheck`、`pnpm --filter=chimera-ui build`、Prettier 和 `git diff --check` 通过。未运行真实桌面
+  E2E；当前 Chimera 前端没有 connections 浏览器测试 suite，构建和类型检查不证明 route 返回/重载行为。
+- 收敛条件：先迁移 ref `backend/nyanpasu-traffic` 的领域模型、持久化、traffic actor 与连接帧装配，映射到
+  Chimera `ChimeraClient`/Tauri IPC 并用现有 Specta generator 生成 binding；之后迁入 ref connections route 的
+  active/all/closed viewer、filters、toolbar/status tabs 和跨页焦点，并分别验证主 UI、受影响的 legacy 共享入口及
+  agent 对同一 API 的兼容性。完成这些步骤前不得称 Connections 页面已与最新 ref 完成对齐。

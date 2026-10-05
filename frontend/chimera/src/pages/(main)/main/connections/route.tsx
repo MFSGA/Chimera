@@ -25,12 +25,17 @@ import {
 } from '@/components/ui/tooltip';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
+import { RANGES, searchFilterSchema } from '../_modules/traffic-filters';
 import ProxyIcon from '../rules/_modules/proxy-icon';
 
 export const Route = createFileRoute('/(main)/main/connections')({
   component: RouteComponent,
   validateSearch: z.object({
     proxy: z.string().optional().nullable(),
+    q: z.string().optional(),
+    scope: z.enum(['all', 'active', 'closed']).optional(),
+    range: z.enum(RANGES).optional(),
+    filters: z.array(searchFilterSchema).optional(),
   }),
 });
 
@@ -75,10 +80,12 @@ const Item = ({
           asChild
         >
           <Link
+            from={Route.fullPath}
             to="."
-            search={{
+            search={(previous) => ({
+              ...previous,
               proxy: item,
-            }}
+            })}
           >
             <div className="text-md grid size-6 shrink-0 place-content-center">
               {icon}

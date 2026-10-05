@@ -65,6 +65,9 @@ pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<Chimera
     if let Some(value) = legacy.enable_auto_check_update {
         next.enable_auto_check_update = value;
     }
+    if let Some(value) = legacy.traffic_retention {
+        next.traffic_retention = value;
+    }
     if let Some(value) = legacy.clash_tray_selector {
         next.tray_selector_mode = super::yaml_convert(value)?;
     }
@@ -102,6 +105,7 @@ pub(crate) fn apply_app_config_to_legacy_verge(
     draft.enable_builtin_enhanced = Some(snap.enable_builtin_enhanced);
     draft.max_log_files = Some(snap.max_log_files);
     draft.enable_auto_check_update = Some(snap.enable_auto_check_update);
+    draft.traffic_retention = Some(snap.traffic_retention);
     draft.clash_tray_selector = Some(super::yaml_convert(snap.tray_selector_mode)?);
     draft.always_on_top = Some(snap.always_on_top);
     draft.window_type = Some(super::yaml_convert(snap.window_type)?);
@@ -125,6 +129,7 @@ fn apply_prepared_app_projection(target: &mut IVerge, projected: &IVerge) {
     target.enable_builtin_enhanced = projected.enable_builtin_enhanced;
     target.max_log_files = projected.max_log_files;
     target.enable_auto_check_update = projected.enable_auto_check_update;
+    target.traffic_retention = projected.traffic_retention;
     target.clash_tray_selector = projected.clash_tray_selector;
     target.always_on_top = projected.always_on_top;
     target.window_type = projected.window_type;
@@ -223,7 +228,8 @@ mod tests {
     use super::*;
     use crate::config::chimera::{ClashCore, ProxiesSelectorMode, WindowType};
     use chimera_config::application::{
-        ProxiesSelectorMode as AppProxiesSelectorMode, WindowType as AppWindowType,
+        ProxiesSelectorMode as AppProxiesSelectorMode, TrafficRetention,
+        WindowType as AppWindowType,
     };
 
     #[test]
@@ -245,6 +251,7 @@ mod tests {
             enable_builtin_enhanced: Some(false),
             max_log_files: Some(14),
             enable_auto_check_update: Some(false),
+            traffic_retention: Some(TrafficRetention::ThirtyDays),
             clash_tray_selector: Some(ProxiesSelectorMode::Hidden),
             always_on_top: Some(true),
             window_type: Some(WindowType::Main),
@@ -260,6 +267,7 @@ mod tests {
         assert_eq!(typed.window_type, AppWindowType::Main);
         assert_eq!(typed.proxy_guard_interval, 15);
         assert_eq!(typed.max_log_files, 14);
+        assert_eq!(typed.traffic_retention, TrafficRetention::ThirtyDays);
         assert!(typed.enable_service_mode);
         assert!(typed.enable_system_proxy);
         assert!(typed.always_on_top);
@@ -275,5 +283,6 @@ mod tests {
         assert_eq!(typed.window_type, AppWindowType::Legacy);
         assert!(typed.enable_builtin_enhanced);
         assert_eq!(typed.max_log_files, 7);
+        assert_eq!(typed.traffic_retention, TrafficRetention::SevenDays);
     }
 }

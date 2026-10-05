@@ -10,6 +10,7 @@ import HotkeyManager from './_modules/hotket-manager';
 import LightenAnimationEffectsSwitch from './_modules/lighten-animation-effects-switch';
 import LogFileConfig from './_modules/log-file-config';
 import LogLevelSelector from './_modules/log-level-selector';
+import TrafficRetentionSelector from './_modules/traffic-retention-selector';
 import TrayProxiesSelector from './_modules/tray-proxies-selector';
 
 export const Route = createFileRoute('/(main)/main/settings/chimera')({
@@ -25,6 +26,18 @@ const LogSettings = () => {
         <LogLevelSelector />
 
         <LogFileConfig />
+      </SettingsGroup>
+    </div>
+  );
+};
+
+const TrafficSettings = () => {
+  return (
+    <div data-slot="app-settings-container">
+      <SettingsLabel>{m.settings_chimera_traffic_label()}</SettingsLabel>
+
+      <SettingsGroup>
+        <TrafficRetentionSelector />
       </SettingsGroup>
     </div>
   );
@@ -91,6 +104,8 @@ function RouteComponent() {
 
       <div className="space-y-4 px-4 pb-4">
         <LogSettings />
+
+        <TrafficSettings />
 
         <EnhanceSettings />
 

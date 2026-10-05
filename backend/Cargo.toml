@@ -5,6 +5,7 @@ members = [
   "chimera-core",
   "chimera-core-manager",
   "chimera-core-metadata",
+  "chimera-traffic",
   "chimera-macro",
   "chimera-utils",
   "tauri",

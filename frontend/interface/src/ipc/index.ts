@@ -35,6 +35,7 @@ export * from './use-clash-info';
 export * from './use-clash-logs';
 export * from './use-clash-memory';
 export * from './use-clash-traffic';
+export * from './use-traffic';
 /** 11 */
 export * from './use-profile-content';
 /** 12 */
