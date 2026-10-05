@@ -39,14 +39,13 @@ chimera-ipc = { path = "chimera-runtime/chimera_ipc", features = [
 
 thiserror = "2"
 
-reqwest = { version = "0.13", default-features = false, features = [
+reqwest = { version = "0.12", default-features = false, features = [
   "charset",
   "http2",
   "system-proxy",
   "json",
-  "query",
   "stream",
-  "rustls",
+  "rustls-tls",
 ] }
 
 tokio = { version = "1", features = ["full"] }

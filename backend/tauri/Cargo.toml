@@ -81,7 +81,7 @@ smol-cancellation-token = "0.1"
 backon = { version = "1.0.1", features = ["tokio-sleep"] }                # for backoff retry
 ractor = "0.16"
 
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 percent-encoding = "2.3.1"
 
@@ -90,13 +90,13 @@ serde_yaml = { version = "0.9" }
 serde_yaml_ng = { version = "0.10", git = "https://github.com/libnyanpasu/serde-yaml-ng.git", rev = "363da138dc97f90ef0a356f971c2dc1d8fe04c9e", features = ["specta"] }
 mlua = { version = "0.12", features = ["lua54", "vendored", "serde"] }
 rquickjs = "0.13.0"
-oxc_parser = "0.151"
-oxc_allocator = "0.151"
-oxc_span = "0.151"
-oxc_ast = "0.151"
-oxc_syntax = "0.151"
-oxc_ast_visit = "0.151"
-sha2 = "0.11"
+oxc_parser = "0.152"
+oxc_allocator = "0.152"
+oxc_span = "0.152"
+oxc_ast = "0.152"
+oxc_syntax = "0.152"
+oxc_ast_visit = "0.152"
+sha2 = "0.10"
 
 ambassador = "0.5.0"                                                      # for trait delegation
 
@@ -216,7 +216,7 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Shutdown",
   "Win32_Graphics_Gdi",
 ] }
-windows-core = "0.100"
+windows-core = "0.62"
 # webview2-com = "0.38"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
