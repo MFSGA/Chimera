@@ -49,7 +49,13 @@ import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -69,6 +75,7 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { containsSearchTerm } from '@/utils';
 import parseTraffic from '@/utils/parse-traffic';
+import { useSearchTerm } from '../_modules/use-search-term';
 import TableRow from './_modules/table-row';
 import { Route as ConnectionsRoute } from './route';
 
@@ -535,7 +542,21 @@ function Viewer({ search }: { search: string }) {
  * - 使用 useScrollArea 获取 viewportRef 供 Virtualizer 使用
  */
 function RouteComponent() {
-  const [search, setSearch] = useState('');
+  const { q } = ConnectionsRoute.useSearch();
+  const navigate = ConnectionsRoute.useNavigate();
+  const [search, setSearch] = useSearchTerm(
+    q,
+    useCallback(
+      (next) =>
+        navigate({
+          search: (previous) => ({ ...previous, q: next }),
+          replace: true,
+        }),
+      [navigate],
+    ),
+  );
+  const deferredSearch = useDeferredValue(search);
+  const showTable = useDeferredValue(true, false);
 
   const { deleteConnections } = useClashConnections();
 
@@ -556,7 +577,7 @@ function RouteComponent() {
             type="hover"
             data-slot="connections-scroll-wrapper"
           >
-            <Viewer search={search} />
+            {showTable && <Viewer search={deferredSearch} />}
           </ScrollArea>
         </RegisterContextMenuTrigger>
 
