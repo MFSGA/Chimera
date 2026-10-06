@@ -118,3 +118,9 @@ On macOS, the affected `profiles-layout.e2e.ts` spec was also attempted with
 WebKit 605.1.15. It failed in `openMainRoute` while waiting for the main route
 animation to settle, before the import-action assertion ran. This local run
 does not verify the change; Windows Edge CI remains the required desktop result.
+
+On head `35abd15a` (full SHA `35abd15aa50478c9fbf3a823d7d3f2825592ff3b`),
+Windows Edge critical passed in [workflow run 37536249230](https://github.com/MFSGA/Chimera/actions/runs/37536249230): all 19 spec files passed in 3 minutes 21 seconds.
+Both `profile-transform-chain-ui.e2e.ts` and `profiles-layout.e2e.ts` passed;
+the latter completed its action-draft assertions without refreshing the main
+window. This is the first passing Windows run for the final test setup.
