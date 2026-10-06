@@ -64,6 +64,8 @@
 
 项目现有[下拉菜单测试](../../tauri-e2e/specs/main-dropdown-menu.e2e.ts)通过设置焦点再按 Enter 激活菜单，并等待动画后检查几何。这与上述限制相符，但它不能替代本次发布源码核对。键盘激活适合验证菜单布局，鼠标可用性仍需独立覆盖。
 
+当前项目使用的桌面驱动是 vendored `tauri-plugin-wdio-webdriver@1.4.0`，并带兼容补丁 `e4bdb66`。在实际 vendored 源码中，`src/server/handlers/actions.rs` 的 `PointerAction::Move` 分支调用 `dispatch_pointer_event(PointerEventType::Move, ...)`；`src/platform/executor.rs` 的该方法把 `Move` 映射为 `MouseEvent("mousemove")`。因此 `moveTo()` 可以验证驱动的合成 mousemove 路径，但不能证明浏览器收到真实 `PointerEvent`，也不能作为 Radix Tooltip 鼠标悬停行为的验收。对应的受限测试及移除条件见[Profile 导入动作测试契约](contracts/profile-import-accessible-action.md)。
+
 ## U05 Mocha 异步与 hooks
 
 核对 `mocha@11.8.0/lib/runnable.js` 的 `callFn` / `callFnAsync`；npm 发布元数据给出的提交是 `90c1bb3e183a262ac91d83fa45035d03ea9f6045`。[固定提交源码](https://github.com/mochajs/mocha/blob/90c1bb3e183a262ac91d83fa45035d03ea9f6045/lib/runnable.js)

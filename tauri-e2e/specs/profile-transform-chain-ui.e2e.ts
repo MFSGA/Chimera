@@ -450,9 +450,29 @@ describe('main transform chain editor', () => {
         errors.push(error);
       }
     }
+    if (localUid) {
+      try {
+        requireCommitted(
+          await setGlobalTransforms([]),
+          'global chain test-state cleanup',
+        );
+        await waitForGlobalChain([]);
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        requireCommitted(
+          await setScopedTransforms(localUid, []),
+          'scoped chain test-state cleanup',
+        );
+        await waitForScopedChain(localUid, []);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     if (javascriptUid) {
       try {
-        requireApplied(
+        requireCommitted(
           await invoke<MutationOutcome<null>>('save_profile_file', {
             uid: javascriptUid,
             fileData: javascriptFileData,
@@ -610,10 +630,11 @@ describe('main transform chain editor', () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
-    requireApplied(
+    requireCommitted(
       await setGlobalTransforms([]),
       'global chain reset before profile editor diagnostics',
     );
+    await waitForGlobalChain([]);
     requireApplied(
       await setScopedTransforms(sourceUid, [transformUid]),
       'scoped JavaScript chain before profile editor diagnostics',

@@ -52,25 +52,42 @@ function runtimeProductPath(): string {
   return path.join(runtimeRoot, 'config', 'runtime', 'clash-config.yaml');
 }
 
-async function waitForUnifiedDelay(expected: boolean): Promise<void> {
-  const product = runtimeProductPath();
-  let lastValue = 'missing';
-  await browser.waitUntil(
-    async () => {
-      if (!fs.existsSync(product)) {
-        lastValue = 'runtime product missing';
-        return false;
-      }
-      const contents = fs.readFileSync(product, 'utf8');
-      const match = contents.match(/^unified-delay:\s*(true|false)\s*$/m);
-      lastValue = match?.[1] ?? 'field missing';
-      return lastValue === String(expected);
-    },
-    {
-      timeout: 30_000,
-      timeoutMsg: `Runtime unified-delay did not become ${expected}. Last value: ${lastValue}`,
-    },
+function readRuntimeDnsEnabled(product: string): string {
+  let contents: string;
+  try {
+    contents = fs.readFileSync(product, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 'runtime product missing';
+    }
+    throw error;
+  }
+
+  const dns = contents.match(
+    /^dns:[ \t]*\r?\n((?:[ \t]+[^\r\n]*(?:\r?\n|$))*)/m,
+  )?.[1];
+  return (
+    dns?.match(/^[ \t]+enable:[ \t]*(true|false)[ \t]*$/m)?.[1] ??
+    (dns ? 'dns.enable missing' : 'dns section missing')
   );
+}
+
+async function waitForDnsEnabled(expected: boolean): Promise<void> {
+  const product = runtimeProductPath();
+  try {
+    await browser.waitUntil(
+      async () => readRuntimeDnsEnabled(product) === String(expected),
+      {
+        timeout: 30_000,
+        timeoutMsg: `Timed out waiting for runtime dns.enable=${expected}.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Runtime dns.enable did not become ${expected}. Final observation: ${readRuntimeDnsEnabled(product)}.`,
+      { cause: error },
+    );
+  }
 }
 
 describe('Chimera JavaScript transform runtime lifecycle', () => {
@@ -78,8 +95,9 @@ describe('Chimera JavaScript transform runtime lifecycle', () => {
   // attached through the current config definition. The generated runtime YAML
   // and transform diagnostics must both show its effect; the persisted Profile
   // item must carry the same transform UID. IPC fixture setup is an integration
-  // boundary, not a UI workflow. Cleanup restores the original selection and
-  // detaches/deletes only this test's profiles while preserving failures.
+  // boundary, not a UI workflow. dns.enable proves transform output because the
+  // default core guard supplies unified-delay=true after profile transforms.
+  // Cleanup restores the original selection and removes only this test's data.
   it('executes a JavaScript transform in a scoped runtime chain', async () => {
     const suffix = Date.now();
     const localName = `javascript-source-${suffix}`;
@@ -133,7 +151,8 @@ describe('Chimera JavaScript transform runtime lifecycle', () => {
         const local = await createProfile(
           localConfigProfileRequest(localName),
           [
-            'unified-delay: false',
+            'dns:',
+            '  enable: false',
             'proxies: []',
             'proxy-groups: []',
             'rules: []',
@@ -146,7 +165,7 @@ describe('Chimera JavaScript transform runtime lifecycle', () => {
           scriptProfileRequest(javascriptName, 'javascript'),
           [
             'export default function (config) {',
-            '  config["unified-delay"] = true;',
+            '  config.dns.enable = true;',
             '  console.info("e2e javascript transform executed");',
             '  return config;',
             '}',
@@ -164,14 +183,14 @@ describe('Chimera JavaScript transform runtime lifecycle', () => {
           'source Profile activation',
         );
         await waitForCoreRunning();
-        await waitForUnifiedDelay(false);
+        await waitForDnsEnabled(false);
 
         appliedValue(
           await setScopedTransforms(localUid, [javascriptUid]),
           'scoped JavaScript transform update',
         );
         await waitForCoreRunning();
-        await waitForUnifiedDelay(true);
+        await waitForDnsEnabled(true);
 
         const profiles = await readProfiles();
         const source = profiles.items.find((item) => item.uid === localUid);
@@ -191,7 +210,7 @@ describe('Chimera JavaScript transform runtime lifecycle', () => {
           'scoped JavaScript transform removal',
         );
         await waitForCoreRunning();
-        await waitForUnifiedDelay(false);
+        await waitForDnsEnabled(false);
 
         const detachedDiagnostics =
           await invoke<RuntimeTransformDiagnostics | null>(

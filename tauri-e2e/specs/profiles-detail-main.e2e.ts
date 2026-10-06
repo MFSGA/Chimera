@@ -1,15 +1,21 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
 import {
+  appliedValue,
+  committedValue,
   createProfile,
   invoke,
   localConfigProfileRequest,
+  readProfiles,
+  runCleanupActions,
 } from './profile-fixtures.js';
 
 const profileName = `Main Detail Ref Profile ${Date.now()}`;
 
 type ProfilesResponse = {
+  current: string | null;
   items: Array<{ name: string; uid: string }>;
 };
 
@@ -51,9 +57,14 @@ async function getActiveClickableElement(selector: string) {
 
 describe('main profile detail reference editors', () => {
   let profileUid: string | undefined;
+  let previousCurrent: string | null = null;
+  let selectionCaptured = false;
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
+
+    previousCurrent = (await readProfiles()).current ?? null;
+    selectionCaptured = true;
 
     const created = await createProfile(
       localConfigProfileRequest(profileName),
@@ -101,7 +112,58 @@ describe('main profile detail reference editors', () => {
         (item) => item.name === profileName,
       )?.uid;
     if (!uid) return;
-    await invoke('delete_profile', { uid });
+    const cleanupActions = [
+      {
+        label: 'restore the original Profile selection',
+        run: async () => {
+          if (!selectionCaptured) return;
+          const profiles = await readProfiles();
+          if (
+            profiles.current !== uid ||
+            profiles.current === previousCurrent
+          ) {
+            return;
+          }
+          appliedValue(
+            await invoke<MutationOutcome<null>>('activate_profile', {
+              uid: previousCurrent,
+            }),
+            'Profile selection restoration',
+          );
+          await browser.waitUntil(
+            async () => (await readProfiles()).current === previousCurrent,
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The original Profile selection was not restored.',
+            },
+          );
+        },
+      },
+      {
+        label: 'delete the detail test Profile',
+        run: async () => {
+          const profiles = await readProfiles();
+          assert.notEqual(
+            profiles.current,
+            uid,
+            'The detail test Profile is active and cannot be deleted safely.',
+          );
+          committedValue(
+            await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+            'Detail test Profile deletion',
+          );
+          await browser.waitUntil(
+            async () =>
+              !(await readProfiles()).items.some((item) => item.uid === uid),
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The detail test Profile was not removed.',
+            },
+          );
+        },
+      },
+    ];
+    await runCleanupActions('main profile detail spec', cleanupActions);
   });
 
   // Contract: a locally created file Profile opens in the main detail route;
