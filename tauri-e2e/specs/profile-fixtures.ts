@@ -15,6 +15,18 @@ export type CleanupRegistrar = (
   action: () => Promise<unknown>,
 ) => void;
 
+function describeError(error: unknown): string {
+  if (error instanceof AggregateError) {
+    return `${error.message}: ${Array.from(error.errors, describeError).join('; ')}`;
+  }
+  if (error instanceof Error) {
+    return error.cause === undefined
+      ? error.message
+      : `${error.message}: ${describeError(error.cause)}`;
+  }
+  return String(error);
+}
+
 export async function withCleanup<T>(
   name: string,
   action: (defer: CleanupRegistrar) => Promise<T>,
@@ -47,9 +59,13 @@ export async function withCleanup<T>(
 
   if (hasPrimaryError && cleanupErrors.length === 0) throw primaryError;
   if (hasPrimaryError || cleanupErrors.length > 0) {
+    const errors = [
+      ...(hasPrimaryError ? [primaryError] : []),
+      ...cleanupErrors,
+    ];
     throw new AggregateError(
-      [...(hasPrimaryError ? [primaryError] : []), ...cleanupErrors],
-      `${name} failed${cleanupErrors.length ? ' and cleanup was incomplete' : ''}`,
+      errors,
+      `${name} failed: ${errors.map(describeError).join('; ')}`,
     );
   }
   return value;
@@ -68,7 +84,10 @@ export async function runCleanupActions(
     }
   }
   if (errors.length > 0) {
-    throw new AggregateError(errors, `${name} cleanup was incomplete`);
+    throw new AggregateError(
+      errors,
+      `${name} cleanup was incomplete: ${errors.map(describeError).join('; ')}`,
+    );
   }
 }
 

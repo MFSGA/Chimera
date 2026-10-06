@@ -44,25 +44,42 @@ function runtimeProductPath(): string {
   return path.join(runtimeRoot, 'config', 'runtime', 'clash-config.yaml');
 }
 
-async function waitForUnifiedDelay(expected: boolean): Promise<void> {
-  const product = runtimeProductPath();
-  let lastValue = 'missing';
-  await browser.waitUntil(
-    async () => {
-      if (!fs.existsSync(product)) {
-        lastValue = 'runtime product missing';
-        return false;
-      }
-      const contents = fs.readFileSync(product, 'utf8');
-      const match = contents.match(/^unified-delay:\s*(true|false)\s*$/m);
-      lastValue = match?.[1] ?? 'field missing';
-      return lastValue === String(expected);
-    },
-    {
-      timeout: 30_000,
-      timeoutMsg: `Runtime unified-delay did not become ${expected}. Last value: ${lastValue}`,
-    },
+function readRuntimeDnsEnabled(product: string): string {
+  let contents: string;
+  try {
+    contents = fs.readFileSync(product, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 'runtime product missing';
+    }
+    throw error;
+  }
+
+  const dns = contents.match(
+    /^dns:[ \t]*\r?\n((?:[ \t]+[^\r\n]*(?:\r?\n|$))*)/m,
+  )?.[1];
+  return (
+    dns?.match(/^[ \t]+enable:[ \t]*(true|false)[ \t]*$/m)?.[1] ??
+    (dns ? 'dns.enable missing' : 'dns section missing')
   );
+}
+
+async function waitForDnsEnabled(expected: boolean): Promise<void> {
+  const product = runtimeProductPath();
+  try {
+    await browser.waitUntil(
+      async () => readRuntimeDnsEnabled(product) === String(expected),
+      {
+        timeout: 30_000,
+        timeoutMsg: `Timed out waiting for runtime dns.enable=${expected}.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Runtime dns.enable did not become ${expected}. Final observation: ${readRuntimeDnsEnabled(product)}.`,
+      { cause: error },
+    );
+  }
 }
 
 async function createLocalProfile(
@@ -71,7 +88,8 @@ async function createLocalProfile(
   return createProfile(
     localConfigProfileRequest(name),
     [
-      'unified-delay: false',
+      'dns:',
+      '  enable: false',
       'proxies: []',
       'proxy-groups: []',
       'rules: []',
@@ -83,7 +101,7 @@ async function createLocalProfile(
 async function createOverlayProfile(
   name: string,
 ): Promise<MutationOutcome<string>> {
-  return createProfile(overlayProfileRequest(name), 'unified-delay: true\n');
+  return createProfile(overlayProfileRequest(name), 'dns:\n  enable: true\n');
 }
 
 describe('Chimera transform profile runtime lifecycle', () => {
@@ -91,8 +109,9 @@ describe('Chimera transform profile runtime lifecycle', () => {
   // config and overlay through current Profile IPC, activates the config, and
   // changes scoped then global transform IDs. The Profile document and
   // generated runtime YAML are independent result sources. Old `{ item }`
-  // requests or chain commands fail setup; cleanup restores selection and the
-  // original global transforms before deleting only this run's UIDs.
+  // requests or chain commands fail setup. dns.enable proves transform output
+  // because the default core guard supplies unified-delay=true after profile
+  // transforms. Cleanup restores selection and global transforms.
   it('applies and removes merge transforms through scoped and global chains', async () => {
     const suffix = Date.now();
     const localName = `transform-source-${suffix}`;
@@ -163,14 +182,14 @@ describe('Chimera transform profile runtime lifecycle', () => {
         'source Profile activation',
       );
       await waitForCoreRunning();
-      await waitForUnifiedDelay(false);
+      await waitForDnsEnabled(false);
 
       appliedValue(
         await setScopedTransforms(localUid, [mergeUid]),
         'scoped overlay update',
       );
       await waitForCoreRunning();
-      await waitForUnifiedDelay(true);
+      await waitForDnsEnabled(true);
 
       let profiles: ProfileDocument_Deserialize = await readProfiles();
       const source = profiles.items.find((item) => item.uid === localUid);
@@ -181,7 +200,7 @@ describe('Chimera transform profile runtime lifecycle', () => {
         'scoped overlay removal',
       );
       await waitForCoreRunning();
-      await waitForUnifiedDelay(false);
+      await waitForDnsEnabled(false);
 
       globalTransformsMayHaveChanged = true;
       appliedValue(
@@ -189,13 +208,13 @@ describe('Chimera transform profile runtime lifecycle', () => {
         'global overlay update',
       );
       await waitForCoreRunning();
-      await waitForUnifiedDelay(true);
+      await waitForDnsEnabled(true);
       profiles = await readProfiles();
       assert.deepEqual(profiles.global_transforms, [mergeUid]);
 
       appliedValue(await setGlobalTransforms([]), 'global overlay removal');
       await waitForCoreRunning();
-      await waitForUnifiedDelay(false);
+      await waitForDnsEnabled(false);
     });
   });
 });

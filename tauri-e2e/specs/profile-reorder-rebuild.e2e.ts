@@ -1,40 +1,16 @@
 import assert from 'node:assert/strict';
-
-interface ProfileItem {
-  uid: string;
-  name: string;
-}
-
-interface ProfilesResponse {
-  current: string | null;
-  items: ProfileItem[];
-}
+import type {
+  MutationOutcome,
+  ProfileDocument_Deserialize,
+} from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  committedValue,
+  invoke,
+  readProfiles,
+  withCleanup,
+} from './profile-fixtures.js';
 
 type CoreState = 'Running' | { Stopped: string | null };
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, payload) => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return tauri.invoke(name, payload);
-    },
-    command,
-    args,
-  );
-}
-
-async function readProfiles(): Promise<ProfilesResponse> {
-  return invoke<ProfilesResponse>('get_profiles');
-}
 
 async function waitForCoreRunning(): Promise<void> {
   let lastState = 'unknown';
@@ -92,49 +68,128 @@ async function createLocalProfile(name: string): Promise<string> {
   return uid;
 }
 
-async function removeProfilesWithPrefix(prefix: string): Promise<void> {
-  const profiles = await readProfiles();
-  for (const item of profiles.items.filter((profile) =>
-    profile.name.startsWith(prefix),
-  )) {
-    await invoke('delete_profile', { uid: item.uid });
-  }
-  await waitForCoreRunning();
-}
-
 describe('Chimera profile reorder persistence', () => {
   it('persists the final reordered profile list without requiring a runtime rebuild', async () => {
-    const prefix = 'profile-reorder-e2e-';
-    await removeProfilesWithPrefix(prefix);
+    // Contract: create two uniquely named local Profiles through the UI,
+    // reorder them through the shared API, and verify the persisted order after
+    // refresh. The runtime is shared across specs, so cleanup restores the
+    // original selection and UID order and deletes only these exact fixtures.
+    const prefix = `profile-reorder-e2e-${Date.now()}-`;
+    const firstName = `${prefix}a`;
+    const secondName = `${prefix}b`;
     const original = await readProfiles();
-    const created: string[] = [];
-    const suffix = Date.now();
+    assert.equal(
+      original.items.some((item) =>
+        [firstName, secondName].includes(item.name),
+      ),
+      false,
+      'The isolated runtime already contains a profile owned by this test.',
+    );
 
-    try {
-      created.push(await createLocalProfile(`${prefix}a-${suffix}`));
+    await withCleanup('Profile reorder persistence', async (defer) => {
+      defer('restore the original profile state', async () => {
+        let profiles: ProfileDocument_Deserialize = await readProfiles();
+        if (profiles.current !== original.current) {
+          committedValue(
+            await invoke<MutationOutcome<null>>('activate_profile', {
+              uid: original.current,
+            }),
+            'Original profile selection restoration',
+          );
+          await browser.waitUntil(
+            async () => (await readProfiles()).current === original.current,
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The original profile selection was not restored.',
+            },
+          );
+        }
+
+        profiles = await readProfiles();
+        const testProfiles = profiles.items.filter((item) =>
+          [firstName, secondName].includes(item.name),
+        );
+        for (const item of testProfiles) {
+          committedValue(
+            await invoke<MutationOutcome<null>>('delete_profile', {
+              uid: item.uid,
+            }),
+            `Test profile ${item.name} deletion`,
+          );
+          await browser.waitUntil(
+            async () =>
+              !(await readProfiles()).items.some(
+                (profile) => profile.uid === item.uid,
+              ),
+            {
+              timeout: 30_000,
+              timeoutMsg: `Test profile ${item.name} remained after deletion.`,
+            },
+          );
+        }
+
+        profiles = await readProfiles();
+        const originalOrder = original.items.map((item) => item.uid);
+        const originalUidSet = new Set(originalOrder);
+        assert.deepEqual(
+          new Set(profiles.items.map((item) => item.uid)),
+          originalUidSet,
+          'Profile cleanup changed the original profile set.',
+        );
+        if (
+          profiles.items.map((item) => item.uid).join('|') !==
+          originalOrder.join('|')
+        ) {
+          committedValue(
+            await invoke<MutationOutcome<null>>('reorder_profiles_by_list', {
+              list: originalOrder,
+            }),
+            'Original profile order restoration',
+          );
+          await browser.waitUntil(
+            async () =>
+              (await readProfiles()).items.map((item) => item.uid).join('|') ===
+              originalOrder.join('|'),
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The original profile order was not restored.',
+            },
+          );
+        }
+        await waitForCoreRunning();
+      });
+
+      const firstUid = await createLocalProfile(firstName);
       await browser.waitUntil(
-        async () => (await readProfiles()).current === created[0],
+        async () => (await readProfiles()).current === firstUid,
         {
           timeout: 45_000,
           timeoutMsg: 'The first local profile was not activated.',
         },
       );
-      created.push(await createLocalProfile(`${prefix}b-${suffix}`));
+      const secondUid = await createLocalProfile(secondName);
 
       const before = await readProfiles();
       const originalCurrentOrder = before.items.map((item) => item.uid);
-      const first = created[0];
-      const second = created[1];
       const reordered = originalCurrentOrder.map((uid) => {
-        if (uid === first) return second;
-        if (uid === second) return first;
+        if (uid === firstUid) return secondUid;
+        if (uid === secondUid) return firstUid;
         return uid;
       });
       assert.notDeepEqual(reordered, originalCurrentOrder);
 
-      await invoke('reorder_profiles_by_list', { list: reordered });
-      await invoke('reorder_profiles_by_list', { list: originalCurrentOrder });
-      await invoke('reorder_profiles_by_list', { list: reordered });
+      for (const [list, operation] of [
+        [reordered, 'Initial profile reorder'],
+        [originalCurrentOrder, 'Profile order reset'],
+        [reordered, 'Final profile reorder'],
+      ] as const) {
+        committedValue(
+          await invoke<MutationOutcome<null>>('reorder_profiles_by_list', {
+            list,
+          }),
+          operation,
+        );
+      }
 
       await browser.waitUntil(
         async () => {
@@ -165,23 +220,6 @@ describe('Chimera profile reorder persistence', () => {
             'The final profile order was not persisted after refresh.',
         },
       );
-    } finally {
-      for (const uid of created.reverse()) {
-        await invoke('delete_profile', { uid }).catch(() => undefined);
-      }
-      await removeProfilesWithPrefix(prefix).catch(() => undefined);
-      const remaining = await readProfiles().catch(() => null);
-      if (remaining) {
-        const originalRemainingOrder = original.items
-          .map((item) => item.uid)
-          .filter((uid) => remaining.items.some((item) => item.uid === uid));
-        if (originalRemainingOrder.length === remaining.items.length) {
-          await invoke('reorder_profiles_by_list', {
-            list: originalRemainingOrder,
-          }).catch(() => undefined);
-        }
-      }
-      await waitForCoreRunning();
-    }
+    });
   });
 });

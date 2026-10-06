@@ -30,19 +30,14 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
 
 describe('main profiles import action compatibility', () => {
   before(async () => {
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
-    await openMainRoute(targetPath);
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
-    });
-    await browser.refresh();
-    await openMainRoute(targetPath);
   });
 
   // Contract: the main Profiles route accepts the ImportLocalProfile search
   // action; closing its draft clears that action and leaves both the backend
-  // Profile document and visible list unchanged. Navigating through an absent
-  // sidebar link must not be required for this route contract.
+  // Profile document and visible list unchanged. This contract does not depend
+  // on page refresh behavior or an absent sidebar link.
   it('opens a local import draft from the action search param without persisting on close', async () => {
     const before = await invoke<ProfilesResponse>('get_profiles');
     assert.equal(

@@ -94,6 +94,7 @@ impl Config {
         profiles: std::sync::Arc<chimera_config::profile::Profiles>,
         resolved_ports: chimera_config::runtime::executor::ResolvedPortBindings,
         staged_content: std::collections::BTreeMap<String, String>,
+        strict_transforms: bool,
     ) -> Result<RuntimeInputOutput> {
         let (config, exists_keys, postprocessing_output, inspection) =
             enhance::build_from_profiles_with_inspection(
@@ -103,6 +104,7 @@ impl Config {
                 app,
                 resolved_ports,
                 staged_content,
+                strict_transforms,
             )
             .await?;
 

@@ -23,7 +23,9 @@ describe('Chimera desktop smoke test', () => {
     }));
 
     const url = new URL(state.href);
-    assert.equal(url.hostname, 'tauri.localhost');
+    const expectedHostname =
+      process.platform === 'darwin' ? 'localhost' : 'tauri.localhost';
+    assert.equal(url.hostname, expectedHostname);
     assert.notEqual(url.protocol, 'chrome-error:');
     assert.equal(state.title, 'Clash Chimera');
     assert.equal(state.rootExists, true);

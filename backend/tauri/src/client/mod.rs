@@ -603,10 +603,17 @@ impl ChimeraClient {
         uid: ProfileId,
         definition: ProfileDefinition,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self
+        let report = match self
             .profiles_client()?
             .replace_definition(uid, definition)
-            .await?;
+            .await
+        {
+            Ok(report) => report,
+            Err(error) => {
+                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
+                return Err(error.into());
+            }
+        };
         self.inner.ui_sink.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
@@ -624,7 +631,13 @@ impl ChimeraClient {
         &self,
         ids: Vec<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.set_global_transforms(ids).await?;
+        let report = match self.profiles_client()?.set_global_transforms(ids).await {
+            Ok(report) => report,
+            Err(error) => {
+                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
+                return Err(error.into());
+            }
+        };
         self.inner.ui_sink.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
@@ -643,7 +656,13 @@ impl ChimeraClient {
         uid: ProfileId,
         data: String,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        let report = self.profiles_client()?.save_file(uid, data).await?;
+        let report = match self.profiles_client()?.save_file(uid, data).await {
+            Ok(report) => report,
+            Err(error) => {
+                self.inner.ui_sink.refresh_runtime_transform_diagnostics();
+                return Err(error.into());
+            }
+        };
         self.inner.ui_sink.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
