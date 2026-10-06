@@ -1,42 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-interface ProfileItem {
-  uid: string;
-  name: string;
-}
-
-interface ProfilesResponse {
-  current: string | null;
-  items: ProfileItem[];
-}
+import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  appliedValue,
+  committedValue,
+  invoke,
+  readProfiles,
+  withCleanup,
+} from './profile-fixtures.js';
 
 type CoreState = 'Running' | { Stopped: string | null };
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, payload) => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return tauri.invoke(name, payload);
-    },
-    command,
-    args,
-  );
-}
-
-async function readProfiles(): Promise<ProfilesResponse> {
-  return invoke<ProfilesResponse>('get_profiles');
-}
 
 async function waitForCoreRunning(): Promise<void> {
   let lastState = 'unknown';
@@ -97,13 +71,79 @@ async function openLocalProfileForm() {
 }
 
 describe('Chimera profile runtime product lifecycle', () => {
+  // Contract: from the isolated E2E runtime with a healthy core, create one
+  // uniquely named local Profile through the UI. The Profiles document proves
+  // its UID became current, and the generated runtime file proves promotion.
+  // A stored-but-inactive Profile or missing product fails these checks.
+  // Cleanup restores the original selection before deleting only this Profile.
   it('checks, promotes and starts the exact product when the first local profile is created', async () => {
     const profileName = `runtime-product-${Date.now()}`;
+    const initialProfiles = await readProfiles();
+    assert.equal(
+      initialProfiles.items.some((item) => item.name === profileName),
+      false,
+      'The isolated runtime already contains a Profile owned by this test.',
+    );
     let createdUid: string | null = null;
 
-    await waitForCoreRunning();
+    await withCleanup('runtime product Profile lifecycle', async (defer) => {
+      const findCreatedUid = async (): Promise<string | null> => {
+        const profiles = await readProfiles();
+        const created = profiles.items.find(
+          (item) => item.uid === createdUid || item.name === profileName,
+        );
+        createdUid = created?.uid ?? null;
+        return createdUid;
+      };
 
-    try {
+      defer('restore the original Profile selection', async () => {
+        const profiles = await readProfiles();
+        if (profiles.current === initialProfiles.current) return;
+
+        appliedValue(
+          await invoke<MutationOutcome<null>>('activate_profile', {
+            uid: initialProfiles.current,
+          }),
+          'Original Profile selection restoration',
+        );
+        await browser.waitUntil(
+          async () =>
+            (await readProfiles()).current === initialProfiles.current,
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The original Profile selection was not restored.',
+          },
+        );
+        await waitForCoreRunning();
+      });
+
+      defer('delete the test Profile', async () => {
+        const uid = await findCreatedUid();
+        if (!uid) return;
+
+        const profiles = await readProfiles();
+        assert.notEqual(
+          profiles.current,
+          uid,
+          'The test Profile is still active and cannot be deleted safely.',
+        );
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+          'Runtime product test Profile deletion',
+        );
+        await browser.waitUntil(
+          async () =>
+            !(await readProfiles()).items.some((item) => item.uid === uid),
+          {
+            timeout: 45_000,
+            timeoutMsg: 'The runtime product test Profile was not removed.',
+          },
+        );
+        await waitForCoreRunning();
+        assertRuntimeProductIsPromoted();
+      });
+
+      await waitForCoreRunning();
       const nameInput = await openLocalProfileForm();
       await nameInput.setValue(profileName);
 
@@ -175,29 +215,6 @@ describe('Chimera profile runtime product lifecycle', () => {
         await refreshedCard.getAttribute('data-profile-active'),
         'true',
       );
-    } finally {
-      if (!createdUid) {
-        const profiles = await readProfiles().catch(() => null);
-        createdUid =
-          profiles?.items.find((item) => item.name === profileName)?.uid ??
-          null;
-      }
-
-      if (createdUid) {
-        await invoke<null>('delete_profile', { uid: createdUid });
-        await browser.waitUntil(
-          async () => {
-            const profiles = await readProfiles();
-            return !profiles.items.some((item) => item.uid === createdUid);
-          },
-          {
-            timeout: 45_000,
-            timeoutMsg: 'The runtime product test profile was not removed.',
-          },
-        );
-        await waitForCoreRunning();
-        assertRuntimeProductIsPromoted();
-      }
-    }
+    });
   });
 });
