@@ -38,8 +38,9 @@
   the applied revision, attempted revision, failure UID, scope, and error
   message.
 - Current UI result: failed chain candidates remain visible as editor drafts
-  with a row-level failure; rejected script saves keep the profile editor open
-  and surface the attempt diagnostic. A refresh is not used to create the
+  with a row-level failure and a nonblocking in-app notice; unrelated errors
+  retain the native error dialog. Rejected script saves keep the profile editor
+  open and surface the attempt diagnostic. A refresh is not used to create the
   expected current-page state.
 - Persistence and restart: rejected script edits must leave the managed file
   byte-for-byte unchanged. These cases do not claim cold-start persistence or
@@ -71,6 +72,12 @@
 
 On macOS, the focused spec was attempted with a dedicated E2E config directory
 and a free mixed port. WebKit did not display the transform-chain editor in six
-cases, so this was a failed local desktop run, not a pass. The Windows Edge PR
-workflow remains the supported desktop result for this suite. See the PR check
-for the current Windows run.
+cases, so this was a failed local desktop run, not a pass. The Windows Edge run
+for head `bad04f694eb19cc3269750587a853dd6d4429653` built all platform binaries
+but failed the critical suite: 14 spec files passed and 5 failed. Rejection
+cases opened the native Tauri error dialog while retaining the draft; WebDriver
+could not dismiss it, so the save task stayed pending and later UI checks timed
+out. The error boundary now uses a nonblocking notice for a newly published
+transform failure, and recovery checks wait for the draft to update before
+saving. A new Windows Edge CI run is required to verify this correction; the
+failed run is not a pass.

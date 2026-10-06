@@ -11,6 +11,7 @@ import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { useMemo, useState, type ReactElement } from 'react';
+import { Notice } from '@/components/base';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { Button } from '@/components/ui/button';
 import {
@@ -131,10 +132,15 @@ export default function TransformChainEditor({
     }
     return failure.scope_uid === null ? failure : null;
   }, [diagnostics.data?.failure, profile]);
+  const transformScope = profile && isConfigItem(profile) ? profile.uid : null;
 
   const task = useBlockTask(
     `update-transform-chain-${profile?.uid ?? 'global'}`,
     async () => {
+      const previousAttemptRevision =
+        diagnostics.data?.failure?.attempt_revision ??
+        diagnostics.data?.revision ??
+        0;
       try {
         const outcome =
           profile && isConfigItem(profile)
@@ -151,7 +157,16 @@ export default function TransformChainEditor({
           setOpen(false);
         }
       } catch (error) {
-        await diagnostics.refetch();
+        const refreshed = await diagnostics.refetch();
+        const failure = refreshed.data?.failure;
+        if (
+          failure &&
+          failure.scope_uid === transformScope &&
+          failure.attempt_revision > previousAttemptRevision
+        ) {
+          Notice.error(formatError(error), 5000);
+          return;
+        }
         await message(formatError(error), {
           title: m.common_error(),
           kind: 'error',

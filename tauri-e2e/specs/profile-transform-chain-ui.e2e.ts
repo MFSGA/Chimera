@@ -256,6 +256,20 @@ async function activeOrder(scope: 'profile' | 'global') {
   }, scope);
 }
 
+async function waitForActiveOrder(
+  scope: 'profile' | 'global',
+  expected: string[],
+) {
+  await browser.waitUntil(
+    async () =>
+      JSON.stringify(await activeOrder(scope)) === JSON.stringify(expected),
+    {
+      timeout: 15_000,
+      timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
+    },
+  );
+}
+
 describe('main transform chain editor', () => {
   const suffix = Date.now();
   const localName = `chain-ui-source-${suffix}`;
@@ -1032,6 +1046,7 @@ describe('main transform chain editor', () => {
       );
       await currentRow.$('[data-slot="transform-chain-remove"]').click();
     }
+    await waitForActiveOrder('global', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([]);
     await waitForEditorClosed('global');
@@ -1142,6 +1157,7 @@ describe('main transform chain editor', () => {
       `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeAUid}"]`,
     );
     await baselineRow.$('[data-slot="transform-chain-remove"]').click();
+    await waitForActiveOrder('profile', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForScopedChain(localUid, []);
     await waitForEditorClosed('profile');
