@@ -59,4 +59,14 @@ pub struct RuntimeArtifact {
     pub graph: ConfigSnapshotsGraph,
     pub step_logs: Vec<StepLog>,
     pub applied_fields: IndexSet<String>,
+    /// Failures passed through by the lenient executor. Candidate validation
+    /// rejects these while committed runtime rebuilds may retain passthrough.
+    pub transform_failures: Vec<TransformFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TransformFailure {
+    Profile { id: String },
+    Builtin { name: String },
 }

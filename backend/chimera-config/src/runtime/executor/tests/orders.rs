@@ -323,6 +323,12 @@ fn script_transform_failure_is_lenient_with_anchored_error_log() {
             .iter()
             .any(|entry| entry.level == StepLogLevel::Error)
     );
+    assert_eq!(
+        artifact.transform_failures,
+        vec![crate::runtime::executor::TransformFailure::Profile {
+            id: "boom".to_string(),
+        }]
+    );
 }
 
 #[test]

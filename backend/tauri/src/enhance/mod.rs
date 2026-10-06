@@ -8,5 +8,5 @@ pub use chain::PostProcessingOutput;
 pub(crate) use chain::TransformFailureError;
 pub use content_source::FsProfileContentSource;
 pub(crate) use runtime_builder::build_from_profiles_with_inspection;
-pub use runtime_builder::{RuntimeBuildInput, RuntimeBuilder};
+pub use runtime_builder::{RuntimeBuildError, RuntimeBuildInput, RuntimeBuilder};
 pub use script::adapter::EnhanceScriptRunner;

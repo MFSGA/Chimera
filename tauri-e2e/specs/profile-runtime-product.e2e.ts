@@ -1,42 +1,16 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-
-interface ProfileItem {
-  uid: string;
-  name: string;
-}
-
-interface ProfilesResponse {
-  current: string | null;
-  items: ProfileItem[];
-}
+import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import {
+  appliedValue,
+  committedValue,
+  invoke,
+  readProfiles,
+  withCleanup,
+} from './profile-fixtures.js';
 
 type CoreState = 'Running' | { Stopped: string | null };
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, payload) => {
-      const tauri = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return tauri.invoke(name, payload);
-    },
-    command,
-    args,
-  );
-}
-
-async function readProfiles(): Promise<ProfilesResponse> {
-  return invoke<ProfilesResponse>('get_profiles');
-}
 
 async function waitForCoreRunning(): Promise<void> {
   let lastState = 'unknown';
@@ -96,108 +70,213 @@ async function openLocalProfileForm() {
   return nameInput;
 }
 
+async function captureFailureBeforeCleanup(
+  profileName: string,
+  error: unknown,
+): Promise<void> {
+  const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+  if (!artifactDirectory || !browser.sessionId) return;
+
+  const runId = path.basename(
+    process.env.CHIMERA_E2E_RUNTIME_DIR ?? `local-${process.pid}`,
+  );
+  const artifactName =
+    `profile-runtime-product-${runId}-${profileName}-${process.pid}-${Date.now()}`.replace(
+      /[^a-z0-9._-]+/gi,
+      '-',
+    );
+  const artifactBase = path.join(artifactDirectory, artifactName);
+  const captureErrors: string[] = [];
+  try {
+    fs.mkdirSync(artifactDirectory, { recursive: true });
+  } catch (captureError) {
+    process.stderr.write(
+      `Could not create failure evidence directory: ${String(captureError)}\n`,
+    );
+    return;
+  }
+
+  await browser
+    .saveScreenshot(`${artifactBase}.before-cleanup.png`)
+    .catch((captureError) => captureErrors.push(String(captureError)));
+  await browser
+    .getPageSource()
+    .then((source) =>
+      fs.writeFileSync(`${artifactBase}.before-cleanup.html`, source),
+    )
+    .catch((captureError) => captureErrors.push(String(captureError)));
+  try {
+    fs.writeFileSync(
+      `${artifactBase}.before-cleanup.error.txt`,
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
+  } catch (captureError) {
+    captureErrors.push(String(captureError));
+  }
+  if (captureErrors.length > 0) {
+    try {
+      fs.writeFileSync(
+        `${artifactBase}.capture-error.txt`,
+        captureErrors.join('\n'),
+      );
+    } catch (captureError) {
+      process.stderr.write(
+        `Could not save capture errors: ${String(captureError)}\n`,
+      );
+    }
+  }
+}
+
 describe('Chimera profile runtime product lifecycle', () => {
+  // Contract: from the isolated E2E runtime with a healthy core, create one
+  // uniquely named local Profile through the UI. The Profiles document proves
+  // its UID became current, and the generated runtime file proves promotion.
+  // A stored-but-inactive Profile or missing product fails these checks.
+  // Cleanup restores the original selection before deleting only this Profile.
   it('checks, promotes and starts the exact product when the first local profile is created', async () => {
     const profileName = `runtime-product-${Date.now()}`;
+    const initialProfiles = await readProfiles();
+    assert.equal(
+      initialProfiles.items.some((item) => item.name === profileName),
+      false,
+      'The isolated runtime already contains a Profile owned by this test.',
+    );
     let createdUid: string | null = null;
 
-    await waitForCoreRunning();
+    await withCleanup('runtime product Profile lifecycle', async (defer) => {
+      const findCreatedUid = async (): Promise<string | null> => {
+        const profiles = await readProfiles();
+        const created = profiles.items.find(
+          (item) => item.uid === createdUid || item.name === profileName,
+        );
+        createdUid = created?.uid ?? null;
+        return createdUid;
+      };
 
-    try {
-      const nameInput = await openLocalProfileForm();
-      await nameInput.setValue(profileName);
+      defer('restore the original Profile selection', async () => {
+        const profiles = await readProfiles();
+        if (profiles.current === initialProfiles.current) return;
 
-      const descriptionInput = await $('textarea[name="desc"]');
-      await descriptionInput.setValue(
-        'Exercises the checked runtime product lifecycle.',
-      );
-
-      const okButton = await $('button=OK');
-      await okButton.waitForClickable({ timeout: 15_000 });
-      await okButton.click();
-
-      await browser.waitUntil(async () => !(await nameInput.isExisting()), {
-        timeout: 45_000,
-        timeoutMsg:
-          'The local profile dialog did not close after the create transaction finished.',
+        appliedValue(
+          await invoke<MutationOutcome<null>>('activate_profile', {
+            uid: initialProfiles.current,
+          }),
+          'Original Profile selection restoration',
+        );
+        await browser.waitUntil(
+          async () =>
+            (await readProfiles()).current === initialProfiles.current,
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The original Profile selection was not restored.',
+          },
+        );
+        await waitForCoreRunning();
       });
 
-      await browser.waitUntil(
-        async () => {
-          const profiles = await readProfiles();
-          const created = profiles.items.find(
-            (item) => item.name === profileName,
-          );
-          createdUid = created?.uid ?? null;
-          return Boolean(createdUid && profiles.current === createdUid);
-        },
-        {
-          timeout: 45_000,
-          timeoutMsg: 'The local profile was not created and activated.',
-        },
-      );
+      defer('delete the test Profile', async () => {
+        const uid = await findCreatedUid();
+        if (!uid) return;
 
-      assert.ok(createdUid);
-      await waitForCoreRunning();
-      assertRuntimeProductIsPromoted();
-
-      const card = await $(
-        `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
-      );
-      await card.waitForDisplayed({ timeout: 15_000 });
-      assert.equal(await card.getAttribute('data-profile-active'), 'true');
-      assert.equal(
-        await card
-          .$('[data-slot="profile-card-active-background"]')
-          .isExisting(),
-        true,
-      );
-
-      await browser.refresh();
-      await browser.waitUntil(
-        async () => {
-          const profiles = await readProfiles();
-          return profiles.current === createdUid;
-        },
-        {
-          timeout: 30_000,
-          timeoutMsg: 'The active profile was not persisted after refresh.',
-        },
-      );
-      await waitForCoreRunning();
-      assertRuntimeProductIsPromoted();
-
-      const refreshedCard = await $(
-        `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
-      );
-      await refreshedCard.waitForDisplayed({ timeout: 15_000 });
-      assert.equal(
-        await refreshedCard.getAttribute('data-profile-active'),
-        'true',
-      );
-    } finally {
-      if (!createdUid) {
-        const profiles = await readProfiles().catch(() => null);
-        createdUid =
-          profiles?.items.find((item) => item.name === profileName)?.uid ??
-          null;
-      }
-
-      if (createdUid) {
-        await invoke<null>('delete_profile', { uid: createdUid });
+        const profiles = await readProfiles();
+        assert.notEqual(
+          profiles.current,
+          uid,
+          'The test Profile is still active and cannot be deleted safely.',
+        );
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+          'Runtime product test Profile deletion',
+        );
         await browser.waitUntil(
-          async () => {
-            const profiles = await readProfiles();
-            return !profiles.items.some((item) => item.uid === createdUid);
-          },
+          async () =>
+            !(await readProfiles()).items.some((item) => item.uid === uid),
           {
             timeout: 45_000,
-            timeoutMsg: 'The runtime product test profile was not removed.',
+            timeoutMsg: 'The runtime product test Profile was not removed.',
           },
         );
         await waitForCoreRunning();
         assertRuntimeProductIsPromoted();
+      });
+
+      try {
+        await waitForCoreRunning();
+        const nameInput = await openLocalProfileForm();
+        await nameInput.setValue(profileName);
+
+        const descriptionInput = await $('textarea[name="desc"]');
+        await descriptionInput.setValue(
+          'Exercises the checked runtime product lifecycle.',
+        );
+
+        const okButton = await $('button=OK');
+        await okButton.waitForClickable({ timeout: 15_000 });
+        await okButton.click();
+
+        await browser.waitUntil(async () => !(await nameInput.isExisting()), {
+          timeout: 45_000,
+          timeoutMsg:
+            'The local profile dialog did not close after the create transaction finished.',
+        });
+
+        await browser.waitUntil(
+          async () => {
+            const profiles = await readProfiles();
+            const created = profiles.items.find(
+              (item) => item.name === profileName,
+            );
+            createdUid = created?.uid ?? null;
+            return Boolean(createdUid && profiles.current === createdUid);
+          },
+          {
+            timeout: 45_000,
+            timeoutMsg: 'The local profile was not created and activated.',
+          },
+        );
+
+        assert.ok(createdUid);
+        await waitForCoreRunning();
+        assertRuntimeProductIsPromoted();
+
+        const card = await $(
+          `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
+        );
+        await card.waitForDisplayed({ timeout: 15_000 });
+        assert.equal(await card.getAttribute('data-profile-active'), 'true');
+        assert.equal(
+          await card
+            .$('[data-slot="profile-card-active-background"]')
+            .isExisting(),
+          true,
+        );
+
+        await browser.refresh();
+        await browser.waitUntil(
+          async () => {
+            const profiles = await readProfiles();
+            return profiles.current === createdUid;
+          },
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The active profile was not persisted after refresh.',
+          },
+        );
+        await waitForCoreRunning();
+        assertRuntimeProductIsPromoted();
+
+        const refreshedCard = await $(
+          `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
+        );
+        await refreshedCard.waitForDisplayed({ timeout: 15_000 });
+        assert.equal(
+          await refreshedCard.getAttribute('data-profile-active'),
+          'true',
+        );
+      } catch (error) {
+        await captureFailureBeforeCleanup(profileName, error);
+        throw error;
       }
-    }
+    });
   });
 });

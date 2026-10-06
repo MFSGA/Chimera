@@ -1,3 +1,5 @@
+// Detailed rejection, state-preservation, and coverage contract:
+// ../../docs/testing/contracts/profile-transform-candidate-rejection.md
 import assert from 'node:assert/strict';
 import type {
   MutationOutcome,
@@ -132,16 +134,16 @@ async function waitForScopedChain(uid: string, expected: string[]) {
 }
 
 async function waitForGlobalChain(expected: string[]) {
+  let lastChain = 'unavailable';
   await browser.waitUntil(
     async () => {
       const profiles = await readProfiles();
-      return (
-        JSON.stringify(profiles.global_transforms) === JSON.stringify(expected)
-      );
+      lastChain = JSON.stringify(profiles.global_transforms ?? []);
+      return lastChain === JSON.stringify(expected);
     },
     {
       timeout: 30_000,
-      timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}.`,
+      timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}. Last value: ${lastChain}.`,
     },
   );
 }
@@ -252,6 +254,20 @@ async function activeOrder(scope: 'profile' | 'global') {
         [],
     ).map((row) => row.getAttribute('data-profile-uid'));
   }, scope);
+}
+
+async function waitForActiveOrder(
+  scope: 'profile' | 'global',
+  expected: string[],
+) {
+  await browser.waitUntil(
+    async () =>
+      JSON.stringify(await activeOrder(scope)) === JSON.stringify(expected),
+    {
+      timeout: 15_000,
+      timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
+    },
+  );
 }
 
 describe('main transform chain editor', () => {
@@ -375,7 +391,6 @@ describe('main transform chain editor', () => {
       })),
     );
 
-    await waitForCoreRunning();
     globalTransformsMayHaveChanged = true;
     requireCommitted(await setGlobalTransforms([]), 'global transform reset');
 
@@ -430,6 +445,7 @@ describe('main transform chain editor', () => {
       }),
       'local Profile activation',
     );
+    await waitForCoreRunning();
 
     await openMainWindow();
     await browser.setWindowSize(1240, 720);
@@ -450,9 +466,29 @@ describe('main transform chain editor', () => {
         errors.push(error);
       }
     }
+    if (localUid) {
+      try {
+        requireCommitted(
+          await setGlobalTransforms([]),
+          'global chain test-state cleanup',
+        );
+        await waitForGlobalChain([]);
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        requireCommitted(
+          await setScopedTransforms(localUid, []),
+          'scoped chain test-state cleanup',
+        );
+        await waitForScopedChain(localUid, []);
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     if (javascriptUid) {
       try {
-        requireApplied(
+        requireCommitted(
           await invoke<MutationOutcome<null>>('save_profile_file', {
             uid: javascriptUid,
             fileData: javascriptFileData,
@@ -494,7 +530,14 @@ describe('main transform chain editor', () => {
       errors.push(error);
     }
     if (errors.length > 0) {
-      throw new AggregateError(errors, 'Profile transform spec cleanup failed');
+      throw new AggregateError(
+        errors,
+        `Profile transform spec cleanup failed: ${errors
+          .map((error) =>
+            error instanceof Error ? error.message : String(error),
+          )
+          .join('; ')}`,
+      );
     }
   });
 
@@ -602,18 +645,18 @@ describe('main transform chain editor', () => {
     }
   });
 
-  // Contract: save a failing JS transform through editor IPC while the editor
-  // window stays open; backend file content and scoped diagnostics must identify
-  // that script, then a valid repair clears failure. A stale success result or
-  // missing runtime error fails this case.
-  it('keeps the profile editor open and shows transform failures after a degraded file save', async () => {
+  // Contract: a failing JS transform edit is rejected before file commit; the
+  // editor stays open, diagnostics identify the failed attempt, and a valid
+  // repair applies without replacing the prior runtime on failure.
+  it('keeps the profile editor open and shows transform failures after a rejected file save', async () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
-    requireApplied(
+    requireCommitted(
       await setGlobalTransforms([]),
       'global chain reset before profile editor diagnostics',
     );
+    await waitForGlobalChain([]);
     requireApplied(
       await setScopedTransforms(sourceUid, [transformUid]),
       'scoped JavaScript chain before profile editor diagnostics',
@@ -629,16 +672,27 @@ describe('main transform chain editor', () => {
     assert.ok(before);
 
     const editorLabel = await openProfileEditorWindow(transformUid);
-    const degraded = await invoke<MutationOutcome<null>>('save_profile_file', {
-      uid: transformUid,
-      fileData: [
-        'export default function () {',
-        '  throw new Error("profile editor intentional failure");',
-        '}',
-        '',
-      ].join('\n'),
-    });
-    assert.equal(degraded.status, 'committed_degraded');
+    const failingFile = [
+      'export default function () {',
+      '  throw new Error("profile editor intentional failure");',
+      '}',
+      '',
+    ].join('\n');
+    await assert.rejects(
+      invoke<MutationOutcome<null>>('save_profile_file', {
+        uid: transformUid,
+        fileData: failingFile,
+      }),
+    );
+    assert.equal(
+      await invoke<string>('read_profile_file', { uid: transformUid }),
+      originalFile,
+      'a rejected script candidate must preserve the previous file content',
+    );
+
+    const failure = await $('[data-slot="profile-editor-runtime-failure"]');
+    await failure.waitForDisplayed({ timeout: 30_000 });
+    assert.match(await failure.getText(), /profile editor intentional failure/);
 
     await browser.refresh();
     await browser.waitUntil(
@@ -648,21 +702,26 @@ describe('main transform chain editor', () => {
         ),
       {
         timeout: 30_000,
-        timeoutMsg: 'Profile editor did not reload after the degraded save.',
+        timeoutMsg: 'Profile editor did not reload after the rejected save.',
       },
     );
     assert.match(
       await invoke<string>('read_profile_file', { uid: transformUid }),
-      /profile editor intentional failure/,
+      /chain ui javascript log/,
     );
 
-    const failure = await $('[data-slot="profile-editor-runtime-failure"]');
-    await failure.waitForDisplayed({ timeout: 30_000 });
-    assert.match(await failure.getText(), /profile editor intentional failure/);
+    const refreshedFailure = await $(
+      '[data-slot="profile-editor-runtime-failure"]',
+    );
+    await refreshedFailure.waitForDisplayed({ timeout: 30_000 });
+    assert.match(
+      await refreshedFailure.getText(),
+      /profile editor intentional failure/,
+    );
     assert.equal(
       (await browser.getWindowHandles()).includes(editorLabel),
       true,
-      'degraded profile save unexpectedly closed the editor window',
+      'rejected profile save unexpectedly closed the editor window',
     );
 
     const failed = await invoke<RuntimeTransformDiagnostics | null>(
@@ -673,13 +732,25 @@ describe('main transform chain editor', () => {
       throw new Error('runtime failure diagnostics were not available');
     }
     assert.ok(runtimeFailure.attempt_revision > before.revision);
+    assert.equal(
+      failed?.revision,
+      before.revision,
+      'failed file save must not replace the applied runtime revision',
+    );
     assert.equal(runtimeFailure.transform_uid, transformUid);
     assert.equal(runtimeFailure.scope_uid, sourceUid);
 
+    const repairedFile = [
+      'export default function (config) {',
+      '  console.info("profile editor intentional failure repaired");',
+      '  return config;',
+      '}',
+      '',
+    ].join('\n');
     requireApplied(
       await invoke<MutationOutcome<null>>('save_profile_file', {
         uid: transformUid,
-        fileData: originalFile,
+        fileData: repairedFile,
       }),
       'profile editor script repair',
     );
@@ -895,12 +966,16 @@ describe('main transform chain editor', () => {
     await waitForEditorClosed('global');
   });
 
-  // Contract: a failing JS transform in the global chain must be attributed to
-  // its UID in backend diagnostics and the editor row; removing it clears the
-  // failure. Actual script execution, rather than display-only state, is the
-  // failure boundary.
-  it('pins a failed transform attempt to the responsible global script', async () => {
+  // Contract: a failing JS transform candidate is rejected without changing
+  // the global chain; diagnostics identify its UID in the editor draft, then a
+  // valid chain update clears the failure.
+  it('rejects a failed global transform candidate and pins diagnostics to its script', async () => {
     assert.ok(mergeAUid && failingJavascriptUid);
+    requireApplied(
+      await setGlobalTransforms([mergeAUid]),
+      'global transform baseline before failed-script diagnostics',
+    );
+    await waitForGlobalChain([mergeAUid]);
     await openRoute('/main/profiles/merge');
 
     const before = await invoke<RuntimeTransformDiagnostics | null>(
@@ -926,8 +1001,12 @@ describe('main transform chain editor', () => {
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForGlobalChain([mergeAUid, failingJavascriptUid]);
+    await waitForGlobalChain([mergeAUid]);
     await editor.waitForDisplayed({ timeout: 15_000 });
+    assert.deepEqual(await activeOrder('global'), [
+      mergeAUid,
+      failingJavascriptUid,
+    ]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -961,12 +1040,15 @@ describe('main transform chain editor', () => {
       /chain ui intentional failure/,
     );
 
-    const currentFailingRow = await editor.$(
-      `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
-    );
-    await currentFailingRow.$('[data-slot="transform-chain-remove"]').click();
+    for (const transformUid of [failingJavascriptUid, mergeAUid]) {
+      const currentRow = await editor.$(
+        `[data-slot="transform-chain-active-item"][data-profile-uid="${transformUid}"]`,
+      );
+      await currentRow.$('[data-slot="transform-chain-remove"]').click();
+    }
+    await waitForActiveOrder('global', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForGlobalChain([mergeAUid]);
+    await waitForGlobalChain([]);
     await waitForEditorClosed('global');
 
     await browser.waitUntil(
@@ -992,12 +1074,12 @@ describe('main transform chain editor', () => {
     assert.equal(repaired.failure, null);
   });
 
-  // Contract: a failing JS transform in the selected Profile's scoped chain is
-  // attributed to the script and source UID, then clears after removal. Both
-  // backend diagnostics and the editor row must reflect the result.
-  it('pins a failed transform attempt to the responsible scoped script', async () => {
+  // Contract: a failing scoped transform candidate is rejected without
+  // changing the Profile chain; diagnostics identify its UID and source in the
+  // editor draft, then a valid chain update clears the failure.
+  it('rejects a failed scoped transform candidate and pins diagnostics to its script', async () => {
     assert.ok(localUid && mergeAUid && failingJavascriptUid);
-    requireApplied(
+    requireCommitted(
       await setGlobalTransforms([]),
       'global chain reset before scoped failure diagnostics',
     );
@@ -1031,8 +1113,12 @@ describe('main transform chain editor', () => {
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForScopedChain(localUid, [mergeAUid, failingJavascriptUid]);
+    await waitForScopedChain(localUid, [mergeAUid]);
     await editor.waitForDisplayed({ timeout: 15_000 });
+    assert.deepEqual(await activeOrder('profile'), [
+      mergeAUid,
+      failingJavascriptUid,
+    ]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -1067,8 +1153,13 @@ describe('main transform chain editor', () => {
     );
 
     await failingRow.$('[data-slot="transform-chain-remove"]').click();
+    const baselineRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeAUid}"]`,
+    );
+    await baselineRow.$('[data-slot="transform-chain-remove"]').click();
+    await waitForActiveOrder('profile', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForScopedChain(localUid, [mergeAUid]);
+    await waitForScopedChain(localUid, []);
     await waitForEditorClosed('profile');
 
     await browser.waitUntil(
@@ -1094,14 +1185,14 @@ describe('main transform chain editor', () => {
     assert.equal(repaired.failure, null);
   });
 
-  // Contract: editing an active script to fail refreshes the open scoped
-  // diagnostics without closing the editor; restoring valid content advances
-  // runtime revision and removes the failure row.
-  it('refreshes diagnostics when an active script file is edited', async () => {
+  // Contract: editing an active script to fail is rejected and preserves the
+  // file and runtime; the open editor shows the attempt, then valid content
+  // applies and removes the failure row.
+  it('rejects an invalid active script edit and refreshes diagnostics', async () => {
     assert.ok(localUid && javascriptUid);
     const sourceUid = localUid;
     const transformUid = javascriptUid;
-    requireApplied(
+    requireCommitted(
       await setGlobalTransforms([]),
       'global chain reset before script file diagnostics',
     );
@@ -1126,16 +1217,26 @@ describe('main transform chain editor', () => {
     assert.ok(before);
     assert.equal(before.failure, null);
 
-    const degraded = await invoke<MutationOutcome<null>>('save_profile_file', {
+    const originalFile = await invoke<string>('read_profile_file', {
       uid: transformUid,
-      fileData: [
-        'export default function () {',
-        '  throw new Error("chain ui edited script failure");',
-        '}',
-        '',
-      ].join('\n'),
     });
-    assert.equal(degraded.status, 'committed_degraded');
+    const failingFile = [
+      'export default function () {',
+      '  throw new Error("chain ui edited script failure");',
+      '}',
+      '',
+    ].join('\n');
+    await assert.rejects(
+      invoke<MutationOutcome<null>>('save_profile_file', {
+        uid: transformUid,
+        fileData: failingFile,
+      }),
+    );
+    assert.equal(
+      await invoke<string>('read_profile_file', { uid: transformUid }),
+      originalFile,
+      'a rejected script candidate must preserve the previous file content',
+    );
 
     const activeRowSelector = `[data-slot="transform-chain-active-item"][data-profile-uid="${transformUid}"]`;
     await browser.waitUntil(
@@ -1175,18 +1276,24 @@ describe('main transform chain editor', () => {
     assert.equal(failed.failure.script_type, 'javascript');
     assert.match(failed.failure.message, /chain ui edited script failure/);
 
+    const repairedFile = [
+      'export default function (config) {',
+      '  console.info("chain ui edited script repaired");',
+      '  return config;',
+      '}',
+      '',
+    ].join('\n');
     requireApplied(
       await invoke<MutationOutcome<null>>('save_profile_file', {
         uid: transformUid,
-        fileData: [
-          'export default function (config) {',
-          '  console.info("chain ui edited script repaired");',
-          '  return config;',
-          '}',
-          '',
-        ].join('\n'),
+        fileData: repairedFile,
       }),
       'repair active JavaScript profile content',
+    );
+    assert.equal(
+      await invoke<string>('read_profile_file', { uid: transformUid }),
+      repairedFile,
+      'valid repaired script content was not committed',
     );
 
     await browser.waitUntil(
@@ -1239,12 +1346,12 @@ describe('main transform chain editor', () => {
     await waitForEditorClosed('profile');
   });
 
-  // Contract: selecting invalid overlay YAML globally must fail runtime apply
-  // and attribute the failure to that overlay; removing it clears diagnostics.
-  // Profile state and the runtime failure UID are independent evidence.
-  it('pins an invalid merge transform to the responsible global row', async () => {
-    assert.ok(failingMergeUid);
-    requireApplied(
+  // Contract: selecting invalid overlay YAML is rejected without changing the
+  // global chain; diagnostics identify the overlay in the editor draft, then a
+  // valid chain update clears the failure.
+  it('rejects an invalid merge candidate and pins diagnostics to its row', async () => {
+    assert.ok(failingMergeUid && mergeAUid);
+    requireCommitted(
       await setGlobalTransforms([]),
       'global chain baseline before merge failure diagnostics',
     );
@@ -1271,7 +1378,7 @@ describe('main transform chain editor', () => {
     await failingTransform.click();
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForGlobalChain([failingMergeUid]);
+    await waitForGlobalChain([]);
     await editor.waitForDisplayed({ timeout: 15_000 });
 
     const failingRow = await editor.$(
@@ -1285,9 +1392,15 @@ describe('main transform chain editor', () => {
       await failure.getAttribute('data-attempt-revision'),
     );
     assert.ok(attemptRevision > before.revision);
-    assert.equal(await failure.getAttribute('data-transform-type'), 'merge');
+    // `data-transform-type` exposes the Profile type discriminator; the user
+    // facing label identifies this Profile's transform implementation.
+    assert.equal(
+      await failure.getAttribute('data-transform-type'),
+      'transform',
+    );
     assert.equal(await failure.getAttribute('data-script-type'), null);
-    assert.match(await failure.getText(), /YAML mapping/);
+    assert.match(await failure.getText(), /Merge \(YAML\)/);
+    assert.match(await failure.getText(), /not a mapping/);
 
     const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
       'get_runtime_transform_diagnostics',
@@ -1302,11 +1415,16 @@ describe('main transform chain editor', () => {
     assert.equal(failedDiagnostics.failure.transform_uid, failingMergeUid);
     assert.equal(failedDiagnostics.failure.scope_uid, null);
     assert.equal(failedDiagnostics.failure.script_type, null);
-    assert.match(failedDiagnostics.failure.message, /YAML mapping/);
+    assert.match(failedDiagnostics.failure.message, /not a mapping/);
 
     await failingRow.$('[data-slot="transform-chain-remove"]').click();
+    const validTransform = await editor.$(
+      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
+    );
+    await validTransform.click();
+    assert.deepEqual(await activeOrder('global'), [mergeAUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForGlobalChain([]);
+    await waitForGlobalChain([mergeAUid]);
     await waitForEditorClosed('global');
 
     await browser.waitUntil(

@@ -13,6 +13,13 @@ use std::{collections::HashMap, fmt};
 
 use anyhow::{Context, bail};
 use chimera_config::clash::config::ClashConfig;
+use chimera_config::{
+    profile::{ProfileDefinition, Profiles, ScriptRuntime, TransformDefinition},
+    runtime::{
+        executor::{StepLogLevel, TransformFailure},
+        snapshot::OperatorTag,
+    },
+};
 use chimera_core_manager::{
     ConfigInput, CoreCommand, CoreCommandEnvelope, CoreControl, CoreState, InstanceOptions,
     OperationId, OperationOutput, ReconcileRequest, spec::LocalIpcSettings,
@@ -42,6 +49,92 @@ use crate::{
     },
     enhance::PostProcessingOutput,
 };
+
+fn publish_transform_failure(
+    lifecycle: &crate::client::runtime::RuntimeLifecycle,
+    error: &anyhow::Error,
+    profiles: &Profiles,
+    attempt_revision: crate::client::runtime::RuntimeRevision,
+) {
+    if let Some(transform) = error.downcast_ref::<crate::enhance::TransformFailureError>() {
+        lifecycle.publish_transform_failure(RuntimeTransformFailure {
+            attempt_revision,
+            transform_uid: transform.transform_uid.clone(),
+            scope_uid: transform.scope_uid.clone(),
+            script_type: transform.script_type,
+            message: transform.message(),
+        });
+        return;
+    }
+
+    let Some(crate::enhance::RuntimeBuildError::TransformsFailed { failures, logs }) =
+        error.downcast_ref::<crate::enhance::RuntimeBuildError>()
+    else {
+        return;
+    };
+    let Some(transform_uid) = failures.iter().find_map(|failure| match failure {
+        TransformFailure::Profile { id } => Some(id),
+        TransformFailure::Builtin { .. } => None,
+    }) else {
+        return;
+    };
+    let Some(log) = logs
+        .iter()
+        .find(|log| transform_uid_of(&log.tag) == Some(transform_uid.as_str()))
+    else {
+        return;
+    };
+    let scope_uid = match &log.tag {
+        OperatorTag::ScopedTransform {
+            host_profile_id, ..
+        } => Some(host_profile_id.0.clone()),
+        OperatorTag::GlobalTransform { .. } => None,
+        _ => return,
+    };
+    let script_type = profiles
+        .items
+        .values()
+        .find(|item| item.uid.0 == *transform_uid)
+        .and_then(|item| match &item.definition {
+            ProfileDefinition::Transform {
+                transform: TransformDefinition::Script(script),
+            } => Some(match script.runtime {
+                ScriptRuntime::JavaScript => {
+                    crate::config::profile::item_type::ScriptType::JavaScript
+                }
+                ScriptRuntime::Lua => crate::config::profile::item_type::ScriptType::Lua,
+            }),
+            _ => None,
+        });
+    let message = log
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| matches!(entry.level, StepLogLevel::Error | StepLogLevel::Warn))
+        .map(|entry| entry.message.clone())
+        .unwrap_or_else(|| format!("transform {transform_uid} failed"));
+    lifecycle.publish_transform_failure(RuntimeTransformFailure {
+        attempt_revision,
+        transform_uid: transform_uid.clone(),
+        scope_uid,
+        script_type,
+        message,
+    });
+}
+
+fn transform_uid_of(tag: &OperatorTag) -> Option<&str> {
+    match tag {
+        OperatorTag::ScopedTransform {
+            transform_profile_id,
+            ..
+        }
+        | OperatorTag::GlobalTransform {
+            transform_profile_id,
+            ..
+        } => Some(transform_profile_id.0.as_str()),
+        _ => None,
+    }
+}
 
 /// Owns Chimera's runtime generation and snapshot adapter around the shared
 /// endpoint control plane.
@@ -199,6 +292,7 @@ impl LocalRuntimeHost {
 
         let resolved_ports = self.ports.resolve(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
+        let diagnostic_profiles = profiles.clone();
         let output = match Config::generate_runtime_output_from_profiles(
             &clash,
             target_core,
@@ -206,23 +300,13 @@ impl LocalRuntimeHost {
             profiles,
             resolved_ports,
             staged_content,
+            true,
         )
         .await
         {
             Ok(output) => output,
             Err(error) => {
-                if let Some(transform) =
-                    error.downcast_ref::<crate::enhance::TransformFailureError>()
-                {
-                    self.lifecycle
-                        .publish_transform_failure(RuntimeTransformFailure {
-                            attempt_revision: revision,
-                            transform_uid: transform.transform_uid.clone(),
-                            scope_uid: transform.scope_uid.clone(),
-                            script_type: transform.script_type,
-                            message: transform.message(),
-                        });
-                }
+                publish_transform_failure(&self.lifecycle, &error, &diagnostic_profiles, revision);
                 return Err(error);
             }
         };
@@ -314,8 +398,10 @@ impl LocalRuntimeHost {
 
         let resolved_ports = self.ports.resolve(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
+        let mut diagnostic_profiles = None;
         let generated = match profile_source {
             Some((profiles, app, staged_content)) => {
+                diagnostic_profiles = Some(profiles.clone());
                 Config::generate_runtime_output_from_profiles(
                     &clash,
                     target_core,
@@ -323,6 +409,7 @@ impl LocalRuntimeHost {
                     profiles,
                     resolved_ports.clone(),
                     staged_content,
+                    true,
                 )
                 .await
             }
@@ -343,7 +430,9 @@ impl LocalRuntimeHost {
                 output.inspection,
             ),
             Err(error) => {
-                if let Some(transform) =
+                if let Some(profiles) = diagnostic_profiles.as_ref() {
+                    publish_transform_failure(&self.lifecycle, &error, profiles, revision);
+                } else if let Some(transform) =
                     error.downcast_ref::<crate::enhance::TransformFailureError>()
                 {
                     self.lifecycle
