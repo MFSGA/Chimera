@@ -97,3 +97,24 @@ remaining mismatch was its stale `YAML mapping` substring; the actual diagnostic
 is `overlay document is not a mapping, skipped`. The assertion now checks the
 shared `not a mapping` phrase. This run also remains a failure and does not
 count as verification of the correction.
+
+On head `679ea88a1e95f91bf3774ff83794b10678bef4b7`, Windows Edge critical
+finished with 18 spec files passed and one failed in
+`profiles-layout.e2e.ts` before hook at line 39. The new transform rejection
+cases passed. The failure occurred after the unrelated import-action setup
+refreshed the main window; its second route open could not observe the main
+frontend. Backend logs continued, while WebDriver reported a missing window
+handle. The hook failure had no page-source artifact, so this does not establish
+a backend process exit or a product crash.
+
+The failed job was rerun as attempt 2 on the same head and reproduced the same
+18/19 result at the same hook line. The import-action contract only covers
+opening a draft from the `action` query and does not assert refresh behavior, so
+the test no longer seeds a locale and refreshes the window before its action
+assertions. These two attempts remain failures; a new critical-suite run is
+required to verify the setup change and the transform rejection cases.
+
+On macOS, the affected `profiles-layout.e2e.ts` spec was also attempted with
+WebKit 605.1.15. It failed in `openMainRoute` while waiting for the main route
+animation to settle, before the import-action assertion ran. This local run
+does not verify the change; Windows Edge CI remains the required desktop result.
