@@ -23,13 +23,41 @@ fn apply_with(
     runner: &FakeScriptRunner,
 ) -> (serde_json::Value, Vec<(StepLogLevel, String)>) {
     let mut logs = Vec::new();
-    let result = apply_overlay(&value(overlay), value(config), runner, &mut logs);
+    let (result, _) = apply_overlay(&value(overlay), value(config), runner, &mut logs);
     (
         result.to_json(),
         logs.into_iter()
             .map(|entry| (entry.level, entry.message))
             .collect(),
     )
+}
+
+#[test]
+fn overlay_reports_non_mapping_and_filter_execution_failures() {
+    let runner = FakeScriptRunner::default();
+    let mut logs = Vec::new();
+    let (result, failed) = apply_overlay(
+        &value(json!("not a mapping")),
+        value(json!({ "proxies": [] })),
+        &runner,
+        &mut logs,
+    );
+    assert!(failed);
+    assert_eq!(result.to_json(), json!({ "proxies": [] }));
+
+    let mut runner = FakeScriptRunner::default();
+    runner.predicates.insert(
+        "boom".to_string(),
+        PredicateReply::Fail("lua error".to_string()),
+    );
+    let mut logs = Vec::new();
+    let (_, failed) = apply_overlay(
+        &value(json!({ "filter__proxies": "boom" })),
+        value(json!({ "proxies": [{ "name": "a" }] })),
+        &runner,
+        &mut logs,
+    );
+    assert!(failed);
 }
 
 #[test]

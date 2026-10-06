@@ -151,6 +151,7 @@ export default function TransformChainEditor({
           setOpen(false);
         }
       } catch (error) {
+        await diagnostics.refetch();
         await message(formatError(error), {
           title: m.common_error(),
           kind: 'error',

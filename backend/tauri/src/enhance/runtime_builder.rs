@@ -13,8 +13,9 @@ use chimera_config::{
     runtime::executor::{
         BuiltinTransform, ExecutionTarget, GuardInputs, PortError, ProfileContentSource,
         ResolvedPortBindings, RuntimeArtifact, RuntimePipelineError, RuntimePipelineInputs,
-        ScriptRunner, TunFlavor, TunParams, execute,
+        ScriptRunner, TransformFailure, TunFlavor, TunParams, execute,
     },
+    runtime::snapshot::OperatorTag,
 };
 
 use crate::{
@@ -32,6 +33,17 @@ pub enum RuntimeBuildError {
     Validation(Vec<chimera_config::profile::ProfileValidationError>),
     #[error(transparent)]
     Pipeline(#[from] RuntimePipelineError),
+    #[error("runtime candidate contains failed transforms: {failures:?}")]
+    TransformsFailed {
+        failures: Vec<TransformFailure>,
+        logs: Vec<RuntimeBuildLog>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeBuildLog {
+    pub tag: OperatorTag,
+    pub entries: Vec<chimera_config::runtime::executor::StepLogEntry>,
 }
 
 pub struct RuntimeBuildInput {
@@ -127,6 +139,32 @@ pub fn derive_tun_flavor(
 pub struct RuntimeBuilder;
 
 impl RuntimeBuilder {
+    /// Retain the rejected candidate's diagnostics without publishing its output.
+    pub fn validate_transforms(artifact: &RuntimeArtifact) -> Result<(), RuntimeBuildError> {
+        if artifact.transform_failures.is_empty() {
+            return Ok(());
+        }
+        let logs = artifact
+            .step_logs
+            .iter()
+            .map(|log| RuntimeBuildLog {
+                tag: artifact
+                    .graph
+                    .nodes
+                    .iter()
+                    .find(|node| node.key == log.key)
+                    .expect("executor logs must belong to a snapshot node")
+                    .tag
+                    .clone(),
+                entries: log.entries.clone(),
+            })
+            .collect();
+        Err(RuntimeBuildError::TransformsFailed {
+            failures: artifact.transform_failures.clone(),
+            logs,
+        })
+    }
+
     pub fn build(
         input: &RuntimeBuildInput,
         content: &dyn ProfileContentSource,
@@ -177,6 +215,7 @@ pub(crate) async fn build_from_profiles_with_inspection(
     mut app: ChimeraAppConfig,
     resolved_ports: ResolvedPortBindings,
     staged_content: BTreeMap<String, String>,
+    strict_transforms: bool,
 ) -> Result<(
     serde_yaml::Mapping,
     Vec<String>,
@@ -201,6 +240,10 @@ pub(crate) async fn build_from_profiles_with_inspection(
         let scripts = EnhanceScriptRunner::new()?;
         let artifact = RuntimeBuilder::build(&input, &content, &scripts)
             .map_err(|error| anyhow::anyhow!(error))?;
+        if strict_transforms {
+            RuntimeBuilder::validate_transforms(&artifact)
+                .map_err(|error| anyhow::anyhow!(error))?;
+        }
         artifact_to_legacy_output_with_inspection(
             artifact,
             &input.profiles,
@@ -496,5 +539,39 @@ mod tests {
             "script logs must be anchored for the postprocessing_output consumer: {:#?}",
             artifact.step_logs
         );
+
+        std::fs::write(
+            temp.path().join("scr1.js"),
+            "function main() { throw new Error('candidate script failed'); }\n",
+        )
+        .unwrap();
+        let failed = RuntimeBuilder::build(&input, &content, &scripts).unwrap();
+        assert_eq!(
+            failed.transform_failures,
+            vec![TransformFailure::Profile { id: "scr1".into() }],
+            "candidate artifact: {failed:#?}"
+        );
+
+        let error = RuntimeBuilder::validate_transforms(&failed).unwrap_err();
+        let RuntimeBuildError::TransformsFailed { failures, logs } = error else {
+            panic!("expected failed candidate validation");
+        };
+        assert_eq!(
+            failures,
+            vec![TransformFailure::Profile { id: "scr1".into() }]
+        );
+        assert!(logs.iter().any(|log| {
+            matches!(
+                &log.tag,
+                OperatorTag::ScopedTransform {
+                    host_profile_id,
+                    transform_profile_id,
+                    ..
+                } if host_profile_id.0 == "cfg1" && transform_profile_id.0 == "scr1"
+            ) && log
+                .entries
+                .iter()
+                .any(|entry| entry.message.contains("candidate script failed"))
+        }));
     }
 }

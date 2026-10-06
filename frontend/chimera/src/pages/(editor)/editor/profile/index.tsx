@@ -136,6 +136,7 @@ function RouteComponent() {
       skipCloseGuard.current = true;
       await currentWindow.close();
     } catch (error) {
+      await diagnostics.refetch();
       await message(formatError(error), {
         title: m.common_error(),
         kind: 'error',
