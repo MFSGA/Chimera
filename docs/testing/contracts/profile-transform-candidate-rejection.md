@@ -90,3 +90,10 @@ contains the Profile discriminator (`transform`), while the diagnostic label
 identifies the overlay as `Merge (YAML)`. The assertion now checks both
 meanings separately. This run remains a failure; the updated Windows Edge suite
 must pass before merge.
+
+On head `10c9773e26c4308f2950d82e0fb39480e5b4f979`, Windows Edge critical
+again finished with 18 spec files passed and one failed in that same case. The
+remaining mismatch was its stale `YAML mapping` substring; the actual diagnostic
+is `overlay document is not a mapping, skipped`. The assertion now checks the
+shared `not a mapping` phrase. This run also remains a failure and does not
+count as verification of the correction.

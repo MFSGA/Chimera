@@ -1400,7 +1400,7 @@ describe('main transform chain editor', () => {
     );
     assert.equal(await failure.getAttribute('data-script-type'), null);
     assert.match(await failure.getText(), /Merge \(YAML\)/);
-    assert.match(await failure.getText(), /YAML mapping/);
+    assert.match(await failure.getText(), /not a mapping/);
 
     const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
       'get_runtime_transform_diagnostics',
@@ -1415,7 +1415,7 @@ describe('main transform chain editor', () => {
     assert.equal(failedDiagnostics.failure.transform_uid, failingMergeUid);
     assert.equal(failedDiagnostics.failure.scope_uid, null);
     assert.equal(failedDiagnostics.failure.script_type, null);
-    assert.match(failedDiagnostics.failure.message, /YAML mapping/);
+    assert.match(failedDiagnostics.failure.message, /not a mapping/);
 
     await failingRow.$('[data-slot="transform-chain-remove"]').click();
     const validTransform = await editor.$(
