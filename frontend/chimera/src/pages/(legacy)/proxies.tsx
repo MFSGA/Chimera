@@ -203,10 +203,16 @@ function ProxyPage() {
             <DelayButton onClick={handleDelayClick} />
           </>
         ) : (
-          <ContentDisplay className="absolute" message={'No Proxies'} />
+          <ContentDisplay
+            className="absolute"
+            message={m.proxies_group_empty_message()}
+          />
         )
       ) : (
-        <ContentDisplay className="absolute" message={'Direct Mode'} />
+        <ContentDisplay
+          className="absolute"
+          message={m.proxies_group_direct_message()}
+        />
       )}
     </SidePage>
   );
