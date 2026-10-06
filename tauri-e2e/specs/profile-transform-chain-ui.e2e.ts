@@ -1392,8 +1392,14 @@ describe('main transform chain editor', () => {
       await failure.getAttribute('data-attempt-revision'),
     );
     assert.ok(attemptRevision > before.revision);
-    assert.equal(await failure.getAttribute('data-transform-type'), 'merge');
+    // `data-transform-type` exposes the Profile type discriminator; the user
+    // facing label identifies this Profile's transform implementation.
+    assert.equal(
+      await failure.getAttribute('data-transform-type'),
+      'transform',
+    );
     assert.equal(await failure.getAttribute('data-script-type'), null);
+    assert.match(await failure.getText(), /Merge \(YAML\)/);
     assert.match(await failure.getText(), /YAML mapping/);
 
     const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(

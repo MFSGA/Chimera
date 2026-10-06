@@ -81,3 +81,12 @@ out. The error boundary now uses a nonblocking notice for a newly published
 transform failure, and recovery checks wait for the draft to update before
 saving. A new Windows Edge CI run is required to verify this correction; the
 failed run is not a pass.
+
+On head `fc89659efd53fc29b3ed73ccbc1d21dab25ebc60`, Windows Edge critical
+finished with 18 spec files passed and one failed. The blocking-dialog and
+recovery-ordering issues were cleared; the remaining failure was an incorrect
+expectation that `data-transform-type` meant the overlay kind. The selector
+contains the Profile discriminator (`transform`), while the diagnostic label
+identifies the overlay as `Merge (YAML)`. The assertion now checks both
+meanings separately. This run remains a failure; the updated Windows Edge suite
+must pass before merge.
