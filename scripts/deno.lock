@@ -18,7 +18,7 @@
     "npm:colorize-template@1.0.0": "1.0.0",
     "npm:consola@*": "3.4.2",
     "npm:consola@3.4.2": "3.4.2",
-    "npm:fs-extra@11.3.6": "11.3.6",
+    "npm:fs-extra@11.4.1": "11.4.1",
     "npm:globby@*": "16.2.0",
     "npm:lodash-es@*": "4.18.1",
     "npm:octokit@*": "5.0.5",
@@ -406,8 +406,8 @@
         "to-regex-range"
       ]
     },
-    "fs-extra@11.3.6": {
-      "integrity": "sha512-w8ZNZr2mKIc7qeNaQ9AVPT1+iFaI+Avd4xudVOvdDJ8VytREi1Ft5Ih7hd9jjehod8vAM5GMsfQ/TpPf4EyoEA==",
+    "fs-extra@11.4.1": {
+      "integrity": "sha512-KYAb4c9BJQI6QqGKthV68OHe0badztdXJWKo0WtBA9IuCFPTKvE5ZdUBglP833aMjhaSPNO4A5j/EkzZtGlKjA==",
       "dependencies": [
         "graceful-fs",
         "jsonfile",
@@ -633,7 +633,7 @@
         "npm:adm-zip@0.6.0",
         "npm:colorize-template@1.0.0",
         "npm:consola@3.4.2",
-        "npm:fs-extra@11.3.6",
+        "npm:fs-extra@11.4.1",
         "npm:octokit@5.0.5",
         "npm:picocolors@1.1.1",
         "npm:tar@7.5.20",
