@@ -13,7 +13,7 @@
     "npm:@types/adm-zip@0.5.8": "0.5.8",
     "npm:@types/fs-extra@11.0.4": "11.0.4",
     "npm:@types/yargs@17.0.35": "17.0.35",
-    "npm:adm-zip@0.6.0": "0.6.0",
+    "npm:adm-zip@0.6.1": "0.6.1",
     "npm:colorize-template@*": "1.0.0",
     "npm:colorize-template@1.0.0": "1.0.0",
     "npm:consola@*": "3.4.2",
@@ -337,8 +337,8 @@
         "@types/yargs-parser"
       ]
     },
-    "adm-zip@0.6.0": {
-      "integrity": "sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg=="
+    "adm-zip@0.6.1": {
+      "integrity": "sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ=="
     },
     "ansi-regex@6.2.2": {
       "integrity": "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="
@@ -630,7 +630,7 @@
         "npm:@types/adm-zip@0.5.8",
         "npm:@types/fs-extra@11.0.4",
         "npm:@types/yargs@17.0.35",
-        "npm:adm-zip@0.6.0",
+        "npm:adm-zip@0.6.1",
         "npm:colorize-template@1.0.0",
         "npm:consola@3.4.2",
         "npm:fs-extra@11.4.1",

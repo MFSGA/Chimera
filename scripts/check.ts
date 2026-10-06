@@ -2,7 +2,7 @@ import { parseArgs } from 'jsr:@std/cli@1/parse-args';
 import { ensureDir, exists } from 'jsr:@std/fs';
 import * as path from 'jsr:@std/path';
 // @ts-types="npm:@types/adm-zip@0.5.8"
-import AdmZip from 'npm:adm-zip@0.6.0';
+import AdmZip from 'npm:adm-zip@0.6.1';
 import { colorize, consola } from './deno/utils/logger.ts';
 import { verifyAndInstallSidecar } from './deno/utils/sidecar-integrity.ts';
 
