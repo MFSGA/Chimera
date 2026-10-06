@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import { committedValue } from './profile-fixtures.js';
 
 const profileName = 'TDD 本地配置';
 const fixturePath = path.resolve(
@@ -16,8 +18,25 @@ type ProfilesResponse = {
 };
 
 type VergeConfig = {
-  language?: string;
+  language?: string | null;
 };
+
+type WebviewLocaleState = {
+  cache: string | null;
+  documentLanguage: string;
+};
+
+async function attemptCleanup(
+  errors: Error[],
+  label: string,
+  action: () => Promise<void>,
+) {
+  try {
+    await action();
+  } catch (cause) {
+    errors.push(new Error(label, { cause }));
+  }
+}
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
@@ -51,8 +70,16 @@ async function waitForPath(pathname: string) {
 }
 
 describe('legacy proxy localization', () => {
+  // Contract (desktop UI E2E): set the test-owned app language to zh-cn, create
+  // a local Profile through the legacy UI, attach its fixture through IPC, and
+  // activate it through the UI. The independent oracle is the page title and
+  // static mode-control labels; dynamic proxy/node names can legitimately be
+  // English. Restore the original language, selected Profile, and each
+  // WebView's cached locale, then delete only the Profile created by this test.
   let profileUid: string | undefined;
-  let originalLanguage: string | undefined;
+  let originalLanguage: string | null | undefined;
+  let originalCurrentProfile: string | null = null;
+  const originalWebviewLocales = new Map<string, WebviewLocaleState>();
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -66,7 +93,29 @@ describe('legacy proxy localization', () => {
       { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
     );
 
-    originalLanguage = (await invoke<VergeConfig>('get_verge_config')).language;
+    const activeWindow = await browser.getWindowHandle();
+    for (const handle of await browser.getWindowHandles()) {
+      if (handle !== 'legacy' && handle !== 'main') continue;
+      await browser.switchToWindow(handle);
+      originalWebviewLocales.set(
+        handle,
+        await browser.execute(() => ({
+          cache: localStorage.getItem(btoa('paraglide-language-cache')),
+          documentLanguage: document.documentElement.lang,
+        })),
+      );
+    }
+    await browser.switchToWindow(activeWindow);
+
+    const originalConfig = await invoke<VergeConfig>('get_verge_config');
+    originalLanguage = originalConfig.language ?? null;
+    const originalProfiles = await invoke<ProfilesResponse>('get_profiles');
+    assert.equal(
+      originalProfiles.items.some((item) => item.name === profileName),
+      false,
+      'The isolated E2E runtime already contains this test profile.',
+    );
+    originalCurrentProfile = originalProfiles.current;
     await invoke('patch_verge_config', {
       payload: { language: 'zh-cn' },
     });
@@ -90,16 +139,134 @@ describe('legacy proxy localization', () => {
   });
 
   after(async () => {
+    const cleanupErrors: Error[] = [];
+    const profiles = await invoke<ProfilesResponse>('get_profiles').catch(
+      (cause: unknown) => {
+        cleanupErrors.push(
+          new Error('Could not find the test profile for cleanup.', { cause }),
+        );
+        return null;
+      },
+    );
+    profileUid ??= profiles?.items.find(
+      (item) => item.name === profileName,
+    )?.uid;
+
     if (profileUid) {
-      await invoke('activate_profile', { uid: null }).catch(() => undefined);
-      await invoke('delete_profile', { uid: profileUid }).catch(
-        () => undefined,
+      await attemptCleanup(
+        cleanupErrors,
+        'Could not restore the active profile.',
+        async () => {
+          committedValue(
+            await invoke<MutationOutcome<null>>('activate_profile', {
+              uid: originalCurrentProfile,
+            }),
+            'Profile selection restoration',
+          );
+          await browser.waitUntil(
+            async () =>
+              (await invoke<ProfilesResponse>('get_profiles')).current ===
+              originalCurrentProfile,
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The original profile selection was not restored.',
+            },
+          );
+        },
+      );
+      await attemptCleanup(
+        cleanupErrors,
+        'Could not delete the test profile.',
+        async () => {
+          committedValue(
+            await invoke<MutationOutcome<null>>('delete_profile', {
+              uid: profileUid,
+            }),
+            'Test profile deletion',
+          );
+          await browser.waitUntil(
+            async () =>
+              !(await invoke<ProfilesResponse>('get_profiles')).items.some(
+                (item) => item.uid === profileUid,
+              ),
+            {
+              timeout: 30_000,
+              timeoutMsg: 'The test profile remained after deletion.',
+            },
+          );
+        },
       );
     }
-    if (originalLanguage) {
-      await invoke('patch_verge_config', {
-        payload: { language: originalLanguage },
-      }).catch(() => undefined);
+
+    if (originalLanguage !== undefined) {
+      await attemptCleanup(
+        cleanupErrors,
+        'Could not restore the original language.',
+        async () => {
+          await invoke('patch_verge_config', {
+            payload: { language: originalLanguage ?? null },
+          });
+          await browser.waitUntil(
+            async () =>
+              ((await invoke<VergeConfig>('get_verge_config')).language ??
+                null) === (originalLanguage ?? null),
+            {
+              timeout: 15_000,
+              timeoutMsg: 'The original language setting was not restored.',
+            },
+          );
+        },
+      );
+    }
+
+    for (const [handle, localeState] of originalWebviewLocales) {
+      await attemptCleanup(
+        cleanupErrors,
+        `Could not restore the original locale in ${handle}.`,
+        async () => {
+          if (!(await browser.getWindowHandles()).includes(handle)) return;
+          await browser.switchToWindow(handle);
+          await browser.execute((state) => {
+            const key = btoa('paraglide-language-cache');
+            if (state.cache === null) {
+              localStorage.removeItem(key);
+            } else {
+              localStorage.setItem(key, state.cache);
+            }
+          }, localeState);
+          await browser.refresh();
+          await browser.waitUntil(
+            async () =>
+              browser.execute(
+                (language) => document.documentElement.lang === language,
+                localeState.documentLanguage,
+              ),
+            {
+              timeout: 15_000,
+              timeoutMsg: `${handle} did not return to its original locale.`,
+            },
+          );
+          await browser.execute((state) => {
+            const key = btoa('paraglide-language-cache');
+            if (state.cache === null) {
+              localStorage.removeItem(key);
+            } else {
+              localStorage.setItem(key, state.cache);
+            }
+          }, localeState);
+        },
+      );
+    }
+
+    if ((await browser.getWindowHandles()).includes('legacy')) {
+      await browser.switchToWindow('legacy');
+    }
+
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        'Legacy proxy localization cleanup was incomplete.',
+      );
     }
   });
 
@@ -163,10 +330,30 @@ describe('legacy proxy localization', () => {
     await browser.waitUntil(
       async () =>
         browser.execute(() => {
-          const text = document.body.innerText;
-          return text.includes('Proxy Groups') || text.includes('代理集');
+          const title = document.querySelector('h1')?.textContent?.trim();
+          const modeLabels = Array.from(
+            document.querySelectorAll<HTMLButtonElement>(
+              '[role="group"] button',
+            ),
+          ).map((button) => [button.value, button.textContent?.trim()]);
+          return (
+            title === '代理集' &&
+            modeLabels.some(
+              ([value, label]) => value === 'rule' && label === '规则',
+            ) &&
+            modeLabels.some(
+              ([value, label]) => value === 'global' && label === '全局',
+            ) &&
+            modeLabels.some(
+              ([value, label]) => value === 'direct' && label === '直连',
+            )
+          );
         }),
-      { timeout: 30_000, timeoutMsg: 'The proxy page did not render.' },
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'The proxy title and mode controls did not localize to zh-cn.',
+      },
     );
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
@@ -176,16 +363,27 @@ describe('legacy proxy localization', () => {
     }
 
     const state = await browser.execute(() => ({
-      bodyText: document.body.innerText,
+      title: document.querySelector('h1')?.textContent?.trim(),
+      modeLabels: Array.from(
+        document.querySelectorAll<HTMLButtonElement>('[role="group"] button'),
+      ).map((button) => [button.value, button.textContent?.trim()]),
     }));
 
-    assert.equal(state.bodyText.includes('Proxy Groups'), false);
-    assert.equal(state.bodyText.includes('Rule'), false);
-    assert.equal(state.bodyText.includes('Global'), false);
-    assert.equal(state.bodyText.includes('Direct'), false);
-    assert.equal(state.bodyText.includes('代理集'), true);
-    assert.equal(state.bodyText.includes('规则'), true);
-    assert.equal(state.bodyText.includes('全局'), true);
-    assert.equal(state.bodyText.includes('直连'), true);
+    assert.equal(state.title, '代理集');
+    assert.ok(
+      state.modeLabels.some(
+        ([value, label]) => value === 'rule' && label === '规则',
+      ),
+    );
+    assert.ok(
+      state.modeLabels.some(
+        ([value, label]) => value === 'global' && label === '全局',
+      ),
+    );
+    assert.ok(
+      state.modeLabels.some(
+        ([value, label]) => value === 'direct' && label === '直连',
+      ),
+    );
   });
 });
