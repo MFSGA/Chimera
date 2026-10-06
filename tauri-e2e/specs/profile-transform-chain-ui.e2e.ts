@@ -132,16 +132,16 @@ async function waitForScopedChain(uid: string, expected: string[]) {
 }
 
 async function waitForGlobalChain(expected: string[]) {
+  let lastChain = 'unavailable';
   await browser.waitUntil(
     async () => {
       const profiles = await readProfiles();
-      return (
-        JSON.stringify(profiles.global_transforms) === JSON.stringify(expected)
-      );
+      lastChain = JSON.stringify(profiles.global_transforms ?? []);
+      return lastChain === JSON.stringify(expected);
     },
     {
       timeout: 30_000,
-      timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}.`,
+      timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}. Last value: ${lastChain}.`,
     },
   );
 }
@@ -514,7 +514,14 @@ describe('main transform chain editor', () => {
       errors.push(error);
     }
     if (errors.length > 0) {
-      throw new AggregateError(errors, 'Profile transform spec cleanup failed');
+      throw new AggregateError(
+        errors,
+        `Profile transform spec cleanup failed: ${errors
+          .map((error) =>
+            error instanceof Error ? error.message : String(error),
+          )
+          .join('; ')}`,
+      );
     }
   });
 

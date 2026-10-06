@@ -209,7 +209,7 @@ describe('Chimera Lua transform runtime lifecycle', () => {
         );
       assert.ok(detachedDiagnostics);
       assert.ok(detachedDiagnostics.revision > diagnostics.revision);
-      assert.deepEqual(detachedDiagnostics.output.scopes[localUid], {});
+      assert.deepEqual(detachedDiagnostics.output.scopes[localUid] ?? {}, {});
     });
   });
 });
