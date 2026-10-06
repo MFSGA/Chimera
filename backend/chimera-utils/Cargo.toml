@@ -66,7 +66,7 @@ tempfile = { version = "3", optional = true }
 parking_lot = "0.12"
 processkit = {
   git = "https://github.com/ZelAnton/ProcessKit-rs",
-  rev = "2adad322f1e3d7c471f3b9c8c625e44f356e416b",
+  rev = "ffcecc46a02dadb02e9a92948371271e2205a37b",
   features = ["tracing"],
   optional = true,
 }

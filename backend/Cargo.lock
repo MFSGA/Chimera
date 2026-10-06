@@ -4543,6 +4543,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
+name = "mutants"
+version = "0.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "add0ac067452ff1aca8c5002111bd6b1c895baee6e45fcbc44e0193aea17be56"
+
+[[package]]
 name = "nanoid"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6020,12 +6026,13 @@ dependencies = [
 
 [[package]]
 name = "processkit"
-version = "2.2.5"
-source = "git+https://github.com/ZelAnton/ProcessKit-rs?rev=2adad322f1e3d7c471f3b9c8c625e44f356e416b#2adad322f1e3d7c471f3b9c8c625e44f356e416b"
+version = "3.3.4"
+source = "git+https://github.com/ZelAnton/ProcessKit-rs?rev=ffcecc46a02dadb02e9a92948371271e2205a37b#ffcecc46a02dadb02e9a92948371271e2205a37b"
 dependencies = [
  "async-trait",
  "encoding_rs",
  "libc",
+ "mutants",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",
@@ -8721,6 +8728,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
