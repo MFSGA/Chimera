@@ -70,6 +70,63 @@ async function openLocalProfileForm() {
   return nameInput;
 }
 
+async function captureFailureBeforeCleanup(
+  profileName: string,
+  error: unknown,
+): Promise<void> {
+  const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+  if (!artifactDirectory || !browser.sessionId) return;
+
+  const runId = path.basename(
+    process.env.CHIMERA_E2E_RUNTIME_DIR ?? `local-${process.pid}`,
+  );
+  const artifactName =
+    `profile-runtime-product-${runId}-${profileName}-${process.pid}-${Date.now()}`.replace(
+      /[^a-z0-9._-]+/gi,
+      '-',
+    );
+  const artifactBase = path.join(artifactDirectory, artifactName);
+  const captureErrors: string[] = [];
+  try {
+    fs.mkdirSync(artifactDirectory, { recursive: true });
+  } catch (captureError) {
+    process.stderr.write(
+      `Could not create failure evidence directory: ${String(captureError)}\n`,
+    );
+    return;
+  }
+
+  await browser
+    .saveScreenshot(`${artifactBase}.before-cleanup.png`)
+    .catch((captureError) => captureErrors.push(String(captureError)));
+  await browser
+    .getPageSource()
+    .then((source) =>
+      fs.writeFileSync(`${artifactBase}.before-cleanup.html`, source),
+    )
+    .catch((captureError) => captureErrors.push(String(captureError)));
+  try {
+    fs.writeFileSync(
+      `${artifactBase}.before-cleanup.error.txt`,
+      error instanceof Error ? (error.stack ?? error.message) : String(error),
+    );
+  } catch (captureError) {
+    captureErrors.push(String(captureError));
+  }
+  if (captureErrors.length > 0) {
+    try {
+      fs.writeFileSync(
+        `${artifactBase}.capture-error.txt`,
+        captureErrors.join('\n'),
+      );
+    } catch (captureError) {
+      process.stderr.write(
+        `Could not save capture errors: ${String(captureError)}\n`,
+      );
+    }
+  }
+}
+
 describe('Chimera profile runtime product lifecycle', () => {
   // Contract: from the isolated E2E runtime with a healthy core, create one
   // uniquely named local Profile through the UI. The Profiles document proves
@@ -143,78 +200,83 @@ describe('Chimera profile runtime product lifecycle', () => {
         assertRuntimeProductIsPromoted();
       });
 
-      await waitForCoreRunning();
-      const nameInput = await openLocalProfileForm();
-      await nameInput.setValue(profileName);
+      try {
+        await waitForCoreRunning();
+        const nameInput = await openLocalProfileForm();
+        await nameInput.setValue(profileName);
 
-      const descriptionInput = await $('textarea[name="desc"]');
-      await descriptionInput.setValue(
-        'Exercises the checked runtime product lifecycle.',
-      );
+        const descriptionInput = await $('textarea[name="desc"]');
+        await descriptionInput.setValue(
+          'Exercises the checked runtime product lifecycle.',
+        );
 
-      const okButton = await $('button=OK');
-      await okButton.waitForClickable({ timeout: 15_000 });
-      await okButton.click();
+        const okButton = await $('button=OK');
+        await okButton.waitForClickable({ timeout: 15_000 });
+        await okButton.click();
 
-      await browser.waitUntil(async () => !(await nameInput.isExisting()), {
-        timeout: 45_000,
-        timeoutMsg:
-          'The local profile dialog did not close after the create transaction finished.',
-      });
-
-      await browser.waitUntil(
-        async () => {
-          const profiles = await readProfiles();
-          const created = profiles.items.find(
-            (item) => item.name === profileName,
-          );
-          createdUid = created?.uid ?? null;
-          return Boolean(createdUid && profiles.current === createdUid);
-        },
-        {
+        await browser.waitUntil(async () => !(await nameInput.isExisting()), {
           timeout: 45_000,
-          timeoutMsg: 'The local profile was not created and activated.',
-        },
-      );
+          timeoutMsg:
+            'The local profile dialog did not close after the create transaction finished.',
+        });
 
-      assert.ok(createdUid);
-      await waitForCoreRunning();
-      assertRuntimeProductIsPromoted();
+        await browser.waitUntil(
+          async () => {
+            const profiles = await readProfiles();
+            const created = profiles.items.find(
+              (item) => item.name === profileName,
+            );
+            createdUid = created?.uid ?? null;
+            return Boolean(createdUid && profiles.current === createdUid);
+          },
+          {
+            timeout: 45_000,
+            timeoutMsg: 'The local profile was not created and activated.',
+          },
+        );
 
-      const card = await $(
-        `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
-      );
-      await card.waitForDisplayed({ timeout: 15_000 });
-      assert.equal(await card.getAttribute('data-profile-active'), 'true');
-      assert.equal(
-        await card
-          .$('[data-slot="profile-card-active-background"]')
-          .isExisting(),
-        true,
-      );
+        assert.ok(createdUid);
+        await waitForCoreRunning();
+        assertRuntimeProductIsPromoted();
 
-      await browser.refresh();
-      await browser.waitUntil(
-        async () => {
-          const profiles = await readProfiles();
-          return profiles.current === createdUid;
-        },
-        {
-          timeout: 30_000,
-          timeoutMsg: 'The active profile was not persisted after refresh.',
-        },
-      );
-      await waitForCoreRunning();
-      assertRuntimeProductIsPromoted();
+        const card = await $(
+          `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
+        );
+        await card.waitForDisplayed({ timeout: 15_000 });
+        assert.equal(await card.getAttribute('data-profile-active'), 'true');
+        assert.equal(
+          await card
+            .$('[data-slot="profile-card-active-background"]')
+            .isExisting(),
+          true,
+        );
 
-      const refreshedCard = await $(
-        `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
-      );
-      await refreshedCard.waitForDisplayed({ timeout: 15_000 });
-      assert.equal(
-        await refreshedCard.getAttribute('data-profile-active'),
-        'true',
-      );
+        await browser.refresh();
+        await browser.waitUntil(
+          async () => {
+            const profiles = await readProfiles();
+            return profiles.current === createdUid;
+          },
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The active profile was not persisted after refresh.',
+          },
+        );
+        await waitForCoreRunning();
+        assertRuntimeProductIsPromoted();
+
+        const refreshedCard = await $(
+          `[data-slot="profile-card"][data-profile-uid="${createdUid}"]`,
+        );
+        await refreshedCard.waitForDisplayed({ timeout: 15_000 });
+        assert.equal(
+          await refreshedCard.getAttribute('data-profile-active'),
+          'true',
+        );
+      } catch (error) {
+        await captureFailureBeforeCleanup(profileName, error);
+        throw error;
+      }
     });
   });
 });
