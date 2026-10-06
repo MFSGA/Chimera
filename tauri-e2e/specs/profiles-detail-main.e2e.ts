@@ -119,8 +119,8 @@ describe('main profile detail reference editors', () => {
           if (!selectionCaptured) return;
           const profiles = await readProfiles();
           if (
-            profiles.current !== uid ||
-            profiles.current === previousCurrent
+            (profiles.current ?? null) !== uid ||
+            (profiles.current ?? null) === previousCurrent
           ) {
             return;
           }
@@ -131,7 +131,8 @@ describe('main profile detail reference editors', () => {
             'Profile selection restoration',
           );
           await browser.waitUntil(
-            async () => (await readProfiles()).current === previousCurrent,
+            async () =>
+              ((await readProfiles()).current ?? null) === previousCurrent,
             {
               timeout: 30_000,
               timeoutMsg: 'The original Profile selection was not restored.',
