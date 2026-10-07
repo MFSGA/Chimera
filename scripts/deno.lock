@@ -13,12 +13,12 @@
     "npm:@types/adm-zip@0.5.8": "0.5.8",
     "npm:@types/fs-extra@11.0.4": "11.0.4",
     "npm:@types/yargs@17.0.35": "17.0.35",
-    "npm:adm-zip@0.6.0": "0.6.0",
+    "npm:adm-zip@0.6.1": "0.6.1",
     "npm:colorize-template@*": "1.0.0",
     "npm:colorize-template@1.0.0": "1.0.0",
     "npm:consola@*": "3.4.2",
     "npm:consola@3.4.2": "3.4.2",
-    "npm:fs-extra@11.3.6": "11.3.6",
+    "npm:fs-extra@11.4.1": "11.4.1",
     "npm:globby@*": "16.2.0",
     "npm:lodash-es@*": "4.18.1",
     "npm:octokit@*": "5.0.5",
@@ -27,7 +27,7 @@
     "npm:picocolors@1.1.1": "1.1.1",
     "npm:semver@*": "7.8.1",
     "npm:tar@7.5.20": "7.5.20",
-    "npm:undici@8.10.2": "8.10.2",
+    "npm:undici@8.11.2": "8.11.2",
     "npm:yargs@18.0.0": "18.0.0",
     "npm:zod@*": "4.4.3"
   },
@@ -337,8 +337,8 @@
         "@types/yargs-parser"
       ]
     },
-    "adm-zip@0.6.0": {
-      "integrity": "sha512-XleryMhbuksdKtofnWZ9Sk+4CUTbms4Mb/EU32SZwToAyZ5RgVos/ki8n+yr0LWHOGKuakbXTuuYNHLQjhddgg=="
+    "adm-zip@0.6.1": {
+      "integrity": "sha512-Xwrja8nx9e5o2N1my4DsKCeKpdrnACyr1wtbPxBDgGzKzKyE9kRtBFA8mWldI+RVlD7CBZNWY/wQ2+ydwOR6kQ=="
     },
     "ansi-regex@6.2.2": {
       "integrity": "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="
@@ -406,8 +406,8 @@
         "to-regex-range"
       ]
     },
-    "fs-extra@11.3.6": {
-      "integrity": "sha512-w8ZNZr2mKIc7qeNaQ9AVPT1+iFaI+Avd4xudVOvdDJ8VytREi1Ft5Ih7hd9jjehod8vAM5GMsfQ/TpPf4EyoEA==",
+    "fs-extra@11.4.1": {
+      "integrity": "sha512-KYAb4c9BJQI6QqGKthV68OHe0badztdXJWKo0WtBA9IuCFPTKvE5ZdUBglP833aMjhaSPNO4A5j/EkzZtGlKjA==",
       "dependencies": [
         "graceful-fs",
         "jsonfile",
@@ -575,8 +575,8 @@
     "undici@6.27.0": {
       "integrity": "sha512-YmfV3YnEDzXRC5lZ2jWtWWHKGUm1zIt8AhesR1tens+HTNv+YZlN/dp6G727LOvMJ8xjP9Be7Y2Sdr96LDm+pg=="
     },
-    "undici@8.10.2": {
-      "integrity": "sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ=="
+    "undici@8.11.2": {
+      "integrity": "sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ=="
     },
     "unicorn-magic@0.4.0": {
       "integrity": "sha512-wH590V9VNgYH9g3lH9wWjTrUoKsjLF6sGLjhR4sH1LWpLmCOH0Zf7PukhDA8BiS7KHe4oPNkcTHqYkj7SOGUOw=="
@@ -630,14 +630,14 @@
         "npm:@types/adm-zip@0.5.8",
         "npm:@types/fs-extra@11.0.4",
         "npm:@types/yargs@17.0.35",
-        "npm:adm-zip@0.6.0",
+        "npm:adm-zip@0.6.1",
         "npm:colorize-template@1.0.0",
         "npm:consola@3.4.2",
-        "npm:fs-extra@11.3.6",
+        "npm:fs-extra@11.4.1",
         "npm:octokit@5.0.5",
         "npm:picocolors@1.1.1",
         "npm:tar@7.5.20",
-        "npm:undici@8.10.2",
+        "npm:undici@8.11.2",
         "npm:yargs@18.0.0"
       ]
     }
