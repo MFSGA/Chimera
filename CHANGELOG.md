@@ -1,3 +1,43 @@
+## [0.25.5] - 2026-10-07 03:54:47
+
+### ✨ Features
+
+- **connections:** Add traffic history views by @MFSGA
+
+- **connections:** Sync search state with route by @MFSGA
+
+- **traffic:** Persist and query connection history by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Align Windows E2E WebView2 bindings by @MFSGA
+
+- **i18n:** Localize legacy proxy empty states by @MFSGA
+
+- **runtime:** Reject failed profile transform candidates (#427) by @MFSGA in [#427](https://github.com/MFSGA/Chimera/pull/427)
+
+### 📚 Documentation
+
+- **alignment:** Record dependency convergence by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Refresh scripts and CI tooling (#430) by @MFSGA in [#430](https://github.com/MFSGA/Chimera/pull/430)
+
+- **deps:** Update WebdriverIO stack to 9.32.0 (#429) by @MFSGA in [#429](https://github.com/MFSGA/Chimera/pull/429)
+
+- **deps:** Align frontend dependencies with ref (#431) by @MFSGA in [#431](https://github.com/MFSGA/Chimera/pull/431)
+
+- **deps:** Align Rust crate versions with ref (#428) by @MFSGA in [#428](https://github.com/MFSGA/Chimera/pull/428)
+
+- **deps:** Align Rust dependencies with ref by @MFSGA
+
+- **deps:** Align frontend workspace with ref by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.4...v0.25.5
+
 ## [0.25.4] - 2026-10-04 09:05:11
 
 ### ✅ Testing
