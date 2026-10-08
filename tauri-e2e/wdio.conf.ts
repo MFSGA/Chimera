@@ -141,7 +141,7 @@ async function releaseControllerPortReservation(): Promise<void> {
 }
 
 async function captureLegacyEntryUrl(): Promise<void> {
-  if (browser.isMultiremote || !browser.sessionId) return;
+  if (browser.isMultiRemote || !browser.sessionId) return;
 
   const handles = await browser.getWindowHandles();
   if (!handles.includes('legacy')) {
@@ -153,7 +153,7 @@ async function captureLegacyEntryUrl(): Promise<void> {
 }
 
 async function resetE2eWindowState(): Promise<void> {
-  if (browser.isMultiremote || !browser.sessionId) return;
+  if (browser.isMultiRemote || !browser.sessionId) return;
 
   for (const handle of await browser.getWindowHandles()) {
     if (handle === 'legacy' || handle === 'main') continue;
@@ -194,7 +194,7 @@ async function resetE2eWindowState(): Promise<void> {
 }
 
 async function prepareTauriServiceTeardown(): Promise<void> {
-  if (browser.isMultiremote) return;
+  if (browser.isMultiRemote) return;
 
   const tauriBrowser = browser as TauriBrowser;
   if (tauriBrowser.sessionId) {
