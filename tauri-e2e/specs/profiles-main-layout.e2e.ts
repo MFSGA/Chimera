@@ -78,13 +78,17 @@ describe('main profiles reference layout', () => {
     await confirmButton.waitForClickable({ timeout: 15_000 });
     await confirmButton.click();
 
-    const profileNameElement = await $(
-      `//*[normalize-space()="${profileName}"]`,
-    );
-    await profileNameElement.waitForDisplayed({ timeout: 15_000 });
     const profiles = await invoke<ProfilesResponse>('get_profiles');
-    profileUid = profiles.items.find((item) => item.name === profileName)?.uid;
-    assert.ok(profileUid, 'The layout fixture profile was not persisted.');
+    const createdProfile = profiles.items.find(
+      (item) => item.name === profileName,
+    );
+    assert.ok(createdProfile, 'The layout fixture profile was not persisted.');
+    profileUid = createdProfile.uid;
+
+    const profileCard = await $(
+      `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`,
+    );
+    await profileCard.waitForDisplayed({ timeout: 15_000 });
   });
 
   after(async () => {

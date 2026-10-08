@@ -1,17 +1,17 @@
 # 测试依赖上游依据与版本边界
 
-核对日期：2026-10-06。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
+核对日期：2026-10-07。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
 
 ## U01 锁定版本与证据优先级
 
-| 依赖                                                | 当前依据                                                                                                                    | 核对版本                                                    |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| WebdriverIO、WDIO runner / Mocha adapter 等直接依赖 | [测试包](../../tauri-e2e/package.json)、[pnpm 锁文件](../../pnpm-lock.yaml)                                                 | WDIO / runner / adapter / reporter 9.32.0（globals 9.31.3） |
-| `@wdio/tauri-service`                               | 同上                                                                                                                        | 1.4.0                                                       |
-| `tauri-plugin-wdio-webdriver`                       | [Cargo manifest](../../backend/tauri/Cargo.toml)、[vendored source](../../backend/tauri/vendor/tauri-plugin-wdio-webdriver) | crates.io 1.4.0 + 上游兼容修复 `e4bdb66`                    |
-| Mocha                                               | pnpm-lock.yaml 中传递依赖                                                                                                   | 11.8.0                                                      |
-| expect-webdriverio                                  | pnpm-lock.yaml 中传递依赖                                                                                                   | 6.0.10                                                      |
-| Node / pnpm                                         | [根 package.json](../../package.json)                                                                                       | Node 24.21.0；pnpm 12.3.4                                   |
+| 依赖                                                | 当前依据                                                                                                                    | 核对版本                                            |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| WebdriverIO、WDIO runner / Mocha adapter 等直接依赖 | [测试包](../../tauri-e2e/package.json)、[pnpm 锁文件](../../pnpm-lock.yaml)                                                 | WDIO / runner / adapter / reporter / globals 10.0.0 |
+| `@wdio/tauri-service`                               | 同上                                                                                                                        | 1.4.0                                               |
+| `tauri-plugin-wdio-webdriver`                       | [Cargo manifest](../../backend/tauri/Cargo.toml)、[vendored source](../../backend/tauri/vendor/tauri-plugin-wdio-webdriver) | crates.io 1.4.0 + 上游兼容修复 `e4bdb66`            |
+| Mocha                                               | pnpm-lock.yaml 中传递依赖                                                                                                   | 12.0.3                                              |
+| expect-webdriverio                                  | pnpm-lock.yaml 中传递依赖                                                                                                   | 8.0.0-alpha.3                                       |
+| Node / pnpm                                         | [根 package.json](../../package.json)                                                                                       | Node 24.21.0；pnpm 12.9.1                           |
 
 **产品期望由需求/契约决定；工具能力由实际锁定版本决定。** 判断顺序：锁文件与实际安装包 → 同版本发布源码/发布产物 → 对应源码提交 → 官方当前文档。官网会更新，不能默认其中每个 API 已在本项目可用。传递包并非全部与直接依赖同版本；例如 `@wdio/tauri-service` 的运行时依赖可能与工作区直接声明的 WDIO 版本不同，实际解析仍需看锁文件。
 
@@ -19,13 +19,17 @@
 
 ## U02 WebdriverIO 等待与重建会话
 
-核对 `webdriverio@9.32.0` 的发布元数据、锁定完整性和 `waitUntil`、`reloadSession`、元素命令源码；npm 发布元数据给出的源码提交是 `5c2a318d9a5e8424a2f2de95df9374b89bda7936`，发布完整性为 `sha512-A7r7SnvZ6eEJROIWAG6GMOlV82W2Pl7FDjXLn/tJ4L8BEc3yjCrDWzY4EB9i4MtPZwlNZoHgNV9fYYKn7JWAew==`。安装目录可能因工作区尚未重新安装而暂时保留旧包，不能以旧包文件冒充锁定版本依据。
+核对 `webdriverio@10.0.0` 的发布元数据、锁定完整性和 `waitUntil`、`reloadSession`、元素命令源码；npm 发布元数据给出的源码提交是 `38bd5ff4dccfaadccce4bd678286f00594623da2`，发布完整性为 `sha512-DiDflg731z/b+qg4EmVAGihMJSWhHJYhlwrS6Q1uSFqL4c48+xHDj9VjhQr7sFzZ/MBJySjGZfMBGyjP7p547Q==`。安装目录可能因工作区尚未重新安装而暂时保留旧包，不能以旧包文件冒充锁定版本依据。
 
-- 源码事实：`waitUntil` 使用计时器调用条件函数；`timeoutMsg` 可为字符串或函数，传入函数时只在超时时求值。静态错误文本不会自动更新。项目要求：失败时附上最新快照；若使用函数，快照读取仍应只读，见 T05。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/browser/waitUntil.ts)
-- 源码事实：元素命令的隐式等待只解决元素定位/重新获取，不代表业务事务完成。项目要求：等待具体业务结果。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/utils/implicitWait.ts)
-- 源码事实：`reloadSession` 删除旧会话后请求协议层创建新会话，并调用 `onReload` hooks；其中并没有针对 Chimera 的应用进程退出、磁盘持久化或内核重启验证。项目要求：冷启动契约必须另外验证进程生命周期。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/browser/reloadSession.ts)
+- 源码事实：`waitUntil` 使用计时器调用条件函数；`timeoutMsg` 可为字符串或函数，传入函数时只在超时时求值。静态错误文本不会自动更新。项目要求：失败时附上最新快照；若使用函数，快照读取仍应只读，见 T05。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/38bd5ff4dccfaadccce4bd678286f00594623da2/packages/webdriverio/src/commands/browser/waitUntil.ts)
+- 源码事实：元素命令的隐式等待只解决元素定位/重新获取，不代表业务事务完成。项目要求：等待具体业务结果。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/38bd5ff4dccfaadccce4bd678286f00594623da2/packages/webdriverio/src/utils/implicitWait.ts)
+- 源码事实：`reloadSession` 删除旧会话后请求协议层创建新会话，并调用 `onReload` hooks；其中并没有针对 Chimera 的应用进程退出、磁盘持久化或内核重启验证。项目要求：冷启动契约必须另外验证进程生命周期。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/38bd5ff4dccfaadccce4bd678286f00594623da2/packages/webdriverio/src/commands/browser/reloadSession.ts)
 
 官方参考：[等待](https://webdriver.io/docs/api/browser/waitUntil/)、[重建会话](https://webdriver.io/docs/api/browser/reloadSession/)、[元素点击](https://webdriver.io/docs/api/element/click/)、[稳健选择器与断言](https://webdriver.io/docs/bestpractices/)。通用点击文档描述的接口不能代替对具体 provider 的核对。
+
+## U07 WDIO 10 严格选择器
+
+WDIO 10.0.0 将 `$` 改为严格单元素查询：选择器命中多个元素时抛出 `StrictSelectorError`；`$$` 仍用于多元素查询。桌面 CI 的 v10 迁移运行曾暴露宽泛文本 XPath 会同时命中文本节点和带重复文案的父级，以及模态框内裸 `button` 命中保存和取消按钮。项目要求：遵循 T04，用业务 UID、稳定 `data-slot` 或更窄的语义选择器消除歧义，不通过全局关闭 strict mode 或静默取首项掩盖不唯一选择器。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/38bd5ff4dccfaadccce4bd678286f00594623da2/packages/webdriverio/src/commands/browser/%24.ts)、[WDIO 选择器指南](https://webdriver.io/docs/selectors)、[v9 到 v10 迁移指南](https://webdriver.io/docs/v10-migration)。
 
 ## U03 Tauri service 启动恢复和清理
 

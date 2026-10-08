@@ -294,7 +294,7 @@ describe('legacy proxy localization', () => {
     await confirmButton.click();
 
     const profileNameElement = await $(
-      `//*[normalize-space()="${profileName}"]`,
+      `//p[normalize-space(text())="${profileName}"]`,
     );
     await profileNameElement.waitForDisplayed({ timeout: 15_000 });
 
@@ -309,7 +309,7 @@ describe('legacy proxy localization', () => {
     await invoke('activate_profile', { uid: null });
 
     const profileCard = await $(
-      `//*[normalize-space()="${profileName}"]/ancestor::div[contains(@class,"cursor-pointer")][1]`,
+      `//p[normalize-space(text())="${profileName}"]/ancestor::div[contains(@class,"cursor-pointer")][1]`,
     );
     await profileCard.click();
     await browser.waitUntil(
