@@ -59,7 +59,7 @@
     "@tauri-apps/cli": "2.12.1",
     "npm-run-all2": "9.0.3",
     "react-devtools": "7.0.1",
-    "oxlint": "1.86.0",
+    "oxlint": "1.87.0",
     "prettier": "3.9.9",
     "@ianvs/prettier-plugin-sort-imports": "4.7.1",
     "prettier-plugin-tailwindcss": "0.8.1",
@@ -71,7 +71,7 @@
     "stylelint-config-standard": "40.0.0",
     "stylelint-declaration-block-no-ignored-properties": "3.0.0",
     "stylelint-order": "8.1.1",
-    "stylelint-scss": "7.2.0",
+    "stylelint-scss": "7.3.0",
     "knip": "6.39.0",
     "lint-staged": "17.6.0",
     "@commitlint/cli": "21.2.3",
@@ -82,7 +82,7 @@
     "typescript": "7.0.2",
     "prettier-plugin-ember-template-tag": "2.1.8"
   },
-  "packageManager": "pnpm@12.8.1",
+  "packageManager": "pnpm@12.9.1",
   "engines": {
     "node": "v24.21.0"
   }
