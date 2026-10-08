@@ -78,6 +78,16 @@ describe('main profiles reference layout', () => {
     await confirmButton.waitForClickable({ timeout: 15_000 });
     await confirmButton.click();
 
+    await browser.waitUntil(
+      async () =>
+        (await invoke<ProfilesResponse>('get_profiles')).items.some(
+          (item) => item.name === profileName,
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The layout fixture profile was not persisted.',
+      },
+    );
     const profiles = await invoke<ProfilesResponse>('get_profiles');
     const createdProfile = profiles.items.find(
       (item) => item.name === profileName,
