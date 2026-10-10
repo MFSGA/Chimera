@@ -3,6 +3,7 @@ import {
   openThat,
   useAgent,
   type AgentActionRequest,
+  type AgentIntentResolution,
   type AgentNetworkProbeRequest,
   type AgentProposal,
 } from '@chimera/interface';
@@ -20,6 +21,7 @@ import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 import { DiagnosisOverview } from './components/diagnosis-overview';
+import { IntentCard } from './components/intent-card';
 import { buildAgentIssueUrl } from './components/issue-guidance';
 import { NetworkProbeCard } from './components/network-probe-card';
 import { ProposalDialog } from './components/proposal-dialog';
@@ -104,7 +106,25 @@ function ErrorCard() {
 export function AgentPage() {
   const agent = useAgent();
   const [proposal, setProposal] = useState<AgentProposal | null>(null);
+  const [intentResolution, setIntentResolution] =
+    useState<AgentIntentResolution | null>(null);
   const snapshot = agent.snapshot.data;
+
+  const resolveIntent = async (text: string) => {
+    setIntentResolution(null);
+    try {
+      const resolution = await agent.resolveIntent.mutateAsync(text);
+      setIntentResolution(resolution);
+      if (
+        resolution.status === 'resolved' &&
+        resolution.intent.intent === 'diagnose'
+      ) {
+        await agent.snapshot.refetch();
+      }
+    } catch {
+      Notice.error(m.agent_error_title());
+    }
+  };
 
   const propose = async (action: AgentActionRequest) => {
     try {
@@ -210,6 +230,13 @@ export function AgentPage() {
           />
         ) : (
           <>
+            <IntentCard
+              resolution={intentResolution}
+              resolving={agent.resolveIntent.isPending}
+              disabled={agent.propose.isPending || agent.execute.isPending}
+              onResolve={(text) => void resolveIntent(text)}
+              onPropose={(action) => void propose(action)}
+            />
             <DiagnosisOverview
               snapshot={snapshot}
               pending={agent.propose.isPending}
