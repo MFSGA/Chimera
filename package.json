@@ -82,7 +82,7 @@
     "typescript": "7.0.2",
     "prettier-plugin-ember-template-tag": "2.1.8"
   },
-  "packageManager": "pnpm@12.9.1",
+  "packageManager": "pnpm@12.10.1",
   "engines": {
     "node": "v24.21.0"
   }
