@@ -136,6 +136,10 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm --filter @chimera/tauri-e2e test:unit
 
+      - name: Test Connections reference models
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: pnpm --filter chimera-ui test:connections
+
       - name: Test application effects and hotkey bindings
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: |

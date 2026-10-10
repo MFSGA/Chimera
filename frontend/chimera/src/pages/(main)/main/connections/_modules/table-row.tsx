@@ -1,11 +1,11 @@
-import { useClashConnections } from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { type ClosedConnection } from '@chimera/interface';
+import { cn } from '@chimera/utils';
 import ChatInfoRounded from '~icons/material-symbols/chat-info-rounded';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
 import { filesize } from 'filesize';
-import { useState, type ComponentProps } from 'react';
+import { ComponentProps, memo } from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -28,57 +28,122 @@ import {
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import type { ConnectionRow } from '..';
+import { ruleLabel } from '../../_modules/traffic-filters';
+import { RelativeTimeCell } from './cells';
+import type { ConnectionRow } from './use-connection-rows';
 
+// Keys added by ConnectionRow, plus the two wrapper fields, that should not
+// be rendered as their own dialog row: `metadata` and `_extra` get their own
+// sections below.
 const INTERNAL_KEYS = new Set([
-  'closed',
-  'closedAt',
   'downloadSpeed',
   'uploadSpeed',
+  'startMs',
+  'metadata',
+  '_extra',
 ]);
 
-/** Format connection detail values using the same units as the table. */
-function formatValue(key: string, value: unknown): React.ReactNode {
+const FIELD_LABELS = {
+  id: m.connections_field_id,
+  upload: m.connections_field_upload,
+  download: m.connections_field_download,
+  start: m.connections_field_start,
+  chains: m.connections_field_chains,
+  rule: m.connections_field_rule,
+  rulePayload: m.connections_field_rule_payload,
+  network: m.connections_field_network,
+  type: m.connections_field_type,
+  host: m.connections_field_host,
+  sourceIP: m.connections_field_source_ip,
+  sourcePort: m.connections_field_source_port,
+  destinationIP: m.connections_field_destination_ip,
+  destinationPort: m.connections_field_destination_port,
+  destinationIPASN: m.connections_field_destination_ip_asn,
+  sourceGeoIP: m.connections_field_source_geo_ip,
+  destinationGeoIP: m.connections_field_destination_geo_ip,
+  process: m.connections_field_process,
+  processPath: m.connections_field_process_path,
+  dnsMode: m.connections_field_dns_mode,
+  dscp: m.connections_field_dscp,
+  inboundIP: m.connections_field_inbound_ip,
+  inboundName: m.connections_field_inbound_name,
+  inboundPort: m.connections_field_inbound_port,
+  inboundUser: m.connections_field_inbound_user,
+  remoteDestination: m.connections_field_remote_destination,
+  sniffHost: m.connections_field_sniff_host,
+  specialProxy: m.connections_field_special_proxy,
+  specialRules: m.connections_field_special_rules,
+};
+
+// Fields only a closed record has
+const CLOSED_FIELD_LABELS = {
+  source: m.connections_column_source,
+  closed: m.connections_column_closed_time,
+};
+
+// Fields the core adds later have no message yet, so show the key itself
+function fieldLabel(key: string) {
+  if (Object.hasOwn(FIELD_LABELS, key)) {
+    return FIELD_LABELS[key as keyof typeof FIELD_LABELS]();
+  }
+
+  if (Object.hasOwn(CLOSED_FIELD_LABELS, key)) {
+    return CLOSED_FIELD_LABELS[key as keyof typeof CLOSED_FIELD_LABELS]();
+  }
+
+  return sentenceCase(key);
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatValue(key: string, value: any): React.ReactNode {
   if (Array.isArray(value)) {
     return <span>{value.join(' / ')}</span>;
   }
 
-  const normalizedKey = key.toLowerCase();
+  const k = key.toLowerCase();
 
-  if (normalizedKey.includes('speed')) {
-    return <span>{filesize(value as number, { standard: 'iec' })}/s</span>;
+  if (k.includes('speed')) {
+    return <span>{filesize(value, { standard: 'iec' })}/s</span>;
   }
 
-  if (normalizedKey.includes('download') || normalizedKey.includes('upload')) {
-    return <span>{filesize(value as number, { standard: 'iec' })}</span>;
+  if (k.includes('download') || k.includes('upload')) {
+    return <span>{filesize(value, { standard: 'iec' })}</span>;
   }
 
-  if (
-    normalizedKey.includes('port') ||
-    normalizedKey === 'id' ||
-    normalizedKey.includes('ip')
-  ) {
-    return <span>{String(value)}</span>;
+  if (k.includes('port') || k === 'id' || k.includes('ip')) {
+    return <span>{value}</span>;
   }
 
-  const date = dayjs(value as string | number | Date | null | undefined);
+  if (typeof value === 'string' && value.includes('T')) {
+    const date = dayjs(value);
+    if (date.isValid()) {
+      return <RelativeTimeCell ms={date.valueOf()} />;
+    }
+  }
 
-  if (date.isValid() && typeof value === 'string' && value.includes('T')) {
-    return (
-      <span title={date.format('YYYY-MM-DD HH:mm:ss')}>{date.fromNow()}</span>
-    );
+  // An unknown (`_extra`) field's value can itself be a nested JSON object.
+  if (value !== null && typeof value === 'object') {
+    return <span>{JSON.stringify(value)}</span>;
   }
 
   return <span>{String(value)}</span>;
 }
 
-/** Render a label/value pair in the connection details grid. */
-function RowRender({ label, value }: { label: string; value: unknown }) {
+// Memoized: a new sample re-renders only the fields whose values changed,
+// while relative times follow the tick on their own.
+const RowRender = memo(function RowRender({
+  label,
+  value,
+}: {
+  label: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  value: any;
+}) {
   const key = label.toLowerCase();
 
   return (
     <>
-      <div className="w-fit text-sm font-semibold">{sentenceCase(label)}</div>
+      <div className="w-fit text-sm font-semibold">{fieldLabel(label)}</div>
       <div
         className={cn(
           'text-sm break-all',
@@ -94,94 +159,151 @@ function RowRender({ label, value }: { label: string; value: unknown }) {
       </div>
     </>
   );
+});
+
+// A connection's fields as dialog rows, keyed for `RowRender`'s labels.
+type DetailFields = Array<[key: string, value: unknown]>;
+
+export type ConnectionDetail = {
+  fields: DetailFields;
+  metadata?: DetailFields;
+  // The connection is gone: a closed record, or a live connection's last
+  // sample kept after it closed.
+  closed: boolean;
+  // The rule the connection matched, as the rules and traffic pages name it.
+  ruleLabel: string;
+  // The row's id in the table that opened the dialog, to focus on return.
+  rowId: string;
+};
+
+const isShown = (value: unknown) =>
+  value !== undefined && value !== null && value !== '';
+
+export function activeConnectionDetail(
+  row: ConnectionRow,
+  closed: boolean,
+  rowId: string,
+): ConnectionDetail {
+  return {
+    fields: [
+      ...Object.entries(row).filter(
+        ([key, value]) => !INTERNAL_KEYS.has(key) && isShown(value),
+      ),
+      ...Object.entries(row._extra ?? {}).filter(
+        ([, value]) => value !== undefined && value !== null,
+      ),
+    ],
+    metadata: [
+      ...Object.entries(row.metadata ?? {}).filter(
+        ([key, value]) => key !== '_extra' && isShown(value),
+      ),
+      ...Object.entries(
+        (
+          row.metadata as unknown as
+            { _extra?: Record<string, unknown> } | undefined
+        )?._extra ?? {},
+      ).filter(([, value]) => value !== undefined && value !== null),
+    ],
+    closed,
+    ruleLabel: ruleLabel(row.rule, row.rulePayload),
+    rowId,
+  };
 }
 
-/** Render a virtualized connection row with ref-style context menu and modal. */
-export default function TableRow({
-  data,
-  onDoubleClick,
-  ...props
-}: ComponentProps<'tr'> & {
-  data: ConnectionRow;
+export function closedConnectionDetail(
+  row: ClosedConnection,
+  rowId: string,
+): ConnectionDetail {
+  const { dimensions } = row;
+
+  return {
+    fields: (
+      [
+        ['id', row.id],
+        ['host', dimensions.target],
+        ['chains', dimensions.chains],
+        ['rule', dimensions.rule.kind],
+        ['rulePayload', dimensions.rule.payload],
+        ['type', dimensions.protocol],
+        ['source', dimensions.source],
+        ['process', dimensions.process],
+        ['upload', row.bytes.upload],
+        ['download', row.bytes.download],
+        // ISO strings, so `formatValue` shows them as times
+        ['start', new Date(row.started_at).toISOString()],
+        ['closed', new Date(row.closed_at).toISOString()],
+      ] satisfies DetailFields
+    ).filter(([, value]) => isShown(value)),
+    closed: true,
+    ruleLabel: ruleLabel(dimensions.rule.kind, dimensions.rule.payload),
+    rowId,
+  };
+}
+
+// One dialog for the whole table, selected by connection id: a dialog owned by
+// a virtualized row would follow the row's position, and every row would build
+// its hidden dialog content on each sample. Memoized, so a sample re-renders it
+// only while it shows that connection.
+export const ConnectionDetailModal = memo(function ConnectionDetailModal({
+  detail,
+  onClose,
+  onCloseConnection,
+  onLocateRule,
+  onViewRuleUsage,
+}: {
+  detail?: ConnectionDetail;
+  onClose: () => void;
+  onCloseConnection?: () => Promise<unknown>;
+  onLocateRule?: (detail: ConnectionDetail) => void;
+  onViewRuleUsage?: (detail: ConnectionDetail) => void;
 }) {
-  const { deleteConnections } = useClashConnections();
-  const [open, setOpen] = useState(false);
-
   const handleCloseConnection = useLockFn(async () => {
-    if (data.closed) {
-      return;
-    }
+    // frist close the dialog to avoid showing stale data when the deletion is slow
+    onClose();
 
-    if (open) {
-      setOpen(false);
-    }
-
-    await deleteConnections.mutateAsync(data.id);
+    await onCloseConnection?.();
   });
 
   return (
-    <>
-      <RegisterContextMenu>
-        <RegisterContextMenuTrigger asChild>
-          <tr
-            onDoubleClick={(event) => {
-              onDoubleClick?.(event);
-              setOpen(true);
-            }}
-            {...props}
-          />
-        </RegisterContextMenuTrigger>
-
-        <RegisterContextMenuContent>
-          <ContextMenuItem onSelect={() => setOpen(true)}>
-            <ChatInfoRounded className="size-4" />
-            <span>{m.connections_view_details()}</span>
-          </ContextMenuItem>
-
-          {!data.closed && (
-            <ContextMenuItem onSelect={() => handleCloseConnection()}>
-              <CloseRounded className="size-4" />
-              <span>{m.connections_close_connection()}</span>
-            </ContextMenuItem>
-          )}
-        </RegisterContextMenuContent>
-      </RegisterContextMenu>
-
-      <Modal open={open} onOpenChange={setOpen}>
-        <ModalContent>
+    <Modal
+      open={detail !== undefined}
+      onOpenChange={(open) => {
+        if (!open) {
+          onClose();
+        }
+      }}
+    >
+      <ModalContent>
+        {detail && (
           <Card divider className="flex max-w-[80vw] min-w-96 flex-col">
-            <CardHeader>
+            <CardHeader className="flex-row items-center gap-2">
               <ModalTitle>{m.connections_view_details()}</ModalTitle>
+
+              {detail.closed && (
+                <span className="bg-surface-variant text-on-surface-variant rounded-full px-2 py-0.5 text-xs">
+                  {m.connections_tab_closed()}
+                </span>
+              )}
             </CardHeader>
 
             <CardContent asChild className="p-0">
               <ScrollArea className="max-h-[70vh] select-text">
                 <div className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 p-4">
-                  {Object.entries(data)
-                    .filter(
-                      ([key, value]) =>
-                        key !== 'metadata' &&
-                        !INTERNAL_KEYS.has(key) &&
-                        value !== undefined &&
-                        value !== null &&
-                        value !== '',
-                    )
-                    .map(([key, value]) => (
-                      <RowRender key={key} label={key} value={value} />
-                    ))}
+                  {detail.fields.map(([key, value]) => (
+                    <RowRender key={key} label={key} value={value} />
+                  ))}
 
-                  <h3 className="col-span-2 pt-4 pb-1 text-base font-semibold">
-                    Metadata
-                  </h3>
+                  {detail.metadata && (
+                    <>
+                      <h3 className="col-span-2 pt-4 pb-1 text-base font-semibold">
+                        {m.connections_field_metadata()}
+                      </h3>
 
-                  {Object.entries(data.metadata)
-                    .filter(
-                      ([, value]) =>
-                        value !== undefined && value !== null && value !== '',
-                    )
-                    .map(([key, value]) => (
-                      <RowRender key={key} label={key} value={value} />
-                    ))}
+                      {detail.metadata.map(([key, value]) => (
+                        <RowRender key={key} label={key} value={value} />
+                      ))}
+                    </>
+                  )}
                 </div>
               </ScrollArea>
             </CardContent>
@@ -189,15 +311,88 @@ export default function TableRow({
             <CardFooter className="gap-2">
               <ModalClose variant="flat">{m.common_close()}</ModalClose>
 
-              {!data.closed && (
+              {!detail.closed && onCloseConnection && (
                 <Button onClick={handleCloseConnection}>
                   {m.connections_close_connection()}
                 </Button>
               )}
+
+              {/* The footer runs in reverse: last here, the jumps sit apart at
+                  the start while closing stays at the end. A jump closes the
+                  dialog first, so it does not stay over the next page. */}
+              {(onLocateRule || onViewRuleUsage) && (
+                <div
+                  className="mr-auto flex gap-2"
+                  data-slot="connections-detail-jumps"
+                >
+                  {onLocateRule && (
+                    <Button
+                      variant="basic"
+                      onClick={() => {
+                        onClose();
+                        onLocateRule(detail);
+                      }}
+                    >
+                      {m.connections_locate_rule()}
+                    </Button>
+                  )}
+
+                  {onViewRuleUsage && (
+                    <Button
+                      variant="basic"
+                      onClick={() => {
+                        onClose();
+                        onViewRuleUsage(detail);
+                      }}
+                    >
+                      {m.connections_view_rule_usage()}
+                    </Button>
+                  )}
+                </div>
+              )}
             </CardFooter>
           </Card>
-        </ModalContent>
-      </Modal>
-    </>
+        )}
+      </ModalContent>
+    </Modal>
+  );
+});
+
+export default function TableRow({
+  onDoubleClick,
+  onViewDetails,
+  onCloseConnection,
+  ...props
+}: ComponentProps<'tr'> & {
+  onViewDetails: () => void;
+  // Absent for a connection that is already closed
+  onCloseConnection?: () => void;
+}) {
+  return (
+    <RegisterContextMenu>
+      <RegisterContextMenuTrigger asChild>
+        <tr
+          onDoubleClick={(e) => {
+            onDoubleClick?.(e);
+            onViewDetails();
+          }}
+          {...props}
+        />
+      </RegisterContextMenuTrigger>
+
+      <RegisterContextMenuContent>
+        <ContextMenuItem onSelect={onViewDetails}>
+          <ChatInfoRounded className="size-4" />
+          <span>{m.connections_view_details()}</span>
+        </ContextMenuItem>
+
+        {onCloseConnection && (
+          <ContextMenuItem onSelect={onCloseConnection}>
+            <CloseRounded className="size-4" />
+            <span>{m.connections_close_connection()}</span>
+          </ContextMenuItem>
+        )}
+      </RegisterContextMenuContent>
+    </RegisterContextMenu>
   );
 }

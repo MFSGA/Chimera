@@ -1,107 +1,44 @@
 import { BasePage } from '@chimera/ui';
-import { createFileRoute, useBlocker } from '@tanstack/react-router';
-import FilterAltRounded from '~icons/material-symbols/filter-alt-rounded';
-import {
-  lazy,
-  Suspense,
-  useDeferredValue,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
-import { SearchTermCtx } from '@/components/connections/connection-search-term';
-import HeaderSearch from '@/components/connections/header-search';
-import { Button } from '@/components/ui/button';
+import { createFileRoute } from '@tanstack/react-router';
+import { useCallback, useState } from 'react';
+import ContextMenuProvider from '@/components/providers/context-menu-provider';
+import ConnectionsContent, {
+  type ConnectionsViewState,
+} from '@/pages/(main)/main/connections/_modules/connections-content';
+import type { ConnectionDetail } from '@/pages/(main)/main/connections/_modules/table-row';
 import * as m from '@/paraglide/messages';
-
-const Component = lazy(
-  () => import('@/components/connections/connection-page'),
-);
-const ColumnFilterDialog = lazy(
-  () => import('@/components/connections/connections-column-filter'),
-);
-const ConnectionTotal = lazy(
-  () => import('@/components/connections/connections-total'),
-);
+import './connections.scss';
 
 export const Route = createFileRoute('/(legacy)/connections')({
   component: Connections,
 });
 
-function LoadingFallback() {
-  return (
-    <div className="grid h-full min-h-52 place-items-center">
-      <div className="border-primary/20 border-t-primary size-8 animate-spin rounded-full border-2" />
-    </div>
-  );
-}
-
 function Connections() {
-  const [openColumnFilter, setOpenColumnFilter] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const deferredSearchTerm = useDeferredValue(searchTerm);
-
-  const [mountTable, setMountTable] = useState(true);
-  const deferredMountTable = useDeferredValue(mountTable);
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const pendingNavigationRef = useRef(false);
-  const { proceed } = useBlocker({
-    shouldBlockFn: () => {
-      if (pendingNavigationRef.current) {
-        return false;
-      }
-
-      pendingNavigationRef.current = true;
-      setMountTable(false);
-      return true;
-    },
-    withResolver: true,
+  const navigate = Route.useNavigate();
+  const [value, setValue] = useState<ConnectionsViewState>({
+    scope: 'active',
+    filters: [],
   });
+  const onChange = useCallback((patch: Partial<ConnectionsViewState>) => {
+    setValue((previous) => ({ ...previous, ...patch }));
+  }, []);
 
-  useEffect(() => {
-    if (pendingNavigationRef.current && !deferredMountTable) {
-      proceed?.();
-    }
-  }, [proceed, deferredMountTable]);
+  const onLocateRule = (detail: ConnectionDetail) =>
+    navigate({ to: '/rules', search: { q: detail.ruleLabel } });
 
   return (
-    <SearchTermCtx.Provider value={deferredSearchTerm}>
-      <BasePage
-        title={m.navbar_label_connections()}
-        full
-        viewportRef={viewportRef}
-        header={
-          <div className="flex max-h-96 w-full flex-1 items-center justify-between gap-2 pl-5">
-            <Suspense fallback={null}>
-              <ConnectionTotal />
-            </Suspense>
-            <div className="flex items-center gap-1">
-              <Suspense fallback={null}>
-                <ColumnFilterDialog
-                  open={openColumnFilter}
-                  onClose={() => setOpenColumnFilter(false)}
-                />
-              </Suspense>
-              <HeaderSearch
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-              />
-              <Button
-                icon
-                variant="flat"
-                aria-label={m.connections_column_filter_title()}
-                onClick={() => setOpenColumnFilter(true)}
-              >
-                <FilterAltRounded className="size-5" />
-              </Button>
-            </div>
-          </div>
-        }
-      >
-        <Suspense fallback={<LoadingFallback />}>
-          {mountTable && <Component viewportRef={viewportRef} />}
-        </Suspense>
-      </BasePage>
-    </SearchTermCtx.Provider>
+    <div className="legacy-connections-page h-full min-h-0">
+      <ContextMenuProvider>
+        <div className="h-full min-h-0">
+          <BasePage title={m.navbar_label_connections()} full>
+            <ConnectionsContent
+              value={value}
+              onChange={onChange}
+              onLocateRule={onLocateRule}
+            />
+          </BasePage>
+        </div>
+      </ContextMenuProvider>
+    </div>
   );
 }

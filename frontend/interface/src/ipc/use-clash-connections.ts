@@ -46,12 +46,12 @@ export type ClashConnectionMetadata = {
   specialRules?: string;
 };
 
-export const useClashConnections = () => {
-  const { connections, isLoading, error } = useClashWSContext();
+/** Mutation lifecycle is independent of high-frequency connection snapshots. */
+export const useDeleteClashConnections = () => {
   const [deleteError, setDeleteError] = useState<unknown>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const deleteConnections = {
+  return {
     isPending: isDeleting,
     error: deleteError,
     mutateAsync: async (id?: string | null) => {
@@ -68,6 +68,11 @@ export const useClashConnections = () => {
       }
     },
   };
+};
+
+export const useClashConnections = () => {
+  const { connections, isLoading, error } = useClashWSContext();
+  const deleteConnections = useDeleteClashConnections();
 
   return {
     data: connections,

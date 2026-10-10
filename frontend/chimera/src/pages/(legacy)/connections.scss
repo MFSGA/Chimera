@@ -1,0 +1,24 @@
+.legacy-connections-page {
+  .MDYBasePage {
+    min-height: 0;
+  }
+
+  .MDYBasePage-container {
+    flex: 1;
+    min-height: 0;
+
+    > [data-radix-scroll-area-viewport] {
+      overflow: hidden !important;
+
+      > div,
+      > div > div {
+        height: 100%;
+        min-height: 0;
+      }
+    }
+  }
+
+  [data-slot='connections-container'] {
+    height: 100%;
+  }
+}

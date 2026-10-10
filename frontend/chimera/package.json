@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build"
+    "build": "vite build",
+    "test:connections": "tsx --test tests/connections-model.test.ts"
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",

@@ -1,5 +1,9 @@
 export const baseE2eSuites = {
-  smoke: ['./specs/smoke.e2e.ts', './specs/proxy-localization.e2e.ts'],
+  smoke: [
+    './specs/smoke.e2e.ts',
+    './specs/proxy-localization.e2e.ts',
+    './specs/connections-legacy-layout.e2e.ts',
+  ],
   runtime: [
     './specs/ipv6-runtime-setting.e2e.ts',
     './specs/log-level-runtime-setting.e2e.ts',

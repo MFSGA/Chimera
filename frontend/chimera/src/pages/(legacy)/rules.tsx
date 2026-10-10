@@ -9,17 +9,21 @@ import {
   useRef,
   useState,
 } from 'react';
+import { z } from 'zod';
+import { ruleLabel } from '@/pages/(main)/main/_modules/traffic-filters';
 import * as m from '@/paraglide/messages';
 
 const RulePageComponent = lazy(() => import('@/components/rules/rule-page'));
 
 export const Route = createFileRoute('/(legacy)/rules')({
+  validateSearch: z.object({ q: z.string().optional() }),
   component: RulesPage,
 });
 
 function RulesPage() {
   const { data } = useClashRules();
-  const [filterText, setFilterText] = useState('');
+  const { q } = Route.useSearch();
+  const [filterText, setFilterText] = useState(q ?? '');
   const deferredFilterText = useDeferredValue(filterText);
   const viewportRef = useRef<HTMLDivElement>(null);
 
@@ -32,9 +36,12 @@ function RulesPage() {
     }
 
     return rules.filter((rule) =>
-      [rule.type, rule.payload, rule.proxy].some((value) =>
-        value?.toLowerCase().includes(search),
-      ),
+      [
+        rule.type,
+        rule.payload,
+        rule.proxy,
+        ruleLabel(rule.type, rule.payload),
+      ].some((value) => value?.toLowerCase().includes(search)),
     );
   }, [data?.rules, deferredFilterText]);
 

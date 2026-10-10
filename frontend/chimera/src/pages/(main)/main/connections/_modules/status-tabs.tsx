@@ -3,11 +3,13 @@ import {
   useTrafficActiveConnectionIds,
   useTrafficReport,
   useTrafficSummary,
-  type TrafficRange,
   type TrafficScope,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui';
+import {
+  SegmentedButton,
+  SegmentedButtonItem,
+} from '@/components/ui/segmented-button';
 import * as m from '@/paraglide/messages';
 import { toTrafficFilters } from '../../_modules/traffic-filters';
 import type { ConnectionsSelection } from './connections-filters';
@@ -43,9 +45,10 @@ function StatusTabs({
   closedCount?: number;
 }) {
   return (
-    <ToggleGroupPrimitive.Root
-      type="single"
-      className="bg-surface-variant/40 dark:bg-surface-variant/15 h-9 w-auto shrink-0 rounded-full p-0.5"
+    <SegmentedButton
+      variant="tabs"
+      size="sm"
+      className="w-auto shrink-0"
       value={value}
       onValueChange={(next) => {
         if (next === 'all' || next === 'active' || next === 'closed') {
@@ -61,22 +64,18 @@ function StatusTabs({
           ['closed', m.connections_tab_closed(), closedCount],
         ] as const
       ).map(([scope, label, count]) => (
-        <ToggleGroupPrimitive.Item
+        <SegmentedButtonItem
           key={scope}
           value={scope}
           data-slot="connections-scope-tab"
           data-scope={scope}
-          className={cn(
-            'group h-8 cursor-pointer rounded-full px-4 text-xs font-medium whitespace-nowrap outline-hidden',
-            'text-on-surface-variant data-[state=on]:bg-secondary-container',
-            'data-[state=on]:text-on-secondary-container',
-          )}
+          className={cn('flex-none whitespace-nowrap')}
         >
           {label}
           {scope !== 'all' && <CountBadge count={count} />}
-        </ToggleGroupPrimitive.Item>
+        </SegmentedButtonItem>
       ))}
-    </ToggleGroupPrimitive.Root>
+    </SegmentedButton>
   );
 }
 

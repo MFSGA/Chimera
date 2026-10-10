@@ -14,6 +14,7 @@ import type { SearchFilter } from '../../_modules/traffic-filters';
 import ConnectionsFilters from './connections-filters';
 
 export default function ConnectionsToolbar({
+  start,
   tabs,
   selection,
   onSelectionChange,
@@ -22,6 +23,7 @@ export default function ConnectionsToolbar({
   onOpenSettings,
   onCloseAll,
 }: {
+  start?: ReactNode;
   tabs: ReactNode;
   selection: { range?: TrafficRange; filters: SearchFilter[] };
   onSelectionChange: (selection: {
@@ -45,6 +47,7 @@ export default function ConnectionsToolbar({
         className="flex min-h-16 flex-wrap items-center gap-3 px-4 py-3 @4xl:flex-nowrap @4xl:py-0"
         data-slot="connections-toolbar-content"
       >
+        {start}
         {tabs}
 
         {filtered && (
