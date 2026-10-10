@@ -24,8 +24,9 @@ pnpm --filter @chimera/tauri-e2e test:smoke
 | `test:runtime`, `test:profiles`, `test:settings`, `test:main` | The named group in `spec-suites.ts`                                                                                                                                   |
 | `test:agent`                                                  | Agent UI/orchestration with the default stale-proxy fixture                                                                                                           |
 | `test:network`, `test:lan`                                    | Allow LAN; requires the configured external test client                                                                                                               |
-| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network and upgrade                                                                                    |
-| `test:all`                                                    | All base groups; includes network prerequisites and the conditional upgrade spec                                                                                      |
+| `test:hermetic`                                               | Smoke + runtime + profiles + settings + main + agent; excludes network, upgrade, and system                                                                           |
+| `test:all`                                                    | All non-system base groups; includes network prerequisites and the conditional upgrade spec                                                                           |
+| `test:system`                                                 | **Destructive Windows Service/TUN lifecycle**; dedicated disposable VM, elevated shell, clean service ownership and explicit opt-in required. Never automatic in CI   |
 | `test:upgrade:v0.22.3`                                        | Dedicated two-phase upgrade runner; requires its old/new binary setup                                                                                                 |
 | `test:unit`                                                   | Explicit list: `agent-issue-guidance`, `clash-runtime`, `profile-definition`, `process-cleanup`, `privacy-safe-context`, `runtime-path`, and `spec-suites` unit tests |
 
@@ -33,9 +34,23 @@ Inspect [spec-suites.ts](spec-suites.ts) for the authoritative membership and [u
 
 ## Current CI coverage
 
-[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network and the dedicated upgrade runner are not automatically exercised by those selections.
+[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network, the dedicated upgrade runner, and the destructive Windows `system` suite are not automatically exercised by those selections.
 
 Check the workflow and suite membership when adding tests. Register new desktop specs and provide executable unit-test entries; report which assertions actually ran. Build, typecheck, skipped tests, and unselected suites are not test passes.
+
+## Windows Service/TUN system lifecycle (manual only)
+
+This is an **optional host-mutating integration test**, not a desktop UI interaction test and **not** a default CI or `test:all` target. It installs and restarts a system Service, changes the test app's TUN/Service settings, and checks Windows routes. Use only an isolated, disposable Windows VM you control, with no existing Chimera Service or TUN usage. Elevated permissions and the explicit opt-ins below are necessary but **do not prove VM isolation**; the operator is responsible for that prerequisite. Never run it on a daily-use host or shared hosted CI runner.
+
+Build the matching E2E app and matching `chimera-service.exe` for the VM. Set `CHIMERA_E2E_SERVICE_BINARY` to the Service executable if it is not alongside the E2E app, and ensure the system-test runtime/config is isolated. In an elevated PowerShell session on that VM:
+
+```powershell
+$env:CHIMERA_E2E_SYSTEM_LIFECYCLE = '1'
+$env:CHIMERA_E2E_DEDICATED_VM = '1'
+pnpm --filter @chimera/tauri-e2e test:system
+```
+
+The WDIO configuration rejects the suite _before launching the test application_ unless opt-in, dedicated-VM acknowledgment, Windows elevation, a readable current Service executable and a not-installed Service are all confirmed. The spec also refuses to overwrite pre-enabled TUN/Service settings. Any failed or interrupted host-level cleanup must be resolved in that VM before reusing it. The ordinary `test:unit` command tests the fail-closed preflight logic without installing Service or changing network settings. Real Service/TUN behavior remains **unverified** until this dedicated VM suite is actually executed and its result recorded.
 
 ## Runtime and isolation
 

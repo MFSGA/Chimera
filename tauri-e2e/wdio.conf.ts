@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
@@ -13,6 +14,7 @@ import {
   resolveRuntimeDirectory,
 } from './runtime-path.js';
 import { e2eSuites } from './spec-suites.js';
+import { assertSystemLifecyclePreflight } from './system-lifecycle-preflight.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const selectedSuiteIndex = process.argv.indexOf('--suite');
@@ -28,6 +30,80 @@ const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
 const appBinaryPath =
   process.env.CHIMERA_E2E_BINARY ??
   path.resolve(configDirectory, '../backend/target/e2e/debug', binaryName);
+
+// System service and TUN change host state. Never enter this suite through an
+// aggregate selection; fail closed before creating a desktop E2E session.
+const systemLifecycleSelected =
+  selectedSuite === 'system' ||
+  process.argv.some((argument) =>
+    argument.includes('windows-service-tun-lifecycle.e2e.ts'),
+  );
+
+function assertSafeSystemLifecycleHost(): void {
+  if (!systemLifecycleSelected) return;
+  if (process.env.CHIMERA_E2E_SYSTEM_LIFECYCLE !== '1') {
+    throw new Error('Set CHIMERA_E2E_SYSTEM_LIFECYCLE=1 on a dedicated VM.');
+  }
+  if (process.env.CHIMERA_E2E_DEDICATED_VM !== '1') {
+    throw new Error(
+      'Set CHIMERA_E2E_DEDICATED_VM=1 on an isolated, disposable VM.',
+    );
+  }
+  if (process.platform !== 'win32') {
+    throw new Error('System lifecycle E2E is only supported on Windows.');
+  }
+
+  const serviceBinary =
+    process.env.CHIMERA_E2E_SERVICE_BINARY ??
+    path.join(path.dirname(appBinaryPath), 'chimera-service.exe');
+  if (!fs.existsSync(serviceBinary)) {
+    throw new Error('Current E2E Service binary is missing: ' + serviceBinary);
+  }
+
+  let elevated = false;
+  try {
+    execFileSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '$p=New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent()); if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 }; exit 1',
+      ],
+      { stdio: 'ignore', windowsHide: true, timeout: 10_000 },
+    );
+    elevated = true;
+  } catch {
+    elevated = false;
+  }
+
+  let serviceStatus: string;
+  try {
+    const output = execFileSync(serviceBinary, ['status', '--json'], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    serviceStatus = String(
+      (JSON.parse(output) as { status?: unknown }).status ?? 'unknown',
+    );
+  } catch (cause) {
+    throw new Error('Failed to read Chimera Service preflight status.', {
+      cause,
+    });
+  }
+
+  assertSystemLifecyclePreflight({
+    platform: process.platform,
+    optedIn: true,
+    dedicatedVm: true,
+    elevated,
+    serviceStatus,
+  });
+}
+
+assertSafeSystemLifecycleHost();
+
 const runtimeRootDirectory = path.resolve(configDirectory, '.tmp/runtime');
 const hostProxySnapshot =
   process.env.CHIMERA_E2E_SKIP_PROXY_RESTORE === '1'

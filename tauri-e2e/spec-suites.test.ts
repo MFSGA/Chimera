@@ -53,6 +53,12 @@ test('critical and hermetic suites have intentional coverage boundaries', () => 
   );
   assert.deepEqual(
     [...e2eSuites.all].sort(),
-    Object.values(baseE2eSuites).flat().sort(),
+    Object.entries(baseE2eSuites)
+      .filter(([name]) => name !== 'system')
+      .flatMap(([, specs]) => [...specs])
+      .sort(),
+    'all must not select the destructive Windows system suite',
   );
+  assert.deepEqual(e2eSuites.system, baseE2eSuites.system);
+  assert.equal(e2eSuites.hermetic.includes(baseE2eSuites.system[0]), false);
 });

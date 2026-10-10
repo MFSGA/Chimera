@@ -63,6 +63,8 @@ export const baseE2eSuites = {
   ],
   network: ['./specs/allow-lan.e2e.ts'],
   upgrade: ['./specs/upgrade-v0.22.3-to-v0.23.0.e2e.ts'],
+  // Destructive Windows host integration. Only run with an explicit VM opt-in.
+  system: ['./specs/windows-service-tun-lifecycle.e2e.ts'],
 } as const;
 
 const combine = (...groups: readonly (readonly string[])[]) => groups.flat();
@@ -93,4 +95,5 @@ export const e2eSuites = {
     baseE2eSuites.network,
     baseE2eSuites.upgrade,
   ),
+  system: baseE2eSuites.system,
 } satisfies Record<string, readonly string[]>;
