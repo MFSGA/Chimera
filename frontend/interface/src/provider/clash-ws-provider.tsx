@@ -6,24 +6,30 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
-import { commands, events, type ClashWsKind } from '../ipc/bindings';
+import {
+  commands,
+  events,
+  type ClashConnectionsConnectorState,
+  type ClashWsKind,
+} from '../ipc/bindings';
 import {
   MAX_CONNECTIONS_HISTORY,
   MAX_LOGS_HISTORY,
   MAX_MEMORY_HISTORY,
   MAX_TRAFFIC_HISTORY,
 } from '../ipc/consts';
-import type { ClashConnection } from '../ipc/use-clash-connections';
+import type { ClashConnectionsSnapshot } from '../ipc/use-clash-connections';
 import type { ClashLog } from '../ipc/use-clash-logs';
 import type { ClashMemory } from '../ipc/use-clash-memory';
 import type { ClashTraffic } from '../ipc/use-clash-traffic';
 
 const ClashWSContext = createContext<{
-  connections: ClashConnection[];
+  connections: ClashConnectionsSnapshot[];
   logs: ClashLog[];
   traffic: ClashTraffic[];
   memory: ClashMemory[];
   isLoading: boolean;
+  connectorState: ClashConnectionsConnectorState;
   error: unknown;
   clearHistory: (kind: ClashWsKind) => Promise<void>;
 } | null>(null);
@@ -62,11 +68,15 @@ const appendLimited = <T,>(items: T[] | undefined, item: T, limit: number) => {
 };
 
 export const ClashWSProvider = ({ children }: PropsWithChildren) => {
-  const [connections, setConnections] = useState<ClashConnection[]>([]);
+  const [connections, setConnections] = useState<ClashConnectionsSnapshot[]>(
+    [],
+  );
   const [logs, setLogs] = useState<ClashLog[]>([]);
   const [traffic, setTraffic] = useState<ClashTraffic[]>([]);
   const [memory, setMemory] = useState<ClashMemory[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [connectorState, setConnectorState] =
+    useState<ClashConnectionsConnectorState>('disconnected');
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
@@ -79,12 +89,13 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
       }
 
       const snapshot = result.data;
+      setConnectorState(snapshot.state);
       setConnections(
         snapshot.connections.map((connection) => ({
           ...connection,
           memory: connection.memory ?? undefined,
           connections:
-            (connection.connections as ClashConnection['connections']) ??
+            (connection.connections as ClashConnectionsSnapshot['connections']) ??
             undefined,
         })),
       );
@@ -109,7 +120,7 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
                 memory: payload.data.memory ?? undefined,
                 connections:
                   (payload.data
-                    .connections as ClashConnection['connections']) ??
+                    .connections as ClashConnectionsSnapshot['connections']) ??
                   undefined,
               },
               MAX_CONNECTIONS_HISTORY,
@@ -163,6 +174,7 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
           break;
         }
         case 'state_changed':
+          setConnectorState(payload.data);
           break;
       }
     });
@@ -203,6 +215,7 @@ export const ClashWSProvider = ({ children }: PropsWithChildren) => {
         traffic,
         memory,
         isLoading,
+        connectorState,
         error,
         clearHistory,
       }}

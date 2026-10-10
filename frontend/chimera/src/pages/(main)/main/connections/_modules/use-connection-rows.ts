@@ -1,8 +1,8 @@
 import {
-  useClashConnections,
+  useClashConnectionDetails,
   useTrafficActiveConnectionIds,
   useTrafficClosedConnections,
-  type ClashConnectionItem,
+  type ClashConnection_Serialize,
   type ClosedConnection,
   type TrafficRange,
 } from '@chimera/interface';
@@ -20,10 +20,7 @@ import {
 } from '../../_modules/traffic-filters';
 import { activeConnectionDetail } from './table-row';
 
-export type ConnectionRow = ClashConnectionItem & {
-  downloadSpeed: number;
-  uploadSpeed: number;
-  _extra?: Record<string, unknown>;
+export type ConnectionRow = ClashConnection_Serialize & {
   // Parsed once per sample: sorting by time compares numbers instead of
   // parsing both dates in every comparison.
   startMs: number;
@@ -110,11 +107,10 @@ export function useActiveConnectionRows({
   proxy?: string | null;
   filters: SearchFilter[];
 }) {
-  // Chimera still receives connection snapshots through its shared Clash WS.
-  // Use both snapshots for speed; the detail-stream transport is a separate
-  // shared API migration and must not be silently invented at the UI boundary.
-  const { data: samples } = useClashConnections();
-  const deferredSamples = useDeferredValue(samples);
+  // As in ref, rendering follows the latest on-demand backend detail frame,
+  // independent of the historical Connections recording toggle.
+  const { data: latest, status } = useClashConnectionDetails();
+  const details = useDeferredValue(latest);
   const filtered = filters.length > 0;
   const ids = useTrafficActiveConnectionIds(toTrafficFilters(filters), {
     enabled: filtered,
@@ -124,27 +120,18 @@ export function useActiveConnectionRows({
     [ids.isError, ids.data],
   );
   const connections = useMemo<ConnectionRow[]>(() => {
-    const current = deferredSamples?.at(-1)?.connections ?? [];
-    const previous = deferredSamples?.at(-2)?.connections ?? [];
-    const previousById = new Map(previous.map((row) => [row.id, row]));
-
-    return current
+    const live = (details?.connections ?? []) as ClashConnection_Serialize[];
+    return live
       .filter((row) => !filtered || matchedIds?.has(row.id))
       .map((row) => ({
         ...row,
         startMs: Date.parse(row.start),
-        downloadSpeed: Math.max(
-          0,
-          row.download - (previousById.get(row.id)?.download ?? row.download),
-        ),
-        uploadSpeed: Math.max(
-          0,
-          row.upload - (previousById.get(row.id)?.upload ?? row.upload),
-        ),
       }));
-  }, [deferredSamples, filtered, matchedIds]);
-  const loading = filtered && matchedIds === undefined && !ids.isError;
-  const unavailable = filtered && ids.isError;
+  }, [details, filtered, matchedIds]);
+  const loading =
+    (status === 'connecting' && details === null) ||
+    (filtered && matchedIds === undefined && !ids.isError);
+  const unavailable = status === 'error' || (filtered && ids.isError);
 
   const searchTexts = useRef(new Map<string, string>());
 

@@ -144,6 +144,15 @@ pub fn run() -> std::io::Result<()> {
     }
 
     builder = builder
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                if let Some(registry) = webview.app_handle().try_state::<
+                    crate::core::clash::connection_details::ConnectionDetailSubscriptions,
+                >() {
+                    registry.cancel_for_webview(webview.label());
+                }
+            }
+        })
         .invoke_handler(specta_builder.invoke_handler())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -284,6 +293,11 @@ pub fn run() -> std::io::Result<()> {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
+                    if let Some(registry) = app_handle.try_state::<
+                        crate::core::clash::connection_details::ConnectionDetailSubscriptions,
+                    >() {
+                        registry.cancel_for_webview(label.as_str());
+                    }
                     resolve::mark_frontend_unmounted(label.as_str());
                 }
                 _ => {}

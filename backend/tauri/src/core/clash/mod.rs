@@ -9,6 +9,7 @@ use tauri_specta::Event;
 
 /// 2
 pub mod api;
+pub mod connection_details;
 /// 1
 pub mod core;
 /// 3
@@ -50,6 +51,7 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         tracing::error!(%error, "failed to start optional traffic recording");
     }
     manager.manage(ws_connector.clone());
+    manager.manage(connection_details::ConnectionDetailSubscriptions::new());
     let app_handle = manager.app_handle().clone();
 
     tauri::async_runtime::spawn(async move {

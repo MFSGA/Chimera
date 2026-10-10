@@ -31,6 +31,8 @@ pub struct Connection {
     pub rule: String,
     pub rule_payload: String,
     #[serde(flatten)]
+    // A recursive JSON extension must not be expanded inline by Specta.
+    #[specta(type = std::collections::HashMap<String, specta_typescript::Any>)]
     pub extra: indexmap::IndexMap<String, serde_json::Value>,
 }
 
@@ -166,6 +168,8 @@ pub struct ConnectionMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sniff_host: Option<String>,
     #[serde(flatten)]
+    // A recursive JSON extension must not be expanded inline by Specta.
+    #[specta(type = std::collections::HashMap<String, specta_typescript::Any>)]
     pub extra: indexmap::IndexMap<String, serde_json::Value>,
 }
 

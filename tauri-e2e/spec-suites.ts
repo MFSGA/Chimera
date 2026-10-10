@@ -3,6 +3,7 @@ export const baseE2eSuites = {
     './specs/smoke.e2e.ts',
     './specs/proxy-localization.e2e.ts',
     './specs/connections-legacy-layout.e2e.ts',
+    './specs/connections-detail-subscription.e2e.ts',
   ],
   runtime: [
     './specs/ipv6-runtime-setting.e2e.ts',

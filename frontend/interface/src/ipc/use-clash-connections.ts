@@ -3,7 +3,7 @@ import { useClashWSContext } from '../provider/clash-ws-provider';
 import { unwrapResult } from '../utils';
 import { commands } from './bindings';
 
-export type ClashConnection = {
+export type ClashConnectionsSnapshot = {
   downloadTotal: number;
   uploadTotal: number;
   downloadSpeed: number;

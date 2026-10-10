@@ -1,5 +1,5 @@
 // eslint-disable-next-line @typescript-eslint/no-namespace
-export namespace Connection {
+export namespace LegacyConnection {
   export interface Item {
     id: string;
     metadata: Metadata;
