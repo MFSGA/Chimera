@@ -9,6 +9,14 @@ const frontendRoots = [
 const generatedBindings = path.normalize(
   path.join(workspaceRoot, 'frontend/interface/src/ipc/bindings.ts'),
 );
+// The shared transport adapter is the only non-generated module allowed to
+// construct native Tauri Channels. UI pages still use @chimera/interface.
+const nativeConnectionChannel = path.normalize(
+  path.join(
+    workspaceRoot,
+    'frontend/interface/src/ipc/connection-details-channel.ts',
+  ),
+);
 const legacyUiRoots = [
   path.normalize(
     path.join(workspaceRoot, 'frontend/chimera/src/pages/(legacy)'),
@@ -57,8 +65,9 @@ const visit = async (entryPath: string): Promise<void> => {
   const relativePath = path.relative(workspaceRoot, entryPath);
 
   if (
-    /from\s+['"]@tauri-apps\/api\/core['"]/.test(source) ||
-    /import\s*\(\s*['"]@tauri-apps\/api\/core['"]\s*\)/.test(source)
+    path.normalize(entryPath) !== nativeConnectionChannel &&
+    (/from\s+['"]@tauri-apps\/api\/core['"]/.test(source) ||
+      /import\s*\(\s*['"]@tauri-apps\/api\/core['"]\s*\)/.test(source))
   ) {
     violations.push(
       `${relativePath}: import Tauri core commands through @chimera/interface instead of @tauri-apps/api/core`,

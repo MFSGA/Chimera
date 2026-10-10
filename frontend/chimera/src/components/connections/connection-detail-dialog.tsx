@@ -1,4 +1,4 @@
-import { Connection } from '@chimera/interface';
+import { LegacyConnection as Connection } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';

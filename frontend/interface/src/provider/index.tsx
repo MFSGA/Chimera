@@ -10,8 +10,14 @@ import {
   CHIMERA_SETTING_QUERY_KEY,
   CHIMERA_SETTING_UPDATED_EVENT,
 } from '../ipc/consts';
+import {
+  ClashConnectionDetailsProvider,
+  useClashConnectionDetails,
+} from './clash-connection-details-provider';
 import { ClashWSProvider, useClashWSContext } from './clash-ws-provider';
 import { MutationProvider } from './mutation-provider';
+
+export { ClashConnectionDetailsFreezeBoundary } from './clash-connection-details-provider';
 
 let mutationDegradationHandler: ((degradations: Degradation[]) => void) | null =
   null;
@@ -79,11 +85,22 @@ export const RootProvider: any = ({ children }: PropsWithChildren) => {
     <QueryClientProvider client={queryClient}>
       <SettingSyncProvider>
         <MutationProvider>
-          <ClashWSProvider>{children}</ClashWSProvider>
+          <ClashWSProvider>
+            <ConnectionDetailsBridge>{children}</ConnectionDetailsBridge>
+          </ClashWSProvider>
         </MutationProvider>
       </SettingSyncProvider>
     </QueryClientProvider>
   );
 };
 
-export { useClashWSContext };
+const ConnectionDetailsBridge = ({ children }: PropsWithChildren) => {
+  const { connectorState } = useClashWSContext();
+  return (
+    <ClashConnectionDetailsProvider connectorState={connectorState}>
+      {children}
+    </ClashConnectionDetailsProvider>
+  );
+};
+
+export { useClashWSContext, useClashConnectionDetails };

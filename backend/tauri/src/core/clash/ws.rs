@@ -1,7 +1,11 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     ops::Deref,
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -102,6 +106,87 @@ pub struct ClashWsConnectionSnapshot {
     // bug is fixed or a proper named recursive JsonValue type is available.
     #[specta(type = Option<specta_typescript::Any>)]
     pub connections: Option<Vec<serde_json::Value>>,
+}
+
+/// One core connection plus its derived rates, as in ref's detail contract.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ClashConnection {
+    #[serde(flatten)]
+    pub connection: chimera_clash_api::Connection,
+    pub download_speed: u64,
+    pub upload_speed: u64,
+}
+
+/// Latest full connection details, produced only while a UI subscriber exists.
+/// A single latest frame (not an unbounded event queue) follows ref's watch semantics.
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ClashConnectionDetails {
+    pub sequence: u64,
+    pub connections: Vec<ClashConnection>,
+}
+
+#[derive(Default)]
+struct DetailCounters {
+    at: Option<Instant>,
+    connections: HashMap<String, (i64, i64)>,
+}
+
+/// Pure per-connection byte/sec derivation: time and the previous sample's
+/// counters are explicit, as in ref. Preserve the core model's extra fields.
+fn derive_connection_details(
+    counters: &mut DetailCounters,
+    rows: &[serde_json::Value],
+    at: Instant,
+) -> Vec<ClashConnection> {
+    let elapsed = counters
+        .at
+        .and_then(|last| at.checked_duration_since(last))
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or_default();
+    let mut next = HashMap::with_capacity(rows.len());
+    let details = rows
+        .iter()
+        .filter_map(|raw| {
+            let connection: chimera_clash_api::Connection =
+                match serde_json::from_value(raw.clone()) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        tracing::debug!(%error, "skipping malformed connection detail");
+                        return None;
+                    }
+                };
+            let rate = |previous: i64, current: i64| -> u64 {
+                if elapsed <= 0.0 || current <= previous {
+                    return 0;
+                }
+                ((current.saturating_sub(previous)) as u64 as f64 / elapsed) as u64
+            };
+            let (download_speed, upload_speed) = counters
+                .connections
+                .get(&connection.id.to_string())
+                .map(|(before_down, before_up)| {
+                    (
+                        rate(*before_down, connection.download),
+                        rate(*before_up, connection.upload),
+                    )
+                })
+                .unwrap_or_default();
+            next.insert(
+                connection.id.to_string(),
+                (connection.download, connection.upload),
+            );
+            Some(ClashConnection {
+                connection,
+                download_speed,
+                upload_speed,
+            })
+        })
+        .collect();
+    counters.at = Some(at);
+    counters.connections = next;
+    details
 }
 
 /// Internal accounting frame. The instance id remains stable across transport reconnects and
@@ -319,6 +404,9 @@ struct ClashConnectionsConnectorShared {
     connections_tx: tokio::sync::broadcast::Sender<ClashConnectionsConnectorEvent>,
     ws_tx: tokio::sync::broadcast::Sender<ClashWsEvent>,
     frames: watch::Sender<Option<Arc<ClashConnectionsFrame>>>,
+    details: watch::Sender<Option<Arc<ClashConnectionDetails>>>,
+    detail_counters: Mutex<DetailCounters>,
+    detail_sequence: AtomicU64,
     instance_id: Mutex<String>,
     info: Mutex<ClashConnectionsInfo>,
     history: Mutex<ClashWsHistory>,
@@ -328,6 +416,7 @@ struct ClashConnectionsConnectorShared {
 impl ClashConnectionsConnectorShared {
     fn new() -> Self {
         let (frames, _) = watch::channel(None);
+        let (details, _) = watch::channel(None);
         Self {
             state: AtomicClashConnectionsConnectorState::new(
                 ClashConnectionsConnectorState::Disconnected,
@@ -335,6 +424,9 @@ impl ClashConnectionsConnectorShared {
             connections_tx: tokio::sync::broadcast::channel(16).0,
             ws_tx: tokio::sync::broadcast::channel(64).0,
             frames,
+            details,
+            detail_counters: Mutex::new(DetailCounters::default()),
+            detail_sequence: AtomicU64::new(0),
             instance_id: Mutex::new(nanoid::nanoid!()),
             info: Mutex::new(ClashConnectionsInfo::default()),
             history: Mutex::new(ClashWsHistory::default()),
@@ -356,6 +448,8 @@ impl ClashConnectionsConnectorShared {
         let event_state = state.clone();
         if state == ClashConnectionsConnectorState::Disconnected {
             self.frames.send_replace(None);
+            self.details.send_replace(None);
+            *self.detail_counters.lock() = DetailCounters::default();
         }
         self.state.store(state, Ordering::Release);
         let _ = self
@@ -376,6 +470,10 @@ impl ClashConnectionsConnectorShared {
 
     fn subscribe_frames(&self) -> watch::Receiver<Option<Arc<ClashConnectionsFrame>>> {
         self.frames.subscribe()
+    }
+
+    fn subscribe_connection_details(&self) -> watch::Receiver<Option<Arc<ClashConnectionDetails>>> {
+        self.details.subscribe()
     }
 
     fn set_recording(&self, kind: ClashWsKind, enabled: bool) -> ClashWsRecording {
@@ -434,6 +532,26 @@ impl ClashConnectionsConnectorShared {
                 MAX_CONNECTIONS_HISTORY,
             );
         }
+        // Historical recording is optional, but the detail stream is independent
+        // of it: the Connections page must still work when history is disabled.
+        let sequence = self.detail_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+        if self.details.receiver_count() > 0 {
+            let rows = derive_connection_details(
+                &mut self.detail_counters.lock(),
+                snapshot.connections.as_deref().unwrap_or_default(),
+                Instant::now(),
+            );
+            self.details
+                .send_replace(Some(Arc::new(ClashConnectionDetails {
+                    sequence,
+                    connections: rows,
+                })));
+        } else {
+            // No consumers: keep neither full records nor counter maps.
+            self.details.send_replace(None);
+            *self.detail_counters.lock() = DetailCounters::default();
+        }
+
         self.frames
             .send_replace(Some(Arc::new(ClashConnectionsFrame {
                 instance_id: self.instance_id.lock().clone(),
@@ -444,6 +562,8 @@ impl ClashConnectionsConnectorShared {
 
     fn renew_instance(&self) {
         *self.instance_id.lock() = nanoid::nanoid!();
+        *self.detail_counters.lock() = DetailCounters::default();
+        self.details.send_replace(None);
     }
 
     fn update_log(&self, raw: serde_json::Value) {
@@ -844,6 +964,12 @@ impl ClashConnectionsConnectorInner {
         self.shared.subscribe_frames()
     }
 
+    pub fn subscribe_connection_details(
+        &self,
+    ) -> watch::Receiver<Option<Arc<ClashConnectionDetails>>> {
+        self.shared.subscribe_connection_details()
+    }
+
     pub fn set_recording(&self, kind: ClashWsKind, enabled: bool) -> ClashWsRecording {
         self.shared.set_recording(kind, enabled)
     }
@@ -959,5 +1085,97 @@ mod tests {
 
         actor_ref.stop(None);
         handle.await.expect("actor should stop cleanly");
+    }
+}
+
+#[cfg(test)]
+mod connection_detail_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn detail_rates_use_elapsed_seconds_and_never_keep_closed_connection_counters() {
+        let now = Instant::now();
+        let mut counters = DetailCounters::default();
+        const A: &str = "11111111-1111-1111-1111-111111111111";
+        const B: &str = "22222222-2222-2222-2222-222222222222";
+        let connection = |id: &str, download: u64, upload: u64| {
+            serde_json::json!({
+                "id": id,
+                "download": download,
+                "upload": upload,
+                "metadata": { "host": "example.test", "inboundUser": "example", "unknownGeo": {"zone": "test"} },
+                "customTag": {"from": "core"},
+                "chains": ["DIRECT"],
+                "start": "2024-01-01T00:00:00+00:00",
+                "rule": "MATCH",
+                "rulePayload": "",
+            })
+        };
+
+        let first = derive_connection_details(&mut counters, &[connection(A, 1000, 400)], now);
+        assert_eq!(first[0].download_speed, 0);
+        assert_eq!(first[0].upload_speed, 0);
+
+        let next = derive_connection_details(
+            &mut counters,
+            &[connection(A, 1700, 600), connection(B, 300, 120)],
+            now + Duration::from_millis(500),
+        );
+        assert_eq!(next[0].download_speed, 1400);
+        assert_eq!(next[0].upload_speed, 400);
+        assert_eq!(next[1].download_speed, 0);
+        assert_eq!(
+            next[0]
+                .connection
+                .metadata
+                .as_ref()
+                .unwrap()
+                .inbound_user
+                .as_deref(),
+            Some("example")
+        );
+        let serialized = serde_json::to_value(&next[0]).expect("serialize typed detail");
+        assert_eq!(serialized["metadata"]["unknownGeo"]["zone"], "test");
+        assert_eq!(serialized["customTag"]["from"], "core");
+
+        derive_connection_details(&mut counters, &[], now + Duration::from_secs(1));
+        let reused_id = derive_connection_details(
+            &mut counters,
+            &[connection(A, 10, 8)],
+            now + Duration::from_secs(2),
+        );
+        assert_eq!(reused_id[0].download_speed, 0);
+    }
+
+    #[test]
+    fn details_are_published_only_with_subscribers_even_when_history_off() {
+        let shared = ClashConnectionsConnectorShared::new();
+        shared.set_recording(ClashWsKind::Connections, false);
+        let update = |value| {
+            serde_json::json!({
+                "downloadTotal": value,
+                "uploadTotal": 0,
+                "connections": [ {
+                    "id": "11111111-1111-1111-1111-111111111111",
+                    "download": value, "upload": 0,
+                    "metadata": null, "start": "2024-01-01T00:00:00+00:00",
+                    "chains": [], "rule": "MATCH", "rulePayload": "",
+                } ],
+            })
+        };
+        shared.update_connections(update(1));
+        assert_eq!(shared.snapshot().connections.len(), 0);
+        assert_eq!(shared.details.receiver_count(), 0);
+        let rx = shared.subscribe_connection_details();
+        shared.update_connections(update(2));
+        assert_eq!(
+            rx.borrow().as_ref().unwrap().connections[0].download_speed,
+            0
+        );
+        assert_eq!(shared.snapshot().connections.len(), 0);
+        drop(rx);
+        shared.update_connections(update(3));
+        assert!(shared.details.borrow().is_none());
     }
 }

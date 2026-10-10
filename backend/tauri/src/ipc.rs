@@ -1271,6 +1271,34 @@ pub async fn clear_clash_ws_history(
     Ok(())
 }
 
+// Only a page that consumes full connection rows opens a native Channel.
+// Each subscriber is owned by its window and the connector keeps only the latest frame.
+#[tauri::command]
+#[specta::specta]
+pub async fn subscribe_clash_connection_details(
+    window: tauri::Window,
+    connector: State<'_, crate::core::clash::ws::ClashConnectionsConnector>,
+    subscriptions: State<'_, crate::core::clash::connection_details::ConnectionDetailSubscriptions>,
+    on_frame: tauri::ipc::Channel<crate::core::clash::ws::ClashConnectionDetails>,
+) -> Result<crate::core::clash::connection_details::SubscriptionId> {
+    let receiver = connector.subscribe_connection_details();
+    let task = tokio::spawn(crate::core::clash::connection_details::forward_details(
+        receiver, on_frame,
+    ));
+    Ok(subscriptions.register(window.label().to_owned(), task))
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn unsubscribe_clash_connection_details(
+    window: tauri::Window,
+    subscriptions: State<'_, crate::core::clash::connection_details::ConnectionDetailSubscriptions>,
+    id: crate::core::clash::connection_details::SubscriptionId,
+) -> Result {
+    subscriptions.unsubscribe(id, window.label())?;
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn clash_api_get_configs(

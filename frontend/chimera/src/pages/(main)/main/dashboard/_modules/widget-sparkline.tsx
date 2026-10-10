@@ -26,7 +26,7 @@ import {
   useClashConnections,
   useClashMemory,
   useClashTraffic,
-  type ClashConnection,
+  type ClashConnectionsSnapshot,
 } from '@chimera/interface';
 import { cn } from '@chimera/utils';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
@@ -246,7 +246,7 @@ export function ConnectionsWidget({ id, onCloseClick }: WidgetComponentProps) {
       id={id}
       data={padData(
         clashConnections?.map(
-          (item: ClashConnection) => item.connections?.length ?? 0,
+          (item: ClashConnectionsSnapshot) => item.connections?.length ?? 0,
         ),
         MAX_CONNECTIONS_HISTORY,
       )}

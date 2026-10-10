@@ -84,6 +84,8 @@ macro_rules! build_builder {
                 crate::ipc::get_clash_ws_snapshot,
                 crate::ipc::set_clash_ws_recording,
                 crate::ipc::clear_clash_ws_history,
+                crate::ipc::subscribe_clash_connection_details,
+                crate::ipc::unsubscribe_clash_connection_details,
                 crate::ipc::check_update,
                 crate::ipc::is_portable,
                 crate::ipc::is_appimage,

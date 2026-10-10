@@ -1,3 +1,4 @@
+import { ClashConnectionDetailsFreezeBoundary } from '@chimera/interface';
 import {
   Outlet,
   RouterContextProvider,
@@ -156,7 +157,9 @@ export function AnimatedOutlet({
   return (
     <motion.div ref={ref} {...props}>
       <RouterContextProvider router={renderedRouter}>
-        <Outlet />
+        <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
+          <Outlet />
+        </ClashConnectionDetailsFreezeBoundary>
       </RouterContextProvider>
     </motion.div>
   );

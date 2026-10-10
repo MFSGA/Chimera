@@ -11,8 +11,15 @@ import {
 } from '@tanstack/react-table';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useState } from 'react';
+import { ReturnButton } from '@/components/router/return-button';
+import { useEntryFocus } from '@/components/router/use-cross-navigate';
 import HighlightText from '@/components/ui/highlight-text';
 import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
+import {
+  focusHighlightStyle,
+  useFocusHighlight,
+} from '../_modules/focus-highlight';
+import { ruleLabel } from '../_modules/traffic-filters';
 import { Route as IndexRoute } from './route';
 
 export const Route = createFileRoute('/(main)/main/rules/')({
@@ -25,7 +32,7 @@ const features = tableFeatures({
   sortedRowModel: createSortedRowModel(),
 });
 
-const Viewer = ({ search }: { search: string }) => {
+const Viewer = ({ search, focus }: { search: string; focus?: string }) => {
   const { data } = useClashRules();
   const { proxy } = IndexRoute.useSearch();
   const { viewportRef } = useScrollArea();
@@ -103,6 +110,12 @@ const Viewer = ({ search }: { search: string }) => {
   });
 
   const { rows } = table.getRowModel();
+  const focusedRule = useFocusHighlight(
+    focus,
+    rows,
+    (row) => ruleLabel(row.original.type, row.original.payload),
+    rowVirtualizer,
+  );
 
   return (
     <div
@@ -131,7 +144,13 @@ const Viewer = ({ search }: { search: string }) => {
                 key={row.id}
                 data-index={virtualRow.index}
                 data-slot="rules-virtual-tr"
+                data-focused={
+                  ruleLabel(row.original.type, row.original.payload) ===
+                  focusedRule
+                }
                 style={{
+                  ...(ruleLabel(row.original.type, row.original.payload) ===
+                    focusedRule && focusHighlightStyle),
                   height: `${virtualRow.size}px`,
                   transform: `translateY(${offset}px)`,
                 }}
@@ -152,17 +171,19 @@ const Viewer = ({ search }: { search: string }) => {
 
 function RouteComponent() {
   const [search, setSearch] = useState('');
+  const focus = useEntryFocus();
 
   return (
     <div className="divide-outline-variant flex min-h-0 flex-1 flex-col divide-y overflow-hidden">
       <ScrollArea className="min-h-0 flex-1" scrollbars="both" type="hover">
-        <Viewer search={search} />
+        <Viewer search={search} focus={focus} />
       </ScrollArea>
 
       <div
         className="bg-mixed-background flex h-16 shrink-0 items-center px-4"
         data-slot="rules-search"
       >
+        <ReturnButton className="mr-3" />
         <input
           type="text"
           className={cn(

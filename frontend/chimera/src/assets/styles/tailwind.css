@@ -227,3 +227,15 @@
     left: 107%;
   }
 }
+
+/* The row returned to by cross-navigation stays highlighted, then fades. */
+@keyframes focus-highlight {
+  0%,
+  65% {
+    background-color: color-mix(
+      in oklab,
+      var(--color-primary) 12%,
+      transparent
+    );
+  }
+}
