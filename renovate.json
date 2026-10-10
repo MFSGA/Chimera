@@ -10,6 +10,7 @@
   ],
   "cloneSubmodules": true,
   "cloneSubmodulesFilter": ["backend/chimera-runtime"],
+  "ignorePaths": ["ref/**", "backend/chimera-runtime/**"],
   "statusCheckWhen": {
     "artifactError": "never",
     "minimumReleaseAge": "never"
@@ -74,5 +75,6 @@
       "matchPackageNames": ["/vitest/", "/cypress/", "/wdio/"]
     }
   ],
-  "prConcurrentLimit": 30
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 2
 }
