@@ -20,7 +20,7 @@ async function invoke<T>(
   command: string,
   args?: Record<string, unknown>,
 ): Promise<T> {
-  return browser.execute(
+  return (await browser.execute(
     async (name, payload) => {
       const tauri = (
         window as typeof window & {
@@ -36,7 +36,7 @@ async function invoke<T>(
     },
     command,
     args,
-  );
+  )) as unknown as T;
 }
 
 async function readAutoUpdate(): Promise<boolean> {
