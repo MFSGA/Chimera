@@ -140,6 +140,12 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm --filter chimera-ui test:connections
 
+      - name: Test core lifecycle and port resolution
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: |
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::actor_v2::facade::tests
+          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::ports::tests
+
       - name: Test application effects and hotkey bindings
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: |
