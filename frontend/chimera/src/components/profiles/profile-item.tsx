@@ -11,11 +11,9 @@ import {
   FilterDrama,
   InsertDriveFile,
   Menu as MenuIcon,
-  Terminal,
   Update,
 } from '@mui/icons-material';
 import {
-  Badge,
   Button,
   Chip,
   LinearProgress,
@@ -33,26 +31,17 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import parseTraffic from '@/utils/parse-traffic';
 import { ProfileDialog } from './profile-dialog';
+
 // import { GlobalUpdatePendingContext } from './provider';
-import { ClashProfile } from './utils';
 
 export interface ProfileItemProps {
   item: ProfileQueryResultItem;
   selected?: boolean;
-  maxLogLevelTriggered?: {
-    global: undefined | 'info' | 'error' | 'warn';
-    current: undefined | 'info' | 'error' | 'warn';
-  };
-  onClickChains: (item: ClashProfile) => void;
-  chainsSelected?: boolean;
 }
 
 export const ProfileItem = memo(function ProfileItem({
   item,
   selected,
-  onClickChains,
-  chainsSelected,
-  maxLogLevelTriggered,
 }: ProfileItemProps) {
   const { deleteConnections } = useClashConnections();
 
@@ -153,19 +142,17 @@ export const ProfileItem = memo(function ProfileItem({
     () => ({
       Select: () => handleSelect(),
       'Edit Info': () => setOpen(true),
-      'Proxy Chains': () => onClickChains(item as ClashProfile),
       'Open File': () => item?.view?.(),
       Update: () => handleUpdate(),
       'Update(Proxy)': () => handleUpdate(true),
       Delete: () => handleDelete(),
     }),
-    [handleDelete, handleSelect, handleUpdate, item, onClickChains],
+    [handleDelete, handleSelect, handleUpdate, item],
   );
 
   const menuLabels: Record<string, string> = {
     Select: m.profile_menu_select(),
     'Edit Info': m.profile_name_editor_title(),
-    'Proxy Chains': m.profile_menu_proxy_chains(),
     'Open File': m.profile_menu_open_file(),
     Update: m.profile_subscription_update(),
     'Update(Proxy)': m.profile_menu_update_proxy(),
@@ -280,31 +267,6 @@ export const ProfileItem = memo(function ProfileItem({
           </div>
 
           <div className="flex justify-end gap-2">
-            <Badge
-              variant="dot"
-              color={
-                maxLogLevelTriggered?.current === 'error'
-                  ? 'error'
-                  : maxLogLevelTriggered?.current === 'warn'
-                    ? 'warning'
-                    : 'primary'
-              }
-              invisible={!selected || !maxLogLevelTriggered?.current}
-            >
-              <Button
-                className="!mr-auto"
-                size="small"
-                variant={chainsSelected ? 'contained' : 'outlined'}
-                startIcon={<Terminal />}
-                onClick={(e) => {
-                  cleanDeepClickEvent(e);
-                  onClickChains(item as ClashProfile);
-                }}
-              >
-                {m.profile_menu_proxy_chains()}
-              </Button>
-            </Badge>
-
             <Tooltip title={m.profile_subscription_update()}>
               <Button
                 size="small"

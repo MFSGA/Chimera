@@ -10,36 +10,22 @@ import {
   TextSnippetOutlined,
   Update,
 } from '@mui/icons-material';
-import {
-  Badge,
-  Button,
-  CircularProgress,
-  Fab,
-  Grid,
-  IconButton,
-  useMediaQuery,
-} from '@mui/material';
+import { Button, CircularProgress, Fab, Grid, IconButton } from '@mui/material';
 import { createFileRoute } from '@tanstack/react-router';
 import { useLockFn } from 'ahooks';
-import { useAtom } from 'jotai';
 import { AnimatePresence, motion } from 'motion/react';
 import { useMemo, useState, useTransition } from 'react';
 import ContentDisplay from '@/components/base/content-display';
-import {
-  atomChainsSelected,
-  atomGlobalChainCurrent,
-} from '@/components/profiles/modules/store';
 import NewProfileButton from '@/components/profiles/new-profile-button';
 import {
   AddProfileContext,
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
 import ProfileItem from '@/components/profiles/profile-item';
-import ProfileSide from '@/components/profiles/profile-side';
 import { GlobalUpdatePendingContext } from '@/components/profiles/provider';
 import { QuickImport } from '@/components/profiles/quick-import';
 import RuntimeConfigDiffDialog from '@/components/profiles/runtime-config-diff-dialog';
-import { ClashProfile, filterProfiles } from '@/components/profiles/utils';
+import { filterProfiles } from '@/components/profiles/utils';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -101,34 +87,7 @@ function ProfilePage() {
   );
   // todo: optimize the components
 
-  const onClickChains = (profile: ClashProfile) => {
-    setGlobalChain(false);
-
-    if (chainsSelected === profile.uid) {
-      setChainsSelected(undefined);
-    } else {
-      setChainsSelected(profile.uid);
-    }
-  };
-
-  const [globalChain, setGlobalChain] = useAtom(atomGlobalChainCurrent);
-
-  const [chainsSelected, setChainsSelected] = useAtom(atomChainsSelected);
-
-  const handleGlobalChainClick = () => {
-    setChainsSelected(undefined);
-    setGlobalChain(!globalChain);
-  };
-
-  const hasSide = globalChain || chainsSelected;
-
-  const handleSideClose = () => {
-    setChainsSelected(undefined);
-    setGlobalChain(false);
-  };
-
   const [runtimeConfigViewerOpen, setRuntimeConfigViewerOpen] = useState(false);
-  const isNarrowLayout = useMediaQuery('(max-width:1000px)');
   const [globalUpdatePending, startGlobalUpdate] = useTransition();
 
   const handleGlobalProfileUpdate = useLockFn(async () => {
@@ -219,7 +178,7 @@ function ProfilePage() {
             size={{
               xs: 12,
               sm: 12,
-              md: hasSide && isNarrowLayout ? 12 : 6,
+              md: 6,
               lg: 4,
               xl: 3,
             }}
@@ -232,9 +191,7 @@ function ProfilePage() {
             >
               <ProfileItem
                 item={item}
-                onClickChains={onClickChains}
                 selected={query.data?.current === item.uid}
-                chainsSelected={chainsSelected === item.uid}
               />
             </motion.div>
           </Grid>
@@ -246,8 +203,6 @@ function ProfilePage() {
   return (
     <SidePage
       title={m.navbar_label_profiles()}
-      flexReverse
-      side={hasSide && <ProfileSide onClose={handleSideClose} />}
       header={
         <div className="flex items-center gap-2">
           <RuntimeConfigDiffDialog
@@ -264,16 +219,6 @@ function ProfilePage() {
           >
             <TextSnippetOutlined />
           </IconButton>
-          <Badge variant="dot">
-            <Button
-              size="small"
-              variant={globalChain ? 'contained' : 'outlined'}
-              onClick={handleGlobalChainClick}
-              startIcon={<Public />}
-            >
-              {'Global Proxy Chains'}
-            </Button>
-          </Badge>
         </div>
       }
     >
