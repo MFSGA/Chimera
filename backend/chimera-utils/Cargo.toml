@@ -59,7 +59,7 @@ chimera-platform-utils.workspace = true
 backon = { version = "1.6", optional = true }
 camino = { version = "1.1", optional = true }
 derive_builder = { version = "0.20", optional = true }
-dirs = { version = "6", optional = true }
+dirs = { version = "7", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 memchr = "2.7"
 tempfile = { version = "3", optional = true }
