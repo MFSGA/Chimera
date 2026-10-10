@@ -98,6 +98,54 @@ describe('legacy connections shared layout', () => {
         { cause },
       );
     }
+
+    // A displayed input does not mean the route's Motion slide/scale animation
+    // has finished. On Windows the old layout assertion sampled the header at
+    // 71.55px instead of its 72px layout height and saw a transient 3.59px
+    // toolbar overflow. Wait for the untransformed geometry before measuring.
+    let lastFrame: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          const frame = await browser.execute(() => {
+            const transition =
+              document.querySelector<HTMLElement>('.page-transition');
+            const header = document.querySelector<HTMLElement>(
+              '.MDYBasePage > header',
+            );
+            if (!transition || !header) return null;
+            const transform = getComputedStyle(transition).transform;
+            const matrix = new DOMMatrixReadOnly(
+              transform === 'none' ? undefined : transform,
+            );
+            return {
+              transform,
+              headerHeight: header.getBoundingClientRect().height,
+              naturalHeaderHeight: header.offsetHeight,
+              settled:
+                Math.abs(matrix.a - 1) < 0.0002 &&
+                Math.abs(matrix.d - 1) < 0.0002 &&
+                Math.abs(matrix.e) < 0.25 &&
+                Math.abs(matrix.f) < 0.25 &&
+                Math.abs(
+                  header.getBoundingClientRect().height - header.offsetHeight,
+                ) < 0.1,
+            };
+          });
+          lastFrame = frame;
+          return frame?.settled === true;
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: 'Legacy Connections transition did not settle.',
+        },
+      );
+    } catch (cause) {
+      throw new Error(
+        `Legacy Connections did not reach stable layout: ${JSON.stringify(lastFrame)}`,
+        { cause },
+      );
+    }
   });
 
   it('renders the shared table viewport below the legacy header', async () => {
