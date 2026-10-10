@@ -196,7 +196,7 @@ async-trait = "0.1"
 tempfile = "3"
 atomicwrites = "0.4.4"
 flate2 = "1"
-zip = "8"
+zip = "9"
 num_cpus = "1"
 sysinfo = "0.39"
 
