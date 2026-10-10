@@ -414,6 +414,10 @@ export const commands = {
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
   agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
+  agentGetAuditHistory: () =>
+    typedError<AgentAuditHistoryView, string>(
+      __TAURI_INVOKE('agent_get_audit_history'),
+    ),
   agentExecuteTool: (request: AgentToolRequest) =>
     typedError<AgentToolResult, string>(
       __TAURI_INVOKE('agent_execute_tool', { request }),
@@ -478,6 +482,19 @@ export type AgentActionResult = {
 export type AgentActionRisk = 'traffic_change' | 'host_network_change';
 
 export type AgentAppliedState = 'consistent' | 'stale' | 'unknown';
+
+/**  Privacy-safe, read-only view: never expose proposal IDs or snapshot revisions. */
+export type AgentAuditHistoryView = {
+  retained_events: number;
+  verified_events: number;
+  entries: AgentAuditHistoryViewEntry[];
+};
+
+export type AgentAuditHistoryViewEntry = {
+  recorded_at: number;
+  action: string;
+  outcome: string;
+};
 
 export type AgentConnectorState =
   'disconnected' | 'connecting' | 'connected' | 'unknown';

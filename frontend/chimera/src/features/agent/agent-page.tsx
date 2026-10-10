@@ -20,6 +20,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
+import { AuditHistoryCard } from './components/audit-history-card';
 import { DiagnosisOverview } from './components/diagnosis-overview';
 import { IntentCard } from './components/intent-card';
 import { buildAgentIssueUrl } from './components/issue-guidance';
@@ -253,6 +254,12 @@ export function AgentPage() {
               loading={agent.probeNetwork.isPending}
               result={agent.probeNetwork.data}
               onProbe={(url) => void probeNetwork(url)}
+            />
+            <AuditHistoryCard
+              history={agent.auditHistory.data}
+              loading={agent.auditHistory.isFetching}
+              error={agent.auditHistory.isError}
+              onRefresh={() => void agent.auditHistory.refetch()}
             />
           </>
         )}
