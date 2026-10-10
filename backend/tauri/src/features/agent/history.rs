@@ -7,6 +7,7 @@ use std::{
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use specta::Type;
 use tokio::sync::Mutex;
 
 use crate::utils::dirs::app_data_dir;
@@ -17,6 +18,7 @@ const HISTORY_FILE: &str = "agent-history.json";
 const HISTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_DIAGNOSTIC_HISTORY: usize = 100;
 const MAX_AUDIT_HISTORY: usize = 200;
+const MAX_VISIBLE_AUDIT_HISTORY: usize = 20;
 const MAX_HISTORY_FILE_BYTES: u64 = 1024 * 1024;
 
 static HISTORY_GATE: Mutex<()> = Mutex::const_new(());
@@ -50,6 +52,49 @@ struct AgentAuditHistoryEntry {
 struct AgentHistoryDocument {
     diagnostics: VecDeque<AgentDiagnosticHistoryEntry>,
     audits: VecDeque<AgentAuditHistoryEntry>,
+}
+
+/// Privacy-safe, read-only view: never expose proposal IDs or snapshot revisions.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentAuditHistoryView {
+    pub retained_events: u32,
+    pub verified_events: u32,
+    pub entries: Vec<AgentAuditHistoryViewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentAuditHistoryViewEntry {
+    pub recorded_at: i64,
+    pub action: String,
+    pub outcome: String,
+}
+
+pub(super) async fn get_audit_history() -> anyhow::Result<AgentAuditHistoryView> {
+    let _guard = HISTORY_GATE.lock().await;
+    let document = load_document(history_path()?).await?;
+    Ok(project_audit_history(&document))
+}
+
+fn project_audit_history(document: &AgentHistoryDocument) -> AgentAuditHistoryView {
+    AgentAuditHistoryView {
+        retained_events: document.audits.len() as u32,
+        verified_events: document
+            .audits
+            .iter()
+            .filter(|entry| entry.outcome == "verified")
+            .count() as u32,
+        entries: document
+            .audits
+            .iter()
+            .rev()
+            .take(MAX_VISIBLE_AUDIT_HISTORY)
+            .map(|entry| AgentAuditHistoryViewEntry {
+                recorded_at: entry.recorded_at,
+                action: entry.action.clone(),
+                outcome: entry.outcome.clone(),
+            })
+            .collect(),
+    }
 }
 
 pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
@@ -322,7 +367,7 @@ mod tests {
 
     use super::{
         AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, normalize_history_document,
-        proposal_reference, trim,
+        project_audit_history, proposal_reference, trim,
     };
 
     #[test]
@@ -373,6 +418,37 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden), "{forbidden}");
         }
+    }
+
+    #[test]
+    fn audit_view_is_bounded_newest_first_and_hides_identifiers() {
+        let document = AgentHistoryDocument {
+            diagnostics: VecDeque::new(),
+            audits: (0..25)
+                .map(|index| AgentAuditHistoryEntry {
+                    schema_version: 1,
+                    recorded_at: index,
+                    proposal_id: "secret-proposal-id-canary".into(),
+                    action: "set_tun_enabled".into(),
+                    snapshot_revision: "private-snapshot-revision-canary".into(),
+                    outcome: if index % 2 == 0 {
+                        "verified"
+                    } else {
+                        "proposed"
+                    }
+                    .into(),
+                })
+                .collect(),
+        };
+        let view = project_audit_history(&document);
+        assert_eq!(view.retained_events, 25);
+        assert_eq!(view.verified_events, 13);
+        assert_eq!(view.entries.len(), 20);
+        assert_eq!(view.entries[0].recorded_at, 24);
+        assert_eq!(view.entries[19].recorded_at, 5);
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("secret-proposal-id-canary"));
+        assert!(!serialized.contains("private-snapshot-revision-canary"));
     }
 
     #[test]

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   commands,
   type AgentActionRequest,
+  type AgentAuditHistoryView,
   type AgentNetworkProbeRequest,
   type AgentNetworkSnapshot,
   type AgentToolRequest,
@@ -13,6 +14,11 @@ export const AGENT_MANIFEST_QUERY_KEY = ['agent', 'manifest'] as const;
 export const AGENT_NETWORK_SNAPSHOT_QUERY_KEY = [
   'agent',
   'network-snapshot',
+] as const;
+
+export const AGENT_AUDIT_HISTORY_QUERY_KEY = [
+  'agent',
+  'audit-history',
 ] as const;
 
 export type AgentExecuteInput = {
@@ -47,6 +53,18 @@ export const useAgent = () => {
   const snapshot = useQuery({
     queryKey: AGENT_NETWORK_SNAPSHOT_QUERY_KEY,
     queryFn: getSystemSnapshot,
+    enabled: false,
+    retry: false,
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  // Audit history is only read on explicit user request; never background-poll.
+  const auditHistory = useQuery<AgentAuditHistoryView>({
+    queryKey: AGENT_AUDIT_HISTORY_QUERY_KEY,
+    queryFn: async () => unwrapResult(await commands.agentGetAuditHistory()),
     enabled: false,
     retry: false,
     refetchInterval: false,
@@ -109,6 +127,7 @@ export const useAgent = () => {
   return {
     manifest,
     snapshot,
+    auditHistory,
     runTool,
     probeNetwork,
     resolveIntent,
