@@ -144,15 +144,15 @@ const ThemeColor = () => {
   );
 };
 
-const ExperimentalSwitch = () => {
+const NewPageSwitch = () => {
   const { switchToMain, isPending } = useUiSwitch();
 
   return (
     <ListItem sx={{ pl: 0, pr: 0 }}>
-      <ListItemText primary="Switch to Experimental UI" />
+      <ListItemText primary={m.settings_user_interface_switch_to_new_page()} />
 
       <Button variant="contained" loading={isPending} onClick={switchToMain}>
-        Continue
+        {m.common_continue()}
       </Button>
     </ListItem>
   );
@@ -176,7 +176,7 @@ export const SettingChimerauUI = () => {
           onChange={() => setOnlyIcon(!onlyIcon)}
         />
 
-        <ExperimentalSwitch />
+        <NewPageSwitch />
       </List>
     </BaseCard>
   );
