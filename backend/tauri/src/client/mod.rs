@@ -681,12 +681,7 @@ impl ChimeraClient {
             self.inner.profile_service.as_ref(),
             &source.materialized().file,
         )?;
-        if item.definition.is_config() {
-            crate::service::profile_file::normalize_yaml_document(&raw)
-                .context("failed to normalize profile YAML")
-        } else {
-            Ok(raw)
-        }
+        profile_file_text_for_editor(raw, item.definition.is_config())
     }
 
     pub(crate) async fn get_profile_materialized_path(
@@ -709,9 +704,46 @@ impl ChimeraClient {
     }
 }
 
+/// REF parity: config Profiles are YAML mappings, but transforms and scripts
+/// must be returned byte-for-byte as text (even when they are not valid YAML).
+fn profile_file_text_for_editor(raw: String, is_config: bool) -> anyhow::Result<String> {
+    if is_config {
+        crate::service::profile_file::normalize_yaml_document(&raw)
+            .context("failed to normalize profile YAML")
+    } else {
+        Ok(raw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+
+    #[test]
+    fn transform_profile_file_read_preserves_non_yaml_source_exactly() {
+        let javascript = "function main(config) { return config; }\n// [invalid YAML";
+        let lua = "return { [\"proxies\"] = {} }\n-- not a YAML mapping";
+        for source in [javascript, lua] {
+            assert_eq!(
+                super::profile_file_text_for_editor(source.into(), false).unwrap(),
+                source,
+                "script and merge transform content must never be normalized as YAML"
+            );
+        }
+    }
+
+    #[test]
+    fn config_profile_file_read_normalizes_yaml_and_rejects_invalid_mapping() {
+        let normalized = super::profile_file_text_for_editor("mode: rule\n".into(), true).unwrap();
+        assert_eq!(normalized, "mode: rule\n");
+        let error =
+            super::profile_file_text_for_editor("not: [valid YAML".into(), true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to normalize profile YAML")
+        );
+    }
 
     use async_trait::async_trait;
     use chimera_ipc::api::status::CoreState;

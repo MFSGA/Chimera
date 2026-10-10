@@ -119,6 +119,11 @@ pub enum IpcError {
     Storage(#[from] StorageOperationError),
     #[error("{0}")]
     Custom(String),
+    #[error("the file {} of profile {uid} does not exist", path.display())]
+    ProfileFileMissing {
+        uid: chimera_config::profile::ProfileId,
+        path: PathBuf,
+    },
 }
 
 impl serde::Serialize for IpcError {
@@ -277,6 +282,19 @@ pub async fn import_profile_with_mode(
     Ok(client.import_profile(url, name, option).await?)
 }
 
+fn ensure_viewable_profile_file(
+    uid: chimera_config::profile::ProfileId,
+    path: &std::path::Path,
+) -> Result {
+    if !path.exists() {
+        return Err(IpcError::ProfileFileMissing {
+            uid,
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn view_profile(
@@ -284,12 +302,9 @@ pub async fn view_profile(
     client: State<'_, ChimeraClient>,
     uid: String,
 ) -> Result {
-    let path = client
-        .get_profile_materialized_path(chimera_config::profile::ProfileId(uid))
-        .await?;
-    if !path.exists() {
-        return Err(anyhow!("profile file not found").into());
-    }
+    let uid = chimera_config::profile::ProfileId(uid);
+    let path = client.get_profile_materialized_path(uid.clone()).await?;
+    ensure_viewable_profile_file(uid, &path)?;
     help::open_file(app_handle, path)?;
     Ok(())
 }
@@ -1424,7 +1439,35 @@ pub async fn query_traffic_active_connection_ids(
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use super::PendingDeepLink;
+    use super::{IpcError, PendingDeepLink, ensure_viewable_profile_file};
+
+    #[test]
+    fn missing_profile_view_reports_profile_identity_and_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-profile.yaml");
+        let uid = chimera_config::profile::ProfileId("profile-42".into());
+
+        let error = ensure_viewable_profile_file(uid.clone(), &missing).unwrap_err();
+        assert!(matches!(
+            &error,
+            IpcError::ProfileFileMissing { uid: actual, path }
+                if actual == &uid && path == &missing
+        ));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the file {} of profile {uid} does not exist",
+                missing.display()
+            )
+        );
+        let wire = serde_json::to_value(&error).unwrap();
+        let wire = wire.as_str().expect("IPC must serialize errors as strings");
+        assert!(wire.contains("profile-42"), "{wire}");
+        assert!(wire.contains("missing-profile.yaml"), "{wire}");
+
+        std::fs::write(&missing, "mode: rule\n").unwrap();
+        ensure_viewable_profile_file(uid, &missing).unwrap();
+    }
 
     #[test]
     fn pending_deep_links_are_listed_without_claiming() {
