@@ -1,3 +1,55 @@
+## [0.25.6] - 2026-10-10 17:42:31
+
+### ✅ Testing
+
+- **e2e:** Wait for stable legacy connections layout by @MFSGA
+
+### ✨ Features
+
+- **connections:** Align on-demand details with reference by @MFSGA
+
+- **connections:** Share reference viewers across main and legacy by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **deps:** Update dependency virtua to v0.53.3 (#445) by @MFSGA in [#445](https://github.com/MFSGA/Chimera/pull/445)
+
+- **i18n:** Rename experimental UI switch to new page by @MFSGA
+
+- **proxy-mode:** Follow configured connection interruption policy by @MFSGA
+
+### 🔨 Refactor
+
+- **legacy-ui:** Remove unsupported proxy chain controls by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Update dependency sass-embedded to v1.105.1 (#440) by @MFSGA in [#440](https://github.com/MFSGA/Chimera/pull/440)
+
+- **deps:** Update dependency ubuntu to v26 (#452) by @MFSGA in [#452](https://github.com/MFSGA/Chimera/pull/452)
+
+- **deps:** Update rust crate camino to v1.2.6 (#443) by @MFSGA in [#443](https://github.com/MFSGA/Chimera/pull/443)
+
+- **deps:** Update pnpm to v12.9.1 (#442) by @MFSGA in [#442](https://github.com/MFSGA/Chimera/pull/442)
+
+- **deps:** Update dependency stylelint-scss to v7.3.0 (#441) by @MFSGA in [#441](https://github.com/MFSGA/Chimera/pull/441)
+
+- **deps:** Update dependency oxlint to v1.87.0 (#439) by @MFSGA in [#439](https://github.com/MFSGA/Chimera/pull/439)
+
+- **deps:** Update rust crate zerocopy to v0.8.61 (#437) by @MFSGA in [#437](https://github.com/MFSGA/Chimera/pull/437)
+
+- **deps:** Update renovatebot/github-action action to v46.3.7 (#436) by @MFSGA in [#436](https://github.com/MFSGA/Chimera/pull/436)
+
+- **deps:** Update dependency nanoid to v6.0.2 (#434) by @MFSGA in [#434](https://github.com/MFSGA/Chimera/pull/434)
+
+- **deps:** Update dependency @iconify/json to v2.2.539 by @renovate-bot
+
+- **deps:** Update bundler packages by @renovate-bot
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.5...v0.25.6
+
 ## [0.25.5] - 2026-10-07 03:54:47
 
 ### ✨ Features
