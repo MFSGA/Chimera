@@ -1348,7 +1348,7 @@ dependencies = [
  "camino",
  "chimera_utils",
  "derive_builder",
- "dirs 6.0.0",
+ "dirs 7.0.0",
  "encoding_rs",
  "futures-util",
  "kill_tree",
