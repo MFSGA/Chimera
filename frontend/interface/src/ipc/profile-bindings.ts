@@ -13,9 +13,19 @@ export const queries = {
       queryKey: [PROFILES_QUERY_KEY, ...args],
       queryFn: () => commands.getProfiles(...args),
     }),
+  readProfileFile: (...args: Parameters<typeof commands.readProfileFile>) =>
+    queryOptions({
+      queryKey: ['readProfileFile', ...args],
+      queryFn: () => commands.readProfileFile(...args),
+    }),
 };
 
 export const mutations = {
+  saveProfileFile: mutationOptions({
+    mutationKey: ['saveProfileFile'],
+    mutationFn: (input: Parameters<typeof commands.saveProfileFile>) =>
+      commands.saveProfileFile(...input),
+  }),
   importProfile: mutationOptions({
     mutationKey: ['importProfile'],
     mutationFn: (input: Parameters<typeof commands.importProfile>) =>

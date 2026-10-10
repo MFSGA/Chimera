@@ -140,6 +140,10 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: pnpm --filter chimera-ui test:connections
 
+      - name: Test Profile content query contract
+        if: startsWith(matrix.targets.os, 'ubuntu-')
+        run: pnpm test:profiles:query
+
       - name: Test core lifecycle and port resolution
         if: startsWith(matrix.targets.os, 'ubuntu-')
         run: |
