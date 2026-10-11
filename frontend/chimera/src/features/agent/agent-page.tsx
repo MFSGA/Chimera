@@ -22,6 +22,7 @@ import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 import { AuditHistoryCard } from './components/audit-history-card';
 import { DiagnosisOverview } from './components/diagnosis-overview';
+import { DiagnosticHistoryCard } from './components/diagnostic-history-card';
 import { IntentCard } from './components/intent-card';
 import { buildAgentIssueUrl } from './components/issue-guidance';
 import { NetworkProbeCard } from './components/network-probe-card';
@@ -189,6 +190,14 @@ export function AgentPage() {
     }
   };
 
+  const captureDiagnostic = async () => {
+    try {
+      await agent.captureDiagnostic.mutateAsync();
+    } catch {
+      Notice.error(m.agent_error_title());
+    }
+  };
+
   const reportIssue = async () => {
     let envInfos = 'Environment information unavailable.';
     try {
@@ -262,6 +271,14 @@ export function AgentPage() {
               loading={agent.probeNetwork.isPending}
               result={agent.probeNetwork.data}
               onProbe={(url) => void probeNetwork(url)}
+            />
+            <DiagnosticHistoryCard
+              history={agent.diagnosticHistory.data}
+              loading={agent.diagnosticHistory.isFetching}
+              capturing={agent.captureDiagnostic.isPending}
+              error={agent.diagnosticHistory.isError}
+              onCapture={() => void captureDiagnostic()}
+              onRefresh={() => void agent.diagnosticHistory.refetch()}
             />
             <AuditHistoryCard
               history={agent.auditHistory.data}
