@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 
 use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
 use sha2::{Digest, Sha256};
@@ -328,10 +328,18 @@ fn summarize_system_proxy(
 }
 
 pub(super) fn host_scope(host: &str) -> AgentHostScope {
+    // IPv6 literals may be bracketed by host-proxy APIs. Only accept a
+    // bracketed IPv6 address, never arbitrary hostnames or bracketed IPv4.
+    let bracketed_loopback = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .and_then(|value| value.parse::<Ipv6Addr>().ok())
+        .is_some_and(|address| address.is_loopback());
     if host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<IpAddr>()
             .is_ok_and(|address| address.is_loopback())
+        || bracketed_loopback
     {
         AgentHostScope::Loopback
     } else if host.trim().is_empty() {
@@ -580,8 +588,25 @@ mod tests {
     fn classifies_only_loopback_hosts_as_loopback() {
         assert_eq!(host_scope("127.0.0.1"), AgentHostScope::Loopback);
         assert_eq!(host_scope("::1"), AgentHostScope::Loopback);
+        assert_eq!(host_scope("[::1]"), AgentHostScope::Loopback);
         assert_eq!(host_scope("localhost"), AgentHostScope::Loopback);
+        assert_eq!(host_scope("LOCALHOST"), AgentHostScope::Loopback);
         assert_eq!(host_scope("192.168.1.1"), AgentHostScope::NonLoopback);
+        assert_eq!(host_scope("[::2]"), AgentHostScope::NonLoopback);
+        assert_eq!(host_scope("[127.0.0.1]"), AgentHostScope::NonLoopback);
+        assert_eq!(
+            host_scope("[::1].evil.example"),
+            AgentHostScope::NonLoopback
+        );
+        assert_eq!(
+            host_scope("localhost.evil.example"),
+            AgentHostScope::NonLoopback
+        );
+        assert_eq!(
+            host_scope("127.0.0.1.evil.example"),
+            AgentHostScope::NonLoopback
+        );
+        assert_eq!(host_scope(" "), AgentHostScope::Unknown);
     }
 
     #[test]
@@ -632,6 +657,41 @@ mod tests {
         assert!(!serialized.contains("subscription-token.canary"));
         assert_eq!(summary.observed_host_scope, AgentHostScope::NonLoopback);
         assert!(failures.is_empty());
+    }
+
+    /// HOST-IPv6-LOOPBACK: a bracketed IPv6 localhost is a genuine local
+    /// endpoint; a lookalike hostname must never qualify for remediation.
+    #[test]
+    fn system_proxy_bracketed_ipv6_loopback_respects_remediation_boundary() {
+        let proxy_for = |host: &str| {
+            let mut failures = Vec::new();
+            let proxy = summarize_system_proxy(
+                true,
+                7890,
+                Ok(Ok(Sysproxy {
+                    enable: true,
+                    host: host.into(),
+                    port: 7890,
+                    bypass: String::new(),
+                })),
+                &mut failures,
+            );
+            assert!(failures.is_empty());
+            proxy
+        };
+
+        let loopback = proxy_for("[::1]");
+        assert_eq!(loopback.observed_host_scope, AgentHostScope::Loopback);
+        assert_eq!(loopback.matches_expected_endpoint, Some(true));
+        assert!(matches!(
+            stale_proxy_recommended_action(&loopback),
+            Some(AgentActionRequest::DisableStaleSystemProxy)
+        ));
+
+        let lookalike = proxy_for("[::1].evil.example");
+        assert_eq!(lookalike.observed_host_scope, AgentHostScope::NonLoopback);
+        assert_eq!(lookalike.matches_expected_endpoint, Some(false));
+        assert!(stale_proxy_recommended_action(&lookalike).is_none());
     }
 
     #[test]
