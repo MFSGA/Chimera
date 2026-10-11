@@ -54,9 +54,9 @@ impl From<&ClashCore> for chimera_utils::core::CoreType {
             ClashCore::ClashRs => ClashCoreType::ClashRust,
             ClashCore::Mihomo => ClashCoreType::Mihomo,
             ClashCore::ChimeraClient => ClashCoreType::ChimeraClient,
-            // Alpha is a separate distributed binary but keeps the same
-            // Chimera Client behavior and config contract.
-            ClashCore::ChimeraClientAlpha => ClashCoreType::ChimeraClient,
+            // Alpha keeps the same manager kind, but its wire identity selects
+            // the separately distributed executable on service hosts.
+            ClashCore::ChimeraClientAlpha => ClashCoreType::ChimeraClientAlpha,
             ClashCore::MihomoAlpha => ClashCoreType::MihomoAlpha,
             ClashCore::ClashRsAlpha => ClashCoreType::ClashRustAlpha,
         })
@@ -80,6 +80,7 @@ impl TryFrom<&chimera_utils::core::CoreType> for ClashCore {
                 ClashCoreType::Mihomo => Ok(Self::Mihomo),
                 ClashCoreType::MihomoAlpha => Ok(Self::MihomoAlpha),
                 ClashCoreType::ChimeraClient => Ok(Self::ChimeraClient),
+                ClashCoreType::ChimeraClientAlpha => Ok(Self::ChimeraClientAlpha),
             },
             _ => Err(UnsupportedCoreTypeError(core.clone())),
         }
@@ -105,7 +106,11 @@ mod tests {
         );
         assert_eq!(
             CoreType::from(&core),
-            CoreType::Clash(ClashCoreType::ChimeraClient)
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha)
+        );
+        assert_eq!(
+            ClashCore::try_from(&CoreType::Clash(ClashCoreType::ChimeraClientAlpha)).unwrap(),
+            core
         );
     }
 }

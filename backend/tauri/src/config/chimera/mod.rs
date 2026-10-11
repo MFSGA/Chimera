@@ -65,7 +65,7 @@ impl From<&ClashCore> for chimera_utils::core::CoreType {
             ),
             // Both channels use Chimera Client's config/runtime contract.
             ClashCore::ChimeraClientAlpha => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::ChimeraClient,
+                chimera_utils::core::ClashCoreType::ChimeraClientAlpha,
             ),
         }
     }
@@ -310,6 +310,24 @@ impl AsRef<str> for TunStack {
             TunStack::Gvisor => "gvisor",
             TunStack::Mixed => "mixed",
         }
+    }
+}
+
+#[cfg(test)]
+mod core_type_tests {
+    use super::ClashCore;
+    use chimera_utils::core::{ClashCoreType, CoreType};
+
+    #[test]
+    fn chimera_client_alpha_uses_its_service_wire_identity() {
+        assert_eq!(
+            CoreType::from(&ClashCore::ChimeraClient),
+            CoreType::Clash(ClashCoreType::ChimeraClient)
+        );
+        assert_eq!(
+            CoreType::from(&ClashCore::ChimeraClientAlpha),
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha)
+        );
     }
 }
 

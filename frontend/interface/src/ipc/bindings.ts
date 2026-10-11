@@ -812,7 +812,8 @@ export type ClashCoreType =
   | 'clash-rs'
   | 'clash-rs-alpha'
   | 'clash'
-  | 'chimera_client';
+  | 'chimera_client'
+  | 'chimera_client_alpha';
 
 export type ClashCore_Deserialize =
   | 'clash'
