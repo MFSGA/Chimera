@@ -71,7 +71,8 @@ pub(crate) struct AgentAuditHistoryViewEntry {
 
 pub(super) async fn get_audit_history() -> anyhow::Result<AgentAuditHistoryView> {
     let _guard = HISTORY_GATE.lock().await;
-    let document = load_document(history_path()?).await?;
+    // History inspection must never quarantine (rename) a corrupt file.
+    let document = load_document(history_path()?, false).await?;
     Ok(project_audit_history(&document))
 }
 
@@ -111,7 +112,7 @@ pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
             return;
         }
     };
-    let mut document = match load_document(path.clone()).await {
+    let mut document = match load_document(path.clone(), true).await {
         Ok(document) => document,
         Err(_) => {
             tracing::warn!(target: "agent_audit", "failed to load agent history");
@@ -151,13 +152,19 @@ fn history_path() -> anyhow::Result<PathBuf> {
     Ok(app_data_dir()?.join(HISTORY_FILE))
 }
 
-async fn load_document(path: PathBuf) -> anyhow::Result<AgentHistoryDocument> {
-    tokio::task::spawn_blocking(move || load_document_blocking(&path))
+async fn load_document(
+    path: PathBuf,
+    quarantine_corrupt: bool,
+) -> anyhow::Result<AgentHistoryDocument> {
+    tokio::task::spawn_blocking(move || load_document_blocking(&path, quarantine_corrupt))
         .await
         .map_err(|_| anyhow::anyhow!("agent history load task failed"))?
 }
 
-fn load_document_blocking(path: &Path) -> anyhow::Result<AgentHistoryDocument> {
+fn load_document_blocking(
+    path: &Path,
+    quarantine_corrupt: bool,
+) -> anyhow::Result<AgentHistoryDocument> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
@@ -177,10 +184,11 @@ fn load_document_blocking(path: &Path) -> anyhow::Result<AgentHistoryDocument> {
             normalize_history_document(&mut document);
             Ok(document)
         }
-        Err(_) => {
+        Err(_) if quarantine_corrupt => {
             quarantine_corrupt_document(path)?;
             Ok(Default::default())
         }
+        Err(_) => Err(anyhow::anyhow!("agent history document is corrupt")),
     }
 }
 
@@ -366,9 +374,52 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{
-        AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, normalize_history_document,
-        project_audit_history, proposal_reference, trim,
+        AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, load_document_blocking,
+        normalize_history_document, project_audit_history, proposal_reference, trim,
     };
+
+    /// HISTORY-READONLY: A corrupt file is left byte-for-byte intact by the
+    /// inspection path. The existing write path may still quarantine it.
+    /// Regression: the old read path renamed the file and returned empty data.
+    #[test]
+    fn corrupt_history_read_does_not_rename_or_replace_user_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let original = b"{ not valid json";
+        std::fs::write(&path, original).unwrap();
+
+        let error = load_document_blocking(&path, false).unwrap_err();
+        assert_eq!(error.to_string(), "agent history document is corrupt");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn missing_history_read_returns_empty_view_without_creating_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let document = load_document_blocking(&path, false).unwrap();
+        assert_eq!(project_audit_history(&document).retained_events, 0);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn corrupt_history_write_path_still_quarantines_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let original = b"{ not valid json";
+        std::fs::write(&path, original).unwrap();
+
+        let document = load_document_blocking(&path, true).unwrap();
+        assert_eq!(project_audit_history(&document).retained_events, 0);
+        assert!(!path.exists());
+        let quarantined = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(std::fs::read(&quarantined[0]).unwrap(), original);
+    }
 
     #[test]
     fn proposal_references_are_fixed_lower_hex_and_hide_raw_tokens() {
