@@ -26,6 +26,7 @@ import { buildAgentIssueUrl } from './components/issue-guidance';
 import { NetworkProbeCard } from './components/network-probe-card';
 import { ProposalDialog } from './components/proposal-dialog';
 import { TechnicalDetails } from './components/technical-details';
+import { resolveAgentIntentForDisplay } from './model/intent-resolution';
 import {
   projectPrivacySafeIssueSnapshot,
   serializePrivacySafeSnapshot,
@@ -113,13 +114,15 @@ export function AgentPage() {
   const resolveIntent = async (text: string) => {
     setIntentResolution(null);
     try {
-      const resolution = await agent.resolveIntent.mutateAsync(text);
-      setIntentResolution(resolution);
-      if (
-        resolution.status === 'resolved' &&
-        resolution.intent.intent === 'diagnose'
-      ) {
-        await agent.snapshot.refetch();
+      const resolution = await resolveAgentIntentForDisplay(
+        text,
+        (input) => agent.resolveIntent.mutateAsync(input),
+        () => agent.snapshot.refetch(),
+      );
+      if (resolution) {
+        setIntentResolution(resolution);
+      } else {
+        Notice.error(m.agent_error_title());
       }
     } catch {
       Notice.error(m.agent_error_title());
@@ -233,7 +236,12 @@ export function AgentPage() {
             <IntentCard
               resolution={intentResolution}
               resolving={agent.resolveIntent.isPending}
-              disabled={agent.propose.isPending || agent.execute.isPending}
+              disabled={
+                agent.propose.isPending ||
+                agent.execute.isPending ||
+                agent.resolveIntent.isPending ||
+                agent.snapshot.isFetching
+              }
               onResolve={(text) => void resolveIntent(text)}
               onPropose={(action) => void propose(action)}
             />
