@@ -2,17 +2,19 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "default:automergeMinor",
     "default:prHourlyLimitNone",
     "default:preserveSemverRanges",
     "default:rebaseStalePrs",
     "group:monorepos"
   ],
+  "automergeType": "pr",
+  "platformAutomerge": false,
+  "ignoreTests": false,
   "cloneSubmodules": true,
   "cloneSubmodulesFilter": ["backend/chimera-runtime"],
   "ignorePaths": ["ref/**", "backend/chimera-runtime/**"],
   "statusCheckWhen": {
-    "artifactError": "never",
+    "artifactError": "always",
     "minimumReleaseAge": "never"
   },
   "packageRules": [
@@ -28,8 +30,12 @@
     },
     {
       "matchManagers": ["cargo"],
-      "rangeStrategy": "update-lockfile",
-      "platformAutomerge": false
+      "rangeStrategy": "update-lockfile"
+    },
+    {
+      "description": "Automerge patch and minor updates after all checks pass; keep majors for manual review",
+      "matchUpdateTypes": ["patch", "minor"],
+      "automerge": true
     },
     {
       "groupName": "Oxc packages",
