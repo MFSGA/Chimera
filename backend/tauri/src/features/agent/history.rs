@@ -12,13 +12,14 @@ use tokio::sync::Mutex;
 
 use crate::utils::dirs::app_data_dir;
 
-use super::model::{AgentActionKind, AgentProposal};
+use super::model::{AgentActionKind, AgentNetworkSnapshot, AgentProposal};
 
 const HISTORY_FILE: &str = "agent-history.json";
 const HISTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_DIAGNOSTIC_HISTORY: usize = 100;
 const MAX_AUDIT_HISTORY: usize = 200;
 const MAX_VISIBLE_AUDIT_HISTORY: usize = 20;
+const MAX_VISIBLE_DIAGNOSTIC_HISTORY: usize = 20;
 const MAX_HISTORY_FILE_BYTES: u64 = 1024 * 1024;
 
 static HISTORY_GATE: Mutex<()> = Mutex::const_new(());
@@ -67,6 +68,97 @@ pub(crate) struct AgentAuditHistoryViewEntry {
     pub recorded_at: i64,
     pub action: String,
     pub outcome: String,
+}
+
+/// Read-only projection: do not expose revisions, targets, profile data, or secrets.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentDiagnosticHistoryView {
+    pub retained_events: u32,
+    pub entries: Vec<AgentDiagnosticHistoryViewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentDiagnosticHistoryViewEntry {
+    pub captured_at: i64,
+    pub health: String,
+    pub core_state: String,
+    pub service_state: String,
+    pub finding_codes: Vec<String>,
+    pub probe_failure_codes: Vec<String>,
+}
+
+pub(super) async fn get_diagnostic_history() -> anyhow::Result<AgentDiagnosticHistoryView> {
+    let _guard = HISTORY_GATE.lock().await;
+    let document = load_document(history_path()?, false).await?;
+    Ok(project_diagnostic_history(&document))
+}
+
+fn project_diagnostic_history(document: &AgentHistoryDocument) -> AgentDiagnosticHistoryView {
+    AgentDiagnosticHistoryView {
+        retained_events: document.diagnostics.len() as u32,
+        entries: document
+            .diagnostics
+            .iter()
+            .rev()
+            .take(MAX_VISIBLE_DIAGNOSTIC_HISTORY)
+            .map(|entry| AgentDiagnosticHistoryViewEntry {
+                captured_at: entry.captured_at,
+                health: entry.health.clone(),
+                core_state: entry.core_state.clone(),
+                service_state: entry.service_state.clone(),
+                finding_codes: entry.finding_codes.clone(),
+                probe_failure_codes: entry.probe_failure_codes.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn enum_code<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("invalid agent diagnostic code"))
+}
+
+fn diagnostic_entry(
+    snapshot: &AgentNetworkSnapshot,
+) -> anyhow::Result<AgentDiagnosticHistoryEntry> {
+    let mut entry = AgentDiagnosticHistoryEntry {
+        schema_version: HISTORY_SCHEMA_VERSION,
+        captured_at: snapshot.captured_at,
+        revision: snapshot.revision.clone(),
+        health: enum_code(&snapshot.health)?,
+        core_state: enum_code(&snapshot.core.state)?,
+        service_state: enum_code(&snapshot.service.state)?,
+        finding_codes: snapshot
+            .findings
+            .iter()
+            .map(|finding| enum_code(&finding.code))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        probe_failure_codes: snapshot
+            .probe_failures
+            .iter()
+            .map(|failure| enum_code(&failure.code))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    };
+    if !normalize_diagnostic_entry(&mut entry) {
+        anyhow::bail!("agent diagnostic snapshot is invalid");
+    }
+    Ok(entry)
+}
+
+/// Explicit user action only; ordinary diagnosis and reads do not persist.
+pub(super) async fn record_diagnostic_snapshot(
+    snapshot: &AgentNetworkSnapshot,
+) -> anyhow::Result<AgentDiagnosticHistoryView> {
+    let entry = diagnostic_entry(snapshot)?;
+    let _guard = HISTORY_GATE.lock().await;
+    let path = history_path()?;
+    let mut document = load_document(path.clone(), true).await?;
+    document.diagnostics.push_back(entry);
+    trim(&mut document.diagnostics, MAX_DIAGNOSTIC_HISTORY);
+    save_document(path, document.clone()).await?;
+    Ok(project_diagnostic_history(&document))
 }
 
 pub(super) async fn get_audit_history() -> anyhow::Result<AgentAuditHistoryView> {
@@ -333,6 +425,7 @@ fn is_probe_failure_code(code: &str) -> bool {
         code,
         "core_status_unavailable"
             | "core_config_unavailable"
+            | "profiles_unavailable"
             | "system_proxy_unavailable"
             | "service_status_unavailable"
             | "service_status_timeout"
@@ -374,9 +467,63 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{
-        AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, load_document_blocking,
-        normalize_history_document, project_audit_history, proposal_reference, trim,
+        AgentAuditHistoryEntry, AgentDiagnosticHistoryEntry, AgentHistoryDocument, enum_code,
+        is_lower_hex, load_document_blocking, normalize_diagnostic_entry,
+        normalize_history_document, project_audit_history, project_diagnostic_history,
+        proposal_reference, trim,
     };
+
+    #[test]
+    fn diagnostic_history_view_is_bounded_newest_first_and_redacted() {
+        let document = AgentHistoryDocument {
+            diagnostics: (0..25)
+                .map(|index| AgentDiagnosticHistoryEntry {
+                    schema_version: 1,
+                    captured_at: index,
+                    revision: "a".repeat(64),
+                    health: "warning".into(),
+                    core_state: "running".into(),
+                    service_state: "stopped".into(),
+                    finding_codes: vec!["weak_controller_secret".into()],
+                    probe_failure_codes: vec!["profiles_unavailable".into()],
+                })
+                .collect(),
+            audits: VecDeque::new(),
+        };
+        let view = project_diagnostic_history(&document);
+        assert_eq!(view.retained_events, 25);
+        assert_eq!(view.entries.len(), 20);
+        assert_eq!(view.entries[0].captured_at, 24);
+        assert_eq!(view.entries[19].captured_at, 5);
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            !json.contains(&"a".repeat(64)),
+            "revisions must stay private"
+        );
+        assert!(!json.contains("proposal_id"));
+        assert!(json.contains("profiles_unavailable"));
+    }
+
+    #[test]
+    fn diagnostic_history_rejects_unrecognized_codes_and_retains_profiles_failure() {
+        let mut entry = AgentDiagnosticHistoryEntry {
+            schema_version: 1,
+            captured_at: 100,
+            revision: "b".repeat(64),
+            health: "degraded".into(),
+            core_state: "unknown".into(),
+            service_state: "unknown".into(),
+            finding_codes: vec!["tun_runtime_mismatch".into(), "tun_runtime_mismatch".into()],
+            probe_failure_codes: vec![
+                enum_code(&crate::features::agent::model::AgentProbeCode::ProfilesUnavailable)
+                    .unwrap(),
+            ],
+        };
+        assert!(normalize_diagnostic_entry(&mut entry));
+        assert_eq!(entry.finding_codes, ["tun_runtime_mismatch"]);
+        entry.finding_codes.push("canary-secret-url".into());
+        assert!(!normalize_diagnostic_entry(&mut entry));
+    }
 
     /// HISTORY-READONLY: A corrupt file is left byte-for-byte intact by the
     /// inspection path. The existing write path may still quarantine it.
