@@ -33,6 +33,8 @@ pub enum ClashCore {
     MihomoAlpha,
     #[serde(rename = "clash-rs-alpha")]
     ClashRsAlpha,
+    #[serde(rename = "chimera-client-alpha")]
+    ChimeraClientAlpha,
 }
 
 impl Default for ClashCore {
@@ -52,6 +54,9 @@ impl From<&ClashCore> for chimera_utils::core::CoreType {
             ClashCore::ClashRs => ClashCoreType::ClashRust,
             ClashCore::Mihomo => ClashCoreType::Mihomo,
             ClashCore::ChimeraClient => ClashCoreType::ChimeraClient,
+            // Alpha is a separate distributed binary but keeps the same
+            // Chimera Client behavior and config contract.
+            ClashCore::ChimeraClientAlpha => ClashCoreType::ChimeraClient,
             ClashCore::MihomoAlpha => ClashCoreType::MihomoAlpha,
             ClashCore::ClashRsAlpha => ClashCoreType::ClashRustAlpha,
         })
@@ -78,5 +83,29 @@ impl TryFrom<&chimera_utils::core::CoreType> for ClashCore {
             },
             _ => Err(UnsupportedCoreTypeError(core.clone())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClashCore;
+    use chimera_utils::core::{ClashCoreType, CoreType};
+
+    #[test]
+    fn chimera_client_alpha_keeps_its_channel_in_the_application_contract() {
+        let core = ClashCore::ChimeraClientAlpha;
+
+        assert_eq!(
+            serde_json::to_string(&core).unwrap(),
+            "\"chimera-client-alpha\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ClashCore>("\"chimera-client-alpha\"").unwrap(),
+            core
+        );
+        assert_eq!(
+            CoreType::from(&core),
+            CoreType::Clash(ClashCoreType::ChimeraClient)
+        );
     }
 }

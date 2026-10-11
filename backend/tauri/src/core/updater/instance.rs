@@ -13,6 +13,7 @@ use crate::{
 use anyhow::anyhow;
 use serde::Serialize;
 use specta::Type;
+use std::io::{Read, Write};
 #[cfg(target_family = "unix")]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
@@ -177,6 +178,10 @@ impl Updater {
         let buff = tokio::task::spawn_blocking(move || {
             let mut buff = Vec::<u8>::new();
             match artifact {
+                fname if fname.ends_with(".tar.gz") => {
+                    tracing::debug!("extracting tar.gz core archive");
+                    extract_tar_gz_core(&mut tmp_file, &mut buff)?;
+                }
                 fname if fname.ends_with(".gz") => {
                     tracing::debug!("decompressing gz file");
                     let mut decoder = flate2::read::GzDecoder::new(&mut tmp_file);
@@ -332,5 +337,63 @@ impl Updater {
 
     pub fn get_updater_id(&self) -> usize {
         self.id
+    }
+}
+
+fn extract_tar_gz_core(reader: impl Read, output: &mut impl Write) -> anyhow::Result<()> {
+    let decoder = flate2::read::GzDecoder::new(reader);
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if entry
+            .path()?
+            .file_name()
+            .is_some_and(|name| name == "clash-rs")
+        {
+            std::io::copy(&mut entry, output)?;
+            return Ok(());
+        }
+    }
+    anyhow::bail!("failed to find Chimera Client executable in tar.gz archive")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::extract_tar_gz_core;
+
+    /// Contract: update archives must install the embedded core executable,
+    /// while unrelated archive entries and paths are never unpacked to disk.
+    #[test]
+    fn tar_gz_extracts_only_the_chimera_client_executable() {
+        let archive = tar_gz(&[("README.txt", b"metadata"), ("bundle/clash-rs", b"core")]);
+        let mut output = Vec::new();
+
+        extract_tar_gz_core(Cursor::new(archive), &mut output).unwrap();
+
+        assert_eq!(output, b"core");
+    }
+
+    #[test]
+    fn tar_gz_without_the_executable_fails_without_writing_output() {
+        let archive = tar_gz(&[("bundle/other-core", b"wrong core")]);
+        let mut output = b"unchanged".to_vec();
+
+        assert!(extract_tar_gz_core(Cursor::new(archive), &mut output).is_err());
+        assert_eq!(output, b"unchanged");
+    }
+
+    fn tar_gz(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        for (name, bytes) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            archive.append_data(&mut header, *name, *bytes).unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap()
     }
 }

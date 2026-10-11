@@ -62,6 +62,8 @@ pub enum ClashCoreResourceVariant {
     ClashRust,
     #[serde(rename = "clash-rs-alpha")]
     ClashRustAlpha,
+    #[serde(rename = "chimera-client-alpha")]
+    ChimeraClientAlpha,
     #[serde(rename = "clash")]
     ClashPremium,
     #[serde(rename = "meow")]
@@ -82,6 +84,9 @@ impl ClashCoreResourceVariant {
             }
             ClashCoreResourceVariant::ClashRustAlpha => {
                 concat!("clash-rs-alpha", EXE_SUFFIX)
+            }
+            ClashCoreResourceVariant::ChimeraClientAlpha => {
+                concat!("chimera-client-alpha", EXE_SUFFIX)
             }
             ClashCoreResourceVariant::ClashPremium => {
                 concat!("clash", EXE_SUFFIX)

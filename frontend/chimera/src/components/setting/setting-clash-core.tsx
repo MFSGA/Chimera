@@ -56,10 +56,14 @@ export const SettingClashCore = () => {
 
       await switchCore.mutateAsync(core);
 
-      message(m.settings_clash_core_switch_success() + ClashCores[core], {
-        kind: 'info',
-        title: m.common_success(),
-      });
+      message(
+        m.settings_clash_core_switch_success() +
+          ClashCores[core as keyof typeof ClashCores],
+        {
+          kind: 'info',
+          title: m.common_success(),
+        },
+      );
     } catch (e) {
       message(
         m.settings_clash_core_switch_failed() +

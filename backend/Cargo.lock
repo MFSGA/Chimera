@@ -1124,6 +1124,7 @@ dependencies = [
  "strum",
  "sysinfo 0.39.6",
  "sysproxy",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
