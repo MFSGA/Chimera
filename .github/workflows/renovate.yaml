@@ -2,7 +2,7 @@ name: Renovate
 
 on:
   schedule:
-    - cron: '30 3 * * *' # 03:30 UTC, adjust if a different window is desired
+    - cron: '0 */6 * * *' # Recheck green Renovate PRs every six hours for automerge
   workflow_dispatch:
   push:
     branches:
