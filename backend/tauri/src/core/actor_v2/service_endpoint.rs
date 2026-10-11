@@ -278,9 +278,10 @@ mod tests {
     use chimera_ipc::api::core::v2::CoreCommandInfo;
 
     #[test]
-    fn reconcile_wire_keeps_chimera_client_core_identity() {
-        let core_type =
-            chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::ChimeraClient);
+    fn reconcile_wire_keeps_chimera_client_alpha_channel_identity() {
+        let core_type = chimera_utils::core::CoreType::Clash(
+            chimera_utils::core::ClashCoreType::ChimeraClientAlpha,
+        );
         let submission = CoreSubmission {
             expected_owner: None,
             envelope: CoreCommandEnvelope {
@@ -288,7 +289,7 @@ mod tests {
                 command: CoreCommand::Reconcile(Box::new(ReconcileRequest {
                     core: CoreSpec {
                         kind: CoreKind::ChimeraClient,
-                        binary_path: Utf8PathBuf::from("/opt/chimera/chimera-client"),
+                        binary_path: Utf8PathBuf::from("/opt/chimera/chimera-client-alpha"),
                         version: None,
                         features: Vec::new(),
                     },

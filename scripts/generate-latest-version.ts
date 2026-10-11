@@ -3,6 +3,7 @@ import * as path from 'jsr:@std/path';
 import { colorize, consola } from './deno/utils/logger.ts';
 import {
   resolveChimeraClient,
+  resolveChimeraClientAlpha,
   resolveClashPremium,
   resolveClashRs,
   resolveClashRsAlpha,
@@ -25,6 +26,7 @@ type SupportedCore =
   | 'mihomo_alpha'
   | 'clash_rs'
   | 'chimera_client'
+  | 'chimera_client_alpha'
   | 'clash_rs_alpha'
   | 'clash_premium';
 
@@ -42,6 +44,7 @@ const resolvers = [
   resolveMihomoAlpha,
   resolveClashRs,
   resolveChimeraClient,
+  resolveChimeraClientAlpha,
   resolveClashPremium,
   resolveClashRsAlpha,
 ];

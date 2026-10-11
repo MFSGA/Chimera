@@ -33,6 +33,8 @@ pub enum ClashCore {
     MihomoAlpha,
     #[serde(rename = "clash-rs-alpha")]
     ClashRsAlpha,
+    #[serde(rename = "chimera-client-alpha")]
+    ChimeraClientAlpha,
 }
 
 impl Default for ClashCore {
@@ -52,6 +54,9 @@ impl From<&ClashCore> for chimera_utils::core::CoreType {
             ClashCore::ClashRs => ClashCoreType::ClashRust,
             ClashCore::Mihomo => ClashCoreType::Mihomo,
             ClashCore::ChimeraClient => ClashCoreType::ChimeraClient,
+            // Alpha keeps the same manager kind, but its wire identity selects
+            // the separately distributed executable on service hosts.
+            ClashCore::ChimeraClientAlpha => ClashCoreType::ChimeraClientAlpha,
             ClashCore::MihomoAlpha => ClashCoreType::MihomoAlpha,
             ClashCore::ClashRsAlpha => ClashCoreType::ClashRustAlpha,
         })
@@ -75,8 +80,37 @@ impl TryFrom<&chimera_utils::core::CoreType> for ClashCore {
                 ClashCoreType::Mihomo => Ok(Self::Mihomo),
                 ClashCoreType::MihomoAlpha => Ok(Self::MihomoAlpha),
                 ClashCoreType::ChimeraClient => Ok(Self::ChimeraClient),
+                ClashCoreType::ChimeraClientAlpha => Ok(Self::ChimeraClientAlpha),
             },
             _ => Err(UnsupportedCoreTypeError(core.clone())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClashCore;
+    use chimera_utils::core::{ClashCoreType, CoreType};
+
+    #[test]
+    fn chimera_client_alpha_keeps_its_channel_in_the_application_contract() {
+        let core = ClashCore::ChimeraClientAlpha;
+
+        assert_eq!(
+            serde_json::to_string(&core).unwrap(),
+            "\"chimera-client-alpha\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ClashCore>("\"chimera-client-alpha\"").unwrap(),
+            core
+        );
+        assert_eq!(
+            CoreType::from(&core),
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha)
+        );
+        assert_eq!(
+            ClashCore::try_from(&CoreType::Clash(ClashCoreType::ChimeraClientAlpha)).unwrap(),
+            core
+        );
     }
 }

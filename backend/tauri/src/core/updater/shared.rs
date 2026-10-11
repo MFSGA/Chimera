@@ -30,6 +30,7 @@ pub(super) enum CoreTypeMeta {
     MihomoAlpha,
     ClashRs(String),
     ChimeraClient(String),
+    ChimeraClientAlpha,
     ClashRsAlpha,
 }
 
@@ -46,6 +47,9 @@ pub(super) fn get_download_path(core_type: CoreTypeMeta, artifact: &str) -> Stri
         }
         CoreTypeMeta::ChimeraClient(tag) => {
             format!("MFSGA/Chimera_Client/releases/download/{tag}/{artifact}")
+        }
+        CoreTypeMeta::ChimeraClientAlpha => {
+            format!("MFSGA/Chimera_Client/releases/download/latest/{artifact}")
         }
         CoreTypeMeta::ClashRsAlpha => {
             format!("ibigbug/clash-rs/releases/download/latest/{artifact}")

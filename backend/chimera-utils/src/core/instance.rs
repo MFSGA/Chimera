@@ -42,7 +42,8 @@ fn core_command_args(
             CoreType::Clash(
                 ClashCoreType::ClashRust
                 | ClashCoreType::ClashRustAlpha
-                | ClashCoreType::ChimeraClient,
+                | ClashCoreType::ChimeraClient
+                | ClashCoreType::ChimeraClientAlpha,
             ) => "-c",
             CoreType::SingBox => unimplemented!("SingBox is not supported yet"),
             _ => "-f",
@@ -222,6 +223,7 @@ impl CoreInstance {
                     ClashCoreType::ClashRust
                         | ClashCoreType::ClashRustAlpha
                         | ClashCoreType::ChimeraClient
+                        | ClashCoreType::ChimeraClientAlpha
                 )
             ) {
                 super::utils::parse_check_output(

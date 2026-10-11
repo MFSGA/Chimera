@@ -196,6 +196,7 @@ export const commands = {
       | 'chimera_client'
       | 'mihomo-alpha'
       | 'clash-rs-alpha'
+      | 'chimera-client-alpha'
       | null,
   ) =>
     typedError<null, string>(
@@ -811,7 +812,8 @@ export type ClashCoreType =
   | 'clash-rs'
   | 'clash-rs-alpha'
   | 'clash'
-  | 'chimera_client';
+  | 'chimera_client'
+  | 'chimera_client_alpha';
 
 export type ClashCore_Deserialize =
   | 'clash'
@@ -823,7 +825,8 @@ export type ClashCore_Deserialize =
   | 'chimera'
   | 'chimera_client'
   | 'mihomo-alpha'
-  | 'clash-rs-alpha';
+  | 'clash-rs-alpha'
+  | 'chimera-client-alpha';
 
 export type ClashCore_Serialize =
   | 'clash'
@@ -831,7 +834,8 @@ export type ClashCore_Serialize =
   | 'mihomo'
   | 'chimera-client'
   | 'mihomo-alpha'
-  | 'clash-rs-alpha';
+  | 'clash-rs-alpha'
+  | 'chimera-client-alpha';
 
 export type ClashInfo = {
   /**  clash core port */
@@ -1639,6 +1643,7 @@ export type ManifestVersionLatest = {
   mihomo_alpha: string;
   clash_rs: string;
   chimera_client: string;
+  chimera_client_alpha?: string;
   clash_rs_alpha: string;
   clash_premium: string;
 };

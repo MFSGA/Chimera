@@ -311,9 +311,10 @@ pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore)
         ClashCore::ClashPremium | ClashCore::Mihomo | ClashCore::MihomoAlpha => {
             shell.sidecar(core)?.args(["-v"])
         }
-        ClashCore::ClashRs | ClashCore::ClashRsAlpha | ClashCore::ChimeraClient => {
-            shell.sidecar(core)?.args(["-V"])
-        }
+        ClashCore::ClashRs
+        | ClashCore::ClashRsAlpha
+        | ClashCore::ChimeraClient
+        | ClashCore::ChimeraClientAlpha => shell.sidecar(core)?.args(["-V"]),
     };
     let out = cmd.output().await?;
     if !out.status.success() {
@@ -329,13 +330,37 @@ pub async fn resolve_core_version(app_handle: &AppHandle, core_type: &ClashCore)
             || item.starts_with("alpha")
             || Version::parse(item).is_ok()
         {
-            match core_type {
-                ClashCore::ClashRs | ClashCore::ChimeraClient => return Ok(format!("v{}", item)),
-                _ => return Ok(item.to_string()),
-            }
+            return Ok(format_core_version(core_type, item));
         }
     }
     Err(anyhow::anyhow!("failed to get core version"))
+}
+
+fn format_core_version(core_type: &ClashCore, version: &str) -> String {
+    match core_type {
+        ClashCore::ClashRs | ClashCore::ChimeraClient => format!("v{version}"),
+        _ => version.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod core_version_tests {
+    use super::format_core_version;
+    use crate::config::chimera::ClashCore;
+
+    #[test]
+    fn alpha_version_matches_its_manifest_without_a_false_update_badge() {
+        let version = "0.26.3-alpha+sha.229218a";
+
+        assert_eq!(
+            format_core_version(&ClashCore::ChimeraClientAlpha, version),
+            version
+        );
+        assert_eq!(
+            format_core_version(&ClashCore::ChimeraClient, "0.26.3"),
+            "v0.26.3"
+        );
+    }
 }
 
 #[cfg(test)]

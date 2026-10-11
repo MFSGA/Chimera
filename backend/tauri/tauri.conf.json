@@ -41,6 +41,7 @@
       "sidecar/mihomo",
       "sidecar/clash-rs",
       "sidecar/chimera-client",
+      "sidecar/chimera-client-alpha",
       "sidecar/clash-rs-alpha",
       "sidecar/chimera-service"
     ]

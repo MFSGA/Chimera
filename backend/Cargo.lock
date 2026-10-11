@@ -1124,6 +1124,7 @@ dependencies = [
  "strum",
  "sysinfo 0.39.6",
  "sysproxy",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -1278,7 +1279,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.10.1"
+version = "1.10.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -1318,7 +1319,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service-core-metadata"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "constcat",
  "enumset",
@@ -1374,7 +1375,7 @@ dependencies = [
 [[package]]
 name = "chimera_utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#17809a1ccded8caf83e4803f99ad8e7e29cdee20"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "camino",
  "constcat",
@@ -5188,7 +5189,7 @@ dependencies = [
 [[package]]
 name = "os-utils"
 version = "0.1.0"
-source = "git+https://github.com/MFSGA/Chimera_Utils.git#17809a1ccded8caf83e4803f99ad8e7e29cdee20"
+source = "git+https://github.com/MFSGA/Chimera_Utils.git#d1884e1bfed2cdfb3f9ecfc8451326248a3cadf8"
 dependencies = [
  "nix 0.31.3",
  "shared_child",

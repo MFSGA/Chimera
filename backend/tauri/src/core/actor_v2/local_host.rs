@@ -54,12 +54,22 @@ pub(crate) async fn build(paths: &PathResolver) -> Result<CoreControl> {
 /// by the shared process manager. `ChimeraClient` deliberately keeps its own
 /// kind even though it accepts the clash-rs command line.
 pub(crate) fn core_spec(core: &ClashCore) -> Result<CoreSpec> {
-    core_spec_with(core, crate::core::clash::core::find_binary_path)
+    core_spec_with(core, |core, core_type| {
+        if *core == ClashCore::ChimeraClientAlpha {
+            let binary_name = format!("chimera-client-alpha{}", std::env::consts::EXE_SUFFIX);
+            crate::core::clash::core::find_binary_path_by_name(&binary_name)
+        } else {
+            crate::core::clash::core::find_binary_path(core_type)
+        }
+    })
 }
 
 fn core_spec_with(
     core: &ClashCore,
-    find_binary: impl FnOnce(&chimera_utils::core::CoreType) -> std::io::Result<std::path::PathBuf>,
+    find_binary: impl FnOnce(
+        &ClashCore,
+        &chimera_utils::core::CoreType,
+    ) -> std::io::Result<std::path::PathBuf>,
 ) -> Result<CoreSpec> {
     let core_type: chimera_utils::core::CoreType = core.into();
     let kind = match core {
@@ -67,8 +77,9 @@ fn core_spec_with(
         ClashCore::ClashRs | ClashCore::ClashRsAlpha => CoreKind::ClashRust,
         ClashCore::Mihomo | ClashCore::MihomoAlpha => CoreKind::Mihomo,
         ClashCore::ChimeraClient => CoreKind::ChimeraClient,
+        ClashCore::ChimeraClientAlpha => CoreKind::ChimeraClient,
     };
-    let binary_path = to_utf8(find_binary(&core_type)?)?;
+    let binary_path = to_utf8(find_binary(core, &core_type)?)?;
 
     Ok(CoreSpec {
         kind,
@@ -113,11 +124,17 @@ mod tests {
             (ClashCore::Mihomo, CoreKind::Mihomo),
             (ClashCore::MihomoAlpha, CoreKind::Mihomo),
             (ClashCore::ChimeraClient, CoreKind::ChimeraClient),
+            (ClashCore::ChimeraClientAlpha, CoreKind::ChimeraClient),
         ];
 
         for (core, expected_kind) in variants {
-            let spec = core_spec_with(&core, |core_type| {
-                Ok(root.path().join(core_type.get_executable_name()))
+            let spec = core_spec_with(&core, |core, core_type| {
+                let name = if *core == ClashCore::ChimeraClientAlpha {
+                    "chimera-client-alpha"
+                } else {
+                    core_type.get_executable_name()
+                };
+                Ok(root.path().join(name))
             })
             .unwrap();
 
@@ -131,7 +148,7 @@ mod tests {
     #[test]
     fn chimera_client_keeps_its_manager_identity() {
         let root = tempfile::TempDir::new().unwrap();
-        let spec = core_spec_with(&ClashCore::ChimeraClient, |core_type| {
+        let spec = core_spec_with(&ClashCore::ChimeraClient, |_, core_type| {
             Ok(root.path().join(core_type.get_executable_name()))
         })
         .unwrap();
@@ -146,7 +163,7 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;
-            let error = core_spec_with(&ClashCore::Mihomo, |_| {
+            let error = core_spec_with(&ClashCore::Mihomo, |_, _| {
                 Ok(std::path::PathBuf::from(std::ffi::OsString::from_vec(
                     vec![0xff],
                 )))
@@ -164,6 +181,7 @@ mod tests {
             ClashCore::Mihomo => "mihomo",
             ClashCore::MihomoAlpha => "mihomo-alpha",
             ClashCore::ChimeraClient => "chimera-client",
+            ClashCore::ChimeraClientAlpha => "chimera-client-alpha",
         }
     }
 }

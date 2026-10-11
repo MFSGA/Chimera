@@ -39,6 +39,7 @@ interface VersionManifest {
     mihomo_alpha: string;
     clash_rs: string;
     chimera_client: string;
+    chimera_client_alpha: string;
     clash_premium: string;
     clash_rs_alpha: string;
   };
@@ -47,6 +48,7 @@ interface VersionManifest {
     mihomo_alpha: ArchMapping;
     clash_rs: ArchMapping;
     chimera_client: ArchMapping;
+    chimera_client_alpha: ArchMapping;
     clash_premium: ArchMapping;
     clash_rs_alpha: ArchMapping;
   };
@@ -263,6 +265,14 @@ const CHIMERA_CLIENT_MANIFEST: ClashManifest = {
   ARCH_MAPPING: versionManifest.arch_template.chimera_client as ArchMapping,
 };
 
+const CHIMERA_CLIENT_ALPHA_MANIFEST: ClashManifest = {
+  URL_PREFIX:
+    'https://github.com/MFSGA/Chimera_Client/releases/download/latest',
+  VERSION: versionManifest.latest.chimera_client_alpha,
+  ARCH_MAPPING: versionManifest.arch_template
+    .chimera_client_alpha as ArchMapping,
+};
+
 // === Download ===
 
 async function downloadFile(
@@ -442,16 +452,15 @@ async function resolveSidecar(
 
   await ensureDir(sidecarDir);
 
-  // chimera-service's cached target is only trusted alongside a version
-  // stamp file (`<targetFile>.version`, written after a successful
-  // materialization below) whose contents match the requested version.
-  // Without a matching stamp - missing, stale, or --force - the daemon is
-  // re-downloaded and the target is re-materialized from the archive.
-  const cachedTargetIsValid =
-    name === 'chimera-service'
-      ? (await exists(sidecarPath)) &&
-        (await readVersionStamp(versionStampPath)) === version
-      : await exists(sidecarPath);
+  // Mutable alpha releases and chimera-service targets are trusted only
+  // alongside a matching version stamp, so updated release contents replace
+  // stale cached binaries even when the target filename remains unchanged.
+  const versionManagedTarget =
+    name === 'chimera-service' || name === 'chimera-client-alpha';
+  const cachedTargetIsValid = versionManagedTarget
+    ? (await exists(sidecarPath)) &&
+      (await readVersionStamp(versionStampPath)) === version
+    : await exists(sidecarPath);
 
   if (!options?.force && cachedTargetIsValid) {
     return {
@@ -467,7 +476,7 @@ async function resolveSidecar(
   const tempExe = path.join(tempDir, exeFile);
   const checksumFile = `${tempFile}.sha256`;
 
-  if (options?.force || name === 'chimera-service') {
+  if (options?.force || versionManagedTarget) {
     try {
       await Deno.remove(tempDir, { recursive: true });
     } catch (error) {
@@ -498,7 +507,7 @@ async function resolveSidecar(
       checksumPath: checksumURL ? checksumFile : undefined,
       targetPath: sidecarPath,
       versionStampPath:
-        name === 'chimera-service' && version ? versionStampPath : undefined,
+        versionManagedTarget && version ? versionStampPath : undefined,
       version,
       stage: async (stagedPath) => {
         if (tmpFile.endsWith('.zip')) {
@@ -604,6 +613,25 @@ function getChimeraClientInfo(): BinInfo {
     exeFile,
     tmpFile: name,
     downloadURL,
+  };
+}
+
+function getChimeraClientAlphaInfo(): BinInfo {
+  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_ALPHA_MANIFEST;
+  const archLabel = mapArch(platform, arch);
+  const stableVersion = versionManifest.latest.chimera_client.replace(/^v/, '');
+  const name = ARCH_MAPPING[archLabel].replace('{}', stableVersion);
+  const isWin = platform === 'win32';
+  const exeFile = archLabel.startsWith('darwin-')
+    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
+    : name;
+  return {
+    name: 'chimera-client-alpha',
+    version: VERSION,
+    targetFile: `chimera-client-alpha-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
+    exeFile,
+    tmpFile: name,
+    downloadURL: `${URL_PREFIX}/${name}`,
   };
 }
 
@@ -920,6 +948,13 @@ const tasks: Array<{
     name: 'clash-rs-alpha',
     func: (onProgress) =>
       resolveSidecar(getClashRustAlphaInfo(), { force: FORCE, onProgress }),
+    retry: 5,
+  },
+  {
+    name: 'chimera-client-alpha',
+    version: versionManifest.latest.chimera_client_alpha,
+    func: (onProgress) =>
+      resolveSidecar(getChimeraClientAlphaInfo(), { force: FORCE, onProgress }),
     retry: 5,
   },
   {

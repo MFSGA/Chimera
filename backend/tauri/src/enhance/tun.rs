@@ -34,7 +34,7 @@ pub(super) fn params_for(clash: &ClashConfig, core: ClashCore) -> TunParams {
 pub(super) fn derive_tun_flavor(core: ClashCore, stack: TunStack) -> TunFlavor {
     match core {
         ClashCore::ClashRs => TunFlavor::ClashRs,
-        ClashCore::ChimeraClient => TunFlavor::ChimeraClient,
+        ClashCore::ChimeraClient | ClashCore::ChimeraClientAlpha => TunFlavor::ChimeraClient,
         _ => TunFlavor::Standard {
             stack: if core == ClashCore::ClashPremium && stack == TunStack::Mixed {
                 TunStack::Gvisor
@@ -309,6 +309,10 @@ mod tests {
         );
         assert_eq!(
             derive_tun_flavor(ClashCore::ChimeraClient, TunStack::System),
+            TunFlavor::ChimeraClient
+        );
+        assert_eq!(
+            derive_tun_flavor(ClashCore::ChimeraClientAlpha, TunStack::System),
             TunFlavor::ChimeraClient
         );
     }

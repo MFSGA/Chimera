@@ -9,6 +9,7 @@ import { TAURI_APP_DIR, TEMP_DIR } from './env';
 import { colorize, consola } from './logger';
 import { NodeArch } from './manifest';
 import {
+  getChimeraClientAlphaInfo,
   getChimeraClientInfo,
   getClashMetaInfo,
   getClashRustAlphaInfo,
@@ -75,6 +76,10 @@ export class Resolve {
 
   public async chimeraClient() {
     return await this.sidecar(getChimeraClientInfo(this.infoOption));
+  }
+
+  public async chimeraClientAlpha() {
+    return await this.sidecar(getChimeraClientAlphaInfo(this.infoOption));
   }
 
   public async clashRustAlpha() {

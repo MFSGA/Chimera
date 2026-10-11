@@ -57,6 +57,7 @@ const MIHOMO_FAMILY: &[chimera_config::application::ClashCore] = &[
     chimera_config::application::ClashCore::Mihomo,
     chimera_config::application::ClashCore::MihomoAlpha,
     chimera_config::application::ClashCore::ChimeraClient,
+    chimera_config::application::ClashCore::ChimeraClientAlpha,
 ];
 const ALL_CORES: &[chimera_config::application::ClashCore] = &[
     chimera_config::application::ClashCore::ClashPremium,
@@ -65,6 +66,7 @@ const ALL_CORES: &[chimera_config::application::ClashCore] = &[
     chimera_config::application::ClashCore::MihomoAlpha,
     chimera_config::application::ClashCore::ClashRsAlpha,
     chimera_config::application::ClashCore::ChimeraClient,
+    chimera_config::application::ClashCore::ChimeraClientAlpha,
 ];
 const CLASH_RS_ONLY: &[chimera_config::application::ClashCore] =
     &[chimera_config::application::ClashCore::ClashRs];
@@ -123,7 +125,11 @@ pub fn derive_tun_flavor(
     if core == chimera_config::application::ClashCore::ClashRs {
         return TunFlavor::ClashRs;
     }
-    if core == chimera_config::application::ClashCore::ChimeraClient {
+    if matches!(
+        core,
+        chimera_config::application::ClashCore::ChimeraClient
+            | chimera_config::application::ClashCore::ChimeraClientAlpha
+    ) {
         return TunFlavor::ChimeraClient;
     }
     let stack = if core == chimera_config::application::ClashCore::ClashPremium
@@ -281,6 +287,9 @@ fn map_core(core: LegacyClashCore) -> chimera_config::application::ClashCore {
         LegacyClashCore::MihomoAlpha => chimera_config::application::ClashCore::MihomoAlpha,
         LegacyClashCore::ClashRsAlpha => chimera_config::application::ClashCore::ClashRsAlpha,
         LegacyClashCore::ChimeraClient => chimera_config::application::ClashCore::ChimeraClient,
+        LegacyClashCore::ChimeraClientAlpha => {
+            chimera_config::application::ClashCore::ChimeraClientAlpha
+        }
     }
 }
 
@@ -346,9 +355,14 @@ mod tests {
             names(chimera_config::application::ClashCore::ClashRsAlpha),
             vec!["config_fixer"]
         );
+        let expected = vec!["verge_hy_alpn", "verge_meta_guard", "config_fixer"];
         assert_eq!(
             names(chimera_config::application::ClashCore::ChimeraClient),
-            vec!["verge_hy_alpn", "verge_meta_guard", "config_fixer"]
+            expected
+        );
+        assert_eq!(
+            names(chimera_config::application::ClashCore::ChimeraClientAlpha),
+            expected
         );
     }
 

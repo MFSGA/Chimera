@@ -1,5 +1,6 @@
 // import { ArchMapping } from 'utils/manifest';
 import { CHIMERA_CLIENT_MANIFEST } from '../manifest/chimera-client';
+import { CHIMERA_CLIENT_ALPHA_MANIFEST } from '../manifest/chimera-client-alpha';
 import { CLASH_META_MANIFEST } from '../manifest/clash-meta';
 import {
   CLASH_RS_ALPHA_MANIFEST,
@@ -103,6 +104,34 @@ export const getClashRustInfo = ({
   };
 };
 
+export const getChimeraClientAlphaInfo = ({
+  platform,
+  arch,
+  sidecarHost,
+}: {
+  platform: string;
+  arch: string;
+  sidecarHost?: string;
+}): BinInfo => {
+  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_ALPHA_MANIFEST;
+  const archLabel = mappingArch(platform as NodeJS.Platform, arch as NodeArch);
+  const assetVersion = CHIMERA_CLIENT_MANIFEST.VERSION!.replace(/^v/, '');
+  const name = ARCH_MAPPING[archLabel].replace('{}', assetVersion);
+  const isWin = platform === 'win32';
+  const exeFile = archLabel.startsWith('darwin-')
+    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
+    : name;
+
+  return {
+    name: 'chimera-client-alpha',
+    version: VERSION,
+    targetFile: `chimera-client-alpha-${sidecarHost}${isWin ? '.exe' : ''}`,
+    exeFile,
+    tmpFile: name,
+    downloadURL: `${URL_PREFIX}/${name}`,
+  };
+};
+
 export const getChimeraClientInfo = ({
   platform,
   arch,
@@ -119,7 +148,9 @@ export const getChimeraClientInfo = ({
 
   const isWin = platform === 'win32';
 
-  const exeFile = `${name}`;
+  const exeFile = archLabel.startsWith('darwin-')
+    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
+    : `${name}`;
 
   const downloadURL = `${URL_PREFIX}${VERSION}/${name}`;
 

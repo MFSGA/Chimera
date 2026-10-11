@@ -187,6 +187,7 @@ pub(crate) fn legacy_core_from_typed(core: AppClashCore) -> ClashCore {
         AppClashCore::ClashRs => ClashCore::ClashRs,
         AppClashCore::Mihomo => ClashCore::Mihomo,
         AppClashCore::ChimeraClient => ClashCore::ChimeraClient,
+        AppClashCore::ChimeraClientAlpha => ClashCore::ChimeraClientAlpha,
         AppClashCore::MihomoAlpha => ClashCore::MihomoAlpha,
         AppClashCore::ClashRsAlpha => ClashCore::ClashRsAlpha,
     }
@@ -198,6 +199,7 @@ pub(crate) fn typed_core_from_legacy(core: ClashCore) -> AppClashCore {
         ClashCore::ClashRs => AppClashCore::ClashRs,
         ClashCore::Mihomo => AppClashCore::Mihomo,
         ClashCore::ChimeraClient => AppClashCore::ChimeraClient,
+        ClashCore::ChimeraClientAlpha => AppClashCore::ChimeraClientAlpha,
         ClashCore::MihomoAlpha => AppClashCore::MihomoAlpha,
         ClashCore::ClashRsAlpha => AppClashCore::ClashRsAlpha,
     }
@@ -284,5 +286,13 @@ mod tests {
         assert!(typed.enable_builtin_enhanced);
         assert_eq!(typed.max_log_files, 7);
         assert_eq!(typed.traffic_retention, TrafficRetention::SevenDays);
+    }
+
+    #[test]
+    fn chimera_client_alpha_channel_survives_legacy_bridge_round_trip() {
+        let core = AppClashCore::ChimeraClientAlpha;
+
+        assert_eq!(legacy_core_from_typed(core), ClashCore::ChimeraClientAlpha);
+        assert_eq!(typed_core_from_legacy(ClashCore::ChimeraClientAlpha), core);
     }
 }

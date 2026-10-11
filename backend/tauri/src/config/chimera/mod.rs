@@ -31,6 +31,8 @@ pub enum ClashCore {
     MihomoAlpha,
     #[serde(rename = "clash-rs-alpha")]
     ClashRsAlpha,
+    #[serde(rename = "chimera-client-alpha")]
+    ChimeraClientAlpha,
 }
 
 impl Default for ClashCore {
@@ -61,6 +63,10 @@ impl From<&ClashCore> for chimera_utils::core::CoreType {
             ClashCore::ChimeraClient => chimera_utils::core::CoreType::Clash(
                 chimera_utils::core::ClashCoreType::ChimeraClient,
             ),
+            // Both channels use Chimera Client's config/runtime contract.
+            ClashCore::ChimeraClientAlpha => chimera_utils::core::CoreType::Clash(
+                chimera_utils::core::ClashCoreType::ChimeraClientAlpha,
+            ),
         }
     }
 }
@@ -74,6 +80,7 @@ impl std::fmt::Display for ClashCore {
             ClashCore::MihomoAlpha => write!(f, "mihomo-alpha"),
             ClashCore::ClashRsAlpha => write!(f, "clash-rs-alpha"),
             ClashCore::ChimeraClient => write!(f, "chimera-client"),
+            ClashCore::ChimeraClientAlpha => write!(f, "chimera-client-alpha"),
         }
     }
 }
@@ -303,6 +310,24 @@ impl AsRef<str> for TunStack {
             TunStack::Gvisor => "gvisor",
             TunStack::Mixed => "mixed",
         }
+    }
+}
+
+#[cfg(test)]
+mod core_type_tests {
+    use super::ClashCore;
+    use chimera_utils::core::{ClashCoreType, CoreType};
+
+    #[test]
+    fn chimera_client_alpha_uses_its_service_wire_identity() {
+        assert_eq!(
+            CoreType::from(&ClashCore::ChimeraClient),
+            CoreType::Clash(ClashCoreType::ChimeraClient)
+        );
+        assert_eq!(
+            CoreType::from(&ClashCore::ChimeraClientAlpha),
+            CoreType::Clash(ClashCoreType::ChimeraClientAlpha)
+        );
     }
 }
 

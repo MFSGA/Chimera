@@ -65,6 +65,8 @@ pub struct ManifestVersionLatest {
     mihomo_alpha: String,
     clash_rs: String,
     chimera_client: String,
+    #[serde(default)]
+    chimera_client_alpha: String,
     clash_rs_alpha: String,
     clash_premium: String,
 }
@@ -77,6 +79,8 @@ pub struct ArchTemplate {
     clash_rs_alpha: HashMap<String, String>,
     clash_premium: HashMap<String, String>,
     chimera_client: HashMap<String, String>,
+    #[serde(default)]
+    chimera_client_alpha: HashMap<String, String>,
 }
 
 impl Default for ManifestVersion {
@@ -97,6 +101,7 @@ impl Default for ManifestVersionLatest {
             mihomo_alpha: String::new(),
             clash_rs: String::new(),
             chimera_client: String::new(),
+            chimera_client_alpha: String::new(),
             clash_rs_alpha: String::new(),
             clash_premium: String::new(),
         }
@@ -158,6 +163,14 @@ impl ManifestVersion {
                 } else {
                     self.latest.chimera_client.clone()
                 }),
+            )),
+            ClashCore::ChimeraClientAlpha => Some((
+                self.arch_template
+                    .chimera_client_alpha
+                    .get(arch)?
+                    .clone()
+                    .replace("{}", self.latest.chimera_client.trim_start_matches('v')),
+                shared::CoreTypeMeta::ChimeraClientAlpha,
             )),
             ClashCore::ClashRsAlpha => Some((
                 self.arch_template
@@ -286,5 +299,47 @@ impl UpdaterManager {
             });
         }
         Some(report)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::{ArchTemplate, ManifestVersion, ManifestVersionLatest, shared};
+    use crate::config::chimera::ClashCore;
+
+    #[test]
+    fn chimera_client_alpha_uses_latest_release_assets_and_alpha_identity() {
+        let arch = shared::get_arch().unwrap().to_owned();
+        let mut alpha_mapping = HashMap::new();
+        alpha_mapping.insert(arch.clone(), format!("chimera-client-{{}}-{arch}"));
+        let manifest = ManifestVersion {
+            manifest_version: 1,
+            latest: ManifestVersionLatest {
+                mihomo: String::new(),
+                mihomo_alpha: String::new(),
+                clash_rs: String::new(),
+                chimera_client: "v0.26.3".to_owned(),
+                chimera_client_alpha: "0.26.3-alpha+sha.0123456".to_owned(),
+                clash_rs_alpha: String::new(),
+                clash_premium: String::new(),
+            },
+            arch_template: ArchTemplate {
+                chimera_client_alpha: alpha_mapping,
+                ..Default::default()
+            },
+            updated_at: String::new(),
+        };
+
+        let (artifact, channel) = manifest
+            .get_matches(&ClashCore::ChimeraClientAlpha)
+            .expect("the current platform should have an alpha artifact");
+
+        assert_eq!(artifact, format!("chimera-client-0.26.3-{arch}"));
+        assert_eq!(
+            shared::get_download_path(channel, &artifact),
+            format!("MFSGA/Chimera_Client/releases/download/latest/{artifact}")
+        );
     }
 }

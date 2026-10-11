@@ -862,21 +862,25 @@ impl CoreManager {
 pub fn find_binary_path(
     core_type: &chimera_utils::core::CoreType,
 ) -> std::io::Result<std::path::PathBuf> {
+    find_binary_path_by_name(core_type.get_executable_name())
+}
+
+pub fn find_binary_path_by_name(binary_name: &str) -> std::io::Result<std::path::PathBuf> {
     let data_dir = dirs::app_data_dir()
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
-    let binary_path = data_dir.join(core_type.get_executable_name());
+    let binary_path = data_dir.join(binary_name);
     if binary_path.exists() {
         return Ok(binary_path);
     }
     let app_dir = dirs::app_install_dir()
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::NotFound, err.to_string()))?;
-    let binary_path = app_dir.join(core_type.get_executable_name());
+    let binary_path = app_dir.join(binary_name);
     if binary_path.exists() {
         return Ok(binary_path);
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::NotFound,
-        format!("{} not found", core_type.get_executable_name()),
+        format!("{binary_name} not found"),
     ))
 }
 

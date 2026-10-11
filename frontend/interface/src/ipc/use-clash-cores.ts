@@ -18,8 +18,11 @@ export const ClashCores = {
   // 'mihomo-alpha': 'Mihomo Alpha',
   'clash-rs': 'Clash Rust',
   'chimera-client': 'Chimera Client',
+  'chimera-client-alpha': 'Chimera Client Alpha',
   'clash-rs-alpha': 'Clash Rust Alpha',
-} as Record<ClashCore_Serialize, string>;
+} satisfies Partial<Record<ClashCore_Serialize, string>>;
+
+type SupportedClashCore = keyof typeof ClashCores;
 
 export type ClashCoresInfo = Record<ClashCore_Serialize, ClashCoresDetail>;
 
@@ -45,13 +48,13 @@ export const useClashCores = () => {
               ) ?? 'N/A';
 
             result[key as ClashCore_Serialize] = {
-              name: ClashCores[key as ClashCore_Serialize],
+              name: ClashCores[key as SupportedClashCore],
               currentVersion,
             };
           } catch (e) {
             console.error('failed to fetch core version', e);
             result[key as ClashCore_Serialize] = {
-              name: ClashCores[key as ClashCore_Serialize],
+              name: ClashCores[key as SupportedClashCore],
               currentVersion: 'N/A',
             };
           }

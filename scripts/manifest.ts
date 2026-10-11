@@ -175,6 +175,46 @@ export const resolveChimeraClient = async (): LatestVersionResolver => {
   return { name: 'chimera_client', version, archMapping };
 };
 
+export const resolveChimeraClientAlpha = async (): LatestVersionResolver => {
+  const owner = 'MFSGA';
+  const repo = 'Chimera_Client';
+  const [ref, stableRelease] = await Promise.all([
+    githubFetch<{ object: { type: string; sha: string } }>(
+      `https://api.github.com/repos/${owner}/${repo}/git/ref/tags/latest`,
+    ),
+    githubFetch<{ tag_name: string }>(
+      `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
+    ),
+  ]);
+
+  let commitSha = ref.object.sha;
+  if (ref.object.type === 'tag') {
+    const tag = await githubFetch<{ object: { sha: string } }>(
+      `https://api.github.com/repos/${owner}/${repo}/git/tags/${commitSha}`,
+    );
+    commitSha = tag.object.sha;
+  }
+
+  const baseVersion = stableRelease.tag_name.replace(/^v/, '');
+  const alphaVersion = `${baseVersion}-alpha+sha.${commitSha.substring(0, 7)}`;
+  consola.debug(`chimera-client alpha latest release: ${alphaVersion}`);
+
+  const archMapping: ArchMapping = {
+    'windows-i386': 'clash_chimera-i686-pc-windows-msvc.exe',
+    'windows-x86_64': 'clash_chimera-x86_64-pc-windows-msvc.exe',
+    'windows-arm64': 'clash_chimera-aarch64-pc-windows-msvc.exe',
+    'linux-aarch64': 'clash_chimera-aarch64-unknown-linux-gnu',
+    'linux-amd64': 'clash_chimera-x86_64-unknown-linux-gnu',
+    'linux-i386': 'clash_chimera-i686-unknown-linux-musl',
+    'darwin-arm64': 'chimera-client-{}-aarch64-apple-darwin.tar.gz',
+    'darwin-x64': 'chimera-client-{}-x86_64-apple-darwin.tar.gz',
+    'linux-armv7': 'clash_chimera-armv7-unknown-linux-gnueabi',
+    'linux-armv7hf': 'clash_chimera-armv7-unknown-linux-gnueabihf',
+  } satisfies ArchMapping;
+
+  return { name: 'chimera_client_alpha', version: alphaVersion, archMapping };
+};
+
 export const resolveClashRsAlpha = async (): LatestVersionResolver => {
   const [ref, stableTag] = await Promise.all([
     githubFetch<{ object: { type: string; sha: string; url: string } }>(
