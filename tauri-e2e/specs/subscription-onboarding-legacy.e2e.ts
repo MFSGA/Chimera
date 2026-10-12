@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import { planSubscriptionProfileCleanup } from '../subscription-onboarding-cleanup.js';
+import {
+  planSubscriptionProfileCleanup,
+} from '../subscription-onboarding-cleanup.js';
 
 /*
 契约 ID：legacy-subscription-onboarding-layout-and-fallback
@@ -227,7 +229,8 @@ describe('legacy subscription onboarding', () => {
       );
     }
 
-    if (languageCacheWriteAttempted && initialLanguageCache !== undefined) {
+    const savedLanguageCache = initialLanguageCache;
+    if (languageCacheWriteAttempted && savedLanguageCache !== undefined) {
       await collectCleanupError(cleanupErrors, () =>
         browser.execute((value) => {
           const key = btoa('paraglide-language-cache');
@@ -236,7 +239,7 @@ describe('legacy subscription onboarding', () => {
           } else {
             localStorage.setItem(key, value);
           }
-        }, initialLanguageCache),
+        }, savedLanguageCache),
       );
     }
 
@@ -245,7 +248,9 @@ describe('legacy subscription onboarding', () => {
         const restoredProfiles = await invoke<ProfilesResponse>('get_profiles');
         if (
           restoredProfiles.current !== initialCurrentProfile ||
-          restoredProfiles.items.some((item) => item.name === fixtureProfileName)
+          restoredProfiles.items.some(
+            (item) => item.name === fixtureProfileName,
+          )
         ) {
           throw new Error(
             'The test profile or current profile was not restored.',
