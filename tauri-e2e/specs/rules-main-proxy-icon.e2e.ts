@@ -42,6 +42,16 @@ type ProxiesResponse = {
   groups: Array<{ name: string; icon?: string | null }>;
 };
 
+type ProxyIconState = {
+  itemFound: boolean;
+  imageFound: boolean;
+  imageComplete: boolean;
+  imageSrc: string;
+  imageClass: string;
+  naturalWidth: number;
+  naturalHeight: number;
+};
+
 async function waitForRuntimeProxyGroup(): Promise<void> {
   let lastObservedGroups = 'none';
   try {
@@ -68,6 +78,58 @@ async function waitForRuntimeProxyGroup(): Promise<void> {
       { cause },
     );
   }
+}
+
+async function waitForProxyGroupIcon(): Promise<ProxyIconState> {
+  let lastObserved = 'not observed';
+  const readState = () =>
+    browser.execute((expectedGroup) => {
+      const sidebar = document.querySelector<HTMLElement>(
+        '[data-slot="slider-sidebar"]',
+      );
+      const label = Array.from(
+        sidebar?.querySelectorAll<HTMLElement>('*') ?? [],
+      ).find((element) => element.textContent?.trim() === expectedGroup);
+      const item = label?.closest('a');
+      const image = item?.querySelector<HTMLImageElement>('img');
+
+      return {
+        itemFound: Boolean(item),
+        imageFound: Boolean(image),
+        imageComplete: image?.complete ?? false,
+        imageSrc: image?.src ?? '',
+        imageClass: image?.className ?? '',
+        naturalWidth: image?.naturalWidth ?? 0,
+        naturalHeight: image?.naturalHeight ?? 0,
+      };
+    }, groupName);
+
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await readState();
+        lastObserved = JSON.stringify(state);
+        return (
+          state.itemFound &&
+          state.imageFound &&
+          state.imageComplete &&
+          state.naturalWidth > 0
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 250,
+        timeoutMsg: 'Rules proxy-group icon did not load.',
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `Rules proxy-group icon did not load. Last state: ${lastObserved}`,
+      { cause },
+    );
+  }
+
+  return readState();
 }
 
 describe('main rules proxy icon reference behavior', () => {
@@ -138,45 +200,11 @@ describe('main rules proxy icon reference behavior', () => {
 
   // Contract: activating a test-owned typed local Profile makes its raw SVG
   // proxy-group icon visible through the runtime proxy API, then the main Rules
-  // UI renders that icon. Runtime response and loaded image state are separate
-  // checks; stale Profile IPC or icon presentation fails the setup or test.
+  // UI renders that icon without a page reload. Runtime response and loaded
+  // image state are separate checks; stale Profile IPC or UI cache invalidation
+  // fails the setup or test.
   it('renders raw SVG proxy-group icons without forcing the loaded image round', async () => {
-    await browser.waitUntil(
-      async () =>
-        browser.execute((expectedGroup) => {
-          const sidebar = document.querySelector<HTMLElement>(
-            '[data-slot="slider-sidebar"]',
-          );
-          const label = Array.from(
-            sidebar?.querySelectorAll<HTMLElement>('*') ?? [],
-          ).find((element) => element.textContent?.trim() === expectedGroup);
-          const image = label
-            ?.closest('a')
-            ?.querySelector<HTMLImageElement>('img');
-          return Boolean(image && image.complete && image.naturalWidth > 0);
-        }, groupName),
-      { timeout: 30_000, timeoutMsg: 'Rules proxy-group icon did not load.' },
-    );
-
-    const state = await browser.execute((expectedGroup) => {
-      const sidebar = document.querySelector<HTMLElement>(
-        '[data-slot="slider-sidebar"]',
-      );
-      const label = Array.from(
-        sidebar?.querySelectorAll<HTMLElement>('*') ?? [],
-      ).find((element) => element.textContent?.trim() === expectedGroup);
-      const item = label?.closest('a');
-      const image = item?.querySelector<HTMLImageElement>('img');
-
-      return {
-        itemFound: Boolean(item),
-        imageFound: Boolean(image),
-        imageSrc: image?.src ?? '',
-        imageClass: image?.className ?? '',
-        naturalWidth: image?.naturalWidth ?? 0,
-        naturalHeight: image?.naturalHeight ?? 0,
-      };
-    }, groupName);
+    const state = await waitForProxyGroupIcon();
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {

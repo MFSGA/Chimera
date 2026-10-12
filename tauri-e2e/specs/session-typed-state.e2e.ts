@@ -189,6 +189,8 @@ describe('typed session/window state ownership', () => {
     }
   });
 
+  // Contract and the bounded Windows DPI clamp are documented in
+  // docs/testing/contracts/window-state-restoration.md.
   it('restores window size and position across UI creation and the app close control', async () => {
     await waitForApp();
     await browser.switchToWindow('legacy');
@@ -277,9 +279,29 @@ describe('typed session/window state ownership', () => {
       await browser.switchToWindow('main');
       await waitForApp();
 
+      const restoreScaleFactor = await browser.execute(
+        () => window.devicePixelRatio || 1,
+      );
+      const minimumRestorableSize = {
+        width: Math.floor(400 * restoreScaleFactor),
+        height: Math.floor(600 * restoreScaleFactor),
+      };
       await saveCurrentWindowState('main');
       const reopenedCapture = await waitForMirroredState();
-      assert.deepEqual(reopenedCapture, secondPersisted);
+      assert.equal(reopenedCapture.x, secondPersisted.x);
+      assert.equal(reopenedCapture.y, secondPersisted.y);
+      assert.equal(
+        reopenedCapture.width,
+        Math.max(secondPersisted.width, minimumRestorableSize.width),
+      );
+      const expectedRestoredHeight = Math.max(
+        secondPersisted.height,
+        minimumRestorableSize.height,
+      );
+      assert.ok(reopenedCapture.height >= expectedRestoredHeight);
+      assert.ok(reopenedCapture.height <= expectedRestoredHeight + 2);
+      assert.equal(reopenedCapture.maximized, secondPersisted.maximized);
+      assert.equal(reopenedCapture.fullscreen, secondPersisted.fullscreen);
     } finally {
       if ((await browser.getWindowHandles()).includes('main')) {
         await browser.switchToWindow('main');
