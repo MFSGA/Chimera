@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
+import { planSubscriptionProfileCleanup } from '../subscription-onboarding-cleanup.js';
 
 /*
 契约 ID：legacy-subscription-onboarding-layout-and-fallback
@@ -7,7 +8,7 @@ import { createServer, type Server } from 'node:http';
 风险/回归：页面把流程状态做成瞬时通知、漏掉某个阶段、默认失败后没有继续探测、失败后不能重试，或 legacy 路由没有挂载向导
 边界：桌面 UI E2E（布局 + 本地确定性订阅服务的 fallback 主路径）
 基础套件：profiles；本轮单独执行该 spec，未执行完整 profiles 套件
-运行条件：Windows Tauri E2E、legacy 窗口、zh-cn
+运行条件：Tauri E2E、legacy 窗口、zh-cn；CI 在 Windows 执行，本地另在 macOS WebKit 验证
 真实依赖：Tauri E2E 二进制、legacy WebView、TanStack Router 页面挂载、应用真实导入/探测 IPC
 模拟与绕过：订阅服务是测试内 127.0.0.1 HTTP 服务；成功路径第一次导入返回无效订阅、后续返回有效 YAML，重试路径前六次请求返回无效订阅、第七次返回有效 YAML；代理/TUN 只在测试前确认关闭，不执行宿主设置变更
 初始状态：切换到 legacy 窗口并打开 /subscription-onboarding；断言系统代理和 TUN 均关闭
@@ -18,9 +19,10 @@ import { createServer, type Server } from 'node:http';
 失败或边界场景：任一流程区域缺失时断言失败；网络行为和宿主设置不在本契约范围
 等待预算：页面挂载最多 30 秒；本地 fallback 主路径最多 45 秒
 诊断：失败由 WDIO 保存错误；设置 CHIMERA_E2E_ARTIFACT_DIR 时额外保存截图和 HTML，产物不含订阅凭据
-资源与清理：关闭本地 HTTP 服务；删除本轮唯一名称的测试 profile，并恢复测试前的当前 profile、语言配置和语言缓存
+资源与清理：关闭本地 HTTP 服务；修改前保存原始 Profile/语言；仅清理本轮唯一名称的测试 Profile，并按已尝试的变更恢复语言和缓存；初始化失败不盲目取消激活 Profile
 回归敏感性：缺少任一固定流程区域、输入控件、成功后的代理选择、失败后的重试入口或误显示结果区域时断言失败
 相关规则与例外：T01、T02、T04、T14；本地服务证明应用调用链，不证明公网网络、系统代理授权或 TUN 驱动行为
+本地执行记录：2026-10-13 macOS WebKit 605.1.15，3/3 通过；只运行本 spec，未运行完整 profiles 套件
 */
 
 const targetPath = '/subscription-onboarding';
@@ -82,20 +84,39 @@ describe('legacy subscription onboarding', () => {
   let server: Server | undefined;
   let serverPort: number | undefined;
   const requestCounts = new Map<string, number>();
-  let initialCurrentProfile: string | null = null;
-  let initialLanguage: string | null = null;
-  let initialLanguageCache: string | null = null;
+  let initialCurrentProfile: string | null | undefined;
+  let initialLanguage: string | null | undefined;
+  let initialLanguageCache: string | null | undefined;
+  let languagePatchAttempted = false;
+  let languageCacheWriteAttempted = false;
 
   before(async () => {
     await browser.switchToWindow('legacy');
     const initialVerge = await invoke<VergeConfig>('get_verge_config');
     initialLanguage = initialVerge.language ?? null;
+    const originalProfiles = await invoke<ProfilesResponse>('get_profiles');
+    initialCurrentProfile = originalProfiles.current;
     initialLanguageCache = await browser.execute(() =>
       localStorage.getItem(btoa('paraglide-language-cache')),
     );
+
+    // A failed precondition must not mutate the app or the host.
+    assert.equal(
+      Boolean(initialVerge.enable_system_proxy),
+      false,
+      'System proxy must be disabled before E2E setup.',
+    );
+    assert.equal(
+      Boolean(initialVerge.enable_tun_mode),
+      false,
+      'TUN must be disabled before E2E setup.',
+    );
+
+    languagePatchAttempted = true;
     await invoke('patch_verge_config', {
       payload: { language: 'zh-cn' },
     });
+    languageCacheWriteAttempted = true;
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
@@ -123,16 +144,13 @@ describe('legacy subscription onboarding', () => {
     assert.equal(
       Boolean(verge.enable_system_proxy),
       false,
-      'The fallback E2E must start with system proxy disabled.',
+      'System proxy became enabled after E2E navigation.',
     );
     assert.equal(
       Boolean(verge.enable_tun_mode),
       false,
-      'The fallback E2E must start with TUN disabled.',
+      'TUN became enabled after E2E navigation.',
     );
-
-    const profiles = await invoke<ProfilesResponse>('get_profiles');
-    initialCurrentProfile = profiles.current;
 
     server = createServer((request, response) => {
       const requestPath = new URL(request.url ?? '/', 'http://127.0.0.1')
@@ -169,36 +187,40 @@ describe('legacy subscription onboarding', () => {
     const cleanupErrors: unknown[] = [];
     await collectCleanupError(cleanupErrors, () => closeServer(server));
 
-    let profiles: ProfilesResponse | null = null;
-    try {
-      profiles = await invoke<ProfilesResponse>('get_profiles');
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-    if (profiles) {
-      await collectCleanupError(cleanupErrors, () =>
-        invoke('activate_profile', { uid: null }),
-      );
-      for (const item of profiles.items.filter(
-        (candidate) => candidate.name === fixtureProfileName,
-      )) {
-        await collectCleanupError(cleanupErrors, () =>
-          invoke('delete_profile', { uid: item.uid }),
-        );
+    if (initialCurrentProfile !== undefined) {
+      let profiles: ProfilesResponse | null = null;
+      try {
+        profiles = await invoke<ProfilesResponse>('get_profiles');
+      } catch (error) {
+        cleanupErrors.push(error);
       }
-      if (
-        initialCurrentProfile &&
-        profiles.items.some((item) => item.uid === initialCurrentProfile)
-      ) {
-        await collectCleanupError(cleanupErrors, () =>
-          invoke('activate_profile', {
-            uid: initialCurrentProfile,
-          }),
+      if (profiles) {
+        const plan = planSubscriptionProfileCleanup(
+          initialCurrentProfile,
+          profiles.current,
+          profiles.items,
+          fixtureProfileName,
         );
+        if (plan.originalMissing) {
+          cleanupErrors.push(
+            new Error('The original active Profile no longer exists.'),
+          );
+        }
+        // Restore selection only if this test's Profile is active.
+        if (plan.restoreTo !== undefined) {
+          await collectCleanupError(cleanupErrors, () =>
+            invoke('activate_profile', { uid: plan.restoreTo }),
+          );
+        }
+        for (const uid of plan.fixtureUids) {
+          await collectCleanupError(cleanupErrors, () =>
+            invoke('delete_profile', { uid }),
+          );
+        }
       }
     }
 
-    if (initialLanguage) {
+    if (languagePatchAttempted && initialLanguage !== undefined) {
       await collectCleanupError(cleanupErrors, () =>
         invoke('patch_verge_config', {
           payload: { language: initialLanguage },
@@ -206,44 +228,53 @@ describe('legacy subscription onboarding', () => {
       );
     }
 
-    await collectCleanupError(cleanupErrors, () =>
-      browser.execute((value) => {
-        const key = btoa('paraglide-language-cache');
-        if (value === null) {
-          localStorage.removeItem(key);
-        } else {
-          localStorage.setItem(key, value);
-        }
-      }, initialLanguageCache),
-    );
+    const savedLanguageCache = initialLanguageCache;
+    if (languageCacheWriteAttempted && savedLanguageCache !== undefined) {
+      await collectCleanupError(cleanupErrors, () =>
+        browser.execute((value) => {
+          const key = btoa('paraglide-language-cache');
+          if (value === null) {
+            localStorage.removeItem(key);
+          } else {
+            localStorage.setItem(key, value);
+          }
+        }, savedLanguageCache),
+      );
+    }
 
-    await collectCleanupError(cleanupErrors, async () => {
-      const restoredProfiles = await invoke<ProfilesResponse>('get_profiles');
-      if (
-        restoredProfiles.current !== initialCurrentProfile ||
-        restoredProfiles.items.some((item) => item.name === fixtureProfileName)
-      ) {
-        throw new Error(
-          'The test profile or current profile was not restored.',
-        );
-      }
-    });
-    if (initialLanguage) {
+    if (initialCurrentProfile !== undefined) {
+      await collectCleanupError(cleanupErrors, async () => {
+        const restoredProfiles = await invoke<ProfilesResponse>('get_profiles');
+        if (
+          restoredProfiles.current !== initialCurrentProfile ||
+          restoredProfiles.items.some(
+            (item) => item.name === fixtureProfileName,
+          )
+        ) {
+          throw new Error(
+            'The test profile or current profile was not restored.',
+          );
+        }
+      });
+    }
+    if (languagePatchAttempted && initialLanguage !== undefined) {
       await collectCleanupError(cleanupErrors, async () => {
         const restoredVerge = await invoke<VergeConfig>('get_verge_config');
-        if (restoredVerge.language !== initialLanguage) {
+        if ((restoredVerge.language ?? null) !== initialLanguage) {
           throw new Error('The test language configuration was not restored.');
         }
       });
     }
-    await collectCleanupError(cleanupErrors, async () => {
-      const restoredLanguageCache = await browser.execute(() =>
-        localStorage.getItem(btoa('paraglide-language-cache')),
-      );
-      if (restoredLanguageCache !== initialLanguageCache) {
-        throw new Error('The test language cache was not restored.');
-      }
-    });
+    if (languageCacheWriteAttempted && initialLanguageCache !== undefined) {
+      await collectCleanupError(cleanupErrors, async () => {
+        const restoredLanguageCache = await browser.execute(() =>
+          localStorage.getItem(btoa('paraglide-language-cache')),
+        );
+        if (restoredLanguageCache !== initialLanguageCache) {
+          throw new Error('The test language cache was not restored.');
+        }
+      });
+    }
 
     if (cleanupErrors.length) {
       throw new AggregateError(
