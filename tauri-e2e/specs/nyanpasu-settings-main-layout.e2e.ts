@@ -20,7 +20,7 @@ describe('main Chimera settings reference layout', () => {
             ),
           );
           return (
-            groups.length === 4 &&
+            groups.length === 6 &&
             groups.every(
               (group) =>
                 group.querySelector('[data-slot="settings-label"]') &&
@@ -60,7 +60,7 @@ describe('main Chimera settings reference layout', () => {
       if (
         !title ||
         !content ||
-        groups.length !== 4 ||
+        groups.length !== 6 ||
         labels.some((label) => !label) ||
         settingsGroups.some((group) => !group)
       ) {
@@ -111,11 +111,14 @@ describe('main Chimera settings reference layout', () => {
 
     assert.equal(state.path, '/main/settings/chimera');
     assert.deepEqual(state.viewport, { width: 1224, height: 629 });
-    assert.equal(state.groupCount, 4);
-    assert.deepEqual(state.groupTags, ['DIV', 'DIV', 'DIV', 'DIV']);
+    assert.equal(state.groupCount, 6);
+    assert.deepEqual(
+      state.groupTags,
+      Array.from({ length: 6 }, () => 'DIV'),
+    );
     assert.deepEqual(
       state.directSlots,
-      Array.from({ length: 4 }, () => ['settings-label', 'settings-group']),
+      Array.from({ length: 6 }, () => ['settings-label', 'settings-group']),
     );
     assert.deepEqual(state.title, {
       height: '64px',
