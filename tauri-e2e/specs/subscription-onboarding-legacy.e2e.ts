@@ -8,7 +8,7 @@ import { planSubscriptionProfileCleanup } from '../subscription-onboarding-clean
 风险/回归：页面把流程状态做成瞬时通知、漏掉某个阶段、默认失败后没有继续探测、失败后不能重试，或 legacy 路由没有挂载向导
 边界：桌面 UI E2E（布局 + 本地确定性订阅服务的 fallback 主路径）
 基础套件：profiles；本轮单独执行该 spec，未执行完整 profiles 套件
-运行条件：Windows Tauri E2E、legacy 窗口、zh-cn
+运行条件：Tauri E2E、legacy 窗口、zh-cn；CI 在 Windows 执行，本地另在 macOS WebKit 验证
 真实依赖：Tauri E2E 二进制、legacy WebView、TanStack Router 页面挂载、应用真实导入/探测 IPC
 模拟与绕过：订阅服务是测试内 127.0.0.1 HTTP 服务；成功路径第一次导入返回无效订阅、后续返回有效 YAML，重试路径前六次请求返回无效订阅、第七次返回有效 YAML；代理/TUN 只在测试前确认关闭，不执行宿主设置变更
 初始状态：切换到 legacy 窗口并打开 /subscription-onboarding；断言系统代理和 TUN 均关闭
@@ -22,6 +22,7 @@ import { planSubscriptionProfileCleanup } from '../subscription-onboarding-clean
 资源与清理：关闭本地 HTTP 服务；修改前保存原始 Profile/语言；仅清理本轮唯一名称的测试 Profile，并按已尝试的变更恢复语言和缓存；初始化失败不盲目取消激活 Profile
 回归敏感性：缺少任一固定流程区域、输入控件、成功后的代理选择、失败后的重试入口或误显示结果区域时断言失败
 相关规则与例外：T01、T02、T04、T14；本地服务证明应用调用链，不证明公网网络、系统代理授权或 TUN 驱动行为
+本地执行记录：2026-10-13 macOS WebKit 605.1.15，3/3 通过；只运行本 spec，未运行完整 profiles 套件
 */
 
 const targetPath = '/subscription-onboarding';
@@ -227,7 +228,8 @@ describe('legacy subscription onboarding', () => {
       );
     }
 
-    if (languageCacheWriteAttempted && initialLanguageCache !== undefined) {
+    const savedLanguageCache = initialLanguageCache;
+    if (languageCacheWriteAttempted && savedLanguageCache !== undefined) {
       await collectCleanupError(cleanupErrors, () =>
         browser.execute((value) => {
           const key = btoa('paraglide-language-cache');
@@ -236,7 +238,7 @@ describe('legacy subscription onboarding', () => {
           } else {
             localStorage.setItem(key, value);
           }
-        }, initialLanguageCache),
+        }, savedLanguageCache),
       );
     }
 
@@ -245,7 +247,9 @@ describe('legacy subscription onboarding', () => {
         const restoredProfiles = await invoke<ProfilesResponse>('get_profiles');
         if (
           restoredProfiles.current !== initialCurrentProfile ||
-          restoredProfiles.items.some((item) => item.name === fixtureProfileName)
+          restoredProfiles.items.some(
+            (item) => item.name === fixtureProfileName,
+          )
         ) {
           throw new Error(
             'The test profile or current profile was not restored.',
