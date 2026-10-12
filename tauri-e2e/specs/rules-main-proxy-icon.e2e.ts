@@ -42,6 +42,34 @@ type ProxiesResponse = {
   groups: Array<{ name: string; icon?: string | null }>;
 };
 
+async function waitForRuntimeProxyGroup(): Promise<void> {
+  let lastObservedGroups = 'none';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const proxies = await invoke<ProxiesResponse>('get_proxies');
+        lastObservedGroups = JSON.stringify(
+          proxies.groups.map(({ name, icon }) => ({ name, icon })),
+        );
+        return proxies.groups.some(
+          (group) => group.name === groupName && group.icon === rawSvg,
+        );
+      },
+      {
+        timeout: 15_000,
+        interval: 250,
+        timeoutMsg:
+          'The raw-SVG proxy group did not become active in the Clash runtime.',
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The raw-SVG proxy group did not become active in the Clash runtime. Last groups: ${lastObservedGroups}`,
+      { cause },
+    );
+  }
+}
+
 describe('main rules proxy icon reference behavior', () => {
   let profileUid: string | undefined;
   let previousCurrent: string | null = null;
@@ -72,13 +100,7 @@ describe('main rules proxy icon reference behavior', () => {
       await invoke('activate_profile', { uid: profileUid }),
       'rules-icon Profile activation',
     );
-    const proxies = await invoke<ProxiesResponse>('get_proxies');
-    assert.ok(
-      proxies.groups.some(
-        (group) => group.name === groupName && group.icon === rawSvg,
-      ),
-      'The raw-SVG proxy group did not become active in the Clash runtime.',
-    );
+    await waitForRuntimeProxyGroup();
 
     await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);

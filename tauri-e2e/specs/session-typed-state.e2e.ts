@@ -201,9 +201,24 @@ describe('typed session/window state ownership', () => {
     }
 
     const originalRect = await browser.getWindowRect();
+    const scaleFactor = await browser.execute(
+      () => window.devicePixelRatio || 1,
+    );
+    const minimumRestorableSize = {
+      width: Math.ceil(400 * scaleFactor) + 48,
+      height: Math.ceil(600 * scaleFactor) + 48,
+    };
     const firstGeometry = {
-      width: Math.max(900, originalRect.width + 64),
-      height: Math.max(700, originalRect.height + 48),
+      width: Math.max(
+        900,
+        originalRect.width + 64,
+        minimumRestorableSize.width,
+      ),
+      height: Math.max(
+        700,
+        originalRect.height + 48,
+        minimumRestorableSize.height,
+      ),
       x: Math.max(80, originalRect.x + 40),
       y: Math.max(80, originalRect.y + 40),
     };

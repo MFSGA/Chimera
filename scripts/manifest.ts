@@ -1,4 +1,5 @@
 import { consola } from './deno/utils/logger.ts';
+import { githubApiHeaders } from './github-api.ts';
 
 // === Types ===
 
@@ -24,21 +25,28 @@ export type LatestVersionResolver = Promise<{
 
 // === GitHub API helpers ===
 
-const GITHUB_API_HEADERS = {
-  Accept: 'application/vnd.github+json',
-  'User-Agent': 'clash-nyanpasu',
-};
-
 const MIHOMO_ALPHA_VERSION_URL =
   'https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt';
 const MIHOMO_ALPHA_ASSETS_URL =
   'https://github.com/MetaCubeX/mihomo/releases/expanded_assets/Prerelease-Alpha';
 
 async function githubFetch<T>(url: string): Promise<T> {
-  const resp = await fetch(url, { headers: GITHUB_API_HEADERS });
+  const token = Deno.env.get('GITHUB_TOKEN') || Deno.env.get('GH_TOKEN');
+  const resp = await fetch(url, { headers: githubApiHeaders(token) });
   if (!resp.ok) {
+    const detail = (await resp.text()).trim();
+    const rateLimitRemaining = resp.headers.get('x-ratelimit-remaining');
+    const requestId = resp.headers.get('x-github-request-id');
     throw new Error(
-      `GitHub API error: ${resp.statusText} (${resp.status}) - ${url}`,
+      [
+        `GitHub API error: ${resp.statusText} (${resp.status}) - ${url}`,
+        detail && `response: ${detail}`,
+        rateLimitRemaining !== null &&
+          `rate-limit-remaining: ${rateLimitRemaining}`,
+        requestId && `request-id: ${requestId}`,
+      ]
+        .filter(Boolean)
+        .join('; '),
     );
   }
   return resp.json() as Promise<T>;
@@ -74,7 +82,7 @@ function extractVersionFromAssetList(
 }
 
 async function fetchText(url: string): Promise<string | undefined> {
-  const resp = await fetch(url, { headers: GITHUB_API_HEADERS });
+  const resp = await fetch(url, { headers: githubApiHeaders() });
   if (!resp.ok) {
     return undefined;
   }
