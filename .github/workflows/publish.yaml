@@ -13,6 +13,10 @@ on:
           - minor
           - patch
 
+concurrency:
+  group: publish-version
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish ${{ inputs.versionType }} release
@@ -57,7 +61,12 @@ jobs:
         name: Bump version
         # Use npm because yarn is for some reason not able to output only the version name
         run: |
-          echo "version=$(pnpm run publish ${{ inputs.versionType }} | tail -n1)" >> $GITHUB_OUTPUT
+          VERSION=$(pnpm run publish ${{ inputs.versionType }} | tail -n1)
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           git add .
       - name: Generate a changelog for the new version
         shell: bash

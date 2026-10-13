@@ -23,7 +23,26 @@ jobs:
         with:
           pattern: Clash.Nyanpasu-*
           path: ./release-assets
-          merge-multiple: true
+          merge-multiple: false
+
+      - name: Validate unique release asset names
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("release-assets")
+          assets = sorted(path for path in root.rglob("*") if path.is_file())
+          if not assets:
+              raise SystemExit("No build assets were downloaded")
+
+          names = {}
+          for asset in assets:
+              previous = names.get(asset.name)
+              if previous is not None:
+                  raise SystemExit(f"Duplicate release asset {asset.name}: {previous} and {asset}")
+              names[asset.name] = asset
+          print(f"Validated {len(assets)} uniquely named release assets")
+          PY
 
       - name: Upload to release
         run: |

@@ -4,7 +4,10 @@ import { Octokit } from 'npm:octokit';
 import semver from 'npm:semver';
 import { z } from 'npm:zod';
 import { colorize, consola } from './deno/utils/logger.ts';
-import { assertUpdaterManifest } from './updater-manifest.ts';
+import {
+  assertUpdaterManifest,
+  matchStableUpdaterAsset,
+} from './updater-manifest.ts';
 
 const GITHUB_PROXY = 'https://gh-proxy.com/';
 const PRE_RELEASE_TAG = 'pre-release';
@@ -121,26 +124,14 @@ function camelCase(s: string) {
   return s.replace(/-(\w)/g, (_, c: string) => c.toUpperCase());
 }
 
-function isMatch(name: string, extension: string, arch: string) {
-  return (
-    name.endsWith(extension) &&
-    name.includes(arch) &&
-    (argv['fixed-webview']
-      ? name.includes('fixed-webview')
-      : !name.includes('fixed-webview'))
+function findUpdaterAssetPair(assets: ReleaseAsset[], assetName: string) {
+  const asset = assets.find((candidate) => candidate.name === assetName);
+  if (!asset) throw new Error(`missing updater asset ${assetName}`);
+  const signature = assets.find(
+    (candidate) => candidate.name === `${assetName}.sig`,
   );
-}
-
-function findAsset(
-  assets: ReleaseAsset[],
-  candidates: Array<{ extension: string; arch: string }>,
-) {
-  for (const candidate of candidates) {
-    const asset = assets.find((item) =>
-      isMatch(item.name, candidate.extension, candidate.arch),
-    );
-    if (asset) return asset;
-  }
+  if (!signature) throw new Error(`missing updater signature ${assetName}.sig`);
+  return signature;
 }
 
 async function getOrCreateUpdaterRelease(
@@ -232,36 +223,44 @@ async function resolveUpdater() {
   const nightlyVersion = await resolveNightlyVersion();
   consola.info(`latest pre-release short hash: ${shortHash}`);
 
-  const packageAsset = findAsset(assets, [
-    { extension: '.nsis.zip', arch: 'x64' },
-    { extension: '.exe', arch: 'x64' },
-  ]);
-  const signatureAsset = findAsset(assets, [
-    { extension: '.nsis.zip.sig', arch: 'x64' },
-    { extension: '.sig', arch: 'x64' },
-  ]);
-
-  if (!packageAsset || !signatureAsset) {
-    throw new Error('failed to parse release for "windows-x86_64"');
+  const platforms: Record<string, { signature: string; url: string }> = {};
+  const updaterAssets = assets.filter(
+    (asset) =>
+      matchStableUpdaterAsset(asset.name, argv['fixed-webview'])?.kind ===
+      'url',
+  );
+  for (const asset of updaterAssets) {
+    const match = matchStableUpdaterAsset(asset.name, argv['fixed-webview']);
+    if (match?.kind !== 'url') continue;
+    const signature = findUpdaterAssetPair(assets, asset.name);
+    const signatureValue = await getSignature(signature.browser_download_url);
+    for (const target of match.targets) {
+      if (platforms[target]) {
+        throw new Error(`multiple updater assets for ${target}`);
+      }
+      platforms[target] = {
+        signature: signatureValue,
+        url: asset.browser_download_url,
+      };
+    }
   }
 
-  const signature = await getSignature(signatureAsset.browser_download_url);
   const updateData = {
     version: `v${nightlyVersion}-alpha+${shortHash}`,
     notes: 'Nightly build. Full changes see commit history.',
     pub_date: new Date().toISOString(),
-    platforms: {
-      win64: {
-        signature,
-        url: packageAsset.browser_download_url,
-      },
-      'windows-x86_64': {
-        signature,
-        url: packageAsset.browser_download_url,
-      },
-    },
+    platforms,
   };
-  assertUpdaterManifest(updateData);
+  const requiredTargets = argv['fixed-webview']
+    ? ['windows-x86_64']
+    : [
+        'windows-x86_64',
+        'windows-aarch64',
+        'darwin',
+        'darwin-aarch64',
+        'linux',
+      ];
+  assertUpdaterManifest(updateData, requiredTargets);
   consola.info(updateData);
 
   const updateDataNew = JSON.parse(
@@ -275,7 +274,7 @@ async function resolveUpdater() {
       consola.error(`updateDataNew.platforms.${key} is null`);
     }
   });
-  assertUpdaterManifest(updateDataNew);
+  assertUpdaterManifest(updateDataNew, requiredTargets);
 
   consola.debug('update updater files...');
   const updateRelease = await getOrCreateUpdaterRelease(github, options);

@@ -6,6 +6,7 @@ import { hideBin } from 'yargs/helpers';
 import {
   assertUpdaterManifest,
   matchStableUpdaterAsset,
+  requiredStableUpdaterTargets,
 } from './updater-manifest.ts';
 import { colorize, consola } from './utils/logger';
 
@@ -17,6 +18,9 @@ const UPDATE_FIXED_WEBVIEW_PROXY = 'update-fixed-webview-proxy.json';
 const UPDATE_RELEASE_BODY = process.env.RELEASE_BODY || '';
 
 const argv = yargs(hideBin(process.argv))
+  .option('tag', {
+    type: 'string',
+  })
   .option('fixed-webview', {
     type: 'boolean',
     default: false,
@@ -38,20 +42,23 @@ async function resolveUpdater() {
   const options = { owner: context.repo.owner, repo: context.repo.repo };
   const github = getOctokit(process.env.GITHUB_TOKEN);
 
-  const { data: tags } = await github.rest.repos.listTags({
-    ...options,
-    per_page: 10,
-    page: 1,
-  });
+  let tag = argv.tag;
+  if (!tag) {
+    const { data: tags } = await github.rest.repos.listTags({
+      ...options,
+      per_page: 10,
+      page: 1,
+    });
 
-  // get the latest publish tag
-  const tag = tags.find((t) => t.name.startsWith('v'));
-  if (!tag) throw new Error('could not found the latest tag');
-  consola.debug(colorize`latest tag: {gray.bold ${tag.name}}`);
+    // get the latest publish tag
+    tag = tags.find((item) => item.name.startsWith('v'))?.name;
+    if (!tag) throw new Error('could not found the latest tag');
+  }
+  consola.debug(colorize`latest tag: {gray.bold ${tag}}`);
 
   const { data: latestRelease } = await github.rest.repos.getReleaseByTag({
     ...options,
-    tag: tag.name,
+    tag,
   });
 
   let updateLog: string | null = null;
@@ -62,7 +69,7 @@ async function resolveUpdater() {
   }
 
   const updateData = {
-    version: tag.name,
+    version: tag,
     notes: UPDATE_RELEASE_BODY || updateLog || latestRelease.body,
     pub_date: new Date().toISOString(),
     platforms: {
@@ -72,6 +79,9 @@ async function resolveUpdater() {
       'darwin-intel': { signature: '', url: '' },
       'darwin-x86_64': { signature: '', url: '' },
       'windows-x86_64': { signature: '', url: '' },
+      'windows-aarch64': { signature: '', url: '' },
+      linux: { signature: '', url: '' },
+      'linux-x86_64': { signature: '', url: '' },
     },
   };
 
@@ -104,7 +114,8 @@ async function resolveUpdater() {
       delete updateData.platforms[key as keyof typeof updateData.platforms];
     }
   });
-  assertUpdaterManifest(updateData);
+  const requiredTargets = requiredStableUpdaterTargets(argv.fixedWebview);
+  assertUpdaterManifest(updateData, requiredTargets);
   consola.info(updateData);
 
   // 生成一个代理github的更新文件
@@ -122,7 +133,7 @@ async function resolveUpdater() {
       consola.error(`updateDataNew.platforms.${key} is null`);
     }
   });
-  assertUpdaterManifest(updateDataNew);
+  assertUpdaterManifest(updateDataNew, requiredTargets);
 
   // update the update.json
   const { data: updateRelease } = await github.rest.repos.getReleaseByTag({

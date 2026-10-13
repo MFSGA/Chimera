@@ -30,7 +30,6 @@ on:
         description: 'Nightly prepare'
         required: true
         type: boolean
-        default: false
       tag:
         description: 'Release Tag'
         required: true
@@ -39,7 +38,6 @@ on:
         type: string
         description: 'build arch target'
         required: true
-        default: 'x86_64'
 
 jobs:
   build:

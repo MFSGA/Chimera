@@ -42,19 +42,16 @@ on:
         description: 'Build Portable pkg'
         required: true
         type: boolean
-        default: false
 
       fixed-webview:
         description: 'Fixed WebView'
         required: true
         type: boolean
-        default: false
 
       nightly:
         description: 'Nightly prepare'
         required: true
         type: boolean
-        default: false
 
       tag:
         description: 'Release Tag'
@@ -65,7 +62,6 @@ on:
         type: string
         description: 'build arch target'
         required: true
-        default: 'x86_64'
 
 jobs:
   build:
@@ -109,12 +105,17 @@ jobs:
         run: pnpm check:service-runtime
 
       - name: Prepare sidecars and resources
-        # todo
         run: |
           $condition = '${{ inputs.arch }}'
           switch ($condition) {
             'x86_64' {
               pnpm prepare:check
+            }
+            'i686' {
+              pnpm prepare:check --arch ia32 --sidecar-host i686-pc-windows-msvc
+            }
+            'aarch64' {
+              pnpm prepare:check --arch arm64 --sidecar-host aarch64-pc-windows-msvc
             }
           }
 
@@ -158,17 +159,28 @@ jobs:
         if: ${{ inputs.nightly == true }}
         run: |
           pnpm prepare:nightly --nsis
-      # TODO: optimize strategy
-      - name: Tauri build x86_64
-        if: ${{ inputs.arch == 'x86_64' }}
+      - name: Tauri build
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           NIGHTLY: ${{ inputs.nightly == true  && 'true' || 'false' }}
-        # todo: changed the following conf in the later
         run: |
-          ${{ inputs.nightly == true && 'pnpm build:nightly' || 'pnpm tauri build -f default-meta' }}
+          $target = switch ('${{ inputs.arch }}') {
+            'x86_64' { $null }
+            'i686' { 'i686-pc-windows-msvc' }
+            'aarch64' { 'aarch64-pc-windows-msvc' }
+            default { throw "Unsupported Windows architecture: ${{ inputs.arch }}" }
+          }
+
+          if ('${{ inputs.nightly }}' -eq 'true') {
+            if ($target) { pnpm build:nightly --target $target }
+            else { pnpm build:nightly }
+          } else {
+            if ($target) { pnpm tauri build -f default-meta --target $target }
+            else { pnpm tauri build -f default-meta }
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload NSIS Installer
         uses: actions/upload-artifact@v7
