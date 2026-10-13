@@ -130,9 +130,9 @@ mod tests {
         for (core, expected_kind) in variants {
             let spec = core_spec_with(&core, |core, core_type| {
                 let name = if *core == ClashCore::ChimeraClientAlpha {
-                    "chimera-client-alpha"
+                    format!("chimera-client-alpha{}", std::env::consts::EXE_SUFFIX)
                 } else {
-                    core_type.get_executable_name()
+                    core_type.get_executable_name().to_owned()
                 };
                 Ok(root.path().join(name))
             })
