@@ -11,8 +11,8 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     def0dbf2716ff972255be47924401b60db7d482c
-verified:   2026-10-04 remote HEAD and refs/heads/main
+commit:     0c7b15b3c61db390db21cffb63d29805abd380a1
+verified:   2026-10-12 remote HEAD and refs/heads/main
 ```
 
 每个迁移切片开始前执行：
@@ -26,7 +26,7 @@ git -C ref status --short
 
 `ref/` 默认只读。开发共通功能时应主动读取其对应代码，不必等待用户再次要求“参考 ref”。不要为了开始一个功能而自动 fetch、pull 或重置参考目录。只有任务包含同步参考版本时才更新，并记录更新前后 commit。
 
-目前主仓库忽略 `ref/`，`.gitmodules` 中的声明本身不能代替实际 gitlink 固定版本；当前主仓库 `HEAD` 未跟踪 `ref` gitlink。本次按用户要求将本地只读 `ref/` 从 `cc21cbd31dc16c3e3b76c27867dd22aeae3b9cf1` 快进至上述 `main` commit，工作树干净。新工作区需另行准备参考仓库并核对本次任务实际采用的 commit；参考缺失时报告缺口，不能自行实现后声称已对齐。本文记录最近核对的基线，不宣称已经实现自动检出或同步检查。
+主仓库通过 `ref/` 的 gitlink 固定参考版本，`.gitmodules` 提供克隆地址；新工作区可用 `git submodule update --init --recursive` 检出完全相同的基线。`ref/` 不应加入忽略规则。该 gitlink 固定的是经过核验的 commit，不会自动跟随上游 `main`；只有明确同步 ref 时才更新并提交新的 gitlink。本次将基线固定为上述 `main` commit，并递归初始化其子模块；CI 和新克隆应从该 gitlink 获得相同源码。参考目录有未提交修改时，应区分 commit 内容与工作区差异，不能把修改后的内容误称为该 commit 的实现。
 
 ## 2. 必须同时满足的目标
 

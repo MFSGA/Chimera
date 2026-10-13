@@ -49,7 +49,6 @@ release.sh
 !/docs/testing/**
 # new rust-analyzer
 target/
-ref/
 
 # Tauri E2E runtime/evidence scratch files
 /tauri-e2e/tmp/
