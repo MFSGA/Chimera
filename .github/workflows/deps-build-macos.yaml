@@ -26,13 +26,11 @@ on:
         description: 'Build aarch64 pkg'
         required: true
         type: boolean
-        default: false
 
       nightly:
         description: 'Nightly prepare'
         required: true
         type: boolean
-        default: false
 
       tag:
         description: 'Release Tag'

@@ -1,4 +1,4 @@
-﻿on:
+on:
   pull_request:
     branches:
       - main
@@ -12,7 +12,6 @@
       - dev
       - release-*
 
-# the name of our workflow
 name: CI
 
 permissions:
@@ -26,31 +25,68 @@ env:
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.classify.outputs.frontend }}
+      backend: ${{ steps.classify.outputs.backend }}
+      scripts: ${{ steps.classify.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Classify changed paths
+        id: classify
+        run: >-
+          deno run --frozen --config scripts/deno.jsonc
+          --allow-run=git --allow-read --allow-write --allow-env=GITHUB_OUTPUT
+          scripts/src/ci/changed-parts.ts "$BASE"
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || '' }}
+
   lint:
     name: Lint
+    needs: [changes]
+    if: ${{ always() && !cancelled() }}
     strategy:
       matrix:
         targets:
           - os: ubuntu-latest
           - os: macos-latest
           - os: windows-latest
+      fail-fast: false
     runs-on: ${{ matrix.targets.os }}
+    env:
+      FRONTEND: ${{ needs.changes.outputs.frontend }}
+      BACKEND: ${{ needs.changes.outputs.backend }}
+      SCRIPTS: ${{ needs.changes.outputs.scripts }}
+      RUN: ${{ startsWith(matrix.targets.os, 'ubuntu-') || needs.changes.outputs.backend == 'true' }}
     steps:
+      - name: Verify change classification
+        if: needs.changes.result != 'success'
+        run: exit 1
+
       - uses: actions/checkout@v7
+        if: env.RUN == 'true'
         with:
           submodules: true
 
       - name: Normalize service runtime line endings
-        if: startsWith(matrix.targets.os, 'windows-')
+        if: startsWith(matrix.targets.os, 'windows-') && env.BACKEND == 'true'
         shell: bash
         run: |
-          if [ -d backend/chimera-runtime ]; then
-            git -C backend/chimera-runtime config core.autocrlf false
-            git -C backend/chimera-runtime config core.eol lf
-            git -C backend/chimera-runtime checkout-index -a -f
-          fi
+          git -C backend/chimera-runtime config core.autocrlf false
+          git -C backend/chimera-runtime config core.eol lf
+          git -C backend/chimera-runtime checkout-index -a -f
 
       - name: Rust
+        if: env.BACKEND == 'true'
         run: |
           rustup toolchain install stable --profile minimal --no-self-update
           rustup default stable
@@ -60,7 +96,7 @@ jobs:
           rustup show
 
       - name: Tauri dependencies
-        if: startsWith(matrix.targets.os, 'ubuntu-')
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.BACKEND == 'true'
         run: >-
           sudo apt-get update &&
           sudo apt-get install -y
@@ -73,39 +109,44 @@ jobs:
           xvfb
 
       - uses: maxim-lobanov/setup-xcode@v1
-        if: startsWith(matrix.targets.os, 'macos-')
+        if: startsWith(matrix.targets.os, 'macos-') && env.BACKEND == 'true'
         with:
           xcode-version: 'latest-stable'
 
-      - name: Install Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 24
-
       - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
+        if: env.BACKEND == 'true'
         with:
           workspaces: |
             backend -> target
           cache-on-failure: true
 
+      - name: Install Node.js
+        if: env.RUN == 'true'
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
       - uses: pnpm/action-setup@v6
         name: Install pnpm
+        if: env.RUN == 'true'
         with:
           run_install: false
 
       - name: Install Deno
+        if: env.RUN == 'true'
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
 
       - name: Get pnpm store directory
+        if: env.RUN == 'true'
         shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
 
       - uses: actions/cache@v6
         name: Setup pnpm cache
+        if: env.RUN == 'true'
         with:
           path: ${{ env.STORE_PATH }}
           key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
@@ -113,69 +154,74 @@ jobs:
             ${{ runner.os }}-pnpm-store-
 
       - name: Install dependencies
+        if: env.RUN == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
+        if: env.BACKEND == 'true'
         run: pnpm check:service-runtime
 
-      - name: Verify Service sidecar integrity and preservation
-        run: deno test --allow-read --allow-write scripts/deno/utils/sidecar-integrity_test.ts
-
       - name: Prepare frontend
-        run: pnpm -r build # Build frontend
+        if: env.RUN == 'true' && (env.FRONTEND == 'true' || env.BACKEND == 'true')
+        run: pnpm -r build
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
-      # TODO: preapre the js script file
+
       - name: Prepare sidecar and resources
+        if: env.BACKEND == 'true'
         run: pnpm prepare:check
-      - name: Verify quality
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: pnpm verify:quality
 
-      - name: Validate E2E harness
+      - name: Lint formatting
         if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: pnpm --filter @chimera/tauri-e2e test:unit
+        run: pnpm lint:prettier
 
-      - name: Test Connections reference models
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: pnpm --filter chimera-ui test:connections
+      - name: Lint frontend and scripts
+        if: startsWith(matrix.targets.os, 'ubuntu-') && (env.FRONTEND == 'true' || env.SCRIPTS == 'true')
+        run: pnpm run-s lint:oxlint lint:styles
 
-      - name: Test Profile content query contract
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: pnpm test:profiles:query
+      - name: Lint frontend boundaries
+        if: startsWith(matrix.targets.os, 'ubuntu-') && (env.FRONTEND == 'true' || env.SCRIPTS == 'true')
+        run: pnpm lint:frontend-boundaries
 
-      - name: Test core lifecycle and port resolution
-        if: startsWith(matrix.targets.os, 'ubuntu-')
+      - name: Test service sidecar integrity
+        if: startsWith(matrix.targets.os, 'ubuntu-') && (env.BACKEND == 'true' || env.SCRIPTS == 'true')
+        run: deno test --allow-read --allow-write scripts/deno/utils/sidecar-integrity_test.ts
+
+      - name: Test changed path classification
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
+        run: pnpm test:changed-parts
+
+      - name: Test updater manifest asset mapping
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
+        run: pnpm test:updater-manifest
+
+      - name: Typecheck frontend and E2E
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.FRONTEND == 'true'
+        run: pnpm typecheck
+
+      - name: Test E2E harness and frontend models
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.FRONTEND == 'true'
         run: |
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::actor_v2::facade::tests
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::ports::tests
-
-      - name: Test Profile file view and read contracts
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: |
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib ipc::tests::missing_profile_view_reports_profile_identity_and_path
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib profile_file_read
-
-      - name: Test application effects and hotkey bindings
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: |
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::effects::
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::application_workflow::tcc::tests
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::hotkey::tests
+          pnpm --filter @chimera/tauri-e2e test:unit
+          pnpm --filter chimera-ui test:connections
+          pnpm test:profiles:query
           pnpm test:hotkeys
           pnpm test:agent:intent
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib features::agent::history::tests::audit_view_is_bounded_newest_first_and_hides_identifiers
 
-      - name: Verify generated files are committed
-        if: startsWith(matrix.targets.os, 'ubuntu-')
-        run: git diff --exit-code
+      - name: Test backend workspace
+        if: env.BACKEND == 'true'
+        run: pnpm test:backend
 
-      - name: Lint Rust
-        if: startsWith(matrix.targets.os, 'ubuntu-') == false
+      - name: Lint backend
+        if: env.BACKEND == 'true'
         run: pnpm run-p lint:clippy lint:rustfmt
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
-  # TODO: support test cross-platform
+
+      - name: Verify generated files are committed
+        if: startsWith(matrix.targets.os, 'ubuntu-') && (env.FRONTEND == 'true' || env.BACKEND == 'true')
+        run: git diff --exit-code
+
   build:
     name: Build Tauri
     strategy:
@@ -185,18 +231,20 @@ jobs:
           - os: macos-latest
           - os: windows-latest
       fail-fast: false
-    #if: >
-    #  github.event_name != 'pull_request' ||
-    #  contains(github.event.pull_request.title, 'crate') ||
-    #  github.event.pull_request.user.login != 'renovate[bot]'
     runs-on: ${{ matrix.targets.os }}
-    needs: lint
+    needs: [changes, lint]
+    env:
+      FRONTEND: ${{ needs.changes.outputs.frontend }}
+      BACKEND: ${{ needs.changes.outputs.backend }}
+      RUN: ${{ needs.changes.outputs.backend == 'true' || (startsWith(matrix.targets.os, 'ubuntu-') && needs.changes.outputs.frontend == 'true') }}
     steps:
       - uses: actions/checkout@v7
+        if: env.RUN == 'true'
         with:
           submodules: true
+
       - name: Tauri dependencies
-        if: startsWith(matrix.targets.os, 'ubuntu-')
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.BACKEND == 'true'
         run: >-
           sudo apt-get update &&
           sudo apt-get install -y
@@ -207,18 +255,27 @@ jobs:
           libxdo-dev
           webkit2gtk-driver
           xvfb
+
       - uses: maxim-lobanov/setup-xcode@v1
-        if: startsWith(matrix.targets.os, 'macos-')
+        if: startsWith(matrix.targets.os, 'macos-') && env.BACKEND == 'true'
         with:
           xcode-version: 'latest-stable'
 
       - name: Install Node.js
+        if: env.RUN == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 24
 
+      - name: Install Deno
+        if: env.RUN == 'true'
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
       - uses: Swatinem/rust-cache@v2
         name: Cache Rust dependencies
+        if: env.BACKEND == 'true'
         with:
           workspaces: |
             backend -> target
@@ -226,41 +283,28 @@ jobs:
 
       - uses: pnpm/action-setup@v6
         name: Install pnpm
+        if: env.RUN == 'true'
         with:
           run_install: false
 
-      - name: Install Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: v2.x
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - uses: actions/cache@v6
-        name: Setup pnpm cache
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
-
       - name: Install dependencies
+        if: env.RUN == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Verify service runtime pin
+        if: env.BACKEND == 'true'
         run: pnpm check:service-runtime
 
-      # todo: prepare the js script file
       - name: Prepare sidecar and resources
+        if: env.BACKEND == 'true'
         run: pnpm prepare:check
 
       - name: Prepare frontend
+        if: env.RUN == 'true'
         run: pnpm -r build
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
 
-      - name: Build Backend
+      - name: Build backend
+        if: env.BACKEND == 'true'
         run: cargo build --release --manifest-path backend/Cargo.toml

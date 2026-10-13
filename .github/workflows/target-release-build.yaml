@@ -12,6 +12,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -21,8 +25,30 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  release_preflight:
+    name: Validate draft release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate release tag and draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          if [[ "$is_draft" != 'true' ]]; then
+            echo "Release $RELEASE_TAG must still be a draft before its assets are built" >&2
+            exit 1
+          fi
+
   macos_x86_64_build:
     name: macOS x86_64 Build
+    needs: [release_preflight]
     uses: ./.github/workflows/deps-build-macos.yaml
     with:
       nightly: false
@@ -31,6 +57,7 @@ jobs:
     secrets: inherit
   macos_aarch64_build:
     name: macOS aarch64 Build
+    needs: [release_preflight]
     uses: ./.github/workflows/deps-build-macos.yaml
     with:
       nightly: false
@@ -39,17 +66,18 @@ jobs:
     secrets: inherit
   windows_build:
     name: Windows Build
+    needs: [release_preflight]
     uses: ./.github/workflows/deps-build-windows-nsis.yaml
     with:
       portable: false
       nightly: false
-      # todo:
       fixed-webview: false
       arch: 'x86_64'
       tag: ${{ inputs.tag }}
     secrets: inherit
   linux_build:
     name: Linux Build
+    needs: [release_preflight]
     uses: ./.github/workflows/deps-build-linux.yaml
     with:
       nightly: false
@@ -57,19 +85,58 @@ jobs:
       arch: 'x86_64'
     secrets: inherit
 
+  linux_aarch64_build:
+    name: Linux aarch64 Build
+    needs: [release_preflight]
+    uses: ./.github/workflows/deps-build-linux.yaml
+    with:
+      nightly: false
+      tag: ${{ inputs.tag }}
+      arch: 'aarch64'
+    secrets: inherit
+
+  windows_aarch64_build:
+    name: Windows aarch64 Build
+    needs: [release_preflight]
+    uses: ./.github/workflows/deps-build-windows-nsis.yaml
+    with:
+      portable: false
+      nightly: false
+      fixed-webview: false
+      arch: 'aarch64'
+      tag: ${{ inputs.tag }}
+    secrets: inherit
+
   upload_release_assets:
     name: Upload Release Assets
-    # todo windows_build
-    needs: [windows_build, linux_build, macos_x86_64_build, macos_aarch64_build]
+    needs:
+      [
+        windows_build,
+        windows_aarch64_build,
+        linux_build,
+        linux_aarch64_build,
+        macos_x86_64_build,
+        macos_aarch64_build,
+      ]
     uses: ./.github/workflows/deps-upload-release-assets.yaml
     with:
       tag: ${{ inputs.tag }}
     secrets: inherit
 
+  updater:
+    name: Create Updater
+    uses: ./.github/workflows/deps-create-updater.yaml
+    needs: [upload_release_assets]
+    with:
+      nightly: false
+      tag: ${{ inputs.tag }}
+      release_body: ${{ inputs.release_body }}
+    secrets: inherit
+
   publish_release:
     name: Publish Release
     runs-on: ubuntu-latest
-    needs: [upload_release_assets]
+    needs: [updater]
     permissions:
       contents: write
     steps:
@@ -79,13 +146,3 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           gh release edit "$RELEASE_TAG" --draft=false --repo "${{ github.repository }}"
-
-  updater:
-    name: Create Updater
-    uses: ./.github/workflows/deps-create-updater.yaml
-    # todo windows_build
-    needs: [publish_release]
-    with:
-      nightly: false
-      release_body: ${{ inputs.release_body }}
-    secrets: inherit
