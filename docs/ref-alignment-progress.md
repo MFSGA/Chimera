@@ -1221,3 +1221,25 @@ DIFF-001 至 DIFF-012 是此前基于
   Chimera `ChimeraClient`/Tauri IPC 并用现有 Specta generator 生成 binding；之后迁入 ref connections route 的
   active/all/closed viewer、filters、toolbar/status tabs 和跨页焦点，并分别验证主 UI、受影响的 legacy 共享入口及
   agent 对同一 API 的兼容性。完成这些步骤前不得称 Connections 页面已与最新 ref 完成对齐。
+
+## DIFF-045：等待新进程完成 exec 后再记录身份
+
+- 基线：只读本地 `ref/` commit `0c7b15b3c61db390db21cffb63d29805abd380a1`，工作树 clean；本轮未更新或修改 `ref/`。
+- ref 到 Chimera 映射：`ref/backend/nyanpasu-runtime/crates/nyanpasu-utils/src/process/pid_file.rs::PidFileGuard::write` 和
+  `wait_for_process_identity` 对应 `backend/chimera-utils/src/process/pid_file.rs` 同名逻辑。
+- 类别：ref 缺陷的最小修正。ref 与 Chimera 原逻辑都会在第一次读到进程身份时立即返回；Linux 在带有 `pre_exec`
+  hook 的 fork/exec 启动窗口中，`/proc/<pid>/exe` 短暂指向父测试进程。CI 的
+  `different_epoch_pid_files_do_not_kill_overlapping_process` 已复现该竞态：刚启动的
+  `chimera-test-child` 被识别为 `process_pid_file` 并拒绝写身份记录。Chimera 现在在有限等待期间继续观察，直到
+  executable 与启动命令一致；持续不匹配仍 fail closed。
+- 其他 CI 修正：`core_spec_preserves_each_supported_brand_and_executable_mapping` 现将平台 `.exe` 后缀纳入测试断言；
+  Specta 绑定新鲜度检查在比较前统一 CRLF/LF，保留内容级差异检查。
+- 影响入口：进程监督写入 epoch pid 记录及 Windows/macOS 二进制路径映射测试；不改变 pid 记录格式、终止权限或
+  产品 IPC。没有 legacy UI 或 agent 独立路径。
+- 验证：epoch pid 集成测试 12/12、启动身份等待竞态回归测试 1/1、核心二进制映射测试 1/1、Specta 绑定新鲜度测试
+  1/1 通过；绑定生成器更新测试运行后没有产生文件差异。`pnpm run-p lint:clippy lint:rustfmt` 与
+  `git diff --check` 通过。全量 `pnpm test:backend` 在本机 macOS 为 551 passed、1 ignored、1 failed；唯一失败是
+  不相关的 `external_watcher_smoke_mirror_real_file_event` 超时，该用例单独重跑 1/1 通过。远程本次失败项只在
+  Linux 进程启动竞态和 Windows 两个跨平台断言；macOS CI 与 Tauri E2E 均通过。
+- 重新评估：当 ref 的进程身份采集等待逻辑或 ProcessKit 的 spawn/exec 行为更新时，重跑身份竞态测试，并评估移除
+  本地等待差异；平台后缀断言和绑定换行规范化保留为跨平台测试要求。

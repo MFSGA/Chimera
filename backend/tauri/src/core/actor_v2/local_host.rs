@@ -139,7 +139,12 @@ mod tests {
             .unwrap();
 
             assert_eq!(spec.kind, expected_kind, "wrong runtime kind for {core}");
-            assert!(spec.binary_path.ends_with(core_type_name(&core)));
+            let expected_binary_name =
+                format!("{}{}", core_type_name(&core), std::env::consts::EXE_SUFFIX);
+            assert_eq!(
+                spec.binary_path.file_name(),
+                Some(expected_binary_name.as_str())
+            );
             assert!(spec.version.is_none());
             assert!(spec.features.is_empty());
         }

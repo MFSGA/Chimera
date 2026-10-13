@@ -201,14 +201,18 @@ mod tests {
         format_bindings(&generated_path);
         normalize_typescript_bindings(&generated_path)
             .expect("failed to normalize generated TypeScript bindings");
-        let generated = std::fs::read_to_string(generated_path)
-            .expect("failed to read generated TypeScript bindings");
-        let checked_in = std::fs::read_to_string(BINDINGS_PATH)
-            .expect("failed to read checked-in TypeScript bindings");
+        let generated = read_bindings_with_normalized_line_endings(generated_path);
+        let checked_in = read_bindings_with_normalized_line_endings(BINDINGS_PATH);
         assert_eq!(
             checked_in, generated,
             "TypeScript bindings are stale; run the ignored update_typescript_bindings test"
         );
+    }
+
+    fn read_bindings_with_normalized_line_endings(path: impl AsRef<Path>) -> String {
+        std::fs::read_to_string(path)
+            .expect("failed to read TypeScript bindings")
+            .replace("\r\n", "\n")
     }
 
     #[test]
