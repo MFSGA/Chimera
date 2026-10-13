@@ -211,9 +211,8 @@ jobs:
           pnpm test:profiles:query
           pnpm test:hotkeys
 
-      # Keep the previously green contract selection until the unfinished runtime/client test scaffolds are implemented.
-      - name: Test focused backend contracts
-        if: startsWith(matrix.targets.os, 'ubuntu-') && env.BACKEND == 'true'
+      - name: Test backend workspace
+        if: env.BACKEND == 'true'
         run: pnpm test:backend
 
       - name: Lint backend
