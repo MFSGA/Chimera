@@ -18,6 +18,21 @@ type AgentProxySnapshot = {
   };
 };
 
+type AgentAuditHistory = {
+  retained_events: number;
+  verified_events: number;
+  entries: Array<{ action: string; outcome: string }>;
+};
+
+type AgentDiagnosticHistory = {
+  retained_events: number;
+  entries: Array<{
+    health: string;
+    core_state: string;
+    service_state: string;
+  }>;
+};
+
 /** Invoke a backend command through the current Tauri page internals. */
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
@@ -74,6 +89,67 @@ async function waitForAgentProposalCooldown(requestedAt: number) {
       timeout: 1_500,
       timeoutMsg: 'The Agent proposal cooldown did not elapse.',
     },
+  );
+}
+
+async function verifyAgentAuditHistory() {
+  await clickElement(
+    await displayedElement('[data-slot="agent-audit-history-refresh"]'),
+  );
+  const auditCard = await displayedElement('[data-slot="agent-audit-history"]');
+  await browser.waitUntil(
+    async () => {
+      const audit = await invoke<AgentAuditHistory>('agent_get_audit_history');
+      return (
+        audit.retained_events > 0 &&
+        audit.verified_events > 0 &&
+        audit.entries.some(
+          (entry) =>
+            entry.action === 'disable_stale_system_proxy' &&
+            entry.outcome === 'verified',
+        ) &&
+        (await auditCard.getText()).includes('disable stale system proxy')
+      );
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: 'The verified proxy action did not appear in audit history.',
+    },
+  );
+  assert.match(await auditCard.getText(), /verified/);
+}
+
+async function captureAgentDiagnosticHistory() {
+  const previous = await invoke<AgentDiagnosticHistory>(
+    'agent_get_diagnostic_history',
+  );
+  assert.equal(
+    previous.retained_events,
+    0,
+    'the isolated Agent runtime must start without diagnostic history',
+  );
+  await clickElement(
+    await displayedElement('[data-slot="agent-diagnostic-capture"]'),
+  );
+  let diagnostic: AgentDiagnosticHistory | undefined;
+  await browser.waitUntil(
+    async () => {
+      diagnostic = await invoke<AgentDiagnosticHistory>(
+        'agent_get_diagnostic_history',
+      );
+      return diagnostic.retained_events === previous.retained_events + 1;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: 'The explicit diagnostic capture was not persisted.',
+    },
+  );
+  assert.equal(diagnostic?.entries[0]?.health, 'healthy');
+  assert.equal(diagnostic?.entries[0]?.core_state, 'stopped');
+  assert.doesNotMatch(JSON.stringify(diagnostic), /revision|proposal_id/);
+  assert.match(
+    await $('[data-slot="agent-diagnostic-history"]').getText(),
+    /healthy/,
   );
 }
 
@@ -472,5 +548,11 @@ describe('network assistant guided diagnosis', () => {
       async () => !(await $('body').getText()).includes('确认网络变更'),
       { timeout: 15_000, timeoutMsg: 'Confirmation dialog did not close.' },
     );
+  });
+
+  // Contract: docs/testing/contracts/agent-history-ui.md
+  it('shows privacy-safe action history and saves an explicit diagnosis', async () => {
+    await verifyAgentAuditHistory();
+    await captureAgentDiagnosticHistory();
   });
 });

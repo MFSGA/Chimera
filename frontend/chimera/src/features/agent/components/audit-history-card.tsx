@@ -30,6 +30,7 @@ export function AuditHistoryCard({
           className="ml-auto"
           loading={loading}
           variant="flat"
+          data-slot="agent-audit-history-refresh"
           onClick={onRefresh}
         >
           <RefreshRounded />

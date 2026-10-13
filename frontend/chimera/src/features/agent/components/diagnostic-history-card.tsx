@@ -36,6 +36,7 @@ export function DiagnosticHistoryCard({
             disabled={loading || capturing}
             loading={capturing}
             variant="flat"
+            data-slot="agent-diagnostic-capture"
             onClick={onCapture}
           >
             <SaveRounded />
@@ -45,6 +46,7 @@ export function DiagnosticHistoryCard({
             disabled={capturing}
             loading={loading}
             variant="flat"
+            data-slot="agent-diagnostic-history-refresh"
             onClick={onRefresh}
           >
             <RefreshRounded />

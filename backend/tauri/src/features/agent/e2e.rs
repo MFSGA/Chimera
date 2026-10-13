@@ -1,5 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use sha2::{Digest, Sha256};
+
 use super::model::{
     AgentActionRequest, AgentAppliedState, AgentConnectorState, AgentCoreSnapshot, AgentCoreState,
     AgentFinding, AgentFindingCode, AgentFindingSeverity, AgentHealth, AgentHostScope,
@@ -45,13 +47,7 @@ fn snapshot() -> AgentNetworkSnapshot {
     let tun_enabled = TUN_ENABLED.load(Ordering::SeqCst);
     AgentNetworkSnapshot {
         schema_version: NETWORK_SNAPSHOT_SCHEMA_VERSION,
-        revision: match (repaired, tun_enabled) {
-            (false, false) => "agent-e2e-stale-proxy",
-            (false, true) => "agent-e2e-stale-proxy-tun",
-            (true, false) => "agent-e2e-healthy",
-            (true, true) => "agent-e2e-healthy-tun",
-        }
-        .into(),
+        revision: snapshot_revision(repaired, tun_enabled),
         captured_at: chrono::Utc::now().timestamp_millis(),
         app_version: env!("CARGO_PKG_VERSION").into(),
         os_family: std::env::consts::OS.into(),
@@ -70,6 +66,16 @@ fn snapshot() -> AgentNetworkSnapshot {
         probe_failures: Vec::new(),
         privacy: privacy_boundary(),
     }
+}
+
+fn snapshot_revision(repaired: bool, tun_enabled: bool) -> String {
+    let state = match (repaired, tun_enabled) {
+        (false, false) => "stale-proxy",
+        (false, true) => "stale-proxy-tun",
+        (true, false) => "healthy",
+        (true, true) => "healthy-tun",
+    };
+    format!("{:x}", Sha256::digest(state.as_bytes()))
 }
 
 fn core_snapshot() -> AgentCoreSnapshot {
