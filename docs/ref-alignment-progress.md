@@ -1232,7 +1232,8 @@ DIFF-001 至 DIFF-012 是此前基于
   `different_epoch_pid_files_do_not_kill_overlapping_process` 已复现该竞态：刚启动的
   `chimera-test-child` 被识别为 `process_pid_file` 并拒绝写身份记录。Chimera 现在在有限等待期间继续观察，直到
   executable 与启动命令一致；持续不匹配仍 fail closed。
-- 其他 CI 修正：`core_spec_preserves_each_supported_brand_and_executable_mapping` 现将平台 `.exe` 后缀纳入测试断言；
+- 其他 CI 修正：`core_spec_preserves_each_supported_brand_and_executable_mapping` 将平台可执行后缀纳入断言，并在
+  Windows 上为 Alpha 测试夹具提供 `.exe` 文件名；
   Specta 绑定新鲜度检查在比较前统一 CRLF/LF，保留内容级差异检查。
 - 影响入口：进程监督写入 epoch pid 记录及 Windows/macOS 二进制路径映射测试；不改变 pid 记录格式、终止权限或
   产品 IPC。没有 legacy UI 或 agent 独立路径。
