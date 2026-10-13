@@ -24,9 +24,6 @@ use crate::client::hotkey::{
     ports::{HotkeyAction, WindowControl},
 };
 
-#[cfg(test)]
-use crate::client::{LegacyProfileFsPort, LegacyProfilesReadPort};
-
 struct LegacySelfProxyPort;
 
 impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
@@ -107,10 +104,6 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
             core_facade,
         )),
-        #[cfg(test)]
-        profiles: Arc::new(LegacyProfilesReadPort),
-        #[cfg(test)]
-        profile_files: Arc::new(LegacyProfileFsPort),
         profile_service,
         system_dns: Arc::new(OsSystemDnsCache),
         traffic_store,
