@@ -77,7 +77,11 @@ export function ProposalDialog({
               <Button loading={executing} variant="flat" onClick={onConfirm}>
                 {m.agent_confirm_execute()}
               </Button>
-              <Button disabled={executing} onClick={onCancel}>
+              <Button
+                data-slot="agent-proposal-cancel"
+                disabled={executing}
+                onClick={onCancel}
+              >
                 {m.agent_cancel()}
               </Button>
             </CardFooter>

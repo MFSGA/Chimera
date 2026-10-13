@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { displayedElement } from './interaction.js';
+import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/assistant';
 const artifactDirectory = path.resolve('.tmp');
+const PROPOSAL_COOLDOWN_OBSERVATION_MS = 600;
 
 type VergeConfig = {
   language?: string | null;
+};
+
+type AgentProxySnapshot = {
+  system_proxy: {
+    observed_enabled: boolean | null;
+  };
 };
 
 /** Invoke a backend command through the current Tauri page internals. */
@@ -29,6 +36,44 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
     },
     command,
     args,
+  );
+}
+
+async function ensureIntentCard() {
+  const card = await $('[data-slot="agent-intent-card"]');
+  if ((await card.isExisting()) && (await card.isDisplayed())) return;
+
+  const start = await displayedElement('//button[contains(., "检查网络问题")]');
+  await clickElement(start);
+  await displayedElement('[data-slot="agent-intent-card"]');
+}
+
+async function cancelPendingAgentProposal() {
+  const cancel = await displayedElement('[data-slot="agent-proposal-cancel"]');
+  await clickElement(cancel);
+  await waitForAgentProposalClosed();
+}
+
+async function waitForAgentProposalClosed() {
+  await browser.waitUntil(
+    async () => !(await $('[data-slot="modal-content"]').isDisplayed()),
+    {
+      timeout: 15_000,
+      timeoutMsg: 'Agent proposal dialog did not close.',
+    },
+  );
+}
+
+async function waitForAgentProposalCooldown(requestedAt: number) {
+  // The backend enforces a 500 ms per-window proposal interval; the extra
+  // margin avoids making the next valid UI action race that boundary.
+  await browser.waitUntil(
+    async () => Date.now() - requestedAt >= PROPOSAL_COOLDOWN_OBSERVATION_MS,
+    {
+      interval: 25,
+      timeout: 1_500,
+      timeoutMsg: 'The Agent proposal cooldown did not elapse.',
+    },
   );
 }
 
@@ -112,6 +157,93 @@ describe('network assistant guided diagnosis', () => {
     assert.equal(enabled, true);
   });
 
+  it('keeps a resolved network change pending until explicit confirmation', async () => {
+    const initial = await invoke<AgentProxySnapshot>(
+      'agent_get_network_snapshot',
+    );
+    assert.equal(
+      initial.system_proxy.observed_enabled,
+      true,
+      'the isolated stale-proxy fixture must start with its simulated proxy enabled',
+    );
+
+    await ensureIntentCard();
+    const input = await displayedElement('[data-slot="agent-intent-input"]');
+    await input.setValue('关闭残留代理');
+    await clickElement(
+      await displayedElement('[data-slot="agent-intent-submit"]'),
+    );
+    await browser.waitUntil(
+      async () => (await $('body').getText()).includes('已识别到受支持的变更'),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The supported Agent intent was not resolved.',
+      },
+    );
+
+    let proposalAttempted = false;
+    let operationError: unknown;
+    try {
+      const continueButton = await displayedElement(
+        '[data-slot="agent-intent-continue"]',
+      );
+      proposalAttempted = true;
+      await clickElement(continueButton);
+      await browser.waitUntil(
+        async () => (await $('body').getText()).includes('确认网络变更'),
+        {
+          timeout: 15_000,
+          timeoutMsg: 'The Agent intent did not open its proposal dialog.',
+        },
+      );
+      const dialogText = await $('body').getText();
+      assert.match(dialogText, /将禁用主机的系统代理/);
+      const confirm = await displayedElement(
+        '//div[@data-slot="modal-content"]//button[contains(., "确认并执行")]',
+      );
+      assert.equal(
+        await browser.execute(
+          (element) => !(element as HTMLButtonElement).disabled,
+          confirm,
+        ),
+        true,
+      );
+
+      const pending = await invoke<AgentProxySnapshot>(
+        'agent_get_network_snapshot',
+      );
+      assert.equal(
+        pending.system_proxy.observed_enabled,
+        true,
+        'opening a proposal must not apply the host proxy change',
+      );
+    } catch (error) {
+      operationError = error;
+    }
+
+    let cleanupError: unknown;
+    if (proposalAttempted) {
+      try {
+        await cancelPendingAgentProposal();
+      } catch (error) {
+        cleanupError = error;
+      }
+    }
+    if (operationError && cleanupError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        'Agent intent proposal failed and cleanup also failed.',
+      );
+    }
+    if (operationError) throw operationError;
+    if (cleanupError) throw cleanupError;
+
+    const afterCancel = await invoke<AgentProxySnapshot>(
+      'agent_get_network_snapshot',
+    );
+    assert.equal(afterCancel.system_proxy.observed_enabled, true);
+  });
+
   it('turns a finding into an explanation and recommended repair', async () => {
     const button = await displayedElement(
       '//button[contains(., "检查网络问题")]',
@@ -168,6 +300,7 @@ describe('network assistant guided diagnosis', () => {
     );
   });
 
+  // Contract: docs/testing/contracts/agent-tun-readiness.md
   it('guards system proxy and respects platform TUN readiness', async () => {
     const proxyEnable = await displayedElement(
       '[data-slot="agent-system-proxy-enable"]',
@@ -196,6 +329,7 @@ describe('network assistant guided diagnosis', () => {
     // so TUN enablement must remain unavailable until that prerequisite is met.
     if (!tunEnableExpected) return;
 
+    const tunEnableRequestedAt = Date.now();
     await browser.execute(
       (element) => (element as HTMLElement).click(),
       tunEnable,
@@ -211,6 +345,7 @@ describe('network assistant guided diagnosis', () => {
       (element) => (element as HTMLElement).click(),
       confirm,
     );
+    await waitForAgentProposalClosed();
     await browser.waitUntil(
       async () => {
         const enable = await $('[data-slot="agent-tun-enable"]').getElement();
@@ -219,6 +354,7 @@ describe('network assistant guided diagnosis', () => {
       },
       { timeout: 15_000, timeoutMsg: 'TUN enable was not verified in the UI.' },
     );
+    await waitForAgentProposalCooldown(tunEnableRequestedAt);
 
     const disable = await displayedElement('[data-slot="agent-tun-disable"]');
     await browser.execute(
@@ -236,6 +372,7 @@ describe('network assistant guided diagnosis', () => {
       (element) => (element as HTMLElement).click(),
       confirm,
     );
+    await waitForAgentProposalClosed();
     await browser.waitUntil(
       async () => {
         const enable = await $('[data-slot="agent-tun-enable"]').getElement();

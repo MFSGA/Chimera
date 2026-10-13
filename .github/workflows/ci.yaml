@@ -210,6 +210,7 @@ jobs:
           pnpm --filter chimera-ui test:connections
           pnpm test:profiles:query
           pnpm test:hotkeys
+          pnpm test:agent:intent
 
       - name: Test backend workspace
         if: env.BACKEND == 'true'
