@@ -14,3 +14,4 @@ frontend/chimera/auto-imports.d.ts
 # backend/tauri/gen/schemas/
 # note: prettier should only format the frontend source codes. All backend files are ignored.
 backend/
+ref/
