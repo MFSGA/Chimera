@@ -401,7 +401,7 @@ pub(crate) struct RuntimeApplyReceipt {
     pub run_intent: super::application_workflow::policy::CoreRunIntent,
     pub local_ipc: chimera_core_manager::LocalIpcSettings,
     pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
-    pub ports: chimera_config::runtime::executor::ResolvedPortBindings,
+    pub ports: super::ports::CandidatePortBindings,
     pub artifact: Option<Arc<RuntimeSnapshot>>,
 }
 
@@ -442,6 +442,7 @@ pub struct RuntimeLifecycleState {
     pub promoted: Option<Arc<RuntimeSnapshot>>,
     pub applied: Option<Arc<RuntimeSnapshot>>,
     pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
+    pub confirmed_available: bool,
     pub last_transform_failure: Option<RuntimeTransformFailure>,
 }
 
@@ -468,10 +469,23 @@ impl RuntimeLifecycle {
         let mut state = self.state.write();
         state.applied = None;
         state.confirmed = Some(receipt);
+        state.confirmed_available = true;
     }
 
     pub fn confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         self.state.read().confirmed.clone()
+    }
+
+    pub fn accepted_confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        let state = self.state.read();
+        state
+            .confirmed_available
+            .then(|| state.confirmed.clone())
+            .flatten()
+    }
+
+    pub fn invalidate_confirmed(&self) {
+        self.state.write().confirmed_available = false;
     }
 
     pub fn publish_applied(&self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {

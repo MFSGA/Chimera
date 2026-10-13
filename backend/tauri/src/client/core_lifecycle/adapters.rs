@@ -175,8 +175,9 @@ impl LegacyCoreBridge {
 
     /// Compatibility boundary for the staged lifecycle migration.
     ///
-    /// The concrete CoreManager is owned by the lower core facade; this adapter
-    /// only maps that lower host boundary into the client lifecycle port.
+    /// The CoreFacade owns the lower host boundary; this adapter only maps it
+    /// into the client lifecycle port. Production local execution uses
+    /// LocalRuntimeHost, while the manager-only path is retained for tests.
     fn facade(&self) -> &Arc<CoreFacade> {
         &self.facade
     }

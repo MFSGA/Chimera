@@ -468,7 +468,7 @@ impl CoreLifecycleLease<'_> {
 struct CoreLifecycleState {
     /// Single mutex domain for run/restart, stop, check, recover, and core changes.
     run_lock: RuntimeRebuildGate,
-    runtime_lifecycle: RuntimeLifecycle,
+    runtime_lifecycle: Arc<RuntimeLifecycle>,
     port_resolver: SessionPortResolver,
     recovery_notify: Arc<tokio::sync::Notify>,
 }
@@ -481,12 +481,13 @@ pub struct CoreManager {
 
 impl CoreManager {
     pub(crate) fn new() -> Self {
+        let runtime_lifecycle = Arc::new(RuntimeLifecycle::default());
         Self {
             instance: Mutex::new(None),
             lifecycle: CoreLifecycleState {
                 run_lock: RuntimeRebuildGate::default(),
-                runtime_lifecycle: RuntimeLifecycle::default(),
-                port_resolver: SessionPortResolver::default(),
+                port_resolver: SessionPortResolver::new(runtime_lifecycle.clone()),
+                runtime_lifecycle,
                 recovery_notify: Arc::new(tokio::sync::Notify::new()),
             },
         }
@@ -670,10 +671,10 @@ impl CoreManager {
             .prepare_external_controller_port()
             .map_err(RuntimeRestartError::Prepare)?;
 
-        let resolved_ports = self
+        let candidate_ports = self
             .lifecycle
             .port_resolver
-            .resolve(clash)
+            .resolve_candidate(clash)
             .map_err(RuntimeRestartError::Prepare)?;
 
         let revision = self
@@ -682,8 +683,12 @@ impl CoreManager {
             .allocate_revision()
             .map_err(RuntimeRestartError::Prepare)?;
         let (config, exists_keys, transform_output, inspection) =
-            match Config::generate_runtime_output_with_ports(clash, target_core, resolved_ports)
-                .await
+            match Config::generate_runtime_output_with_ports(
+                clash,
+                target_core,
+                candidate_ports.bindings().clone(),
+            )
+            .await
             {
                 Ok(output) => (
                     output.config,
