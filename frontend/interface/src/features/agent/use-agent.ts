@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   commands,
   type AgentActionRequest,
+  type AgentAuditHistoryView,
+  type AgentDiagnosticHistoryView,
   type AgentNetworkProbeRequest,
   type AgentNetworkSnapshot,
   type AgentToolRequest,
@@ -13,6 +15,16 @@ export const AGENT_MANIFEST_QUERY_KEY = ['agent', 'manifest'] as const;
 export const AGENT_NETWORK_SNAPSHOT_QUERY_KEY = [
   'agent',
   'network-snapshot',
+] as const;
+
+export const AGENT_AUDIT_HISTORY_QUERY_KEY = [
+  'agent',
+  'audit-history',
+] as const;
+
+export const AGENT_DIAGNOSTIC_HISTORY_QUERY_KEY = [
+  'agent',
+  'diagnostic-history',
 ] as const;
 
 export type AgentExecuteInput = {
@@ -53,6 +65,38 @@ export const useAgent = () => {
     refetchOnMount: false,
     refetchOnReconnect: false,
     refetchOnWindowFocus: false,
+  });
+
+  // Audit history is only read on explicit user request; never background-poll.
+  const auditHistory = useQuery<AgentAuditHistoryView>({
+    queryKey: AGENT_AUDIT_HISTORY_QUERY_KEY,
+    queryFn: async () => unwrapResult(await commands.agentGetAuditHistory()),
+    enabled: false,
+    retry: false,
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const diagnosticHistory = useQuery<AgentDiagnosticHistoryView>({
+    queryKey: AGENT_DIAGNOSTIC_HISTORY_QUERY_KEY,
+    queryFn: async () =>
+      unwrapResult(await commands.agentGetDiagnosticHistory()),
+    enabled: false,
+    retry: false,
+    refetchInterval: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
+  });
+
+  const captureDiagnostic = useMutation({
+    mutationFn: async () =>
+      unwrapResult(await commands.agentCaptureDiagnosticHistory()),
+    onSuccess: (history) => {
+      queryClient.setQueryData(AGENT_DIAGNOSTIC_HISTORY_QUERY_KEY, history);
+    },
   });
 
   const runTool = useMutation({
@@ -109,6 +153,9 @@ export const useAgent = () => {
   return {
     manifest,
     snapshot,
+    auditHistory,
+    diagnosticHistory,
+    captureDiagnostic,
     runTool,
     probeNetwork,
     resolveIntent,

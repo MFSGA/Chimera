@@ -415,6 +415,22 @@ export const commands = {
   createLegacyWindow: () =>
     typedError<null, string>(__TAURI_INVOKE('create_legacy_window')),
   agentGetManifest: () => __TAURI_INVOKE<AgentManifest>('agent_get_manifest'),
+  agentGetAuditHistory: () =>
+    typedError<AgentAuditHistoryView, string>(
+      __TAURI_INVOKE('agent_get_audit_history'),
+    ),
+  /**
+   *  Explicit persistence command. The backend captures an authoritative fresh
+   *  snapshot rather than accepting an untrusted frontend-provided diagnostic.
+   */
+  agentCaptureDiagnosticHistory: () =>
+    typedError<AgentDiagnosticHistoryView, string>(
+      __TAURI_INVOKE('agent_capture_diagnostic_history'),
+    ),
+  agentGetDiagnosticHistory: () =>
+    typedError<AgentDiagnosticHistoryView, string>(
+      __TAURI_INVOKE('agent_get_diagnostic_history'),
+    ),
   agentExecuteTool: (request: AgentToolRequest) =>
     typedError<AgentToolResult, string>(
       __TAURI_INVOKE('agent_execute_tool', { request }),
@@ -480,6 +496,19 @@ export type AgentActionRisk = 'traffic_change' | 'host_network_change';
 
 export type AgentAppliedState = 'consistent' | 'stale' | 'unknown';
 
+/**  Privacy-safe, read-only view: never expose proposal IDs or snapshot revisions. */
+export type AgentAuditHistoryView = {
+  retained_events: number;
+  verified_events: number;
+  entries: AgentAuditHistoryViewEntry[];
+};
+
+export type AgentAuditHistoryViewEntry = {
+  recorded_at: number;
+  action: string;
+  outcome: string;
+};
+
 export type AgentConnectorState =
   'disconnected' | 'connecting' | 'connected' | 'unknown';
 
@@ -495,6 +524,21 @@ export type AgentCoreSnapshot = {
 };
 
 export type AgentCoreState = 'running' | 'stopped' | 'unknown';
+
+/**  Read-only projection: do not expose revisions, targets, profile data, or secrets. */
+export type AgentDiagnosticHistoryView = {
+  retained_events: number;
+  entries: AgentDiagnosticHistoryViewEntry[];
+};
+
+export type AgentDiagnosticHistoryViewEntry = {
+  captured_at: number;
+  health: string;
+  core_state: string;
+  service_state: string;
+  finding_codes: string[];
+  probe_failure_codes: string[];
+};
 
 export type AgentDiagnosticSummary = {
   revision: string;

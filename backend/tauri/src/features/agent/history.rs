@@ -7,16 +7,19 @@ use std::{
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use specta::Type;
 use tokio::sync::Mutex;
 
 use crate::utils::dirs::app_data_dir;
 
-use super::model::{AgentActionKind, AgentProposal};
+use super::model::{AgentActionKind, AgentNetworkSnapshot, AgentProposal};
 
 const HISTORY_FILE: &str = "agent-history.json";
 const HISTORY_SCHEMA_VERSION: u32 = 1;
 const MAX_DIAGNOSTIC_HISTORY: usize = 100;
 const MAX_AUDIT_HISTORY: usize = 200;
+const MAX_VISIBLE_AUDIT_HISTORY: usize = 20;
+const MAX_VISIBLE_DIAGNOSTIC_HISTORY: usize = 20;
 const MAX_HISTORY_FILE_BYTES: u64 = 1024 * 1024;
 
 static HISTORY_GATE: Mutex<()> = Mutex::const_new(());
@@ -52,6 +55,141 @@ struct AgentHistoryDocument {
     audits: VecDeque<AgentAuditHistoryEntry>,
 }
 
+/// Privacy-safe, read-only view: never expose proposal IDs or snapshot revisions.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentAuditHistoryView {
+    pub retained_events: u32,
+    pub verified_events: u32,
+    pub entries: Vec<AgentAuditHistoryViewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentAuditHistoryViewEntry {
+    pub recorded_at: i64,
+    pub action: String,
+    pub outcome: String,
+}
+
+/// Read-only projection: do not expose revisions, targets, profile data, or secrets.
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentDiagnosticHistoryView {
+    pub retained_events: u32,
+    pub entries: Vec<AgentDiagnosticHistoryViewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+pub(crate) struct AgentDiagnosticHistoryViewEntry {
+    pub captured_at: i64,
+    pub health: String,
+    pub core_state: String,
+    pub service_state: String,
+    pub finding_codes: Vec<String>,
+    pub probe_failure_codes: Vec<String>,
+}
+
+pub(super) async fn get_diagnostic_history() -> anyhow::Result<AgentDiagnosticHistoryView> {
+    let _guard = HISTORY_GATE.lock().await;
+    let document = load_document(history_path()?, false).await?;
+    Ok(project_diagnostic_history(&document))
+}
+
+fn project_diagnostic_history(document: &AgentHistoryDocument) -> AgentDiagnosticHistoryView {
+    AgentDiagnosticHistoryView {
+        retained_events: document.diagnostics.len() as u32,
+        entries: document
+            .diagnostics
+            .iter()
+            .rev()
+            .take(MAX_VISIBLE_DIAGNOSTIC_HISTORY)
+            .map(|entry| AgentDiagnosticHistoryViewEntry {
+                captured_at: entry.captured_at,
+                health: entry.health.clone(),
+                core_state: entry.core_state.clone(),
+                service_state: entry.service_state.clone(),
+                finding_codes: entry.finding_codes.clone(),
+                probe_failure_codes: entry.probe_failure_codes.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn enum_code<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    serde_json::to_value(value)?
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("invalid agent diagnostic code"))
+}
+
+fn diagnostic_entry(
+    snapshot: &AgentNetworkSnapshot,
+) -> anyhow::Result<AgentDiagnosticHistoryEntry> {
+    let mut entry = AgentDiagnosticHistoryEntry {
+        schema_version: HISTORY_SCHEMA_VERSION,
+        captured_at: snapshot.captured_at,
+        revision: snapshot.revision.clone(),
+        health: enum_code(&snapshot.health)?,
+        core_state: enum_code(&snapshot.core.state)?,
+        service_state: enum_code(&snapshot.service.state)?,
+        finding_codes: snapshot
+            .findings
+            .iter()
+            .map(|finding| enum_code(&finding.code))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+        probe_failure_codes: snapshot
+            .probe_failures
+            .iter()
+            .map(|failure| enum_code(&failure.code))
+            .collect::<anyhow::Result<Vec<_>>>()?,
+    };
+    if !normalize_diagnostic_entry(&mut entry) {
+        anyhow::bail!("agent diagnostic snapshot is invalid");
+    }
+    Ok(entry)
+}
+
+/// Explicit user action only; ordinary diagnosis and reads do not persist.
+pub(super) async fn record_diagnostic_snapshot(
+    snapshot: &AgentNetworkSnapshot,
+) -> anyhow::Result<AgentDiagnosticHistoryView> {
+    let entry = diagnostic_entry(snapshot)?;
+    let _guard = HISTORY_GATE.lock().await;
+    let path = history_path()?;
+    let mut document = load_document(path.clone(), true).await?;
+    document.diagnostics.push_back(entry);
+    trim(&mut document.diagnostics, MAX_DIAGNOSTIC_HISTORY);
+    save_document(path, document.clone()).await?;
+    Ok(project_diagnostic_history(&document))
+}
+
+pub(super) async fn get_audit_history() -> anyhow::Result<AgentAuditHistoryView> {
+    let _guard = HISTORY_GATE.lock().await;
+    // History inspection must never quarantine (rename) a corrupt file.
+    let document = load_document(history_path()?, false).await?;
+    Ok(project_audit_history(&document))
+}
+
+fn project_audit_history(document: &AgentHistoryDocument) -> AgentAuditHistoryView {
+    AgentAuditHistoryView {
+        retained_events: document.audits.len() as u32,
+        verified_events: document
+            .audits
+            .iter()
+            .filter(|entry| entry.outcome == "verified")
+            .count() as u32,
+        entries: document
+            .audits
+            .iter()
+            .rev()
+            .take(MAX_VISIBLE_AUDIT_HISTORY)
+            .map(|entry| AgentAuditHistoryViewEntry {
+                recorded_at: entry.recorded_at,
+                action: entry.action.clone(),
+                outcome: entry.outcome.clone(),
+            })
+            .collect(),
+    }
+}
+
 pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
     if !is_lower_hex(&proposal.snapshot_revision, 64) || !is_audit_outcome(outcome) {
         tracing::warn!(target: "agent_audit", "discarding invalid agent audit history entry");
@@ -66,7 +204,7 @@ pub(super) async fn record_audit(proposal: &AgentProposal, outcome: &str) {
             return;
         }
     };
-    let mut document = match load_document(path.clone()).await {
+    let mut document = match load_document(path.clone(), true).await {
         Ok(document) => document,
         Err(_) => {
             tracing::warn!(target: "agent_audit", "failed to load agent history");
@@ -106,13 +244,19 @@ fn history_path() -> anyhow::Result<PathBuf> {
     Ok(app_data_dir()?.join(HISTORY_FILE))
 }
 
-async fn load_document(path: PathBuf) -> anyhow::Result<AgentHistoryDocument> {
-    tokio::task::spawn_blocking(move || load_document_blocking(&path))
+async fn load_document(
+    path: PathBuf,
+    quarantine_corrupt: bool,
+) -> anyhow::Result<AgentHistoryDocument> {
+    tokio::task::spawn_blocking(move || load_document_blocking(&path, quarantine_corrupt))
         .await
         .map_err(|_| anyhow::anyhow!("agent history load task failed"))?
 }
 
-fn load_document_blocking(path: &Path) -> anyhow::Result<AgentHistoryDocument> {
+fn load_document_blocking(
+    path: &Path,
+    quarantine_corrupt: bool,
+) -> anyhow::Result<AgentHistoryDocument> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
@@ -132,10 +276,11 @@ fn load_document_blocking(path: &Path) -> anyhow::Result<AgentHistoryDocument> {
             normalize_history_document(&mut document);
             Ok(document)
         }
-        Err(_) => {
+        Err(_) if quarantine_corrupt => {
             quarantine_corrupt_document(path)?;
             Ok(Default::default())
         }
+        Err(_) => Err(anyhow::anyhow!("agent history document is corrupt")),
     }
 }
 
@@ -280,6 +425,7 @@ fn is_probe_failure_code(code: &str) -> bool {
         code,
         "core_status_unavailable"
             | "core_config_unavailable"
+            | "profiles_unavailable"
             | "system_proxy_unavailable"
             | "service_status_unavailable"
             | "service_status_timeout"
@@ -321,9 +467,106 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::{
-        AgentAuditHistoryEntry, AgentHistoryDocument, is_lower_hex, normalize_history_document,
+        AgentAuditHistoryEntry, AgentDiagnosticHistoryEntry, AgentHistoryDocument, enum_code,
+        is_lower_hex, load_document_blocking, normalize_diagnostic_entry,
+        normalize_history_document, project_audit_history, project_diagnostic_history,
         proposal_reference, trim,
     };
+
+    #[test]
+    fn diagnostic_history_view_is_bounded_newest_first_and_redacted() {
+        let document = AgentHistoryDocument {
+            diagnostics: (0..25)
+                .map(|index| AgentDiagnosticHistoryEntry {
+                    schema_version: 1,
+                    captured_at: index,
+                    revision: "a".repeat(64),
+                    health: "warning".into(),
+                    core_state: "running".into(),
+                    service_state: "stopped".into(),
+                    finding_codes: vec!["weak_controller_secret".into()],
+                    probe_failure_codes: vec!["profiles_unavailable".into()],
+                })
+                .collect(),
+            audits: VecDeque::new(),
+        };
+        let view = project_diagnostic_history(&document);
+        assert_eq!(view.retained_events, 25);
+        assert_eq!(view.entries.len(), 20);
+        assert_eq!(view.entries[0].captured_at, 24);
+        assert_eq!(view.entries[19].captured_at, 5);
+        let json = serde_json::to_string(&view).unwrap();
+        assert!(
+            !json.contains(&"a".repeat(64)),
+            "revisions must stay private"
+        );
+        assert!(!json.contains("proposal_id"));
+        assert!(json.contains("profiles_unavailable"));
+    }
+
+    #[test]
+    fn diagnostic_history_rejects_unrecognized_codes_and_retains_profiles_failure() {
+        let mut entry = AgentDiagnosticHistoryEntry {
+            schema_version: 1,
+            captured_at: 100,
+            revision: "b".repeat(64),
+            health: "degraded".into(),
+            core_state: "unknown".into(),
+            service_state: "unknown".into(),
+            finding_codes: vec!["tun_runtime_mismatch".into(), "tun_runtime_mismatch".into()],
+            probe_failure_codes: vec![
+                enum_code(&crate::features::agent::model::AgentProbeCode::ProfilesUnavailable)
+                    .unwrap(),
+            ],
+        };
+        assert!(normalize_diagnostic_entry(&mut entry));
+        assert_eq!(entry.finding_codes, ["tun_runtime_mismatch"]);
+        entry.finding_codes.push("canary-secret-url".into());
+        assert!(!normalize_diagnostic_entry(&mut entry));
+    }
+
+    /// HISTORY-READONLY: A corrupt file is left byte-for-byte intact by the
+    /// inspection path. The existing write path may still quarantine it.
+    /// Regression: the old read path renamed the file and returned empty data.
+    #[test]
+    fn corrupt_history_read_does_not_rename_or_replace_user_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let original = b"{ not valid json";
+        std::fs::write(&path, original).unwrap();
+
+        let error = load_document_blocking(&path, false).unwrap_err();
+        assert_eq!(error.to_string(), "agent history document is corrupt");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn missing_history_read_returns_empty_view_without_creating_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let document = load_document_blocking(&path, false).unwrap();
+        assert_eq!(project_audit_history(&document).retained_events, 0);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn corrupt_history_write_path_still_quarantines_original() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("agent-history.json");
+        let original = b"{ not valid json";
+        std::fs::write(&path, original).unwrap();
+
+        let document = load_document_blocking(&path, true).unwrap();
+        assert_eq!(project_audit_history(&document).retained_events, 0);
+        assert!(!path.exists());
+        let quarantined = std::fs::read_dir(temp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(quarantined.len(), 1);
+        assert_eq!(std::fs::read(&quarantined[0]).unwrap(), original);
+    }
 
     #[test]
     fn proposal_references_are_fixed_lower_hex_and_hide_raw_tokens() {
@@ -373,6 +616,37 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden), "{forbidden}");
         }
+    }
+
+    #[test]
+    fn audit_view_is_bounded_newest_first_and_hides_identifiers() {
+        let document = AgentHistoryDocument {
+            diagnostics: VecDeque::new(),
+            audits: (0..25)
+                .map(|index| AgentAuditHistoryEntry {
+                    schema_version: 1,
+                    recorded_at: index,
+                    proposal_id: "secret-proposal-id-canary".into(),
+                    action: "set_tun_enabled".into(),
+                    snapshot_revision: "private-snapshot-revision-canary".into(),
+                    outcome: if index % 2 == 0 {
+                        "verified"
+                    } else {
+                        "proposed"
+                    }
+                    .into(),
+                })
+                .collect(),
+        };
+        let view = project_audit_history(&document);
+        assert_eq!(view.retained_events, 25);
+        assert_eq!(view.verified_events, 13);
+        assert_eq!(view.entries.len(), 20);
+        assert_eq!(view.entries[0].recorded_at, 24);
+        assert_eq!(view.entries[19].recorded_at, 5);
+        let serialized = serde_json::to_string(&view).unwrap();
+        assert!(!serialized.contains("secret-proposal-id-canary"));
+        assert!(!serialized.contains("private-snapshot-revision-canary"));
     }
 
     #[test]

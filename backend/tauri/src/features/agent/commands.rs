@@ -1,5 +1,6 @@
 use tauri::{AppHandle, Manager, State, WebviewWindow};
 
+use super::history::{self, AgentAuditHistoryView, AgentDiagnosticHistoryView};
 use super::{
     AgentActionRequest, AgentActionResult, AgentCommandError, AgentFeatureState,
     AgentIntentRequest, AgentIntentResolution, AgentManifest, AgentNetworkProbeRequest,
@@ -7,6 +8,40 @@ use super::{
     AgentToolRequest, AgentToolResult, agent_manifest, collect_network_snapshot,
     execute_network_probe, execute_readonly_tool, execute_tool, resolve_intent,
 };
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_get_audit_history() -> Result<AgentAuditHistoryView, String> {
+    history::get_audit_history()
+        .await
+        .map_err(|_| "agent history unavailable".to_owned())
+}
+
+/// Explicit persistence command. The backend captures an authoritative fresh
+/// snapshot rather than accepting an untrusted frontend-provided diagnostic.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_capture_diagnostic_history(
+    app: AppHandle,
+) -> Result<AgentDiagnosticHistoryView, String> {
+    let snapshot = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        collect_network_snapshot(&app),
+    )
+    .await
+    .map_err(|_| "agent diagnosis timed out".to_owned())?;
+    history::record_diagnostic_snapshot(&snapshot)
+        .await
+        .map_err(|_| "agent diagnostic history unavailable".to_owned())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn agent_get_diagnostic_history() -> Result<AgentDiagnosticHistoryView, String> {
+    history::get_diagnostic_history()
+        .await
+        .map_err(|_| "agent diagnostic history unavailable".to_owned())
+}
 
 #[tauri::command]
 #[specta::specta]
