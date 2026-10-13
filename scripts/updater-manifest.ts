@@ -13,6 +13,9 @@ export type UpdaterManifest = {
 export type StableUpdaterTarget =
   | 'win64'
   | 'windows-x86_64'
+  | 'windows-aarch64'
+  | 'linux'
+  | 'linux-x86_64'
   | 'darwin'
   | 'darwin-intel'
   | 'darwin-x86_64'
@@ -22,6 +25,20 @@ export type StableUpdaterAssetMatch = {
   kind: 'url' | 'signature';
   targets: readonly StableUpdaterTarget[];
 };
+
+export function requiredStableUpdaterTargets(
+  fixedWebview = false,
+): readonly StableUpdaterTarget[] {
+  if (fixedWebview) return ['windows-x86_64'];
+
+  return [
+    'windows-x86_64',
+    'windows-aarch64',
+    'darwin',
+    'darwin-aarch64',
+    'linux',
+  ];
+}
 
 export function matchStableUpdaterAsset(
   name: string,
@@ -35,11 +52,23 @@ export function matchStableUpdaterAsset(
     return null;
   }
 
-  if (name.endsWith('.exe') && name.includes('x64')) {
+  if (name.endsWith('.nsis.zip') && name.includes('x64')) {
     return { kind: 'url', targets: ['win64', 'windows-x86_64'] };
   }
-  if (name.endsWith('.exe.sig') && name.includes('x64')) {
+  if (name.endsWith('.nsis.zip.sig') && name.includes('x64')) {
     return { kind: 'signature', targets: ['win64', 'windows-x86_64'] };
+  }
+  if (name.endsWith('.nsis.zip') && name.includes('arm64')) {
+    return { kind: 'url', targets: ['windows-aarch64'] };
+  }
+  if (name.endsWith('.nsis.zip.sig') && name.includes('arm64')) {
+    return { kind: 'signature', targets: ['windows-aarch64'] };
+  }
+  if (name.endsWith('.AppImage.tar.gz')) {
+    return { kind: 'url', targets: ['linux', 'linux-x86_64'] };
+  }
+  if (name.endsWith('.AppImage.tar.gz.sig')) {
+    return { kind: 'signature', targets: ['linux', 'linux-x86_64'] };
   }
   if (name.endsWith('aarch64.app.tar.gz')) {
     return { kind: 'url', targets: ['darwin-aarch64'] };

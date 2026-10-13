@@ -1,4 +1,7 @@
 {
+  "imports": {
+    "@std/path": "jsr:@std/path@^1.1.5",
+  },
   "nodeModulesDir": "auto",
   "compilerOptions": {
     "lib": ["deno.ns", "dom", "dom.iterable", "esnext"],

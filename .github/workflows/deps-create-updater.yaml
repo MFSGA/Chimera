@@ -13,6 +13,10 @@ on:
         required: false
         type: boolean
         default: false
+      tag:
+        description: 'Release Tag for the stable updater'
+        required: false
+        type: string
       release_body:
         description: 'Release Body'
         required: false
@@ -23,12 +27,15 @@ on:
         description: 'Nightly'
         required: true
         type: boolean
-        default: false
       fixed_webview:
         description: 'Update fixed WebView nightly updater'
         required: false
         type: boolean
         default: false
+      tag:
+        description: 'Release Tag for the stable updater'
+        required: false
+        type: string
       release_body:
         description: 'Release Body'
         required: false
@@ -41,6 +48,9 @@ jobs:
   updater:
     name: Update Updater
     runs-on: ubuntu-latest
+    concurrency:
+      group: updater-manifests-${{ inputs.nightly }}-${{ inputs.fixed_webview }}
+      cancel-in-progress: false
     permissions:
       id-token: write # This is required to allow the GitHub Action to authenticate with Deno Deploy.
       contents: write
@@ -65,6 +75,9 @@ jobs:
       - name: Pnpm install
         run: pnpm install --frozen-lockfile
 
+      - name: Test updater asset mapping
+        run: pnpm test:updater-manifest
+
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
@@ -82,7 +95,13 @@ jobs:
 
       - name: Update Stable Updater
         if: ${{ inputs.nightly == false }}
-        run: pnpm updater
+        run: |
+          if [[ -n "$UPDATER_TAG" ]]; then
+            pnpm updater --tag "$UPDATER_TAG"
+          else
+            pnpm updater
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATER_TAG: ${{ inputs.tag }}
           RELEASE_BODY: ${{ inputs.release_body || github.event.release.body }}

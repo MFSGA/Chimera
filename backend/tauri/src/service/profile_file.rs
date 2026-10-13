@@ -38,9 +38,30 @@ pub trait SelfProxyPortSource: Send + Sync + 'static {
     fn mixed_port(&self) -> Option<u16>;
 }
 
+trait SystemProxySource: Send + Sync + 'static {
+    fn http_proxy(&self) -> Option<String>;
+}
+
+struct OsSystemProxySource;
+
+impl SystemProxySource for OsSystemProxySource {
+    fn http_proxy(&self) -> Option<String> {
+        match sysproxy::Sysproxy::get_system_proxy() {
+            Ok(sysproxy::Sysproxy {
+                enable: true,
+                host,
+                port,
+                ..
+            }) => Some(format!("http://{host}:{port}")),
+            _ => None,
+        }
+    }
+}
+
 pub struct ProfileFileService {
     paths: PathResolver,
     self_proxy_port: Arc<dyn SelfProxyPortSource>,
+    system_proxy: Arc<dyn SystemProxySource>,
     http_timeout: Duration,
 }
 
@@ -49,8 +70,15 @@ impl ProfileFileService {
         Self {
             paths,
             self_proxy_port,
+            system_proxy: Arc::new(OsSystemProxySource),
             http_timeout: Duration::from_secs(30),
         }
+    }
+
+    #[cfg(test)]
+    fn with_system_proxy_source(mut self, source: Arc<dyn SystemProxySource>) -> Self {
+        self.system_proxy = source;
+        self
     }
 
     #[cfg(test)]
@@ -2063,12 +2091,7 @@ impl SubscriptionFetcher for ProfileFileService {
         };
         let proxy_url = proxy_url.or_else(|| {
             if options.with_proxy {
-                match sysproxy::Sysproxy::get_system_proxy() {
-                    Ok(p @ sysproxy::Sysproxy { enable: true, .. }) => {
-                        Some(format!("http://{}:{}", p.host, p.port))
-                    }
-                    _ => None,
-                }
+                self.system_proxy.http_proxy()
             } else {
                 None
             }
@@ -2229,7 +2252,7 @@ mod tests {
         Router,
         http::{HeaderMap as AxumHeaderMap, StatusCode, header},
         response::IntoResponse,
-        routing::get,
+        routing::{any, get},
     };
     use chimera_config::profile::{
         ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
@@ -2263,6 +2286,22 @@ mod tests {
         }
     }
 
+    struct NoSystemProxy;
+
+    impl SystemProxySource for NoSystemProxy {
+        fn http_proxy(&self) -> Option<String> {
+            None
+        }
+    }
+
+    struct FixedSystemProxy(String);
+
+    impl SystemProxySource for FixedSystemProxy {
+        fn http_proxy(&self) -> Option<String> {
+            Some(self.0.clone())
+        }
+    }
+
     fn service() -> (tempfile::TempDir, ProfileFileService) {
         service_with(Arc::new(NoProxy))
     }
@@ -2275,7 +2314,11 @@ mod tests {
             temp.path().join("config"),
             temp.path().join("data"),
         );
-        (temp, ProfileFileService::new(paths, self_proxy_port))
+        (
+            temp,
+            ProfileFileService::new(paths, self_proxy_port)
+                .with_system_proxy_source(Arc::new(NoSystemProxy)),
+        )
     }
 
     fn managed(name: &str) -> ManagedProfilePath {
@@ -3693,19 +3736,34 @@ mod tests {
     #[tokio::test]
     async fn fetch_continues_proxy_chain_when_self_proxy_port_is_unavailable() {
         let source_hits = Arc::new(AtomicUsize::new(0));
-        let router = Router::new().route("/", get(|| async { "ok: true\n" }));
-        let (url, _server) = serve(router).await;
+        let proxy_hits = Arc::new(AtomicUsize::new(0));
+        let request_hits = Arc::clone(&proxy_hits);
+        let router = Router::new().fallback(any(move || {
+            let request_hits = Arc::clone(&request_hits);
+            async move {
+                request_hits.fetch_add(1, Ordering::SeqCst);
+                "ok: true\n"
+            }
+        }));
+        let (proxy_url, _server) = serve(router).await;
         let (_temp, service) = service_with(Arc::new(CountingNoProxy {
             hits: Arc::clone(&source_hits),
         }));
+        let service = service.with_system_proxy_source(Arc::new(FixedSystemProxy(
+            proxy_url.trim_end_matches('/').to_owned(),
+        )));
 
         let fetched = service
-            .fetch(&Url::parse(&url).unwrap(), &options(true, true))
+            .fetch(
+                &Url::parse("http://subscription.invalid/profile.yaml").unwrap(),
+                &options(true, true),
+            )
             .await
             .unwrap();
 
         assert_eq!(fetched.content, "ok: true\n");
         assert_eq!(source_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(proxy_hits.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

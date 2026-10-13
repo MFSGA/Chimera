@@ -13,8 +13,6 @@ pub(crate) mod effects;
 mod event_sink;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) mod hotkey;
-#[cfg(test)]
-mod legacy_profiles;
 pub(crate) mod ports;
 pub(crate) mod profiles;
 pub mod runtime;
@@ -31,9 +29,6 @@ use chimera_config::profile::{
     RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use struct_patch::Patch as _;
-
-#[cfg(test)]
-use std::{collections::HashSet, sync::Mutex as StdMutex};
 
 #[allow(unused_imports)]
 pub(crate) use self::core_lifecycle::LegacyCoreBridge;
@@ -55,12 +50,6 @@ pub(crate) use self::{
     system_dns::OsSystemDnsCache,
 };
 
-#[cfg(test)]
-pub(crate) use self::legacy_profiles::{
-    LegacyProfileFsPort, LegacyProfilesReadPort, LegacyProfilesWritePort, ProfileFsPort,
-    ProfilesReadPort, ProfilesWritePort,
-};
-
 use crate::{
     service::profile_file::ProfileFileService,
     state::mirror::{ClashLegacyBridge, VergeLegacyBridge, WindowLegacyBridge},
@@ -68,9 +57,6 @@ use crate::{
     state::profiles::{CommitReport, NewProfileRequest, ProfilesError, ReorderOp},
     utils::path::PathResolver,
 };
-
-#[cfg(test)]
-use crate::config::profile::item_type::ProfileUid;
 
 pub use runtime::RuntimePaths;
 
@@ -88,13 +74,8 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) core: Arc<dyn CoreLifecyclePort>,
     pub(crate) service: Arc<dyn core_lifecycle::ServiceLifecyclePort>,
 
-    #[cfg(test)]
-    pub(crate) profiles: Arc<dyn ProfilesReadPort>,
-    #[cfg(test)]
-    pub(crate) profile_files: Arc<dyn ProfileFsPort>,
     pub(crate) profile_service: Arc<ProfileFileService>,
 
-    // pub(crate) profile_writes: Arc<dyn ProfilesWritePort>,
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
     pub(crate) traffic_store: Option<Arc<dyn chimera_traffic::TrafficStore>>,
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
@@ -175,12 +156,7 @@ struct ChimeraClientInner {
     core_lifecycle: CoreLifecycleClient,
     core: Arc<dyn CoreLifecyclePort>,
     typed_profiles: Option<profiles::ProfilesClient>,
-    #[cfg(test)]
-    profiles: Arc<dyn ProfilesReadPort>,
-    #[cfg(test)]
-    profile_files: Arc<dyn ProfileFsPort>,
     profile_service: Arc<ProfileFileService>,
-    // profile_writes: Arc<dyn ProfilesWritePort>,
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
     traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
@@ -194,9 +170,17 @@ struct ChimeraClientInner {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     window: Arc<dyn hotkey::ports::WindowControl>,
     #[cfg(test)]
-    profile_commit: tokio::sync::Mutex<()>,
-    #[cfg(test)]
-    pending_refreshes: StdMutex<HashSet<ProfileUid>>,
+    _test_profile_dir: Option<Arc<tempfile::TempDir>>,
+}
+
+#[cfg(test)]
+struct NoSelfProxyPort;
+
+#[cfg(test)]
+impl crate::service::profile_file::SelfProxyPortSource for NoSelfProxyPort {
+    fn mixed_port(&self) -> Option<u16> {
+        None
+    }
 }
 
 impl ChimeraClient {
@@ -207,12 +191,7 @@ impl ChimeraClient {
             bridges,
             core,
             service,
-            #[cfg(test)]
-            profiles,
-            #[cfg(test)]
-            profile_files,
             profile_service,
-            // profile_writes,
             system_dns,
             traffic_store,
             ui_sink,
@@ -232,7 +211,10 @@ impl ChimeraClient {
         let effects = tauri::async_runtime::block_on(async {
             let initial = effects::plan::ApplicationEffectInputs::project(
                 &typed.application.get_typed(),
-                &typed.clash_config.get()?,
+                &typed
+                    .clash_config
+                    .get()
+                    .expect("test clash config should be readable"),
                 None,
             );
             effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
@@ -268,15 +250,12 @@ impl ChimeraClient {
             typed,
             core_lifecycle,
             core,
-            #[cfg(test)]
-            profiles,
-            #[cfg(test)]
-            profile_files,
             profile_service,
             Some(typed_profiles),
-            // profile_writes,
             system_dns,
             ui_sink,
+            #[cfg(test)]
+            None,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
             accelerators,
@@ -289,11 +268,8 @@ impl ChimeraClient {
     }
 
     #[cfg(test)]
-    fn with_parts(
+    async fn with_parts(
         core: Arc<dyn CoreLifecyclePort>,
-        profiles: Arc<dyn ProfilesReadPort>,
-        profile_files: Arc<dyn ProfileFsPort>,
-        profile_writes: Arc<dyn ProfilesWritePort>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
     ) -> Self {
@@ -305,20 +281,69 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
-        todo!()
+        let test_profile_dir = Arc::new(tempfile::tempdir().expect("test profile directory"));
+        let paths = PathResolver::with_base_dirs(
+            test_profile_dir.path().join("config"),
+            test_profile_dir.path().join("data"),
+        );
+        let profile_service = Arc::new(ProfileFileService::new(
+            paths.clone(),
+            Arc::new(NoSelfProxyPort),
+        ));
+        let runtime_paths = RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf());
+        let core_lifecycle = CoreLifecycleClient::direct(
+            core.clone(),
+            typed.application.clone(),
+            typed.clash_config.clone(),
+            runtime_paths,
+        );
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let effects = {
+            let initial = effects::plan::ApplicationEffectInputs::project(
+                &typed.application.get_typed(),
+                &typed
+                    .clash_config
+                    .get()
+                    .expect("test clash config should be readable"),
+                None,
+            );
+            effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
+                port: Arc::new(effects::ports::NoopApplicationEffects),
+                ui: ui_sink.clone(),
+                initial,
+            })
+            .await
+            .expect("test effects actor should start")
+        };
+
+        Self::with_parts_and_typed_config(
+            typed,
+            core_lifecycle,
+            core,
+            profile_service,
+            None,
+            system_dns,
+            ui_sink,
+            Some(test_profile_dir),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            effects,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            Arc::new(hotkey::adapters::PlatformAcceleratorValidator),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            Arc::new(hotkey::ports::MockWindowControl::new()),
+        )
     }
 
     fn with_parts_and_typed_config(
         typed: TypedConfigClients,
         core_lifecycle: CoreLifecycleClient,
         core: Arc<dyn CoreLifecyclePort>,
-        #[cfg(test)] profiles: Arc<dyn ProfilesReadPort>,
-        #[cfg(test)] profile_files: Arc<dyn ProfileFsPort>,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
-        // profile_writes: Arc<dyn ProfilesWritePort>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
+        #[cfg(test)] _test_profile_dir: Option<Arc<tempfile::TempDir>>,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects: effects::actor::EffectsClient,
         #[cfg(not(any(target_os = "android", target_os = "ios")))] accelerators: Arc<
@@ -335,12 +360,7 @@ impl ChimeraClient {
             core_lifecycle,
             core,
             typed_profiles,
-            #[cfg(test)]
-            profiles,
-            #[cfg(test)]
-            profile_files,
             profile_service,
-            // profile_writes,
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),
             traffic: parking_lot::RwLock::new(None),
@@ -354,9 +374,7 @@ impl ChimeraClient {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             window,
             #[cfg(test)]
-            profile_commit: tokio::sync::Mutex::new(()),
-            #[cfg(test)]
-            pending_refreshes: StdMutex::new(HashSet::new()),
+            _test_profile_dir,
         };
         Self {
             inner: Arc::new(inner),
@@ -717,7 +735,7 @@ fn profile_file_text_for_editor(raw: String, is_config: bool) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn transform_profile_file_read_preserves_non_yaml_source_exactly() {
@@ -751,26 +769,7 @@ mod tests {
     use super::core_lifecycle::CoreStatusSnapshot;
     use super::*;
     use crate::client::system_dns::{NoopSystemDnsCache, SystemDnsCache};
-    use crate::{
-        config::{
-            chimera::ClashCore,
-            profile::{
-                builder::ProfileBuilder,
-                item::{
-                    Profile, ProfileMetaGetter,
-                    local::LocalProfile,
-                    remote::{
-                        PreparedSubscriptionUpdate, RemoteProfile, RemoteProfileOptions,
-                        RemoteProfileOptionsBuilder, SubscriptionInfo,
-                    },
-                    shared::ProfileShared,
-                },
-                item_type::ProfileUid,
-                profiles::Profiles,
-            },
-        },
-        core::RunType,
-    };
+    use crate::{config::chimera::ClashCore, core::RunType};
 
     struct RecordingCore {
         events: Arc<Mutex<Vec<&'static str>>>,
@@ -818,173 +817,6 @@ mod tests {
         }
     }
 
-    struct StaticProfilesRead {
-        profiles: Profiles,
-    }
-
-    impl ProfilesReadPort for StaticProfilesRead {
-        fn snapshot(&self) -> anyhow::Result<Profiles> {
-            Ok(self.profiles.clone())
-        }
-    }
-
-    struct NoopProfileFs;
-
-    #[async_trait]
-    impl ProfileFsPort for NoopProfileFs {
-        async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::path::PathBuf::from(file))
-        }
-        async fn read(&self, _file: &str) -> anyhow::Result<String> {
-            Ok(String::new())
-        }
-        async fn write_atomic(&self, _file: &str, _content: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn remove(&self, _file: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct RecordingProfileFs {
-        previous_file: String,
-        reads: Arc<Mutex<Vec<String>>>,
-        writes: Arc<Mutex<Vec<(String, String)>>>,
-        fail_write: bool,
-    }
-
-    #[async_trait]
-    impl ProfileFsPort for RecordingProfileFs {
-        async fn resolve_path(&self, file: &str) -> anyhow::Result<std::path::PathBuf> {
-            Ok(std::path::PathBuf::from(file))
-        }
-        async fn read(&self, file: &str) -> anyhow::Result<String> {
-            self.reads.lock().unwrap().push(file.to_string());
-            Ok(self.previous_file.clone())
-        }
-
-        async fn write_atomic(&self, file: &str, content: &str) -> anyhow::Result<()> {
-            self.writes
-                .lock()
-                .unwrap()
-                .push((file.to_string(), content.to_string()));
-            if self.fail_write {
-                anyhow::bail!("injected profile file write failure");
-            }
-            Ok(())
-        }
-
-        async fn remove(&self, _file: &str) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[derive(Default)]
-    struct NoopProfilesWrite {
-        fail_refresh: bool,
-        refresh_commits: Option<Arc<Mutex<usize>>>,
-        patch_commits: Option<Arc<Mutex<usize>>>,
-    }
-
-    #[async_trait]
-    impl ProfilesWritePort for NoopProfilesWrite {
-        async fn add(&self, profile: Profile) -> anyhow::Result<(ProfileUid, bool)> {
-            Ok((profile.uid().to_string(), false))
-        }
-        async fn delete(&self, uid: &ProfileUid) -> anyhow::Result<(String, bool)> {
-            Ok((format!("{uid}.yaml"), false))
-        }
-        async fn patch_profile(
-            &self,
-            _uid: &ProfileUid,
-            _profile: ProfileBuilder,
-        ) -> anyhow::Result<()> {
-            if let Some(commits) = &self.patch_commits {
-                *commits.lock().unwrap() += 1;
-            }
-            Ok(())
-        }
-        async fn patch_metadata(
-            &self,
-            _uid: &ProfileUid,
-            _name: Option<String>,
-            _desc: Option<Option<String>>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn patch_remote_options(
-            &self,
-            _uid: &ProfileUid,
-            _user_agent: Option<Option<String>>,
-            _with_proxy: Option<bool>,
-            _self_proxy: Option<bool>,
-            _update_interval_minutes: Option<u64>,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn reorder(
-            &self,
-            _active_id: &ProfileUid,
-            _over_id: &ProfileUid,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn reorder_by_list(&self, _list: &[ProfileUid]) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn set_current(&self, _uid: Option<&ProfileUid>) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn set_valid_fields(&self, _fields: &[String]) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn set_profile_transform_chain(
-            &self,
-            _uid: &ProfileUid,
-            _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-        async fn set_global_transform_chain(
-            &self,
-            _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-        async fn apply_remote_options(
-            &self,
-            _uid: &ProfileUid,
-            _options: RemoteProfileOptionsBuilder,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn commit_refreshed(
-            &self,
-            _uid: &ProfileUid,
-            _updated: RemoteProfile,
-        ) -> anyhow::Result<bool> {
-            if let Some(commits) = &self.refresh_commits {
-                *commits.lock().unwrap() += 1;
-            }
-            if self.fail_refresh {
-                anyhow::bail!("injected profile state failure");
-            }
-            Ok(false)
-        }
-        async fn replace_remote_definition(
-            &self,
-            _uid: &ProfileUid,
-            _file: &str,
-            _updated_at: Option<usize>,
-            _url: url::Url,
-            _option: Option<RemoteProfileOptions>,
-            _subscription: Option<SubscriptionInfo>,
-            _transforms: &[ProfileUid],
-        ) -> anyhow::Result<bool> {
-            Ok(false)
-        }
-    }
-
     struct RecordingUi {
         events: Arc<Mutex<Vec<&'static str>>>,
     }
@@ -1016,38 +848,7 @@ mod tests {
         }
     }
 
-    fn test_local_profile(uid: &str) -> Profile {
-        Profile::Local(LocalProfile {
-            shared: ProfileShared {
-                uid: uid.into(),
-                name: "Local Test".into(),
-                file: format!("{uid}.yaml"),
-                desc: None,
-                updated: 7,
-            },
-            symlinks: None,
-            chain: Vec::new(),
-        })
-    }
-
-    fn test_remote_profile() -> RemoteProfile {
-        RemoteProfile {
-            url: url::Url::parse("https://example.com/profile.yaml").unwrap(),
-            option: RemoteProfileOptions::default(),
-            shared: ProfileShared {
-                uid: "r-test".into(),
-                name: "Test".into(),
-                file: "r-test.yaml".into(),
-                desc: None,
-                updated: 7,
-            },
-            chain: Vec::new(),
-            extra: SubscriptionInfo::default(),
-        }
-    }
-
-    fn recording_client_with_profiles(
-        profiles: Profiles,
+    async fn recording_client(
         fail_rebuild: bool,
     ) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
         let events = Arc::new(Mutex::new(Vec::new()));
@@ -1056,220 +857,13 @@ mod tests {
                 events: events.clone(),
                 fail_rebuild,
             }),
-            Arc::new(StaticProfilesRead { profiles }),
-            Arc::new(NoopProfileFs),
-            Arc::new(NoopProfilesWrite::default()),
             Arc::new(NoopSystemDnsCache),
             Arc::new(RecordingUi {
                 events: events.clone(),
             }),
-        );
+        )
+        .await;
         (client, events)
-    }
-
-    fn recording_client(fail_rebuild: bool) -> (ChimeraClient, Arc<Mutex<Vec<&'static str>>>) {
-        recording_client_with_profiles(Profiles::default(), fail_rebuild)
-    }
-
-    #[test]
-    fn duplicate_profile_refresh_is_rejected_until_guard_drops() {
-        let (client, _) = recording_client(false);
-        let uid = "r-test".to_string();
-        let first = client.begin_profile_refresh(&uid).unwrap();
-        let error = match client.begin_profile_refresh(&uid) {
-            Ok(_) => panic!("duplicate refresh should be rejected"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("already in progress"));
-        drop(first);
-        assert!(client.begin_profile_refresh(&uid).is_ok());
-    }
-
-    #[test]
-    fn refresh_fingerprint_tracks_definition_but_not_display_metadata() {
-        let profile = test_remote_profile();
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&profile).unwrap();
-        let mut renamed = profile.clone();
-        renamed.shared.name = "Renamed".into();
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &renamed).is_ok());
-        let mut changed_url = profile.clone();
-        changed_url.url = url::Url::parse("https://example.com/changed.yaml").unwrap();
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &changed_url).is_err());
-        let mut refreshed = profile;
-        refreshed.shared.updated += 1;
-        assert!(ChimeraClient::ensure_refresh_is_current(&fingerprint, &refreshed).is_err());
-    }
-
-    #[tokio::test]
-    async fn refresh_file_write_failure_does_not_commit_profile_state() {
-        let remote = test_remote_profile();
-        let uid = remote.shared.uid.clone();
-        let profiles = Profiles {
-            items: vec![Profile::Remote(remote.clone())],
-            ..Profiles::default()
-        };
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let reads = Arc::new(Mutex::new(Vec::new()));
-        let writes = Arc::new(Mutex::new(Vec::new()));
-        let refresh_commits = Arc::new(Mutex::new(0));
-        let previous_file = "mode: rule\n".to_string();
-        let client = ChimeraClient::with_parts(
-            Arc::new(RecordingCore {
-                events: events.clone(),
-                fail_rebuild: false,
-            }),
-            Arc::new(StaticProfilesRead { profiles }),
-            Arc::new(RecordingProfileFs {
-                previous_file: previous_file.clone(),
-                reads: reads.clone(),
-                writes: writes.clone(),
-                fail_write: true,
-            }),
-            Arc::new(NoopProfilesWrite {
-                refresh_commits: Some(refresh_commits.clone()),
-                ..NoopProfilesWrite::default()
-            }),
-            Arc::new(NoopSystemDnsCache),
-            Arc::new(RecordingUi {
-                events: events.clone(),
-            }),
-        );
-
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
-        assert_eq!(snapshot_file, previous_file);
-
-        let mut data = serde_yaml::Mapping::new();
-        data.insert("mode".into(), "global".into());
-        let prepared = PreparedSubscriptionUpdate::for_test(
-            data,
-            SubscriptionInfo {
-                upload: 10,
-                download: 20,
-                total: 30,
-                expire: 40,
-            },
-        );
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
-
-        let error = client
-            .commit_refreshed_profile(uid, fingerprint, previous_file, prepared)
-            .await
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("injected profile file write failure")
-        );
-        assert_eq!(*refresh_commits.lock().unwrap(), 0);
-        assert_eq!(writes.lock().unwrap().len(), 1);
-        assert!(events.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn refresh_state_failure_restores_file_through_profile_fs_port() {
-        let remote = test_remote_profile();
-        let uid = remote.shared.uid.clone();
-        let profiles = Profiles {
-            items: vec![Profile::Remote(remote.clone())],
-            ..Profiles::default()
-        };
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let reads = Arc::new(Mutex::new(Vec::new()));
-        let writes = Arc::new(Mutex::new(Vec::new()));
-        let previous_file = "mode: rule\n".to_string();
-        let client = ChimeraClient::with_parts(
-            Arc::new(RecordingCore {
-                events: events.clone(),
-                fail_rebuild: false,
-            }),
-            Arc::new(StaticProfilesRead { profiles }),
-            Arc::new(RecordingProfileFs {
-                previous_file: previous_file.clone(),
-                reads: reads.clone(),
-                writes: writes.clone(),
-                fail_write: false,
-            }),
-            Arc::new(NoopProfilesWrite {
-                fail_refresh: true,
-                ..NoopProfilesWrite::default()
-            }),
-            Arc::new(NoopSystemDnsCache),
-            Arc::new(RecordingUi {
-                events: events.clone(),
-            }),
-        );
-
-        let (_, snapshot_file) = client.remote_profile_snapshot(&uid).await.unwrap();
-        assert_eq!(snapshot_file, previous_file);
-        assert_eq!(reads.lock().unwrap().as_slice(), ["r-test.yaml"]);
-
-        let mut data = serde_yaml::Mapping::new();
-        data.insert("mode".into(), "global".into());
-        let prepared = PreparedSubscriptionUpdate::for_test(
-            data,
-            SubscriptionInfo {
-                upload: 10,
-                download: 20,
-                total: 30,
-                expire: 40,
-            },
-        );
-        let fingerprint = ChimeraClient::remote_profile_fingerprint(&remote).unwrap();
-
-        let error = client
-            .commit_refreshed_profile(uid, fingerprint, previous_file.clone(), prepared)
-            .await
-            .unwrap_err();
-
-        assert!(error.to_string().contains("injected profile state failure"));
-        let writes = writes.lock().unwrap();
-        assert_eq!(writes.len(), 2);
-        assert_eq!(writes[0].0, "r-test.yaml");
-        assert!(writes[0].1.contains("mode: global"));
-        assert_eq!(writes[1], ("r-test.yaml".to_string(), previous_file));
-        assert!(events.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn profile_patch_uses_injected_write_port_before_runtime_rebuild() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let patch_commits = Arc::new(Mutex::new(0));
-        let client = ChimeraClient::with_parts(
-            Arc::new(RecordingCore {
-                events: events.clone(),
-                fail_rebuild: false,
-            }),
-            Arc::new(StaticProfilesRead {
-                profiles: Profiles::default(),
-            }),
-            Arc::new(NoopProfileFs),
-            Arc::new(NoopProfilesWrite {
-                patch_commits: Some(patch_commits.clone()),
-                ..NoopProfilesWrite::default()
-            }),
-            Arc::new(NoopSystemDnsCache),
-            Arc::new(RecordingUi {
-                events: events.clone(),
-            }),
-        );
-
-        let outcome = client
-            .patch_profile("l-test".into(), ProfileBuilder::Local(Default::default()))
-            .await
-            .unwrap();
-
-        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
-        assert_eq!(*patch_commits.lock().unwrap(), 1);
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            [
-                "refresh-profiles",
-                "rebuild",
-                "refresh-ui",
-                "profile-change"
-            ]
-        );
     }
 
     #[tokio::test]
@@ -1281,17 +875,13 @@ mod tests {
                 events: events.clone(),
                 fail_rebuild: false,
             }),
-            Arc::new(StaticProfilesRead {
-                profiles: Profiles::default(),
-            }),
-            Arc::new(NoopProfileFs),
-            Arc::new(NoopProfilesWrite::default()),
             Arc::new(RecordingSystemDns {
                 flushes: flushes.clone(),
                 fail: false,
             }),
             Arc::new(RecordingUi { events }),
-        );
+        )
+        .await;
 
         client.flush_system_dns_cache().await.unwrap();
         assert_eq!(*flushes.lock().unwrap(), 1);
@@ -1305,17 +895,13 @@ mod tests {
                 events: events.clone(),
                 fail_rebuild: false,
             }),
-            Arc::new(StaticProfilesRead {
-                profiles: Profiles::default(),
-            }),
-            Arc::new(NoopProfileFs),
-            Arc::new(NoopProfilesWrite::default()),
             Arc::new(RecordingSystemDns {
                 flushes: Arc::new(Mutex::new(0)),
                 fail: true,
             }),
             Arc::new(RecordingUi { events }),
-        );
+        )
+        .await;
 
         let error = client.flush_system_dns_cache().await.unwrap_err();
         assert!(
@@ -1327,7 +913,7 @@ mod tests {
 
     #[tokio::test]
     async fn core_status_is_read_through_the_injected_lifecycle_port() {
-        let (client, _) = recording_client(false);
+        let (client, _) = recording_client(false).await;
         let snapshot = client.core_status().await.unwrap();
         assert!(matches!(snapshot.state, CoreState::Stopped(None)));
         assert_eq!(snapshot.state_changed_at, 7);
@@ -1336,82 +922,30 @@ mod tests {
 
     #[tokio::test]
     async fn change_core_runs_through_the_injected_lifecycle_port() {
-        let (client, events) = recording_client(false);
+        let (client, events) = recording_client(false).await;
         client.change_core(ClashCore::Mihomo).await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["change-core"]);
     }
 
     #[tokio::test]
     async fn stop_core_runs_through_the_injected_lifecycle_port() {
-        let (client, events) = recording_client(false);
+        let (client, events) = recording_client(false).await;
         client.stop_core().await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["stop"]);
     }
 
     #[tokio::test]
     async fn runtime_rebuild_does_not_emit_profile_change_side_effects() {
-        let (client, events) = recording_client(false);
+        let (client, events) = recording_client(false).await;
         client.rebuild_running_config().await.unwrap();
         assert_eq!(events.lock().unwrap().as_slice(), ["rebuild", "refresh-ui"]);
     }
 
     #[tokio::test]
     async fn rebuild_failure_stops_follow_up_side_effects() {
-        let (client, events) = recording_client(true);
+        let (client, events) = recording_client(true).await;
         let error = client.rebuild_running_config().await.unwrap_err();
         assert!(error.to_string().contains("injected rebuild failure"));
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["rebuild", "refresh-diagnostics"]
-        );
-    }
-
-    #[tokio::test]
-    async fn active_local_profile_file_save_rebuilds_runtime() {
-        let profiles = Profiles {
-            current: vec!["l-active".into()],
-            items: vec![test_local_profile("l-active")],
-            ..Profiles::default()
-        };
-        let (client, events) = recording_client_with_profiles(profiles, false);
-        let outcome = client
-            .legacy_save_profile_file("l-active".into(), "proxies: []\n".into())
-            .await
-            .unwrap();
-        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
-        assert_eq!(
-            events.lock().unwrap().as_slice(),
-            ["rebuild", "refresh-ui", "profile-change"]
-        );
-    }
-
-    #[tokio::test]
-    async fn inactive_local_profile_file_save_does_not_rebuild_runtime() {
-        let profiles = Profiles {
-            current: vec!["l-active".into()],
-            items: vec![test_local_profile("l-active"), test_local_profile("l-idle")],
-            ..Profiles::default()
-        };
-        let (client, events) = recording_client_with_profiles(profiles, false);
-        let outcome = client
-            .legacy_save_profile_file("l-idle".into(), "proxies: []\n".into())
-            .await
-            .unwrap();
-        assert!(matches!(outcome, MutationOutcome::Committed { .. }));
-        assert!(events.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn post_commit_rebuild_failure_is_structured_degradation() {
-        let (client, events) = recording_client(true);
-        let outcome = client.after_profile_runtime_commit("test mutation").await;
-        assert!(matches!(outcome, MutationOutcome::CommittedDegraded { .. }));
-        assert_eq!(outcome.degradations().len(), 1);
-        let degradation = &outcome.degradations()[0];
-        assert_eq!(degradation.phase, DegradationPhase::RuntimeBuild);
-        assert_eq!(degradation.code, "runtime_rebuild_failed");
-        assert!(degradation.retryable);
-        assert!(degradation.message.contains("injected rebuild failure"));
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["rebuild", "refresh-diagnostics"]

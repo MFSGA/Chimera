@@ -623,6 +623,9 @@
     }
   },
   "workspace": {
+    "dependencies": [
+      "jsr:@std/path@^1.1.5"
+    ],
     "packageJson": {
       "dependencies": [
         "npm:@actions/github@9.1.1",
