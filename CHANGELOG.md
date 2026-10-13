@@ -1,3 +1,45 @@
+## [0.26.0] - 2026-10-13 02:41:16
+
+### ✅ Testing
+
+- **core:** Avoid fixed port collisions in resolver tests by @MFSGA
+
+- **e2e:** Decouple window restore from height by @MFSGA
+
+- **e2e:** Account for first window DPI clamp by @MFSGA
+
+- **e2e:** Port guarded Windows service TUN lifecycle suite by @MFSGA
+
+### ✨ Features
+
+- **core:** Preserve Chimera Client Alpha in Service mode by @MFSGA
+
+- **core:** Add Chimera Client Alpha support by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Stabilize manifest and scheduled e2e workflows by @MFSGA
+
+- **profiles:** Align missing file diagnostics with ref by @MFSGA
+
+- **ui:** Refresh proxy queries after runtime updates by @MFSGA
+
+### 🔨 Refactor
+
+- **profiles:** Align content queries with reference by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **core:** Update Chimera Service to v1.10.2 by @MFSGA
+
+- **renovate:** Automerge green patch and minor updates by @MFSGA in [#474](https://github.com/MFSGA/Chimera/pull/474)
+
+- **renovate:** Protect reference and bound PR churn by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.25.6...v0.26.0
+
 ## [0.25.6] - 2026-10-10 17:42:31
 
 ### ✅ Testing
