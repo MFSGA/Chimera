@@ -47,6 +47,7 @@
 
 ## Setup
 
+- Initialize the pinned reference and runtime submodules with `git submodule update --init --recursive`.
 - During development, try to run with administrator/root privileges when possible (needed for TUN-related setup).
 - Install JS deps with `pnpm install`.
 - Rust toolchain is required for `backend/` (cargo, rustfmt, clippy).
