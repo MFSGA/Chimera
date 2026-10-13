@@ -1,15 +1,19 @@
-# Window state restoration contract
+# Window state persistence and restoration contract
 
 契约 ID：`window-state-restoration`
 
-用例：`tauri-e2e/specs/session-typed-state.e2e.ts` 中的 “restores window size and position across UI creation and the app close control”。
+## 持久化捕获
 
-风险是新建主窗口或关闭主窗口时没有保存位置和大小，或重开后丢失已保存状态。用例通过 WebDriver 调整真实 Tauri 窗口，读取专属 E2E runtime 下的 `session-state.yaml`，并通过 `get_verge_config` 独立核对 legacy 兼容镜像；主窗口关闭操作使用 UI 按钮，创建窗口和捕获状态使用 IPC。此覆盖不代表应用冷启动持久化。
+`tauri-e2e/specs/session-typed-state.e2e.ts` 中的第一个用例通过 WebDriver 调整真实 Tauri 窗口，调用保存命令，并分别读取专属 E2E runtime 下的 `session-state.yaml` 与 `get_verge_config` 返回值。它确认捕获的宽、高、位置和窗口标志均有效，session 文件存在，并且页面刷新后 legacy 镜像仍保留宽、高。这个用例证明尺寸被捕获和持久化，不证明新窗口恢复了完全相同的高度。
 
-用例先关闭可能残留的主窗口并记录 legacy 窗口矩形，再设置第一组矩形、读取持久状态、创建主窗口并核对恢复值。随后通过第二组矩形和主窗口关闭按钮触发保存，读取更新后的状态，重新创建主窗口并检查恢复结果。两次创建都按新主窗口的 `devicePixelRatio` 核对最小尺寸。等待只读取窗口句柄和两份状态，不在轮询中重复创建、保存或关闭窗口。清理恢复原窗口矩形并再次核对状态。
+## 窗口生命周期
 
-Ref 基线为 `def0dbf2716ff972255be47924401b60db7d482c`。窗口捕获和恢复映射到 `ref/backend/tauri/src/window.rs` 的 `AppWindow::capture_state`、`MainWindow::get_window_state` 与 `save_main_window_state_async`；Chimera 对应 `backend/tauri/src/window.rs` 的 `capture_window_state`、`restore_window_state`、`persist_window_state`。两边都以物理客户区尺寸记录状态，并按恢复窗口的屏幕缩放比例应用最小尺寸。
+第二个用例先关闭可能残留的主窗口，记录 legacy 窗口矩形并保存第一组几何状态；随后创建主窗口，检查新窗口句柄、位置、宽度和窗口标志。接着改变位置和宽度，点击应用关闭按钮，再从 session 文件和 legacy 兼容镜像等待新状态收敛；没有保存更新时等待失败。第二次创建主窗口后再次检查位置、宽度和窗口标志。窗口创建和状态捕获通过 IPC，关闭通过 UI 控件。清理会关闭测试创建的主窗口并恢复原 legacy 矩形。此覆盖不代表应用冷启动持久化。
 
-Windows 上恢复窗口的原生最小尺寸可能高于已保存高度。CI 曾记录 session 保存高度为 691px；恢复窗口的 WebView 缩放比例为 1.2，600px 的配置最小高度折算为 720px，Windows 捕获值为 721px。最新完整 E2E 又在第一次创建主窗口时复现 691px 到 721px 的差异（[run 38212640916](https://github.com/MFSGA/Chimera/actions/runs/38212640916)），证明边界也适用于第一次创建。用例因此要求位置和窗口标志精确恢复，宽度等于已保存值与当前缩放后最小宽度的较大值；高度不得低于已保存值或当前缩放后的最小高度，也不得高出该预期超过 2px。该容差只覆盖观测到的最小尺寸钳制和 1px 原生舍入，不接受任意窗口尺寸差异。
+高度不属于这个生命周期用例的通过条件。Windows 原生最小客户区会按屏幕 DPI 调整实际高度，WebView 报出的缩放比例也不足以给所有窗口创建路径提供稳定的跨平台高度预期。先前 Windows CI 观察到保存高度 691px、恢复后捕获高度 721px；加入基于缩放比例的 2px 容差后仍在另一轮完整 E2E 失败（[run 38327471065](https://github.com/MFSGA/Chimera/actions/runs/38327471065)）。因此该用例完全不比较恢复前后的高度，也不以高度变化等待关闭后的持久状态。它仍通过单独的持久化捕获用例检查高度写入、镜像和刷新后读取。
 
-若 Tauri/WebDriver 提供稳定的原生 scale factor 读取，或测试能在所有目标屏幕尺寸下确保保存尺寸高于窗口最小值，则可移除此边界并恢复高度精确相等断言。若最小尺寸策略改变，应重新核对 ref 并更新此契约。
+这项边界意味着 E2E 可以发现主窗口没有创建、关闭没有保存、位置或宽度丢失、窗口标志变化等问题；它不会声称精确验证窗口高度恢复。只有产品需求明确要求跨平台验证恢复高度，并且能够从原生窗口 API 得到稳定的最小尺寸与缩放依据时，才应扩展这个契约。
+
+## Ref 映射
+
+Ref 基线为 `def0dbf2716ff972255be47924401b60db7d482c`。窗口捕获和恢复映射到 `ref/backend/tauri/src/window.rs` 的 `AppWindow::capture_state`、`MainWindow::get_window_state` 与 `save_main_window_state_async`；Chimera 对应 `backend/tauri/src/window.rs` 的 `capture_window_state`、`restore_window_state`、`persist_window_state`。双方都保存窗口矩形和状态；本契约对高度的限制是 E2E 断言边界，不改变产品恢复行为。
