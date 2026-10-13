@@ -252,6 +252,7 @@ where
 }
 
 impl CoreFacade {
+    #[cfg(test)]
     pub(crate) fn new_local() -> Self {
         Self {
             manager: Arc::new(CoreManager::new()),
@@ -293,6 +294,12 @@ impl CoreFacade {
                 .is_some_and(|runtime| runtime.outcome_uncertain())
     }
 
+    fn invalidate_local_ports(&self) {
+        if let Some(local_runtime) = self.local_runtime.as_ref() {
+            local_runtime.invalidate_ports();
+        }
+    }
+
     async fn run_local_mutation<F>(&self, operation: &'static str, future: F) -> anyhow::Result<()>
     where
         F: Future<Output = anyhow::Result<()>> + Send + 'static,
@@ -309,13 +316,18 @@ impl CoreFacade {
                 Err(anyhow::Error::new(error))
             }
             Some(MutationResult::Completed(Err(MutationFailure::Other(error)))) => {
+                if self.outcome_uncertain() {
+                    self.invalidate_local_ports();
+                }
                 Err(anyhow::anyhow!(error))
             }
             Some(MutationResult::Uncertain(error)) => {
+                self.invalidate_local_ports();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 Err(anyhow::anyhow!(error))
             }
             Some(MutationResult::Running) | None => {
+                self.invalidate_local_ports();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 anyhow::bail!(
                     "{operation} operation {id} did not reach a terminal state within the lower-host wait budget"
@@ -489,6 +501,7 @@ impl CoreFacade {
                     match (previous_run_type, run_type) {
                         (RunType::Service, RunType::Normal) => {
                             stop_service_core(service_endpoint, stop_uncertain).await?;
+                            local_runtime.invalidate_ports();
                         }
                         (RunType::Normal, RunType::Service) => {
                             local_runtime.stop_core().await?;
@@ -550,11 +563,15 @@ impl CoreFacade {
                 RunType::Service => {
                     let endpoint = self.service_endpoint.clone();
                     let outcome_uncertain = self.outcome_uncertain.clone();
-                    return self
+                    let result = self
                         .run_local_mutation("service core stop", async move {
                             stop_service_core(endpoint, outcome_uncertain).await
                         })
                         .await;
+                    if result.is_ok() {
+                        local_runtime.invalidate_ports();
+                    }
+                    return result;
                 }
                 RunType::Elevated => {
                     anyhow::bail!("elevated core execution is not implemented")
@@ -716,6 +733,7 @@ impl CoreFacade {
             RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
         };
         let previous = local_runtime.run_type();
+        let runtime_for_invalidation = local_runtime.clone();
         let service_endpoint = self.service_endpoint.clone();
         let stop_uncertain = self.outcome_uncertain.clone();
         let result = self
@@ -732,6 +750,9 @@ impl CoreFacade {
                     .await
             })
             .await;
+        if result.is_err() {
+            runtime_for_invalidation.invalidate_ports();
+        }
         self.refresh_ws_binding().await;
         result
     }

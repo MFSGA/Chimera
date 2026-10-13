@@ -1,7 +1,7 @@
 //! Running-core Clash API capability owned by ChimeraClient.
 //!
-//! This follows the reference client ownership direction while the core
-//! lifecycle adapter is still backed by the legacy CoreManager.
+//! This follows the reference client ownership direction and reads the active
+//! runtime through the shared CoreFacade host boundary.
 
 use anyhow::Result;
 

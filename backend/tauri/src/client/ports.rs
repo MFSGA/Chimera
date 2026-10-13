@@ -1,10 +1,10 @@
 //! Session-scoped network port resolution helpers.
 //!
-//! Chimera still stores port strategies in the legacy config model, so this
-//! module centralizes the existing mixed-port and external-controller
-//! selection behavior behind the same client boundary used by REF.
+//! Port strategies still come from Chimera's config model. Candidate picks are
+//! separate from bindings confirmed by the running core, matching REF's v2
+//! §6.2 ownership boundary.
 
-use std::{net::TcpListener, sync::Mutex};
+use std::{net::TcpListener, sync::Arc};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use chimera_config::{
@@ -24,7 +24,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PortsFingerprint {
+pub struct PortsFingerprint {
     mixed: PortStrategy,
     socks: Option<PortStrategy>,
     http: Option<PortStrategy>,
@@ -32,7 +32,7 @@ struct PortsFingerprint {
 }
 
 impl PortsFingerprint {
-    fn of(clash: &ClashConfig) -> Self {
+    pub fn of(clash: &ClashConfig) -> Self {
         Self {
             mixed: clash.mixed_port.clone(),
             socks: clash.socks_port.clone(),
@@ -42,30 +42,62 @@ impl PortsFingerprint {
     }
 }
 
-/// Resolves port strategies once per session and keeps unchanged picks stable.
+/// One candidate resolution. It is inert until the core confirms its apply.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CandidatePortBindings {
+    fingerprint: PortsFingerprint,
+    bindings: ResolvedPortBindings,
+}
+
+impl CandidatePortBindings {
+    pub fn bindings(&self) -> &ResolvedPortBindings {
+        &self.bindings
+    }
+}
+
+impl Default for CandidatePortBindings {
+    fn default() -> Self {
+        let config = ClashConfig::default();
+        Self {
+            fingerprint: PortsFingerprint::of(&config),
+            bindings: ResolvedPortBindings::default(),
+        }
+    }
+}
+
+/// Resolves port strategies from the last confirmed apply and keeps unchanged
+/// picks stable. Candidate picks do not change that baseline.
 ///
 /// The executor receives concrete bindings and never performs port probing. A
 /// later config change only re-probes the strategy fields that changed, so a
 /// running core's existing listeners are not mistaken for collisions.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct SessionPortResolver {
-    cached: Mutex<Option<(PortsFingerprint, ResolvedPortBindings)>>,
+    lifecycle: Arc<super::runtime::RuntimeLifecycle>,
 }
 
 impl SessionPortResolver {
-    pub(crate) fn resolve(&self, clash: &ClashConfig) -> Result<ResolvedPortBindings> {
+    pub(crate) fn new(lifecycle: Arc<super::runtime::RuntimeLifecycle>) -> Self {
+        Self { lifecycle }
+    }
+
+    pub(crate) fn resolve_candidate(&self, clash: &ClashConfig) -> Result<CandidatePortBindings> {
         let fingerprint = PortsFingerprint::of(clash);
-        let mut cached = self
-            .cached
-            .lock()
-            .expect("port resolver cache should not poison");
-        if let Some((previous, ports)) = cached.as_ref()
+        let previous = self.lifecycle.accepted_confirmed_receipt().map(|receipt| {
+            (
+                receipt.ports.fingerprint.clone(),
+                receipt.ports.bindings.clone(),
+            )
+        });
+        if let Some((previous, ports)) = previous.as_ref()
             && *previous == fingerprint
         {
-            return Ok(ports.clone());
+            return Ok(CandidatePortBindings {
+                fingerprint,
+                bindings: ports.clone(),
+            });
         }
 
-        let previous = cached.clone();
         let unchanged = |same: bool| -> Option<&ResolvedPortBindings> {
             match previous.as_ref() {
                 Some((_, ports)) if same => Some(ports),
@@ -148,16 +180,70 @@ impl SessionPortResolver {
             socks_port,
             external_controller,
         };
-        *cached = Some((fingerprint, ports.clone()));
-        Ok(ports)
+        Ok(CandidatePortBindings {
+            fingerprint,
+            bindings: ports,
+        })
     }
 
-    pub(crate) fn cached_ports(&self) -> Option<ResolvedPortBindings> {
-        self.cached
-            .lock()
-            .expect("port resolver cache should not poison")
-            .as_ref()
-            .map(|(_, ports)| ports.clone())
+    #[cfg(test)]
+    pub(crate) fn confirm(&self, candidate: &CandidatePortBindings) {
+        self.lifecycle
+            .publish_confirmed(Arc::new(test_runtime_receipt(candidate.clone())));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn confirmed(&self) -> Option<ResolvedPortBindings> {
+        self.lifecycle
+            .accepted_confirmed_receipt()
+            .map(|receipt| receipt.ports.bindings.clone())
+    }
+
+    pub(crate) fn invalidate(&self) {
+        self.lifecycle.invalidate_confirmed();
+    }
+}
+
+impl Default for SessionPortResolver {
+    fn default() -> Self {
+        Self::new(Arc::new(super::runtime::RuntimeLifecycle::default()))
+    }
+}
+
+#[cfg(test)]
+fn test_runtime_receipt(ports: CandidatePortBindings) -> super::runtime::RuntimeApplyReceipt {
+    use crate::{
+        client::application_workflow::policy::CoreRunIntent, config::chimera::ClashCore,
+        core::actor_v2::control_endpoint::ExecutionHost,
+    };
+
+    super::runtime::RuntimeApplyReceipt {
+        revision: super::runtime::RuntimeRevisionAllocator::default()
+            .allocate()
+            .expect("test runtime revision should allocate"),
+        config_text: Arc::from(""),
+        config_digest: String::new(),
+        target_core: ClashCore::Mihomo,
+        core_spec: chimera_core_manager::CoreSpec {
+            kind: chimera_core_manager::CoreKind::Mihomo,
+            binary_path: camino::Utf8PathBuf::from("/test/mihomo"),
+            version: None,
+            features: Vec::new(),
+        },
+        host: ExecutionHost::Local,
+        run_intent: CoreRunIntent::Running,
+        local_ipc: chimera_core_manager::LocalIpcSettings {
+            policy: chimera_core_manager::LocalIpcPolicy::Disable,
+            keep_http_controller: true,
+        },
+        applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
+            epoch: 1,
+            generation: 1,
+            source_hash: String::new(),
+            effective_hash: String::new(),
+        },
+        ports,
+        artifact: None,
     }
 }
 
@@ -222,6 +308,15 @@ pub(crate) fn get_clash_external_port(
 mod tests {
     use super::*;
 
+    fn resolve_and_confirm(
+        resolver: &SessionPortResolver,
+        clash: &ClashConfig,
+    ) -> CandidatePortBindings {
+        let candidate = resolver.resolve_candidate(clash).unwrap();
+        resolver.confirm(&candidate);
+        candidate
+    }
+
     fn fixed(port: u16) -> PortStrategy {
         PortStrategy {
             kind: PortStrategyKind::Fixed,
@@ -248,7 +343,8 @@ mod tests {
         clash.http_port = None;
         clash.external_controller.port = fixed(external);
 
-        let ports = resolver.resolve(&clash).unwrap();
+        let candidate = resolver.resolve_candidate(&clash).unwrap();
+        let ports = candidate.bindings();
         assert_eq!(ports.mixed_port, mixed);
         assert_eq!(ports.socks_port, Some(socks));
         assert_eq!(ports.port, None);
@@ -256,7 +352,9 @@ mod tests {
             ports.external_controller.as_deref(),
             Some(format!("127.0.0.1:{external}").as_str())
         );
-        assert_eq!(resolver.cached_ports(), Some(ports));
+        assert_eq!(resolver.confirmed(), None);
+        resolver.confirm(&candidate);
+        assert_eq!(resolver.confirmed(), Some(ports.clone()));
     }
 
     #[test]
@@ -268,19 +366,26 @@ mod tests {
             start_port: 0,
         };
 
-        let first = resolver.resolve(&clash).unwrap();
-        let second = resolver.resolve(&clash).unwrap();
+        let first = resolve_and_confirm(&resolver, &clash);
+        let second = resolver.resolve_candidate(&clash).unwrap();
         assert_eq!(
-            first, second,
+            first.bindings(),
+            second.bindings(),
             "same fingerprint must reuse the session pick"
         );
 
         clash.socks_port = Some(fixed(48234));
-        let third = resolver.resolve(&clash).unwrap();
-        assert_eq!(third.socks_port, Some(48234));
+        let third = resolver.resolve_candidate(&clash).unwrap();
+        assert_eq!(third.bindings().socks_port, Some(48234));
         assert_eq!(
-            third.mixed_port, first.mixed_port,
+            third.bindings().mixed_port,
+            first.bindings().mixed_port,
             "unchanged mixed strategy must keep the session pick"
+        );
+        assert_eq!(
+            resolver.confirmed(),
+            Some(first.bindings().clone()),
+            "an unconfirmed candidate must not replace the last applied binding"
         );
     }
 
@@ -296,16 +401,16 @@ mod tests {
         let resolver = SessionPortResolver::default();
         let mut clash = ClashConfig::default();
         clash.mixed_port = fixed(mixed);
-        let first = resolver.resolve(&clash).unwrap();
-        assert_eq!(first.mixed_port, mixed);
+        let first = resolve_and_confirm(&resolver, &clash);
+        assert_eq!(first.bindings().mixed_port, mixed);
 
         let _core = TcpListener::bind(("127.0.0.1", mixed)).unwrap();
         clash.socks_port = Some(fixed(socks));
         let second = resolver
-            .resolve(&clash)
+            .resolve_candidate(&clash)
             .expect("unchanged mixed port must not be re-probed");
-        assert_eq!(second.mixed_port, mixed);
-        assert_eq!(second.socks_port, Some(socks));
+        assert_eq!(second.bindings().mixed_port, mixed);
+        assert_eq!(second.bindings().socks_port, Some(socks));
     }
 
     #[test]
@@ -317,19 +422,19 @@ mod tests {
         let resolver = SessionPortResolver::default();
         let mut clash = ClashConfig::default();
         clash.external_controller.port = fixed(external);
-        let first = resolver.resolve(&clash).unwrap();
+        let first = resolve_and_confirm(&resolver, &clash);
         assert_eq!(
-            first.external_controller.as_deref(),
+            first.bindings().external_controller.as_deref(),
             Some(format!("127.0.0.1:{external}").as_str())
         );
 
         let _core = TcpListener::bind(("127.0.0.1", external)).unwrap();
         clash.external_controller.host = "0.0.0.0".parse().unwrap();
         let second = resolver
-            .resolve(&clash)
+            .resolve_candidate(&clash)
             .expect("host-only change must not re-probe the external port");
         assert_eq!(
-            second.external_controller.as_deref(),
+            second.bindings().external_controller.as_deref(),
             Some(format!("0.0.0.0:{external}").as_str())
         );
     }
@@ -342,7 +447,60 @@ mod tests {
         let mut clash = ClashConfig::default();
         clash.mixed_port = PortStrategy::new_allow_fallback(taken);
 
-        let ports = resolver.resolve(&clash).unwrap();
-        assert_ne!(ports.mixed_port, taken);
+        let ports = resolver.resolve_candidate(&clash).unwrap();
+        assert_ne!(ports.bindings().mixed_port, taken);
+    }
+
+    #[test]
+    // Contract: invalidate the accepted pick while another listener owns its
+    // port; the next AllowFallback candidate must choose a new free port.
+    // Reusing an unproven cached pick fails the final assertion.
+    fn invalidation_drops_unproven_binding_before_the_next_candidate() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let taken = probe.local_addr().unwrap().port();
+        drop(probe);
+        let resolver = SessionPortResolver::default();
+        let mut clash = ClashConfig::default();
+        clash.mixed_port = PortStrategy::new_allow_fallback(taken);
+
+        let confirmed = resolve_and_confirm(&resolver, &clash);
+        assert_eq!(confirmed.bindings().mixed_port, taken);
+        let _core = TcpListener::bind(("127.0.0.1", taken)).unwrap();
+        resolver.invalidate();
+        assert_eq!(resolver.confirmed(), None);
+        assert!(
+            resolver.lifecycle.confirmed_receipt().is_some(),
+            "invalidating the accepted binding must preserve the receipt for recovery"
+        );
+
+        let next = resolver
+            .resolve_candidate(&clash)
+            .expect("invalidating an uncertain binding permits a fresh fallback pick");
+        assert_ne!(
+            next.bindings().mixed_port,
+            taken,
+            "a stale confirmed pick must not be reused after invalidation"
+        );
+    }
+
+    #[test]
+    // Contract: keep one accepted binding, resolve a different config without
+    // applying it, and prove the accepted binding remains the resolver baseline.
+    // A resolver that commits candidate picks during preparation fails here.
+    fn candidate_resolution_does_not_change_confirmed_binding() {
+        let resolver = SessionPortResolver::default();
+        let mut baseline = ClashConfig::default();
+        baseline.mixed_port = PortStrategy {
+            kind: PortStrategyKind::Random,
+            start_port: 0,
+        };
+        let confirmed = resolve_and_confirm(&resolver, &baseline);
+
+        let mut candidate_config = baseline.clone();
+        candidate_config.socks_port = Some(fixed(48235));
+        let candidate = resolver.resolve_candidate(&candidate_config).unwrap();
+
+        assert_eq!(candidate.bindings().socks_port, Some(48235));
+        assert_eq!(resolver.confirmed(), Some(confirmed.bindings().clone()));
     }
 }

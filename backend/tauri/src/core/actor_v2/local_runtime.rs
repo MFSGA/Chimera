@@ -147,7 +147,7 @@ pub(crate) struct LocalRuntimeHost {
     control: CoreControl,
     runtime_paths: RuntimePaths,
     ports: crate::client::SessionPortResolver,
-    lifecycle: crate::client::runtime::RuntimeLifecycle,
+    lifecycle: Arc<crate::client::runtime::RuntimeLifecycle>,
     pending_profile_candidates:
         tokio::sync::Mutex<HashMap<OperationId, crate::client::runtime::CandidateFile>>,
     run_type: RwLock<RunType>,
@@ -184,11 +184,12 @@ impl LocalRuntimeHost {
                 previous = current;
             }
         });
+        let lifecycle = Arc::new(crate::client::runtime::RuntimeLifecycle::default());
         Self {
             control,
             runtime_paths,
-            ports: crate::client::SessionPortResolver::default(),
-            lifecycle: crate::client::runtime::RuntimeLifecycle::default(),
+            ports: crate::client::SessionPortResolver::new(lifecycle.clone()),
+            lifecycle,
             pending_profile_candidates: tokio::sync::Mutex::new(HashMap::new()),
             run_type: RwLock::new(RunType::Normal),
             recovery_notify,
@@ -215,6 +216,10 @@ impl LocalRuntimeHost {
 
     pub(crate) fn confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         self.lifecycle.confirmed_receipt()
+    }
+
+    pub(crate) fn invalidate_ports(&self) {
+        self.ports.invalidate();
     }
 
     pub(crate) async fn reconcile(
@@ -290,7 +295,7 @@ impl LocalRuntimeHost {
             );
         }
 
-        let resolved_ports = self.ports.resolve(&clash)?;
+        let candidate_ports = self.ports.resolve_candidate(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
         let diagnostic_profiles = profiles.clone();
         let output = match Config::generate_runtime_output_from_profiles(
@@ -298,7 +303,7 @@ impl LocalRuntimeHost {
             target_core,
             app,
             profiles,
-            resolved_ports,
+            candidate_ports.bindings().clone(),
             staged_content,
             true,
         )
@@ -396,7 +401,7 @@ impl LocalRuntimeHost {
             );
         }
 
-        let resolved_ports = self.ports.resolve(&clash)?;
+        let candidate_ports = self.ports.resolve_candidate(&clash)?;
         let revision = self.lifecycle.allocate_revision()?;
         let mut diagnostic_profiles = None;
         let generated = match profile_source {
@@ -407,7 +412,7 @@ impl LocalRuntimeHost {
                     target_core,
                     app,
                     profiles,
-                    resolved_ports.clone(),
+                    candidate_ports.bindings().clone(),
                     staged_content,
                     true,
                 )
@@ -417,7 +422,7 @@ impl LocalRuntimeHost {
                 Config::generate_runtime_output_with_ports(
                     &clash,
                     target_core,
-                    resolved_ports.clone(),
+                    candidate_ports.bindings().clone(),
                 )
                 .await
             }
@@ -573,6 +578,7 @@ impl LocalRuntimeHost {
             Ok(status) => status,
             Err(error) => {
                 cleanup_candidate(candidate, "could not confirm applied runtime").await;
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 return Err(anyhow::Error::from(error).context(
                     "the core accepted the runtime operation, but its applied status could not be confirmed",
@@ -588,6 +594,7 @@ impl LocalRuntimeHost {
             Ok(revision) => revision,
             Err(error) => {
                 cleanup_candidate(candidate, "applied runtime identity was not confirmed").await;
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 return Err(anyhow::anyhow!(
                     "the core accepted the runtime operation, but status confirmation failed: {error:#}"
@@ -604,7 +611,7 @@ impl LocalRuntimeHost {
             run_intent: crate::client::application_workflow::policy::CoreRunIntent::Running,
             local_ipc,
             applied_revision,
-            ports: resolved_ports,
+            ports: candidate_ports,
             artifact: Some(snapshot.clone()),
         });
 
@@ -612,6 +619,11 @@ impl LocalRuntimeHost {
             ExecutionHost::Local => RunType::Normal,
             ExecutionHost::Service => RunType::Service,
         };
+        // The runtime host has confirmed this apply even if the Profile
+        // source transaction has not reached Confirm. Keep the receipt and
+        // ports bound to what is actually running; Cancel restores its saved
+        // baseline receipt through the same confirmed path.
+        self.lifecycle.publish_confirmed(receipt.clone());
 
         if let Some(operation_id) = profile_operation_id {
             let replaced = reconcile_replaced(&reconcile_outcome);
@@ -807,6 +819,7 @@ impl LocalRuntimeHost {
             Ok(outcome) => outcome,
             Err(error) => {
                 cleanup_candidate(candidate, "runtime restore operation failed").await;
+                self.ports.invalidate();
                 return Err(error);
             }
         };
@@ -815,6 +828,7 @@ impl LocalRuntimeHost {
             Ok(status) => status,
             Err(error) => {
                 cleanup_candidate(candidate, "could not confirm restored runtime").await;
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 return Err(anyhow::Error::from(error).context(
                     "the runtime restore was accepted, but its applied status could not be confirmed",
@@ -830,6 +844,7 @@ impl LocalRuntimeHost {
             Ok(revision) => revision,
             Err(error) => {
                 cleanup_candidate(candidate, "restored runtime identity was not confirmed").await;
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 return Err(anyhow::anyhow!(
                     "the runtime restore was accepted, but status confirmation failed: {error:#}"
@@ -904,6 +919,7 @@ impl LocalRuntimeHost {
                             )
                         }))
                 {
+                    self.ports.invalidate();
                     self.outcome_uncertain.store(true, Ordering::Release);
                 }
                 return Err(error.into());
@@ -911,6 +927,7 @@ impl LocalRuntimeHost {
         };
 
         if operation.id != operation_id.to_string() {
+            self.ports.invalidate();
             self.outcome_uncertain.store(true, Ordering::Release);
             bail!("core host returned a different reconcile operation id");
         }
@@ -924,12 +941,14 @@ impl LocalRuntimeHost {
             {
                 Some(operation) => operation,
                 None => {
+                    self.ports.invalidate();
                     self.outcome_uncertain.store(true, Ordering::Release);
                     bail!("core reconcile outcome could not be observed");
                 }
             };
         }
         if operation.id != operation_id.to_string() {
+            self.ports.invalidate();
             self.outcome_uncertain.store(true, Ordering::Release);
             bail!("core host returned a different reconcile operation id");
         }
@@ -947,10 +966,12 @@ impl LocalRuntimeHost {
                     .unwrap_or_else(|| "core host returned no failure detail".into())
             ),
             (OperationPhase::Queued | OperationPhase::Running, _) => {
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 bail!("core reconcile is still running; its outcome is uncertain");
             }
             (OperationPhase::Succeeded, output) => {
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 bail!("core reconcile completed with an unexpected result: {output:?}");
             }
@@ -972,6 +993,7 @@ impl LocalRuntimeHost {
             bail!("the local core control plane is shutting down");
         }
         if matches!(self.control.status().state, CoreState::Stopped { .. }) {
+            self.ports.invalidate();
             return Ok(());
         }
         let envelope = CoreCommandEnvelope {
@@ -983,8 +1005,12 @@ impl LocalRuntimeHost {
             Err(error) => return Err(error.into()),
         };
         match handle.wait().await {
-            Ok(OperationOutput::Stopped) => Ok(()),
+            Ok(OperationOutput::Stopped) => {
+                self.ports.invalidate();
+                Ok(())
+            }
             Ok(output) => {
+                self.ports.invalidate();
                 self.outcome_uncertain.store(true, Ordering::Release);
                 bail!("core stop returned unexpected output: {output:?}");
             }
@@ -997,6 +1023,7 @@ impl LocalRuntimeHost {
                     )
                 }) || self.control.executor_is_closed()
                 {
+                    self.ports.invalidate();
                     self.outcome_uncertain.store(true, Ordering::Release);
                 }
                 Err(error.into())
@@ -1270,6 +1297,7 @@ mod tests {
     struct RecordingEndpoint {
         status: StdMutex<super::super::control_endpoint::CoreStatusSnapshot>,
         submitted: StdMutex<Vec<(Vec<u8>, Option<LocalIpcSettings>)>>,
+        apply_submission: bool,
     }
 
     #[async_trait::async_trait]
@@ -1304,7 +1332,7 @@ mod tests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((bytes, request.options.local_ipc));
 
-            let generation = {
+            let generation = if self.apply_submission {
                 let mut status = self
                     .status
                     .lock()
@@ -1324,6 +1352,13 @@ mod tests {
                 status.source_hash = Some(digest.clone());
                 status.applied_kind = Some(request.core.kind);
                 generation
+            } else {
+                self.status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .revision
+                    .as_ref()
+                    .map_or(1, |revision| revision.generation + 1)
             };
             let revision = ConfigRevisionInfo {
                 epoch: 1,
@@ -1366,8 +1401,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn restore_runtime_receipt_reapplies_the_exact_confirmed_bytes_and_settings() {
+    async fn runtime_host_fixture() -> (tempfile::TempDir, LocalRuntimeHost, RuntimePaths) {
         let root = tempfile::TempDir::new().unwrap();
         let paths = crate::utils::path::PathResolver::with_base_dirs(
             root.path().join("config"),
@@ -1381,24 +1415,30 @@ mod tests {
                 .unwrap(),
         );
         let host = LocalRuntimeHost::new(control, runtime_paths.clone());
-        let status = super::super::control_endpoint::CoreStatusSnapshot {
-            controller: None,
-            state: Some(CoreStateDetail::Running { epoch: 1, pid: 42 }),
-            state_changed_at: 1,
-            revision: Some(RevisionIdInfo {
-                epoch: 1,
-                generation: 2,
-                effective_hash: "before-restore".into(),
+        (root, host, runtime_paths)
+    }
+
+    fn recording_endpoint(apply_submission: bool) -> RecordingEndpoint {
+        RecordingEndpoint {
+            status: StdMutex::new(super::super::control_endpoint::CoreStatusSnapshot {
+                controller: None,
+                state: Some(CoreStateDetail::Running { epoch: 1, pid: 42 }),
+                state_changed_at: 1,
+                revision: Some(RevisionIdInfo {
+                    epoch: 1,
+                    generation: 2,
+                    effective_hash: "before-restore".into(),
+                }),
+                source_hash: Some("candidate-digest".into()),
+                healthy: Some(true),
+                applied_kind: Some(CoreKind::Mihomo),
             }),
-            source_hash: Some("candidate-digest".into()),
-            healthy: Some(true),
-            applied_kind: Some(CoreKind::Mihomo),
-        };
-        let endpoint = RecordingEndpoint {
-            status: StdMutex::new(status),
             submitted: StdMutex::new(Vec::new()),
-        };
-        let config_text: Arc<str> = "mode: rule\nexternal-controller: 127.0.0.1:9090\n".into();
+            apply_submission,
+        }
+    }
+
+    fn restore_receipt(config_text: Arc<str>) -> Arc<RuntimeApplyReceipt> {
         let target_core = ClashCore::Mihomo;
         let runtime_revision = crate::client::runtime::RuntimeRevisionAllocator::default()
             .allocate()
@@ -1410,10 +1450,10 @@ mod tests {
             serde_yaml::Mapping::new(),
             PostProcessingOutput::default(),
         ));
-        let receipt = Arc::new(RuntimeApplyReceipt {
+        Arc::new(RuntimeApplyReceipt {
             revision: runtime_revision,
             config_digest: chimera_core_manager::payload_digest(config_text.as_bytes()),
-            config_text: config_text.clone(),
+            config_text,
             target_core,
             core_spec: chimera_core_manager::CoreSpec {
                 kind: CoreKind::Mihomo,
@@ -1430,12 +1470,21 @@ mod tests {
             applied_revision: chimera_ipc::api::status::ConfigRevisionInfo {
                 epoch: 1,
                 generation: 1,
-                source_hash: "candidate-digest".into(),
+                source_hash: "baseline-digest".into(),
                 effective_hash: "old-effective".into(),
             },
             ports: Default::default(),
             artifact: Some(artifact),
-        });
+        })
+    }
+
+    #[tokio::test]
+    async fn restore_runtime_receipt_reapplies_the_exact_confirmed_bytes_and_settings() {
+        let (_root, host, runtime_paths) = runtime_host_fixture().await;
+        let config_text: Arc<str> = "mode: rule\nexternal-controller: 127.0.0.1:9090\n".into();
+        let endpoint = recording_endpoint(true);
+        let receipt = restore_receipt(config_text.clone());
+        host.ports.confirm(&receipt.ports);
 
         host.restore_runtime_receipt(&endpoint, receipt.clone())
             .await
@@ -1450,12 +1499,43 @@ mod tests {
         assert_eq!(submitted[0].1, Some(receipt.local_ipc));
         drop(submitted);
         assert_eq!(
+            host.ports.confirmed(),
+            Some(receipt.ports.bindings().clone()),
+            "only the verified restore may confirm its port binding"
+        );
+        assert_eq!(
             tokio::fs::read(runtime_paths.product()).await.unwrap(),
             config_text.as_bytes()
         );
         assert_eq!(
             host.confirmed_runtime_receipt().unwrap().config_digest,
             receipt.config_digest
+        );
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    // Contract: a restore submission succeeds but the fresh status still
+    // describes the candidate. The method must fail and make its old binding
+    // unavailable; trusting the submission response alone fails this check.
+    async fn restore_with_unconfirmed_status_invalidates_the_previous_port_binding() {
+        let (_root, host, _runtime_paths) = runtime_host_fixture().await;
+        let config_text: Arc<str> = "mode: rule\nexternal-controller: 127.0.0.1:9090\n".into();
+        let endpoint = recording_endpoint(false);
+        let receipt = restore_receipt(config_text);
+        host.ports.confirm(&receipt.ports);
+        assert!(host.ports.confirmed().is_some());
+
+        let result = host.restore_runtime_receipt(&endpoint, receipt).await;
+
+        assert!(
+            result.is_err(),
+            "stale status must not prove a successful restore"
+        );
+        assert_eq!(
+            host.ports.confirmed(),
+            None,
+            "an unverified restore must not leave a port binding available"
         );
         host.shutdown().await.unwrap();
     }

@@ -401,7 +401,7 @@ pub(crate) struct RuntimeApplyReceipt {
     pub run_intent: super::application_workflow::policy::CoreRunIntent,
     pub local_ipc: chimera_core_manager::LocalIpcSettings,
     pub applied_revision: chimera_ipc::api::status::ConfigRevisionInfo,
-    pub ports: chimera_config::runtime::executor::ResolvedPortBindings,
+    pub ports: super::ports::CandidatePortBindings,
     pub artifact: Option<Arc<RuntimeSnapshot>>,
 }
 
@@ -442,6 +442,7 @@ pub struct RuntimeLifecycleState {
     pub promoted: Option<Arc<RuntimeSnapshot>>,
     pub applied: Option<Arc<RuntimeSnapshot>>,
     pub confirmed: Option<Arc<RuntimeApplyReceipt>>,
+    pub confirmed_available: bool,
     pub last_transform_failure: Option<RuntimeTransformFailure>,
 }
 
@@ -468,10 +469,23 @@ impl RuntimeLifecycle {
         let mut state = self.state.write();
         state.applied = None;
         state.confirmed = Some(receipt);
+        state.confirmed_available = true;
     }
 
     pub fn confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
         self.state.read().confirmed.clone()
+    }
+
+    pub fn accepted_confirmed_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        let state = self.state.read();
+        state
+            .confirmed_available
+            .then(|| state.confirmed.clone())
+            .flatten()
+    }
+
+    pub fn invalidate_confirmed(&self) {
+        self.state.write().confirmed_available = false;
     }
 
     pub fn publish_applied(&self, snapshot: Arc<RuntimeSnapshot>) -> Result<()> {
@@ -519,7 +533,6 @@ pub struct RuntimeTransactionSnapshot {
 #[derive(Debug, Clone)]
 pub struct RuntimePaths {
     product: Utf8PathBuf,
-    legacy_product: Utf8PathBuf,
     candidate_dir: Utf8PathBuf,
 }
 
@@ -528,7 +541,6 @@ impl RuntimePaths {
         let runtime_dir = utf8_path(paths.app_config_dir().join(RUNTIME_CONFIG_DIR))?;
         Ok(Self {
             product: runtime_dir.join(RUNTIME_CONFIG),
-            legacy_product: utf8_path(paths.app_config_dir().join(RUNTIME_CONFIG))?,
             candidate_dir: runtime_dir.join(".candidates"),
         })
     }
@@ -536,7 +548,6 @@ impl RuntimePaths {
     #[allow(dead_code)]
     pub fn new(product: Utf8PathBuf, candidate_dir: Utf8PathBuf) -> Self {
         Self {
-            legacy_product: product.clone(),
             product,
             candidate_dir,
         }
@@ -548,8 +559,6 @@ impl RuntimePaths {
         Self {
             product: utf8_path(runtime_dir.join(RUNTIME_CONFIG))
                 .expect("test runtime path is UTF-8"),
-            legacy_product: utf8_path(config_root.join(RUNTIME_CONFIG))
-                .expect("test legacy runtime path is UTF-8"),
             candidate_dir: utf8_path(runtime_dir.join(".candidates"))
                 .expect("test runtime path is UTF-8"),
         }
@@ -562,10 +571,6 @@ impl RuntimePaths {
     #[allow(dead_code)]
     pub fn candidate_dir(&self) -> &Utf8Path {
         &self.candidate_dir
-    }
-
-    fn legacy_product(&self) -> &Utf8Path {
-        &self.legacy_product
     }
 
     pub async fn create_candidate(&self, bytes: &[u8]) -> anyhow::Result<CandidateFile> {
@@ -772,13 +777,7 @@ pub async fn capture_runtime_transaction(
 ) -> Result<RuntimeTransactionSnapshot> {
     let product = match tokio::fs::read(paths.product()).await {
         Ok(bytes) => Some(bytes),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match tokio::fs::read(paths.legacy_product()).await {
-                Ok(bytes) => Some(bytes),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error.into()),
-            }
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
     Ok(RuntimeTransactionSnapshot {
@@ -1088,15 +1087,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transaction_capture_falls_back_to_legacy_product() {
+    async fn transaction_restore_keeps_typed_config_out_of_runtime_product() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(&dir);
-        std::fs::write(paths.legacy_product(), b"mode: rule\n").unwrap();
+        let typed_config_path = dir.path().join(RUNTIME_CONFIG);
+        let typed_config =
+            serde_yaml::to_string(&chimera_config::clash::config::ClashConfig::default()).unwrap();
+        std::fs::write(&typed_config_path, &typed_config).unwrap();
         let lifecycle = RuntimeLifecycle::default();
         let transaction = capture_runtime_transaction(&paths, &lifecycle)
             .await
             .unwrap();
-        assert_eq!(transaction.product.unwrap(), b"mode: rule\n");
+        assert!(transaction.product.is_none());
+
+        restore_product(paths.product(), b"failed runtime candidate\n")
+            .await
+            .unwrap();
+        restore_failed_apply(&paths, &lifecycle, transaction, |had_product| async move {
+            assert!(!had_product);
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+        assert!(!paths.product().exists());
+        assert_eq!(
+            std::fs::read_to_string(typed_config_path).unwrap(),
+            typed_config
+        );
     }
 
     #[tokio::test]
