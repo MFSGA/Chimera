@@ -2,7 +2,7 @@
 
 - 契约 ID：`profile-import-accessible-action`
 - 边界：Windows Edge 桌面 UI E2E；从 Profiles 页面点击打开导入菜单，再检查远程导入动作可见并具有本地化 `aria-label`。
-- 基础套件：`main`，由 PR 的 `critical` 套件执行。
+- 基础套件：`main`，由 PR 的 `hermetic` 套件执行。
 - 锁定工具：WebdriverIO `9.31.7`、`@wdio/tauri-service` `1.4.0`、vendored `tauri-plugin-wdio-webdriver` `1.4.0`（兼容补丁 `e4bdb66`）。
 - 初始状态：主窗口位于 Profiles 页面，导入菜单关闭。
 - 被测操作：通过可见的导入按钮打开菜单一次。
