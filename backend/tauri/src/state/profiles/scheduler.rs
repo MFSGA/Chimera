@@ -181,6 +181,8 @@ impl RemoteUpdateScheduler {
                     time::OffsetDateTime::now_utc() - at
                         >= time::Duration::minutes(interval_minutes as i64)
                 });
+            let period = std::time::Duration::from_secs(interval_minutes * 60);
+            let first_refresh_at = tokio::time::Instant::now() + period;
             let actor = actor.clone();
             let tick_uid = uid.clone();
             let handle = tokio::spawn(async move {
@@ -192,7 +194,13 @@ impl RemoteUpdateScheduler {
                         reply: None,
                     });
                 }
-                let period = std::time::Duration::from_secs(interval_minutes * 60);
+                tokio::time::sleep_until(first_refresh_at).await;
+                let _ = actor.cast(ProfilesActorMessage::RefreshRemote {
+                    uid: tick_uid.clone(),
+                    patch: None,
+                    origin: super::actor::RefreshOrigin::Scheduled,
+                    reply: None,
+                });
                 loop {
                     tokio::time::sleep(period).await;
                     let _ = actor.cast(ProfilesActorMessage::RefreshRemote {
