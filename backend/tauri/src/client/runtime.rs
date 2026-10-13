@@ -520,6 +520,7 @@ pub struct RuntimeTransactionSnapshot {
 pub struct RuntimePaths {
     product: Utf8PathBuf,
     candidate_dir: Utf8PathBuf,
+    legacy_product: Utf8PathBuf,
 }
 
 impl RuntimePaths {
@@ -528,13 +529,14 @@ impl RuntimePaths {
         Ok(Self {
             product: runtime_dir.join(RUNTIME_CONFIG),
             candidate_dir: runtime_dir.join(".candidates"),
+            legacy_product: utf8_path(paths.app_config_dir().join(RUNTIME_CONFIG))?,
         })
     }
 
     #[allow(dead_code)]
     pub fn new(product: Utf8PathBuf, candidate_dir: Utf8PathBuf) -> Self {
         Self {
-            // legacy_product: product.clone(),
+            legacy_product: product.clone(),
             product,
             candidate_dir,
         }
@@ -548,8 +550,8 @@ impl RuntimePaths {
                 .expect("test runtime path is UTF-8"),
             candidate_dir: utf8_path(runtime_dir.join(".candidates"))
                 .expect("test runtime path is UTF-8"),
-            /* legacy_product: utf8_path(config_root.join(RUNTIME_CONFIG))
-            .expect("test runtime path is UTF-8"), */
+            legacy_product: utf8_path(config_root.join(RUNTIME_CONFIG))
+                .expect("test runtime path is UTF-8"),
         }
     }
 
@@ -564,7 +566,7 @@ impl RuntimePaths {
 
     #[cfg(test)]
     fn legacy_product(&self) -> &Utf8Path {
-        todo!()
+        &self.legacy_product
     }
 
     pub async fn create_candidate(&self, bytes: &[u8]) -> anyhow::Result<CandidateFile> {
@@ -772,7 +774,11 @@ pub async fn capture_runtime_transaction(
     let product = match tokio::fs::read(paths.product()).await {
         Ok(bytes) => Some(bytes),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            todo!()
+            match tokio::fs::read(&paths.legacy_product).await {
+                Ok(bytes) => Some(bytes),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            }
         }
         Err(error) => return Err(error.into()),
     };
@@ -816,10 +822,10 @@ where
 }
 
 async fn prepare_private_dir(path: &Utf8Path) -> anyhow::Result<()> {
-    if let Ok(metadata) = tokio::fs::symlink_metadata(path).await
-        && is_symlink_or_reparse(&metadata)
-    {
-        anyhow::bail!("runtime candidate directory is a symlink or reparse point: {path}");
+    match tokio::fs::symlink_metadata(path).await {
+        Ok(metadata) => ensure_real_directory(path.as_std_path(), &metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
     tokio::fs::create_dir_all(path).await?;
     let metadata = tokio::fs::symlink_metadata(path).await?;
@@ -866,7 +872,7 @@ mod tests {
     use super::*;
 
     fn paths(dir: &tempfile::TempDir) -> RuntimePaths {
-        todo!() // RuntimePaths::from_config_root(dir.path().to_path_buf())
+        RuntimePaths::from_config_root(dir.path().to_path_buf())
     }
 
     fn transform_output(message: &str) -> PostProcessingOutput {
@@ -992,7 +998,21 @@ mod tests {
 
     #[tokio::test]
     async fn promote_uses_exact_candidate_bytes_and_hash() {
-        todo!()
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        restore_product(paths.product(), b"mode: rule\n")
+            .await
+            .unwrap();
+        let candidate = paths.create_candidate(b"mode: direct\n").await.unwrap();
+        let bytes = promote_candidate(&candidate, paths.product())
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"mode: direct\n");
+        assert_eq!(std::fs::read(paths.product()).unwrap(), bytes);
+        assert_eq!(
+            <[u8; 32]>::from(Sha256::digest(&bytes)),
+            candidate.bytes_sha256()
+        );
     }
 
     #[tokio::test]
@@ -1038,17 +1058,16 @@ mod tests {
     async fn candidate_tamper_is_rejected_without_replacing_product() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(&dir);
-        todo!()
-        /* restore_product(paths.product(), b"mode: rule\n")
-        .await
-        .unwrap(); */
-        /*  let candidate = paths.create_candidate(b"mode: direct\n").await.unwrap();
+        restore_product(paths.product(), b"mode: rule\n")
+            .await
+            .unwrap();
+        let candidate = paths.create_candidate(b"mode: direct\n").await.unwrap();
         std::fs::write(candidate.path(), b"mode: global\n").unwrap();
         let error = promote_candidate(&candidate, paths.product())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("changed after creation"));
-        assert_eq!(std::fs::read(paths.product()).unwrap(), b"mode: rule\n"); */
+        assert_eq!(std::fs::read(paths.product()).unwrap(), b"mode: rule\n");
     }
 
     #[tokio::test]
@@ -1073,12 +1092,38 @@ mod tests {
     async fn transaction_capture_falls_back_to_legacy_product() {
         let dir = tempfile::tempdir().unwrap();
         let paths = paths(&dir);
-        /* std::fs::write(paths.legacy_product(), b"mode: rule\n").unwrap();
+        std::fs::write(paths.legacy_product(), b"mode: rule\n").unwrap();
         let lifecycle = RuntimeLifecycle::default();
         let transaction = capture_runtime_transaction(&paths, &lifecycle)
             .await
             .unwrap();
-        assert_eq!(transaction.product.unwrap(), b"mode: rule\n"); */
+        assert_eq!(transaction.product.unwrap(), b"mode: rule\n");
+    }
+
+    #[tokio::test]
+    async fn transaction_capture_prefers_runtime_product_over_legacy_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::write(paths.legacy_product(), b"mode: global\n").unwrap();
+        restore_product(paths.product(), b"mode: rule\n")
+            .await
+            .unwrap();
+        let lifecycle = RuntimeLifecycle::default();
+        let transaction = capture_runtime_transaction(&paths, &lifecycle)
+            .await
+            .unwrap();
+        assert_eq!(transaction.product.unwrap(), b"mode: rule\n");
+    }
+
+    #[tokio::test]
+    async fn transaction_without_existing_product_captures_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        let lifecycle = RuntimeLifecycle::default();
+        let transaction = capture_runtime_transaction(&paths, &lifecycle)
+            .await
+            .unwrap();
+        assert!(transaction.product.is_none());
     }
 
     #[tokio::test]

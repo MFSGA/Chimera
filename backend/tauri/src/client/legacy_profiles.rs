@@ -430,7 +430,12 @@ impl ChimeraClient {
     }
 
     fn remote_profile_state_snapshot(&self, uid: &ProfileUid) -> anyhow::Result<RemoteProfile> {
-        todo!()
+        let profiles = self.inner.profiles.snapshot()?;
+        let profile = profiles.get_item(uid)?;
+        profile
+            .as_remote()
+            .ok_or_else(|| anyhow::anyhow!("profile `{uid}` is not remote"))
+            .cloned()
     }
 
     pub(super) async fn remote_profile_snapshot(
@@ -438,7 +443,8 @@ impl ChimeraClient {
         uid: &ProfileUid,
     ) -> anyhow::Result<(RemoteProfile, String)> {
         let remote = self.remote_profile_state_snapshot(uid)?;
-        todo!()
+        let previous_file = self.inner.profile_files.read(&remote.shared.file).await?;
+        Ok((remote, previous_file))
     }
 
     pub(super) fn remote_profile_fingerprint(profile: &RemoteProfile) -> anyhow::Result<String> {
@@ -499,7 +505,15 @@ impl ChimeraClient {
         uid: ProfileUid,
         profile: ProfileBuilder,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        todo!()
+        {
+            let _commit = self.inner.profile_commit.lock().await;
+            self.inner
+                .profile_writes
+                .patch_profile(&uid, profile)
+                .await?;
+            self.inner.ui_sink.refresh_profiles();
+        }
+        Ok(self.after_profile_runtime_commit("profile patch").await)
     }
 
     pub(crate) async fn legacy_patch_profile_metadata(
@@ -529,7 +543,40 @@ impl ChimeraClient {
         previous_file: String,
         prepared: PreparedSubscriptionUpdate,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        todo!()
+        let _commit = self.inner.profile_commit.lock().await;
+        let current = self.remote_profile_state_snapshot(&uid)?;
+        Self::ensure_refresh_is_current(&expected_fingerprint, &current)?;
+        let mut updated = current.clone();
+        let content = updated.apply_prepared_subscription_update(prepared)?;
+        self.inner
+            .profile_files
+            .write_atomic(&current.shared.file, &content)
+            .await?;
+        let affects_current = match self
+            .inner
+            .profile_writes
+            .commit_refreshed(&uid, updated)
+            .await
+        {
+            Ok(affects_current) => affects_current,
+            Err(error) => {
+                self.inner
+                    .profile_files
+                    .write_atomic(&current.shared.file, &previous_file)
+                    .await
+                    .context("restore profile file after failed state commit")?;
+                return Err(error);
+            }
+        };
+        self.inner.ui_sink.refresh_profiles();
+        drop(_commit);
+        if affects_current {
+            Ok(self
+                .after_profile_runtime_commit("remote profile refresh")
+                .await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
     }
 
     pub(crate) async fn legacy_refresh_profile(
@@ -637,7 +684,20 @@ impl ChimeraClient {
         uid: ProfileUid,
         file_data: String,
     ) -> anyhow::Result<MutationOutcome<()>> {
-        todo!()
+        let _commit = self.inner.profile_commit.lock().await;
+        let profiles = self.inner.profiles.snapshot()?;
+        let profile = profiles.get_item(&uid)?;
+        let affects_current = profiles.current.contains(&uid);
+        self.inner
+            .profile_files
+            .write_atomic(profile.file(), &file_data)
+            .await?;
+        drop(_commit);
+        if affects_current {
+            Ok(self.after_profile_runtime_commit("profile file save").await)
+        } else {
+            Ok(MutationOutcome::from_parts((), Vec::new()))
+        }
     }
 
     async fn rebuild_profile_runtime(&self) -> anyhow::Result<()> {

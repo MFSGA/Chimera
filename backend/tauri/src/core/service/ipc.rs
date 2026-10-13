@@ -335,7 +335,10 @@ mod tests {
         IpcState, ServiceBackendObservation, WarnLevel, next_ineligible_warning_state,
         should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition, target_ipc_state,
     };
-    use crate::core::{RunType, service::compat::ServiceCompat};
+    use crate::core::{
+        RunType,
+        service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat},
+    };
 
     fn running_status(server_version: &str) -> StatusInfo<'static> {
         StatusInfo {
@@ -410,13 +413,13 @@ mod tests {
 
     #[test]
     fn compatible_owned_daemon_reaches_service_backend() {
-        let info = running_status("1.9.0");
+        let info = running_status(REQUIRED_SERVICE_MIN);
         let (state, compat) = target_ipc_state(&info, true);
         assert_eq!(state, IpcState::Connected);
         assert_eq!(
             compat,
             ServiceCompat::Compatible {
-                server_version: "1.9.0".to_owned(),
+                server_version: REQUIRED_SERVICE_MIN.to_owned(),
             }
         );
         assert!(
@@ -482,7 +485,7 @@ mod tests {
 
     #[test]
     fn foreign_runtime_never_reaches_service_backend() {
-        let info = running_status("1.9.0");
+        let info = running_status(REQUIRED_SERVICE_MIN);
         let (state, compat) = target_ipc_state(&info, false);
         assert_eq!(state, IpcState::Disconnected);
         assert!(compat.allows_service_backend());

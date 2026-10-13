@@ -180,7 +180,10 @@ struct ChimeraClientInner {
     #[cfg(test)]
     profile_files: Arc<dyn ProfileFsPort>,
     profile_service: Arc<ProfileFileService>,
-    // profile_writes: Arc<dyn ProfilesWritePort>,
+    #[cfg(test)]
+    profile_writes: Arc<dyn ProfilesWritePort>,
+    #[cfg(test)]
+    _test_runtime_dir: Option<tempfile::TempDir>,
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
     traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
@@ -274,7 +277,10 @@ impl ChimeraClient {
             profile_files,
             profile_service,
             Some(typed_profiles),
-            // profile_writes,
+            #[cfg(test)]
+            Arc::new(LegacyProfilesWritePort),
+            #[cfg(test)]
+            None,
             system_dns,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -305,7 +311,55 @@ impl ChimeraClient {
             clash_config: ClashConfigClient::legacy()
                 .expect("test clash config client should initialize"),
         };
-        todo!()
+        let runtime_dir = tempfile::tempdir().expect("test runtime directory");
+        let paths = PathResolver::with_base_dirs(
+            runtime_dir.path().join("config"),
+            runtime_dir.path().join("data"),
+        );
+        let core_lifecycle = CoreLifecycleClient::direct(
+            core.clone(),
+            typed.application.clone(),
+            typed.clash_config.clone(),
+            RuntimePaths::from_config_root(paths.app_config_dir().to_path_buf()),
+        );
+        let initial = effects::plan::ApplicationEffectInputs::project(
+            &typed.application.get_typed(),
+            &typed.clash_config.get().expect("test clash configuration"),
+            None,
+        );
+        let effects_ui = ui_sink.clone();
+        let effects = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(effects::actor::EffectsClient::spawn(
+                effects::actor::EffectsArgs {
+                    port: Arc::new(effects::ports::NoopApplicationEffects),
+                    ui: effects_ui,
+                    initial,
+                },
+            ))
+        })
+        .join()
+        .expect("test effects actor thread")
+        .expect("test effects actor");
+        let profile_service = Arc::new(ProfileFileService::new(
+            paths,
+            Arc::new(crate::service::profile_file::MockSelfProxyPortSource::new()),
+        ));
+        Self::with_parts_and_typed_config(
+            typed,
+            core_lifecycle,
+            core,
+            profiles,
+            profile_files,
+            profile_service,
+            None,
+            profile_writes,
+            Some(runtime_dir),
+            system_dns,
+            ui_sink,
+            effects,
+            Arc::new(hotkey::ports::MockAcceleratorValidator::new()),
+            Arc::new(hotkey::ports::MockWindowControl::new()),
+        )
     }
 
     fn with_parts_and_typed_config(
@@ -316,7 +370,8 @@ impl ChimeraClient {
         #[cfg(test)] profile_files: Arc<dyn ProfileFsPort>,
         profile_service: Arc<ProfileFileService>,
         typed_profiles: Option<profiles::ProfilesClient>,
-        // profile_writes: Arc<dyn ProfilesWritePort>,
+        #[cfg(test)] profile_writes: Arc<dyn ProfilesWritePort>,
+        #[cfg(test)] test_runtime_dir: Option<tempfile::TempDir>,
         system_dns: Arc<dyn SystemDnsCache>,
         ui_sink: Arc<dyn UiEventSink>,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -340,7 +395,10 @@ impl ChimeraClient {
             #[cfg(test)]
             profile_files,
             profile_service,
-            // profile_writes,
+            #[cfg(test)]
+            profile_writes,
+            #[cfg(test)]
+            _test_runtime_dir: test_runtime_dir,
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),
             traffic: parking_lot::RwLock::new(None),

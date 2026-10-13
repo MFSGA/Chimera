@@ -2038,6 +2038,18 @@ impl ProfileMaterializationPort for ProfileFileService {
     }
 }
 
+/// Select a subscription proxy without reading host state in unit tests.
+/// The caller supplies the real system proxy lookup only when needed.
+fn subscription_proxy_url(
+    options: &RemoteProfileOptions,
+    self_proxy_port: Option<u16>,
+    system_proxy_url: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    (options.self_proxy.then_some(self_proxy_port).flatten())
+        .map(|port| format!("http://127.0.0.1:{port}"))
+        .or_else(|| options.with_proxy.then(system_proxy_url).flatten())
+}
+
 #[async_trait::async_trait]
 impl SubscriptionFetcher for ProfileFileService {
     async fn fetch(
@@ -2054,23 +2066,16 @@ impl SubscriptionFetcher for ProfileFileService {
 
         // Proxy precedence mirrors the legacy subscriber (remote.rs:129-150):
         // self_proxy wins, then system proxy, else direct.
-        let proxy_url = if options.self_proxy {
-            self.self_proxy_port
-                .mixed_port()
-                .map(|port| format!("http://127.0.0.1:{port}"))
-        } else {
-            None
-        };
-        let proxy_url = proxy_url.or_else(|| {
-            if options.with_proxy {
-                match sysproxy::Sysproxy::get_system_proxy() {
-                    Ok(p @ sysproxy::Sysproxy { enable: true, .. }) => {
-                        Some(format!("http://{}:{}", p.host, p.port))
-                    }
-                    _ => None,
+        let self_proxy_port = options
+            .self_proxy
+            .then(|| self.self_proxy_port.mixed_port())
+            .flatten();
+        let proxy_url = subscription_proxy_url(options, self_proxy_port, || {
+            match sysproxy::Sysproxy::get_system_proxy() {
+                Ok(p @ sysproxy::Sysproxy { enable: true, .. }) => {
+                    Some(format!("http://{}:{}", p.host, p.port))
                 }
-            } else {
-                None
+                _ => None,
             }
         });
         if let Some(proxy_url) = proxy_url {
@@ -3690,22 +3695,35 @@ mod tests {
         assert_eq!(source_hits.load(Ordering::SeqCst), 1);
     }
 
-    #[tokio::test]
-    async fn fetch_continues_proxy_chain_when_self_proxy_port_is_unavailable() {
+    #[test]
+    fn system_proxy_is_selected_when_self_proxy_port_is_unavailable() {
         let source_hits = Arc::new(AtomicUsize::new(0));
-        let router = Router::new().route("/", get(|| async { "ok: true\n" }));
-        let (url, _server) = serve(router).await;
-        let (_temp, service) = service_with(Arc::new(CountingNoProxy {
+        let source = CountingNoProxy {
             hits: Arc::clone(&source_hits),
-        }));
-
-        let fetched = service
-            .fetch(&Url::parse(&url).unwrap(), &options(true, true))
-            .await
-            .unwrap();
-
-        assert_eq!(fetched.content, "ok: true\n");
+        };
+        let system_proxy = "http://127.0.0.1:12345";
+        let selected =
+            super::subscription_proxy_url(&options(true, true), source.mixed_port(), || {
+                Some(system_proxy.to_owned())
+            });
+        assert_eq!(selected.as_deref(), Some(system_proxy));
         assert_eq!(source_hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn self_proxy_takes_precedence_without_querying_system_proxy() {
+        let selected = super::subscription_proxy_url(&options(true, true), Some(7890), || {
+            panic!("system proxy must not be consulted when self-proxy is available")
+        });
+        assert_eq!(selected.as_deref(), Some("http://127.0.0.1:7890"));
+    }
+
+    #[test]
+    fn disabled_proxy_options_do_not_consult_system_proxy() {
+        let selected = super::subscription_proxy_url(&options(false, false), None, || {
+            panic!("system proxy must not be consulted when proxy is disabled")
+        });
+        assert_eq!(selected, None);
     }
 
     #[tokio::test]
