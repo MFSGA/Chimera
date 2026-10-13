@@ -7,14 +7,6 @@ on:
       - master
       - dev
       - release-*
-    paths:
-      - 'backend/**'
-      - 'frontend/**'
-      - 'tauri-e2e/**'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - '.github/workflows/e2e.yaml'
   push:
     branches:
       - main
@@ -49,7 +41,7 @@ on:
     - cron: '45 20 * * *'
 
 concurrency:
-  group: tauri-e2e-${{ github.workflow }}-${{ github.ref }}
+  group: tauri-e2e-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.suite || 'default' }}
   cancel-in-progress: true
 
 env:
@@ -64,7 +56,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
-      E2E_SUITE: ${{ github.event_name == 'schedule' && 'hermetic' || github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'critical' || 'smoke' }}
+      E2E_SUITE: ${{ github.event_name == 'schedule' && 'hermetic' || github.event_name == 'workflow_dispatch' && inputs.suite || github.event_name == 'pull_request' && 'hermetic' || 'smoke' }}
       CHIMERA_E2E_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/e2e
     steps:
       - uses: actions/checkout@v7

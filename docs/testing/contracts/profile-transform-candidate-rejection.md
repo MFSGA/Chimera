@@ -12,9 +12,9 @@
   diagnostics. The invalid script body is injected with `save_profile_file`
   IPC, so that case proves the Profile transaction/file boundary and its UI
   feedback; it does not prove typing the broken body into the editor.
-- Base suites: `profiles` and `critical`; the PR desktop workflow runs
-  `critical` on Windows. A spec file or local typecheck alone is not desktop
-  evidence.
+- Base suites: `profiles` and `critical`; at the time of the recorded Windows
+  runs, the PR desktop workflow selected `critical`. A spec file or local
+  typecheck alone is not desktop evidence.
 - Runtime conditions: Tauri E2E app, WebdriverIO, Windows Edge/WebView2 in CI,
   local isolated E2E runtime directory and mixed port. The core must be running
   before runtime diagnostics are checked.
