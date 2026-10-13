@@ -9,18 +9,71 @@
 
 - Keep shared functionality as close as possible to the implementation in local `ref/` (Clash Nyanpasu): architecture, business logic, directory structure, filenames, type names, function names, variable names, and interface contracts. Equivalent behavior alone does not complete alignment.
 - Keep branding differences limited to actual product identity, such as Chimera names, package identifiers, application IDs, resources, and required distribution endpoints. Do not rename unrelated upstream concepts or reorganize shared code for personal preference.
+- **Large-scale upstream copying is explicitly allowed and preferred when it keeps a cohesive feature aligned.** Copy complete related files/directories/call paths from the pinned local `ref/` implementation as needed, then apply a reviewed, consistent upstream-brand → Chimera-brand mapping across the copied scope. Do not artificially split a coherent migration merely to keep the diff small. Preserve non-brand symbol names, architecture, behavior, and license/copyright notices; inspect replacement matches so protocol fields, persisted data, third-party identifiers, and external APIs are not accidentally changed.
 - Preserve the legacy UI as a supported product interface. It is an intentional extension, not obsolete code to delete during alignment. Keep its routes, window entry points, presentation, and user flows working.
 - The main extension is E2E testing; the other extension is agent capability. Preserve both while aligning the shared implementation.
 - The main UI, legacy UI, and agent must reuse the same application APIs and business implementation. Put necessary legacy presentation adapters and agent orchestration at their boundaries; do not maintain separate configuration, persistence, core, or service implementations for them.
 - Existing differences outside branding, legacy UI, E2E, and agent are not automatically permanent exceptions. Record their purpose and convergence plan. Preserve working functionality and user data during migration; do not remove Chimera Client/Service support or other behavior merely to reduce a diff. Keep necessary compatibility in narrow adapters and distinguish it from the aligned shared implementation.
 - Follow [the alignment guide](docs/ref-alignment-guide.md) for baseline selection, difference records, migration steps, and acceptance criteria. Keep this file and the guide consistent when the product goal changes.
 
+## Codex / AI development governance
+
+This repository also follows [AI development governance](docs/ai-development-governance.md),
+the [independent review checklist](docs/ai-review-checklist.md), and the
+[engineering lessons log](LESSONS.md). These rules **add to** the reference-alignment
+guide, [testing standard](docs/testing/README.md), and existing safety boundaries;
+they do not replace them. GitHub workflow realities are summarized in
+[WORKFLOWS.md](.github/WORKFLOWS.md).
+
+- For any nontrivial task, record objective, explicit non-goals, acceptance criteria,
+  changed interfaces, risk level L0–L3, test plan, rollback, and required approval.
+  Use the [AI task issue template](.github/ISSUE_TEMPLATE/ai-task.md) for tracked work.
+- Before coding, verify branch, Git state, relevant submodule SHAs, existing source
+  and tests. Shared-feature tasks **must** follow the ref path/symbol mapping and
+  preserve both main and legacy UI and the agent's shared application API.
+  Work in isolated branches/worktrees when several agents or workstreams are active;
+  never overwrite another developer's dirty tree or generated files.
+- The coder proves implemented behavior through actually executed checks.
+  An independent reviewer, with a fresh context, checks the real diff, reference
+  mapping, tests, failure/recovery paths, host effects, and authorization.
+  Self-review and a green build cannot substitute for applicable test evidence.
+- **Do not idle waiting for remote CI after local tests pass.** Once an authorized
+  PR/push has started checks, record the run link and `pending` status, then
+  immediately continue useful work that does not depend on those results:
+  independent review preparation, focused local verification, documentation,
+  risk/rollback analysis, or another already-authorized task in an isolated
+  worktree. Avoid repeated empty polling or holding the task open solely for CI.
+  If no independent work remains, hand off the pending CI state and next steps.
+  CI pending is **not** success: do not merge/release before required checks and
+  approvals, do not promise background monitoring, and treat a discovered CI
+  failure as a blocker requiring diagnosis before delivery/merge.
+- L0 nonbehavioral docs and L1 bounded presentation changes may be considered for
+  constrained automation **only after** branch protection, checks and review
+  enforcement are implemented. L2 includes persisted configuration, core/service
+  runtime, system proxy/TUN, IPC/agent mutations, security, dependency/sidecar pins,
+  and shared behavior. L3 covers `AGENTS.md`, governance rules, CI/release,
+  signing, secrets, update channels, privileges, and Git history rewriting.
+  L2 requires explicit human approval after review; L3 requires maintainer approval.
+  When scopes overlap, use the highest risk category.
+- All PRs should complete the [PR template](.github/pull_request_template.md):
+  evidence and exact commands, coverage and omissions, review findings,
+  reference SHA, change risk, and rollback. Do not claim CI enforces rules that
+  are currently only documented.
+- Test failures, regressions, and confirmed process mistakes belong in
+  `LESSONS.md` with evidence and prevention tests; suspected issues go into
+  an Issue, not an invented incident report. Normative changes require L3 review.
+- Do not commit, push, merge, tag, publish, dispatch workflows, mutate host network
+  or elevate privileges unless those actions have been authorized for the task.
+  Do not bypass checks, disable tests, lower permission gates, or expose
+  credentials to make an AI task pass. The documents here do **not** install
+  autonomous coding, AI review, or auto-merge actions.
+
 ## Required workflow for shared functionality
 
 1. Before developing, fixing, or refactoring shared functionality, read its local `ref/` implementation and relevant architecture guidance. Trace the UI/hook, IPC, application API, state ownership, persistence, and runtime path as applicable. This reference read is the default and does not require a separate user request.
 2. Record `git -C ref rev-parse HEAD` and inspect `git -C ref status --short`. Map the touched reference paths and symbols to Chimera paths and symbols, including only necessary branding substitutions. Do not silently update `ref/` or replace the baseline with a different online revision. If the needed reference is unavailable, report the gap and avoid claiming alignment.
-3. Prefer the reference implementation in corresponding files. Do not replace it with a locally designed equivalent, rename non-brand symbols, or split/reorganize reference functions just to satisfy local stylistic preferences. Generate bindings through the existing generator when the changed contract requires it.
-4. Migrate the smallest complete call path, including state ownership and error handling. A compatibility bridge is a temporary migration step: document its reason, remaining differences, and removal condition. Only a legacy business bridge may be retired; the legacy UI itself remains supported.
+3. Prefer the reference implementation in corresponding files. For broad alignment, **copy the full cohesive upstream implementation first** (including related directories, types, state ownership, error handling, and tests), then consistently replace only required product-brand identifiers using an explicit mapping. Do not replace it with a locally designed equivalent, rename non-brand symbols, or split/reorganize reference functions just to satisfy local stylistic preferences. Generate bindings through the existing generator when the changed contract requires it.
+4. Choose migration scope by **feature completeness and verifiability, not by an arbitrary small diff**: copying many related upstream files or whole modules in one pass is allowed. Check each brand replacement and preserve licenses, public contracts, stored user data, existing Chimera Client/Service support, legacy UI and agent integration. A compatibility bridge is a temporary migration step: document its reason, remaining differences, and removal condition. Only a legacy business bridge may be retired; the legacy UI itself remains supported.
 5. Check the main and legacy UI entry points affected by shared changes, and the agent entry point when it uses that capability. Update relevant tests, register their execution entry points, and run checks appropriate to the change.
 6. Report the reference commit, path/symbol mapping, retained differences, affected interfaces, actual test results, and remaining work. Label incomplete migrations as partial; matching behavior, filenames, or types alone is not proof that the implementation is aligned.
 
