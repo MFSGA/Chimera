@@ -1,6 +1,6 @@
 # Chimera
 
-> 面向桌面用户的现代代理客户端，强调稳定、清晰、可维护的日常使用体验。
+> 下一代主机网络管家：让网络管理更简单、更可靠，并尽可能无感地运行在后台。
 
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4c8bf5)](#)
 [![Tauri](https://img.shields.io/badge/Tauri-2.x-24c8db)](#)
@@ -29,30 +29,13 @@ AChimera · Proxy Wiki
 - [AChimera](https://github.com/MFSGA/AChimera) — Android client
 - [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
 
-> **Chimera Proxy** — Rust-native desktop client for the Chimera proxy ecosystem.
-
-## Chimera Ecosystem
-
-```text
-Chimera Desktop
-       ↕
-Chimera Client (Rust client core)
-       ↕ VLESS / REALITY
-Chimera Proxy Server (Rust server core)
-       ↕
-AChimera · Proxy Wiki
-```
-
-- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust client core with Clash / Mihomo compatibility
-- [Chimera Proxy Server](https://github.com/MFSGA/Chimera_Service) — Pure Rust Xray-compatible server core
-- [AChimera](https://github.com/MFSGA/AChimera) — Android client
-- [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
-
 ---
 
 ## 项目简介
 
-Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windows、macOS 与 Linux/NixOS 上提供稳定、清晰、可维护的代理使用体验。它基于 Tauri、Rust 与 React 构建，既保留了桌面应用应有的轻量与响应速度，也为代理核心、订阅配置、系统代理、服务模式和更新能力提供可靠支撑。
+Chimera 的目标是成为下一代最好用的主机网络管家：在 Windows、macOS 与 Linux/NixOS 上，把代理核心、系统网络设置和日常连接管理整合起来，让网络能力稳定、可靠地工作，并尽可能在后台无感运行。项目基于 Tauri、Rust 与 React 构建，也保留清晰的状态、日志和控制入口，让用户需要时能理解并掌控发生了什么。
+
+Chimera 也以 AI agent 友好为设计方向。主界面、legacy UI 与 AI agent 应复用同一套应用 API 和业务能力，避免 agent 维护一份平行的配置或运行逻辑。项目计划支持本地优先的 agent 工具，让 agent 能在本机协助检查网络状态、解释问题和完成配置任务；涉及修改的操作会保留用户控制，并提供可核验的执行结果。该能力仍在规划和建设中，不代表所有 agent 工具现已可用。
 
 ## 协议兼容矩阵
 
@@ -66,7 +49,7 @@ Chimera 是一款面向桌面用户的现代代理客户端，目标是在 Windo
 
 Chimera Desktop 负责桌面编排；具体协议能力取决于所选核心及其版本。
 
-如果你希望有一个更专注于日常使用的代理管理工具，Chimera 的重点不是把界面做得复杂，而是把常用流程整理得更顺：导入订阅、切换节点、查看连接、调整规则、管理核心、处理更新，都应该尽量直接、可理解、少打扰。
+如果你希望有一个更专注于日常使用的网络管理工具，Chimera 的重点不是把界面做得复杂，而是让导入订阅、切换节点、查看连接、调整规则、管理核心和处理更新都尽量直接、可靠、少打扰。长期目标是让网络管理在后台妥善完成，只有需要用户决策或查看时才清楚地呈现出来。
 
 ## 为什么选择 Chimera
 
@@ -76,6 +59,7 @@ Chimera Desktop 负责桌面编排；具体协议能力取决于所选核心及�
 - 完整代理控制台：管理订阅与配置，查看代理组和节点，观察连接状态，调整运行时配置。
 - 服务模式支持：适合追求更安全、更稳定后台运行、系统级代理能力和长期使用场景的用户。
 - 日常排查友好：提供日志、连接、规则、配置目录和核心目录等入口，降低定位问题的成本。
+- AI agent 友好方向：通过共享应用 API 让 GUI 与 agent 使用同一套业务能力，并计划支持本地优先、由用户掌控的 agent 工具。
 
 ## 当前支持协议
 
