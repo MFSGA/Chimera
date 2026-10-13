@@ -37,6 +37,8 @@ release.sh
 
 # Keep governing guides versionable without exposing local reports and evidence.
 /docs/*
+!/docs/ai-development-governance.md
+!/docs/ai-review-checklist.md
 !/docs/ref-alignment-guide.md
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
