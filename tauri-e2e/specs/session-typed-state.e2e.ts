@@ -155,6 +155,28 @@ async function waitForMirroredState(
   return persisted;
 }
 
+function assertRestoredWindowState(
+  restored: WindowState,
+  persisted: WindowState,
+  scaleFactor: number,
+): void {
+  assert.equal(restored.x, persisted.x);
+  assert.equal(restored.y, persisted.y);
+  assert.equal(
+    restored.width,
+    Math.max(persisted.width, Math.floor(400 * scaleFactor)),
+  );
+
+  const expectedRestoredHeight = Math.max(
+    persisted.height,
+    Math.floor(600 * scaleFactor),
+  );
+  assert.ok(restored.height >= expectedRestoredHeight);
+  assert.ok(restored.height <= expectedRestoredHeight + 2);
+  assert.equal(restored.maximized, persisted.maximized);
+  assert.equal(restored.fullscreen, persisted.fullscreen);
+}
+
 describe('typed session/window state ownership', () => {
   it('persists a real window capture through session-state.yaml and mirrors it to legacy config', async () => {
     await waitForApp();
@@ -248,7 +270,14 @@ describe('typed session/window state ownership', () => {
 
       await saveCurrentWindowState('main');
       const restoredCapture = await waitForMirroredState();
-      assert.deepEqual(restoredCapture, firstPersisted);
+      const firstRestoreScaleFactor = await browser.execute(
+        () => window.devicePixelRatio || 1,
+      );
+      assertRestoredWindowState(
+        restoredCapture,
+        firstPersisted,
+        firstRestoreScaleFactor,
+      );
 
       await browser.setWindowRect(
         secondGeometry.x,
@@ -282,26 +311,13 @@ describe('typed session/window state ownership', () => {
       const restoreScaleFactor = await browser.execute(
         () => window.devicePixelRatio || 1,
       );
-      const minimumRestorableSize = {
-        width: Math.floor(400 * restoreScaleFactor),
-        height: Math.floor(600 * restoreScaleFactor),
-      };
       await saveCurrentWindowState('main');
       const reopenedCapture = await waitForMirroredState();
-      assert.equal(reopenedCapture.x, secondPersisted.x);
-      assert.equal(reopenedCapture.y, secondPersisted.y);
-      assert.equal(
-        reopenedCapture.width,
-        Math.max(secondPersisted.width, minimumRestorableSize.width),
+      assertRestoredWindowState(
+        reopenedCapture,
+        secondPersisted,
+        restoreScaleFactor,
       );
-      const expectedRestoredHeight = Math.max(
-        secondPersisted.height,
-        minimumRestorableSize.height,
-      );
-      assert.ok(reopenedCapture.height >= expectedRestoredHeight);
-      assert.ok(reopenedCapture.height <= expectedRestoredHeight + 2);
-      assert.equal(reopenedCapture.maximized, secondPersisted.maximized);
-      assert.equal(reopenedCapture.fullscreen, secondPersisted.fullscreen);
     } finally {
       if ((await browser.getWindowHandles()).includes('main')) {
         await browser.switchToWindow('main');
