@@ -26,6 +26,15 @@ async fn main() {
                 writeln!(lock, "line-{i}").expect("write");
             }
         }
+        "spam-stdout-forever" => {
+            let stdout = std::io::stdout();
+            let mut lock = stdout.lock();
+            let mut i = 0usize;
+            loop {
+                writeln!(lock, "line-{i}").expect("write");
+                i += 1;
+            }
+        }
         "sleep-forever" => {
             println!("ready");
             sleep_forever().await;

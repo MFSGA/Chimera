@@ -222,7 +222,7 @@ async fn readiness_is_not_starved_by_continuous_output() {
     let output_count_for_ready = output_count.clone();
     let ready_output_count_for_hook = ready_output_count.clone();
 
-    let supervisor = Supervisor::builder(|| Command::new(child()).args(["spam-stdout", "200000"]))
+    let supervisor = Supervisor::builder(|| Command::new(child()).arg("spam-stdout-forever"))
         .readiness(ReadinessProbe::AliveAfter(Duration::from_millis(100)))
         .on_process_event(move |event| {
             if matches!(event, ProcessEvent::Stdout(_)) {
