@@ -152,9 +152,11 @@ impl PidFileGuard {
                 // narrow pre-record interval can leave an orphan without an
                 // authoritative identity record; such a process is never
                 // killed on an unproven numeric PID.
-                let identity = wait_for_process_identity(pid).await?.ok_or_else(|| {
-                    identity_error(format!("spawned pid {pid} disappeared before recording"))
-                })?;
+                let identity = wait_for_spawned_process_identity(pid, expected_exe)
+                    .await?
+                    .ok_or_else(|| {
+                        identity_error(format!("spawned pid {pid} disappeared before recording"))
+                    })?;
                 if !exe_names_equal(&identity.executable, expected_exe) {
                     return Err(identity_error(format!(
                         "spawned pid {pid} executable `{}` does not match `{expected_exe}`",
@@ -605,11 +607,34 @@ fn identity_query_is_provisional(error: &std::io::Error) -> bool {
     false
 }
 
+#[cfg(test)]
 async fn wait_for_process_identity(pid: u32) -> std::io::Result<Option<ProcessIdentity>> {
+    wait_for_process_identity_matching(pid, None, process_identity).await
+}
+
+async fn wait_for_spawned_process_identity(
+    pid: u32,
+    expected_exe: &str,
+) -> std::io::Result<Option<ProcessIdentity>> {
+    wait_for_process_identity_matching(pid, Some(expected_exe), process_identity).await
+}
+
+async fn wait_for_process_identity_matching(
+    pid: u32,
+    expected_exe: Option<&str>,
+    mut identify: impl FnMut(u32) -> std::io::Result<Option<ProcessIdentity>>,
+) -> std::io::Result<Option<ProcessIdentity>> {
     let mut access_error = None;
+    let mut mismatched_identity = None;
     for attempt in 0..IDENTITY_WAIT_ATTEMPTS {
-        match process_identity(pid) {
-            Ok(Some(identity)) => return Ok(Some(identity)),
+        match identify(pid) {
+            Ok(Some(identity))
+                if expected_exe
+                    .is_none_or(|expected| exe_names_equal(&identity.executable, expected)) =>
+            {
+                return Ok(Some(identity));
+            }
+            Ok(Some(identity)) => mismatched_identity = Some(identity),
             Ok(None) => {}
             Err(error) if identity_query_is_provisional(&error) => {
                 access_error = Some(error);
@@ -619,6 +644,9 @@ async fn wait_for_process_identity(pid: u32) -> std::io::Result<Option<ProcessId
         if attempt + 1 < IDENTITY_WAIT_ATTEMPTS {
             tokio::time::sleep(IDENTITY_WAIT_DELAY).await;
         }
+    }
+    if let Some(identity) = mismatched_identity {
+        return Ok(Some(identity));
     }
     match access_error {
         Some(error) => Err(error),
@@ -1174,6 +1202,30 @@ fn identity_error(message: impl Into<String>) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    #[tokio::test]
+    async fn spawned_identity_waits_until_exec_replaces_the_parent_image() {
+        let mut identities = VecDeque::from([
+            ProcessIdentity {
+                executable: "process_pid_file".into(),
+                start_token: 1,
+            },
+            ProcessIdentity {
+                executable: "chimera-test-child".into(),
+                start_token: 1,
+            },
+        ]);
+
+        let identity = wait_for_process_identity_matching(42, Some("chimera-test-child"), |_| {
+            Ok(identities.pop_front())
+        })
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(identity.executable, "chimera-test-child");
+    }
 
     #[test]
     fn epoch_record_round_trips() {
