@@ -23,6 +23,7 @@
 
 - PR 描述必须记录任务/风险级别、`master` 与 `ref/` SHA、实际执行的本地命令和 GitHub job 链接、测试数量、失败/跳过/未执行、跨平台及实际 host 影响。
 - **CI 不应阻塞 AI 继续独立工作**：本地验证完成、PR 检查已启动后，记录 run URL 和 `pending`；继续授权范围内不依赖 CI 的审查、文档、补充本地验证或隔离的下一切片。避免持续轮询；无独立工作时交接待完成状态和下一步，不假装正在后台监控。**等待 CI 的合并门禁仍须保留**，不得在 required checks 未通过时合并/发布；收到失败结果则先诊断。
+- **同一问题的修复历史须在最终确认后整理**：多个调试/CI 修复提交先保持可追溯，直到复现问题在最终代码上得到验证、相关必需检查明确。再在自有、未合并的任务分支本地 squash/fixup；必须保留最终代码差异、作者与 PR/CI 证据。若已获明确授权覆盖该远端非共享任务分支，只能用 `--force-with-lease`；**禁止改写 `master`/受保护分支或他人历史**。新 SHA 必须重新执行 required checks，旧 SHA 的成功结果不可继承。
 - 只检查 CI `success` 不够：确认 path classifier 的输出、被跳过 job、选中的 E2E suite 与对应 E2E 构建二进制，尤其要区分 `test:unit`、`hermetic`、`network`、`upgrade`、`system`。
 - Windows Service/TUN 的 `test:system` 可能安装/修改真实系统服务和路由，**禁止在一般 CI、日常机器或无明确授权的 Agent 中运行**；须按 E2E README 在专用一次性 VM 中人工开启。
 - `pnpm prepare:check`、`pnpm check:service-runtime`、Rust lock/core pin、生成代码/sidecar/updater 一致性属于实际边界；不可删掉失败校验来使 PR 通过。
