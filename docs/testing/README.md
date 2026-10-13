@@ -157,7 +157,7 @@ MUST NOT 保存真实订阅凭据、完整认证头或不相关宿主环境信�
 
 每个新 spec MUST 恰好归属一个 `baseE2eSuites` 分组；组合套件由其派生，运行 `spec-suites.test.ts` 验证遗漏/重复。`critical`、`hermetic` 和 `all` 的含义以[实际定义](../../tauri-e2e/spec-suites.ts)为准。
 
-当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：匹配路径和分支的 PR 跑 critical，push 跑 smoke，每日跑 hermetic；均在 Windows。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
+当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：配置分支上的所有 PR 跑 hermetic，匹配代码路径的 push 跑 smoke，每日跑 hermetic；均在 Windows。PR 移除路径过滤，确保未知文件路径也不会绕过桌面回归；代价是文档类 PR 也会执行完整 hermetic 套件。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
 
 下列是审查所需证据，**不表示工作流已经自动执行所有项目**：
 
@@ -169,7 +169,7 @@ MUST NOT 保存真实订阅凭据、完整认证头或不相关宿主环境信�
 | 产品业务回归                              | 最小相关单元/集成检查及覆盖该行为的 E2E；修改前后或等价反例证据   |
 | 网络/系统行为                             | 对应专属环境结果；托管 CI 不支持时明确尚未验证，不能用 smoke 代替 |
 
-若基础套件为 settings/main 而 PR 自动只跑 critical，MUST 额外运行受影响套件并附结果。新覆盖若应成为 PR 必检，必须同步调整组合套件或 CI；把文件放进目录不代表 PR 会运行它。
+PR 当前运行完整 `hermetic`，所以 settings/main/agent 的 hermetic specs 会进入 PR 门禁。新覆盖若应成为 PR 必检，必须确认其所属组合套件包含该 spec；把文件放进目录不代表 PR 会运行它。
 
 框架、状态隔离或偶发失败修复，还应验证目标独立运行及同一进程环境下与其他相关用例组合运行。仅在这些风险存在时增加重复/顺序扰动验证，不要求每次低影响变更全量重跑。
 

@@ -70,8 +70,8 @@ legacy UI 是正式保留的界面。共通业务修改需要检查受影响的 
 
 ## 5. 当前执行入口的局限
 
-- `test:unit` 只执行三个显式列出的 harness 文件，不覆盖目录内全部 `.test.ts`。新增测试需要同步可运行入口。
-- PR 的 `critical` 是 smoke + runtime + profiles；agent、settings、main 在夜间 `hermetic` 中，不属于该 PR 集合。
+- `test:unit` 只执行显式列出的 harness 文件，不覆盖目录内全部 `.test.ts`。新增测试需要同步可运行入口。
+- 配置分支上的 PR 运行完整 `hermetic`，覆盖 smoke、runtime、profiles、settings、main 和 agent；push 运行 smoke，每日运行 hermetic。workflow 对 PR 不做路径过滤，因此未知路径不会绕过桌面回归，但文档类 PR 也会执行该套件。
 - 桌面 CI 当前是 Windows；网络套件依赖外部客户端配置，不能据常规 CI 结果声称双内核或跨平台网络验证已完成。
 - 升级 spec 在没有 `CHIMERA_E2E_UPGRADE_PHASE` 时跳过。普通 `test:all` 不能代替专门的两阶段升级命令。
 - 当前 CI 配置中的 build/clippy 不等于执行 Rust tests。需要实际运行的测试命令和结果才能报告通过。

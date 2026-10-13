@@ -34,7 +34,7 @@ Inspect [spec-suites.ts](spec-suites.ts) for the authoritative membership and [u
 
 ## Current CI coverage
 
-[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: PRs select `critical`, pushes select `smoke`, and scheduled runs select `hermetic`. It also runs the controller-port fallback regression and the registered harness unit tests. Agent/settings/main coverage is not part of the PR `critical` group. Network, the dedicated upgrade runner, and the destructive Windows `system` suite are not automatically exercised by those selections.
+[The desktop workflow](../.github/workflows/e2e.yaml) currently runs on Windows: every pull request to a configured branch selects `hermetic`, pushes to those branches select `smoke` when relevant code paths change, and scheduled runs select `hermetic`. PR runs include all hermetic groups so changes outside the former `critical` selection receive desktop coverage; this adds roughly nine minutes compared with the former PR selection. The workflow also runs the controller-port fallback regression and registered harness unit tests. Network, the dedicated upgrade runner, and the destructive Windows `system` suite are not automatically exercised.
 
 Check the workflow and suite membership when adding tests. Register new desktop specs and provide executable unit-test entries; report which assertions actually ran. Build, typecheck, skipped tests, and unselected suites are not test passes.
 
