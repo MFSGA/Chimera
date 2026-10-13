@@ -1243,3 +1243,20 @@ DIFF-001 至 DIFF-012 是此前基于
   Linux 进程启动竞态和 Windows 两个跨平台断言；macOS CI 与 Tauri E2E 均通过。
 - 重新评估：当 ref 的进程身份采集等待逻辑或 ProcessKit 的 spawn/exec 行为更新时，重跑身份竞态测试，并评估移除
   本地等待差异；平台后缀断言和绑定换行规范化保留为跨平台测试要求。
+
+## DIFF-046：在配置提交时锚定远程 profile 首次刷新时间
+
+- 基线：只读本地 `ref/` commit `0c7b15b3c61db390db21cffb63d29805abd380a1`，工作树 clean；本轮未更新或修改 `ref/`。
+- ref 到 Chimera 映射：ref `backend/tauri/src/state/profiles/jobs.rs::ProfileJobs::reconcile` 注册持久化 interval job；Chimera
+  `backend/tauri/src/state/profiles/scheduler.rs::RemoteUpdateScheduler::reconcile` 维护每 profile 的 Tokio timer。
+  两者都从 committed profile 的 `update_interval_minutes` 派生后台刷新，但调度器实现不同。
+- 问题与修正：Linux CI 暴露了导入 profile 后立即推进 Tokio 虚拟时间的竞态：timer task 可能在时间推进后才首次被轮询，
+  从而把完整 interval 错误地从推进后的时刻开始计算。现在在 reconcile 同步计算首次刷新 deadline，再由 task 等待该 deadline；
+  计时从 profile 提交/调度时刻开始，不依赖 executor 何时首次运行 task。后续周期仍按原 interval 循环。
+- 影响入口：通过同一个 `ProfilesClient` 的主界面、legacy UI 与 agent profile 导入/更新入口；未改变持久化格式或 IPC。
+- 验证：远程失败回归用例 `client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer` 本机通过（1/1）；
+  `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests -- --test-threads=1`
+  通过（66 passed）。Cargo fmt、Prettier 和 `git diff --check` 通过。推送后的 CI 将重新验证 Linux/Windows 后端测试矩阵；
+  Tauri E2E 不受此改动影响。
+- 收敛条件：当 Chimera 迁移到与 ref 相同的持久化 job scheduler 时，重看首次 tick 的注册时刻与 catch-up 语义；保留
+  “deadline 不依赖 task 首次 poll 时刻”的确定性要求。
