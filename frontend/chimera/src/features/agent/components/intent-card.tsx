@@ -55,12 +55,14 @@ export function IntentCard({
           onSubmit={submit}
         >
           <Input
+            data-slot="agent-intent-input"
             maxLength={160}
             label={m.agent_intent_placeholder()}
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
           <Button
+            data-slot="agent-intent-submit"
             className="md:self-center"
             disabled={disabled}
             loading={resolving}
@@ -80,6 +82,7 @@ export function IntentCard({
             </p>
             {routed.kind === 'proposal' && (
               <Button
+                data-slot="agent-intent-continue"
                 className="mt-2"
                 disabled={disabled}
                 onClick={() => onPropose(routed.action)}
