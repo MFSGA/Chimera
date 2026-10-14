@@ -1299,3 +1299,61 @@ DIFF-001 至 DIFF-012 是此前基于
 - 收敛条件：本地准备器整体迁移到 ref 的 `scripts/src/prepare/check.ts` 后，移除
   `scripts/check.ts` 的委托桥接；若要在 manifest 日更窗口内自动淘汰已缓存的
   旧 Alpha，还需单独评估每次准备时在线解析版本的成本和离线回退策略。
+
+## DIFF-050：按 ref 拆分核心 sidecar 解析器并补齐打包入口
+
+- 目标：把二进制信息、平台映射和版本解析从 `scripts/check.ts` 收拢到 ref 对应的
+  `scripts/src/prepare/` 模块；准备并打包 Chimera 当前支持的所有 core sidecar。
+- 非目标：本批不搬迁下载/解压实现、进度显示或任务执行器，不改 Core/Service IPC、用户配置、
+  数据格式或宿主网络行为；不引入 Chimera 尚未公开支持的 Meow core。
+- ref 基线：`813673a8e84b51265467f02277fc7e739837f61e`（本地 `ref/` 与 `origin/main` 一致，
+  工作树干净）。
+- ref 到 Chimera 的路径与符号映射：
+  - `ref/scripts/src/prepare/types.ts` 的 `ClashManifest`、`ResolveInfo`、`TaskDetail`、
+    `DownloadProgress`、`DownloadResult`、`ResolveOptions` → `scripts/src/prepare/types.ts` 同名类型。
+  - `ref/scripts/src/prepare/platform.ts::{normalizePlatform, normalizeArch, mapArch}` →
+    `scripts/src/prepare/platform.ts` 同名函数；保留 ref 架构并扩展到 Chimera manifest 已支持的
+    十种平台/架构组合。
+  - `ref/scripts/src/prepare/versions.ts::{normalizeVersion, isValidVersion,
+    extractVersionFromAssetList, fetchText}` → `scripts/src/prepare/versions.ts` 同名函数；
+    `scripts/manifest.ts` 复用版本提取和文本请求实现。
+  - `ref/scripts/src/prepare/binaries.ts::createBinaryResolvers` 及 Clash Premium、Mihomo、
+    Mihomo Alpha、Clash-rs、Clash-rs Alpha resolver → `scripts/src/prepare/binaries.ts` 同名
+    factory 和 resolver。保留 Chimera Client、Chimera Client Alpha、Chimera Service 扩展；
+    Alpha Client 的刷新继续调用 Chimera manifest resolver，Service 版本继续来自本地 Cargo manifest。
+    Mihomo Alpha 元数据请求异常时回退到版本 manifest；版本变化时通过 sidecar 版本戳使旧缓存失效。
+  - `ref/scripts/src/prepare/check.ts` 的 core task 注册和
+    `ref/backend/tauri/tauri.conf.json::bundle.externalBin` → 当前 `scripts/check.ts` 的
+    task 注册及 `backend/tauri/tauri.conf.json::bundle.externalBin`。本批让 Clash Premium 和
+    Mihomo Alpha sidecar 同时进入准备与 Tauri 打包清单，避免仅能解析却未随应用分发。
+- 保留差异与收敛状态：部分迁移。`scripts/check.ts` 仍负责网络下载、校验和、解压、原子安装、
+  Wintun/MMDB/GeoIP 准备、进度显示及重试任务；整体迁移到 ref 的 `download.ts`、`resources.ts`
+  和 `check.ts` 留待后续批次。ref 支持 Meow；Chimera 的应用配置和 IPC core 合同没有 Meow 变体，
+  service endpoint 也拒绝该类型（底层 metadata 仍保留枚举），因此不注册 Meow sidecar。现有十种
+  manifest 架构映射和 Chimera Service/Client 资产命名保留。
+- 变更接口：新增内部 `createBinaryResolvers(BinaryResolverOptions)` factory；新增平台与版本 helper
+  模块；`scripts/check.ts` 通过 factory 解析现有及补齐的 sidecar；Tauri bundle 增加 `clash` 和
+  `mihomo-alpha` external binaries。无应用 IPC、前端 API、持久化或用户配置接口变化。
+- 风险：L2（sidecar 下载、二进制分发及运行时 core 资源）。首轮独立审查发现 Alpha 缓存失效和
+  元数据网络异常回退两项阻断问题；已增加版本戳校验与 pinned-manifest 回退及回归测试。修正后的独立复审已完成，
+  无代码阻断项；审查建议同步修正本记录的测试数量与复审状态，现已更新。用户要求在远端 CI 运行期间继续独立批次；
+  本批可在本地验收与独立复核完成后并行推送，但必须等本批自己的必需检查与审查通过后才能合并。
+- 验收条件：十种架构均得到对应资产映射；Alpha 版本解析可刷新，元数据不可用时能回退且缓存按版本失效；
+  Service 版本、归档名和 SHA-256 清单 URL 由本地 crate 版本推导；当前支持的 core sidecar 已注册准备任务并列入 bundle；Deno
+  锁定测试、类型检查、lint、格式和差异检查通过；独立审查无阻塞项；推送该批 SHA 后所需 CI 与
+  桌面 E2E 成功，失败则在同一分支修复并以新 SHA 重验。
+- 验证计划与限制：`pnpm test:manifest`、带仓库 Deno 配置的冻结锁测试、`deno check`、
+  `pnpm typecheck`、`pnpm lint:oxlint`、Prettier、`git diff --check`；推送后依赖 CI 的各平台
+  lint/build 和 Tauri Desktop E2E 检查 sidecar 下载与打包。未在本机运行会下载并替换忽略 sidecar
+  文件的 `pnpm prepare:check`，也未声称其本地通过。
+- 回滚：在本批 feature 分支撤销上述解析器、task 注册、externalBin、测试入口/锁和本条记录；
+  不需数据迁移或用户状态恢复。
+- 当前证据：`pnpm test:manifest` 为 17 passed、0 failed；`deno check --frozen --config
+  scripts/deno.jsonc scripts/check.ts scripts/manifest.ts scripts/src/prepare/binaries.ts
+  scripts/src/prepare/platform.ts scripts/src/prepare/versions.ts`、
+  `pnpm typecheck`、`pnpm lint:oxlint`、Prettier 与 `git diff --check` 通过。测试入口固定使用
+  `scripts/deno.lock`，并将测试使用的 `@std/assert` 版本写入该锁，防止在仓库根目录生成额外锁文件。
+  独立审查已完成、无阻断项。曾实际运行 `pnpm prepare:check --arch arm64 --sidecar-host aarch64-apple-darwin`，
+  但下载反复重试且无进度后中断；随后对 Clash Premium、Mihomo Alpha 与 Chimera Client Alpha 的 GitHub 元数据/资产 URL
+  执行请求均在 12 秒超时，故本地实际下载与安装未验证，不能记为通过。该批仍为部分迁移；推送后需记录该 SHA 的
+  CI/E2E 结果，远端未通过前不得合并。

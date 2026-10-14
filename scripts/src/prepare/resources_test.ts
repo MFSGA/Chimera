@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { resolveSidecar } from './resources.ts';
+import {
+  isSidecarCacheValid,
+  isVersionManagedTarget,
+  resolveSidecar,
+} from './resources.ts';
 import type { BinInfo } from './types.ts';
 
 function info(overrides: Partial<BinInfo> = {}): BinInfo {
@@ -13,6 +17,36 @@ function info(overrides: Partial<BinInfo> = {}): BinInfo {
     ...overrides,
   };
 }
+
+Deno.test(
+  'a Mihomo Alpha cache is invalidated when its version changes',
+  () => {
+    assert.equal(isVersionManagedTarget('mihomo-alpha'), true);
+    assert.equal(
+      isSidecarCacheValid(
+        'mihomo-alpha',
+        true,
+        'alpha-1234567',
+        'alpha-7654321',
+      ),
+      false,
+    );
+    assert.equal(
+      isSidecarCacheValid(
+        'mihomo-alpha',
+        true,
+        'alpha-7654321',
+        'alpha-7654321',
+      ),
+      true,
+    );
+    assert.equal(
+      isSidecarCacheValid('mihomo-alpha', true, null, 'alpha-7654321'),
+      false,
+    );
+    assert.equal(isSidecarCacheValid('mihomo', true, null, 'v1.19.32'), true);
+  },
+);
 
 Deno.test(
   'resolveSidecar retries once with refreshed release metadata',

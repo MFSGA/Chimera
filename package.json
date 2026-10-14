@@ -40,7 +40,7 @@
     "test:changed-parts": "deno test --frozen --config scripts/deno.jsonc scripts/src/ci/changed-parts_test.ts",
     "test:agent:intent": "tsx --test frontend/chimera/src/features/agent/model/intent-routing.test.ts frontend/chimera/src/features/agent/model/intent-resolution.test.ts",
     "test:profiles:query": "tsx --test frontend/interface/tests/profile-content-query.test.ts",
-    "test:manifest": "deno test scripts/github-api_test.ts scripts/src/prepare/binaries_test.ts scripts/src/prepare/resources_test.ts",
+    "test:manifest": "deno test --frozen --config scripts/deno.jsonc scripts/github-api_test.ts scripts/src/prepare/binaries_test.ts scripts/src/prepare/platform_test.ts scripts/src/prepare/resources_test.ts scripts/src/prepare/versions_test.ts",
     "test:updater-manifest": "tsx --test scripts/updater-manifest.test.ts",
     "publish": "tsx scripts/publish.ts",
     "dev:diff": "run-p -r web:devtools tauri:diff",

@@ -1,5 +1,21 @@
 import type { BinInfo } from './types.ts';
 
+export function isVersionManagedTarget(name: string): boolean {
+  return ['chimera-service', 'chimera-client-alpha', 'mihomo-alpha'].includes(
+    name,
+  );
+}
+
+export function isSidecarCacheValid(
+  name: string,
+  targetExists: boolean,
+  versionStamp: string | null,
+  version?: string,
+): boolean {
+  if (!targetExists) return false;
+  return !isVersionManagedTarget(name) || versionStamp === version;
+}
+
 export async function resolveSidecar<T>(
   binInfo: BinInfo | Promise<BinInfo>,
   materialize: (binInfo: BinInfo) => Promise<T>,

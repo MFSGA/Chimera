@@ -5,63 +5,30 @@ import * as path from 'jsr:@std/path';
 import AdmZip from 'npm:adm-zip@0.6.1';
 import { colorize, consola } from './deno/utils/logger.ts';
 import { verifyAndInstallSidecar } from './deno/utils/sidecar-integrity.ts';
-import { getChimeraClientAlphaInfo as createChimeraClientAlphaInfo } from './src/prepare/binaries.ts';
-import { resolveSidecar as resolveSidecarWithRefresh } from './src/prepare/resources.ts';
+import { createBinaryResolvers } from './src/prepare/binaries.ts';
+import { normalizeArch, normalizePlatform } from './src/prepare/platform.ts';
+import {
+  isSidecarCacheValid,
+  isVersionManagedTarget,
+  resolveSidecar as resolveSidecarWithRefresh,
+} from './src/prepare/resources.ts';
 import type {
-  ArchMapping,
   BinInfo,
-  SupportedArch,
+  DownloadProgress,
+  DownloadResult,
+  ResolveInfo,
+  ResolveOptions,
+  TaskDetail,
   VersionManifest,
 } from './src/prepare/types.ts';
+import { normalizeVersion } from './src/prepare/versions.ts';
 
 // === Types ===
-
-interface ClashManifest {
-  URL_PREFIX: string;
-  BACKUP_URL_PREFIX?: string;
-  BACKUP_LATEST_DATE?: string;
-  VERSION?: string;
-  ARCH_MAPPING: ArchMapping;
-}
 
 interface CheckArgs {
   force?: boolean;
   arch?: string;
   'sidecar-host'?: string;
-}
-
-interface ResolveInfo {
-  file: string;
-  version?: string;
-  size?: number;
-  speed?: number;
-  cached: boolean;
-}
-
-interface TaskDetail {
-  version?: string;
-  size?: string;
-  speed?: string;
-  cached?: boolean;
-  file?: string;
-  note?: string;
-}
-
-interface DownloadProgress {
-  downloaded: number;
-  total?: number;
-  speed?: number;
-  version?: string;
-}
-
-interface DownloadResult {
-  size: number;
-  speed?: number;
-}
-
-interface ResolveOptions {
-  force?: boolean;
-  onProgress?: (progress: DownloadProgress) => void;
 }
 
 // === Constants ===
@@ -125,12 +92,6 @@ async function writeAll(file: Deno.FsFile, bytes: Uint8Array): Promise<void> {
   }
 }
 
-function normalizeVersion(version?: string): string | undefined {
-  if (!version) return undefined;
-  if (version === 'Not Found') return undefined;
-  return version;
-}
-
 function formatResolveInfo(info: ResolveInfo): TaskDetail {
   return {
     version: normalizeVersion(info.version),
@@ -145,16 +106,11 @@ function formatResolveInfo(info: ResolveInfo): TaskDetail {
 
 // Deno.build.os: 'windows' | 'darwin' | 'linux' | ...
 // Map to Node-style for arch table compatibility
-const platform = Deno.build.os === 'windows' ? 'win32' : Deno.build.os;
+const platform = normalizePlatform(Deno.build.os);
 
 // Deno.build.arch: 'x86_64' | 'aarch64'
 // Map to Node-style for arch table compatibility
-const DENO_ARCH_TO_NODE: Record<string, string> = {
-  x86_64: 'x64',
-  aarch64: 'arm64',
-};
-const arch =
-  ARCH_OVERRIDE ?? DENO_ARCH_TO_NODE[Deno.build.arch] ?? Deno.build.arch;
+const arch = ARCH_OVERRIDE ?? normalizeArch(Deno.build.arch);
 
 // === Sidecar Host ===
 
@@ -175,56 +131,20 @@ debugLog(colorize`sidecar-host {yellow ${SIDECAR_HOST}}`);
 debugLog(colorize`platform {yellow ${platform}}`);
 debugLog(colorize`arch {yellow ${arch}}`);
 
-// === Arch Mapping ===
-
-function mapArch(platform: string, arch: string): SupportedArch {
-  const mapping: Partial<Record<string, SupportedArch>> = {
-    'darwin-x64': 'darwin-x64',
-    'darwin-arm64': 'darwin-arm64',
-    'win32-ia32': 'windows-i386',
-    'win32-x64': 'windows-x86_64',
-    'win32-arm64': 'windows-arm64',
-    'linux-x64': 'linux-amd64',
-    'linux-ia32': 'linux-i386',
-    'linux-arm': 'linux-armv7hf',
-    'linux-arm64': 'linux-aarch64',
-    'linux-armel': 'linux-armv7',
-  };
-  const result = mapping[`${platform}-${arch}`];
-  if (!result) {
-    throw new Error(`Unsupported platform/architecture: ${platform}-${arch}`);
-  }
-  return result;
-}
-
 // === Version Manifest ===
 
 const versionManifest = JSON.parse(
   await Deno.readTextFile(path.join(WORKSPACE_ROOT, 'manifest/version.json')),
 ) as VersionManifest;
 
-const CLASH_META_MANIFEST: ClashManifest = {
-  URL_PREFIX: `https://github.com/MetaCubeX/mihomo/releases/download/${versionManifest.latest.mihomo}`,
-  VERSION: versionManifest.latest.mihomo,
-  ARCH_MAPPING: versionManifest.arch_template.mihomo as ArchMapping,
-};
-
-const CLASH_RS_MANIFEST: ClashManifest = {
-  URL_PREFIX: 'https://github.com/ibigbug/clash-rs/releases/download/',
-  VERSION: versionManifest.latest.clash_rs,
-  ARCH_MAPPING: versionManifest.arch_template.clash_rs as ArchMapping,
-};
-
-const CLASH_RS_ALPHA_MANIFEST: ClashManifest = {
-  URL_PREFIX: 'https://github.com/ibigbug/clash-rs/releases/download/latest',
-  ARCH_MAPPING: versionManifest.arch_template.clash_rs_alpha as ArchMapping,
-};
-
-const CHIMERA_CLIENT_MANIFEST: ClashManifest = {
-  URL_PREFIX: 'https://github.com/MFSGA/Chimera_Client/releases/download/',
-  VERSION: versionManifest.latest.chimera_client,
-  ARCH_MAPPING: versionManifest.arch_template.chimera_client as ArchMapping,
-};
+const binaryResolvers = createBinaryResolvers({
+  versionManifest,
+  sidecarHost: SIDECAR_HOST,
+  platform,
+  arch,
+  workspaceRoot: WORKSPACE_ROOT,
+  debugLog: (message) => debugLog(message),
+});
 
 // === Download ===
 
@@ -419,12 +339,13 @@ async function materializeSidecar(
   // Mutable alpha releases and chimera-service targets are trusted only
   // alongside a matching version stamp, so updated release contents replace
   // stale cached binaries even when the target filename remains unchanged.
-  const versionManagedTarget =
-    name === 'chimera-service' || name === 'chimera-client-alpha';
-  const cachedTargetIsValid = versionManagedTarget
-    ? (await exists(sidecarPath)) &&
-      (await readVersionStamp(versionStampPath)) === version
-    : await exists(sidecarPath);
+  const versionManagedTarget = isVersionManagedTarget(name);
+  const cachedTargetIsValid = isSidecarCacheValid(
+    name,
+    await exists(sidecarPath),
+    versionManagedTarget ? await readVersionStamp(versionStampPath) : null,
+    version,
+  );
 
   if (!options?.force && cachedTargetIsValid) {
     return {
@@ -507,124 +428,6 @@ async function materializeSidecar(
       // ignore temporary download cleanup failures
     }
   }
-}
-
-// === Binary Info Functions ===
-
-function getClashMetaInfo(): BinInfo {
-  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CLASH_META_MANIFEST;
-  const archLabel = mapArch(platform, arch);
-  const name = ARCH_MAPPING[archLabel].replace('{}', VERSION!);
-  const isWin = platform === 'win32';
-  return {
-    name: 'mihomo',
-    version: VERSION,
-    targetFile: `mihomo-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile: `${name}${isWin ? '.exe' : ''}`,
-    tmpFile: name,
-    downloadURL: `${URL_PREFIX}/${name}`,
-  };
-}
-
-function getClashRustInfo(): BinInfo {
-  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CLASH_RS_MANIFEST;
-  const archLabel = mapArch(platform, arch);
-  const name = ARCH_MAPPING[archLabel].replace('{}', VERSION!);
-  const isWin = platform === 'win32';
-  return {
-    name: 'clash-rs',
-    version: VERSION,
-    targetFile: `clash-rs-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile: name,
-    tmpFile: name,
-    downloadURL: `${URL_PREFIX}${VERSION}/${name}`,
-  };
-}
-
-async function getClashRustAlphaInfo(): Promise<BinInfo> {
-  const { ARCH_MAPPING, URL_PREFIX } = CLASH_RS_ALPHA_MANIFEST;
-  const version = versionManifest.latest.clash_rs_alpha;
-
-  debugLog(`clash-rs-alpha version: ${version}`);
-  const archLabel = mapArch(platform, arch);
-  const name = ARCH_MAPPING[archLabel].replace('{}', version);
-  const isWin = platform === 'win32';
-  return {
-    name: 'clash-rs-alpha',
-    version,
-    targetFile: `clash-rs-alpha-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile: name,
-    tmpFile: name,
-    downloadURL: `${URL_PREFIX}/${name}`,
-  };
-}
-
-function getChimeraClientInfo(): BinInfo {
-  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_MANIFEST;
-  const archLabel = mapArch(platform, arch);
-  const assetTemplate = ARCH_MAPPING[archLabel];
-  const assetVersion = VERSION!.replace(/^v/, '');
-  const name = assetTemplate.replace('{}', assetVersion);
-  const isWin = platform === 'win32';
-  const exeFile = archLabel.startsWith('darwin-')
-    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
-    : name;
-  const downloadURL = `${URL_PREFIX}${VERSION!.startsWith('v') ? VERSION : `v${VERSION}`}/${name}`;
-  return {
-    name: 'chimera-client',
-    version: VERSION,
-    targetFile: `chimera-client-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile,
-    tmpFile: name,
-    downloadURL,
-  };
-}
-
-function getChimeraClientAlphaInfo(): BinInfo {
-  return createChimeraClientAlphaInfo({
-    versionManifest,
-    platform,
-    arch: mapArch(platform, arch),
-    sidecarHost: SIDECAR_HOST!,
-  });
-}
-
-// The sidecar version follows the `chimera-service` crate in the local
-// `chimera-runtime` submodule, whose releases are tagged `v<crate version>`.
-const CHIMERA_SERVICE_MANIFEST = path.join(
-  WORKSPACE_ROOT,
-  'backend/chimera-runtime/chimera_service/Cargo.toml',
-);
-
-async function getChimeraServiceVersion(): Promise<string> {
-  const manifest = await Deno.readTextFile(CHIMERA_SERVICE_MANIFEST);
-  const match = manifest.match(/^\[package\][^[]*?^version\s*=\s*"([^"]+)"/ms);
-  if (!match) {
-    throw new Error(
-      `failed to parse chimera-service version from ${CHIMERA_SERVICE_MANIFEST}`,
-    );
-  }
-  return `v${match[1]}`;
-}
-
-async function getChimeraServiceInfo(): Promise<BinInfo> {
-  const serviceRepo = 'MFSGA/Chimera_Service';
-  const isWin = SIDECAR_HOST!.includes('windows');
-  const urlExt = isWin ? 'zip' : 'tar.gz';
-
-  const version = await getChimeraServiceVersion();
-  debugLog(`chimera-service version: ${version}`);
-
-  const name = 'chimera-service';
-  return {
-    name,
-    version,
-    targetFile: `${name}-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile: `${name}${isWin ? '.exe' : ''}`,
-    tmpFile: `${name}-${version}-${SIDECAR_HOST}.${urlExt}`,
-    downloadURL: `https://github.com/${serviceRepo}/releases/download/${version}/${name}-${SIDECAR_HOST}.${urlExt}`,
-    checksumURL: `https://github.com/${serviceRepo}/releases/download/${version}/${name}-${SIDECAR_HOST}.${urlExt}.sha256`,
-  };
 }
 
 async function resolveWintun(
@@ -878,43 +681,71 @@ const tasks: Array<{
   winOnly?: boolean;
 }> = [
   {
+    name: 'clash',
+    version: versionManifest.latest.clash_premium,
+    func: (onProgress) =>
+      resolveSidecar(binaryResolvers.clash(), { force: FORCE, onProgress }),
+    retry: 5,
+  },
+  {
     name: 'mihomo',
     version: versionManifest.latest.mihomo,
     func: (onProgress) =>
-      resolveSidecar(getClashMetaInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.mihomo(), { force: FORCE, onProgress }),
+    retry: 5,
+  },
+  {
+    name: 'mihomo-alpha',
+    func: (onProgress) =>
+      resolveSidecar(binaryResolvers.mihomoAlpha(), {
+        force: FORCE,
+        onProgress,
+      }),
     retry: 5,
   },
   {
     name: 'clash-rs',
     version: versionManifest.latest.clash_rs,
     func: (onProgress) =>
-      resolveSidecar(getClashRustInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.clashRs(), { force: FORCE, onProgress }),
     retry: 5,
   },
   {
     name: 'chimera-client',
     version: versionManifest.latest.chimera_client,
     func: (onProgress) =>
-      resolveSidecar(getChimeraClientInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.chimeraClient(), {
+        force: FORCE,
+        onProgress,
+      }),
     retry: 5,
   },
   {
     name: 'clash-rs-alpha',
     func: (onProgress) =>
-      resolveSidecar(getClashRustAlphaInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.clashRsAlpha(), {
+        force: FORCE,
+        onProgress,
+      }),
     retry: 5,
   },
   {
     name: 'chimera-client-alpha',
     version: versionManifest.latest.chimera_client_alpha,
     func: (onProgress) =>
-      resolveSidecar(getChimeraClientAlphaInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.chimeraClientAlpha(), {
+        force: FORCE,
+        onProgress,
+      }),
     retry: 5,
   },
   {
     name: 'chimera-service',
     func: (onProgress) =>
-      resolveSidecar(getChimeraServiceInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(binaryResolvers.chimeraService(), {
+        force: FORCE,
+        onProgress,
+      }),
     retry: 5,
   },
   {
