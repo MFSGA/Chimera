@@ -48,6 +48,8 @@ async function waitForWindowClosed(label: string): Promise<void> {
 }
 
 describe('custom CSS editor parity', () => {
+  // IPC prepares the singleton editor; the user-facing Cancel control must
+  // close it. Accept the driver's close race only after its window handle is gone.
   it('opens the ref-compatible singleton CSS editor route and closes cleanly', async () => {
     await waitForApp();
     const sourceWindow = (await browser.getWindowHandles()).includes('legacy')
@@ -92,7 +94,22 @@ describe('custom CSS editor parity', () => {
       assert.equal(footerButtons.length, 4);
       const cancel = footerButtons[1];
       await cancel.waitForClickable({ timeout: 15_000 });
-      await cancel.click();
+      try {
+        await cancel.click();
+      } catch (cause) {
+        const handles = await browser.getWindowHandles();
+        const message = cause instanceof Error ? cause.message : String(cause);
+        const closeRace =
+          /no window could be found when running "element\/[^\"]+\/click"/i.test(
+            message,
+          );
+        if (!closeRace || handles.includes('editor-css')) {
+          throw new Error(
+            `The CSS editor Cancel click failed before the window closed: ${message}`,
+            { cause },
+          );
+        }
+      }
       await waitForWindowClosed('editor-css');
     } finally {
       const handles = await browser.getWindowHandles();

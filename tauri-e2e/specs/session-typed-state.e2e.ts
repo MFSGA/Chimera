@@ -108,6 +108,22 @@ async function saveCurrentWindowState(label: string): Promise<void> {
   await invoke<null>('save_window_size_state', { label });
 }
 
+async function closeMainWindowAfterPersistingState(): Promise<void> {
+  if (process.platform === 'darwin') {
+    // macOS close controls are native titlebar chrome outside the WebView.
+    // Persist explicitly, then destroy the window through the embedded driver
+    // so this branch verifies restoration without claiming native-click coverage.
+    await saveCurrentWindowState('main');
+    await browser.closeWindow();
+  } else {
+    const closeButton = await $('[data-slot="window-control-close-button"]');
+    await closeButton.waitForClickable({ timeout: 15_000 });
+    await closeButton.click();
+  }
+
+  await waitForWindowClosed('main');
+}
+
 async function waitForWindow(label: string): Promise<void> {
   await browser.waitUntil(
     async () => (await browser.getWindowHandles()).includes(label),
@@ -254,10 +270,7 @@ describe('typed session/window state ownership', () => {
         secondGeometry.width,
         secondGeometry.height,
       );
-      const closeButton = await $('[data-slot="window-control-close-button"]');
-      await closeButton.waitForClickable({ timeout: 15_000 });
-      await closeButton.click();
-      await waitForWindowClosed('main');
+      await closeMainWindowAfterPersistingState();
       await browser.switchToWindow('legacy');
 
       const secondPersisted = await waitForMirroredState(

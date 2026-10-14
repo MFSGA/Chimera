@@ -1,37 +1,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/clash';
-
-async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
-  );
-}
-
-async function openMainWindow() {
-  await invoke('create_main_window');
-  await browser.waitUntil(
-    async () => (await browser.getWindowHandles()).includes('main'),
-    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
-  );
-  await browser.switchToWindow('main');
-}
 
 describe('main clash settings reference layout', () => {
   it('uses the ref card hierarchy and excludes the system-only UWP tool', async () => {
@@ -39,21 +11,13 @@ describe('main clash settings reference layout', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
-    await openMainWindow();
+    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
 
-    await browser.execute((target) => {
-      history.pushState({}, '', target);
-      window.dispatchEvent(new PopStateEvent('popstate'));
-    }, targetPath);
-    await browser.waitUntil(
-      async () =>
-        browser.execute((target) => location.pathname === target, targetPath),
-      { timeout: 15_000, timeoutMsg: 'Clash settings route did not open.' },
+    const patchGroup = await $(
+      '[data-slot="patch-settings-container"] > [data-slot="settings-group"]',
     );
-
-    const patch = await $('[data-slot="patch-settings-container"]');
-    await patch.waitForDisplayed({ timeout: 15_000 });
+    await patchGroup.waitForDisplayed({ timeout: 15_000 });
 
     const state = await browser.execute(() => {
       const patchGroup = document.querySelector(
