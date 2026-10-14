@@ -13,8 +13,8 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a
-verified:   2026-10-13 fetched and fast-forwarded from origin/main
+commit:     813673a8e84b51265467f02277fc7e739837f61e
+verified:   2026-10-14 fetched and fast-forwarded from origin/main
 ```
 
 每个迁移切片开始前执行：

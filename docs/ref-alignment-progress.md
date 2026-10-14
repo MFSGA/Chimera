@@ -1261,3 +1261,127 @@ DIFF-001 至 DIFF-012 是此前基于
   Tauri E2E 不受此改动影响。
 - 收敛条件：当 Chimera 迁移到与 ref 相同的持久化 job scheduler 时，重看首次 tick 的注册时刻与 catch-up 语义；保留
   “deadline 不依赖 task 首次 poll 时刻”的确定性要求。
+
+## DIFF-049：滚动 Chimera Client Alpha 资产失败后刷新
+
+- ref 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，与远端 `main` 一致，工作树干净。该提交相对原分析基线 `67999753918c7b9879ddd2bacdef74246bfef1dd` 未改变本条映射的 `scripts/src/prepare` 文件。
+- ref 到 Chimera 映射：ref `scripts/src/prepare/types.ts::BinInfo.refresh`、
+  `scripts/src/prepare/binaries.ts::getClashMetaAlphaInfo` / `getMeowAlphaInfo` 和
+  `scripts/src/prepare/resources.ts::resolveSidecar`；Chimera 对应新增的
+  `scripts/src/prepare/{types,binaries,resources}.ts` 中 `BinInfo.refresh`、
+  `getChimeraClientAlphaInfo` 与 `resolveSidecar`。
+- 实际入口：`package.json::prepare:check` 调用 `scripts/check.ts`；Alpha task
+  仍通过 `materializeSidecar` 和 `verifyAndInstallSidecar` 安装。当前 Alpha
+  `BinInfo` 没有提供 `checksumURL`，因此这条路径不做 SHA-256 比较；它继续使用
+  现有的文件暂存、可执行权限设置、原子替换与版本戳更新。
+  为保持 Chimera 当前 Deno 准备器与安装边界，本批把 ref 的刷新重试抽到对齐
+  目录；实际暂存、可选校验和原子替换仍由 `scripts/check.ts` 承担。未修改没有
+  被 `prepare:check` 调用的旧 `scripts/utils/resource.ts`。
+- 问题与修正：Chimera Client Alpha 使用滚动 `latest` release；macOS 资产文件名
+  带稳定版本号。当 manifest 更新落后于 release 且旧资产已不可用时，首次下载
+  失败会触发 `resolveChimeraClientAlpha`（与 manifest 生成共用同一 resolver）
+  重新解析版本及架构映射，再按 ref 行为重试一次。刷新元数据失败时保留首次
+  下载错误；重试安装失败则报告重试错误，外层原有 task retry 不变。当前 release
+  资产列表确有版本化 macOS tarball；证据：[latest release assets](https://github.com/MFSGA/Chimera_Client/releases/expanded_assets/latest)。
+- 保留差异与边界：只给 Chimera Client Alpha 增加刷新，未支持的 Meow 不迁入；
+  Clash-rs Alpha 使用无版本号文件名，因此无需此映射。与 ref 相同，只有首次
+  materialization 失败才刷新；命中版本戳有效的缓存时仍遵从现有缓存语义，直到
+  manifest 更新使版本戳失效。
+- 影响入口：打包/开发前的共享 sidecar 准备；不改变 main UI、legacy UI、Agent
+  的 API，配置持久化、Core/Service 协议和宿主网络均不受影响。下载及安装仍复用
+  现有临时目录、版本戳和原子替换逻辑；Alpha 资产当前没有 SHA-256 校验。
+- 验证：`pnpm test:manifest` 为 5 passed，其中新增测试模拟旧滚动资产失败，
+  验证同一调用链刷新为新 Alpha 版本并重试；`deno check --frozen --config
+  scripts/deno.jsonc scripts/check.ts`、`pnpm typecheck`、`pnpm lint:oxlint`、
+  Prettier 和 `git diff --check` 通过。未在本机运行 `pnpm prepare:check`，因为它会
+  下载并替换工作区 sidecar；本批完整准备/打包路径由变更后的远程 CI 执行。没有
+  本机 macOS Tauri 桌面 E2E 或真实 Alpha 核心运行验证。
+- 收敛条件：本地准备器整体迁移到 ref 的 `scripts/src/prepare/check.ts` 后，移除
+  `scripts/check.ts` 的委托桥接；若要在 manifest 日更窗口内自动淘汰已缓存的
+  旧 Alpha，还需单独评估每次准备时在线解析版本的成本和离线回退策略。
+
+## DIFF-051：修正 epoch PID 文件检查与读取之间的删除竞态
+
+- 问题与证据：PR #479 的 macOS CI job `115762372590` 在
+  `process_pid_file::residual_process_is_killed_before_spawn` 第二次 `spawn().unwrap()` 处报告 OS
+  `NotFound`，日志没有指出产生错误的具体系统调用。`read_epoch_pid_file` 先 `symlink_metadata`、后
+  `read_to_string`，而上一轮进程清理可并发移除同一记录；检查后读取前的删除竞态是与日志现象一致的候选根因。
+- ref 映射与保留差异：ref `backend/nyanpasu-runtime/crates/nyanpasu-utils/src/process/pid_file.rs::read_epoch_pid_file`
+  （runtime SHA `e9f44e68b0c88981160f5b986f7ffcc9fb5b20a7`）也有相同顺序。Chimera 在对应的
+  `backend/chimera-utils/src/process/pid_file.rs::read_epoch_pid_file` 仅将读取阶段的 `NotFound` 处理为
+  `Ok(None)`；符号链接/普通文件检查仍保留，其他 I/O 错误仍向上传播。该最小修正不改变 PID 身份校验、终止授权或记录格式，
+  不复制 ref 中已观察到的竞态缺陷。CI 没有 syscall 级证据确认此次失败源自该读取窗口，因此该根因仍待新 SHA 远端复验。
+- 验证：旧 PR SHA 的 macOS CI 为 11 passed、1 failed；修正后本地 macOS `process_pid_file` 集成目标
+  12/12 通过，`rustfmt --check backend/chimera-utils/src/process/pid_file.rs` 通过。新 SHA 的 macOS CI 与
+  Desktop E2E 尚待远端复验；新 SHA 用于验证修复效果，旧失败的具体 syscall 根因仍是与现有证据一致的候选判断。
+- 关联记录：[LESSON-20261014-001](../LESSONS.md#lesson-20261014-001-epoch-pid-记录可能在检查后读取前被并发清理)。
+- 回滚：还原读取错误分支即可；无用户数据迁移或宿主状态变更。
+
+## DIFF-052：滚动 Chimera Client Alpha 发布期间有限重试
+
+- ref 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，工作树干净；对应的
+  `scripts/src/prepare/resources.ts::resolveSidecar` 在刷新失败时只尝试一次，本批保留其初次下载、刷新、再安装的调用顺序。
+- Chimera 映射：`scripts/check.ts::tasks` 的 `chimera-client-alpha` task →
+  `getChimeraClientAlphaInfo` → `scripts/src/prepare/resources.ts::resolveSidecar` →
+  `materializeSidecar`。仅 Alpha task 提供 `SidecarRefreshRetryPolicy`；其他 sidecar 沿用原路径。
+- 证据与原因：PR #479 macOS job
+  [115791449079](https://github.com/MFSGA/Chimera/actions/runs/38544336079/job/115791449079)
+  在资源准备阶段因已失效的 `0.26.3` Alpha 资产 URL 返回 404 而失败；task 在无等待的五次总尝试（含初次）内没有恢复机会。只读检查
+  `MFSGA/Chimera_Client/.github/workflows/ci.yml` 发现 master nightly 发布会先删除滚动 `latest` release/tag，再上传
+  新资产并发布替代 release；因此当前元数据或资产暂时 404 是已证实存在的发布窗口。CI 日志证明旧资产不可用，发布工作流
+  证明窗口存在；日志没有 syscall 式证据证明此次 404 与窗口精确重叠，二者关系按候选根因记录。
+- 修正：当 Alpha 初次下载后刷新元数据或新资产仍返回 404 时，按 1、2、4、8 秒间隔重新解析滚动 release 并尝试安装；
+  每次 sidecar resolve 最多额外四轮，累计等待上限 15 秒。外层原有 task retry 仍为五次，因此持续 404 时整体准备过程最多可累计
+  75 秒的新增等待。非 404 错误不进入该重试；缓存、文件校验/安装边界及其他 core 的 task retry 不变。
+- 保留差异：ref 对 rolling asset 只刷新一次；此处的有限 404 重试是针对 Chimera Client `latest` 发布流程的本地恢复适配。
+  如果上游发布流程改为原子替换 release/tag，或 Alpha 资产改为不可变版本 URL，应重新评估并移除此差异。
+- 验证：用例模拟旧 Alpha 资产 404、latest tag 查询暂时 404、恢复后新资产再短暂 404；另有用例验证 404 重试预算耗尽时抛出
+  最后一次错误，以及 503 不进入延迟重试。`pnpm test:manifest` 为 8 passed；`deno check --frozen --config
+  scripts/deno.jsonc scripts/check.ts`、`pnpm lint:oxlint`、Prettier 和 `git diff --check` 通过。`pnpm prepare:check`
+  在本机实际完成，旧 manifest 中的 `0.26.3` Alpha URL 刷新到 `0.27.0-alpha+sha.47d6954` 并安装成功；其他 sidecar 均命中缓存。
+  全工作区 `pnpm typecheck` 未通过，因为该隔离工作树缺少构建生成的 `frontend/chimera/src/paraglide` 模块，错误与本次脚本 diff 无关。
+  该 SHA 推送后仍需重新验证 PR required checks 与 Desktop E2E；尚未运行实际 macOS Tauri 打包。
+- 风险与回滚：L2（sidecar 依赖解析/打包）。回滚可移除 retry policy 与 `resolveSidecar` 的可选重试参数；没有用户数据、
+  宿主网络或持久配置变更。
+
+## DIFF-053：profile 变更后使代理快照缓存失效
+
+- 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，工作树干净；本批未修改 ref。
+- 映射：ref `frontend/query/src/ipc/use-profile.ts::useProfileMutations` 的成功回调只失效 profile query；
+  `frontend/query/src/provider/mutation-provider.tsx` 的 `profiles` key 列表也不包含 `getProxies`。ref 由
+  `backend/tauri/src/client/clash_api.rs::NyanpasuClient::{get_proxies,refresh_proxies}` 读取 actor-owned
+  `ProxiesClient` 快照，并以 API 实例身份和撤销状态维护其生命周期；同一实例的普通缓存为 3 秒，周期性强制刷新间隔为 10 秒。
+  Chimera 的本地扩展
+  `frontend/interface/src/provider/mutation-provider.tsx` 会在 profile mutation 后使 `CLASH_PROXIES_QUERY_KEY` 失效；
+  后端则通过 `backend/tauri/src/ipc.rs::get_proxies` 读取共享的 `core/clash/proxies.rs::ProxiesGuard`。
+- 问题证据：PR #479 旧 SHA `2188073f4ee0f749777e3a8c21e1c7aef54520c3` 的 Windows Desktop E2E 中，
+  `rules-main-proxy-icon.e2e.ts` 52 项有 1 项失败。页面已导航到新 profile，直接 runtime 查询也看到带 SVG 的新代理组，
+  但 30 秒后 UI 仍显示无图标 fallback。失败截图与完整用例见
+  [Windows Desktop E2E run](https://github.com/MFSGA/Chimera/actions/runs/38544336107)。
+- 原因与修正：Chimera profile mutation 会使前端代理 query 失效，但后端 `get_proxies` 在 3 秒缓存 TTL 内仍可返回旧快照；
+  该 IPC 刷新路径不广播 proxies mutation，因而旧结果可能保持在 UI query 中。`ChimeraClient::refresh_profiles`
+  现在先递增 `ProxiesGuard` generation、清除 checksum 并将 `updated_at` 置为过期，再发 profile mutation。缓存更新在提交前
+  对 generation 做核对：如果旧快照请求跨过了 profile 失效点，它会被丢弃；`get_proxies` 会重新取得 API 并重试。
+  后台刷新在解析 API 前捕获 generation；手动代理选择在 API 获取后、发出选择请求前重新校验 generation，并把同一 generation
+  传给后续缓存刷新。profile 在 API 获取期间发生变化时，选择会被拒绝。
+  如果 profile 在已发出的 HTTP 选择请求期间变化，请求本身仍可能作用于正在退出的 runtime（未实现 ref actor 的实例级撤销），
+  但后续快照刷新发现 generation 已失效时会返回错误；IPC 不报告成功，也不会继续发出代理变更事件或连接中断处理。
+  手动 profile mutation 与“无当前 profile 时自动激活”的完成路径都在发送事件前共用此函数。
+- 保留差异与接口：没有改变 IPC、前端 query key 或持久配置；`ProxiesGuard` 是 Chimera 迁移期缓存桥接。ref 的代理快照由
+  `ProxiesClient` actor 管理并绑定到可撤销的 API 实例；Chimera 当前仍使用全局 TTL guard，加 generation 栅栏保证失效后的
+  旧请求不能复活缓存。后续迁移到 ref 的代理客户端/刷新契约时，应移除该全局 TTL 缓存并由共享 client 管理快照和通知。
+  变更影响 profile 与代理刷新共享路径，属 L2。
+- 验证：旧 SHA 的 Windows 用例 1/52 失败；旧代码本机 macOS 定向 E2E 1/1 通过。初始 generation 修复的 Rust 定向测试为
+  3 passed。补上选择请求期间 profile 切换的错误返回后，第一次重跑因本机磁盘空间耗尽在链接前失败；清理当前工作树生成的 Cargo
+  构建缓存后，以 `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked --manifest-path
+  backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture` 重跑，最终代码 4 passed、0 failed。
+  `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo clippy --locked --manifest-path backend/Cargo.toml -p chimera --all-targets
+  --all-features`、`cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、`pnpm test:manifest`（8 passed）和
+  Deno check 通过；`pnpm exec prettier --check LESSONS.md docs/ref-alignment-progress.md` 与 `git diff --check` 通过。
+  用最新 e2e 构建运行本机 macOS WebKit 定向用例：第一次在
+  profile 创建前因主页面路由动画未稳定而失败；随后两个独立运行都通过 1/1，最后一次使用包含 generation 与选择预检的最终
+  e2e 构建。重试通过不等于首次运行通过，也不能替代 Windows 回归复验。完整工作区 `pnpm typecheck` 仍因隔离工作树缺少
+  生成的 Paraglide 文件而失败。新 SHA 的 Windows Desktop E2E
+  及 PR 必需检查仍须远端复验；当前未声称 CI 已通过。
+- 回滚：移除 `ProxiesGuard::invalidate` 和 `ChimeraClient::refresh_profiles` 包装，恢复各 profile mutation 直接发事件；
+  无迁移用户数据、宿主网络或系统服务状态。

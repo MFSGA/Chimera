@@ -764,17 +764,24 @@ pub async fn get_proxies(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::core::clash::proxies::Proxies> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
-    {
-        let guard = ProxiesGuard::global().read();
-        if guard.is_updated() {
-            return Ok(guard.inner().clone());
+
+    for _ in 0..3 {
+        let generation = {
+            let guard = ProxiesGuard::global().read();
+            if guard.is_updated() {
+                return Ok(guard.inner().clone());
+            }
+            guard.generation()
+        };
+        let api = client.clash_api_client().await?;
+        if ProxiesGuard::global()
+            .update_if_generation(&api, generation)
+            .await?
+        {
+            return Ok(ProxiesGuard::global().read().inner().clone());
         }
     }
-    let api = client.clash_api_client().await?;
-    match ProxiesGuard::global().update(&api).await {
-        Ok(_) => Ok(ProxiesGuard::global().read().inner().clone()),
-        Err(err) => Err(err.into()),
-    }
+    Err(anyhow!("proxy snapshot changed repeatedly while refreshing").into())
 }
 
 #[tauri::command]
@@ -786,9 +793,10 @@ pub async fn select_proxy(
 ) -> Result<()> {
     use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
     let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
+    let generation = ProxiesGuard::global().read().generation();
     let api = client.clash_api_client().await?;
     ProxiesGuard::global()
-        .select_proxy(&api, &group, &name)
+        .select_proxy(&api, generation, &group, &name)
         .await?;
     handle::Handle::mutate_proxies();
     let _ = crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(

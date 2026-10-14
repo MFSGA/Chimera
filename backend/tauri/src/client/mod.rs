@@ -404,6 +404,13 @@ impl ChimeraClient {
             .ok_or_else(|| anyhow!("typed ProfilesClient is not configured"))
     }
 
+    fn refresh_profiles(&self) {
+        crate::core::clash::proxies::ProxiesGuard::global()
+            .write()
+            .invalidate();
+        self.inner.ui_sink.refresh_profiles();
+    }
+
     async fn collect_post_commit_degradations(&self, report: &CommitReport) -> Vec<Degradation> {
         let mut degradations = report
             .degradations
@@ -453,7 +460,10 @@ impl ChimeraClient {
         };
         match profiles.set_current_if_none(uid).await {
             Ok(None) => MutationOutcome::from_parts((), Vec::new()),
-            Ok(Some(report)) => self.after_commit(&report).await,
+            Ok(Some(report)) => {
+                self.refresh_profiles();
+                self.after_commit(&report).await
+            }
             Err(error) => MutationOutcome::from_parts(
                 (),
                 vec![Self::auto_activation_failure_degradation(&error)],
@@ -483,7 +493,7 @@ impl ChimeraClient {
             .created
             .clone()
             .ok_or_else(|| anyhow!("profile add committed without a created uid"))?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(MutationOutcome::from_parts(
             created,
             self.collect_post_commit_degradations(&report).await,
@@ -540,7 +550,7 @@ impl ChimeraClient {
             .created
             .clone()
             .ok_or_else(|| anyhow!("profile import committed without a created uid"))?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         let outcome = MutationOutcome::from_parts(
             created.clone(),
             self.collect_post_commit_degradations(&report).await,
@@ -554,7 +564,7 @@ impl ChimeraClient {
         uid: ProfileId,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let report = self.profiles_client()?.delete(uid).await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -567,7 +577,7 @@ impl ChimeraClient {
             .profiles_client()?
             .reorder(ReorderOp::Move { active, over })
             .await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -579,7 +589,7 @@ impl ChimeraClient {
             .profiles_client()?
             .reorder(ReorderOp::ByList(list))
             .await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -589,7 +599,7 @@ impl ChimeraClient {
         patch: Option<RemoteProfileOptionsPatch>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let report = self.profiles_client()?.refresh(uid, patch).await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -599,7 +609,7 @@ impl ChimeraClient {
         patch: ProfileMetadataPatch,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let report = self.profiles_client()?.patch_metadata(uid, patch).await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -612,7 +622,7 @@ impl ChimeraClient {
             .profiles_client()?
             .patch_remote_options(uid, patch)
             .await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -632,7 +642,7 @@ impl ChimeraClient {
                 return Err(error.into());
             }
         };
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -641,7 +651,7 @@ impl ChimeraClient {
         uid: Option<ProfileId>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let report = self.profiles_client()?.set_current(uid).await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -656,7 +666,7 @@ impl ChimeraClient {
                 return Err(error.into());
             }
         };
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -665,7 +675,7 @@ impl ChimeraClient {
         fields: Vec<String>,
     ) -> anyhow::Result<MutationOutcome<()>> {
         let report = self.profiles_client()?.set_valid_fields(fields).await?;
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
@@ -681,7 +691,7 @@ impl ChimeraClient {
                 return Err(error.into());
             }
         };
-        self.inner.ui_sink.refresh_profiles();
+        self.refresh_profiles();
         Ok(self.after_commit(&report).await)
     }
 
