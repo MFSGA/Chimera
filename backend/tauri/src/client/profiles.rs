@@ -894,10 +894,15 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn import_suggestion_is_committed_and_reschedules_the_timer() {
         let fetch_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let scheduled_fetch = std::sync::Arc::new(tokio::sync::Notify::new());
         let mut fetcher = MockSubscriptionFetcher::new();
         let counter = std::sync::Arc::clone(&fetch_count);
+        let scheduled_notice = std::sync::Arc::clone(&scheduled_fetch);
         fetcher.expect_fetch().returning(move |_, _| {
             let call = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if call == 2 {
+                scheduled_notice.notify_one();
+            }
             Ok(FetchedSubscription {
                 content: "proxies: []\n".into(),
                 filename: None,
@@ -941,19 +946,33 @@ mod tests {
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         tokio::time::advance(std::time::Duration::from_secs(60 * 60 + 1)).await;
-        for _ in 0..200 {
-            let snapshot = client.snapshot();
-            let source = snapshot.items[&uid].definition.source().unwrap();
-            if matches!(
-                source,
-                ProfileSource::Remote { subscription, .. }
-                    if subscription.upload == Some(2)
-            ) {
-                break;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            scheduled_fetch.notified(),
+        )
+        .await
+        .expect("rescheduled refresh should reach the subscription fetcher");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                let snapshot = client.snapshot();
+                let source = snapshot.items[&uid].definition.source().unwrap();
+                if matches!(
+                    source,
+                    ProfileSource::Remote { subscription, .. }
+                        if subscription.upload == Some(2)
+                ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
-            tokio::task::yield_now().await;
-        }
-        assert!(fetch_count.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+        })
+        .await
+        .expect("scheduled refresh should commit its fetched subscription");
+        assert_eq!(
+            fetch_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the committed 60-minute interval should admit one scheduled refresh"
+        );
         let snapshot = client.snapshot();
         let source = snapshot.items[&uid].definition.source().unwrap();
         let ProfileSource::Remote {

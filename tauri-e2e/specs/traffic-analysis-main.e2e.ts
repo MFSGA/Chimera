@@ -51,9 +51,25 @@ describe('main traffic analysis', () => {
         timeoutMsg: 'Selecting Closed did not update the traffic URL.',
       },
     );
+    await browser.waitUntil(
+      async () => (await closedScope.getAttribute('aria-checked')) === 'true',
+      {
+        timeout: 10_000,
+        timeoutMsg: 'The Closed scope control did not settle after navigation.',
+      },
+    );
 
     const metricTrigger = await $('[data-slot="traffic-metric-trigger"]');
+    await metricTrigger.waitForClickable({ timeout: 10_000 });
     await metricTrigger.click();
+    await browser.waitUntil(
+      async () =>
+        (await metricTrigger.getAttribute('aria-expanded')) === 'true',
+      {
+        timeout: 10_000,
+        timeoutMsg: 'The traffic metric menu did not open after activation.',
+      },
+    );
     const connectionsMetric = await $(
       '[data-slot="traffic-metric-option"][data-value="connections"]',
     );

@@ -16,6 +16,7 @@
 | ------------------- | ---------- | ------------- | --------------------------------------------------------------------------------------------------------------- | ---- |
 | LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open |
 | LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open |
+| LESSON-20261014-003 | 2026-10-14 | Profile / E2E | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open |
 
 ## 单条模板
 
@@ -82,3 +83,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
   未声称 macOS 结果能代替 Windows。全工作区 typecheck 因隔离工作树缺少生成的 Paraglide 文件而失败。
 - 风险/回滚和清理证据（如涉及宿主状态）：L2，共享 profile/proxy 刷新时序。回滚为恢复 profile call sites 直接触发事件并移除缓存失效函数和对应测试；不触及持久化数据、宿主网络、TUN 或 Service 状态。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：现有 E2E 即为跨平台防复发用例；无治理门禁调整。
+
+### LESSON-20261014-003：异步 Profile 刷新与流量菜单测试必须等待状态收敛
+
+- 日期与时区：2026-10-14 UTC
+- 状态：Open（测试修复待 PR #481 新 SHA 的 CI/E2E 复验）
+- 严重度：Low
+- 模块：Profile / E2E / CI
+- PR head commit / ref gitlink SHA / 平台与测试环境：PR #481 初始 head `b9329eee6e6a20d64b960800c8a6cefa81439836`；ref `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；GitHub Actions Ubuntu Rust tests 与 Windows Edge hermetic suite
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #481](https://github.com/MFSGA/Chimera/pull/481)，[CI run 38592275892](https://github.com/MFSGA/Chimera/actions/runs/38592275892)，[Tauri E2E run 38592275993](https://github.com/MFSGA/Chimera/actions/runs/38592275993)。Ubuntu 在 551 passed 后，`client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer` 因 `fetch_count >= 2` 超时失败；Windows 52/53 specs 通过，`traffic-analysis-main.e2e.ts` 未观察到 Connections 菜单项，失败截图中的 metric trigger 仍为 `aria-expanded=false`。Profile transform-chain 用例在该 E2E run 中通过。
+- 预期行为：计划刷新到期后，测试等待 fetch 与提交后的 Profile snapshot；选择流量 scope 后等待控制状态更新，再打开 metric 菜单并选择指标。
+- 真实异常、复现步骤与证据：Linux 测试以 200 次 `yield_now` 轮询 actor snapshot，CI 失败时仍未观察到第二次 fetch。Windows 测试只等待 URL 中的 `scope=closed`，随即点击 metric trigger 并等待 Connections 项；归档 HTML/截图显示测试结束时 scope 已选中、菜单已关闭。失败是测试证据，不代表 Profile scheduler 或流量菜单产品行为已被证明损坏。
+- 确认的根因与排除项：Rust 用例将调度 actor 与异步提交误当成可在固定次数的协作让出内完成；计数是调度任务的异步副作用，有限 `yield_now` 不提供完成保证。Windows 用例没有等待 scope 控件反映 URL 状态，也没有验证点击后菜单确实打开，故失败位置不能区分 UI 事件未触发与断言时序。新测试改为等待 fetch `Notify`、提交后的 authoritative snapshot、scope `aria-checked` 和菜单 `aria-expanded`；仍须以新 CI 结果确认这组边界足以稳定通过。
+- 修复提交、差异映射及保留的兼容性边界：Rust 测试用 `Notify` 等待第二次真实 fetch，并以有界等待观察已提交的 subscription；ref `backend/tauri/src/client/profiles.rs::wait_for_source` 与 `jobs::settled` 提供类似完成同步，Chimera scheduler 没有 jobs registry，因此本测试用 fetch 信号和 snapshot 适配，不改产品调度器。流量 E2E 在打开菜单前等待 scope 和 Radix `aria-expanded` 状态；不改变流量 UI 或查询行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败证据为上述 Ubuntu 与 Windows runs。新测试修复已在 `backend/tauri/src/client/profiles.rs` 和 `tauri-e2e/specs/traffic-analysis-main.e2e.ts`；待新 SHA 运行 `pnpm test:backend` 与 hermetic E2E 后才能标记修复通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、`pnpm --filter @chimera/tauri-e2e typecheck`、`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --all-features client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer -- --exact`、Prettier 和 `git diff --check` 通过；针对性 Rust 单测 1/1 通过。Mac 桌面 E2E 构建成功，但 `traffic-analysis-main.e2e.ts` 在 `beforeEach` 的既有 `waitForMainRouteSettled` 等待中超时（0/1 specs 到达目标交互断言），因此本机未验证本次修改的菜单步骤；Windows Edge hermetic CI 是该步骤的权威验证。外接盘独立 target 避免了主卷空间限制。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试可靠性修正，不改变运行时或持久化行为；回滚为还原上述两个测试文件。本次只下载并检查了 PR E2E 诊断工件，未运行宿主网络或 Service/TUN 操作。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：新断言在 CI 通过后作为防复发检查；无治理门禁调整。
