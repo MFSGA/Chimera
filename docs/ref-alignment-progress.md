@@ -1271,9 +1271,11 @@ DIFF-001 至 DIFF-012 是此前基于
   `scripts/src/prepare/{types,binaries,resources}.ts` 中 `BinInfo.refresh`、
   `getChimeraClientAlphaInfo` 与 `resolveSidecar`。
 - 实际入口：`package.json::prepare:check` 调用 `scripts/check.ts`；Alpha task
-  仍通过 `materializeSidecar` 和 `verifyAndInstallSidecar` 安装并校验二进制。
-  为保持 Chimera 当前 Deno 准备器与完整性安装边界，本批把 ref 的刷新重试抽到
-  对齐目录，实际原子暂存、校验和替换仍由 `scripts/check.ts` 承担。未修改没有
+  仍通过 `materializeSidecar` 和 `verifyAndInstallSidecar` 安装。当前 Alpha
+  `BinInfo` 没有提供 `checksumURL`，因此这条路径不做 SHA-256 比较；它继续使用
+  现有的文件暂存、可执行权限设置、原子替换与版本戳更新。
+  为保持 Chimera 当前 Deno 准备器与安装边界，本批把 ref 的刷新重试抽到对齐
+  目录；实际暂存、可选校验和原子替换仍由 `scripts/check.ts` 承担。未修改没有
   被 `prepare:check` 调用的旧 `scripts/utils/resource.ts`。
 - 问题与修正：Chimera Client Alpha 使用滚动 `latest` release；macOS 资产文件名
   带稳定版本号。当 manifest 更新落后于 release 且旧资产已不可用时，首次下载
@@ -1287,7 +1289,7 @@ DIFF-001 至 DIFF-012 是此前基于
   manifest 更新使版本戳失效。
 - 影响入口：打包/开发前的共享 sidecar 准备；不改变 main UI、legacy UI、Agent
   的 API，配置持久化、Core/Service 协议和宿主网络均不受影响。下载及安装仍复用
-  现有临时目录、版本戳、SHA-256 校验和原子替换逻辑。
+  现有临时目录、版本戳和原子替换逻辑；Alpha 资产当前没有 SHA-256 校验。
 - 验证：`pnpm test:manifest` 为 5 passed，其中新增测试模拟旧滚动资产失败，
   验证同一调用链刷新为新 Alpha 版本并重试；`deno check --frozen --config
   scripts/deno.jsonc scripts/check.ts`、`pnpm typecheck`、`pnpm lint:oxlint`、
