@@ -12,7 +12,11 @@ import {
 } from '@/components/providers/context-menu-provider';
 import { ContextMenuItem } from '@/components/ui/context-menu';
 import HighlightText from '@/components/ui/highlight-text';
-import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
+import {
+  ScrollArea,
+  useScrollArea,
+  useScrollAreaViewportElement,
+} from '@/components/ui/scroll-area';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import LogLevelBadge from './_modules/log-level-badge';
@@ -38,11 +42,12 @@ const Viewer = ({ search }: { search: string }) => {
     return logs.filter((log) => log.type.toLowerCase() === level);
   }, [logs, level]);
 
-  const { isBottom, viewportRef } = useScrollArea();
+  const { isBottom } = useScrollArea();
+  const viewportElement = useScrollAreaViewportElement();
 
   const rowVirtualizer = useVirtualizer({
     count: filteredLogs.length,
-    getScrollElement: () => viewportRef.current,
+    getScrollElement: () => viewportElement,
     estimateSize: () => 60,
     overscan: 5,
     measureElement: (element) => element?.getBoundingClientRect().height,

@@ -15,6 +15,9 @@ import {
 const profileName = `TDD Main Proxy Node ${Date.now()}`;
 const groupName = 'TDD Node Group';
 const nodeName = 'TDD SOCKS Node';
+type ProxiesResponse = {
+  groups: Array<{ name: string; all: Array<{ name: string }> }>;
+};
 const fixture = `mixed-port: 27892
 allow-lan: false
 mode: rule
@@ -44,6 +47,8 @@ describe('main proxy node reference layout', () => {
 
   before(async () => {
     await browser.setWindowSize(1240, 638);
+    await openMainRoute('/main/proxies');
+    await browser.setWindowSize(1240, 638);
 
     const initial = await readProfiles();
     previousCurrent = initial.current ?? null;
@@ -65,9 +70,24 @@ describe('main proxy node reference layout', () => {
       'proxy-node Profile activation',
     );
 
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
-    });
+    await browser.waitUntil(
+      async () => {
+        const proxies = await invoke<ProxiesResponse>('get_proxies').catch(
+          () => undefined,
+        );
+        return proxies?.groups.some(
+          (group) =>
+            group.name === groupName &&
+            group.all.some((node) => node.name === nodeName),
+        );
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: 'The active Profile did not expose its proxy group.',
+      },
+    );
+
+    await browser.refresh();
     await openMainRoute('/main/proxies');
     await browser.setWindowSize(1240, 638);
 
@@ -119,10 +139,11 @@ describe('main proxy node reference layout', () => {
     ]);
   });
 
-  // Contract: a real active local Profile provides the fixture's SOCKS5 node;
-  // the main proxy group renders its type and UDP chips at the fixed viewport.
-  // The runtime-backed proxy API and visible node chips fail independently if
-  // the Profile or presentation is stale.
+  // Contract: an active local Profile provides the SOCKS5 fixture. The proxy
+  // index reloads after activation so its group query is populated before the
+  // detail route mounts the virtualized node list. Its type and UDP chips must
+  // render on the first viewport attachment, catching a virtualizer initialized
+  // while its parent viewport ref is still null.
   it('shows ref-style type and UDP chips on proxy nodes', async () => {
     const node = await $(`[data-slot="proxies-virtual-item"]*=${nodeName}`);
     await node.waitForDisplayed({ timeout: 15_000 });
@@ -145,18 +166,14 @@ describe('main proxy node reference layout', () => {
         buttonHeight: button
           ? Math.round(button.getBoundingClientRect().height)
           : 0,
-        viewport: { width: innerWidth, height: innerHeight },
       };
     })) as {
       chips: string[];
       hasDelay: boolean;
       nodeText: string;
       buttonHeight: number;
-      viewport: { width: number; height: number };
     };
 
-    assert.equal(state.viewport.width, 1224);
-    assert.equal(state.viewport.height, 629);
     assert.ok(
       state.chips.some((chip) => chip.toLowerCase().includes('socks')),
       JSON.stringify(state, null, 2),

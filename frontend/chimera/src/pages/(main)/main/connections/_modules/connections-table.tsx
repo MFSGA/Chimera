@@ -28,7 +28,10 @@ import {
   type ComponentProps,
   type ReactNode,
 } from 'react';
-import { useScrollArea } from '@/components/ui/scroll-area';
+import {
+  useScrollAreaViewport,
+  useScrollAreaViewportElement,
+} from '@/components/ui/scroll-area';
 import { useLocalStorage } from '@/hooks/use-local-storage';
 import {
   focusHighlightStyle,
@@ -202,7 +205,8 @@ function ConnectionsTable<TRow extends RowData>({
     columnIds,
   );
 
-  const { viewportRef } = useScrollArea();
+  const { viewportRef } = useScrollAreaViewport();
+  const viewportElement = useScrollAreaViewportElement();
 
   const table = useTable({
     features,
@@ -228,7 +232,7 @@ function ConnectionsTable<TRow extends RowData>({
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => viewportRef.current,
+    getScrollElement: () => viewportElement,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
   });
