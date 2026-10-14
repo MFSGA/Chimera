@@ -72,10 +72,11 @@ async function waitForPath(pathname: string) {
 describe('legacy proxy localization', () => {
   // Contract (desktop UI E2E): set the test-owned app language to zh-cn, create
   // a local Profile through the legacy UI, attach its fixture through IPC, and
-  // activate it through the UI. The independent oracle is the page title and
-  // static mode-control labels; dynamic proxy/node names can legitimately be
-  // English. Restore the original language, selected Profile, and each
-  // WebView's cached locale, then delete only the Profile created by this test.
+  // activate it through the UI. The independent oracle is the page title,
+  // static mode-control labels, and document root lang; dynamic proxy/node names
+  // can legitimately be English. Restore the original language, selected
+  // Profile, and each WebView's cached locale, then delete only the Profile
+  // created by this test.
   let profileUid: string | undefined;
   let originalLanguage: string | null | undefined;
   let originalCurrentProfile: string | null = null;
@@ -337,6 +338,7 @@ describe('legacy proxy localization', () => {
             ),
           ).map((button) => [button.value, button.textContent?.trim()]);
           return (
+            document.documentElement.lang === 'zh-cn' &&
             title === '代理集' &&
             modeLabels.some(
               ([value, label]) => value === 'rule' && label === '规则',
@@ -364,12 +366,14 @@ describe('legacy proxy localization', () => {
 
     const state = await browser.execute(() => ({
       title: document.querySelector('h1')?.textContent?.trim(),
+      documentLanguage: document.documentElement.lang,
       modeLabels: Array.from(
         document.querySelectorAll<HTMLButtonElement>('[role="group"] button'),
       ).map((button) => [button.value, button.textContent?.trim()]),
     }));
 
     assert.equal(state.title, '代理集');
+    assert.equal(state.documentLanguage, 'zh-cn');
     assert.ok(
       state.modeLabels.some(
         ([value, label]) => value === 'rule' && label === '规则',

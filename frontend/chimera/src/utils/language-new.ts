@@ -23,9 +23,19 @@ export const getCachedLanguage = () => {
 
 defineCustomClientStrategy('custom-extension', {
   getLocale: () => {
-    return getCachedLanguage();
+    const locale = getCachedLanguage() ?? undefined;
+
+    if (locale && typeof document !== 'undefined') {
+      document.documentElement.lang = locale;
+    }
+
+    return locale;
   },
   setLocale: (locale) => {
     setCachedLanguage(locale as Language);
+
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = String(locale).toLowerCase();
+    }
   },
 });
