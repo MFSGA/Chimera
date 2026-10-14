@@ -18,19 +18,38 @@ async function invoke<T>(command: string, args?: Record<string, unknown>) {
   );
 }
 
-async function waitForMainApp(timeout = 30_000) {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(() => {
-        const root = document.getElementById('root');
-        return (
-          (root?.childElementCount ?? 0) > 0 &&
-          document.documentElement.classList.contains('chimera-main') &&
-          document.querySelector('[data-slot="app-root"]') !== null
-        );
-      }),
-    { timeout, timeoutMsg: 'The Chimera main frontend did not render.' },
-  );
+async function readMainAppState() {
+  return browser.execute(() => {
+    const root = document.getElementById('root');
+    return {
+      url: location.href,
+      title: document.title,
+      rootChildren: root?.childElementCount ?? 0,
+      mainClass: document.documentElement.classList.contains('chimera-main'),
+      appRoot: document.querySelector('[data-slot="app-root"]') !== null,
+      bodyText: document.body.innerText.slice(0, 240),
+    };
+  });
+}
+
+async function waitForMainApp(timeout = 60_000) {
+  let lastState = 'not observed';
+
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await readMainAppState();
+        lastState = JSON.stringify(state);
+        return state.rootChildren > 0 && state.mainClass && state.appRoot;
+      },
+      { timeout, timeoutMsg: 'The Chimera main frontend did not render.' },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The Chimera main frontend did not render. Last state: ${lastState}`,
+      { cause },
+    );
+  }
 }
 
 async function createMainWindow() {

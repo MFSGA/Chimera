@@ -52,7 +52,9 @@ describe('main global CSS contract', () => {
         color: bodyStyle.color,
         backgroundColor: bodyStyle.backgroundColor,
         overflow: bodyStyle.overflow,
-        userSelect: bodyStyle.userSelect,
+        userSelect:
+          bodyStyle.getPropertyValue('user-select') ||
+          bodyStyle.getPropertyValue('-webkit-user-select'),
         scrollbarWidth: scrollbarStyle.width,
       };
       probe.remove();

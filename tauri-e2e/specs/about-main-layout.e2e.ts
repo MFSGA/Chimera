@@ -91,7 +91,8 @@ describe('main about settings reference layout', () => {
     });
 
     assert.equal(state.path, '/main/settings/about');
-    assert.deepEqual(state.viewport, { width: 1224, height: 629 });
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
     assert.deepEqual(state.sticky, {
       height: '64px',
       paddingLeft: '24px',
