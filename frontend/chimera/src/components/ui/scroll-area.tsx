@@ -2,7 +2,9 @@ import { cn } from '@chimera/utils';
 import { ScrollArea as ScrollAreaPrimitive } from 'radix-ui';
 import {
   createContext,
+  useCallback,
   useContext,
+  useMemo,
   useRef,
   useState,
   type ComponentProps,
@@ -21,10 +23,19 @@ interface ScrollAreaContextValue {
     left: number;
     right: number;
   };
+}
+
+interface ScrollAreaViewportContextValue {
   viewportRef: RefObject<HTMLDivElement | null>;
 }
 
 const ScrollAreaContext = createContext<ScrollAreaContextValue | null>(null);
+const ScrollAreaViewportContext =
+  createContext<ScrollAreaViewportContextValue | null>(null);
+// `undefined` means outside a ScrollArea; `null` means not attached yet.
+const ScrollAreaViewportElementContext = createContext<
+  HTMLDivElement | null | undefined
+>(undefined);
 
 export function useScrollArea() {
   const context = useContext(ScrollAreaContext);
@@ -34,6 +45,52 @@ export function useScrollArea() {
   }
 
   return context;
+}
+
+export function useScrollAreaViewport() {
+  const context = useContext(ScrollAreaViewportContext);
+
+  if (!context) {
+    throw new Error(
+      'useScrollAreaViewport must be used within a ScrollArea component',
+    );
+  }
+
+  return context;
+}
+
+/**
+ * The attached viewport element for a virtualizer's `getScrollElement`. A
+ * child's layout effect runs before React attaches the viewport ref, so a
+ * virtualizer reading `viewportRef` on mount sees `null` and may never observe
+ * the viewport. This state value re-renders consumers when it is attached.
+ */
+export function useScrollAreaViewportElement() {
+  const element = useContext(ScrollAreaViewportElementContext);
+
+  if (element === undefined) {
+    throw new Error(
+      'useScrollAreaViewportElement must be used within a ScrollArea component',
+    );
+  }
+
+  return element;
+}
+
+// Keep the ref context stable so its consumers do not rerender on scroll.
+function useViewportProvider() {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewportElement, setViewportElement] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const viewport = useMemo(() => ({ viewportRef }), []);
+
+  const attachViewport = useCallback((element: HTMLDivElement | null) => {
+    viewportRef.current = element;
+    setViewportElement(element);
+  }, []);
+
+  return { viewport, viewportElement, attachViewport };
 }
 
 function useScrollTracking(threshold = 50) {
@@ -173,35 +230,56 @@ function ScrollAreaProvider({
   scrollbars: 'vertical' | 'horizontal' | 'both';
   slot: string;
 }) {
-  const viewportRef = useRef<HTMLDivElement>(null);
+  const { viewport, viewportElement, attachViewport } = useViewportProvider();
   const tracking = useScrollTracking();
+  const { handleScroll } = tracking;
+  const scrollState = useMemo(
+    () => ({
+      isScrolling: tracking.isScrolling,
+      isTop: tracking.isTop,
+      isBottom: tracking.isBottom,
+      scrollDirection: tracking.scrollDirection,
+      offset: tracking.offset,
+    }),
+    [
+      tracking.isScrolling,
+      tracking.isTop,
+      tracking.isBottom,
+      tracking.scrollDirection,
+      tracking.offset,
+    ],
+  );
 
   return (
-    <ScrollAreaContext.Provider value={{ ...tracking, viewportRef }}>
-      <Root
-        data-slot={slot}
-        // Keep the content scrollbar discoverable even when the page is idle.
-        type="always"
-        scrollHideDelay={600}
-        className={className}
-        data-scrolling={String(tracking.isScrolling)}
-        data-top={String(tracking.isTop)}
-        data-bottom={String(tracking.isBottom)}
-        data-scroll-direction={tracking.scrollDirection}
-        {...props}
-      >
-        <Viewport ref={viewportRef} onScroll={tracking.handleScroll}>
-          {children}
-        </Viewport>
-        {(scrollbars === 'vertical' || scrollbars === 'both') && (
-          <ScrollBar orientation="vertical" />
-        )}
-        {(scrollbars === 'horizontal' || scrollbars === 'both') && (
-          <ScrollBar orientation="horizontal" />
-        )}
-        <Corner />
-      </Root>
-    </ScrollAreaContext.Provider>
+    <ScrollAreaViewportContext.Provider value={viewport}>
+      <ScrollAreaViewportElementContext.Provider value={viewportElement}>
+        <ScrollAreaContext.Provider value={scrollState}>
+          <Root
+            data-slot={slot}
+            // Keep the content scrollbar discoverable even when the page is idle.
+            type="always"
+            scrollHideDelay={600}
+            className={className}
+            data-scrolling={String(tracking.isScrolling)}
+            data-top={String(tracking.isTop)}
+            data-bottom={String(tracking.isBottom)}
+            data-scroll-direction={tracking.scrollDirection}
+            {...props}
+          >
+            <Viewport ref={attachViewport} onScroll={handleScroll}>
+              {children}
+            </Viewport>
+            {(scrollbars === 'vertical' || scrollbars === 'both') && (
+              <ScrollBar orientation="vertical" />
+            )}
+            {(scrollbars === 'horizontal' || scrollbars === 'both') && (
+              <ScrollBar orientation="horizontal" />
+            )}
+            <Corner />
+          </Root>
+        </ScrollAreaContext.Provider>
+      </ScrollAreaViewportElementContext.Provider>
+    </ScrollAreaViewportContext.Provider>
   );
 }
 

@@ -14,7 +14,10 @@ import { useMemo, useState } from 'react';
 import { ReturnButton } from '@/components/router/return-button';
 import { useEntryFocus } from '@/components/router/use-cross-navigate';
 import HighlightText from '@/components/ui/highlight-text';
-import { ScrollArea, useScrollArea } from '@/components/ui/scroll-area';
+import {
+  ScrollArea,
+  useScrollAreaViewportElement,
+} from '@/components/ui/scroll-area';
 import {
   focusHighlightStyle,
   useFocusHighlight,
@@ -35,7 +38,7 @@ const features = tableFeatures({
 const Viewer = ({ search, focus }: { search: string; focus?: string }) => {
   const { data } = useClashRules();
   const { proxy } = IndexRoute.useSearch();
-  const { viewportRef } = useScrollArea();
+  const viewportElement = useScrollAreaViewportElement();
 
   const filteredRules = useMemo(() => {
     const rules = data?.rules ?? [];
@@ -61,7 +64,7 @@ const Viewer = ({ search, focus }: { search: string; focus?: string }) => {
 
   const rowVirtualizer = useVirtualizer({
     count: filteredRules.length,
-    getScrollElement: () => viewportRef.current,
+    getScrollElement: () => viewportElement,
     estimateSize: () => 48,
     overscan: 10,
     measureElement: (element) => element?.getBoundingClientRect().height,

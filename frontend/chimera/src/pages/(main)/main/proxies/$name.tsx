@@ -33,7 +33,10 @@ import Radar from '~icons/material-symbols/radar';
 import { filesize } from 'filesize';
 import { useCallback, useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { useScrollArea } from '@/components/ui/scroll-area';
+import {
+  useScrollAreaViewport,
+  useScrollAreaViewportElement,
+} from '@/components/ui/scroll-area';
 import DelayTestButton from './_modules/delay-test-button';
 import GroupHeader from './_modules/group-header';
 import { useCurrentGroupConnection } from './_modules/hooks';
@@ -80,7 +83,8 @@ function RouteComponent() {
   }, [proxies, proxyGroupName, proxyMode]);
 
   // 获取 AppContentScrollArea 的 viewportRef（用于同步虚拟滚动）
-  const { viewportRef } = useScrollArea();
+  const { viewportRef } = useScrollAreaViewport();
+  const viewportElement = useScrollAreaViewportElement();
 
   // 响应式列数：根据容器宽度自动调整网格列数（匹配 ref）
   const lanes = useContainerBreakpointValue(
@@ -98,7 +102,7 @@ function RouteComponent() {
   // 初始化 @tanstack/react-virtual 多列虚拟化
   const virtualizer = useVirtualizer({
     count: currentGroup?.all?.length || 0,
-    getScrollElement: () => viewportRef.current,
+    getScrollElement: () => viewportElement,
     estimateSize: () => 60,
     overscan: 5,
     lanes,
