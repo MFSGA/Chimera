@@ -5,55 +5,19 @@ import * as path from 'jsr:@std/path';
 import AdmZip from 'npm:adm-zip@0.6.1';
 import { colorize, consola } from './deno/utils/logger.ts';
 import { verifyAndInstallSidecar } from './deno/utils/sidecar-integrity.ts';
+import { getChimeraClientAlphaInfo as createChimeraClientAlphaInfo } from './src/prepare/binaries.ts';
+import {
+  resolveSidecar as resolveSidecarWithRefresh,
+  type SidecarRefreshRetryPolicy,
+} from './src/prepare/resources.ts';
+import type {
+  ArchMapping,
+  BinInfo,
+  SupportedArch,
+  VersionManifest,
+} from './src/prepare/types.ts';
 
 // === Types ===
-
-interface BinInfo {
-  name: string;
-  version?: string;
-  targetFile: string;
-  exeFile: string;
-  tmpFile: string;
-  downloadURL: string;
-  checksumURL?: string;
-}
-
-type SupportedArch =
-  | 'windows-i386'
-  | 'windows-x86_64'
-  | 'windows-arm64'
-  | 'linux-aarch64'
-  | 'linux-amd64'
-  | 'linux-i386'
-  | 'linux-armv7'
-  | 'linux-armv7hf'
-  | 'darwin-arm64'
-  | 'darwin-x64';
-
-type ArchMapping = Record<SupportedArch, string>;
-
-interface VersionManifest {
-  manifest_version: number;
-  latest: {
-    mihomo: string;
-    mihomo_alpha: string;
-    clash_rs: string;
-    chimera_client: string;
-    chimera_client_alpha: string;
-    clash_premium: string;
-    clash_rs_alpha: string;
-  };
-  arch_template: {
-    mihomo: ArchMapping;
-    mihomo_alpha: ArchMapping;
-    clash_rs: ArchMapping;
-    chimera_client: ArchMapping;
-    chimera_client_alpha: ArchMapping;
-    clash_premium: ArchMapping;
-    clash_rs_alpha: ArchMapping;
-  };
-  updated_at: string;
-}
 
 interface ClashManifest {
   URL_PREFIX: string;
@@ -265,12 +229,13 @@ const CHIMERA_CLIENT_MANIFEST: ClashManifest = {
   ARCH_MAPPING: versionManifest.arch_template.chimera_client as ArchMapping,
 };
 
-const CHIMERA_CLIENT_ALPHA_MANIFEST: ClashManifest = {
-  URL_PREFIX:
-    'https://github.com/MFSGA/Chimera_Client/releases/download/latest',
-  VERSION: versionManifest.latest.chimera_client_alpha,
-  ARCH_MAPPING: versionManifest.arch_template
-    .chimera_client_alpha as ArchMapping,
+// The upstream rolling `latest` release is deleted before its replacement is
+// published. Retry only 404s while refreshing the Alpha sidecar through that
+// short transition; permanent download and validation errors still fail fast.
+const CHIMERA_CLIENT_ALPHA_REFRESH_RETRY: SidecarRefreshRetryPolicy = {
+  delaysMs: [1_000, 2_000, 4_000, 8_000],
+  shouldRetry: (error) =>
+    error instanceof Error && error.message.includes('(404)'),
 };
 
 // === Download ===
@@ -435,6 +400,19 @@ async function readVersionStamp(stampPath: string): Promise<string | null> {
 async function resolveSidecar(
   binInfo: BinInfo | Promise<BinInfo>,
   options?: ResolveOptions,
+  refreshRetry?: SidecarRefreshRetryPolicy,
+): Promise<ResolveInfo> {
+  return resolveSidecarWithRefresh(
+    binInfo,
+    (info) => materializeSidecar(info, options),
+    (message) => debugLog(message),
+    refreshRetry,
+  );
+}
+
+async function materializeSidecar(
+  binInfo: BinInfo,
+  options?: ResolveOptions,
 ): Promise<ResolveInfo> {
   const {
     name,
@@ -444,7 +422,7 @@ async function resolveSidecar(
     exeFile,
     downloadURL,
     checksumURL,
-  } = await binInfo;
+  } = binInfo;
 
   const sidecarDir = path.join(TAURI_APP_DIR, 'sidecar');
   const sidecarPath = path.join(sidecarDir, targetFile);
@@ -617,22 +595,12 @@ function getChimeraClientInfo(): BinInfo {
 }
 
 function getChimeraClientAlphaInfo(): BinInfo {
-  const { ARCH_MAPPING, URL_PREFIX, VERSION } = CHIMERA_CLIENT_ALPHA_MANIFEST;
-  const archLabel = mapArch(platform, arch);
-  const stableVersion = versionManifest.latest.chimera_client.replace(/^v/, '');
-  const name = ARCH_MAPPING[archLabel].replace('{}', stableVersion);
-  const isWin = platform === 'win32';
-  const exeFile = archLabel.startsWith('darwin-')
-    ? `${name.replace(/\.tar\.gz$/, '')}/clash-rs`
-    : name;
-  return {
-    name: 'chimera-client-alpha',
-    version: VERSION,
-    targetFile: `chimera-client-alpha-${SIDECAR_HOST}${isWin ? '.exe' : ''}`,
-    exeFile,
-    tmpFile: name,
-    downloadURL: `${URL_PREFIX}/${name}`,
-  };
+  return createChimeraClientAlphaInfo({
+    versionManifest,
+    platform,
+    arch: mapArch(platform, arch),
+    sidecarHost: SIDECAR_HOST!,
+  });
 }
 
 // The sidecar version follows the `chimera-service` crate in the local
@@ -954,7 +922,11 @@ const tasks: Array<{
     name: 'chimera-client-alpha',
     version: versionManifest.latest.chimera_client_alpha,
     func: (onProgress) =>
-      resolveSidecar(getChimeraClientAlphaInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(
+        getChimeraClientAlphaInfo(),
+        { force: FORCE, onProgress },
+        CHIMERA_CLIENT_ALPHA_REFRESH_RETRY,
+      ),
     retry: 5,
   },
   {

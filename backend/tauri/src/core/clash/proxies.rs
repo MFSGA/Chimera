@@ -167,6 +167,7 @@ pub struct ProxiesGuard {
     inner: Proxies,
     checksum: Option<u32>,
     updated_at: u64,
+    generation: u64,
     sender: broadcast::Sender<()>,
 }
 
@@ -180,6 +181,7 @@ impl ProxiesGuard {
                 sender: tx,
                 inner: Proxies::default(),
                 updated_at: 0,
+                generation: 0,
             }))
         })
     }
@@ -191,6 +193,31 @@ impl ProxiesGuard {
 
     pub fn inner(&self) -> &Proxies {
         &self.inner
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    fn ensure_generation_matches(&self, generation: u64) -> Result<()> {
+        if self.generation != generation {
+            anyhow::bail!("proxy selection was invalidated by a profile change")
+        }
+        Ok(())
+    }
+
+    pub(crate) fn invalidate(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
+        self.checksum = None;
+        self.updated_at = 0;
+    }
+
+    fn replace_if_generation(&mut self, generation: u64, proxies: Proxies, checksum: u32) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        self.replace(proxies, checksum);
+        true
     }
 
     pub fn replace(&mut self, proxies: Proxies, checksum: u32) {
@@ -208,31 +235,230 @@ impl ProxiesGuard {
     }
 }
 
-pub trait ProxiesGuardExt {
-    async fn update(&self, api: &api::ApiClient) -> Result<()>;
-    async fn select_proxy(&self, api: &api::ApiClient, group: &str, name: &str) -> Result<()>;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalidation_marks_the_cached_snapshot_stale() {
+        let (sender, _) = broadcast::channel(1);
+        let mut guard = ProxiesGuard {
+            inner: Proxies {
+                global: ProxyGroupItem {
+                    name: "cached profile".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            checksum: Some(1),
+            updated_at: chrono::Utc::now().timestamp() as u64,
+            generation: 0,
+            sender,
+        };
+
+        assert!(guard.is_updated());
+
+        guard.invalidate();
+
+        assert!(!guard.is_updated());
+        assert_eq!(guard.checksum, None);
+        assert_eq!(guard.inner().global.name, "cached profile");
+    }
+
+    #[test]
+    fn invalidated_refresh_cannot_replace_the_snapshot() {
+        let (sender, _) = broadcast::channel(1);
+        let mut guard = ProxiesGuard {
+            inner: Proxies {
+                global: ProxyGroupItem {
+                    name: "previous profile".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            checksum: Some(1),
+            updated_at: chrono::Utc::now().timestamp() as u64,
+            generation: 0,
+            sender,
+        };
+        let refresh_generation = guard.generation();
+
+        guard.invalidate();
+
+        assert!(!guard.replace_if_generation(
+            refresh_generation,
+            Proxies {
+                global: ProxyGroupItem {
+                    name: "stale profile response".into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            2,
+        ));
+        assert!(!guard.is_updated());
+        assert_eq!(guard.inner().global.name, "previous profile");
+    }
+
+    #[test]
+    fn invalidated_selection_generation_is_rejected() {
+        let (sender, _) = broadcast::channel(1);
+        let mut guard = ProxiesGuard {
+            inner: Proxies::default(),
+            checksum: Some(1),
+            updated_at: chrono::Utc::now().timestamp() as u64,
+            generation: 0,
+            sender,
+        };
+        let selection_generation = guard.generation();
+
+        guard.invalidate();
+
+        assert!(
+            guard
+                .ensure_generation_matches(selection_generation)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn selection_invalidated_while_request_is_in_flight_returns_error() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        const TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("controller listener should bind");
+        let address = listener.local_addr().expect("controller address");
+        let (request_started_tx, request_started_rx) = tokio::sync::oneshot::channel();
+        let (continue_response_tx, continue_response_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (stream, _) = tokio::time::timeout(TEST_TIMEOUT, listener.accept())
+                .await
+                .expect("selection should connect before the deadline")
+                .expect("controller should accept the selection");
+            let mut reader = BufReader::new(stream);
+            let mut request_line = Vec::new();
+            let read =
+                tokio::time::timeout(TEST_TIMEOUT, reader.read_until(b'\n', &mut request_line))
+                    .await
+                    .expect("selection request should arrive before the deadline")
+                    .expect("selection request line should read");
+            assert!(read > 0, "selection request should not be empty");
+            assert!(request_line.starts_with(b"PUT /proxies/GLOBAL"));
+            request_started_tx
+                .send(())
+                .expect("test should still be waiting for request");
+            tokio::time::timeout(TEST_TIMEOUT, continue_response_rx)
+                .await
+                .expect("test should release the selection response before the deadline")
+                .expect("test should release the selection response");
+            tokio::time::timeout(
+                TEST_TIMEOUT,
+                reader.get_mut().write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                ),
+            )
+            .await
+            .expect("selection response should write before the deadline")
+            .expect("selection response should write");
+        });
+
+        let (sender, _) = broadcast::channel(1);
+        let guard = Arc::new(RwLock::new(ProxiesGuard {
+            inner: Proxies::default(),
+            checksum: None,
+            updated_at: 0,
+            generation: 0,
+            sender,
+        }));
+        let generation = guard.read().generation();
+        let api = api::ApiClient::new(crate::config::clash::ClashInfo {
+            port: address.port(),
+            server: address.to_string(),
+            secret: None,
+        })
+        .expect("API client should build");
+        let guard_for_selection = guard.clone();
+        let mut selection = tokio::spawn(async move {
+            (&guard_for_selection)
+                .select_proxy(&api, generation, "GLOBAL", "DIRECT")
+                .await
+        });
+
+        tokio::time::timeout(TEST_TIMEOUT, request_started_rx)
+            .await
+            .expect("selection request should start before the deadline")
+            .expect("selection server should report the request");
+        guard.write().invalidate();
+        continue_response_tx
+            .send(())
+            .expect("selection server should still be waiting");
+
+        let selection_result = tokio::time::timeout(TEST_TIMEOUT, &mut selection).await;
+        if selection_result.is_err() {
+            selection.abort();
+            let _ = tokio::time::timeout(TEST_TIMEOUT, &mut selection).await;
+        }
+        let error = selection_result
+            .expect("selection task should finish before the deadline")
+            .expect("selection task should not panic")
+            .expect_err("an invalidated selection must not report success");
+        assert!(
+            error
+                .to_string()
+                .contains("snapshot changed while selection was in flight")
+        );
+        tokio::time::timeout(TEST_TIMEOUT, server)
+            .await
+            .expect("controller server should finish before the deadline")
+            .expect("controller server should not panic");
+    }
 }
 
-type ProxiesGuardSingleton = &'static Arc<RwLock<ProxiesGuard>>;
-impl ProxiesGuardExt for ProxiesGuardSingleton {
-    async fn update(&self, api: &api::ApiClient) -> Result<()> {
+pub trait ProxiesGuardExt {
+    async fn update_if_generation(&self, api: &api::ApiClient, generation: u64) -> Result<bool>;
+    async fn select_proxy(
+        &self,
+        api: &api::ApiClient,
+        generation: u64,
+        group: &str,
+        name: &str,
+    ) -> Result<()>;
+}
+
+impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
+    async fn update_if_generation(&self, api: &api::ApiClient, generation: u64) -> Result<bool> {
+        if self.read().generation() != generation {
+            return Ok(false);
+        }
+
         let proxies = Proxies::fetch(api).await?;
         let buf = serde_json::to_string(&proxies)?;
         let checksum = adler::adler32(buf.as_bytes())?;
-        {
-            let reader = self.read();
-            if reader.checksum == Some(checksum) {
-                return Ok(());
-            }
-        }
         let mut writer = self.write();
-        writer.replace(proxies, checksum);
-        Ok(())
+        if writer.generation() != generation {
+            return Ok(false);
+        }
+        if writer.checksum == Some(checksum) {
+            return Ok(true);
+        }
+        Ok(writer.replace_if_generation(generation, proxies, checksum))
     }
 
-    async fn select_proxy(&self, api: &api::ApiClient, group: &str, name: &str) -> Result<()> {
+    async fn select_proxy(
+        &self,
+        api: &api::ApiClient,
+        generation: u64,
+        group: &str,
+        name: &str,
+    ) -> Result<()> {
+        self.read().ensure_generation_matches(generation)?;
         api.update_proxy(group, name).await?;
-        self.update(api).await?;
+        if !self.update_if_generation(api, generation).await? {
+            anyhow::bail!("proxy snapshot changed while selection was in flight");
+        }
         Ok(())
     }
 }
