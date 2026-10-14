@@ -82,6 +82,12 @@ CI 在 Tauri 2.12 下编译 `tauri-plugin-wdio-webdriver@1.3.0` 失败：Tauri �
 
 这是临时的测试工具兼容 pin。上游发布包含此修复的 crate 后，更新 Cargo 依赖与锁文件到该 registry 版本，并重新核对 Windows E2E 构建；在那之前保留固定提交，避免 Tauri 次版本变化再次拆分 WebView2 COM 类型。
 
+## U07 关闭 WebView 时的元素点击响应
+
+核对当前 vendored `tauri-plugin-wdio-webdriver@1.4.0` 的 `src/platform/executor.rs::click_element` 与 `src/server/handlers/element.rs::click`。点击脚本同步执行 `el.click()` 并返回 `true`；CSS 编辑器的 Cancel 处理器会在同一点击中调用 Tauri `WebviewWindow.close()`。本机 WebKit E2E 的日志记录到：窗口确实关闭，但首个 click 响应返回 unsupported result type，WDIO 按锁定的 `connectionRetryCount: 1` 重试后得到 `No window could be found`，窗口句柄列表已不含 `editor-css`。
+
+项目测试在这条特定边界接受该最终响应，仅当它匹配元素 click 的 no-window 错误且独立读取的句柄列表确认编辑器窗口消失。其他错误、或窗口仍存在时均失败。此断言证明取消按钮关闭了 WebView，不证明原生鼠标输入。升级 WDIO 或 vendored 驱动时重跑此场景；若点击响应能正常返回，移除错误兼容分支。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。
