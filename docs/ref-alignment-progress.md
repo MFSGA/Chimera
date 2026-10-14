@@ -2,10 +2,12 @@
 
 主仓库此前固定的 `ref` 基线为 `813673a8e84b51265467f02277fc7e739837f61e`。
 2026-10-14 已从 `origin/main` 核实并检出上游最新提交
-`fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5`；当前候选 gitlink 指向该提交，
-子模块工作区干净。此次上游新增的两个提交分别更新 ref 自身的 TanStack Router
-依赖，以及重整流量分析侧栏路由、页面结构和相关测试；未改变嵌套子模块。此同步
-只更新参考基线，不等于将依赖或界面代码直接应用到 Chimera。
+`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；当前候选 gitlink 指向该提交，
+子模块工作区干净。自原基线以来上游合入了 TanStack Router、meta-json-schema、
+Playwright、Prettier 和 router-plugin 更新，流量分析侧栏路由重整，以及完整的
+profile transform-chain 编辑改进和相应浏览器测试；还补充了 worktree CoW 说明。
+递归子模块指针未变。此同步只更新参考基线，不等于将依赖或界面代码直接应用到
+Chimera。
 
 DIFF-001 至 DIFF-012 是此前基于
 `f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
@@ -14,15 +16,15 @@ DIFF-001 至 DIFF-012 是此前基于
 ## ref 基线同步（2026-10-14）
 
 - 上一固定提交：`813673a8e84b51265467f02277fc7e739837f61e`。
-- 同步提交：`85613d5ec9d3dea3bb08e36b546af738887fcdee`（TanStack Router
-  依赖更新）及 `fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5`（流量分析页面路由重整）。
-  后者已 fetch 并与 `origin/main` 核对，是当前上游 main tip。
-- 上游变化：第一个提交将 `@tanstack/react-router` 从 1.170.41 更新至
-  1.170.44，将 `@tanstack/router-plugin` 从 1.168.42 更新至 1.168.45，并同步
-  router-core、history、generator 锁文件；第二个提交把流量分析页面拆为侧栏子路由，
-  调整排名、工具栏和流量布局组件，并新增/更新浏览器测试。相对 85613d5e，后者
-  改动 37 个文件，约 2,800 行新增、836 行删除。以上仅描述 ref 内部变化，不改
-  Chimera 的 `package.json`、`pnpm-lock.yaml` 或前端实现。
+- 同步提交：`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`，已 fetch 并与
+  `origin/main` 核对，是当前上游 main tip。期间依次包含 `85613d5e` Router 依赖、
+  `fb0039b1` 流量分析路由、`635e96c9` meta-json-schema、`9fdd5135` Playwright、
+  `d9cf2cc8` profile transform-chain 编辑、`b568b8b5` Prettier、`6083e156`
+  worktree CoW 文档和 `e81eeaea` router-plugin 更新。
+- 上游变化：除依赖升级与流量侧栏路由外，`d9cf2cc8` 重整 profile 转换链编辑器、
+  同步历史展示和卡片能力，增加 transform-chain 列组件、Accordion 组件及浏览器
+  覆盖。此次仅更新 `ref` 基线和本记录；未把上游依赖、profile UI 或其他源文件复制
+  到 Chimera，也未改 Chimera 的 `package.json`、`pnpm-lock.yaml` 或前端实现。
 - 验证：父仓库 `ref` gitlink 指向该提交；ref 工作区干净；递归子模块没有变化；
   `git diff --check` 通过。此批只改参考版本与本记录，不涉及产品代码，故未运行
   应用构建、桌面 E2E 或宿主网络测试。

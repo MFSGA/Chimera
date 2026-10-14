@@ -14,7 +14,7 @@
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
 previous:   813673a8e84b51265467f02277fc7e739837f61e
-commit:     fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5
+commit:     e81eeaea46a9c229478cd29c9555b5c072f7e6cc
 verified:   2026-10-14 fetched from origin/main; ref worktree clean
 ```
 
