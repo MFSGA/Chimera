@@ -225,7 +225,14 @@ pub async fn read_epoch_pid_file(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     }
-    let raw = tokio::fs::read_to_string(path).await?;
+    let raw = match tokio::fs::read_to_string(path).await {
+        Ok(raw) => raw,
+        // The file can be removed after `symlink_metadata` succeeds, for
+        // example when the previous process exits while a replacement is
+        // preparing its epoch. Treat that race the same as a missing file.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
     parse_epoch_record(&raw).map(Some)
 }
 

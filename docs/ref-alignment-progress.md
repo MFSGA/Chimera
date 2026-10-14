@@ -1299,3 +1299,20 @@ DIFF-001 至 DIFF-012 是此前基于
 - 收敛条件：本地准备器整体迁移到 ref 的 `scripts/src/prepare/check.ts` 后，移除
   `scripts/check.ts` 的委托桥接；若要在 manifest 日更窗口内自动淘汰已缓存的
   旧 Alpha，还需单独评估每次准备时在线解析版本的成本和离线回退策略。
+
+## DIFF-051：修正 epoch PID 文件检查与读取之间的删除竞态
+
+- 问题与证据：PR #479 的 macOS CI job `115762372590` 在
+  `process_pid_file::residual_process_is_killed_before_spawn` 第二次 `spawn().unwrap()` 处报告 OS
+  `NotFound`，日志没有指出产生错误的具体系统调用。`read_epoch_pid_file` 先 `symlink_metadata`、后
+  `read_to_string`，而上一轮进程清理可并发移除同一记录；检查后读取前的删除竞态是与日志现象一致的候选根因。
+- ref 映射与保留差异：ref `backend/nyanpasu-runtime/crates/nyanpasu-utils/src/process/pid_file.rs::read_epoch_pid_file`
+  （runtime SHA `e9f44e68b0c88981160f5b986f7ffcc9fb5b20a7`）也有相同顺序。Chimera 在对应的
+  `backend/chimera-utils/src/process/pid_file.rs::read_epoch_pid_file` 仅将读取阶段的 `NotFound` 处理为
+  `Ok(None)`；符号链接/普通文件检查仍保留，其他 I/O 错误仍向上传播。该最小修正不改变 PID 身份校验、终止授权或记录格式，
+  不复制 ref 中已观察到的竞态缺陷。CI 没有 syscall 级证据确认此次失败源自该读取窗口，因此该根因仍待新 SHA 远端复验。
+- 验证：旧 PR SHA 的 macOS CI 为 11 passed、1 failed；修正后本地 macOS `process_pid_file` 集成目标
+  12/12 通过，`rustfmt --check backend/chimera-utils/src/process/pid_file.rs` 通过。新 SHA 的 macOS CI 与
+  Desktop E2E 尚待远端复验；新 SHA 用于验证修复效果，旧失败的具体 syscall 根因仍是与现有证据一致的候选判断。
+- 关联记录：[LESSON-20261014-001](../LESSONS.md#lesson-20261014-001-epoch-pid-记录可能在检查后读取前被并发清理)。
+- 回滚：还原读取错误分支即可；无用户数据迁移或宿主状态变更。
