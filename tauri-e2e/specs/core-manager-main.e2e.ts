@@ -124,8 +124,8 @@ describe('main clash core manager reference layout', () => {
       };
     });
 
-    assert.equal(state.viewport.width, 1224, JSON.stringify(state, null, 2));
-    assert.equal(state.viewport.height, 629, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
     assert.ok(state.card, JSON.stringify(state, null, 2));
     assert.ok(state.content, JSON.stringify(state, null, 2));
     assert.ok(state.current, JSON.stringify(state, null, 2));

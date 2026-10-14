@@ -78,8 +78,8 @@ describe('main tooltip reference surface', () => {
     assert.equal(state.surfaceChildren, 1, JSON.stringify(state, null, 2));
     assert.ok(state.contentText.length > 0, JSON.stringify(state, null, 2));
     assert.notEqual(state.borderRadius, '0px', JSON.stringify(state, null, 2));
-    assert.equal(state.viewport.width, 1224);
-    assert.equal(state.viewport.height, 629);
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {

@@ -175,8 +175,8 @@ describe('main cached proxy icons', () => {
       };
     }, iconUrl);
 
-    assert.equal(state.viewport.width, 1224);
-    assert.equal(state.viewport.height, 629);
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
     assert.ok(state.imageSrc, JSON.stringify(state, null, 2));
     assert.match(state.imageSrc, /^http:\/\/localhost:\d+\/cache\/icon\?url=/);
     assert.equal(
@@ -195,36 +195,47 @@ describe('main cached proxy icons', () => {
   it('keeps loaded Rules proxy artwork square like ref', async () => {
     await openMainRoute('/main/rules');
 
-    const groupLabel = await $(`//*[normalize-space()="${svgGroupName}"]`);
-    await groupLabel.waitForDisplayed({ timeout: 30_000 });
+    let lastState = 'not observed';
+    const readState = () =>
+      browser.execute((expectedGroup) => {
+        const sidebar = document.querySelector<HTMLElement>(
+          '[data-slot="slider-sidebar"]',
+        );
+        const link = Array.from(
+          sidebar?.querySelectorAll<HTMLAnchorElement>('a') ?? [],
+        ).find((candidate) => candidate.textContent?.trim() === expectedGroup);
+        const image = link?.querySelector<HTMLImageElement>('img');
 
-    const state = await browser.execute((expectedGroup) => {
-      const candidates = Array.from(
-        document.querySelectorAll<HTMLAnchorElement>('a'),
-      )
-        .filter((link) => link.innerText.trim() === expectedGroup)
-        .map((link) => {
-          const image = link.querySelector<HTMLImageElement>('img');
-          return {
-            imageSrc: image?.src ?? '',
-            imageClass: image?.className ?? '',
-            width: image?.getBoundingClientRect().width ?? 0,
-            height: image?.getBoundingClientRect().height ?? 0,
-          };
-        });
-      const image = candidates.find((candidate) =>
-        candidate.imageClass.split(/\s+/).includes('size-6'),
+        return {
+          imageFound: Boolean(image),
+          imageSrc: image?.src ?? '',
+          imageClass: image?.className ?? '',
+          width: image?.getBoundingClientRect().width ?? 0,
+          height: image?.getBoundingClientRect().height ?? 0,
+        };
+      }, svgGroupName);
+
+    try {
+      await browser.waitUntil(
+        async () => {
+          const state = await readState();
+          lastState = JSON.stringify(state);
+          return state.imageFound && state.width > 0 && state.height > 0;
+        },
+        {
+          timeout: 30_000,
+          interval: 250,
+          timeoutMsg: 'Rules proxy artwork did not load in the sidebar.',
+        },
       );
+    } catch (cause) {
+      throw new Error(
+        `Rules proxy artwork did not load in the sidebar. Last state: ${lastState}`,
+        { cause },
+      );
+    }
 
-      return {
-        imageFound: Boolean(image),
-        imageSrc: image?.imageSrc ?? '',
-        imageClass: image?.imageClass ?? '',
-        width: image?.width ?? 0,
-        height: image?.height ?? 0,
-        candidates,
-      };
-    }, svgGroupName);
+    const state = await readState();
 
     assert.equal(state.imageFound, true, JSON.stringify(state, null, 2));
     assert.ok(

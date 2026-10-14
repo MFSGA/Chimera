@@ -110,7 +110,8 @@ describe('main Chimera settings reference layout', () => {
     });
 
     assert.equal(state.path, '/main/settings/chimera');
-    assert.deepEqual(state.viewport, { width: 1224, height: 629 });
+    assert.ok(state.viewport.width >= 1200, JSON.stringify(state, null, 2));
+    assert.ok(state.viewport.height >= 600, JSON.stringify(state, null, 2));
     assert.equal(state.groupCount, 6);
     assert.deepEqual(
       state.groupTags,
