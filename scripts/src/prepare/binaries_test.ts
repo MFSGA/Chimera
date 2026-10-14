@@ -1,7 +1,6 @@
 import { assertEquals } from 'jsr:@std/assert@1';
 import * as path from 'jsr:@std/path';
 import { createBinaryResolvers } from './binaries.ts';
-import { resolveSidecar } from './resources.ts';
 import type { ArchMapping, SupportedArch, VersionManifest } from './types.ts';
 
 const platforms: Array<{
@@ -429,36 +428,6 @@ Deno.test(
         'chimera-client-0.26.4-aarch64-apple-darwin.tar.gz',
     );
     assertEquals(refreshed.targetFile, pinned.targetFile);
-  },
-);
-
-Deno.test(
-  'Chimera Client Alpha retries a failed asset with refreshed metadata',
-  async () => {
-    const binary = createResolvers(
-      'darwin',
-      'arm64',
-      'aarch64-apple-darwin',
-      '/workspace',
-      async () => ({
-        version: '0.26.4-alpha+sha.abcdef0',
-        archMapping: versionManifest.arch_template.chimera_client_alpha,
-      }),
-    );
-    const attempted: string[] = [];
-    const result = await resolveSidecar(
-      binary.chimeraClientAlpha(),
-      async (info) => {
-        attempted.push(info.downloadURL);
-        if (attempted.length === 1) throw new Error('stale asset');
-        return { file: info.targetFile, version: info.version };
-      },
-    );
-
-    assertEquals(attempted.length, 2);
-    assertEquals(attempted[0].includes('chimera-client-0.26.3-'), true);
-    assertEquals(attempted[1].includes('chimera-client-0.26.4-'), true);
-    assertEquals(result.version, '0.26.4-alpha+sha.abcdef0');
   },
 );
 

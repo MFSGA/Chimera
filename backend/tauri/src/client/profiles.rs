@@ -941,18 +941,22 @@ mod tests {
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         tokio::time::advance(std::time::Duration::from_secs(60 * 60 + 1)).await;
-        for _ in 0..200 {
-            let snapshot = client.snapshot();
-            let source = snapshot.items[&uid].definition.source().unwrap();
-            if matches!(
-                source,
-                ProfileSource::Remote { subscription, .. }
-                    if subscription.upload == Some(2)
-            ) {
-                break;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let snapshot = client.snapshot();
+                let source = snapshot.items[&uid].definition.source().unwrap();
+                if matches!(
+                    source,
+                    ProfileSource::Remote { subscription, .. }
+                        if subscription.upload == Some(2)
+                ) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
-            tokio::task::yield_now().await;
-        }
+        })
+        .await
+        .expect("scheduled refresh should commit its result");
         assert!(fetch_count.load(std::sync::atomic::Ordering::SeqCst) >= 2);
         let snapshot = client.snapshot();
         let source = snapshot.items[&uid].definition.source().unwrap();

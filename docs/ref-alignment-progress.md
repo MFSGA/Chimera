@@ -1357,3 +1357,23 @@ DIFF-001 至 DIFF-012 是此前基于
   但下载反复重试且无进度后中断；随后对 Clash Premium、Mihomo Alpha 与 Chimera Client Alpha 的 GitHub 元数据/资产 URL
   执行请求均在 12 秒超时，故本地实际下载与安装未验证，不能记为通过。该批仍为部分迁移；推送后需记录该 SHA 的
   CI/E2E 结果，远端未通过前不得合并。
+
+## DIFF-051：迁移 prepare 下载、资源安装、进度和任务执行器
+
+- 目标：完成上一切片预留的 prepare 管线迁移，将下载/解压、资源解析、进度渲染和任务调度放入 ref 对应的 `scripts/src/prepare/` 文件，并让 `pnpm prepare:check` 直接运行该入口。
+- 非目标：不改变 manifest 版本解析、平台映射、应用 Core/Service IPC、用户配置、宿主网络/TUN 行为；不注册应用未支持的 Meow core；不在本机下载或替换真实 sidecar/资源来验证。
+- 风险：L2（准备并原子安装 sidecar 与运行资源）。需要独立复核和维护者审批后才能提交推送；合并仍需新 SHA 的 CI/E2E 通过。
+- ref 基线：`813673a8e84b51265467f02277fc7e739837f61e`，本地 `ref/` 已核对为该 SHA 且工作区干净；本批未改动或重新同步 ref。
+- ref 到 Chimera 的路径与符号映射：
+  - `ref/scripts/src/prepare/download.ts::{downloadFile, extractZip, extractTarGz, gunzipFile}` → `scripts/src/prepare/download.ts` 同名函数；流式下载和解包流程沿用 ref。
+  - `ref/scripts/src/prepare/progress.ts::{ProgressRenderer, formatSize, formatSpeed, formatProgressSize, formatResolveInfo}` → `scripts/src/prepare/progress.ts` 同名类和函数。
+  - `ref/scripts/src/prepare/resources.ts::{resolveResource, resolveSidecar, resolveWintun}` → `scripts/src/prepare/resources.ts` 同名解析器；保留 Chimera 现有 Alpha metadata refresh、sidecar SHA-256 和临时版本戳。
+  - `ref/scripts/src/prepare/check.ts::{runTask, resolveSidecarHost, main}` → `scripts/src/prepare/check.ts` 同名入口和任务执行路径；`createPrepareTasks`、`selectPrepareTasks` 放在 `scripts/src/prepare/tasks.ts`，并由独立测试检查支持的核心、资源和 Windows 任务。使用 Chimera 的 logger、manifest、资源路径，并注册 Clash、Mihomo、Mihomo Alpha、Clash-rs/Alpha、Chimera Client/Alpha、Chimera Service、Wintun、MMDB、GeoIP、GeoSite 与 Windows loopback 工具。保留十种架构和现有服务/客户端资产名。
+  - 历史入口 `scripts/check.ts` 保留为兼容委托；`package.json::prepare:check` 改为直接运行新模块。
+- 保留差异与缺陷修正：不注册上游 Meow，因为 Chimera 的 core 配置/IPC/service 合同不支持它；用现有 `verifyAndInstallSidecar` 为 sidecar 保留校验和 staged atomic install。普通资源现在也先写入同目录临时文件、下载完成后再替换：中断下载会留下半截文件并被下次按“已缓存”采用，已用测试复现该旧行为并验证新实现保留原缓存、清理临时文件。Wintun 的每次重试都会丢弃未完成归档；DLL 经同目录暂存并原子替换，失败时保留上次可用版本。这些是窄范围恢复性修正，ref 应在后续切片复查。
+- 影响范围：仅改变 Node/Deno prepare 脚本入口、脚本测试执行权限和本地准备资源流程；主界面、legacy UI、agent、持久化数据和宿主代理状态不变。
+- 验收：下载、失败清理、Alpha 刷新、checksum 失败保留旧 sidecar、Wintun 重试与旧 DLL 保留、任务进度、注册任务清单、历史入口和所有当前 core task 可检查；`pnpm test:manifest`、Deno frozen check、workspace typecheck、oxlint、Prettier 和 diff 检查通过；独立复核无阻断项；推送后的必需平台 CI 与 Desktop E2E 通过。
+- 验证计划/限制：使用假 HTTP 响应和隔离临时目录覆盖下载与恢复；本地 `pnpm prepare:check` 会访问网络并替换被忽略的 sidecar/resource 文件，本批不运行该命令。全平台真实下载与 Tauri 打包由本批推送后的工作流验证。
+- 回滚：回退 `scripts/src/prepare/{check,download,progress,resources}.ts`、相应测试/测试入口、`prepare:check` 路径及本条记录；无用户数据迁移。
+- 当前本地证据：`pnpm test:manifest` 24 passed、0 failed；`deno check --frozen --config scripts/deno.jsonc scripts/src/prepare/check.ts scripts/src/prepare/tasks.ts scripts/src/prepare/resources_test.ts` 通过；`pnpm typecheck`、`pnpm lint:oxlint`、本批文件 Prettier、`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check` 与 `git diff --check` 通过。对 CI 失败的 `client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer` 定向 `cargo test` 通过，等待新 SHA 上 CI 重验。本机 `pnpm prepare:check` 未运行，不宣称真实资源下载/安装已验证。
+- 远端失败证据（修复前的 #480 head `c797797d16cc2453b01ca460a2adf3e6b90a1d67`）：CI https://github.com/MFSGA/Chimera/actions/runs/38558416365 的 Ubuntu 后端测试因观察 fetch 与 actor 提交之间的竞态失败，现已改为等待提交后的快照；Desktop E2E https://github.com/MFSGA/Chimera/actions/runs/38558416387 的 Windows 运行中 51/52 个 spec 通过，`rules-main-proxy-icon.e2e.ts` 未加载图标。PR #479 的缓存 generation 修复已通过全平台 CI 和 Desktop E2E，并于 2026-10-14 合入 master；#480 的新 SHA 仍须重新执行必需检查。当前本地 `pnpm prepare:check` 未运行，不代表真实资源下载/安装验证通过。
