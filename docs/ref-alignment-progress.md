@@ -1264,7 +1264,7 @@ DIFF-001 至 DIFF-012 是此前基于
 
 ## DIFF-049：滚动 Chimera Client Alpha 资产失败后刷新
 
-- ref 基线：本地 `ref/` commit `67999753918c7b9879ddd2bacdef74246bfef1dd`，与远端 `main` 一致，工作树干净。
+- ref 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，与远端 `main` 一致，工作树干净。该提交相对原分析基线 `67999753918c7b9879ddd2bacdef74246bfef1dd` 未改变本条映射的 `scripts/src/prepare` 文件。
 - ref 到 Chimera 映射：ref `scripts/src/prepare/types.ts::BinInfo.refresh`、
   `scripts/src/prepare/binaries.ts::getClashMetaAlphaInfo` / `getMeowAlphaInfo` 和
   `scripts/src/prepare/resources.ts::resolveSidecar`；Chimera 对应新增的
