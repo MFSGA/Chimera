@@ -37,10 +37,9 @@ describe('main traffic analysis', () => {
     const sidebarToggle = await $('[data-slot="navigation-sidebar-toggle"]');
     assert.ok(await sidebarToggle.getAttribute('aria-label'));
 
-    const closedScope = await $(
-      '[data-slot="traffic-scope-item"][data-scope="closed"]',
-    );
-    await closedScope.click();
+    const closedScopeSelector =
+      '[data-slot="traffic-scope-item"][data-scope="closed"]';
+    await $(closedScopeSelector).click();
     await browser.waitUntil(
       async () =>
         browser.execute(
@@ -52,7 +51,13 @@ describe('main traffic analysis', () => {
       },
     );
     await browser.waitUntil(
-      async () => (await closedScope.getAttribute('aria-checked')) === 'true',
+      async () =>
+        browser.execute(
+          (selector) =>
+            document.querySelector(selector)?.getAttribute('aria-checked') ===
+            'true',
+          closedScopeSelector,
+        ),
       {
         timeout: 10_000,
         timeoutMsg: 'The Closed scope control did not settle after navigation.',
