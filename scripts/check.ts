@@ -6,7 +6,10 @@ import AdmZip from 'npm:adm-zip@0.6.1';
 import { colorize, consola } from './deno/utils/logger.ts';
 import { verifyAndInstallSidecar } from './deno/utils/sidecar-integrity.ts';
 import { getChimeraClientAlphaInfo as createChimeraClientAlphaInfo } from './src/prepare/binaries.ts';
-import { resolveSidecar as resolveSidecarWithRefresh } from './src/prepare/resources.ts';
+import {
+  resolveSidecar as resolveSidecarWithRefresh,
+  type SidecarRefreshRetryPolicy,
+} from './src/prepare/resources.ts';
 import type {
   ArchMapping,
   BinInfo,
@@ -226,6 +229,15 @@ const CHIMERA_CLIENT_MANIFEST: ClashManifest = {
   ARCH_MAPPING: versionManifest.arch_template.chimera_client as ArchMapping,
 };
 
+// The upstream rolling `latest` release is deleted before its replacement is
+// published. Retry only 404s while refreshing the Alpha sidecar through that
+// short transition; permanent download and validation errors still fail fast.
+const CHIMERA_CLIENT_ALPHA_REFRESH_RETRY: SidecarRefreshRetryPolicy = {
+  delaysMs: [1_000, 2_000, 4_000, 8_000],
+  shouldRetry: (error) =>
+    error instanceof Error && error.message.includes('(404)'),
+};
+
 // === Download ===
 
 async function downloadFile(
@@ -388,11 +400,13 @@ async function readVersionStamp(stampPath: string): Promise<string | null> {
 async function resolveSidecar(
   binInfo: BinInfo | Promise<BinInfo>,
   options?: ResolveOptions,
+  refreshRetry?: SidecarRefreshRetryPolicy,
 ): Promise<ResolveInfo> {
   return resolveSidecarWithRefresh(
     binInfo,
     (info) => materializeSidecar(info, options),
     (message) => debugLog(message),
+    refreshRetry,
   );
 }
 
@@ -908,7 +922,11 @@ const tasks: Array<{
     name: 'chimera-client-alpha',
     version: versionManifest.latest.chimera_client_alpha,
     func: (onProgress) =>
-      resolveSidecar(getChimeraClientAlphaInfo(), { force: FORCE, onProgress }),
+      resolveSidecar(
+        getChimeraClientAlphaInfo(),
+        { force: FORCE, onProgress },
+        CHIMERA_CLIENT_ALPHA_REFRESH_RETRY,
+      ),
     retry: 5,
   },
   {
