@@ -13,8 +13,8 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     0c7b15b3c61db390db21cffb63d29805abd380a1
-verified:   2026-10-12 remote HEAD and refs/heads/main
+commit:     69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a
+verified:   2026-10-13 fetched and fast-forwarded from origin/main
 ```
 
 每个迁移切片开始前执行：
@@ -201,3 +201,27 @@ cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features
 - 实际验证：前端 `pnpm typecheck`、`pnpm lint:frontend-boundaries` 和 Prettier 检查通过；Rust 应用契约、legacy bridge、runtime builder、local host、updater 和 Alpha 版本展示测试通过。`pnpm prepare:check` 成功下载并登记 macOS arm64 Alpha sidecar（版本戳 `0.26.3-alpha+sha.229218a`），二进制 `-V` 输出一致。完整 manifest 生成器确认解析出该 Alpha 版本，但在无关的 Mihomo Alpha GitHub 请求处因 TLS peer 关闭而失败，因此版本清单保留了已核对的 Alpha 版本和资源模板。`pnpm build` 已生成 `.app` 和 `.dmg`，但命令最后因缺少 `TAURI_SIGNING_PRIVATE_KEY` 在 updater 签名步骤返回失败；构建包内已确认存在可执行的 Alpha sidecar。Service 扩展测试通过：`cargo +nightly test --locked -p chimera-ipc chimera_client_channels_keep_distinct_wire_and_executable_identities`、`cargo +nightly test --locked -p chimera-service service_resolves_the_alpha_sidecar_while_sharing_the_chimera_manager_kind`、`cargo +nightly test --locked -p chimera-service chimera_client_keeps_its_manager_kind`，以及主仓的 Alpha application-contract、Service wire-identity 和 reconcile-wire 测试；受影响 Rust 文件的 nightly rustfmt 检查通过。Service `v1.10.2` 发布 workflow `38156677500` 的 macOS、Linux、Windows 全部构建和上传 job 成功；主仓 `pnpm check:service-runtime` 报告 IPC/Service 版本对齐至 `v1.10.2`。`pnpm prepare:check` 再次成功并验证 Service macOS arm64 发布包 SHA-256，二进制报告 `chimera-service v1.10.2 (Release Build)`。Service 单元测试仍是源码级验证，不等于已安装系统服务或真实 TUN 端到端验证；桌面 UI E2E 尚未执行。
 - 已知边界：Service IPC 类型、manager 映射和独立 Alpha 可执行文件均已进入源码及 `v1.10.2` 发布二进制，主仓 submodule 也指向该版本。已经安装旧版 Service 的主机仍需更新其 Service 二进制；真实系统服务重启、授权和 TUN 流量尚未端到端验证。
 - 重新评估条件：在 Chimera Client 持续发布 `latest` 预发布期间保留此产品选项；其发布 workflow 改动时重新核对 asset 名称、压缩包布局和 tag/ref 约定。对已安装服务完成版本升级后，在专用 macOS runner/VM 验证服务模式启动、重启和 TUN，再把该平台验证标记为完成。UI 与 updater 继续按 ref 稳定版/Alpha 结构维护。
+
+### DIFF-MAIN-SCROLL-VIEWPORT：主界面虚拟列表滚动视口
+
+- ref commit：`69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a`（工作区干净）。
+- ref 路径和符号：`ref/frontend/ui/src/scroll-area.tsx::{ScrollAreaProvider, useScrollAreaViewport, useScrollAreaViewportElement}`；主界面 connections、logs、rules、proxy-group 对应页面的 `getScrollElement`。
+- Chimera 路径和符号：`frontend/chimera/src/components/ui/scroll-area.tsx`；`frontend/chimera/src/pages/(main)/main/{connections/_modules/connections-table.tsx,logs/index.tsx,rules/index.tsx,proxies/$name.tsx}`。
+- 类别：部分迁移。
+- 差异及必要性：已沿用 ref 的稳定 viewport ref 与挂载后 viewport element 状态，并让虚拟器读取实际元素；这是避免子组件在 ref 尚未挂载时初始化虚拟器的必要修复。Chimera 当前 ScrollArea 仍保留 `offset` 状态、`type="always"` 行为和独立 `slot` 参数，ref 的 `isPastHeader` 与 `AppContentScrollArea` 尚未迁入；proxy-group 路由文件位置也仍不同。
+- 共通业务入口及适配边界：主界面和 legacy UI 共用 Chimera ScrollArea，业务状态与数据查询没有分叉；只为现有组件增加 ref 对应的 viewport contexts。
+- 影响的入口：主界面的 connections、logs、rules、proxy group；共享 ScrollArea 的 legacy 调用方经类型检查覆盖。主界面 E2E 已注册到 `test:main`。
+- 实际验证：`pnpm typecheck:chimera`、E2E TypeScript typecheck、`pnpm lint:frontend-boundaries`、前端 build 和 E2E harness unit（25/25）通过；`test:main` 14/14 specs 通过，`test:smoke` 4/4 specs（9 条用例）通过，覆盖主界面和 legacy 入口。`test:settings` 整套为 12/16 specs：修改过的 `core-manager-main.e2e.ts` 单独执行通过；整套另有 4 个失败，分别是 `session-typed-state` 关闭按钮不可点击、`clash-settings-main` 未找到期望的布局节点、`custom-css-editor` WebDriver 窗口丢失、macOS 上不存在的 Windows UWP 卡片。后四项未由本次视口/代理缓存改动触发，仍需独立修复或按平台约束测试；不能据此宣称 settings 套件全绿。
+- 收敛、移除或重新评估条件：后续对齐完整 ScrollArea API 和 AppContentScrollArea 时复核 `offset`、滚动条策略及组件位置；在确认主/legacy 的页面语义后再迁移或记录兼容边界。
+
+### DIFF-PROFILE-PROXY-INVALIDATION：Profile 变更后的代理查询缓存
+
+- ref commit：`69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a`（工作区干净）。
+- ref 路径和符号：`ref/frontend/query/src/provider/mutation-provider.tsx::mutationKeys.profiles`。
+- Chimera 路径和符号：`frontend/interface/src/provider/mutation-provider.tsx::{PROFILES_MUTATION_KEYS,CLASH_CONFIG_MUTATION_KEYS}`。
+- 类别：缺陷修正。
+- 差异及必要性：ref 的 `profiles` 变更键未包含代理快照；本地复现显示，当主窗口已经缓存旧 Profile 的代理数据时，切换 Profile 后 IPC 返回的新代理组与主界面代理图标不一致。因此 Chimera 在 Profile 和运行时 Clash 配置事件中同时失效代理及代理提供者查询，避免继续显示旧快照。
+- 共通业务入口及适配边界：仍由共享 `MutationProvider` 监听现有后端 mutation 事件并失效 React Query 缓存；未增加第二套代理状态源。
+- 影响的入口：主窗口 navbar、proxies、rules 代理图标及 provider 代理列表；legacy UI 和 agent 继续读共享接口。`rules-main-proxy-icon.e2e.ts` 先挂载旧 Profile 查询，再通过测试 fixture 激活新 Profile，验证当前 UI 跟随运行时数据更新。
+- 实际验证：`pnpm typecheck:chimera`、E2E TypeScript typecheck、`pnpm lint:frontend-boundaries`、前端 build 和 E2E harness unit（25/25）通过；`test:main` 14/14 specs 通过，其中该回归用例先挂载旧 Profile 查询再切换到 fixture Profile；`test:smoke` 4/4 specs（9 条用例）通过。该用例使用 IPC fixture 准备并由桌面 UI 观察，不代表真实网络流量验证。`test:settings` 整套 12/16，失败项和已知限制见 `DIFF-MAIN-SCROLL-VIEWPORT` 验证记录。
+- 收敛、移除或重新评估条件：迁移到 ref 的 query/event 架构后，重新核对 Profile 事件的代理快照失效语义；只有新架构在“缓存旧 Profile 后切换”的回归场景仍能更新时，才移除此兼容修正。
