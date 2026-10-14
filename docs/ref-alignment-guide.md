@@ -13,7 +13,7 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a
+commit:     67999753918c7b9879ddd2bacdef74246bfef1dd
 verified:   2026-10-13 fetched and fast-forwarded from origin/main
 ```
 

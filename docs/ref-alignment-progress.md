@@ -1261,3 +1261,39 @@ DIFF-001 至 DIFF-012 是此前基于
   Tauri E2E 不受此改动影响。
 - 收敛条件：当 Chimera 迁移到与 ref 相同的持久化 job scheduler 时，重看首次 tick 的注册时刻与 catch-up 语义；保留
   “deadline 不依赖 task 首次 poll 时刻”的确定性要求。
+
+## DIFF-049：滚动 Chimera Client Alpha 资产失败后刷新
+
+- ref 基线：本地 `ref/` commit `67999753918c7b9879ddd2bacdef74246bfef1dd`，与远端 `main` 一致，工作树干净。
+- ref 到 Chimera 映射：ref `scripts/src/prepare/types.ts::BinInfo.refresh`、
+  `scripts/src/prepare/binaries.ts::getClashMetaAlphaInfo` / `getMeowAlphaInfo` 和
+  `scripts/src/prepare/resources.ts::resolveSidecar`；Chimera 对应新增的
+  `scripts/src/prepare/{types,binaries,resources}.ts` 中 `BinInfo.refresh`、
+  `getChimeraClientAlphaInfo` 与 `resolveSidecar`。
+- 实际入口：`package.json::prepare:check` 调用 `scripts/check.ts`；Alpha task
+  仍通过 `materializeSidecar` 和 `verifyAndInstallSidecar` 安装并校验二进制。
+  为保持 Chimera 当前 Deno 准备器与完整性安装边界，本批把 ref 的刷新重试抽到
+  对齐目录，实际原子暂存、校验和替换仍由 `scripts/check.ts` 承担。未修改没有
+  被 `prepare:check` 调用的旧 `scripts/utils/resource.ts`。
+- 问题与修正：Chimera Client Alpha 使用滚动 `latest` release；macOS 资产文件名
+  带稳定版本号。当 manifest 更新落后于 release 且旧资产已不可用时，首次下载
+  失败会触发 `resolveChimeraClientAlpha`（与 manifest 生成共用同一 resolver）
+  重新解析版本及架构映射，再按 ref 行为重试一次。刷新元数据失败时保留首次
+  下载错误；重试安装失败则报告重试错误，外层原有 task retry 不变。当前 release
+  资产列表确有版本化 macOS tarball；证据：[latest release assets](https://github.com/MFSGA/Chimera_Client/releases/expanded_assets/latest)。
+- 保留差异与边界：只给 Chimera Client Alpha 增加刷新，未支持的 Meow 不迁入；
+  Clash-rs Alpha 使用无版本号文件名，因此无需此映射。与 ref 相同，只有首次
+  materialization 失败才刷新；命中版本戳有效的缓存时仍遵从现有缓存语义，直到
+  manifest 更新使版本戳失效。
+- 影响入口：打包/开发前的共享 sidecar 准备；不改变 main UI、legacy UI、Agent
+  的 API，配置持久化、Core/Service 协议和宿主网络均不受影响。下载及安装仍复用
+  现有临时目录、版本戳、SHA-256 校验和原子替换逻辑。
+- 验证：`pnpm test:manifest` 为 5 passed，其中新增测试模拟旧滚动资产失败，
+  验证同一调用链刷新为新 Alpha 版本并重试；`deno check --frozen --config
+  scripts/deno.jsonc scripts/check.ts`、`pnpm typecheck`、`pnpm lint:oxlint`、
+  Prettier 和 `git diff --check` 通过。未在本机运行 `pnpm prepare:check`，因为它会
+  下载并替换工作区 sidecar；本批完整准备/打包路径由变更后的远程 CI 执行。没有
+  本机 macOS Tauri 桌面 E2E 或真实 Alpha 核心运行验证。
+- 收敛条件：本地准备器整体迁移到 ref 的 `scripts/src/prepare/check.ts` 后，移除
+  `scripts/check.ts` 的委托桥接；若要在 manifest 日更窗口内自动淘汰已缓存的
+  旧 Alpha，还需单独评估每次准备时在线解析版本的成本和离线回退策略。
