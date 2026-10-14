@@ -1,6 +1,42 @@
 import assert from 'node:assert/strict';
 import { openMainRoute } from './main-window.js';
 
+async function readCenterHitTarget(selector: string) {
+  return browser.execute((targetSelector) => {
+    const target = document.querySelector<HTMLElement>(targetSelector);
+    if (!target) {
+      return {
+        targetFound: false,
+        centerInViewport: false,
+        hitsTarget: false,
+        hitSlot: null,
+        center: null,
+      };
+    }
+
+    const rect = target.getBoundingClientRect();
+    const center = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+    const hit = document.elementFromPoint(center.x, center.y);
+    return {
+      targetFound: true,
+      centerInViewport:
+        center.x >= 0 &&
+        center.y >= 0 &&
+        center.x < window.innerWidth &&
+        center.y < window.innerHeight,
+      hitsTarget: hit === target || (hit !== null && target.contains(hit)),
+      hitSlot:
+        hit?.closest<HTMLElement>('[data-slot]')?.dataset.slot ??
+        hit?.tagName ??
+        null,
+      center,
+    };
+  }, selector);
+}
+
 describe('main traffic analysis', () => {
   before(async () => {
     await browser.setWindowSize(1280, 720);
@@ -65,7 +101,14 @@ describe('main traffic analysis', () => {
     );
 
     const metricTrigger = await $('[data-slot="traffic-metric-trigger"]');
-    await metricTrigger.waitForClickable({ timeout: 10_000 });
+    await metricTrigger.waitForDisplayed({ timeout: 10_000 });
+    const centerHit = await readCenterHitTarget(
+      '[data-slot="traffic-metric-trigger"]',
+    );
+    assert.ok(
+      centerHit.centerInViewport && centerHit.hitsTarget,
+      `The traffic metric trigger center was not unobstructed: ${JSON.stringify(centerHit)}`,
+    );
     await metricTrigger.click();
     await browser.waitUntil(
       async () =>
