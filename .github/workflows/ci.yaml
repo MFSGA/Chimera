@@ -216,6 +216,10 @@ jobs:
       - name: Test backend workspace
         if: env.BACKEND == 'true'
         run: pnpm test:backend
+        env:
+          # Rustdoc test executables do not inherit Tauri's application CRT
+          # linker arguments, so keep this test process on the default CRT.
+          STATIC_VCRUNTIME: 'false'
 
       - name: Lint backend
         if: env.BACKEND == 'true'

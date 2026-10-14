@@ -46,6 +46,10 @@ fn build_tauri() {
 }
 
 fn main() {
+    // The locked tauri-build version uses this variable to change native link
+    // outputs but does not ask Cargo to rerun this script when it changes.
+    println!("cargo:rerun-if-env-changed=STATIC_VCRUNTIME");
+
     let version: String = if let Ok(true) = exists("../../package.json") {
         let raw = read("../../package.json").unwrap();
         let pkg_json: PackageJson = serde_json::from_slice(&raw).unwrap();
