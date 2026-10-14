@@ -4,6 +4,7 @@ import {
   resolveSidecar,
   resolveWintun,
   type ResourceResolverOptions,
+  type SidecarRefreshRetryPolicy,
 } from './resources.ts';
 import type {
   DownloadProgress,
@@ -26,13 +27,23 @@ interface CreatePrepareTasksOptions {
   versionManifest: VersionManifest;
   binary: ReturnType<typeof createBinaryResolvers>;
   resourceContext: ResourceResolverOptions;
+  chimeraClientAlphaRefreshRetryPolicy?: SidecarRefreshRetryPolicy;
 }
+
+// Chimera Client's rolling `latest` release is deleted before its replacement
+// is published. Retry only 404s during that short transition.
+const CHIMERA_CLIENT_ALPHA_REFRESH_RETRY: SidecarRefreshRetryPolicy = {
+  delaysMs: [1_000, 2_000, 4_000, 8_000],
+  shouldRetry: (error) =>
+    error instanceof Error && error.message.includes('(404)'),
+};
 
 export function createPrepareTasks({
   force,
   versionManifest,
   binary,
   resourceContext,
+  chimeraClientAlphaRefreshRetryPolicy = CHIMERA_CLIENT_ALPHA_REFRESH_RETRY,
 }: CreatePrepareTasksOptions): Task[] {
   return [
     {
@@ -90,10 +101,15 @@ export function createPrepareTasks({
     {
       name: 'chimera-client-alpha',
       func: (onProgress) =>
-        resolveSidecar(resourceContext, binary.chimeraClientAlpha(), {
-          force,
-          onProgress,
-        }),
+        resolveSidecar(
+          resourceContext,
+          binary.chimeraClientAlpha(),
+          {
+            force,
+            onProgress,
+          },
+          chimeraClientAlphaRefreshRetryPolicy,
+        ),
       retry: 5,
     },
     {

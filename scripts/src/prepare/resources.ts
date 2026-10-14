@@ -26,6 +26,40 @@ export interface ResourceResolverOptions {
   debugLog?: DebugLog;
 }
 
+export interface SidecarRefreshRetryPolicy {
+  delaysMs: readonly number[];
+  shouldRetry: (error: unknown) => boolean;
+  sleep?: (delayMs: number) => Promise<void>;
+}
+
+async function retryRefreshedSidecar(
+  info: BinInfo,
+  materialize: (binInfo: BinInfo) => Promise<ResolveInfo>,
+  lastError: unknown,
+  debugLog: DebugLog,
+  policy: SidecarRefreshRetryPolicy,
+): Promise<ResolveInfo> {
+  for (const delayMs of policy.delaysMs) {
+    if (!policy.shouldRetry(lastError)) throw lastError;
+
+    await (
+      policy.sleep ??
+      ((delay) => new Promise((resolve) => setTimeout(resolve, delay)))
+    )(delayMs);
+
+    try {
+      const refreshed = await info.refresh!();
+      debugLog(`retrying ${info.name} with version ${refreshed.version}`);
+      return await materialize(refreshed);
+    } catch (error) {
+      if (!policy.shouldRetry(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
 export function isVersionManagedTarget(name: string): boolean {
   return ['chimera-service', 'chimera-client-alpha', 'mihomo-alpha'].includes(
     name,
@@ -96,10 +130,13 @@ export async function resolveSidecar(
   context: ResourceResolverOptions,
   binInfo: BinInfo | Promise<BinInfo>,
   options?: ResolveOptions,
+  refreshRetry?: SidecarRefreshRetryPolicy,
 ): Promise<ResolveInfo> {
   const info = await binInfo;
+  const materialize = (nextInfo: BinInfo) =>
+    materializeSidecar(context, nextInfo, options);
   try {
-    return await materializeSidecar(context, info, options);
+    return await materialize(info);
   } catch (err) {
     if (!info.refresh) throw err;
     const debugLog = context.debugLog ?? (() => {});
@@ -109,11 +146,33 @@ export async function resolveSidecar(
       refreshed = await info.refresh();
     } catch (refreshErr) {
       debugLog(`failed to refresh ${info.name}: ${String(refreshErr)}`);
+      if (refreshRetry && refreshRetry.shouldRetry(refreshErr)) {
+        return retryRefreshedSidecar(
+          info,
+          materialize,
+          refreshErr,
+          debugLog,
+          refreshRetry,
+        );
+      }
       throw err;
     }
 
     debugLog(`retrying ${info.name} with version ${refreshed.version}`);
-    return await materializeSidecar(context, refreshed, options);
+    try {
+      return await materialize(refreshed);
+    } catch (refreshedErr) {
+      if (!refreshRetry || !refreshRetry.shouldRetry(refreshedErr)) {
+        throw refreshedErr;
+      }
+      return retryRefreshedSidecar(
+        info,
+        materialize,
+        refreshedErr,
+        debugLog,
+        refreshRetry,
+      );
+    }
   }
 }
 
