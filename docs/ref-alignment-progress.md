@@ -1,14 +1,31 @@
 # ref 对齐进度
 
-当前只读参考检出为 Clash Nyanpasu `main` 的最新提交
-`5331747c06a5f42eeabb3e225a1e77a83f480549`，已通过远端 `HEAD` 与
-`refs/heads/main` 核实；检出状态干净。主仓库 `.gitmodules` 留有 `ref` URL，
-但当前 `HEAD` 没有 `ref` gitlink；按本项目约定，`ref/` 是 `.gitignore` 中的
-本地只读基线，不属于主仓库提交。
+主仓库此前固定的 `ref` 基线为 `813673a8e84b51265467f02277fc7e739837f61e`。
+2026-10-14 已从 `origin/main` 核实并检出上游最新提交
+`fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5`；当前候选 gitlink 指向该提交，
+子模块工作区干净。此次上游新增的两个提交分别更新 ref 自身的 TanStack Router
+依赖，以及重整流量分析侧栏路由、页面结构和相关测试；未改变嵌套子模块。此同步
+只更新参考基线，不等于将依赖或界面代码直接应用到 Chimera。
 
 DIFF-001 至 DIFF-012 是此前基于
 `f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
 新基线重审。后续切片应使用当前 `ref/` 提交，并明确记录与历史基线的差别。
+
+## ref 基线同步（2026-10-14）
+
+- 上一固定提交：`813673a8e84b51265467f02277fc7e739837f61e`。
+- 同步提交：`85613d5ec9d3dea3bb08e36b546af738887fcdee`（TanStack Router
+  依赖更新）及 `fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5`（流量分析页面路由重整）。
+  后者已 fetch 并与 `origin/main` 核对，是当前上游 main tip。
+- 上游变化：第一个提交将 `@tanstack/react-router` 从 1.170.41 更新至
+  1.170.44，将 `@tanstack/router-plugin` 从 1.168.42 更新至 1.168.45，并同步
+  router-core、history、generator 锁文件；第二个提交把流量分析页面拆为侧栏子路由，
+  调整排名、工具栏和流量布局组件，并新增/更新浏览器测试。相对 85613d5e，后者
+  改动 37 个文件，约 2,800 行新增、836 行删除。以上仅描述 ref 内部变化，不改
+  Chimera 的 `package.json`、`pnpm-lock.yaml` 或前端实现。
+- 验证：父仓库 `ref` gitlink 指向该提交；ref 工作区干净；递归子模块没有变化；
+  `git diff --check` 通过。此批只改参考版本与本记录，不涉及产品代码，故未运行
+  应用构建、桌面 E2E 或宿主网络测试。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
