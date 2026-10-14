@@ -142,6 +142,9 @@ describe('main rules proxy icon reference behavior', () => {
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
+    // Keep the existing main window's proxy query mounted on the old profile.
+    // Activating the fixture must invalidate that cached snapshot in place.
+    await openMainRoute(targetPath);
 
     const initial = await readProfiles();
     previousCurrent = initial.current ?? null;
@@ -163,8 +166,6 @@ describe('main rules proxy icon reference behavior', () => {
       'rules-icon Profile activation',
     );
     await waitForRuntimeProxyGroup();
-
-    await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
   });
 
