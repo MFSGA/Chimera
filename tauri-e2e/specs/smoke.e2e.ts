@@ -3,15 +3,17 @@ import { openMainRoute } from './main-window.js';
 
 async function assertConnectSourcesAreAvailable(windowName: string) {
   const result = await browser.execute(async () => {
-    const readResponse = async (url: string) => {
+    const readResponse = async (url: string, mode?: RequestMode) => {
       try {
         const response = await fetch(url, {
           cache: 'no-store',
+          mode,
           signal: AbortSignal.timeout(5_000),
         });
         return {
           status: response.status,
           ok: response.ok,
+          type: response.type,
           body: (await response.text()).slice(0, 80),
         };
       } catch (error) {
@@ -21,7 +23,7 @@ async function assertConnectSourcesAreAvailable(windowName: string) {
 
     return {
       sameOrigin: await readResponse(window.location.href),
-      data: await readResponse('data:text/plain,chimera-csp-probe'),
+      data: await readResponse('data:text/plain,chimera-csp-probe', 'no-cors'),
     };
   });
 
@@ -36,8 +38,8 @@ async function assertConnectSourcesAreAvailable(windowName: string) {
       `${windowName} data URL request was blocked: ${result.data.error}`,
     );
   }
-  assert.equal(result.data.status, 200);
-  assert.equal(result.data.body, 'chimera-csp-probe');
+  assert.equal(result.data.type, 'opaque');
+  assert.equal(result.data.status, 0);
 }
 
 describe('Chimera desktop smoke test', () => {
@@ -112,10 +114,10 @@ describe('Chimera desktop smoke test', () => {
     );
   });
 
-  // Contract: from each supported desktop window, same-origin and data: fetches
-  // complete and return readable responses. The previous connect-src blocked
-  // both requests; this probes the real WebView policy without external network.
-  it('allows same-origin and data URL requests in both desktop windows', async () => {
+  // Contract: from each supported desktop window, same-origin fetch is readable
+  // and a data: no-cors fetch completes as an opaque response. The prior policy
+  // blocked data: requests; bundled non-macOS WebViews also need 'self'.
+  it('allows same-origin and data URL fetches in both desktop windows', async () => {
     await browser.switchToWindow('legacy');
     await assertConnectSourcesAreAvailable('Legacy');
 
