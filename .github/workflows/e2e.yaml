@@ -119,6 +119,8 @@ jobs:
 
       - name: Prepare sidecars and resources
         run: pnpm prepare:check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Tauri E2E binary
         run: pnpm e2e:tauri:build

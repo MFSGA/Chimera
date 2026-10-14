@@ -170,6 +170,8 @@ jobs:
       - name: Prepare sidecar and resources
         if: env.BACKEND == 'true'
         run: pnpm prepare:check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Lint formatting
         if: startsWith(matrix.targets.os, 'ubuntu-')
@@ -307,6 +309,8 @@ jobs:
       - name: Prepare sidecar and resources
         if: env.BACKEND == 'true'
         run: pnpm prepare:check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare frontend
         if: env.RUN == 'true'

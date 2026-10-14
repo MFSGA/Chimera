@@ -66,6 +66,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -118,6 +120,8 @@ jobs:
               pnpm prepare:check --arch arm64 --sidecar-host aarch64-pc-windows-msvc
             }
           }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download fixed WebView
         if: ${{ inputs.fixed-webview == true }}
