@@ -203,27 +203,51 @@ async function saveMainOptions() {
   );
 }
 
-async function openMainUpdateOptions() {
-  const trigger = await $('[data-slot="profile-update-options-trigger"]');
-  await trigger.waitForDisplayed({ timeout: 15_000 });
+async function openMainUpdateOptions(uid: string) {
+  const trigger = await $(
+    `[data-slot="profile-update-options-trigger"][data-profile-uid="${uid}"]`,
+  );
+  try {
+    await trigger.waitForDisplayed({ timeout: 15_000 });
+  } catch (cause) {
+    throw new Error(
+      `The update-options trigger for Profile ${uid} was not displayed. ${await captureMainProfileState(uid)}`,
+      { cause },
+    );
+  }
   await trigger.click();
 
   let lastObserved = 'not observed';
   try {
     await browser.waitUntil(
       async () => {
-        const state = await browser.execute(() => ({
-          url: location.href,
-          modalStates: Array.from(
-            document.querySelectorAll<HTMLElement>(
-              '[data-slot="modal-content"]',
+        const state = await browser.execute(
+          (expectedUid) => ({
+            url: location.href,
+            profileDetails: Array.from(
+              document.querySelectorAll<HTMLElement>(
+                '[data-slot="profile-detail"]',
+              ),
+            ).map((detail) => ({
+              uid: detail.dataset.profileUid ?? null,
+              opacity: getComputedStyle(detail).opacity,
+              text: detail.innerText.slice(0, 180),
+            })),
+            triggerCount: document.querySelectorAll(
+              `[data-slot="profile-update-options-trigger"][data-profile-uid="${expectedUid}"]`,
+            ).length,
+            modalStates: Array.from(
+              document.querySelectorAll<HTMLElement>(
+                '[data-slot="modal-content"]',
+              ),
+              (modal) => modal.getAttribute('data-state'),
             ),
-            (modal) => modal.getAttribute('data-state'),
-          ),
-          activeSlot:
-            (document.activeElement as HTMLElement | null)?.dataset.slot ??
-            null,
-        }));
+            activeSlot:
+              (document.activeElement as HTMLElement | null)?.dataset.slot ??
+              null,
+          }),
+          uid,
+        );
         lastObserved = JSON.stringify(state);
         return state.modalStates.includes('open');
       },
@@ -278,6 +302,61 @@ async function cancelMainOptions() {
   );
 }
 
+async function captureMainProfileState(uid: string) {
+  let stateEvidence = 'UI state capture failed before inspection.';
+  try {
+    const state = await browser.execute((expectedUid) => {
+      const details = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-slot="profile-detail"]'),
+      );
+      const detail = details.find(
+        (candidate) => candidate.dataset.profileUid === expectedUid,
+      );
+      const trigger = detail?.querySelector<HTMLElement>(
+        '[data-slot="profile-update-options-trigger"]',
+      );
+
+      return {
+        url: location.href,
+        details: details.map((candidate) => ({
+          uid: candidate.dataset.profileUid ?? null,
+          opacity: getComputedStyle(candidate).opacity,
+          text: candidate.innerText.slice(0, 180),
+        })),
+        trigger: trigger
+          ? {
+              display: getComputedStyle(trigger).display,
+              visibility: getComputedStyle(trigger).visibility,
+              rects: trigger.getClientRects().length,
+            }
+          : null,
+      };
+    }, uid);
+    stateEvidence = `Last Profile UI state: ${JSON.stringify(state)}.`;
+  } catch (stateError) {
+    stateEvidence = `Profile UI state capture failed: ${String(stateError)}.`;
+  }
+  let screenshotEvidence = '';
+  const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+  if (artifactDirectory) {
+    const screenshotPath = path.join(
+      artifactDirectory,
+      screenshotRunId,
+      'profile-auto-update.e2e',
+      'disables-scheduled-sync-while-keeping-manual-sync-available-in-both-uis',
+      `main-profile-${uid}-before-cleanup-${++screenshotAttempt}.png`,
+    );
+    try {
+      fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+      await browser.saveScreenshot(screenshotPath);
+      screenshotEvidence = ` Failure screenshot: ${screenshotPath}.`;
+    } catch (screenshotError) {
+      screenshotEvidence = ` Screenshot capture failed: ${String(screenshotError)}.`;
+    }
+  }
+  return `${stateEvidence}${screenshotEvidence}`;
+}
+
 async function openProfileDetail(uid: string) {
   const pathname = `/main/profiles/profile/detail/${uid}`;
   let currentPath = await browser.execute(() => location.pathname);
@@ -304,24 +383,55 @@ async function openProfileDetail(uid: string) {
   const profileCard = await $(
     `[data-slot="profile-card"][data-profile-uid="${uid}"]`,
   );
-  await profileCard.waitForExist({ timeout: 15_000 });
+  await profileCard.waitForDisplayed({ timeout: 15_000 });
   const detailLink = await profileCard.$('a');
-  await detailLink.waitForExist({ timeout: 15_000 });
+  await detailLink.waitForDisplayed({ timeout: 15_000 });
   await detailLink.click();
 
   let lastObserved = currentPath;
   try {
     await browser.waitUntil(
       async () => {
-        const state = await browser.execute(() => ({
-          path: location.pathname,
-          hasOptionsTrigger:
-            document.querySelector(
-              '[data-slot="profile-update-options-trigger"]',
-            ) !== null,
-        }));
-        lastObserved = `${state.path}; options=${state.hasOptionsTrigger}`;
-        return state.path === pathname && state.hasOptionsTrigger;
+        const state = await browser.execute((expectedUid) => {
+          const details = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-detail"]',
+            ),
+          );
+          const detail = details.find(
+            (candidate) => candidate.dataset.profileUid === expectedUid,
+          );
+          const trigger = detail?.querySelector<HTMLElement>(
+            '[data-slot="profile-update-options-trigger"]',
+          );
+          const visible = (element: HTMLElement | null) => {
+            if (!element || element.getClientRects().length === 0) return false;
+            for (
+              let current: HTMLElement | null = element;
+              current;
+              current = current.parentElement
+            ) {
+              const style = getComputedStyle(current);
+              if (
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                Number(style.opacity) < 0.99
+              ) {
+                return false;
+              }
+            }
+            return true;
+          };
+          return {
+            path: location.pathname,
+            details: details.map(
+              (candidate) => candidate.dataset.profileUid ?? null,
+            ),
+            hasVisibleOptionsTrigger: visible(trigger ?? null),
+          };
+        }, uid);
+        lastObserved = `${state.path}; details=${state.details.join(',')}; visibleOptions=${state.hasVisibleOptionsTrigger}`;
+        return state.path === pathname && state.hasVisibleOptionsTrigger;
       },
       {
         timeout: 30_000,
@@ -329,8 +439,9 @@ async function openProfileDetail(uid: string) {
       },
     );
   } catch (cause) {
+    const failureState = await captureMainProfileState(uid);
     throw new Error(
-      `The subscription options for Profile ${uid} did not render; last observed ${lastObserved}.`,
+      `The subscription options for Profile ${uid} did not render; last observed ${lastObserved}. ${failureState}`,
       { cause },
     );
   }
@@ -450,7 +561,7 @@ describe('remote profile auto-update', () => {
       // Wait for the feature control itself. The shared route helper also waits
       // for every nested list animation, which is unrelated to this contract.
       await openProfileDetail(uid);
-      await openMainUpdateOptions();
+      await openMainUpdateOptions(uid);
 
       const optionsModal = await $(
         '[data-slot="modal-content"][data-state="open"]',
@@ -474,7 +585,9 @@ describe('remote profile auto-update', () => {
       await waitForPersistedInterval(uid, 0);
 
       const beforeManualSync = requestCount;
-      const manualSync = await $('[data-slot="profile-manual-sync"]');
+      const manualSync = await $(
+        `[data-slot="profile-manual-sync"][data-profile-uid="${uid}"]`,
+      );
       await manualSync.waitForExist({ timeout: 15_000 });
       await manualSync.click();
       try {
@@ -490,7 +603,7 @@ describe('remote profile auto-update', () => {
         );
       }
 
-      await openMainUpdateOptions();
+      await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
       );
@@ -508,7 +621,7 @@ describe('remote profile auto-update', () => {
       await waitForInterval(uid, 0);
       await waitForPersistedInterval(uid, 0);
 
-      await openMainUpdateOptions();
+      await openMainUpdateOptions(uid);
       const reopenedSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
       );
