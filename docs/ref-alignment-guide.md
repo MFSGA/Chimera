@@ -8,13 +8,14 @@
 
 ## 1. 参考基线
 
-本次规则更新核对的本地参考版本：
+当前经同步核对的本地参考版本：
 
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     813673a8e84b51265467f02277fc7e739837f61e
-verified:   2026-10-14 fetched and fast-forwarded from origin/main
+previous:   813673a8e84b51265467f02277fc7e739837f61e
+commit:     5ed238841d98b47ae5e2fdfeb433d4946ba43bbb
+verified:   2026-10-14 fetched from origin/main; root and recursive submodules clean
 ```
 
 每个迁移切片开始前执行：

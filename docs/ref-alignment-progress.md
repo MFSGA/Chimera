@@ -1,14 +1,15 @@
 # ref 对齐进度
 
-当前只读参考检出为 Clash Nyanpasu `main` 的最新提交
-`5331747c06a5f42eeabb3e225a1e77a83f480549`，已通过远端 `HEAD` 与
-`refs/heads/main` 核实；检出状态干净。主仓库 `.gitmodules` 留有 `ref` URL，
-但当前 `HEAD` 没有 `ref` gitlink；按本项目约定，`ref/` 是 `.gitignore` 中的
-本地只读基线，不属于主仓库提交。
+当前同步后的只读参考为 Clash Nyanpasu `main` commit
+`5ed238841d98b47ae5e2fdfeb433d4946ba43bbb`，于 2026-10-14 从远端 `origin/main`
+获取。主仓库 `ref` gitlink 从 `813673a8e84b51265467f02277fc7e739837f61e`
+更新到此提交；ref 根工作树及递归子模块均干净。嵌套 runtime gitlink 仍为
+`e9f44e68b0c88981160f5b986f7ffcc9fb5b20a7`，其 utils gitlink 为
+`7d923f82a1982b0513b0037ac9cbaf78e3dd3f3d`。
 
-DIFF-001 至 DIFF-012 是此前基于
-`f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
-新基线重审。后续切片应使用当前 `ref/` 提交，并明确记录与历史基线的差别。
+各 DIFF 记录中的 ref SHA 是对应切片当时核对的历史基线，不会因本次同步而
+自动改写或表示已按新基线重审。后续切片使用当前 `ref/` 提交，并明确记录
+与历史基线的差别。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
