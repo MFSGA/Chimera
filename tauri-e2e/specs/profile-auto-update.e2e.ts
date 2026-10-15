@@ -109,13 +109,43 @@ async function waitForPersistedInterval(uid: string, expected: number) {
 }
 
 async function waitForSwitchChecked(selector: string, expected: boolean) {
-  let lastObserved: string | null = null;
+  let lastObserved = 'not observed';
   try {
     await browser.waitUntil(
       async () => {
-        const toggle = await $(selector);
-        lastObserved = await toggle.getAttribute('aria-checked');
-        return lastObserved === String(expected);
+        const state = await browser.execute((target) => {
+          const switchElement = document.querySelector<HTMLElement>(target);
+          const switches = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-auto-update-switch"]',
+            ),
+          );
+
+          return {
+            url: location.href,
+            modalStates: Array.from(
+              document.querySelectorAll<HTMLElement>(
+                '[data-slot="modal-content"]',
+              ),
+              (modal) => modal.getAttribute('data-state'),
+            ),
+            targetChecked: switchElement?.getAttribute('aria-checked') ?? null,
+            switches: switches.map((element) => ({
+              checked: element.getAttribute('aria-checked'),
+              state: element.getAttribute('data-state'),
+              connected: element.isConnected,
+            })),
+            activeElement:
+              document.activeElement instanceof HTMLElement
+                ? {
+                    tagName: document.activeElement.tagName,
+                    slot: document.activeElement.dataset.slot ?? null,
+                  }
+                : null,
+          };
+        }, selector);
+        lastObserved = JSON.stringify(state);
+        return state.targetChecked === String(expected);
       },
       {
         timeout: 10_000,
@@ -123,8 +153,23 @@ async function waitForSwitchChecked(selector: string, expected: boolean) {
       },
     );
   } catch (cause) {
+    let screenshotEvidence = '';
+    const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+    if (artifactDirectory) {
+      const screenshotPath = path.join(
+        artifactDirectory,
+        'profile-auto-update-switch-state.png',
+      );
+      try {
+        fs.mkdirSync(artifactDirectory, { recursive: true });
+        await browser.saveScreenshot(screenshotPath);
+        screenshotEvidence = ` Failure screenshot: ${screenshotPath}.`;
+      } catch (screenshotError) {
+        screenshotEvidence = ` Screenshot capture failed: ${String(screenshotError)}.`;
+      }
+    }
     throw new Error(
-      `The Auto Update switch did not become ${String(expected)}; last observed ${String(lastObserved)}.`,
+      `The Auto Update switch did not become ${String(expected)}; last observed ${lastObserved}.${screenshotEvidence}`,
       { cause },
     );
   }
