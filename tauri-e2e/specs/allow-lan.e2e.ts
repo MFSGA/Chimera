@@ -127,7 +127,7 @@ async function setAllowLan(enabled: boolean): Promise<void> {
 
 async function selectRequestedCore(): Promise<void> {
   if (!requestedCore) return;
-  await browser.executeAsync((core, done) => {
+  await browser.execute(async (core) => {
     const tauri = (
       window as typeof window & {
         __TAURI_INTERNALS__: {
@@ -135,10 +135,7 @@ async function selectRequestedCore(): Promise<void> {
         };
       }
     ).__TAURI_INTERNALS__;
-    tauri
-      .invoke('change_clash_core', { clashCore: core })
-      .then(() => done())
-      .catch((error) => done(error));
+    await tauri.invoke('change_clash_core', { clashCore: core });
   }, requestedCore);
 }
 

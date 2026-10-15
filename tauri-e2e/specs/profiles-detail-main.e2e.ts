@@ -184,7 +184,9 @@ describe('main profile detail reference editors', () => {
     await input.waitForDisplayed({ timeout: 15_000 });
     await input.setValue('');
 
-    const saveButton = await modal.$('button');
+    const saveButton = await modal.$(
+      '[data-slot="card-footer"] button:first-of-type',
+    );
     await saveButton.waitForClickable({ timeout: 15_000 });
     await saveButton.click();
 
