@@ -155,9 +155,9 @@ MUST NOT 保存真实订阅凭据、完整认证头或不相关宿主环境信�
 
 ### T14：运行范围必须与改动范围相符
 
-每个新 spec MUST 恰好归属一个 `baseE2eSuites` 分组；组合套件由其派生，运行 `spec-suites.test.ts` 验证遗漏/重复。`critical`、`hermetic` 和 `all` 的含义以[实际定义](../../tauri-e2e/spec-suites.ts)为准。
+每个新 spec MUST 恰好归属一个 `baseE2eSuites` 或 `isolatedE2eSuites` 分组；只有明确需要不同启动状态或独立生命周期的用例才使用隔离分组，并在专用运行入口和套件测试中验证其边界。组合套件由基础分组派生，运行 `spec-suites.test.ts` 验证遗漏/重复。`critical`、`hermetic` 和 `all` 的含义以[实际定义](../../tauri-e2e/spec-suites.ts)为准。
 
-当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：配置分支上的所有 PR 跑 hermetic，匹配代码路径的 push 跑 smoke，每日跑 hermetic；均在 Windows。PR 移除路径过滤，确保未知文件路径也不会绕过桌面回归；代价是文档类 PR 也会执行完整 hermetic 套件。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
+当前 CI 行为见[工作流](../../.github/workflows/e2e.yaml)：配置分支上的所有 PR 跑 hermetic，并在 E2E 二进制成功构建后另开应用会话运行 `profile-auto-update-main`；每日定时运行也执行这两个套件。相关代码 push 跑 smoke；手动运行可选择独立的 `profile-auto-update-main`。这些运行均在 Windows。PR 移除路径过滤，确保未知文件路径也不会绕过桌面回归；代价是文档类 PR 也会执行完整 hermetic 套件。工作流还会运行 `controller-fallback` 回归并上传 E2E 诊断；network 和 upgrade 不在这些自动选择中，仍需要额外环境/专用 runner。根目录 `e2e:tauri:test` 和包内 `test` 默认只跑 smoke。
 
 下列是审查所需证据，**不表示工作流已经自动执行所有项目**：
 

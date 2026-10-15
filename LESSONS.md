@@ -12,10 +12,11 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块          | 问题与证据                                                                                                      | 状态 |
-| ------------------- | ---------- | ------------- | --------------------------------------------------------------------------------------------------------------- | ---- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open |
+| 编号                | 日期       | 模块          | 问题与证据                                                                                                      | 状态     |
+| ------------------- | ---------- | ------------- | --------------------------------------------------------------------------------------------------------------- | -------- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open     |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open     |
+| LESSON-20261015-001 | 2026-10-15 | E2E           | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified |
 
 ## 单条模板
 
@@ -39,6 +40,23 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
+
+### LESSON-20261015-001：跨窗口 E2E 就绪检查必须使用窗口对应的 UI 标记
+
+- 日期与时区：2026-10-15 UTC
+- 状态：Verified
+- 严重度：Low
+- 模块：E2E / main UI / legacy UI
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `c7d21d47a374009161f271c4512722c5c5cd8eae`、PR #482 测试前 head `24ea62a3f42458c31d0860b172396e34340050d3`、ref `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；macOS Apple Silicon、WebKit 605.1.15，使用隔离 E2E runtime 和本地专用 app ID。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #482](https://github.com/MFSGA/Chimera/pull/482)；本地失败信息为 `The legacy Profile window did not render after navigation.`，运行产物位于本次任务的外接盘临时目录。
+- 预期行为：main-first 套件在 main UI 验证完成后创建 legacy 窗口；测试须确认 legacy 前端已挂载，再打开 Profile 列表并验证共享 Profile。
+- 真实异常、复现步骤与证据：首次添加就绪等待时检查 `[data-slot="app-root"]`。该标记只属于 main UI；legacy 页面有自己的根节点与 `data-testid="sidebar-route-profiles"` 导航项。main-first 本地运行在进入 legacy Profile 断言前超时，确认等待条件引用了错误窗口的 DOM 合同。
+- 确认的根因与排除项：根因为 E2E 等待器误用 main-only 标记，不是 Profile 后端状态问题。首次尝试也遇到内部磁盘空间不足；将本次生成的构建缓存及临时目录放到外接盘后，排除了该环境限制。
+- 修复提交、差异映射及保留的兼容性边界：PR #482 在 `tauri-e2e/specs/profile-auto-update.e2e.ts` 改为等待 legacy 专属侧栏项挂载后再导航；`tauri-e2e/README.md` 说明隔离 main-first 套件与默认 legacy 窗口生命周期的区别。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现为上述 main-first 本地 E2E 超时；修复后 `profile-auto-update-main` 在同一主机、独立 app ID 和外接盘 runtime 下通过 1/1。套件由 `isolatedE2eSuites` 注册，并由 `spec-suites.test.ts` 检查只运行一次。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite profile-auto-update-main --logLevel error`，1/1 通过；`pnpm --filter @chimera/tauri-e2e typecheck` 和 25 项 harness unit tests 通过。更新后的 Windows CI 仍须确认平台行为。
+- 风险/回滚和清理证据（如涉及宿主状态）：用例只使用隔离 runtime 与 loopback 服务，并注册 Profile/窗口清理；没有启用系统代理或 TUN。回滚时可恢复上一版测试与 suite 配置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：main 与 legacy 使用不同 DOM 标记；新增跨窗口用例前须从目标页面源码确认挂载信号。没有调整门禁。
 
 ### LESSON-20261014-001：epoch PID 记录可能在检查后、读取前被并发清理
 

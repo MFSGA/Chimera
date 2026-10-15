@@ -15,6 +15,10 @@ import {
 } from './profile-fixtures.js';
 
 const fixtureProfileName = `Auto Update E2E ${process.pid}-${Date.now()}`;
+const screenshotRunId = process.env.GITHUB_RUN_ID
+  ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? '1'}`
+  : `local-${process.pid}-${Date.now()}`;
+let screenshotAttempt = 0;
 
 type VergeConfig = {
   enable_system_proxy?: boolean | null;
@@ -123,6 +127,8 @@ async function waitForSwitchChecked(selector: string, expected: boolean) {
 
           return {
             url: location.href,
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
             modalStates: Array.from(
               document.querySelectorAll<HTMLElement>(
                 '[data-slot="modal-content"]',
@@ -158,10 +164,13 @@ async function waitForSwitchChecked(selector: string, expected: boolean) {
     if (artifactDirectory) {
       const screenshotPath = path.join(
         artifactDirectory,
-        'profile-auto-update-switch-state.png',
+        screenshotRunId,
+        'profile-auto-update.e2e',
+        'disables-scheduled-sync-while-keeping-manual-sync-available-in-both-uis',
+        `profile-auto-update-switch-state-attempt-${++screenshotAttempt}.png`,
       );
       try {
-        fs.mkdirSync(artifactDirectory, { recursive: true });
+        fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
         await browser.saveScreenshot(screenshotPath);
         screenshotEvidence = ` Failure screenshot: ${screenshotPath}.`;
       } catch (screenshotError) {
@@ -366,7 +375,7 @@ describe('remote profile auto-update', () => {
       });
       assert.equal(remoteUpdateInterval(await readProfiles(), uid), 120);
 
-      await browser.switchToWindow('legacy');
+      await browser.switchToWindow('main');
       await browser.setWindowSize(1240, 760);
       await ensureMainWindow();
       await browser.refresh();
@@ -467,7 +476,28 @@ describe('remote profile auto-update', () => {
       await waitForInterval(uid, 120);
       await waitForPersistedInterval(uid, 120);
 
+      await invoke('create_legacy_window');
+      await browser.waitUntil(
+        async () => (await browser.getWindowHandles()).includes('legacy'),
+        {
+          timeout: 15_000,
+          timeoutMsg: 'The legacy window was not created for the legacy flow.',
+        },
+      );
       await browser.switchToWindow('legacy');
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            () =>
+              document.querySelector(
+                '[data-testid="sidebar-route-profiles"]',
+              ) !== null,
+          ),
+        {
+          timeout: 30_000,
+          timeoutMsg: 'The legacy window did not mount its navigation sidebar.',
+        },
+      );
       const legacyUrl = new URL(await browser.getUrl());
       legacyUrl.pathname = '/profiles';
       legacyUrl.search = '';
