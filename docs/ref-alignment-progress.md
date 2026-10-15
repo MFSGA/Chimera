@@ -1,10 +1,11 @@
 # ref 对齐进度
 
-当前只读参考检出为 Clash Nyanpasu `main` 的最新提交
-`5331747c06a5f42eeabb3e225a1e77a83f480549`，已通过远端 `HEAD` 与
-`refs/heads/main` 核实；检出状态干净。主仓库 `.gitmodules` 留有 `ref` URL，
-但当前 `HEAD` 没有 `ref` gitlink；按本项目约定，`ref/` 是 `.gitignore` 中的
-本地只读基线，不属于主仓库提交。
+当前只读参考检出为 Clash Nyanpasu `main` 的提交
+`c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`，该提交在上游 Actions 页面对应
+`main` 构建，子模块工作区干净。主仓库当前记录的 `ref` gitlink 仍为
+`813673a8e84b51265467f02277fc7e739837f61e`；本工作树已将子模块检出更新到
+`c08aa9d9`，gitlink 更新尚待提交。此次 GitHub 直接 fetch 超时；在下次基线
+更新前应重新 fetch 并核对远端分支。
 
 DIFF-001 至 DIFF-012 是此前基于
 `f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
@@ -1385,3 +1386,39 @@ DIFF-001 至 DIFF-012 是此前基于
   及 PR 必需检查仍须远端复验；当前未声称 CI 已通过。
 - 回滚：移除 `ProxiesGuard::invalidate` 和 `ChimeraClient::refresh_profiles` 包装，恢复各 profile mutation 直接发事件；
   无迁移用户数据、宿主网络或系统服务状态。
+
+## DIFF-054：远程 Profile 可关闭自动同步
+
+- 目标：按 ref 增加远程 Profile 的自动同步开关；间隔设为 0 时，周期刷新与启动补刷停止，手动同步仍可用。
+- 非目标：不改变手动同步语义，不改 Core/Service 协议、代理/TUN 宿主设置、Agent API 或 legacy UI 的路由和导航；legacy 编辑器保留数字间隔输入，并只增加说明 0 会关闭自动同步的提示。
+- ref 基线更新：仓库原 gitlink 是 `813673a8e84b51265467f02277fc7e739837f61e`；本工作树当时 checkout 在
+  `c85406d3a16ba61cecf7f8aec7a5a051523cbc2d`，这是上游 PR #5775 提交，不是 main。现更新到主线
+  `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`。GitHub 直接 fetch 超时；目标
+  commit 已在本地对象库，且上游 Actions 页显示 `c08aa9d9` 的 main 构建。更新后 `git -C ref status --short` 为空。
+- 映射：ref `backend/nyanpasu-config/src/profile/source.rs::RemoteSyncInterval`、
+  `backend/tauri/src/state/profiles/actor.rs` 的自动刷新处理和
+  `frontend/nyanpasu/src/pages/(main)/main/profiles/$type/detail/_modules/update-option-editor.tsx`；Chimera 对应
+  `backend/chimera-config/src/profile/source.rs::RemoteSyncInterval`、
+  `backend/tauri/src/state/profiles/scheduler.rs::RemoteUpdateScheduler`、
+  `backend/tauri/src/client/profiles.rs`、`frontend/chimera/.../update-option-editor.tsx`，生成类型位于
+  `frontend/interface/src/ipc/bindings.ts`。legacy 入口通过共享 `ProfilesClient` 保存，并由
+  `frontend/chimera/src/components/profiles/profile-dialog.tsx` 适配数值间隔。
+- 完整性：模型、配置校验、旧配置适配、迁移、actor 调度与 IPC patch 都接受 0；调度器取消周期任务且跳过启动补刷；保留
+  手动刷新；main UI 按 ref 使用 `react-hook-form`/`zodResolver` 开关编辑，重新开启且间隔留空时保存默认 120；legacy 表单仍
+  显示数字间隔并允许 0；修复 legacy 对只读远程物化文件的编辑路径，避免更新选项时错误 upsert 文件内容。
+- 持久化与接口：远程 profile 的 `update_interval_minutes` 现在允许 0，IPC 序列化仍是数字，`bindings.ts` 由既有生成器更新；
+  不改变 YAML 键或其他用户数据。增加 `@hookform/resolvers` 以保持 main editor 的 ref 表单结构。
+- 风险：L2（持久配置、调度器与共享 Profile API）。任何 scope 重叠仍按 L2 处理。
+- 验收：Rust 定向测试、main/legacy/E2E TypeScript 检查、manifest tests、前端 IPC 边界检查、真实桌面流程以及 loopback 手动
+  请求均已执行。本机 WebKit 后台窗口会暂停 Motion 退场动画，视觉折叠与冷启动恢复不在本次实测覆盖内；远端 CI/E2E 尚未启动，
+  不宣称通过。
+- 实际验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config profile`；`chimera` 的
+  `scheduler_stops_refreshing_when_interval_is_patched_to_zero`、
+  `disabled_auto_sync_skips_startup_catch_up_but_allows_manual_refresh`、
+  `preserves_disabled_remote_sync_interval_in_runtime_adapter` 定向测试均通过。`pnpm typecheck:chimera`、
+  `pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、
+  `pnpm test:manifest`（8/8）、`pnpm lint:frontend-boundaries`、`pnpm lint:oxlint` 与 Prettier 检查通过。
+  WebKit 桌面 spec `profile-auto-update.e2e.ts` 1/1 通过，使用隔离运行目录和 loopback HTTP fixture；未覆盖真实公网、系统代理/TUN、
+  前台动画与冷启动。执行命令和运行环境详见 `docs/testing/contracts/profile-auto-update.md`。
+- 审查和批准：需独立复核真实 diff、ref 符号映射、失败/清理路径和宿主影响；L2 maintainer approval 后才提交和推送。
+- 回滚：迁移或手工恢复已保存 0 的 interval 后，再回滚模型、配置兼容、调度器和 UI；避免旧程序把 0 当作无效配置。

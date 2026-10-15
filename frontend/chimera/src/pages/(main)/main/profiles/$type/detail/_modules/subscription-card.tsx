@@ -108,6 +108,7 @@ export default function SubscriptionCard({
       <CardFooter className="gap-1">
         <Button
           className="flex items-center gap-2"
+          data-slot="profile-manual-sync"
           onClick={() => void refresh()}
           loading={task.isPending}
         >
@@ -116,7 +117,10 @@ export default function SubscriptionCard({
         </Button>
 
         <UpdateOptionEditor profile={profile} asChild>
-          <Button className="flex items-center gap-2">
+          <Button
+            className="flex items-center gap-2"
+            data-slot="profile-update-options-trigger"
+          >
             <RuleSettingsRounded className="size-4" />
             <span>{m.profile_update_option_edit()}</span>
           </Button>

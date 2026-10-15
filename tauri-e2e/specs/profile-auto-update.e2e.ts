@@ -1,0 +1,456 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import path from 'node:path';
+import type {
+  MutationOutcome,
+  ProfileDocument_Deserialize,
+} from '../../frontend/interface/src/ipc/bindings.js';
+import { ensureMainWindow } from './main-window.js';
+import {
+  committedValue,
+  invoke,
+  readProfiles,
+  withCleanup,
+} from './profile-fixtures.js';
+
+const fixtureProfileName = `Auto Update E2E ${process.pid}-${Date.now()}`;
+
+type VergeConfig = {
+  enable_system_proxy?: boolean | null;
+  enable_tun_mode?: boolean | null;
+};
+
+function remoteUpdateInterval(
+  profiles: ProfileDocument_Deserialize,
+  uid: string,
+): number {
+  const item = profiles.items.find((candidate) => candidate.uid === uid);
+  assert.ok(item, `Profile ${uid} was not persisted.`);
+  assert.equal(item.type, 'config');
+  if (item.type !== 'config' || item.config.type !== 'file') {
+    throw new Error(`Profile ${uid} is not a file-backed config.`);
+  }
+  assert.equal(item.config.source.type, 'remote');
+  if (item.config.source.type !== 'remote') {
+    throw new Error(`Profile ${uid} is not remote.`);
+  }
+  return item.config.source.option?.update_interval_minutes ?? 120;
+}
+
+function persistedUpdateInterval(uid: string): number {
+  const runtimeRoot = process.env.CHIMERA_E2E_RUNTIME_DIR;
+  assert.ok(runtimeRoot, 'CHIMERA_E2E_RUNTIME_DIR is not configured.');
+  const profilesPath = path.join(runtimeRoot, 'config', 'profiles.yaml');
+  const contents = fs.readFileSync(profilesPath, 'utf8');
+  const escapedUid = uid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const profile = contents
+    .split(/(?=^[ \t]*-[ \t]+uid:[ \t]*)/m)
+    .find((entry) =>
+      new RegExp(`^[ \\t]*-[ \\t]+uid:[ \\t]*${escapedUid}[ \\t]*$`, 'm').test(
+        entry,
+      ),
+    );
+  assert.ok(profile, `Profile ${uid} is missing from persisted profiles.yaml.`);
+  const interval = profile.match(
+    /^[ \t]+update_interval_minutes:[ \t]*(\d+)[ \t]*$/m,
+  );
+  assert.ok(interval, `Profile ${uid} has no persisted update interval.`);
+  return Number(interval[1]);
+}
+
+async function closeServer(server: Server) {
+  if (!server.listening) return;
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+}
+
+async function waitForInterval(uid: string, expected: number) {
+  let lastObserved: number | undefined;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastObserved = remoteUpdateInterval(await readProfiles(), uid);
+        return lastObserved === expected;
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `The saved auto-update interval did not become ${expected}.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The saved auto-update interval did not become ${expected}; last observed ${String(lastObserved)}.`,
+      { cause },
+    );
+  }
+}
+
+async function waitForPersistedInterval(uid: string, expected: number) {
+  let lastObserved: number | undefined;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastObserved = persistedUpdateInterval(uid);
+        return lastObserved === expected;
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `profiles.yaml did not persist update interval ${expected}.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `profiles.yaml did not persist interval ${expected}; last observed ${String(lastObserved)}.`,
+      { cause },
+    );
+  }
+}
+
+async function waitForSwitchChecked(selector: string, expected: boolean) {
+  let lastObserved: string | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const toggle = await $(selector);
+        lastObserved = await toggle.getAttribute('aria-checked');
+        return lastObserved === String(expected);
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: `The Auto Update switch did not become ${String(expected)}.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The Auto Update switch did not become ${String(expected)}; last observed ${String(lastObserved)}.`,
+      { cause },
+    );
+  }
+}
+
+async function saveMainOptions() {
+  const saveButton = await $('[data-slot="profile-update-options-save"]');
+  await saveButton.waitForExist({ timeout: 15_000 });
+  await saveButton.click();
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        () =>
+          document.querySelector(
+            '[data-slot="modal-content"][data-state="open"]',
+          ) === null,
+      ),
+    {
+      timeout: 15_000,
+      timeoutMsg: 'The update-options dialog did not enter its closed state.',
+    },
+  );
+}
+
+async function cancelMainOptions() {
+  const cancelButton = await $('[data-slot="profile-update-options-cancel"]');
+  await cancelButton.waitForExist({ timeout: 15_000 });
+  await cancelButton.click();
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        () =>
+          document.querySelector(
+            '[data-slot="modal-content"][data-state="open"]',
+          ) === null,
+      ),
+    {
+      timeout: 15_000,
+      timeoutMsg:
+        'The update-options dialog did not enter its closed state after cancelling.',
+    },
+  );
+}
+
+async function openProfileDetail(uid: string) {
+  const pathname = `/main/profiles/profile/detail/${uid}`;
+  let currentPath = await browser.execute(() => location.pathname);
+  if (currentPath !== '/main/profiles/profile') {
+    await browser.execute((target) => {
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, '/main/profiles/profile');
+    await browser.waitUntil(
+      async () => {
+        currentPath = await browser.execute(() => location.pathname);
+        return (
+          currentPath === '/main/profiles/profile' &&
+          (await $('[data-slot="profiles-list"]').isExisting())
+        );
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The main Profile list route did not render.',
+      },
+    );
+  }
+
+  const profileCard = await $(
+    `[data-slot="profile-card"][data-profile-uid="${uid}"]`,
+  );
+  await profileCard.waitForExist({ timeout: 15_000 });
+  const detailLink = await profileCard.$('a');
+  await detailLink.waitForExist({ timeout: 15_000 });
+  await detailLink.click();
+
+  let lastObserved = currentPath;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await browser.execute(() => ({
+          path: location.pathname,
+          hasOptionsTrigger:
+            document.querySelector(
+              '[data-slot="profile-update-options-trigger"]',
+            ) !== null,
+        }));
+        lastObserved = `${state.path}; options=${state.hasOptionsTrigger}`;
+        return state.path === pathname && state.hasOptionsTrigger;
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `The subscription options for Profile ${uid} did not render.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The subscription options for Profile ${uid} did not render; last observed ${lastObserved}.`,
+      { cause },
+    );
+  }
+}
+
+describe('remote profile auto-update', () => {
+  it('disables scheduled sync while keeping manual sync available in both UIs', async () => {
+    await withCleanup('remote profile auto-update E2E', async (defer) => {
+      const originalProfiles = await readProfiles();
+      const originalCurrent = originalProfiles.current ?? null;
+      const verge = await invoke<VergeConfig>('get_verge_config');
+      assert.equal(
+        Boolean(verge.enable_system_proxy),
+        false,
+        'System proxy must be disabled before this loopback test.',
+      );
+      assert.equal(
+        Boolean(verge.enable_tun_mode),
+        false,
+        'TUN must be disabled before this loopback test.',
+      );
+
+      let requestCount = 0;
+      const server = createServer((_request, response) => {
+        requestCount += 1;
+        const body = 'proxies: []\n';
+        response.writeHead(200, {
+          'content-type': 'application/yaml',
+          'content-length': Buffer.byteLength(body),
+          'profile-title': fixtureProfileName,
+        });
+        response.end(body);
+      });
+      defer('close the local subscription server', () => closeServer(server));
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen(0, '127.0.0.1', resolve);
+      });
+      const address = server.address();
+      assert.ok(address && typeof address !== 'string');
+
+      const url = `http://127.0.0.1:${address.port}/subscription.yaml`;
+      const outcome = await invoke<MutationOutcome<string>>('import_profile', {
+        url,
+        name: fixtureProfileName,
+        option: {
+          update_interval_minutes: 120,
+          with_proxy: false,
+          self_proxy: false,
+        },
+      });
+      const uid = outcome.value;
+      defer('restore the original Profile selection', async () => {
+        const profiles = await readProfiles();
+        if ((profiles.current ?? null) !== uid) return;
+        committedValue(
+          await invoke<MutationOutcome<null>>('activate_profile', {
+            uid: originalCurrent,
+          }),
+          'Profile selection restoration',
+        );
+        await browser.waitUntil(
+          async () =>
+            ((await readProfiles()).current ?? null) === originalCurrent,
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The original Profile selection was not restored.',
+          },
+        );
+      });
+      defer('delete the imported test Profile', async () => {
+        const profiles = await readProfiles();
+        if (!profiles.items.some((item) => item.uid === uid)) return;
+        assert.notEqual(
+          profiles.current,
+          uid,
+          'The test Profile is still selected and cannot be deleted safely.',
+        );
+        committedValue(
+          await invoke<MutationOutcome<null>>('delete_profile', { uid }),
+          'Test Profile deletion',
+        );
+        await browser.waitUntil(
+          async () =>
+            !(await readProfiles()).items.some((item) => item.uid === uid),
+          {
+            timeout: 30_000,
+            timeoutMsg: 'The imported test Profile was not removed.',
+          },
+        );
+      });
+      committedValue(outcome, 'Loopback subscription import');
+
+      await browser.waitUntil(async () => requestCount >= 1, {
+        timeout: 15_000,
+        timeoutMsg: 'The import did not request the local subscription.',
+      });
+      assert.equal(remoteUpdateInterval(await readProfiles(), uid), 120);
+
+      await browser.switchToWindow('legacy');
+      await browser.setWindowSize(1240, 760);
+      await ensureMainWindow();
+      await browser.refresh();
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            () =>
+              (document.getElementById('root')?.childElementCount ?? 0) > 0 &&
+              document.querySelector('[data-slot="app-root"]') !== null,
+          ),
+        {
+          timeout: 30_000,
+          timeoutMsg:
+            'The main window did not reload the imported Profile fixture.',
+        },
+      );
+      // Wait for the feature control itself. The shared route helper also waits
+      // for every nested list animation, which is unrelated to this contract.
+      await openProfileDetail(uid);
+      const optionsTrigger = await $(
+        '[data-slot="profile-update-options-trigger"]',
+      );
+      await optionsTrigger.waitForExist({ timeout: 15_000 });
+      await optionsTrigger.click();
+
+      const optionsModal = await $(
+        '[data-slot="modal-content"][data-state="open"]',
+      );
+      await optionsModal.waitForExist({ timeout: 15_000 });
+      const autoUpdateSwitch = await $(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+      );
+      await autoUpdateSwitch.waitForExist({ timeout: 15_000 });
+      await waitForSwitchChecked(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+        true,
+      );
+      await autoUpdateSwitch.click();
+      await waitForSwitchChecked(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+        false,
+      );
+      await saveMainOptions();
+      await waitForInterval(uid, 0);
+      await waitForPersistedInterval(uid, 0);
+
+      const beforeManualSync = requestCount;
+      const manualSync = await $('[data-slot="profile-manual-sync"]');
+      await manualSync.waitForExist({ timeout: 15_000 });
+      await manualSync.click();
+      try {
+        await browser.waitUntil(async () => requestCount > beforeManualSync, {
+          timeout: 30_000,
+          timeoutMsg:
+            'Manual sync did not fetch the local subscription while auto-update was off.',
+        });
+      } catch (cause) {
+        throw new Error(
+          `Manual sync did not fetch while auto-update was off; request count stayed ${requestCount}.`,
+          { cause },
+        );
+      }
+
+      await optionsTrigger.click();
+      const cancelSwitch = await $(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+      );
+      await cancelSwitch.waitForExist({ timeout: 15_000 });
+      await waitForSwitchChecked(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+        false,
+      );
+      await cancelSwitch.click();
+      await waitForSwitchChecked(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+        true,
+      );
+      await cancelMainOptions();
+      await waitForInterval(uid, 0);
+      await waitForPersistedInterval(uid, 0);
+
+      await optionsTrigger.click();
+      const reopenedSwitch = await $(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+      );
+      await reopenedSwitch.waitForExist({ timeout: 15_000 });
+      await waitForSwitchChecked(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
+        false,
+      );
+      await reopenedSwitch.click();
+      const intervalInput = await $(
+        '[data-slot="modal-content"][data-state="open"] [data-slot="profile-update-interval"]',
+      );
+      await intervalInput.waitForExist({ timeout: 15_000 });
+      assert.equal(await intervalInput.getValue(), '');
+      await saveMainOptions();
+      await waitForInterval(uid, 120);
+      await waitForPersistedInterval(uid, 120);
+
+      await browser.switchToWindow('legacy');
+      const legacyUrl = new URL(await browser.getUrl());
+      legacyUrl.pathname = '/profiles';
+      legacyUrl.search = '';
+      await browser.url(legacyUrl.href);
+      const profileItem = await $(
+        `[data-slot="profile-item"][data-profile-uid="${uid}"]`,
+      );
+      await profileItem.waitForExist({ timeout: 15_000 });
+      const menuTrigger = await profileItem.$(
+        '[data-slot="profile-menu-trigger"]',
+      );
+      await menuTrigger.waitForExist({ timeout: 15_000 });
+      await menuTrigger.click();
+      const editMenuItem = await $('[data-slot="profile-edit-menu-item"]');
+      await editMenuItem.waitForExist({ timeout: 15_000 });
+      await editMenuItem.click();
+
+      const legacyInterval = await $(
+        '[data-slot="legacy-profile-update-interval"] input',
+      );
+      await legacyInterval.waitForExist({ timeout: 15_000 });
+      await legacyInterval.setValue('0');
+      assert.equal(await legacyInterval.getValue(), '0');
+      const legacySave = await $('button=OK');
+      await legacySave.waitForExist({ timeout: 15_000 });
+      await legacySave.click();
+      await waitForInterval(uid, 0);
+      await waitForPersistedInterval(uid, 0);
+    });
+  });
+});

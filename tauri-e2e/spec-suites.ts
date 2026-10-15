@@ -18,6 +18,7 @@ export const baseE2eSuites = {
   ],
   profiles: [
     './specs/deep-link-main.e2e.ts',
+    './specs/profile-auto-update.e2e.ts',
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
     './specs/profile-transform-chain-ui.e2e.ts',
