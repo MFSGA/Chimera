@@ -941,7 +941,12 @@ mod tests {
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         tokio::time::advance(std::time::Duration::from_secs(60 * 60 + 1)).await;
-        for _ in 0..200 {
+        let refresh_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            assert!(
+                std::time::Instant::now() < refresh_deadline,
+                "scheduled refresh did not commit the second subscription response"
+            );
             let snapshot = client.snapshot();
             let source = snapshot.items[&uid].definition.source().unwrap();
             if matches!(

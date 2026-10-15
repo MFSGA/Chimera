@@ -12,10 +12,11 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块          | 问题与证据                                                                                                      | 状态 |
-| ------------------- | ---------- | ------------- | --------------------------------------------------------------------------------------------------------------- | ---- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open |
+| 编号                | 日期       | 模块          | 问题与证据                                                                                                                      | 状态 |
+| ------------------- | ---------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- | ---- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成                        | Open |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成                 | Open |
+| LESSON-20261015-001 | 2026-10-15 | Rust / CI     | profile 导入后的调度测试在固定 200 次 yield 内未观察到第二次请求；改为等待提交结果并设置真实时间上限，PR #483 新 SHA 复验待完成 | Open |
 
 ## 单条模板
 
@@ -82,3 +83,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
   未声称 macOS 结果能代替 Windows。全工作区 typecheck 因隔离工作树缺少生成的 Paraglide 文件而失败。
 - 风险/回滚和清理证据（如涉及宿主状态）：L2，共享 profile/proxy 刷新时序。回滚为恢复 profile call sites 直接触发事件并移除缓存失效函数和对应测试；不触及持久化数据、宿主网络、TUN 或 Service 状态。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：现有 E2E 即为跨平台防复发用例；无治理门禁调整。
+
+### LESSON-20261015-001：profile 导入后的调度测试使用固定轮询次数
+
+- 日期与时区：2026-10-15 UTC
+- 状态：Open（测试已修正，等待 PR #483 新 SHA 远端复验）
+- 严重度：Low
+- 模块：Rust / CI
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `c7d21d47a374009161f271c4512722c5c5cd8eae`，ref gitlink `813673a8e84b51265467f02277fc7e739837f61e`；失败 PR #483 SHA `6be5fe4fa75d0d53f775ae62cd38cddd1bb84b49` 更新 ref 至 `5ed238841d98b47ae5e2fdfeb433d4946ba43bbb`；GitHub Actions Ubuntu Rust workspace unit tests
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #483](https://github.com/MFSGA/Chimera/pull/483)、[Ubuntu Lint job 116178475001](https://github.com/MFSGA/Chimera/actions/runs/38659904573/job/116178475001)。日志显示 551 passed、1 failed、1 ignored；失败为 `client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer`，`fetch_count >= 2` 在 200 次 `yield_now` 后仍为 false。
+- 预期行为：虚拟时间越过导入时采用的服务器建议周期后，定时刷新会发起第二次请求、提交响应并保留用户有效的刷新周期。
+- 真实异常、复现步骤与证据：导入首次请求后推进 Tokio 虚拟时钟 60 分钟加 1 秒；测试只轮询最多 200 次，未等到 profile snapshot 的 `subscription.upload == Some(2)` 时也继续执行计数断言，Ubuntu CI 因第二次请求尚未被调度而失败。失败的断言与固定轮询窗口直接对应；没有证据表明生产调度逻辑错误。
+- 确认的根因与排除项：测试把异步 actor/scheduler/fetch 任务的完成时机绑定到固定 200 次调度让步，没有等待可观察的提交结果。该轮数不是时间或业务完成条件；在 CI 调度压力下用尽后便错误地把尚未运行的请求当作产品失败。该用例的上游实现使用 `wait_for_source(...ScheduledRefresh)` 和 job settlement 等待；没有发现 Chimera 的生产调度实现偏离预期。
+- 修复提交、差异映射及保留的兼容性边界：在 `backend/tauri/src/client/profiles.rs::import_suggestion_is_committed_and_reschedules_the_timer` 中改为轮询已提交快照直到第二次订阅响应可观察，并以 `std::time::Instant` 提供 10 秒真实时间上限。ref `backend/tauri/src/client/profiles.rs` 的同名测试等待 source watch 中的 `ScheduledRefresh` 状态并 settlement；Chimera 当前没有相同的 source-status 测试 API，因此以已提交的 `subscription.upload == Some(2)` 作本地观测点。没有修改产品调度行为；此测试观测差异待 Chimera 提供等价调度状态后重新评估。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败证据为上述 CI 单测；新断言仍经过实际第二次 fetch 和 commit，固定窗口不足会等待而非误报，真正不刷新时 10 秒后明确失败。测试由 `backend/tauri` 的 Rust 库测试入口执行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：初次本地尝试因隔离工作树缺少 `backend/chimera-runtime` 子模块而无法解析；初始化精确 gitlink `74ab9e425a41147a0d77c4f9b8e083a9962627f0` 后，首次内部盘构建因当时仅剩 116 MiB 可用空间而在 C 编译阶段失败（非测试失败）。随后将 target 放到扩展盘，并只读复用主工作区已准备好的 sidecar/resource 文件。期限检查前置前的首版有界等待修复定向测试执行 6 次，期限检查移到循环开头后的最终版本再执行 5 次；两版合计 11 次均为 1 passed、0 failed。命令为 `CARGO_TARGET_DIR=/Volumes/ChimeraBuild/codex-chimera-pr483-rust-target-20261015 CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_BUILD_JOBS=4 cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer -- --exact`。`cargo fmt --manifest-path backend/Cargo.toml -p chimera -- --check`、`pnpm exec prettier --check LESSONS.md` 及 `git diff --check` 通过。远端新 SHA CI 尚待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响单测等待策略和经验记录，无产品运行时或宿主网络变更；回滚为恢复固定 200 次轮询并删除本条 lesson。为恢复磁盘空间，仅清理本隔离工作树 Cargo target 构建缓存，未删除源码或其他工作树数据。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：无治理门禁调整；如后续遇到同类 scheduler 测试，等待业务状态/信号并使用有界 deadline，避免依赖固定 yield 次数。
