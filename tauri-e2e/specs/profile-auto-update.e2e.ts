@@ -203,6 +203,61 @@ async function saveMainOptions() {
   );
 }
 
+async function openMainUpdateOptions() {
+  const trigger = await $('[data-slot="profile-update-options-trigger"]');
+  await trigger.waitForDisplayed({ timeout: 15_000 });
+  await trigger.click();
+
+  let lastObserved = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await browser.execute(() => ({
+          url: location.href,
+          modalStates: Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="modal-content"]',
+            ),
+            (modal) => modal.getAttribute('data-state'),
+          ),
+          activeSlot:
+            (document.activeElement as HTMLElement | null)?.dataset.slot ??
+            null,
+        }));
+        lastObserved = JSON.stringify(state);
+        return state.modalStates.includes('open');
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The main Profile update-options dialog did not open.',
+      },
+    );
+  } catch (cause) {
+    let screenshotEvidence = '';
+    const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+    if (artifactDirectory) {
+      const screenshotPath = path.join(
+        artifactDirectory,
+        screenshotRunId,
+        'profile-auto-update.e2e',
+        'disables-scheduled-sync-while-keeping-manual-sync-available-in-both-uis',
+        'main-options-open-before-cleanup.png',
+      );
+      try {
+        fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+        await browser.saveScreenshot(screenshotPath);
+        screenshotEvidence = ` Failure screenshot: ${screenshotPath}.`;
+      } catch (screenshotError) {
+        screenshotEvidence = ` Screenshot capture failed: ${String(screenshotError)}.`;
+      }
+    }
+    throw new Error(
+      `The main Profile update-options dialog did not open; last observed ${lastObserved}.${screenshotEvidence}`,
+      { cause },
+    );
+  }
+}
+
 async function cancelMainOptions() {
   const cancelButton = await $('[data-slot="profile-update-options-cancel"]');
   await cancelButton.waitForExist({ timeout: 15_000 });
@@ -395,11 +450,7 @@ describe('remote profile auto-update', () => {
       // Wait for the feature control itself. The shared route helper also waits
       // for every nested list animation, which is unrelated to this contract.
       await openProfileDetail(uid);
-      const optionsTrigger = await $(
-        '[data-slot="profile-update-options-trigger"]',
-      );
-      await optionsTrigger.waitForExist({ timeout: 15_000 });
-      await optionsTrigger.click();
+      await openMainUpdateOptions();
 
       const optionsModal = await $(
         '[data-slot="modal-content"][data-state="open"]',
@@ -439,7 +490,7 @@ describe('remote profile auto-update', () => {
         );
       }
 
-      await optionsTrigger.click();
+      await openMainUpdateOptions();
       const cancelSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
       );
@@ -457,7 +508,7 @@ describe('remote profile auto-update', () => {
       await waitForInterval(uid, 0);
       await waitForPersistedInterval(uid, 0);
 
-      await optionsTrigger.click();
+      await openMainUpdateOptions();
       const reopenedSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
       );
