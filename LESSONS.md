@@ -18,6 +18,8 @@
 | LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
 | LESSON-20261014-003 | 2026-10-14 | Profile / E2E | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
 | LESSON-20261014-004 | 2026-10-14 | Development   | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
+| LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
+| LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
 
 ## 单条模板
 
@@ -118,3 +120,37 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：首次提交 hook 失败；第二次提交 hook 的 oxlint、Prettier、`pnpm typecheck:e2e`、rustfmt、`pnpm lint:clippy` 全部通过。验证前后分别观察到主卷仅剩 116 MiB，以及清理后 792 MiB；未清理主工作区或其大型 Cargo target。
 - 风险/回滚和清理证据（如涉及宿主状态）：清理只针对本任务 worktree 中由失败 hook 新建的 Cargo 构建目录，`cargo clean` 报告移除 3614 文件 / 701.5 MiB；无宿主网络、Service 或 TUN 操作。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行 Rust 构建后若 hook 也需编译，`git commit` 命令必须显式继承 `CARGO_TARGET_DIR`；无治理门禁调整。
+
+### LESSON-20261015-002：路由就绪等待应限定到当前用例需要的出口
+
+- 日期与时区：2026-10-15 UTC
+- 状态：Open（PR #481 的 Windows 新 SHA 复验待完成）
+- 严重度：Low
+- 模块：E2E / main UI
+- master commit / ref gitlink SHA / 平台与测试环境：master `c7d21d47a374009161f271c4512722c5c5cd8eae`；PR #481 旧 head `4431e7e641626c73c44ded27a8f56220d05a3d62`；ref `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；GitHub Actions Windows Edge hermetic E2E，另有本机 macOS WebKit 定向运行。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #481](https://github.com/MFSGA/Chimera/pull/481)，[Windows Desktop E2E run 38668811814](https://github.com/MFSGA/Chimera/actions/runs/38668811814)。该 run 的 53 个 specs 中 52 通过；`rules-main-proxy-icon.e2e.ts` 的 `before` 在 `openMainRoute('/main/rules')` 等待 15 秒后报 `The Chimera main route animation did not settle.`
+- 预期行为：路由进入后按当前用例需要确认页面准备完成；目标业务结果另行等待并断言。
+- 真实异常、复现步骤与证据：规则图标用例在 profile 创建、激活和图标断言前失败。它调用的共享 helper 会等待主路由透明度，并要求 settings、providers、profiles、proxies 等所有当前存在的嵌套 outlet 都恰有一个子节点。CI 日志只证明整体等待超时，没有指出哪个条件未满足；因此尚不能确认嵌套路由是失败原因，也不据此认定 Rules UI 或 profile 图标行为异常。
+- 确认的根因与排除项：根因尚未确认；主路由透明度条件、嵌套 outlet 条件及 Windows 时序都不能从现有日志排除。由于该规则图标用例的契约不依赖其他嵌套路由，修复仅让它跳过这些额外 outlet 等待，同时保留其后对 runtime proxy group 与已加载 SVG 图标的明确等待。本机定向 WebKit 运行达到 1/1。该诊断运行使用当前 profile-sync E2E 二进制；Rules 页面源文件与 PR #481 相同，但导航/button/route tree 有分支差异，Windows 新 SHA 仍是决定性复验。
+- 修复提交、差异映射及保留的兼容性边界：PR #481 的 `tauri-e2e/specs/main-window.ts::openMainRoute` 增加仅供特定测试选择的 `waitForNestedOutlets` 选项，默认行为不变；`rules-main-proxy-icon.e2e.ts` 关闭无关嵌套出口等待，随后继续执行原有 runtime 与 SVG 加载断言。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败为上述 Windows run；修改后的 `rules-main-proxy-icon.e2e.ts` 已注册在 `main` / `hermetic`。本机定向命令 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/rules-main-proxy-icon.e2e.ts --logLevel error` 结果 1/1 通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：E2E harness TypeScript 检查通过，注册的 harness 单测 25/25 通过，Prettier 和 `git diff --check` 通过；本机 WebKit 定向规则图标用例 1/1 通过。新 SHA 的 Windows Edge hermetic run 尚未执行；不将 Mac WebKit 结果当成 Windows 复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅测试 helper 与单个用例，未改变应用 runtime 或宿主网络；回滚为恢复原先无参数的 `openMainRoute` 调用。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-003 也记录过主路由动画等待失败；后续将结合 Windows 新 SHA 结果判断应否进一步调整共享等待条件。当前约束是每个测试只等待其契约所需的 outlet，业务结果使用独立权威断言。无门禁变化。
+
+### LESSON-20261015-003：Cargo 构建产物必须按 worktree 隔离
+
+- 日期与时区：2026-10-15 UTC
+- 状态：Mitigated（交付记录后在 PR #482 自己的 worktree 重建其 target）
+- 严重度：Low
+- 模块：Development / Rust / E2E
+- master commit / ref gitlink SHA / 平台与测试环境：PR #481 head `4431e7e641626c73c44ded27a8f56220d05a3d62` 与 PR #482 worktree `/Volumes/ChimeraBuild/chimera-profile-sync`；Apple Silicon macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #481、PR #482；本地尝试精确构建 PR #481 的 E2E binary 时失败，类型错误涉及 `RemoteSyncInterval` 与 `u64`。
+- 预期行为：每个分支/worktree 使用仅由该 worktree 构建的 Cargo target，避免依赖产物与另一 checkout 的源码/API 不一致。
+- 真实异常、复现步骤与证据：在 PR #481 worktree 运行 `pnpm --filter=chimera-ui build` 后，以 `CARGO_TARGET_DIR=/Volumes/ChimeraBuild/chimera-profile-sync/backend/target/e2e` 编译 PR #481。其 `chimera-config` 源码使用 `u64`；但该 target 中 `chimera_config` 的 dep-info 指向 PR #482 worktree，归档 rlib 还包含 `RemoteSyncInterval` 符号，随后 Tauri 编译产生 4 个与该 API 不匹配的错误。
+- 确认的根因与排除项：把 PR #482 的 target 目录复用于另一 worktree，造成 Cargo 复用了来自不同源码树的 workspace crate 产物。该失败不是 PR #481 Windows CI 日志中的规则图标超时，也不是 source tree 修改；此前 PR #481 的远端 Build Tauri 在旧 SHA 通过。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码修复。后续为 PR #481 使用独立 target；已经受污染的 PR #482 target 仅在其原 worktree 内重建恢复。cargo target 不再跨 worktree 共享。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：这是验证环境的过程错误，没有新增产品测试；在各自 worktree 用独立 target 成功构建后才可宣告该构建通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：首次跨 worktree 构建失败（E0308/E0369/E0277）；PR #481 目标用例在单独已有 E2E binary 上通过 1/1，但这不能作为 PR #481 本地 build 成功证据。PR #482 自己的 target 后续在原 worktree 恢复构建成功，二进制 SHA-256 `dd0c94f945119e9ce5e72839585deaf96349f36fa155f4a0200bdb082383d8ad`；随后该分支的 profile suite 在此二进制上通过 1/1。隔离构建目录并分别验证两项已完成；该过程错误没有产品测试覆盖。
+- 风险/回滚和清理证据（如涉及宿主状态）：没有清理或删除任何 Cargo target；只产生/复用了 Cargo 编译产物，主源码未改。以后需要的 target 放在各自的 worktree 子目录或独立外接盘目录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-004 涉及 hook 未继承 CARGO_TARGET_DIR；本次另外确认 target 本身也不能跨 worktree 共用。无 CI 门禁变化。

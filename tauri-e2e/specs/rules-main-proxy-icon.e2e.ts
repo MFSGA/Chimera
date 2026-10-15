@@ -144,7 +144,7 @@ describe('main rules proxy icon reference behavior', () => {
     });
     // Keep the existing main window's proxy query mounted on the old profile.
     // Activating the fixture must invalidate that cached snapshot in place.
-    await openMainRoute(targetPath);
+    await openMainRoute(targetPath, { waitForNestedOutlets: false });
 
     const initial = await readProfiles();
     previousCurrent = initial.current ?? null;
