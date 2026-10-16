@@ -5,7 +5,7 @@
     "mihomo_alpha": "alpha-94b13ae",
     "clash_rs": "v0.10.10",
     "chimera_client": "v0.27.1",
-    "chimera_client_alpha": "0.27.1-alpha+sha.fd62218",
+    "chimera_client_alpha": "0.27.1-alpha+sha.07103ef",
     "clash_premium": "2023-09-05-gdcc8d87",
     "clash_rs_alpha": "0.10.10-alpha+sha.39282d2"
   },
@@ -95,5 +95,5 @@
       "linux-armv7hf": "clash-rs-armv7-unknown-linux-gnueabihf"
     }
   },
-  "updated_at": "2026-10-15T03:28:01.046Z"
+  "updated_at": "2026-10-16T00:21:56.099Z"
 }
