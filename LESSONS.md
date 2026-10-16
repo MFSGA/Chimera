@@ -20,6 +20,7 @@
 | LESSON-20261014-004 | 2026-10-14 | Development   | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
 | LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
 | LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Frontend / CI | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
 
 ## 单条模板
 
@@ -154,3 +155,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：首次跨 worktree 构建失败（E0308/E0369/E0277）；PR #481 目标用例在单独已有 E2E binary 上通过 1/1，但这不能作为 PR #481 本地 build 成功证据。PR #482 自己的 target 后续在原 worktree 恢复构建成功，二进制 SHA-256 `dd0c94f945119e9ce5e72839585deaf96349f36fa155f4a0200bdb082383d8ad`；随后该分支的 profile suite 在此二进制上通过 1/1。隔离构建目录并分别验证两项已完成；该过程错误没有产品测试覆盖。
 - 风险/回滚和清理证据（如涉及宿主状态）：没有清理或删除任何 Cargo target；只产生/复用了 Cargo 编译产物，主源码未改。以后需要的 target 放在各自的 worktree 子目录或独立外接盘目录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-004 涉及 hook 未继承 CARGO_TARGET_DIR；本次另外确认 target 本身也不能跨 worktree 共用。无 CI 门禁变化。
+
+### LESSON-20261016-001：行边界状态必须在渲染组件中完整解构
+
+- 日期与时区：2026-10-16 UTC
+- 状态：Mitigated（提交钩子已拦截并修复；PR #484 的新 SHA 桌面 E2E 仍待验证）
+- 严重度：Low
+- 模块：Frontend / CI
+- master commit / ref gitlink SHA / 平台与测试环境：PR #484 基线 master `6b5fba41c867ab6c1e39f501f78aa037db96e320`、ref gitlink `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；macOS arm64 本地开发环境；上游 UI 源码读取自 ref `1a0372280a405a824353ac2fa6a5f48a3bca4e18`。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #484](https://github.com/MFSGA/Chimera/pull/484)；本地首次提交尝试的 git hook `pnpm typecheck:chimera` 输出报告 `transform-chain-column.tsx` 中找不到名称 `isLast`。该失败发生在提交创建前，因此没有错误版本的 commit SHA；修复后的实现提交为 `88ea658a3954ffd3df73b94168d4c798e1d46154`。
+- 预期行为：transform-chain 最后一行的 Move down 操作禁用，其他行按行索引计算边界；每个行组件都必须接收并解构用于该边界的 `isLast` 属性，且提交前类型检查应阻止未定义标识符进入提交。
+- 真实异常、复现步骤与证据：首次提交尝试的工作区中，`ItemContent` 渲染逻辑引用了 `isLast`；提交钩子的 `pnpm typecheck:chimera` 报告该标识符未定义并拒绝提交。失败现场没有保存，因此不记录当时参数解构的其他字段。修复代码将 `isLast` 纳入组件参数解构，类型检查通过。
+- 确认的根因与排除项：`ItemContent` 使用的行尾状态未在该组件作用域中声明。不是 ref 的行为差异，也不是生成文件或运行时状态造成的错误。
+- 修复提交、差异映射及保留的兼容性边界：PR #484 的 `frontend/chimera/src/pages/(main)/main/profiles/$type/detail/_modules/transform-chain-column.tsx` 将 `isLast` 加入 `ItemContent` 解构，保持 ref 按行计算首尾状态的分解，并禁用最后一行的无效下移操作。修复包含在提交 `88ea658a3954ffd3df73b94168d4c798e1d46154` 中。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现被提交钩子 `pnpm typecheck:chimera` 拒绝；修复后的 `pnpm typecheck` 与生产构建均通过。边界行为也由 `tauri-e2e/specs/profile-transform-chain-ui.e2e.ts` 的重排断言覆盖，该 spec 属于 `profiles`、`critical` 和 `hermetic`。新 SHA 的 Windows Edge 桌面结果待 PR #484 CI。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后 `pnpm typecheck`、`pnpm --filter=chimera-ui build`、E2E harness typecheck、harness 单测（25/25）、`pnpm lint:frontend-boundaries`、格式检查、`pnpm prepare:check` 和 `git diff --check` 通过。初始 SHA 的远端 Windows Edge profiles E2E 尚在排队；加入本经验记录会产生新提交 SHA，必须重新验证新 SHA，不复用旧 SHA 的结果。
+- 风险/回滚和清理证据（如涉及宿主状态）：L3 工程经验记录；不改产品运行行为、用户数据或宿主状态。回滚只需还原本条索引和记录。维护者已明确批准添加并推送该记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：已有提交 hook 将 `pnpm typecheck:chimera` 作为 staged frontend 文件检查；继续保留该门禁，UI 边界状态变更需复核 prop 声明、传参和渲染解构三处。无 CI 门禁变化。
