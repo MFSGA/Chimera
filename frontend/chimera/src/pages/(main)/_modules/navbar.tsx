@@ -6,6 +6,7 @@ import DashboardRounded from '~icons/material-symbols/dashboard-rounded';
 import DesignServicesRounded from '~icons/material-symbols/design-services-rounded';
 import ExitToAppRounded from '~icons/material-symbols/exit-to-app-rounded';
 import GridViewOutlineRounded from '~icons/material-symbols/grid-view-outline-rounded';
+import LanOutlineRounded from '~icons/material-symbols/lan-outline-rounded';
 import MenuRounded from '~icons/material-symbols/menu-rounded';
 import Public from '~icons/material-symbols/public';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
@@ -129,6 +130,11 @@ export const DefaultNavbar = () => {
         <NavbarLabel>{m.navbar_label_connections()}</NavbarLabel>
       </NavbarButton>
 
+      <NavbarButton to="/main/topology">
+        <LanOutlineRounded />
+        <NavbarLabel>{m.topology_title()}</NavbarLabel>
+      </NavbarButton>
+
       <NavbarButton to="/main/rules">
         <DesignServicesRounded />
         <NavbarLabel>{m.navbar_label_rules()}</NavbarLabel>
@@ -220,6 +226,12 @@ export const MobileNavbar = () => {
             >
               <GridViewOutlineRounded />
               <span>{m.navbar_label_profiles()}</span>
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to={'/main/topology' as never}>
+              <LanOutlineRounded />
+              <span>{m.topology_title()}</span>
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>

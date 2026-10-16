@@ -8,13 +8,14 @@
 
 ## 1. 参考基线
 
-本次规则更新核对的本地参考版本：
+本次同步核对的本地参考版本：
 
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     813673a8e84b51265467f02277fc7e739837f61e
-verified:   2026-10-14 fetched and fast-forwarded from origin/main
+previous:   813673a8e84b51265467f02277fc7e739837f61e
+commit:     e81eeaea46a9c229478cd29c9555b5c072f7e6cc
+verified:   2026-10-14 fetched from origin/main; ref worktree clean
 ```
 
 每个迁移切片开始前执行：
@@ -28,7 +29,7 @@ git -C ref status --short
 
 `ref/` 默认只读。开发共通功能时应主动读取其对应代码，不必等待用户再次要求“参考 ref”。不要为了开始一个功能而自动 fetch、pull 或重置参考目录。只有任务包含同步参考版本时才更新，并记录更新前后 commit。
 
-主仓库通过 `ref/` 的 gitlink 固定参考版本，`.gitmodules` 提供克隆地址；新工作区可用 `git submodule update --init --recursive` 检出完全相同的基线。`ref/` 不应加入忽略规则。该 gitlink 固定的是经过核验的 commit，不会自动跟随上游 `main`；只有明确同步 ref 时才更新并提交新的 gitlink。本次将基线固定为上述 `main` commit，并递归初始化其子模块；CI 和新克隆应从该 gitlink 获得相同源码。参考目录有未提交修改时，应区分 commit 内容与工作区差异，不能把修改后的内容误称为该 commit 的实现。
+主仓库通过 `ref/` 的 gitlink 固定参考版本，`.gitmodules` 提供克隆地址；新工作区可用 `git submodule update --init --recursive` 检出完全相同的基线。`ref/` 不应加入忽略规则。该 gitlink 固定的是经过核验的 commit，不会自动跟随上游 `main`；只有明确同步 ref 时才更新并提交新的 gitlink。本次同步将候选基线从 `813673a8e84b51265467f02277fc7e739837f61e` 更新至上述 `main` commit；递归子模块没有变化。待该 gitlink 变更提交后，CI 和新克隆即可从父仓库获取相同源码。参考目录有未提交修改时，应区分 commit 内容与工作区差异，不能把修改后的内容误称为该 commit 的实现。
 
 ## 2. 必须同时满足的目标
 

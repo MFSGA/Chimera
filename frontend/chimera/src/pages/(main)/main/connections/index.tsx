@@ -51,6 +51,19 @@ function RouteComponent() {
     [crossNavigate],
   );
 
+  const onViewRuleUsage = useCallback(
+    (detail: ConnectionDetail) =>
+      crossNavigate({
+        from: 'connections',
+        originFocus: detail.rowId,
+        to: {
+          to: '/main/topology',
+          search: { filters: [{ d: 'rule', v: detail.ruleLabel }] },
+        },
+      }),
+    [crossNavigate],
+  );
+
   return (
     <ConnectionsContent
       value={{
@@ -61,6 +74,7 @@ function RouteComponent() {
       onChange={onChange}
       start={<ReturnButton />}
       onLocateRule={onLocateRule}
+      onViewRuleUsage={onViewRuleUsage}
       entryFocus={entryFocus}
     />
   );

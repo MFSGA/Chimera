@@ -1,14 +1,33 @@
 # ref 对齐进度
 
-当前只读参考检出为 Clash Nyanpasu `main` 的最新提交
-`5331747c06a5f42eeabb3e225a1e77a83f480549`，已通过远端 `HEAD` 与
-`refs/heads/main` 核实；检出状态干净。主仓库 `.gitmodules` 留有 `ref` URL，
-但当前 `HEAD` 没有 `ref` gitlink；按本项目约定，`ref/` 是 `.gitignore` 中的
-本地只读基线，不属于主仓库提交。
+主仓库此前固定的 `ref` 基线为 `813673a8e84b51265467f02277fc7e739837f61e`。
+2026-10-14 已从 `origin/main` 核实并检出上游最新提交
+`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；当前候选 gitlink 指向该提交，
+子模块工作区干净。自原基线以来上游合入了 TanStack Router、meta-json-schema、
+Playwright、Prettier 和 router-plugin 更新，流量分析侧栏路由重整，以及完整的
+profile transform-chain 编辑改进和相应浏览器测试；还补充了 worktree CoW 说明。
+递归子模块指针未变。此同步只更新参考基线，不等于将依赖或界面代码直接应用到
+Chimera。
 
 DIFF-001 至 DIFF-012 是此前基于
 `f7dbce2997c633e484f54788035e770b3ee99773` 完成的历史记录；它们不代表已按
 新基线重审。后续切片应使用当前 `ref/` 提交，并明确记录与历史基线的差别。
+
+## ref 基线同步（2026-10-14）
+
+- 上一固定提交：`813673a8e84b51265467f02277fc7e739837f61e`。
+- 同步提交：`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`，已 fetch 并与
+  `origin/main` 核对，是当前上游 main tip。期间依次包含 `85613d5e` Router 依赖、
+  `fb0039b1` 流量分析路由、`635e96c9` meta-json-schema、`9fdd5135` Playwright、
+  `d9cf2cc8` profile transform-chain 编辑、`b568b8b5` Prettier、`6083e156`
+  worktree CoW 文档和 `e81eeaea` router-plugin 更新。
+- 上游变化：除依赖升级与流量侧栏路由外，`d9cf2cc8` 重整 profile 转换链编辑器、
+  同步历史展示和卡片能力，增加 transform-chain 列组件、Accordion 组件及浏览器
+  覆盖。此次仅更新 `ref` 基线和本记录；未把上游依赖、profile UI 或其他源文件复制
+  到 Chimera，也未改 Chimera 的 `package.json`、`pnpm-lock.yaml` 或前端实现。
+- 验证：父仓库 `ref` gitlink 指向该提交；ref 工作区干净；递归子模块没有变化；
+  `git diff --check` 通过。此批只改参考版本与本记录，不涉及产品代码，故未运行
+  应用构建、桌面 E2E 或宿主网络测试。
 
 ## DIFF-001：共享 Profile/Runtime 领域下沉（第一阶段）
 
@@ -1385,3 +1404,17 @@ DIFF-001 至 DIFF-012 是此前基于
   及 PR 必需检查仍须远端复验；当前未声称 CI 已通过。
 - 回滚：移除 `ProxiesGuard::invalidate` 和 `ChimeraClient::refresh_profiles` 包装，恢复各 profile mutation 直接发事件；
   无迁移用户数据、宿主网络或系统服务状态。
+
+## DIFF-054：主界面流量分析与拓扑视图
+
+- 目标与非目标：把 ref 的主界面流量总览、排名、flow 和 geography 视图接入 Chimera 主 UI，并让导航保持 URL 筛选状态；本批不迁移本地 IP 探测/外部地理定位，不改变流量采集 runtime、legacy UI 表现或 agent API。
+- 参考版本：流量分析初版取自本地 `ref/` commit `fb0039b11a12c0f575fb92c1481f4ebaf66eb1d5`；本 PR 当前固定的 `ref/` 基线为 `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`。检查 `fb0039b1..e81eeaea` 的 ref 变更后，确认本批映射的 topology、data-page、traffic utility 和 navigation-sidebar 文件未被后续提交触及。本功能提交不修改 `ref/`；同步 gitlink 是同 PR 的独立提交。
+- ref 路径和符号：`ref/frontend/nyanpasu/src/pages/(main)/main/topology/` 的 overview、`traffic-context`、排名、flow、map、toolbar、transition、搜索及布局模块；`ref/frontend/nyanpasu/src/pages/(main)/main/_modules/{data-page.tsx,use-usage-label-of.ts}`、`ref/frontend/nyanpasu/src/utils/{traffic-usage,traffic-retention}.ts`，以及 `ref/frontend/ui/src/navigation-sidebar.tsx`。保留 ref 的路由、查询参数、页面模块和组件命名；新增 `Button.disableRipple` 以承载 ref 导航侧栏的 ripple 所有权。
+- Chimera 映射：对应文件位于 `frontend/chimera/src/pages/(main)/main/topology/`、`frontend/chimera/src/pages/(main)/main/_modules/{data-page.tsx,use-usage-label-of.ts}`、`frontend/chimera/src/utils/` 和 `frontend/chimera/src/components/ui/navigation-sidebar.tsx`；数据仍通过共享 `frontend/interface/src/ipc/use-traffic.ts::{useTrafficReport,useTrafficUsage}` 读取。排名弹窗沿用 ref 的 50 条分页和关闭自动重试策略。增加主界面桌面导航、移动端 More 菜单入口；Connections 的 `onViewRuleUsage` 跳转到带 rule filter 的 topology route。路由生成产物为 `frontend/chimera/src/routeTree.gen.ts`。
+- 类别及接口：L1、只读主界面能力。`useTrafficReport` 新增可选 `refetchInterval` 查询选项，默认查询行为不变；`useTrafficUsage` 的默认分页大小与 retry 策略对齐 ref（50 条、`retry: false`）。没有增加 IPC、持久化、runtime 或 agent tool 合同。legacy UI 继续使用共享 traffic hook，页面呈现未改变；agent 不受影响。
+- 隐私和保留差异：地图仅使用 backend report 已提供的 region 字段和打包的 Natural Earth 数据；没有端到端 IP lookup、public geo 服务、地图瓦片或宿主网络探测。ref 的 local-IP probe、opt-in/geolocation index 和 `mock-traffic.tsx` 未迁入，避免制造未经用户授权的外网 IP 查询，并因 Chimera 没有 ref debug mock hooks 而跳过 mock。没有查询到 region 的本地来源会保留为未知。地图 README 记录数据来源及许可证；后续若要迁移 IP 定位，须先设计显式 opt-in、TUN 排除和隐私测试。
+- 测试契约：新增 `docs/testing/contracts/traffic-analysis-main.md`；注册 `tauri-e2e/specs/traffic-analysis-main.e2e.ts` 到 `main` suite。它通过桌面控件验证 route 和 scope/metric query 保留，不把空报告/IPC 错误恢复或地图地理数据渲染当作覆盖目标。新增可执行的 `test:traffic` 单元入口覆盖 URL 到 report/topology 查询映射。
+- 验收条件：四个视图可从主 UI 打开；范围和指标选项更新 URL，并在 Flow/Geography 切换时保留；Connections 规则用量代码将 rule filter 带入分析页；打包地图不产生外部定位请求；相关前端类型检查、构建、模型测试和已注册的桌面用例通过。新 E2E 不覆盖 Connections 详情交叉跳转，因为当前 main 路由用例没有安全、可控的活动连接 fixture；其代码映射由 review 检查，真实桌面行为尚未验收。桌面 E2E 当前因本机磁盘限制未完成，因此仍待新 SHA 的远端 E2E 结果。
+- 验证：`pnpm typecheck` 通过；`pnpm --filter=chimera-ui build` 通过；`pnpm --filter=chimera-ui test:traffic`，5 passed；`pnpm --filter @chimera/tauri-e2e test:unit`，25 passed；`pnpm lint:frontend-boundaries`、对全部改动前端/契约文件的 Prettier 检查和 `git diff --check` 通过。`pnpm e2e:tauri:build` **未通过**：本机磁盘仅有约 3.2 GB 可用，Rust 在生成 `backend/target/e2e/debug/deps/libchimera_lib.a` 时报告 `No space left on device`；仅删除本次新建的 `backend/target/e2e` 构建输出恢复空间。真实桌面 `traffic-analysis-main.e2e.ts` 因无可执行文件而未运行，不能据此声称桌面验证通过；远端 PR Desktop E2E 仍需按新 SHA 验证。
+- 风险与回滚：本批不改变宿主网络、服务权限或用户数据；完整回滚需移除 `frontend/chimera/src/pages/(main)/main/topology/`、`frontend/chimera/src/pages/(main)/main/_modules/{data-page.tsx,use-usage-label-of.ts}`、`frontend/chimera/src/utils/{traffic-retention,traffic-usage}.ts`、`frontend/chimera/src/components/ui/navigation-sidebar.tsx`、`frontend/chimera/src/assets/maps/`，并恢复 `frontend/chimera/src/components/ui/button.tsx`、`frontend/interface/src/ipc/use-traffic.ts`、`frontend/chimera/src/pages/(main)/_modules/navbar.tsx`、`frontend/chimera/src/pages/(main)/main/connections/index.tsx`、`frontend/chimera/messages/{en,ru,zh-cn,zh-tw}.json`、`frontend/chimera/package.json` 和 `frontend/chimera/src/routeTree.gen.ts`。同时移除 `frontend/chimera/tests/traffic-search.test.ts` 及其 package script、`tauri-e2e/specs/traffic-analysis-main.e2e.ts` 与 `tauri-e2e/spec-suites.ts` 注册、`docs/testing/contracts/traffic-analysis-main.md` 和本 DIFF 记录。地图 generator 未迁入；若未来要让地图数据更新自动对齐 ref，需单独补齐可复现生成器。
+- 收敛条件：在补入并验证本机 Tauri E2E 之前，标记为“前端构建和单测通过、桌面 E2E 未验证”。只有在明确批准 IP 定位的隐私/网络合同并通过专用隔离测试后，才评估迁移 ref local-IP probe；legacy UI 和 agent 继续复用同一共享数据 API，不复制业务逻辑。
