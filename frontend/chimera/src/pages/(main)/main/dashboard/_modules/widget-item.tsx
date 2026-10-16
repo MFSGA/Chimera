@@ -20,8 +20,11 @@ import CloseRounded from '~icons/material-symbols/close-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import type { WidgetComponentProps } from './consts';
+import type { WidgetId } from './widget-config';
+import WidgetConfigMenu from './widget-config-menu';
 
-export type WidgetItemProps = DndGridItemProps<string> & WidgetComponentProps;
+export type WidgetItemProps = DndGridItemProps<string> &
+  WidgetComponentProps & { widgetType: WidgetId };
 
 /**
  * WidgetItem — 可拖拽、可关闭的 widget 容器
@@ -37,6 +40,7 @@ export default function WidgetItem({
   children,
   className,
   onCloseClick,
+  widgetType,
   ...props
 }: WidgetItemProps) {
   const { disabled, sourceOnly } = useDndGridContext();
@@ -80,6 +84,12 @@ export default function WidgetItem({
               <CloseRounded className="size-4" />
             </motion.button>
           </Button>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {!disabled && !sourceOnly && (
+          <WidgetConfigMenu id={props.id} type={widgetType} />
         )}
       </AnimatePresence>
     </DndGridItem>
