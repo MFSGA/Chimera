@@ -1,6 +1,7 @@
 // Detailed rejection, state-preservation, and coverage contract:
 // ../../docs/testing/contracts/profile-transform-candidate-rejection.md
 import assert from 'node:assert/strict';
+import { Key } from 'webdriverio';
 import type {
   MutationOutcome,
   ProfileDocument_Deserialize,
@@ -229,17 +230,20 @@ async function waitForGlobalRuntimeLogCleared(
   return latest;
 }
 
-async function waitForEditorClosed(scope: 'profile' | 'global') {
+async function waitForApplySettled(scope: 'profile' | 'global') {
   await browser.waitUntil(
     async () => {
       const currentEditor = await browser.$(
         `[data-slot="transform-chain-editor"][data-chain-scope="${scope}"]`,
       );
-      return !(await currentEditor.isDisplayed());
+      if (!(await currentEditor.isDisplayed())) return false;
+      return !(await currentEditor
+        .$('[data-slot="transform-chain-save"]')
+        .isExisting());
     },
     {
       timeout: 30_000,
-      timeoutMsg: `${scope} transform chain editor did not close.`,
+      timeoutMsg: `${scope} transform chain apply did not settle.`,
     },
   );
 }
@@ -268,6 +272,30 @@ async function waitForActiveOrder(
       timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
     },
   );
+}
+
+async function moveActiveItemWithKeyboard(uid: string) {
+  const item = await $(
+    `[data-slot="transform-chain-active-item"][data-profile-uid="${uid}"] [data-slot="profile-chain-editor-item"]`,
+  );
+  await item.waitForDisplayed({ timeout: 15_000 });
+  await browser.waitUntil(
+    async () => (await item.getAttribute('tabindex')) === '0',
+    {
+      timeout: 15_000,
+      timeoutMsg: `sortable Profile ${uid} did not become keyboard-focusable`,
+    },
+  );
+  await item.click();
+  assert.equal(
+    await item.isFocused(),
+    true,
+    `sortable Profile ${uid} did not receive keyboard focus`,
+  );
+  await browser.keys(Key.Space);
+  for (let index = 0; index < 12; index += 1) {
+    await browser.keys(Key.ArrowUp);
+  }
 }
 
 describe('main transform chain editor', () => {
@@ -525,7 +553,10 @@ describe('main transform chain editor', () => {
 
     try {
       handles = await browser.getWindowHandles();
-      if (handles.includes('main')) await browser.switchToWindow('main');
+      if (handles.includes('main')) {
+        await browser.switchToWindow('main');
+        await browser.setWindowSize(1240, 720);
+      }
     } catch (error) {
       errors.push(error);
     }
@@ -555,16 +586,49 @@ describe('main transform chain editor', () => {
   // authorities. A stale `chain` field or old create IPC fails setup/assertion.
   it('edits and reorders a scoped transform chain from profile details', async () => {
     assert.ok(localUid && mergeAUid && mergeBUid && javascriptUid);
+    await browser.setWindowSize(1240, 360);
     await openRoute(`/main/profiles/profile/detail/${localUid}`);
 
     const trigger = await $('[data-slot="profile-transform-chain"]');
+    const editorSelector =
+      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]';
+    const editor = await $(editorSelector);
     await trigger.waitForClickable({ timeout: 15_000 });
-    await trigger.click();
+    await editor.waitForExist({ timeout: 15_000 });
 
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
+    const beforeScroll = await browser.execute((selector) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return {
+        top: Math.round(rect.top),
+        height: Math.round(rect.height),
+        viewportHeight: window.innerHeight,
+      };
+    }, editorSelector);
+    assert.ok(beforeScroll, 'The scoped transform editor is missing.');
+    assert.ok(
+      beforeScroll.top + beforeScroll.height / 2 > beforeScroll.viewportHeight,
+      `The editor center must start below the viewport: ${JSON.stringify(beforeScroll)}`,
     );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+
+    await trigger.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute((selector) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) return false;
+          const rect = element.getBoundingClientRect();
+          const center = rect.top + rect.height / 2;
+          return center >= 0 && center <= window.innerHeight;
+        }, editorSelector),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'Clicking the profile transform-chain action did not scroll the editor into view.',
+      },
+    );
+    await browser.setWindowSize(1240, 720);
 
     const first = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
@@ -575,31 +639,62 @@ describe('main transform chain editor', () => {
     const javascript = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
     );
-    await first.click();
-    await second.click();
-    await javascript.click();
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeAUid,
-      mergeBUid,
-      javascriptUid,
-    ]);
+    await first.$('[data-slot="transform-chain-add"]').click();
+    await second.$('[data-slot="transform-chain-add"]').click();
+    await javascript.$('[data-slot="transform-chain-add"]').click();
+    const originalOrder = [mergeAUid, mergeBUid, javascriptUid];
+    assert.deepEqual(await activeOrder('profile'), originalOrder);
 
-    const secondRow = await editor.$(
-      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeBUid}"]`,
+    const firstActiveItem = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeAUid}"]`,
     );
-    await secondRow.$('[data-slot="transform-chain-move-up"]').click();
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeBUid,
-      mergeAUid,
-      javascriptUid,
-    ]);
+    const lastActiveItem = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    assert.equal(
+      await firstActiveItem
+        .$('[data-slot="transform-chain-move-up"]')
+        .isEnabled(),
+      false,
+      'the first active transform cannot move above the start of the chain',
+    );
+    assert.equal(
+      await lastActiveItem
+        .$('[data-slot="transform-chain-move-down"]')
+        .isEnabled(),
+      false,
+      'the last active transform cannot move below the end of the chain',
+    );
+
+    await editor.$('[data-slot="transform-chain-reset"]').click();
+    await waitForActiveOrder('profile', []);
+    await waitForScopedChain(localUid, []);
+
+    for (const uid of originalOrder) {
+      const item = await editor.$(
+        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`,
+      );
+      await item.$('[data-slot="transform-chain-add"]').click();
+    }
+    assert.deepEqual(await activeOrder('profile'), originalOrder);
+    const keyboardOrder = [mergeBUid, mergeAUid, javascriptUid];
+    await moveActiveItemWithKeyboard(mergeBUid);
+    await waitForActiveOrder('profile', keyboardOrder);
+    await browser.keys(Key.Escape);
+    await waitForActiveOrder('profile', originalOrder);
+    await waitForScopedChain(localUid, []);
+
+    await moveActiveItemWithKeyboard(mergeBUid);
+    await waitForActiveOrder('profile', keyboardOrder);
+    await browser.keys(Key.Space);
+    await waitForActiveOrder('profile', keyboardOrder);
 
     const beforeSaveDiagnostics =
       await invoke<RuntimeTransformDiagnostics | null>(
         'get_runtime_transform_diagnostics',
       );
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForScopedChain(localUid, [mergeBUid, mergeAUid, javascriptUid]);
+    await waitForScopedChain(localUid, keyboardOrder);
     const appliedDiagnostics = await waitForScopedRuntimeLog(
       localUid,
       javascriptUid,
@@ -609,7 +704,7 @@ describe('main transform chain editor', () => {
       appliedDiagnostics.revision > (beforeSaveDiagnostics?.revision ?? 0),
       'applied runtime revision did not advance after saving the scoped chain',
     );
-    await waitForEditorClosed('profile');
+    await waitForApplySettled('profile');
 
     const currentTrigger = await $('[data-slot="profile-transform-chain"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
@@ -793,7 +888,7 @@ describe('main transform chain editor', () => {
     await waitForScopedChain(localUid, []);
     await openRoute('/main/profiles/merge');
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
 
@@ -805,13 +900,31 @@ describe('main transform chain editor', () => {
       .$(
         `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
       )
+      .$('[data-slot="transform-chain-add"]')
       .click();
     await editor
       .$(
         `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
       )
+      .$('[data-slot="transform-chain-add"]')
       .click();
-    assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
+    const originalOrder = [mergeAUid, javascriptUid];
+    assert.deepEqual(await activeOrder('global'), originalOrder);
+
+    await editor.$('[data-slot="transform-chain-reset"]').click();
+    await waitForActiveOrder('global', []);
+    await waitForGlobalChain([]);
+
+    editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    for (const uid of originalOrder) {
+      const item = await editor.$(
+        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`,
+      );
+      await item.$('[data-slot="transform-chain-add"]').click();
+    }
+    assert.deepEqual(await activeOrder('global'), originalOrder);
 
     const beforeSaveDiagnostics =
       await invoke<RuntimeTransformDiagnostics | null>(
@@ -824,9 +937,9 @@ describe('main transform chain editor', () => {
       ['info', 'chain ui javascript log'],
       beforeSaveDiagnostics?.revision ?? 0,
     );
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
-    let currentTrigger = await $('[data-slot="global-transform-chain"]');
+    let currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
     editor = await $(
@@ -859,9 +972,30 @@ describe('main transform chain editor', () => {
       ['info', 'chain ui javascript log'],
       firstApplied.revision,
     );
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
-    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    editor = await $(
+      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    );
+    await editor.waitForDisplayed({ timeout: 15_000 });
+    javascriptRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    await javascriptRow.$('[data-slot="transform-chain-move-down"]').click();
+    assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([mergeAUid, javascriptUid]);
+    const movedDown = await waitForGlobalRuntimeLog(
+      javascriptUid,
+      ['info', 'chain ui javascript log'],
+      reordered.revision,
+    );
+    await waitForApplySettled('global');
+
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
     editor = await $(
@@ -877,12 +1011,12 @@ describe('main transform chain editor', () => {
     await waitForGlobalChain([mergeAUid]);
     const cleared = await waitForGlobalRuntimeLogCleared(
       javascriptUid,
-      reordered.revision,
+      movedDown.revision,
     );
-    assert.ok(cleared.revision > reordered.revision);
-    await waitForEditorClosed('global');
+    assert.ok(cleared.revision > movedDown.revision);
+    await waitForApplySettled('global');
 
-    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
     editor = await $(
@@ -962,8 +1096,6 @@ describe('main transform chain editor', () => {
           'Open global transform diagnostics did not return to the empty state after external detachment.',
       },
     );
-    await editor.$('[data-slot="transform-chain-cancel"]').click();
-    await waitForEditorClosed('global');
   });
 
   // Contract: a failing JS transform candidate is rejected without changing
@@ -984,7 +1116,7 @@ describe('main transform chain editor', () => {
     assert.ok(before);
     assert.equal(before.failure, null);
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
     const editor = await $(
@@ -995,7 +1127,7 @@ describe('main transform chain editor', () => {
     const failingTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
     );
-    await failingTransform.click();
+    await failingTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('global'), [
       mergeAUid,
       failingJavascriptUid,
@@ -1049,7 +1181,7 @@ describe('main transform chain editor', () => {
     await waitForActiveOrder('global', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([]);
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
     await browser.waitUntil(
       async () => {
@@ -1107,7 +1239,7 @@ describe('main transform chain editor', () => {
     const failingTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
     );
-    await failingTransform.click();
+    await failingTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('profile'), [
       mergeAUid,
       failingJavascriptUid,
@@ -1160,7 +1292,7 @@ describe('main transform chain editor', () => {
     await waitForActiveOrder('profile', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForScopedChain(localUid, []);
-    await waitForEditorClosed('profile');
+    await waitForApplySettled('profile');
 
     await browser.waitUntil(
       async () => {
@@ -1341,9 +1473,6 @@ describe('main transform chain editor', () => {
           'Open scoped transform diagnostics did not clear the failure after script repair.',
       },
     );
-
-    await editor.$('[data-slot="transform-chain-cancel"]').click();
-    await waitForEditorClosed('profile');
   });
 
   // Contract: selecting invalid overlay YAML is rejected without changing the
@@ -1364,7 +1493,7 @@ describe('main transform chain editor', () => {
     assert.ok(before);
     assert.equal(before.failure, null);
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
     const editor = await $(
@@ -1375,7 +1504,7 @@ describe('main transform chain editor', () => {
     const failingTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingMergeUid}"]`,
     );
-    await failingTransform.click();
+    await failingTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([]);
@@ -1421,11 +1550,11 @@ describe('main transform chain editor', () => {
     const validTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
     );
-    await validTransform.click();
+    await validTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
     await browser.waitUntil(
       async () => {

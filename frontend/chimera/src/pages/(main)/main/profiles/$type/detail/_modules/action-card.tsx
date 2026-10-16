@@ -20,7 +20,6 @@ import {
   useActiveProfile,
   useDeleteProfile,
 } from '../../_modules/profile-actions';
-import TransformChainEditor from '../../_modules/transform-chain-editor';
 import { isProxyProfile } from '../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
@@ -100,15 +99,18 @@ export default function ActionCard({
       )}
 
       {isProxy && (
-        <TransformChainEditor profile={profile}>
-          <ActionButton
-            disabled={isPending}
-            data-slot="profile-transform-chain"
-          >
-            <AccountTreeRounded className="size-4 shrink-0" />
-            <span className="truncate">{m.profile_menu_proxy_chains()}</span>
-          </ActionButton>
-        </TransformChainEditor>
+        <ActionButton
+          disabled={isPending}
+          data-slot="profile-transform-chain"
+          onClick={() =>
+            document
+              .querySelector('[data-slot="transform-chain-editor"]')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+          }
+        >
+          <AccountTreeRounded className="size-4 shrink-0" />
+          <span className="truncate">{m.profile_menu_proxy_chains()}</span>
+        </ActionButton>
       )}
 
       <ActionButton

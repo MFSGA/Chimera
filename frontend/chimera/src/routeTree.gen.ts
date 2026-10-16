@@ -39,6 +39,7 @@ import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/mai
 import { Route as mainMainDashboardIndexRouteImport } from './pages/(main)/main/dashboard/index'
 import { Route as mainMainLogsIndexRouteImport } from './pages/(main)/main/logs/index'
 import { Route as mainMainProfilesIndexRouteImport } from './pages/(main)/main/profiles/index'
+import { Route as mainMainProfilesGlobalRouteRouteImport } from './pages/(main)/main/profiles/global/route'
 import { Route as mainMainProfilesInspectRouteRouteImport } from './pages/(main)/main/profiles/inspect/route'
 import { Route as mainMainProvidersIndexRouteImport } from './pages/(main)/main/providers/index'
 import { Route as mainMainProxiesIndexRouteImport } from './pages/(main)/main/proxies/index'
@@ -218,6 +219,12 @@ const mainMainProfilesIndexRoute = mainMainProfilesIndexRouteImport.update({
   path: '/',
   getParentRoute: () => mainMainProfilesRouteRoute,
 } as any)
+const mainMainProfilesGlobalRouteRoute =
+  mainMainProfilesGlobalRouteRouteImport.update({
+    id: '/global',
+    path: '/global',
+    getParentRoute: () => mainMainProfilesRouteRoute,
+  } as any)
 const mainMainProfilesInspectRouteRoute =
   mainMainProfilesInspectRouteRouteImport.update({
     id: '/inspect',
@@ -392,6 +399,7 @@ export interface FileRoutesByFullPath {
   '/main/settings': typeof mainMainSettingsRouteRouteWithChildren
   '/main/topology': typeof mainMainTopologyRouteRouteWithChildren
   '/main/': typeof mainMainIndexRoute
+  '/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
@@ -439,6 +447,7 @@ export interface FileRoutesByTo {
   '/': typeof legacyIndexRoute
   '/main/assistant': typeof mainMainAssistantRouteRoute
   '/main': typeof mainMainIndexRoute
+  '/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
@@ -497,6 +506,7 @@ export interface FileRoutesById {
   '/(main)/main/settings': typeof mainMainSettingsRouteRouteWithChildren
   '/(main)/main/topology': typeof mainMainTopologyRouteRouteWithChildren
   '/(main)/main/': typeof mainMainIndexRoute
+  '/(main)/main/profiles/global': typeof mainMainProfilesGlobalRouteRoute
   '/(main)/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/(main)/main/settings/about': typeof mainMainSettingsAboutRouteRoute
   '/(main)/main/settings/chimera': typeof mainMainSettingsChimeraRouteRoute
@@ -555,6 +565,7 @@ export interface FileRouteTypes {
     | '/main/settings'
     | '/main/topology'
     | '/main/'
+    | '/main/profiles/global'
     | '/main/profiles/inspect'
     | '/main/settings/about'
     | '/main/settings/chimera'
@@ -602,6 +613,7 @@ export interface FileRouteTypes {
     | '/'
     | '/main/assistant'
     | '/main'
+    | '/main/profiles/global'
     | '/main/profiles/inspect'
     | '/main/settings/about'
     | '/main/settings/chimera'
@@ -659,6 +671,7 @@ export interface FileRouteTypes {
     | '/(main)/main/settings'
     | '/(main)/main/topology'
     | '/(main)/main/'
+    | '/(main)/main/profiles/global'
     | '/(main)/main/profiles/inspect'
     | '/(main)/main/settings/about'
     | '/(main)/main/settings/chimera'
@@ -909,6 +922,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/main/profiles/'
       preLoaderRoute: typeof mainMainProfilesIndexRouteImport
+      parentRoute: typeof mainMainProfilesRouteRoute
+    }
+    '/(main)/main/profiles/global': {
+      id: '/(main)/main/profiles/global'
+      path: '/global'
+      fullPath: '/main/profiles/global'
+      preLoaderRoute: typeof mainMainProfilesGlobalRouteRouteImport
       parentRoute: typeof mainMainProfilesRouteRoute
     }
     '/(main)/main/profiles/inspect': {
@@ -1166,6 +1186,7 @@ const mainMainLogsRouteRouteWithChildren =
   mainMainLogsRouteRoute._addFileChildren(mainMainLogsRouteRouteChildren)
 
 interface mainMainProfilesRouteRouteChildren {
+  mainMainProfilesGlobalRouteRoute: typeof mainMainProfilesGlobalRouteRoute
   mainMainProfilesInspectRouteRoute: typeof mainMainProfilesInspectRouteRoute
   mainMainProfilesIndexRoute: typeof mainMainProfilesIndexRoute
   mainMainProfilesTypeIndexRoute: typeof mainMainProfilesTypeIndexRoute
@@ -1173,6 +1194,7 @@ interface mainMainProfilesRouteRouteChildren {
 }
 
 const mainMainProfilesRouteRouteChildren: mainMainProfilesRouteRouteChildren = {
+  mainMainProfilesGlobalRouteRoute: mainMainProfilesGlobalRouteRoute,
   mainMainProfilesInspectRouteRoute: mainMainProfilesInspectRouteRoute,
   mainMainProfilesIndexRoute: mainMainProfilesIndexRoute,
   mainMainProfilesTypeIndexRoute: mainMainProfilesTypeIndexRoute,
