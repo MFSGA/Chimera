@@ -1,25 +1,4 @@
-/**
- * DnD Grid 组件
- *
- * 迁移自 ref: `src/components/ui/dnd-grid/dnd-grid.tsx`
- *
- * 职责：
- * - 提供可拖拽、可调整大小的网格布局
- * - 使用 @dnd-kit 实现拖拽交互
- * - 支持两种模式：
- *   1. 独立模式：自身包含 DndContext，适合单网格页面
- *   2. 受管模式：注册到 DndGridRoot，适合多网格共存页面（如 Dashboard + WidgetSheet）
- * - 通过 resize 手柄支持项的大小调整
- * - 渲染占位符、拖拽覆盖层和动画过渡
- *
- * 核心流程：
- * 1. useGridLayout 监听容器尺寸并计算网格布局
- * 2. items 按网格坐标渲染为绝对定位的子元素
- * 3. 拖拽时显示幽灵占位符，目标位置用虚线框预览
- * 4. 放置后通过 onLayoutChange 通知外部更新
- */
-
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import {
   DndContext,
   DragOverlay,
@@ -35,8 +14,8 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   Fragment,
   useCallback,
-  useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -45,6 +24,7 @@ import { useDndGridRoot, type GridRegistration } from './root-context';
 import type {
   DndGridItemType,
   GridItemConstraints,
+  GridPosition,
   GridSize,
   ResizeHandle,
 } from './types';
@@ -67,7 +47,7 @@ export interface DndGridProps<T extends string = string> {
   sourceOnly?: boolean;
   dragIdPrefix?: string;
   gridId?: string;
-  onSourceDrop?: (itemId: string) => void;
+  onExternalDrop?: (itemId: string, position: GridPosition) => void;
   onSourceDragStart?: () => void;
 }
 
@@ -84,38 +64,33 @@ export function DndGrid<T extends string = string>({
   sourceOnly = false,
   dragIdPrefix = '',
   gridId,
-  onSourceDrop,
+  onExternalDrop,
   onSourceDragStart,
 }: DndGridProps<T>) {
   const constraintsMapRef = useRef<Record<string, GridItemConstraints>>({});
 
   const { containerRef, layout, computedSize, getItemRect, snapToGrid } =
-    useGridLayout(minCellSize, gap, size);
-
-  const onSizeChangeRef = useRef(onSizeChange);
-  onSizeChangeRef.current = onSizeChange;
-
-  // 当网格尺寸变化时通知外部（用于 Dashboard 布局自适应）
-  useEffect(() => {
-    if (computedSize) {
-      onSizeChangeRef.current?.(computedSize, constraintsMapRef.current);
-    }
-  }, [computedSize]);
+    useGridLayout(minCellSize, gap, size, (newSize) =>
+      onSizeChange?.(newSize, constraintsMapRef.current),
+    );
 
   const [activeItem, setActiveItem] = useState<DndGridItemType<T> | null>(null);
   const [previewItem, setPreviewItem] = useState<DndGridItemType<T> | null>(
     null,
   );
 
-  const [displayItems, setDisplayItems] = useState<DndGridItemType<T>[]>(items);
+  // The items as they were when a drag or resize started; otherwise the grid
+  // shows `items` as given.
+  const [frozenItems, setFrozenItems] = useState<DndGridItemType<T>[] | null>(
+    null,
+  );
+  const displayItems = frozenItems ?? items;
   const [dropInfoMap, setDropInfoMap] = useState<
     Record<string, { left: number; top: number }>
   >({});
 
-  const isDragging = useRef(false);
   const lastValidSnapRef = useRef<DndGridItemType<T> | null>(null);
 
-  // 调整大小状态
   const resizeStateRef = useRef<{
     id: string;
     handle: ResizeHandle;
@@ -130,19 +105,15 @@ export function DndGrid<T extends string = string>({
     null,
   );
 
-  // 当外部 items 变化时同步到内部状态（仅在非拖拽状态时）
-  useEffect(() => {
-    if (!isDragging.current && !resizeStateRef.current) {
-      setDisplayItems(items);
-    }
-  }, [items]);
-
-  // 调整大小时的预览替换
-  const effectiveDisplayItems = resizePreview
-    ? displayItems.map((item) =>
-        item.id === resizePreview.id ? resizePreview : item,
-      )
-    : displayItems;
+  const effectiveDisplayItems = useMemo(
+    () =>
+      resizePreview
+        ? displayItems.map((item) =>
+            item.id === resizePreview.id ? resizePreview : item,
+          )
+        : displayItems,
+    [displayItems, resizePreview],
+  );
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -151,25 +122,21 @@ export function DndGrid<T extends string = string>({
     }),
   );
 
-  /** 拖拽开始：记录拖拽项并清空重叠状态 */
   const handleDragStart = useCallback(
     ({ active }: DragStartEvent) => {
       const item = items.find((i) => i.id === active.id);
-
       if (!item) {
         return;
       }
 
-      isDragging.current = true;
       lastValidSnapRef.current = item;
       setActiveItem(item);
       setPreviewItem(item);
-      setDisplayItems(items);
+      setFrozenItems(items);
     },
     [items],
   );
 
-  /** 拖拽移动：计算网格对齐位置，检测重叠 */
   const handleDragMove = useCallback(
     ({ delta }: DragMoveEvent) => {
       if (!activeItem) {
@@ -178,17 +145,16 @@ export function DndGrid<T extends string = string>({
 
       const snapped = snapToGrid(activeItem, delta.x, delta.y);
 
-      // 仅在目标位置空闲时更新占位符
+      // Only update the placeholder when the target cell is free.
       if (!hasOverlap(items, activeItem.id, snapped)) {
         lastValidSnapRef.current = snapped;
         setPreviewItem(snapped);
       }
-      // 重叠时占位符保持在 lastValidSnapRef，无需更新状态
+      // If overlapping, placeholder stays at lastValidSnapRef �?no state update needed.
     },
     [activeItem, items, snapToGrid],
   );
 
-  /** 拖拽结束：确定最终位置，通知外部 */
   const handleDragEnd = useCallback(
     ({ active, delta }: DragEndEvent) => {
       if (!activeItem) {
@@ -200,7 +166,7 @@ export function DndGrid<T extends string = string>({
       const dropTop = originalRect.top + delta.y;
 
       const snapped = snapToGrid(activeItem, delta.x, delta.y);
-      // 如果对齐位置空闲则使用，否则回退到最后一个有效位置
+      // Use the snapped position if it's free, otherwise fall back to the last valid snap.
       const finalItem = !hasOverlap(items, activeItem.id, snapped)
         ? snapped
         : (lastValidSnapRef.current ?? activeItem);
@@ -208,12 +174,11 @@ export function DndGrid<T extends string = string>({
       const newItems = items.map((i) => (i.id === active.id ? finalItem : i));
       const id = String(active.id);
 
-      isDragging.current = false;
       lastValidSnapRef.current = null;
 
       setActiveItem(null);
       setPreviewItem(null);
-      setDisplayItems(newItems);
+      setFrozenItems(null);
       setDropInfoMap((prev) => ({
         ...prev,
         [id]: { left: dropLeft, top: dropTop },
@@ -223,20 +188,16 @@ export function DndGrid<T extends string = string>({
     [activeItem, items, snapToGrid, getItemRect, onLayoutChange],
   );
 
-  /** 拖拽取消：恢复原始状态 */
   const handleDragCancel = useCallback(() => {
-    isDragging.current = false;
     lastValidSnapRef.current = null;
     setActiveItem(null);
     setPreviewItem(null);
-    setDisplayItems(items);
-  }, [items]);
+    setFrozenItems(null);
+  }, []);
 
-  /** 调整大小开始 */
   const onResizeStart = useCallback(
     (id: string, handle: ResizeHandle, startX: number, startY: number) => {
       const item = items.find((i) => i.id === id);
-
       if (!item || disabled) {
         return;
       }
@@ -250,15 +211,14 @@ export function DndGrid<T extends string = string>({
       };
 
       setResizingItemId(id);
+      setFrozenItems(items);
     },
     [items, disabled],
   );
 
-  /** 调整大小移动 */
   const onResizeMove = useCallback(
     (currentX: number, currentY: number) => {
       const state = resizeStateRef.current;
-
       if (!state) {
         return;
       }
@@ -287,25 +247,45 @@ export function DndGrid<T extends string = string>({
     [items, layout, gap],
   );
 
-  /** 调整大小结束 */
   const onResizeEnd = useCallback(() => {
     const preview = resizePreviewRef.current;
     resizeStateRef.current = null;
     resizePreviewRef.current = null;
     setResizingItemId(null);
     setResizePreview(null);
+    setFrozenItems(null);
 
     if (preview) {
       const newItems = items.map((i) => (i.id === preview.id ? preview : i));
-      setDisplayItems(newItems);
       onLayoutChange?.(newItems);
     }
   }, [items, onLayoutChange]);
 
   const rootCtx = useDndGridRoot();
 
-  // 稳定引用对象，每次渲染时更新属性（用于 DndGridRoot 注册）
-  // 这样 root 始终读取最新的回调闭包，而引用不变避免重复 effect
+  const getDropPosition = useCallback(
+    (clientX: number, clientY: number): GridPosition | null => {
+      const element = containerRef.current;
+      if (!element) {
+        return null;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) {
+        return null;
+      }
+
+      return {
+        x: Math.min(layout.cols - 1, Math.floor(x / (layout.cellW + gap))),
+        y: Math.min(layout.rows - 1, Math.floor(y / (layout.cellH + gap))),
+      };
+    },
+    [containerRef, layout, gap],
+  );
+
+  // Stable object mutated in place every render so the root always reads fresh closures
   const registrationRef = useRef<GridRegistration>({
     itemIds: [],
     dragIdPrefix: '',
@@ -315,6 +295,7 @@ export function DndGrid<T extends string = string>({
     handleDragEnd: () => {},
     handleDragCancel: () => {},
     getCellSize: () => ({ cellW: 0, cellH: 0, gap: 0 }),
+    getDropPosition: () => null,
   });
 
   Object.assign(registrationRef.current, {
@@ -326,11 +307,11 @@ export function DndGrid<T extends string = string>({
     handleDragEnd,
     handleDragCancel,
     getCellSize: () => ({ cellW: layout.cellW, cellH: layout.cellH, gap }),
-    onSourceDrop,
+    getDropPosition,
+    onExternalDrop: disabled ? undefined : onExternalDrop,
     onSourceDragStart,
   });
 
-  // 注册到 DndGridRoot（仅在受管模式下）
   useLayoutEffect(() => {
     if (!rootCtx || !gridId) {
       return;
@@ -348,31 +329,47 @@ export function DndGrid<T extends string = string>({
   const overlayRect = activeItem ? getItemRect(activeItem) : null;
   const placeholderRect = previewItem ? getItemRect(previewItem) : null;
 
-  // 网格内容：提供 DndGridProvider + 容器 + 占位符 + 项渲染 + 覆盖层
+  const activeItemId = activeItem?.id ?? null;
+  // Every item reads this context; a stable value keeps a re-render of the
+  // grid's parent from re-rendering every item.
+  const contextValue = useMemo(
+    () => ({
+      displayItems: effectiveDisplayItems,
+      getItemRect,
+      dropInfoMap,
+      activeItemId,
+      resizingItemId,
+      disabled,
+      sourceOnly,
+      dragIdPrefix,
+      isOverlay: false,
+      constraintsMapRef,
+      onResizeStart,
+      onResizeMove,
+      onResizeEnd,
+    }),
+    [
+      effectiveDisplayItems,
+      getItemRect,
+      dropInfoMap,
+      activeItemId,
+      resizingItemId,
+      disabled,
+      sourceOnly,
+      dragIdPrefix,
+      onResizeStart,
+      onResizeMove,
+      onResizeEnd,
+    ],
+  );
+
   const gridContent = (
-    <DndGridProvider
-      value={{
-        displayItems: effectiveDisplayItems,
-        getItemRect,
-        dropInfoMap,
-        activeItemId: activeItem?.id ?? null,
-        resizingItemId,
-        disabled,
-        sourceOnly,
-        dragIdPrefix,
-        isOverlay: false,
-        constraintsMapRef,
-        onResizeStart,
-        onResizeMove,
-        onResizeEnd,
-      }}
-    >
+    <DndGridProvider value={contextValue}>
       <div
         ref={containerRef}
         className={cn('relative', className)}
         data-slot="dnd-grid-container"
       >
-        {/* 拖拽占位符虚线框 */}
         <AnimatePresence>
           {placeholderRect && activeItem && (
             <motion.div
@@ -397,13 +394,16 @@ export function DndGrid<T extends string = string>({
           )}
         </AnimatePresence>
 
-        {/* 渲染所有网格项 */}
-        {effectiveDisplayItems.map((item) => (
-          <Fragment key={item.id}>{children(item)}</Fragment>
-        ))}
+        {/* Items render once the cells are measured, not first in a 1x1 grid. */}
+        {computedSize && (
+          <AnimatePresence initial={false}>
+            {effectiveDisplayItems.map((item) => (
+              <Fragment key={item.id}>{children(item)}</Fragment>
+            ))}
+          </AnimatePresence>
+        )}
       </div>
 
-      {/* 独立模式（非受管）下的 DragOverlay */}
       {!isManaged && (
         <DragOverlay dropAnimation={null}>
           <AnimatePresence>
@@ -445,12 +445,10 @@ export function DndGrid<T extends string = string>({
     </DndGridProvider>
   );
 
-  // 受管模式：gridContent 不包含 DndContext（由 DndGridRoot 提供）
   if (isManaged) {
     return gridContent;
   }
 
-  // 独立模式：包裹 DndContext
   return (
     <DndContext
       sensors={sensors}

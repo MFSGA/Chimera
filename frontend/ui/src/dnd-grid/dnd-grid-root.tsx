@@ -1,21 +1,3 @@
-/**
- * DnD Grid 根组件
- *
- * 迁移自 ref: `src/components/ui/dnd-grid/dnd-grid-root.tsx`
- *
- * 职责：
- * - 包装在 DnD 页面最外层（如 Dashboard）
- * - 提供 DndContext 和根级上下文
- * - 管理多个 DndGrid 子实例的注册
- * - 处理拖拽事件路由：将 @dnd-kit 事件分发到对应网格的注册处理器
- *
- * 多网格支持：
- * 当页面上有多个 DndGrid（如 Dashboard 的主网格 + WidgetSheet 的来源网格），
- * DndGridRoot 通过 findGrid 查找拖拽项所属的网格，将事件路由到该网格的处理器。
- * 即使来源网格在拖拽中卸载（WidgetSheet 关闭），pendingSourceRef 仍保留 onSourceDrop
- * 回调以完成拖拽放置。
- */
-
 import {
   DndContext,
   PointerSensor,
@@ -26,17 +8,20 @@ import {
   type DragMoveEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
-import { useCallback, useRef, useState, type PropsWithChildren } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PropsWithChildren,
+} from 'react';
 import {
   DndGridRootContext,
+  isDndGridSourceData,
   type ActiveDrag,
   type GridRegistration,
 } from './root-context';
 
-/**
- * 根据拖拽项的 ID 查找其所属的网格注册信息
- * 遍历所有已注册的网格，检查项的 ID 是否匹配（考虑 dragIdPrefix）
- */
 function findGrid(
   grids: Map<string, GridRegistration>,
   activeId: string,
@@ -64,33 +49,43 @@ function findGrid(
       };
     }
   }
-
   return null;
 }
 
-/**
- * DndGridRoot 组件
- *
- * 用法：
- * ```tsx
- * <DndGridRoot>
- *   <DndGrid gridId="main" ...>
- *     {renderWidgets}
- *   </DndGrid>
- *   <WidgetSheet />
- * </DndGridRoot>
- * ```
- */
 export function DndGridRoot({ children }: PropsWithChildren) {
   const gridsRef = useRef<Map<string, GridRegistration>>(new Map());
 
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
-  // 拖拽开始时捕获 onSourceDrop，以应对来源网格在拖拽中卸载（例如 WidgetSheet 关闭）
+  // Keep the source identity when the library closes and unmounts its grid.
   const pendingSourceRef = useRef<{
-    onSourceDrop?: (itemId: string) => void;
     itemId: string;
   } | null>(null);
+  const pointerRef = useRef<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    const trackPointer = (event: PointerEvent) => {
+      if (pendingSourceRef.current) {
+        pointerRef.current = { x: event.clientX, y: event.clientY };
+      }
+    };
+    const trackTouch = (event: TouchEvent) => {
+      const touch = event.changedTouches[0];
+      if (pendingSourceRef.current && touch) {
+        pointerRef.current = { x: touch.clientX, y: touch.clientY };
+      }
+    };
+    document.addEventListener('pointermove', trackPointer, true);
+    document.addEventListener('pointerup', trackPointer, true);
+    document.addEventListener('touchmove', trackTouch, true);
+    document.addEventListener('touchend', trackTouch, true);
+    return () => {
+      document.removeEventListener('pointermove', trackPointer, true);
+      document.removeEventListener('pointerup', trackPointer, true);
+      document.removeEventListener('touchmove', trackTouch, true);
+      document.removeEventListener('touchend', trackTouch, true);
+    };
+  }, []);
 
   const registerGrid = useCallback((gridId: string, reg: GridRegistration) => {
     gridsRef.current.set(gridId, reg);
@@ -100,7 +95,6 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     gridsRef.current.delete(gridId);
   }, []);
 
-  // 触控和鼠标传感器配置
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {
@@ -108,17 +102,44 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     }),
   );
 
-  /**
-   * 拖拽开始处理：
-   * 1. 查找项所属的网格
-   * 2. 如果是来源网格（sourceOnly），捕获 onSourceDrop 并触发 onSourceDragStart
-   * 3. 否则委派到网格自身的 handleDragStart
-   * 4. 设置 activeDrag 用于 DragOverlay
-   */
   const handleDragStart = useCallback((e: DragStartEvent) => {
+    const startSourceDrag = (
+      itemId: string,
+      onSourceDragStart?: () => void,
+    ) => {
+      pointerRef.current = null;
+      // Capture before onSourceDragStart may unmount the source
+      pendingSourceRef.current = {
+        itemId,
+      };
+      onSourceDragStart?.();
+    };
+
+    const source = e.active.data.current;
+    if (isDndGridSourceData(source)) {
+      // A source has no cells; size the preview by a grid it can drop into.
+      const destination = [...gridsRef.current.values()].find(
+        (reg) => !reg.sourceOnly,
+      );
+      if (!destination) {
+        return;
+      }
+
+      const { cellW, cellH, gap } = destination.getCellSize();
+      startSourceDrag(source.itemId, source.onDragStart);
+      setActiveDrag({
+        itemId: source.itemId,
+        dragIdPrefix: source.dragIdPrefix,
+        dims: {
+          width: source.w * cellW + (source.w - 1) * gap,
+          height: source.h * cellH + (source.h - 1) * gap,
+        },
+      });
+      return;
+    }
+
     const activeId = String(e.active.id);
     const found = findGrid(gridsRef.current, activeId);
-
     if (!found) {
       return;
     }
@@ -133,18 +154,14 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     const h = data?.h ?? 2;
 
     if (sourceOnly) {
-      // 在 onSourceDragStart 可能卸载网格之前捕获回调
-      pendingSourceRef.current = {
-        onSourceDrop: reg.onSourceDrop,
-        itemId: plainId,
-      };
-      onSourceDragStart?.();
+      startSourceDrag(plainId, onSourceDragStart);
     } else {
       reg.handleDragStart(e);
     }
 
     setActiveDrag({
       itemId: plainId,
+      dragIdPrefix: reg.dragIdPrefix,
       dims: {
         width: w * cellW + (w - 1) * gap,
         height: h * cellH + (h - 1) * gap,
@@ -152,44 +169,46 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     });
   }, []);
 
-  /**
-   * 拖拽移动处理：
-   * 非 sourceOnly 的网格才需要实时更新预览位置
-   */
   const handleDragMove = useCallback((e: DragMoveEvent) => {
     const activeId = String(e.active.id);
     const found = findGrid(gridsRef.current, activeId);
-
     if (!found) {
       return;
     }
 
     const { reg } = found;
-
     if (!reg.sourceOnly) {
       reg.handleDragMove(e);
     }
   }, []);
 
-  /**
-   * 拖拽结束处理：
-   * 1. 如果有 pending source drop，调用 onSourceDrop 并返回
-   * 2. 否则委派到网格自身的 handleDragEnd
-   */
   const handleDragEnd = useCallback((e: DragEndEvent) => {
     setActiveDrag(null);
 
-    // 来源拖拽：使用捕获的处理器（网格可能已经卸载）
+    // The destination owns the drop; a missing destination cancels the addition.
     if (pendingSourceRef.current) {
-      const { onSourceDrop, itemId } = pendingSourceRef.current;
+      const { itemId } = pendingSourceRef.current;
       pendingSourceRef.current = null;
-      onSourceDrop?.(itemId);
+
+      // Drag deltas include layout adjustments when the drawer closes; use
+      // the native release coordinates instead.
+      const pointer = pointerRef.current;
+      pointerRef.current = null;
+      if (pointer) {
+        for (const reg of gridsRef.current.values()) {
+          if (reg.sourceOnly || !reg.onExternalDrop) continue;
+          const position = reg.getDropPosition(pointer.x, pointer.y);
+          if (position) {
+            reg.onExternalDrop(itemId, position);
+            break;
+          }
+        }
+      }
       return;
     }
 
     const activeId = String(e.active.id);
     const found = findGrid(gridsRef.current, activeId);
-
     if (!found) {
       return;
     }
@@ -197,11 +216,8 @@ export function DndGridRoot({ children }: PropsWithChildren) {
     found.reg.handleDragEnd(e);
   }, []);
 
-  /**
-   * 拖拽取消处理：
-   * 清空所有状态并通知所有非 sourceOnly 的网格
-   */
   const handleDragCancel = useCallback(() => {
+    pointerRef.current = null;
     pendingSourceRef.current = null;
     setActiveDrag(null);
 
