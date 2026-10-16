@@ -121,6 +121,7 @@ export interface ButtonProps
     ButtonVariantsProps {
   asChild?: boolean;
   loading?: boolean;
+  disableRipple?: boolean;
 }
 
 export const Button = ({
@@ -132,13 +133,18 @@ export const Button = ({
   className,
   children,
   onClick,
+  disableRipple,
   ...props
 }: ButtonProps) => {
   const Comp = asChild ? Slot.Root : 'button';
 
   const ripple = useRipple();
 
-  const handleClick = disabled ? undefined : chains(onClick, ripple.onClick);
+  const handleClick = disabled
+    ? undefined
+    : disableRipple
+      ? onClick
+      : chains(onClick, ripple.onClick);
 
   const handleClear = useCallback(
     (key: React.Key) => {
@@ -182,7 +188,7 @@ export const Button = ({
       </AnimatePresence>
 
       <Suspense>
-        {ripple && !loading && !disabled && (
+        {ripple && !disableRipple && !loading && !disabled && (
           <LazyRipple ripples={ripple.ripples} onClear={handleClear} />
         )}
       </Suspense>

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test:connections": "tsx --test tests/connections-model.test.ts"
+    "test:connections": "tsx --test tests/connections-model.test.ts",
+    "test:traffic": "tsx --test tests/traffic-search.test.ts"
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",

@@ -40,6 +40,8 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -108,9 +110,13 @@ jobs:
       - name: Download Sidecars aarch64
         if: ${{ inputs.aarch64 == true }}
         run: pnpm prepare:check --arch arm64 --sidecar-host aarch64-apple-darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Download Sidecars x64
         if: ${{ inputs.aarch64 == false }}
         run: pnpm prepare:check --arch x64 --sidecar-host x86_64-apple-darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Nightly Prepare
         if: ${{ inputs.nightly == true }}
         run: |

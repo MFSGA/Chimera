@@ -32,6 +32,7 @@ import { Route as mainMainProvidersRouteRouteImport } from './pages/(main)/main/
 import { Route as mainMainProxiesRouteRouteImport } from './pages/(main)/main/proxies/route'
 import { Route as mainMainRulesRouteRouteImport } from './pages/(main)/main/rules/route'
 import { Route as mainMainSettingsRouteRouteImport } from './pages/(main)/main/settings/route'
+import { Route as mainMainTopologyRouteRouteImport } from './pages/(main)/main/topology/route'
 import { Route as editorEditorCssIndexRouteImport } from './pages/(editor)/editor/css/index'
 import { Route as editorEditorProfileIndexRouteImport } from './pages/(editor)/editor/profile/index'
 import { Route as mainMainConnectionsIndexRouteImport } from './pages/(main)/main/connections/index'
@@ -51,10 +52,18 @@ import { Route as mainMainSettingsDebugRouteRouteImport } from './pages/(main)/m
 import { Route as mainMainSettingsSystemRouteRouteImport } from './pages/(main)/main/settings/system/route'
 import { Route as mainMainSettingsUserInterfaceRouteRouteImport } from './pages/(main)/main/settings/user-interface/route'
 import { Route as mainMainSettingsWebUiRouteRouteImport } from './pages/(main)/main/settings/web-ui/route'
+import { Route as mainMainTopologyIndexRouteImport } from './pages/(main)/main/topology/index'
 import { Route as mainMainProfilesTypeIndexRouteImport } from './pages/(main)/main/profiles/$type/index'
 import { Route as mainMainProvidersProxiesKeyRouteImport } from './pages/(main)/main/providers/proxies/$key'
 import { Route as mainMainProvidersRulesKeyRouteImport } from './pages/(main)/main/providers/rules/$key'
 import { Route as mainMainSettingsDebugIndexRouteImport } from './pages/(main)/main/settings/debug/index'
+import { Route as mainMainTopologyExitIndexRouteImport } from './pages/(main)/main/topology/exit/index'
+import { Route as mainMainTopologyFlowIndexRouteImport } from './pages/(main)/main/topology/flow/index'
+import { Route as mainMainTopologyInboundIndexRouteImport } from './pages/(main)/main/topology/inbound/index'
+import { Route as mainMainTopologyMapIndexRouteImport } from './pages/(main)/main/topology/map/index'
+import { Route as mainMainTopologyProcessIndexRouteImport } from './pages/(main)/main/topology/process/index'
+import { Route as mainMainTopologySourceIndexRouteImport } from './pages/(main)/main/topology/source/index'
+import { Route as mainMainTopologyTargetIndexRouteImport } from './pages/(main)/main/topology/target/index'
 import { Route as mainMainProfilesTypeDetailUidRouteImport } from './pages/(main)/main/profiles/$type/detail/$uid'
 
 const legacyRouteRoute = legacyRouteRouteImport.update({
@@ -172,6 +181,11 @@ const mainMainSettingsRouteRoute = mainMainSettingsRouteRouteImport.update({
   path: '/main/settings',
   getParentRoute: () => mainRouteRoute,
 } as any)
+const mainMainTopologyRouteRoute = mainMainTopologyRouteRouteImport.update({
+  id: '/main/topology',
+  path: '/main/topology',
+  getParentRoute: () => mainRouteRoute,
+} as any)
 const editorEditorCssIndexRoute = editorEditorCssIndexRouteImport.update({
   id: '/css/',
   path: '/css/',
@@ -277,6 +291,11 @@ const mainMainSettingsWebUiRouteRoute =
     path: '/web-ui',
     getParentRoute: () => mainMainSettingsRouteRoute,
   } as any)
+const mainMainTopologyIndexRoute = mainMainTopologyIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => mainMainTopologyRouteRoute,
+} as any)
 const mainMainProfilesTypeIndexRoute =
   mainMainProfilesTypeIndexRouteImport.update({
     id: '/$type/',
@@ -300,6 +319,48 @@ const mainMainSettingsDebugIndexRoute =
     id: '/',
     path: '/',
     getParentRoute: () => mainMainSettingsDebugRouteRoute,
+  } as any)
+const mainMainTopologyExitIndexRoute =
+  mainMainTopologyExitIndexRouteImport.update({
+    id: '/exit/',
+    path: '/exit/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologyFlowIndexRoute =
+  mainMainTopologyFlowIndexRouteImport.update({
+    id: '/flow/',
+    path: '/flow/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologyInboundIndexRoute =
+  mainMainTopologyInboundIndexRouteImport.update({
+    id: '/inbound/',
+    path: '/inbound/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologyMapIndexRoute =
+  mainMainTopologyMapIndexRouteImport.update({
+    id: '/map/',
+    path: '/map/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologyProcessIndexRoute =
+  mainMainTopologyProcessIndexRouteImport.update({
+    id: '/process/',
+    path: '/process/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologySourceIndexRoute =
+  mainMainTopologySourceIndexRouteImport.update({
+    id: '/source/',
+    path: '/source/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
+  } as any)
+const mainMainTopologyTargetIndexRoute =
+  mainMainTopologyTargetIndexRouteImport.update({
+    id: '/target/',
+    path: '/target/',
+    getParentRoute: () => mainMainTopologyRouteRoute,
   } as any)
 const mainMainProfilesTypeDetailUidRoute =
   mainMainProfilesTypeDetailUidRouteImport.update({
@@ -329,6 +390,7 @@ export interface FileRoutesByFullPath {
   '/main/proxies': typeof mainMainProxiesRouteRouteWithChildren
   '/main/rules': typeof mainMainRulesRouteRouteWithChildren
   '/main/settings': typeof mainMainSettingsRouteRouteWithChildren
+  '/main/topology': typeof mainMainTopologyRouteRouteWithChildren
   '/main/': typeof mainMainIndexRoute
   '/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -349,10 +411,18 @@ export interface FileRoutesByFullPath {
   '/main/proxies/': typeof mainMainProxiesIndexRoute
   '/main/rules/': typeof mainMainRulesIndexRoute
   '/main/settings/': typeof mainMainSettingsIndexRoute
+  '/main/topology/': typeof mainMainTopologyIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
+  '/main/topology/exit/': typeof mainMainTopologyExitIndexRoute
+  '/main/topology/flow/': typeof mainMainTopologyFlowIndexRoute
+  '/main/topology/inbound/': typeof mainMainTopologyInboundIndexRoute
+  '/main/topology/map/': typeof mainMainTopologyMapIndexRoute
+  '/main/topology/process/': typeof mainMainTopologyProcessIndexRoute
+  '/main/topology/source/': typeof mainMainTopologySourceIndexRoute
+  '/main/topology/target/': typeof mainMainTopologyTargetIndexRoute
   '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesByTo {
@@ -387,10 +457,18 @@ export interface FileRoutesByTo {
   '/main/proxies': typeof mainMainProxiesIndexRoute
   '/main/rules': typeof mainMainRulesIndexRoute
   '/main/settings': typeof mainMainSettingsIndexRoute
+  '/main/topology': typeof mainMainTopologyIndexRoute
   '/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/main/profiles/$type': typeof mainMainProfilesTypeIndexRoute
   '/main/settings/debug': typeof mainMainSettingsDebugIndexRoute
+  '/main/topology/exit': typeof mainMainTopologyExitIndexRoute
+  '/main/topology/flow': typeof mainMainTopologyFlowIndexRoute
+  '/main/topology/inbound': typeof mainMainTopologyInboundIndexRoute
+  '/main/topology/map': typeof mainMainTopologyMapIndexRoute
+  '/main/topology/process': typeof mainMainTopologyProcessIndexRoute
+  '/main/topology/source': typeof mainMainTopologySourceIndexRoute
+  '/main/topology/target': typeof mainMainTopologyTargetIndexRoute
   '/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRoutesById {
@@ -417,6 +495,7 @@ export interface FileRoutesById {
   '/(main)/main/proxies': typeof mainMainProxiesRouteRouteWithChildren
   '/(main)/main/rules': typeof mainMainRulesRouteRouteWithChildren
   '/(main)/main/settings': typeof mainMainSettingsRouteRouteWithChildren
+  '/(main)/main/topology': typeof mainMainTopologyRouteRouteWithChildren
   '/(main)/main/': typeof mainMainIndexRoute
   '/(main)/main/profiles/inspect': typeof mainMainProfilesInspectRouteRoute
   '/(main)/main/settings/about': typeof mainMainSettingsAboutRouteRoute
@@ -437,10 +516,18 @@ export interface FileRoutesById {
   '/(main)/main/proxies/': typeof mainMainProxiesIndexRoute
   '/(main)/main/rules/': typeof mainMainRulesIndexRoute
   '/(main)/main/settings/': typeof mainMainSettingsIndexRoute
+  '/(main)/main/topology/': typeof mainMainTopologyIndexRoute
   '/(main)/main/providers/proxies/$key': typeof mainMainProvidersProxiesKeyRoute
   '/(main)/main/providers/rules/$key': typeof mainMainProvidersRulesKeyRoute
   '/(main)/main/profiles/$type/': typeof mainMainProfilesTypeIndexRoute
   '/(main)/main/settings/debug/': typeof mainMainSettingsDebugIndexRoute
+  '/(main)/main/topology/exit/': typeof mainMainTopologyExitIndexRoute
+  '/(main)/main/topology/flow/': typeof mainMainTopologyFlowIndexRoute
+  '/(main)/main/topology/inbound/': typeof mainMainTopologyInboundIndexRoute
+  '/(main)/main/topology/map/': typeof mainMainTopologyMapIndexRoute
+  '/(main)/main/topology/process/': typeof mainMainTopologyProcessIndexRoute
+  '/(main)/main/topology/source/': typeof mainMainTopologySourceIndexRoute
+  '/(main)/main/topology/target/': typeof mainMainTopologyTargetIndexRoute
   '/(main)/main/profiles/$type/detail/$uid': typeof mainMainProfilesTypeDetailUidRoute
 }
 export interface FileRouteTypes {
@@ -466,6 +553,7 @@ export interface FileRouteTypes {
     | '/main/proxies'
     | '/main/rules'
     | '/main/settings'
+    | '/main/topology'
     | '/main/'
     | '/main/profiles/inspect'
     | '/main/settings/about'
@@ -486,10 +574,18 @@ export interface FileRouteTypes {
     | '/main/proxies/'
     | '/main/rules/'
     | '/main/settings/'
+    | '/main/topology/'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type/'
     | '/main/settings/debug/'
+    | '/main/topology/exit/'
+    | '/main/topology/flow/'
+    | '/main/topology/inbound/'
+    | '/main/topology/map/'
+    | '/main/topology/process/'
+    | '/main/topology/source/'
+    | '/main/topology/target/'
     | '/main/profiles/$type/detail/$uid'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -524,10 +620,18 @@ export interface FileRouteTypes {
     | '/main/proxies'
     | '/main/rules'
     | '/main/settings'
+    | '/main/topology'
     | '/main/providers/proxies/$key'
     | '/main/providers/rules/$key'
     | '/main/profiles/$type'
     | '/main/settings/debug'
+    | '/main/topology/exit'
+    | '/main/topology/flow'
+    | '/main/topology/inbound'
+    | '/main/topology/map'
+    | '/main/topology/process'
+    | '/main/topology/source'
+    | '/main/topology/target'
     | '/main/profiles/$type/detail/$uid'
   id:
     | '__root__'
@@ -553,6 +657,7 @@ export interface FileRouteTypes {
     | '/(main)/main/proxies'
     | '/(main)/main/rules'
     | '/(main)/main/settings'
+    | '/(main)/main/topology'
     | '/(main)/main/'
     | '/(main)/main/profiles/inspect'
     | '/(main)/main/settings/about'
@@ -573,10 +678,18 @@ export interface FileRouteTypes {
     | '/(main)/main/proxies/'
     | '/(main)/main/rules/'
     | '/(main)/main/settings/'
+    | '/(main)/main/topology/'
     | '/(main)/main/providers/proxies/$key'
     | '/(main)/main/providers/rules/$key'
     | '/(main)/main/profiles/$type/'
     | '/(main)/main/settings/debug/'
+    | '/(main)/main/topology/exit/'
+    | '/(main)/main/topology/flow/'
+    | '/(main)/main/topology/inbound/'
+    | '/(main)/main/topology/map/'
+    | '/(main)/main/topology/process/'
+    | '/(main)/main/topology/source/'
+    | '/(main)/main/topology/target/'
     | '/(main)/main/profiles/$type/detail/$uid'
   fileRoutesById: FileRoutesById
 }
@@ -749,6 +862,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainSettingsRouteRouteImport
       parentRoute: typeof mainRouteRoute
     }
+    '/(main)/main/topology': {
+      id: '/(main)/main/topology'
+      path: '/main/topology'
+      fullPath: '/main/topology'
+      preLoaderRoute: typeof mainMainTopologyRouteRouteImport
+      parentRoute: typeof mainRouteRoute
+    }
     '/(editor)/editor/css/': {
       id: '/(editor)/editor/css/'
       path: '/css'
@@ -882,6 +1002,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof mainMainSettingsWebUiRouteRouteImport
       parentRoute: typeof mainMainSettingsRouteRoute
     }
+    '/(main)/main/topology/': {
+      id: '/(main)/main/topology/'
+      path: '/'
+      fullPath: '/main/topology/'
+      preLoaderRoute: typeof mainMainTopologyIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
     '/(main)/main/profiles/$type/': {
       id: '/(main)/main/profiles/$type/'
       path: '/$type'
@@ -909,6 +1036,55 @@ declare module '@tanstack/react-router' {
       fullPath: '/main/settings/debug/'
       preLoaderRoute: typeof mainMainSettingsDebugIndexRouteImport
       parentRoute: typeof mainMainSettingsDebugRouteRoute
+    }
+    '/(main)/main/topology/exit/': {
+      id: '/(main)/main/topology/exit/'
+      path: '/exit'
+      fullPath: '/main/topology/exit/'
+      preLoaderRoute: typeof mainMainTopologyExitIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/flow/': {
+      id: '/(main)/main/topology/flow/'
+      path: '/flow'
+      fullPath: '/main/topology/flow/'
+      preLoaderRoute: typeof mainMainTopologyFlowIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/inbound/': {
+      id: '/(main)/main/topology/inbound/'
+      path: '/inbound'
+      fullPath: '/main/topology/inbound/'
+      preLoaderRoute: typeof mainMainTopologyInboundIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/map/': {
+      id: '/(main)/main/topology/map/'
+      path: '/map'
+      fullPath: '/main/topology/map/'
+      preLoaderRoute: typeof mainMainTopologyMapIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/process/': {
+      id: '/(main)/main/topology/process/'
+      path: '/process'
+      fullPath: '/main/topology/process/'
+      preLoaderRoute: typeof mainMainTopologyProcessIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/source/': {
+      id: '/(main)/main/topology/source/'
+      path: '/source'
+      fullPath: '/main/topology/source/'
+      preLoaderRoute: typeof mainMainTopologySourceIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
+    }
+    '/(main)/main/topology/target/': {
+      id: '/(main)/main/topology/target/'
+      path: '/target'
+      fullPath: '/main/topology/target/'
+      preLoaderRoute: typeof mainMainTopologyTargetIndexRouteImport
+      parentRoute: typeof mainMainTopologyRouteRoute
     }
     '/(main)/main/profiles/$type/detail/$uid': {
       id: '/(main)/main/profiles/$type/detail/$uid'
@@ -1092,6 +1268,33 @@ const mainMainSettingsRouteRouteWithChildren =
     mainMainSettingsRouteRouteChildren,
   )
 
+interface mainMainTopologyRouteRouteChildren {
+  mainMainTopologyIndexRoute: typeof mainMainTopologyIndexRoute
+  mainMainTopologyExitIndexRoute: typeof mainMainTopologyExitIndexRoute
+  mainMainTopologyFlowIndexRoute: typeof mainMainTopologyFlowIndexRoute
+  mainMainTopologyInboundIndexRoute: typeof mainMainTopologyInboundIndexRoute
+  mainMainTopologyMapIndexRoute: typeof mainMainTopologyMapIndexRoute
+  mainMainTopologyProcessIndexRoute: typeof mainMainTopologyProcessIndexRoute
+  mainMainTopologySourceIndexRoute: typeof mainMainTopologySourceIndexRoute
+  mainMainTopologyTargetIndexRoute: typeof mainMainTopologyTargetIndexRoute
+}
+
+const mainMainTopologyRouteRouteChildren: mainMainTopologyRouteRouteChildren = {
+  mainMainTopologyIndexRoute: mainMainTopologyIndexRoute,
+  mainMainTopologyExitIndexRoute: mainMainTopologyExitIndexRoute,
+  mainMainTopologyFlowIndexRoute: mainMainTopologyFlowIndexRoute,
+  mainMainTopologyInboundIndexRoute: mainMainTopologyInboundIndexRoute,
+  mainMainTopologyMapIndexRoute: mainMainTopologyMapIndexRoute,
+  mainMainTopologyProcessIndexRoute: mainMainTopologyProcessIndexRoute,
+  mainMainTopologySourceIndexRoute: mainMainTopologySourceIndexRoute,
+  mainMainTopologyTargetIndexRoute: mainMainTopologyTargetIndexRoute,
+}
+
+const mainMainTopologyRouteRouteWithChildren =
+  mainMainTopologyRouteRoute._addFileChildren(
+    mainMainTopologyRouteRouteChildren,
+  )
+
 interface mainRouteRouteChildren {
   mainMainAssistantRouteRoute: typeof mainMainAssistantRouteRoute
   mainMainConnectionsRouteRoute: typeof mainMainConnectionsRouteRouteWithChildren
@@ -1102,6 +1305,7 @@ interface mainRouteRouteChildren {
   mainMainProxiesRouteRoute: typeof mainMainProxiesRouteRouteWithChildren
   mainMainRulesRouteRoute: typeof mainMainRulesRouteRouteWithChildren
   mainMainSettingsRouteRoute: typeof mainMainSettingsRouteRouteWithChildren
+  mainMainTopologyRouteRoute: typeof mainMainTopologyRouteRouteWithChildren
   mainMainIndexRoute: typeof mainMainIndexRoute
 }
 
@@ -1115,6 +1319,7 @@ const mainRouteRouteChildren: mainRouteRouteChildren = {
   mainMainProxiesRouteRoute: mainMainProxiesRouteRouteWithChildren,
   mainMainRulesRouteRoute: mainMainRulesRouteRouteWithChildren,
   mainMainSettingsRouteRoute: mainMainSettingsRouteRouteWithChildren,
+  mainMainTopologyRouteRoute: mainMainTopologyRouteRouteWithChildren,
   mainMainIndexRoute: mainMainIndexRoute,
 }
 
