@@ -1,10 +1,13 @@
 # ref 对齐进度
 
 当前同步后的只读参考为 Clash Nyanpasu `main` commit
-`5ed238841d98b47ae5e2fdfeb433d4946ba43bbb`，于 2026-10-14 从远端 `origin/main`
-获取。主仓库 `ref` gitlink 从 `813673a8e84b51265467f02277fc7e739837f61e`
-更新到此提交；ref 根工作树及递归子模块均干净。嵌套 runtime gitlink 仍为
-`e9f44e68b0c88981160f5b986f7ffcc9fb5b20a7`，其 utils gitlink 为
+`1a0372280a405a824353ac2fa6a5f48a3bca4e18`，于 2026-10-16 从远端 `origin/main`
+获取。主仓库 `ref` gitlink 从 `5ed238841d98b47ae5e2fdfeb433d4946ba43bbb`
+更新到此提交；ref 根工作树及递归子模块均干净。上游此间新增 20 个提交，包含
+本地通道实现、runtime `v2.0.0`、安装包资源和更新界面等；Profile transform-chain
+编辑器对应文件没有变化。嵌套 runtime gitlink 从
+`e9f44e68b0c88981160f5b986f7ffcc9fb5b20a7` 更新到
+`be2f561102fe898cb7a294ef14de3f4c65b68f81`，其 utils gitlink 仍为
 `7d923f82a1982b0513b0037ac9cbaf78e3dd3f3d`。
 
 各 DIFF 记录中的 ref SHA 是对应切片当时核对的历史基线，不会因本次同步而

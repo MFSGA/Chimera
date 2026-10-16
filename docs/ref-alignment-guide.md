@@ -13,9 +13,9 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-previous:   813673a8e84b51265467f02277fc7e739837f61e
-commit:     5ed238841d98b47ae5e2fdfeb433d4946ba43bbb
-verified:   2026-10-14 fetched from origin/main; root and recursive submodules clean
+previous:   5ed238841d98b47ae5e2fdfeb433d4946ba43bbb
+commit:     1a0372280a405a824353ac2fa6a5f48a3bca4e18
+verified:   2026-10-16 fetched from origin/main; root and recursive submodules clean
 ```
 
 每个迁移切片开始前执行：
