@@ -76,6 +76,9 @@ const Item = ({
         >
           <Link
             to="."
+            data-slot="rules-proxy-item"
+            data-proxy-item-kind={item === undefined ? 'all' : 'named'}
+            data-proxy-item={item}
             search={{
               proxy: item,
             }}

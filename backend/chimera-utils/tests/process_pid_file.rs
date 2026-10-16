@@ -1,5 +1,7 @@
 #![cfg(feature = "process")]
 
+use std::time::Duration;
+
 use chimera_utils::process::{
     Command, EpochPidFile, EpochPidFileSpec, OrphanReapOutcome, ProcessEvent, read_epoch_pid_file,
     reap_epoch_pid_file,
@@ -219,6 +221,13 @@ async fn validated_orphan_reap_kills_matching_epoch_record() {
         reap_epoch_pid_file(&pid_path, dir.path()).await.unwrap(),
         OrphanReapOutcome::Killed
     );
+    // The reaper confirms the OS identity disappeared, but the managed child
+    // pump still needs to collect its exit so the process table no longer
+    // reports the child as a zombie on Linux.
+    tokio::time::timeout(Duration::from_secs(5), handle.wait())
+        .await
+        .expect("managed child pump did not collect the killed process")
+        .unwrap();
     assert!(!pid_alive(pid));
     assert!(!pid_path.exists());
 }

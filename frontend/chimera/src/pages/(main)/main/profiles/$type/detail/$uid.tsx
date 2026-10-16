@@ -24,7 +24,11 @@ function RouteComponent() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-slot="profile-detail">
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-slot="profile-detail"
+      data-profile-uid={profile.uid}
+    >
       <DetailHeader type={type}>
         <TextMarquee className="w-0 min-w-0 flex-1 text-lg font-bold">
           {profile.name}
