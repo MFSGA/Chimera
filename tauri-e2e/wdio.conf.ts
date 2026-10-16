@@ -20,6 +20,11 @@ const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const selectedSuiteIndex = process.argv.indexOf('--suite');
 const selectedSuite =
   selectedSuiteIndex >= 0 ? process.argv[selectedSuiteIndex + 1] : undefined;
+const mainWindowProfileAutoUpdate =
+  selectedSuite === 'profile-auto-update-main';
+const initialWindowLabel =
+  process.env.CHIMERA_E2E_WINDOW_LABEL ??
+  (mainWindowProfileAutoUpdate ? 'main' : 'legacy');
 const agentFixtureSuites = new Set(['agent', 'hermetic', 'all']);
 const agentFixture =
   process.env.CHIMERA_E2E_AGENT_FIXTURE ??
@@ -114,7 +119,7 @@ const occupiedControllerPort = process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT
   ? Number(process.env.CHIMERA_E2E_OCCUPY_CONTROLLER_PORT)
   : null;
 let controllerPortReservation: Server | null = null;
-let legacyEntryUrl: string | null = null;
+let initialEntryUrl: string | null = null;
 const ownsRuntimeDirectory = !process.env.CHIMERA_E2E_RUNTIME_DIR;
 const runtimeDirectory = resolveRuntimeDirectory(
   runtimeRootDirectory,
@@ -138,7 +143,9 @@ fs.mkdirSync(dataDirectoryOverride, { recursive: true });
 
 const configFixtureDirectory = process.env.CHIMERA_E2E_CONFIG_FIXTURE
   ? path.resolve(process.env.CHIMERA_E2E_CONFIG_FIXTURE)
-  : null;
+  : mainWindowProfileAutoUpdate
+    ? path.join(configDirectory, 'fixtures/profile-auto-update-main')
+    : null;
 const configFixtureMarker = path.join(
   runtimeDirectory,
   '.config-fixture-seeded',
@@ -216,16 +223,18 @@ async function releaseControllerPortReservation(): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-async function captureLegacyEntryUrl(): Promise<void> {
+async function captureInitialEntryUrl(): Promise<void> {
   if (browser.isMultiremote || !browser.sessionId) return;
 
   const handles = await browser.getWindowHandles();
-  if (!handles.includes('legacy')) {
-    throw new Error('The legacy E2E window is unavailable at session start.');
+  if (!handles.includes(initialWindowLabel)) {
+    throw new Error(
+      `The initial E2E window ${initialWindowLabel} is unavailable at session start.`,
+    );
   }
 
-  await browser.switchToWindow('legacy');
-  legacyEntryUrl = await browser.getUrl();
+  await browser.switchToWindow(initialWindowLabel);
+  initialEntryUrl = await browser.getUrl();
 }
 
 async function resetE2eWindowState(): Promise<void> {
@@ -249,13 +258,15 @@ async function resetE2eWindowState(): Promise<void> {
   }
 
   const handles = await browser.getWindowHandles();
-  if (!handles.includes('legacy')) {
-    throw new Error('The legacy E2E window is unavailable during suite reset.');
+  if (!handles.includes(initialWindowLabel)) {
+    throw new Error(
+      `The initial E2E window ${initialWindowLabel} is unavailable during suite reset.`,
+    );
   }
 
-  await browser.switchToWindow('legacy');
-  if (legacyEntryUrl && (await browser.getUrl()) !== legacyEntryUrl) {
-    await browser.url(legacyEntryUrl);
+  await browser.switchToWindow(initialWindowLabel);
+  if (initialEntryUrl && (await browser.getUrl()) !== initialEntryUrl) {
+    await browser.url(initialEntryUrl);
     await browser.waitUntil(
       async () =>
         browser.execute(
@@ -263,7 +274,7 @@ async function resetE2eWindowState(): Promise<void> {
         ),
       {
         timeout: 30_000,
-        timeoutMsg: 'The legacy E2E window did not render after reset.',
+        timeoutMsg: `The initial E2E window ${initialWindowLabel} did not render after reset.`,
       },
     );
   }
@@ -340,7 +351,7 @@ export const config: WebdriverIO.Config = {
       '@wdio/tauri-service',
       {
         appBinaryPath,
-        windowLabel: 'legacy',
+        windowLabel: initialWindowLabel,
         driverProvider: 'embedded',
         embeddedPort,
         startTimeout: 120_000,
@@ -368,7 +379,7 @@ export const config: WebdriverIO.Config = {
     timeout: 120_000,
   },
   onPrepare: reserveControllerPort,
-  before: captureLegacyEntryUrl,
+  before: captureInitialEntryUrl,
   beforeSuite: async (suite) => {
     if (!suite.parent) await resetE2eWindowState();
   },
