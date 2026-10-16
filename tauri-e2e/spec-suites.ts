@@ -60,6 +60,7 @@ export const baseE2eSuites = {
     './specs/proxies-node-main.e2e.ts',
     './specs/rules-main-layout.e2e.ts',
     './specs/rules-main-proxy-icon.e2e.ts',
+    './specs/traffic-analysis-main.e2e.ts',
   ],
   network: ['./specs/allow-lan.e2e.ts'],
   upgrade: ['./specs/upgrade-v0.22.3-to-v0.23.0.e2e.ts'],

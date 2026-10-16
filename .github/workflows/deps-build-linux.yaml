@@ -42,6 +42,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -133,6 +135,8 @@ jobs:
             "armhf")
               pnpm prepare:check --arch arm --sidecar-host armv7-unknown-linux-gnueabihf ;;
           esac
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Nightly Prepare
         if: ${{ inputs.nightly == true }}
