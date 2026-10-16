@@ -369,6 +369,7 @@ export function TransformChainEditor({
       data-slot="transform-chain-editor"
       data-ref-slot="profile-chain-editor"
       data-chain-scope={scopeUid ? 'profile' : 'global'}
+      data-profile-uid={scopeUid ?? undefined}
       data-layout={layout}
       className={cn('relative', className)}
     >

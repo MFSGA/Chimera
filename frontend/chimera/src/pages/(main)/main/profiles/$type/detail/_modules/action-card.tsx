@@ -39,6 +39,40 @@ const ActionButton = ({
   />
 );
 
+function scrollToProfileTransformChainEditor(profileUid: string) {
+  const editor = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
+    ),
+  ).find((candidate) => candidate.dataset.profileUid === profileUid);
+  const viewport = editor?.closest<HTMLElement>(
+    '[data-slot="scroll-area-viewport"]',
+  );
+  if (!editor || !viewport) return;
+
+  const editorRect = editor.getBoundingClientRect();
+  const viewportRect = viewport.getBoundingClientRect();
+  const centerOffset = Math.max(
+    0,
+    (viewport.clientHeight - editorRect.height) / 2,
+  );
+  const maxScrollTop = Math.max(
+    0,
+    viewport.scrollHeight - viewport.clientHeight,
+  );
+  const targetScrollTop =
+    viewport.scrollTop +
+    editorRect.top -
+    viewportRect.top -
+    viewport.clientTop -
+    centerOffset;
+
+  viewport.scrollTo({
+    top: Math.min(maxScrollTop, Math.max(0, targetScrollTop)),
+    behavior: 'smooth',
+  });
+}
+
 export default function ActionCard({
   type,
   profile,
@@ -102,11 +136,8 @@ export default function ActionCard({
         <ActionButton
           disabled={isPending}
           data-slot="profile-transform-chain"
-          onClick={() =>
-            document
-              .querySelector('[data-slot="transform-chain-editor"]')
-              ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          }
+          data-profile-uid={profile.uid}
+          onClick={() => scrollToProfileTransformChainEditor(profile.uid)}
         >
           <AccountTreeRounded className="size-4 shrink-0" />
           <span className="truncate">{m.profile_menu_proxy_chains()}</span>
