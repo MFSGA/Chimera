@@ -211,6 +211,7 @@ jobs:
           pnpm --filter @chimera/tauri-e2e test:unit
           pnpm --filter chimera-ui test:connections
           pnpm --filter chimera-ui test:traffic
+          pnpm --filter chimera-ui test:dashboard-widget-config
           pnpm test:profiles:query
           pnpm test:hotkeys
           pnpm test:agent:intent
