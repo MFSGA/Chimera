@@ -5,6 +5,8 @@ import path from 'node:path';
 import type {
   MutationOutcome,
   ProfileDocument_Deserialize,
+  ProfileSyncStatus,
+  RunPageDto,
 } from '../../frontend/interface/src/ipc/bindings.js';
 import { ensureMainWindow } from './main-window.js';
 import {
@@ -15,6 +17,7 @@ import {
 } from './profile-fixtures.js';
 
 const fixtureProfileName = `Auto Update E2E ${process.pid}-${Date.now()}`;
+// Contract: docs/testing/contracts/profile-sync-history.md
 const screenshotRunId = process.env.GITHUB_RUN_ID
   ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? '1'}`
   : `local-${process.pid}-${Date.now()}`;
@@ -107,6 +110,105 @@ async function waitForPersistedInterval(uid: string, expected: number) {
   } catch (cause) {
     throw new Error(
       `profiles.yaml did not persist interval ${expected}; last observed ${String(lastObserved)}.`,
+      { cause },
+    );
+  }
+}
+
+async function waitForSuccessfulSyncHistory(uid: string) {
+  let lastObserved = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await browser.execute((profileUid) => {
+          const card = document.querySelector<HTMLElement>(
+            `[data-slot="profile-sync-history"][data-profile-uid="${profileUid}"]`,
+          );
+          const successfulRun = card?.querySelector<HTMLElement>(
+            '[data-slot="profile-sync-run"][data-run-status="succeeded"]',
+          );
+          const isDisplayed = (element: HTMLElement | null | undefined) => {
+            if (!element) return false;
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0'
+            );
+          };
+          return {
+            cardVisible: isDisplayed(card),
+            successfulRunVisible: isDisplayed(successfulRun),
+            renderedLogCount:
+              successfulRun?.querySelectorAll(
+                '[data-slot="profile-sync-logs"] li',
+              ).length ?? 0,
+          };
+        }, uid);
+        lastObserved = JSON.stringify(state);
+        return (
+          state.cardVisible &&
+          state.successfulRunVisible &&
+          state.renderedLogCount > 0
+        );
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `Profile ${uid} did not show a completed sync with logs.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `Profile ${uid} did not show a completed sync with logs; last observed ${lastObserved}.`,
+      { cause },
+    );
+  }
+}
+
+async function waitForExternalManualSync(
+  uid: string,
+  previousSequence: string | null,
+) {
+  let lastObserved = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const status = await invoke<ProfileSyncStatus>(
+          'get_profile_sync_status',
+          { uid },
+        );
+        if (status.latest_run_sequence === previousSequence) {
+          lastObserved = `sequence unchanged at ${String(previousSequence)}`;
+          return false;
+        }
+        const page = await invoke<RunPageDto>('get_profile_sync_runs', {
+          uid,
+          after: null,
+        });
+        const run = page.items.find(
+          (item) => item.admission_sequence === status.latest_run_sequence,
+        );
+        lastObserved = JSON.stringify({
+          latestRunSequence: status.latest_run_sequence,
+          latestRunState: run?.state.kind,
+          latestRunTrigger: run?.trigger,
+        });
+        if (!run || run.trigger !== 'manual' || run.state.kind !== 'finished') {
+          return false;
+        }
+        return run.state.completion.outcome.kind === 'succeeded';
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `External manual sync for Profile ${uid} did not finish.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `External manual sync for Profile ${uid} did not finish; last observed ${lastObserved}.`,
       { cause },
     );
   }
@@ -603,6 +705,8 @@ describe('remote profile auto-update', () => {
         );
       }
 
+      await waitForSuccessfulSyncHistory(uid);
+
       await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
@@ -690,6 +794,29 @@ describe('remote profile auto-update', () => {
       await legacySave.click();
       await waitForInterval(uid, 0);
       await waitForPersistedInterval(uid, 0);
+
+      const beforeLegacyManualSync = await invoke<ProfileSyncStatus>(
+        'get_profile_sync_status',
+        { uid },
+      );
+      const beforeLegacyRequestCount = requestCount;
+      const legacyManualSync = await profileItem.$(
+        '[data-slot="profile-update-button"]',
+      );
+      await legacyManualSync.waitForDisplayed({ timeout: 15_000 });
+      await legacyManualSync.click();
+      await browser.waitUntil(
+        async () => requestCount > beforeLegacyRequestCount,
+        {
+          timeout: 30_000,
+          timeoutMsg:
+            'The legacy Profile update control did not fetch the local subscription.',
+        },
+      );
+      await waitForExternalManualSync(
+        uid,
+        beforeLegacyManualSync.latest_run_sequence,
+      );
     });
   });
 });

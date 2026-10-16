@@ -9,33 +9,77 @@ use anyhow::Context as _;
 use camino::Utf8PathBuf;
 use chimera_config::profile::{
     ProfileDefinition, ProfileId, ProfileMetadata, ProfileMetadataPatch, Profiles,
-    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval,
+    RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     core::migration::modules::profiles::ProfilesFormat,
     state::profiles::{
         CommitReport, NewProfileRequest, ProfilesActor, ProfilesActorArgs, ProfilesActorMessage,
-        ProfilesError, RefreshOrigin, ReorderOp,
+        ProfilesError, ReorderOp,
         ports::{ProfileFsPort, ProfileMaterializationPort, SubscriptionFetcher},
     },
 };
 
 #[derive(Clone)]
 pub struct ProfilesClient {
-    inner: Arc<ProfilesClientInner>,
+    pub(super) inner: Arc<ProfilesClientInner>,
 }
 
-struct ProfilesClientInner {
+pub(super) struct ProfilesClientInner {
     actor_ref: ActorRef<ProfilesActorMessage>,
     /// Committed state, read straight from the coordinator's store so a reader
     /// never queues behind a mutation the actor is still holding open.
-    snapshot: StateSnapshot<Profiles>,
+    pub(super) snapshot: StateSnapshot<Profiles>,
+    pub(super) jobs: crate::state::profiles::jobs::ProfileJobs,
+    #[cfg(test)]
+    _test_owner: Option<TestJobsOwner>,
+}
+
+#[cfg(test)]
+struct TestJobsOwner {
+    shutdown: CancellationToken,
+    tasks: TaskTracker,
+}
+
+#[cfg(test)]
+impl Drop for TestJobsOwner {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
+        self.tasks.close();
+    }
 }
 
 impl ProfilesClient {
+    pub(crate) async fn new_with_jobs(
+        mutations: MutationCoordinator,
+        profiles_path: Utf8PathBuf,
+        jobs: chimera_jobs::JobsClient,
+        fs: Arc<dyn ProfileFsPort>,
+        fetcher: Arc<dyn SubscriptionFetcher>,
+        materialization: Arc<dyn ProfileMaterializationPort>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+    ) -> anyhow::Result<Self> {
+        Self::build(
+            mutations,
+            profiles_path,
+            jobs,
+            fs,
+            fetcher,
+            materialization,
+            shutdown,
+            tasks,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    #[cfg(test)]
     pub(crate) async fn new(
         mutations: MutationCoordinator,
         profiles_path: Utf8PathBuf,
@@ -43,6 +87,38 @@ impl ProfilesClient {
         fetcher: Arc<dyn SubscriptionFetcher>,
         materialization: Arc<dyn ProfileMaterializationPort>,
     ) -> anyhow::Result<Self> {
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let jobs = crate::client::jobs::test_client_with_owner(shutdown.clone(), &tasks).await;
+        Self::build(
+            mutations,
+            profiles_path,
+            jobs,
+            fs,
+            fetcher,
+            materialization,
+            shutdown.clone(),
+            &tasks,
+            Some(TestJobsOwner {
+                shutdown,
+                tasks: tasks.clone(),
+            }),
+        )
+        .await
+    }
+
+    async fn build(
+        mutations: MutationCoordinator,
+        profiles_path: Utf8PathBuf,
+        jobs: chimera_jobs::JobsClient,
+        fs: Arc<dyn ProfileFsPort>,
+        fetcher: Arc<dyn SubscriptionFetcher>,
+        materialization: Arc<dyn ProfileMaterializationPort>,
+        shutdown: CancellationToken,
+        tasks: &TaskTracker,
+        #[cfg(test)] test_owner: Option<TestJobsOwner>,
+    ) -> anyhow::Result<Self> {
+        let jobs = crate::state::profiles::jobs::ProfileJobs::new(jobs);
         let should_load = profiles_path.exists();
         let setup = PersistentStateManagerSetup::<Profiles, ProfilesFormat>::builder()
             .config_path(profiles_path)
@@ -75,16 +151,21 @@ impl ProfilesClient {
                 fs,
                 fetcher,
                 materialization,
+                jobs: jobs.clone(),
             },
         )
         .await
         .context("failed to spawn profiles actor")?
         .0;
+        drain_profiles_actor_on_shutdown(tasks, shutdown, actor_ref.get_cell());
 
         Ok(Self {
             inner: Arc::new(ProfilesClientInner {
                 actor_ref,
                 snapshot,
+                jobs,
+                #[cfg(test)]
+                _test_owner: test_owner,
             }),
         })
     }
@@ -228,16 +309,8 @@ impl ProfilesClient {
         uid: ProfileId,
         patch: Option<RemoteProfileOptionsPatch>,
     ) -> Result<CommitReport, ProfilesError> {
-        self.call(
-            |reply| ProfilesActorMessage::RefreshRemote {
-                uid,
-                patch,
-                origin: RefreshOrigin::Manual,
-                reply: Some(reply),
-            },
-            None,
-        )
-        .await
+        self.profile_sync_key(&uid)?;
+        self.inner.jobs.sync(uid, patch).await
     }
 
     /// Fetch-before-commit remote import. No durable placeholder is written until
@@ -297,9 +370,21 @@ impl Drop for ProfilesClientInner {
         self.actor_ref.stop(None);
     }
 }
+
+fn drain_profiles_actor_on_shutdown(
+    tasks: &TaskTracker,
+    shutdown: CancellationToken,
+    cell: ractor::ActorCell,
+) {
+    tasks.spawn(async move {
+        shutdown.cancelled().await;
+        let _ = cell.drain_and_wait(None).await;
+    });
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::profiles::RefreshOrigin;
     use crate::{
         service::profile_file::{ProfileFileService, SelfProxyPortSource},
         state::profiles::ports::{
@@ -310,6 +395,7 @@ mod tests {
         },
         utils::path::PathResolver,
     };
+    use chimera_config::profile::RemoteSyncInterval;
     use chimera_config::profile::{
         ConfigDefinition, ExternalMode, ExternalProfilePath, FileConfig, LocalBinding,
         ManagedProfilePath, MaterializedFile, OverlayTransform, ProfileDefinition, ProfileId,
@@ -709,6 +795,39 @@ mod tests {
         (client, dir)
     }
 
+    async fn sync_fixture(
+        directory: &TempDir,
+        fetcher: Arc<dyn SubscriptionFetcher>,
+        capture: chimera_jobs::LogCapture,
+        shutdown: &CancellationToken,
+        tasks: &TaskTracker,
+    ) -> ProfilesClient {
+        let jobs = crate::client::jobs::start(
+            directory.path().join("sync-jobs.redb"),
+            capture,
+            shutdown.clone(),
+            tasks,
+        )
+        .await
+        .unwrap();
+        ProfilesClient::build(
+            MutationCoordinator::isolated(),
+            temp_profiles_path(directory),
+            jobs,
+            Arc::new(MockProfileFsPort::new()),
+            fetcher,
+            test_materialization_port(),
+            shutdown.clone(),
+            tasks,
+            Some(TestJobsOwner {
+                shutdown: shutdown.clone(),
+                tasks: tasks.clone(),
+            }),
+        )
+        .await
+        .unwrap()
+    }
+
     struct HoldingFetcher {
         started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
         release: std::sync::Arc<tokio::sync::Notify>,
@@ -913,7 +1032,7 @@ mod tests {
                     upload: Some(call as u64),
                     ..Default::default()
                 },
-                suggested_update_interval_minutes: Some(if call == 1 { 60 } else { 30 }),
+                suggested_update_interval_minutes: Some(if call == 1 { 1 } else { 30 }),
             })
         });
         let dir = tempdir().unwrap();
@@ -947,33 +1066,31 @@ mod tests {
         };
         assert_eq!(
             option.update_interval_minutes,
-            RemoteSyncInterval::from_minutes(60)
+            RemoteSyncInterval::from_minutes(1)
         );
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-        tokio::time::advance(std::time::Duration::from_secs(60 * 60 + 1)).await;
+        tokio::time::advance(std::time::Duration::from_secs(60 + 1)).await;
         tokio::time::timeout(
             std::time::Duration::from_secs(1),
             scheduled_fetch.notified(),
         )
         .await
         .expect("rescheduled refresh should reach the subscription fetcher");
-        tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            loop {
-                let snapshot = client.snapshot();
-                let source = snapshot.items[&uid].definition.source().unwrap();
-                if matches!(
-                    source,
-                    ProfileSource::Remote { subscription, .. }
-                        if subscription.upload == Some(2)
-                ) {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let snapshot = client.snapshot();
+            let source = snapshot.items[&uid].definition.source().unwrap();
+            if matches!(source, ProfileSource::Remote { subscription, .. } if subscription.upload == Some(2))
+            {
+                break;
             }
-        })
-        .await
-        .expect("scheduled refresh should commit its fetched subscription");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "scheduled refresh reached the fetcher but did not commit its result"
+            );
+            tokio::task::yield_now().await;
+        }
         assert_eq!(
             fetch_count.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -992,7 +1109,7 @@ mod tests {
         assert_eq!(subscription.upload, Some(2));
         assert_eq!(
             option.update_interval_minutes,
-            RemoteSyncInterval::from_minutes(60),
+            RemoteSyncInterval::from_minutes(1),
             "scheduled refresh must ignore later server suggestions"
         );
     }
@@ -1084,19 +1201,11 @@ mod tests {
         let c2 = client.clone();
         let first = tokio::spawn(async move { c2.refresh(ProfileId("r1".into()), None).await });
         started_rx.await.unwrap();
-        let err = loop {
-            match client.refresh(ProfileId("r1".into()), None).await {
-                Err(ProfilesError::RefreshFailed { message })
-                    if message.contains("in progress") =>
-                {
-                    break ProfilesError::RefreshFailed { message };
-                }
-                Ok(_) => panic!("second refresh must not both succeed before first settles"),
-                Err(_) => tokio::task::yield_now().await,
-            }
-        };
-        assert!(matches!(err, ProfilesError::RefreshFailed { .. }));
-        release_fetch.notify_waiters();
+        assert!(matches!(
+            client.refresh(ProfileId("r1".into()), None).await,
+            Err(ProfilesError::ProfileSyncJobs(chimera_jobs::Error::Busy))
+        ));
+        release_fetch.notify_one();
         first.await.unwrap().expect("first refresh completes");
     }
 
@@ -1120,7 +1229,7 @@ mod tests {
         let pending = tokio::spawn(async move { c.refresh(ProfileId("r1".into()), None).await });
         started_rx.await.unwrap();
         client.delete(ProfileId("r1".into())).await.unwrap();
-        release_fetch.notify_waiters();
+        release_fetch.notify_one();
 
         let err = pending.await.unwrap().unwrap_err();
         assert!(
@@ -1397,6 +1506,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn scheduler_catches_up_overdue_profiles_on_start() {
+        let _explicit_test_time = crate::client::jobs::explicit_test_time();
         let fetch_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut fetcher = MockSubscriptionFetcher::new();
         let counter = std::sync::Arc::clone(&fetch_count);
@@ -1433,10 +1543,12 @@ mod tests {
         )
         .await
         .unwrap();
-        for _ in 0..200 {
-            if fetch_count.load(std::sync::atomic::Ordering::SeqCst) >= 1 {
-                break;
-            }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while fetch_count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "startup catch-up did not begin"
+            );
             tokio::task::yield_now().await;
         }
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -2422,6 +2534,9 @@ mod tests {
                     Err(ProfilesError::RefreshFailed { message })
                         if message.contains("in progress") =>
                     {
+                        tokio::task::yield_now().await;
+                    }
+                    Err(ProfilesError::ProfileSyncJobs(chimera_jobs::Error::Busy)) => {
                         tokio::task::yield_now().await;
                     }
                     Err(other) => {
@@ -3542,5 +3657,278 @@ mod tests {
             unreachable!()
         };
         assert_eq!(option.update_interval_minutes, RemoteSyncInterval::DISABLED);
+    }
+
+    #[tokio::test]
+    async fn manual_sync_persists_commit_and_scoped_safe_logs() {
+        use tracing::instrument::WithSubscriber;
+        use tracing_subscriber::{Layer as _, layer::SubscriberExt};
+
+        let _parallel_dispatch =
+            tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
+        let capture = crate::client::jobs::capture();
+        let subscriber = tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_writer(std::io::sink)
+                    .with_filter(tracing_subscriber::filter::LevelFilter::WARN),
+            )
+            .with(capture.layer());
+
+        async {
+            let directory = tempdir().unwrap();
+            let shutdown = CancellationToken::new();
+            let tasks = TaskTracker::new();
+            let client = sync_fixture(
+                &directory,
+                Arc::new(ok_fetch("proxies: []\n")),
+                capture,
+                &shutdown,
+                &tasks,
+            )
+            .await;
+            let mut profiles = Profiles::default();
+            let mut item = remote_config_item("r1");
+            if let Some(ProfileSource::Remote { url, .. }) = item.definition.source_mut() {
+                *url = url::Url::parse("https://example.com/sub?token=private-token").unwrap();
+            }
+            profiles.append_item(item);
+            client.replace(profiles).await.unwrap();
+
+            let uid = ProfileId("r1".into());
+            let report = client.refresh(uid.clone(), None).await.unwrap();
+            assert!(
+                report.snapshot.items[&uid]
+                    .definition
+                    .source()
+                    .unwrap()
+                    .materialized()
+                    .updated_at
+                    .is_some()
+            );
+
+            let runs = client.profile_sync_runs(uid.clone(), None).await.unwrap();
+            assert_eq!(runs.items.len(), 1);
+            let run = &runs.items[0];
+            assert_eq!(run.trigger, "manual");
+            let chimera_jobs::dto::RunStateDto::Finished { completion } = &run.state else {
+                panic!("manual sync did not finish");
+            };
+            assert!(matches!(
+                completion.outcome,
+                chimera_jobs::dto::OutcomeDto::Succeeded
+            ));
+
+            let logs = client
+                .profile_sync_logs(uid, run.id.clone(), None)
+                .await
+                .unwrap();
+            let stages: Vec<_> = logs
+                .items
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .fields
+                        .get("stage")
+                        .map(|value| serde_json::from_str::<String>(value).unwrap())
+                })
+                .collect();
+            assert_eq!(stages, ["started", "download", "validated", "committed"]);
+            let serialized = serde_json::to_string(&logs.items).unwrap();
+            assert!(!serialized.contains("private-token"));
+            assert!(!serialized.contains("example.com"));
+
+            drop(client);
+            shutdown.cancel();
+            tasks.close();
+            tasks.wait().await;
+        }
+        .with_subscriber(subscriber)
+        .await;
+    }
+
+    #[tokio::test]
+    async fn failed_sync_retains_ten_runs_and_recovers_history_after_restart() {
+        let directory = tempdir().unwrap();
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher.expect_fetch().times(12).returning(|_, _| {
+            Err(anyhow::anyhow!(
+                "request to https://secret.example/sub?token=private-token failed"
+            ))
+        });
+        let client = sync_fixture(
+            &directory,
+            Arc::new(fetcher),
+            crate::client::jobs::capture(),
+            &shutdown,
+            &tasks,
+        )
+        .await;
+        let mut item = remote_config_item("r1");
+        if let Some(ProfileSource::Remote { option, .. }) = item.definition.source_mut() {
+            option.update_interval_minutes = RemoteSyncInterval::DISABLED;
+        }
+        let mut profiles = Profiles::default();
+        profiles.append_item(item);
+        client.replace(profiles).await.unwrap();
+        let uid = ProfileId("r1".into());
+
+        for _ in 0..12 {
+            assert!(matches!(
+                client.refresh(uid.clone(), None).await,
+                Err(ProfilesError::RefreshFailed { .. })
+            ));
+        }
+        crate::client::jobs::settled(&client.jobs()).await;
+        let key = crate::state::profiles::jobs::sync_key(&uid);
+        let first = client.profile_sync_runs(uid.clone(), None).await.unwrap();
+        assert_eq!(first.items.len(), 10);
+        assert!(first.next.is_none());
+        for run in &first.items {
+            let logs = client
+                .profile_sync_logs(uid.clone(), run.id.clone(), None)
+                .await
+                .unwrap();
+            let serialized = serde_json::to_string(&logs.items).unwrap();
+            assert!(!serialized.contains("private-token"));
+            assert!(!serialized.contains("secret.example"));
+            let chimera_jobs::dto::RunStateDto::Finished { completion } = &run.state else {
+                panic!("failed sync did not finish");
+            };
+            assert!(matches!(
+                &completion.outcome,
+                chimera_jobs::dto::OutcomeDto::Failed { code, .. }
+                    if code == "subscription_download_failed"
+            ));
+        }
+
+        drop(client);
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let reloaded = sync_fixture(
+            &directory,
+            Arc::new(MockSubscriptionFetcher::new()),
+            crate::client::jobs::capture(),
+            &shutdown,
+            &tasks,
+        )
+        .await;
+        let recovered = reloaded.profile_sync_runs(uid, None).await.unwrap();
+        assert_eq!(recovered.items.len(), 10);
+        assert!(recovered.next.is_none());
+        assert!(recovered.items.iter().all(|run| run.job == key));
+
+        drop(reloaded);
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn sync_history_rejects_local_profiles_and_runs_from_other_profiles() {
+        let directory = tempdir().unwrap();
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let client = sync_fixture(
+            &directory,
+            Arc::new(ok_fetch("proxies: []\n")),
+            crate::client::jobs::capture(),
+            &shutdown,
+            &tasks,
+        )
+        .await;
+        let mut profiles = Profiles::default();
+        profiles.append_item(remote_config_item("r1"));
+        profiles.append_item(remote_config_item("r2"));
+        profiles.append_item(file_config_item("local1"));
+        client.replace(profiles).await.unwrap();
+
+        let uid = ProfileId("r1".into());
+        client.refresh(uid.clone(), None).await.unwrap();
+        let run_page = client.profile_sync_runs(uid, None).await.unwrap();
+        let run = &run_page.items[0];
+        assert!(matches!(
+            client.profile_sync_status(ProfileId("local1".into())).await,
+            Err(ProfilesError::NotARemoteProfile)
+        ));
+        assert!(matches!(
+            client
+                .profile_sync_runs(ProfileId("local1".into()), None)
+                .await,
+            Err(ProfilesError::NotARemoteProfile)
+        ));
+        assert!(matches!(
+            client
+                .profile_sync_logs(ProfileId("r2".into()), run.id.clone(), None)
+                .await,
+            Err(ProfilesError::ProfileSyncJobs(
+                chimera_jobs::Error::NotFound
+            ))
+        ));
+
+        drop(client);
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn dropping_sync_waiter_keeps_the_download_owned_and_rejects_overlap() {
+        let directory = tempdir().unwrap();
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let (started, started_rx) = tokio::sync::oneshot::channel();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let fetcher = HoldingFetcher {
+            started: std::sync::Mutex::new(Some(started)),
+            release: release.clone(),
+        };
+        let client = sync_fixture(
+            &directory,
+            Arc::new(fetcher),
+            crate::client::jobs::capture(),
+            &shutdown,
+            &tasks,
+        )
+        .await;
+        let mut profiles = Profiles::default();
+        profiles.append_item(remote_config_item("r1"));
+        client.replace(profiles).await.unwrap();
+        let uid = ProfileId("r1".into());
+
+        let caller = tokio::spawn({
+            let client = client.clone();
+            let uid = uid.clone();
+            async move { client.refresh(uid, None).await }
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        let _ = caller.await;
+        assert!(matches!(
+            client.refresh(uid.clone(), None).await,
+            Err(ProfilesError::ProfileSyncJobs(chimera_jobs::Error::Busy))
+        ));
+
+        release.notify_one();
+        wait_for_updated_at(&client, "r1").await;
+        crate::client::jobs::settled(&client.jobs()).await;
+        let runs = client.profile_sync_runs(uid.clone(), None).await.unwrap();
+        assert_eq!(runs.items.len(), 1);
+        assert!(matches!(
+            &runs.items[0].state,
+            chimera_jobs::dto::RunStateDto::Finished { completion }
+                if matches!(completion.outcome, chimera_jobs::dto::OutcomeDto::Succeeded)
+        ));
+
+        drop(client);
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
     }
 }

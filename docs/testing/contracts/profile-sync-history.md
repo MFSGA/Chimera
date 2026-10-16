@@ -1,0 +1,21 @@
+# Profile sync history contract
+
+- **Contract ID:** `profile-sync-history-main-ui`
+- **Use case:** after automatic updates are disabled, a user can manually sync a remote Profile from either supported UI and see the completed run and its safe journal entries in the main UI.
+- **Risk and regression:** the old `ProfilesActor` scheduler can still fetch, but it has no durable job journal or history IPC; the main page must show the new run after the manual operation completes, including when a fast local response finishes between polling intervals.
+- **Boundary:** desktop UI E2E through Tauri IPC, plus Rust actor/job, sanitized-error mapping, and exit-gate unit tests. The desktop test uses an in-process loopback HTTP server and the real app process; it does not test public network access or system proxy/TUN behavior.
+- **Suite:** `profile-auto-update-main`, registered in `tauri-e2e/spec-suites.ts` and run separately in the PR E2E workflow.
+- **Runtime conditions:** isolated E2E config/data paths; main window; loopback-only subscription; system proxy and TUN are verified disabled before the test.
+- **Initial state:** record the app's original Profile selection, import a uniquely named remote Profile from the loopback server, verify its default scheduled interval, then turn automatic updates off through the main UI and verify the stored interval is zero.
+- **Operation:** click the Profile's existing manual-sync control once. The operation is performed through the visible UI; no direct IPC or file edit triggers the sync.
+- **Authoritative results:** the loopback server's request counter proves the fetch occurred. The main-UI action displays a completed successful run and at least one journal entry under the matching Profile history card. The legacy-UI action is verified through its request and the read-only status/runs commands, including a newer admission sequence and successful manual outcome. The status revision lets an already-open history card detect an external-window run when its next poll observes the new sequence.
+- **Persistence boundary:** the desktop assertion verifies current UI state. Rust integration tests separately verify job journal query/reopen behavior. This E2E does not claim a full app cold restart.
+- **Failure coverage:** the E2E proves scheduled sync stays disabled while manual sync remains available in both UIs and checks that the main history card and successful run are displayed. Rust tests cover failed fetch/error settlement, safe failure categories, durable run outcomes, sanitized log content, and exit-gate decisions; no external-network outage or updater-install failure is simulated here.
+- **Resource ownership and cleanup:** `withCleanup` closes the loopback server, restores the prior Profile selection when needed, and deletes only the Profile created by this test. It verifies these operations and does not alter host networking.
+- **Diagnostic evidence:** a failing UI wait reports the last observed history-card visibility, successful-run presence, and rendered-log count. Existing harness artifacts capture screenshots only when configured.
+- **Regression sensitivity:** without durable job registration and UI history wiring, the request counter can increase while the successful-run selector remains absent, failing the E2E assertion.
+- **Rules:** follows T01, T02, T05, T06, T07, and T09. It does not assert native mouse/pointer semantics or system-level networking.
+
+## Unit exception regression
+
+The upstream card parses retained JSON output without guarding malformed data. Chimera keeps the history view usable when a retained summary is malformed. `frontend/chimera/tests/profile-sync-history.test.ts` directly verifies valid degraded output, clean output, an invalid shape, malformed JSON, and schedule-deadline advancement after a missed poll; run it with `pnpm --filter=chimera-ui test:profile-sync-history`. `utils::exit::tests` verifies exit decisions across running, stopping, finished, pre-shutdown restart, and updater-cleanup restart phases. Update/restart shutdown and installer-failure recovery are reviewed at their call sites but are not covered by an end-to-end process-restart test.

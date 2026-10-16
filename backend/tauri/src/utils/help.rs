@@ -10,7 +10,7 @@ use fs_err as fs;
 use nanoid::nanoid;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_yaml::{Mapping, Value};
-use tauri::{AppHandle, Manager, process::current_binary};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
@@ -166,7 +166,7 @@ pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
 }
 
 #[instrument(skip(app_handle))]
-pub fn cleanup_processes(app_handle: &AppHandle) -> anyhow::Result<()> {
+pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<()> {
     debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
     resolve::resolve_reset();
@@ -177,18 +177,14 @@ pub fn cleanup_processes(app_handle: &AppHandle) -> anyhow::Result<()> {
     let client = app_handle
         .try_state::<ChimeraClient>()
         .map(|state| state.inner().clone());
-    chimera_utils::runtime::block_on(async {
-        if let Some(connector) = connector {
-            connector.stop().await;
-        }
-        let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
-        if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
-            log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
-        }
-        client.shutdown_core().await
-    })?;
-    #[cfg(windows)]
-    crate::shutdown_hook::set_ready_for_shutdown();
+    if let Some(connector) = connector {
+        connector.stop().await;
+    }
+    let client = client.ok_or_else(|| anyhow!("ChimeraClient is not managed"))?;
+    if let Err(error) = crate::window::persist_active_window_state(app_handle, &client).await {
+        log::error!(target: "app", "failed to persist active window state during cleanup: {error:?}");
+    }
+    client.shutdown_core().await?;
     Ok(())
 }
 
@@ -245,20 +241,8 @@ pub fn quit_application(app_handle: &AppHandle) {
 
 #[instrument(skip(app_handle))]
 pub fn restart_application(app_handle: &AppHandle) {
-    crate::log_err!(cleanup_processes(app_handle));
-    let env = app_handle.env();
-    let path = current_binary(&env).unwrap();
-    let arg = std::env::args().collect::<Vec<String>>();
-    let mut args = vec!["launch".to_string(), "--".to_string()];
-    // filter out the first arg
-    if arg.len() > 1 {
-        args.extend(arg.iter().skip(1).cloned());
-    }
-    tracing::info!("restart app: {:#?} with args: {:#?}", path, args);
-    std::process::Command::new(path)
-        .args(args)
-        .spawn()
-        .expect("application failed to start");
+    app_handle
+        .state::<crate::utils::exit::ExitBoundary>()
+        .request_restart();
     app_handle.exit(0);
-    std::process::exit(0);
 }

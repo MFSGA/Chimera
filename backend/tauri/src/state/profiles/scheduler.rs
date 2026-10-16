@@ -1,7 +1,8 @@
 //! Per-uid background refresh/watch services owned by ProfilesActor.
 
-use std::{collections::HashMap, num::NonZeroU64, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf};
 
+use super::actor::ProfilesActorMessage;
 use anyhow::Context as _;
 use chimera_config::profile::{
     ExternalMode, ExternalProfilePath, LocalBinding, ProfileId, ProfileSource, Profiles,
@@ -11,14 +12,6 @@ use notify_debouncer_full::{
     notify::{RecommendedWatcher, RecursiveMode},
 };
 use ractor::ActorRef;
-use tokio::task::JoinHandle;
-
-use super::actor::ProfilesActorMessage;
-
-struct Entry {
-    interval_minutes: NonZeroU64,
-    handle: JoinHandle<()>,
-}
 
 struct WatchEntry {
     watch_path: PathBuf,
@@ -125,105 +118,5 @@ fn watch_path(target: &ExternalProfilePath, mode: ExternalMode) -> PathBuf {
         ExternalMode::Symlink => std::fs::canonicalize(target.as_path())
             .unwrap_or_else(|_| target.as_path().to_path_buf()),
         ExternalMode::Mirror => target.as_path().to_path_buf(),
-    }
-}
-
-#[derive(Default)]
-pub(super) struct RemoteUpdateScheduler {
-    entries: HashMap<ProfileId, Entry>,
-}
-
-impl RemoteUpdateScheduler {
-    pub(super) fn reconcile(
-        &mut self,
-        profiles: &Profiles,
-        actor: &ActorRef<ProfilesActorMessage>,
-        catch_up: bool,
-    ) {
-        let desired: HashMap<ProfileId, (NonZeroU64, Option<time::OffsetDateTime>)> = profiles
-            .items
-            .iter()
-            .filter_map(|(uid, item)| match item.definition.source() {
-                Some(ProfileSource::Remote {
-                    option,
-                    materialized,
-                    ..
-                }) => option
-                    .update_interval_minutes
-                    .minutes()
-                    .map(|interval| (uid.clone(), (interval, materialized.updated_at))),
-                _ => None,
-            })
-            .collect();
-
-        let stale: Vec<ProfileId> = self
-            .entries
-            .iter()
-            .filter(|(uid, entry)| {
-                desired
-                    .get(*uid)
-                    .is_none_or(|(interval, _)| *interval != entry.interval_minutes)
-            })
-            .map(|(uid, _)| uid.clone())
-            .collect();
-        for uid in stale {
-            if let Some(entry) = self.entries.remove(&uid) {
-                entry.handle.abort();
-            }
-        }
-
-        for (uid, (interval_minutes, updated_at)) in desired {
-            if self.entries.contains_key(&uid) {
-                continue;
-            }
-            let overdue = catch_up
-                && updated_at.is_none_or(|at| {
-                    (time::OffsetDateTime::now_utc() - at).whole_seconds() as i128
-                        >= i128::from(interval_minutes.get()) * 60
-                });
-            let period = std::time::Duration::from_secs(interval_minutes.get().saturating_mul(60));
-            let first_refresh_at = tokio::time::Instant::now() + period;
-            let actor = actor.clone();
-            let tick_uid = uid.clone();
-            let handle = tokio::spawn(async move {
-                if overdue {
-                    let _ = actor.cast(ProfilesActorMessage::RefreshRemote {
-                        uid: tick_uid.clone(),
-                        patch: None,
-                        origin: super::actor::RefreshOrigin::Scheduled,
-                        reply: None,
-                    });
-                }
-                tokio::time::sleep_until(first_refresh_at).await;
-                let _ = actor.cast(ProfilesActorMessage::RefreshRemote {
-                    uid: tick_uid.clone(),
-                    patch: None,
-                    origin: super::actor::RefreshOrigin::Scheduled,
-                    reply: None,
-                });
-                loop {
-                    tokio::time::sleep(period).await;
-                    let _ = actor.cast(ProfilesActorMessage::RefreshRemote {
-                        uid: tick_uid.clone(),
-                        patch: None,
-                        origin: super::actor::RefreshOrigin::Scheduled,
-                        reply: None,
-                    });
-                }
-            });
-            self.entries.insert(
-                uid,
-                Entry {
-                    interval_minutes,
-                    handle,
-                },
-            );
-        }
-    }
-
-    pub(super) fn shutdown(&mut self) {
-        for (_, entry) in self.entries.drain() {
-            entry.handle.abort();
-        }
     }
 }

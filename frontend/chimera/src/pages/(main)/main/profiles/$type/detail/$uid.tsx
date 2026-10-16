@@ -7,6 +7,7 @@ import ActionCard from './_modules/action-card';
 import DetailHeader from './_modules/detail-header';
 import ProfileNameEditor from './_modules/profile-name-editor';
 import SubscriptionCard from './_modules/subscription-card';
+import { SyncHistoryCard } from './_modules/sync-history-card';
 
 export const Route = createFileRoute('/(main)/main/profiles/$type/detail/$uid')(
   {
@@ -43,6 +44,7 @@ function RouteComponent() {
 
       <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-4">
         {getRemoteSource(profile) && <SubscriptionCard profile={profile} />}
+        {getRemoteSource(profile) && <SyncHistoryCard uid={uid} />}
         <ActionCard type={type} profile={profile} />
       </div>
     </div>

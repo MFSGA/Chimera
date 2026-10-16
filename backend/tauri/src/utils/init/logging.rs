@@ -16,7 +16,9 @@ use tracing_appender::{
     rolling::Rotation,
 };
 use tracing_log::log_tracer;
-use tracing_subscriber::{EnvFilter, filter, fmt, layer::SubscriberExt, reload};
+use tracing_subscriber::{EnvFilter, Layer, filter, fmt, layer::SubscriberExt, reload};
+
+static JOB_LOG_CAPTURE: OnceLock<chimera_jobs::LogCapture> = OnceLock::new();
 
 use crate::{
     config::{self, chimera::logging::LoggingLevel, core::Config},
@@ -35,6 +37,7 @@ impl Channel {
 
 /// initial instance global logger
 pub fn init() -> Result<()> {
+    let jobs = crate::client::jobs::capture();
     let log_dir = dirs::app_logs_dir().unwrap();
     if !log_dir.exists() {
         let _ = fs::create_dir_all(&log_dir);
@@ -114,13 +117,16 @@ pub fn init() -> Result<()> {
         .with_line_number(true)
         .with_writer(std::io::stdout);
 
-    let subscriber = tracing_subscriber::registry().with(filter).with(file_layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(file_layer.with_filter(filter))
+        .with(jobs.layer());
     #[cfg(debug_assertions)]
     let subscriber = subscriber.with(terminal_layer);
 
     log_tracer::LogTracer::init()?;
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|x| anyhow!("setup logging error: {}", x))?;
+    let _ = JOB_LOG_CAPTURE.set(jobs);
 
     // reload the log level
     std::thread::spawn(move || {
@@ -130,6 +136,13 @@ pub fn init() -> Result<()> {
         let _ = refresh_logger((Some(log_level), log_max_files));
     });
     Ok(())
+}
+
+pub fn jobs_capture() -> chimera_jobs::LogCapture {
+    JOB_LOG_CAPTURE
+        .get()
+        .expect("jobs tracing capture is initialized before Tauri setup")
+        .clone()
 }
 
 fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
