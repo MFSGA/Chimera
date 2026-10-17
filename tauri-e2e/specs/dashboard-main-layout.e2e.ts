@@ -170,6 +170,7 @@ describe('main dashboard reference layout', () => {
     }
   });
 
+  // Contract: docs/testing/contracts/dashboard-widget-config-retry.md
   it('recovers from failed widget storage and persists the retry', async () => {
     await openMainRoute(targetPath);
     async function waitForObservedValue<T>(

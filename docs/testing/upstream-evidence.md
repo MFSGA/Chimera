@@ -110,6 +110,21 @@ Tooltip 对焦点的响应，但必须将边界写成“焦点触发行为”，
 目标链路的最小复现确认其确实改变 `document.activeElement`。升级 WDIO 或 vendored
 驱动后，重跑该复现并更新本条记录。
 
+## U09 Tauri driver 的右键上下文菜单边界
+
+锁定的 `webdriverio@9.32.0` 中，`element.click({ button: 'right' })` 使用
+`performActions`。本项目 vendored `tauri-plugin-wdio-webdriver@1.4.0` 在 WebView
+内合成 `mousedown` 和 `mouseup`，但合成事件不会触发浏览器原生右键默认行为，因而
+不会自动生成 Radix Context Menu 所监听的 `contextmenu`。Windows hermetic E2E
+运行 `39038721817` 中 Dashboard 测试的菜单等待最终观察为 `false`，页面与截图显示
+仍停留在 Dashboard。
+
+本地兼容实现只在匹配的 secondary-button 按下/释放后发送冒泡、可取消的
+`contextmenu` MouseEvent；现有 Dashboard E2E 继续通过 WebDriver 的右键操作验证应用
+菜单和后续用户流程。此测试证明合成事件进入应用处理链，不证明可信原生鼠标输入。
+升级 WebDriver 或 vendored 插件时，必须先用同一个 Dashboard 右键最小复现验证行为；
+当驱动能自行产生菜单事件后移除此兼容处理。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。

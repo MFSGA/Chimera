@@ -196,6 +196,7 @@ pub enum PointerEventType {
     Up,
     Move,
     Click,
+    ContextMenu,
 }
 
 /// Cookie data
@@ -1550,6 +1551,10 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
             // synthesize a click, so element click handlers never fire. The
             // actions handler emits this explicitly after a same-spot down+up.
             PointerEventType::Click => "click",
+            // WebDriver actions are synthesized in the WebView, so the browser
+            // does not perform the native right-click default action for us.
+            // Emit the corresponding event after a right-button release.
+            PointerEventType::ContextMenu => "contextmenu",
         };
 
         let buttons = if matches!(event_type, PointerEventType::Down) {
