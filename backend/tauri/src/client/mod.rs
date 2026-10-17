@@ -13,6 +13,7 @@ pub(crate) mod effects;
 mod event_sink;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) mod hotkey;
+pub(crate) mod jobs;
 pub(crate) mod ports;
 pub(crate) mod profiles;
 pub mod runtime;
@@ -78,6 +79,9 @@ pub(crate) struct ClientSetupArgs {
 
     pub(crate) system_dns: Arc<dyn SystemDnsCache>,
     pub(crate) traffic_store: Option<Arc<dyn chimera_traffic::TrafficStore>>,
+    pub(crate) jobs: chimera_jobs::JobsClient,
+    pub(crate) shutdown: tokio_util::sync::CancellationToken,
+    pub(crate) tasks: tokio_util::task::TaskTracker,
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) effects: Arc<dyn effects::ports::ApplicationEffectsPort>,
@@ -194,6 +198,9 @@ impl ChimeraClient {
             profile_service,
             system_dns,
             traffic_store,
+            jobs,
+            shutdown,
+            tasks,
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 effects: effects_port,
@@ -228,13 +235,17 @@ impl ChimeraClient {
         let mutations = MutationCoordinator::pending_with_notifications(Arc::new(effects.clone()));
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let mutations = MutationCoordinator::pending();
-        let typed_profiles = tauri::async_runtime::block_on(profiles::ProfilesClient::new(
-            mutations.clone(),
-            utf8_path(paths.profiles_path())?,
-            profile_service.clone(),
-            profile_service.clone(),
-            profile_service.clone(),
-        ))?;
+        let typed_profiles =
+            tauri::async_runtime::block_on(profiles::ProfilesClient::new_with_jobs(
+                mutations.clone(),
+                utf8_path(paths.profiles_path())?,
+                jobs,
+                profile_service.clone(),
+                profile_service.clone(),
+                profile_service.clone(),
+                shutdown,
+                &tasks,
+            ))?;
         let core_lifecycle =
             tauri::async_runtime::block_on(CoreLifecycleClient::spawn_with_profiles(
                 core.clone(),
@@ -473,6 +484,36 @@ impl ChimeraClient {
 
     pub(crate) fn get_profiles(&self) -> anyhow::Result<Arc<Profiles>> {
         Ok(self.profiles_client()?.snapshot())
+    }
+
+    pub(crate) async fn profile_sync_status(
+        &self,
+        uid: ProfileId,
+    ) -> anyhow::Result<crate::client::jobs::ProfileSyncStatus> {
+        Ok(self.profiles_client()?.profile_sync_status(uid).await?)
+    }
+
+    pub(crate) async fn profile_sync_runs(
+        &self,
+        uid: ProfileId,
+        after: Option<chimera_jobs::dto::RunCursorDto>,
+    ) -> anyhow::Result<chimera_jobs::dto::RunPageDto> {
+        Ok(self
+            .profiles_client()?
+            .profile_sync_runs(uid, after)
+            .await?)
+    }
+
+    pub(crate) async fn profile_sync_logs(
+        &self,
+        uid: ProfileId,
+        run: String,
+        after: Option<String>,
+    ) -> anyhow::Result<chimera_jobs::dto::LogPageDto> {
+        Ok(self
+            .profiles_client()?
+            .profile_sync_logs(uid, run, after)
+            .await?)
     }
 
     pub(crate) async fn add_profile(

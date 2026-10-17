@@ -61,6 +61,23 @@ test('critical and hermetic suites have intentional coverage boundaries', () => 
     ['./specs/profile-auto-update.e2e.ts'],
     'Profile auto-update must start in its dedicated main-window session',
   );
+  assert.deepEqual(
+    e2eSuites['subscription-onboarding'],
+    ['./specs/subscription-onboarding-legacy.e2e.ts'],
+    'subscription onboarding must use a fresh app session and runtime directory',
+  );
+  assert.equal(
+    e2eSuites.hermetic.includes(
+      './specs/subscription-onboarding-legacy.e2e.ts',
+    ),
+    false,
+    'subscription onboarding must not share a runtime with the hermetic aggregate',
+  );
+  assert.equal(
+    e2eSuites.all.includes('./specs/subscription-onboarding-legacy.e2e.ts'),
+    false,
+    'the all package script launches subscription onboarding in its own WDIO process',
+  );
   assert.equal(
     e2eSuites.all.includes('./specs/profile-auto-update.e2e.ts'),
     false,

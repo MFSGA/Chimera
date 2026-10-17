@@ -91,6 +91,7 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
       return;
     }
 
+    let shutdownStarted = false;
     try {
       setIsInstalling(true);
 
@@ -106,6 +107,7 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
         }
       });
 
+      shutdownStarted = true;
       await commands.cleanupProcesses();
       // cleanup and stop core
       await newVersion.install();
@@ -114,6 +116,16 @@ const NewVersionModal = ({ children }: PropsWithChildren) => {
       await relaunch();
     } catch (e) {
       console.error(e);
+      if (shutdownStarted) {
+        // The app owners have stopped for installation. If installation
+        // fails, relaunch the currently installed version to restore them.
+        try {
+          await relaunch();
+          return;
+        } catch (relaunchError) {
+          console.error(relaunchError);
+        }
+      }
       message(formatError(e), {
         kind: 'error',
         title: 'Error',

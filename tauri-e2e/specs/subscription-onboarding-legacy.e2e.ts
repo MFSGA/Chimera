@@ -9,11 +9,11 @@ import { planSubscriptionProfileCleanup } from '../subscription-onboarding-clean
 用例标题：打开 legacy 订阅导入向导并覆盖成功、代理选择及失败重试
 风险/回归：页面把流程状态做成瞬时通知、漏掉某个阶段、默认失败后没有继续探测、失败后不能重试，或 legacy 路由没有挂载向导
 边界：桌面 UI E2E（布局 + 本地确定性订阅服务的 fallback 主路径）
-基础套件：profiles；本轮单独执行该 spec，未执行完整 profiles 套件
+基础套件：subscription-onboarding；CI 与聚合 package 脚本在独立 WDIO 进程执行；当 CHIMERA_E2E_RUNTIME_DIR 未设置时，各进程使用新运行目录
 运行条件：Tauri E2E、legacy 窗口、zh-cn；CI 在 Windows 执行，本地另在 macOS WebKit 验证
 真实依赖：Tauri E2E 二进制、legacy WebView、TanStack Router 页面挂载、应用真实导入/探测 IPC
 模拟与绕过：订阅服务是测试内 127.0.0.1 HTTP 服务；成功路径第一次导入返回无效订阅、后续返回有效 YAML，重试路径前六次请求返回无效订阅、第七次返回有效 YAML；代理/TUN 只在测试前确认关闭，不执行宿主设置变更
-初始状态：切换到 legacy 窗口并打开 /subscription-onboarding；断言系统代理和 TUN 均关闭
+初始状态：当 CHIMERA_E2E_RUNTIME_DIR 未设置时使用本轮新建的隔离配置/数据目录；切换到 legacy 窗口并打开 /subscription-onboarding；断言系统代理和 TUN 均关闭
 被测操作：通过真实浏览器导航和 QuickImport 输入控件触发导入
 权威结果：DOM 中的 data-slot 区域、每个区域的 data-status、成功结果，以及持久化的测试订阅
 当前 UI 结果：布局测试确认五个步骤初始为“等待执行”；fallback 测试确认默认失败、地址检测、稳定性检测、直连导入依次完成；另验证成功后的代理选择和直连失败后的重试

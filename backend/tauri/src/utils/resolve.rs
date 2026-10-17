@@ -255,7 +255,7 @@ pub fn resolve_setup(app: &mut App) {
 
     // 启动核心
     log::trace!("launch core");
-    log_err!(client.init_core());
+    log_err!(tauri::async_runtime::block_on(client.init_core()));
 
     log::trace!("init storage");
     log_err!(crate::core::storage::setup(app));

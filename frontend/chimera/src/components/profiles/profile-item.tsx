@@ -272,6 +272,7 @@ export const ProfileItem = memo(function ProfileItem({
           <div className="flex justify-end gap-2">
             <Tooltip title={m.profile_subscription_update()}>
               <Button
+                data-slot="profile-update-button"
                 size="small"
                 variant="outlined"
                 className="!size-8 !min-w-0"

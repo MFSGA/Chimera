@@ -1570,22 +1570,25 @@ DIFF-001 至 DIFF-012 是此前基于
 
 ## DIFF-047：同步最新 ref 的 Tokio patch 版本
 
-- 基线：主仓库 `e9e3fab1913773a1ecd6ad6a689175e523208cc2`；只读参考子模块从
-  `69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a` 快进到
-  `67999753918c7b9879ddd2bacdef74246bfef1dd`（远端 `HEAD` 与 `main` 一致），子模块工作树干净。
+- 基线：原始功能分支基于主仓库 `e9e3fab1913773a1ecd6ad6a689175e523208cc2`；只读 ref 当前固定在
+  `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`，工作树干净。该快照包含
+  `67999753918c7b9879ddd2bacdef74246bfef1dd`，其 Tokio 锁定版本为 `1.53.3`。
 - ref 到 Chimera 映射：`ref/backend/Cargo.lock` 的 `tokio` package 条目对应
   `backend/Cargo.lock`；双方的工作区清单都以 `tokio = "1"` 声明兼容范围。
 - 类别：共享 Rust 依赖对齐。
-- 更新：将锁定 Tokio 从 `1.53.2` 升到 ref 当前的 `1.53.3`，并让 Cargo 为本地 workspace
-  重新解析相关 Windows 系统依赖引用；不改任何 `Cargo.toml` 约束或运行时代码。
+- 更新：将锁定 Tokio 从 `1.53.2` 升到 ref 当前的 `1.53.3`，不改任何 `Cargo.toml` 约束或运行时代码。
+  与 master `5fc556b4` 同步时保留其完整依赖图；相对该 master，锁文件只变更 Tokio 版本和校验值，
+  没有带入无关的 Windows 依赖重解析。
 - 影响入口：Rust workspace 中的 Tauri 应用、共享 actor、核心管理器、Service IPC 和 Agent 共用 Tokio；
   主 UI、legacy UI 与 agent 的业务 API、持久化、IPC 合同及用户配置格式均未改变。Windows 依赖图由 CI 验证。
-- 验证：`cargo check --locked --manifest-path backend/Cargo.toml --workspace` 通过；
+- 验证：同步 master 前的功能分支上，`cargo check --locked --manifest-path backend/Cargo.toml --workspace` 通过；
   `RUST_TEST_THREADS=1 pnpm test:backend` 的全 workspace `--all-features` 测试退出码为 0。
   默认并行运行首次为 549 passed、3 failed、1 ignored，失败均为 `client::profiles` 外部文件监听
   用例在 5 秒内未观察到更新时间；随后 `external_` 子集分别以默认并行（4/4）和
   `--test-threads=1`（4/4）通过，串行全 workspace 也通过。原因尚未由本地证据确定，保留首次失败记录，
   由推送后的 CI 决定是否需要修复。首次 check 因本机磁盘空间不足失败；仅使用
-  `cargo clean -p chimera` 清理可重建的应用构建产物后，check 通过。
-  `pnpm exec prettier --check docs/ref-alignment-progress.md` 和 `git diff --check` 通过。
-- 收敛状态：Tokio 版本与新 ref 一致；Windows/macOS/Linux CI 和 Tauri E2E 仍需在推送后的工作流中验证。
+  `cargo clean -p chimera` 清理可重建的应用构建产物后，check 通过。同步 master 后，
+  `cargo metadata --locked --format-version 1 --manifest-path backend/Cargo.toml` 通过，且相对 master
+  的锁文件差异仅为 Tokio 版本/校验值。`pnpm exec prettier --check docs/ref-alignment-progress.md`
+  和 `git diff --check` 通过。最终分支的 Windows/macOS/Linux CI 和 Tauri E2E 以 PR 当前 SHA 检查为准。
+- 收敛状态：Tokio 版本与当前 ref 一致；最终合并分支仍须通过 PR 当前 SHA 的 CI 和 Tauri E2E。
