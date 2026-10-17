@@ -116,18 +116,33 @@ async function waitForPersistedInterval(uid: string, expected: number) {
   }
 }
 
-async function waitForSuccessfulSyncHistory(uid: string) {
+async function waitForSuccessfulSyncHistory(
+  uid: string,
+  minimumSuccessfulRunCount = 1,
+) {
   let lastObserved = 'not observed';
+  let lastState:
+    | {
+        cardVisible: boolean;
+        latestRunVisible: boolean;
+        latestRunStatus: string | null;
+        successfulRunCount: number;
+        renderedLogCount: number;
+      }
+    | undefined;
   try {
     await browser.waitUntil(
       async () => {
-        const state = await browser.execute((profileUid) => {
+        lastState = await browser.execute((profileUid) => {
           const card = document.querySelector<HTMLElement>(
             `[data-slot="profile-sync-history"][data-profile-uid="${profileUid}"]`,
           );
-          const successfulRun = card?.querySelector<HTMLElement>(
-            '[data-slot="profile-sync-run"][data-run-status="succeeded"]',
+          const runs = Array.from(
+            card?.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-sync-run"]',
+            ) ?? [],
           );
+          const latestRun = runs[0];
           const isDisplayed = (element: HTMLElement | null | undefined) => {
             if (!element) return false;
             const style = getComputedStyle(element);
@@ -142,18 +157,23 @@ async function waitForSuccessfulSyncHistory(uid: string) {
           };
           return {
             cardVisible: isDisplayed(card),
-            successfulRunVisible: isDisplayed(successfulRun),
+            latestRunVisible: isDisplayed(latestRun),
+            latestRunStatus: latestRun?.dataset.runStatus ?? null,
+            successfulRunCount: runs.filter(
+              (run) => run.dataset.runStatus === 'succeeded',
+            ).length,
             renderedLogCount:
-              successfulRun?.querySelectorAll(
-                '[data-slot="profile-sync-logs"] li',
-              ).length ?? 0,
+              latestRun?.querySelectorAll('[data-slot="profile-sync-logs"] li')
+                .length ?? 0,
           };
         }, uid);
-        lastObserved = JSON.stringify(state);
+        lastObserved = JSON.stringify(lastState);
         return (
-          state.cardVisible &&
-          state.successfulRunVisible &&
-          state.renderedLogCount > 0
+          lastState.cardVisible &&
+          lastState.latestRunVisible &&
+          lastState.latestRunStatus === 'succeeded' &&
+          lastState.successfulRunCount >= minimumSuccessfulRunCount &&
+          lastState.renderedLogCount > 0
         );
       },
       {
@@ -167,6 +187,8 @@ async function waitForSuccessfulSyncHistory(uid: string) {
       { cause },
     );
   }
+  assert.ok(lastState, `Profile ${uid} sync history was not observed.`);
+  return lastState.successfulRunCount;
 }
 
 async function waitForExternalManualSync(
@@ -769,7 +791,8 @@ describe('remote profile auto-update', () => {
         );
       }
 
-      await waitForSuccessfulSyncHistory(uid);
+      const successfulRunCountBeforeLegacySync =
+        await waitForSuccessfulSyncHistory(uid);
 
       await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
@@ -899,6 +922,11 @@ describe('remote profile auto-update', () => {
       await waitForExternalManualSync(
         uid,
         beforeLegacyManualSync.latest_run_sequence,
+      );
+      await browser.switchToWindow('main');
+      await waitForSuccessfulSyncHistory(
+        uid,
+        successfulRunCountBeforeLegacySync + 1,
       );
     });
   });

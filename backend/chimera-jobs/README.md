@@ -2,7 +2,7 @@
 
 Standalone jobs with typed Rust definitions, actor-owned execution, durable Run history, Tokio scheduling, and a scoped tracing journal. No Tauri, Profiles, core process, daemon IPC, or frontend dependency.
 
-This implements the reusable portions of P1 → P2 → P3 → P5 from the [P0 contract](https://github.com/libnyanpasu/clash-nyanpasu/blob/a4be9966cf765e430e214133e5bc7544fba4deb0/docs/design/jobs-p0-contract.md). Application wiring is documented in the [Profile sync history alignment](../../docs/ref-alignment/profile-sync-history.md) record.
+This implements the reusable portions of P1 → P2 → P3 → P5 from the [P0 contract](https://github.com/libnyanpasu/clash-nyanpasu/blob/a4be9966cf765e430e214133e5bc7544fba4deb0/docs/design/jobs-p0-contract.md). Application wiring is documented in the [Profile sync history alignment](../../docs/ref-alignment-profiles.md) record.
 
 ## Usage
 
