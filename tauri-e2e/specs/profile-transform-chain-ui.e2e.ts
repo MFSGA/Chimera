@@ -1,6 +1,7 @@
 // Detailed rejection, state-preservation, and coverage contract:
 // ../../docs/testing/contracts/profile-transform-candidate-rejection.md
 import assert from 'node:assert/strict';
+import { Key } from 'webdriverio';
 import type {
   MutationOutcome,
   ProfileDocument_Deserialize,
@@ -39,7 +40,35 @@ type RuntimeTransformDiagnostics = {
   } | null;
 };
 
+type RuntimeTransformFailure = Exclude<
+  RuntimeTransformDiagnostics['failure'],
+  null
+>;
+
 type CoreState = 'Running' | { Stopped: string | null };
+
+type ScrollViewportObservation = {
+  editorTop: number;
+  editorHeight: number;
+  visibleTop: number;
+  visibleBottom: number;
+  visibleHeight: number;
+  scrollTop: number;
+  maxScrollTop: number;
+};
+
+type UiElementObservation = {
+  count: number;
+  controlCount: number;
+  exists: boolean;
+  visible: boolean;
+  enabled: boolean | null;
+  unobstructed: boolean | null;
+  hitTarget: string | null;
+};
+
+const GLOBAL_TRANSFORM_EDITOR_SELECTOR =
+  '[data-slot="transform-chain-editor"][data-chain-scope="global"]';
 
 function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
   return appliedValue(outcome, operation);
@@ -116,6 +145,154 @@ async function openRoute(pathname: string) {
   );
 }
 
+async function waitForGlobalEditor() {
+  return waitForStableUiElement(
+    GLOBAL_TRANSFORM_EDITOR_SELECTOR,
+    GLOBAL_TRANSFORM_EDITOR_SELECTOR,
+    'The global transform editor did not become visible and stable',
+    (observation) => observation.count === 1 && observation.visible,
+  );
+}
+
+async function waitForGlobalInactiveAdd(uid: string) {
+  const itemSelector = `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`;
+  const addSelector = `${itemSelector} [data-slot="transform-chain-add"]`;
+  return waitForStableUiElement(
+    itemSelector,
+    addSelector,
+    `Global transform candidate ${uid} did not settle in the available list`,
+    (observation) =>
+      observation.count === 1 &&
+      observation.controlCount === 1 &&
+      observation.exists &&
+      observation.visible &&
+      observation.enabled === true &&
+      observation.unobstructed !== false,
+  );
+}
+
+async function waitForStableUiElement(
+  selector: string,
+  interactionSelector: string,
+  description: string,
+  isReady: (observation: UiElementObservation) => boolean,
+) {
+  let lastObservation: UiElementObservation | null = null;
+  let previousObservation = '';
+  let stableObservations = 0;
+  await browser.waitUntil(
+    async () => {
+      lastObservation = await readUiElementObservation(
+        selector,
+        interactionSelector,
+      );
+      const currentObservation = JSON.stringify(lastObservation);
+      stableObservations =
+        currentObservation === previousObservation ? stableObservations + 1 : 1;
+      previousObservation = currentObservation;
+      return isReady(lastObservation) && stableObservations >= 2;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: () =>
+        `${description}. Last state: ${JSON.stringify(lastObservation)}.`,
+    },
+  );
+  return $(interactionSelector);
+}
+
+async function readUiElementObservation(
+  selector: string,
+  interactionSelector = selector,
+): Promise<UiElementObservation> {
+  return browser.execute(
+    (targetSelector, controlSelector) => {
+      const matches = document.querySelectorAll(targetSelector);
+      const target = matches[0];
+      const controls = document.querySelectorAll(controlSelector);
+      const control = document.querySelector<HTMLElement>(controlSelector);
+      if (!target || !control) {
+        return {
+          count: matches.length,
+          controlCount: controls.length,
+          exists: false,
+          visible: false,
+          enabled: null,
+          unobstructed: null,
+          hitTarget: null,
+        };
+      }
+
+      const style = window.getComputedStyle(control);
+      const rect = control.getBoundingClientRect();
+      const isVisible = (element: Element) => {
+        const elementStyle = window.getComputedStyle(element);
+        const elementRect = element.getBoundingClientRect();
+        return (
+          elementStyle.display !== 'none' &&
+          elementStyle.visibility !== 'hidden' &&
+          elementRect.width > 0 &&
+          elementRect.height > 0
+        );
+      };
+      const visible = isVisible(target) && isVisible(control);
+      const visibleLeft = Math.max(rect.left, 0);
+      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleTop = Math.max(rect.top, 0);
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
+      const inViewport =
+        visibleRight > visibleLeft && visibleBottom > visibleTop;
+      const hit = inViewport
+        ? document.elementFromPoint(
+            visibleLeft + (visibleRight - visibleLeft) / 2,
+            visibleTop + (visibleBottom - visibleTop) / 2,
+          )
+        : null;
+
+      return {
+        count: matches.length,
+        controlCount: controls.length,
+        exists: true,
+        visible,
+        enabled:
+          !control.matches(':disabled') &&
+          control.getAttribute('aria-disabled') !== 'true',
+        unobstructed: hit ? control.contains(hit) : inViewport ? false : null,
+        hitTarget: hit
+          ? `${hit.tagName.toLowerCase()}${hit.getAttribute('data-slot') ? `[data-slot="${hit.getAttribute('data-slot')}"]` : ''}`
+          : null,
+      };
+    },
+    selector,
+    interactionSelector,
+  );
+}
+
+async function readScrollViewportObservation(
+  selector: string,
+): Promise<ScrollViewportObservation | null> {
+  return browser.execute((editorSelector) => {
+    const element = document.querySelector<HTMLElement>(editorSelector);
+    const viewport = element?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]',
+    );
+    if (!element || !viewport) return null;
+    const rect = element.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    const visibleTop = viewportRect.top + viewport.clientTop;
+    const visibleBottom = visibleTop + viewport.clientHeight;
+    return {
+      editorTop: Math.round(rect.top),
+      editorHeight: Math.round(rect.height),
+      visibleTop: Math.round(visibleTop),
+      visibleBottom: Math.round(visibleBottom),
+      visibleHeight: viewport.clientHeight,
+      scrollTop: viewport.scrollTop,
+      maxScrollTop: Math.max(0, viewport.scrollHeight - viewport.clientHeight),
+    };
+  }, selector);
+}
+
 async function waitForScopedChain(uid: string, expected: string[]) {
   await browser.waitUntil(
     async () => {
@@ -146,6 +323,54 @@ async function waitForGlobalChain(expected: string[]) {
       timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}. Last value: ${lastChain}.`,
     },
   );
+}
+
+async function waitForTransformFailure(
+  scopeUid: string | null,
+  transformUid: string,
+  afterRevision: number,
+): Promise<RuntimeTransformDiagnostics & { failure: RuntimeTransformFailure }> {
+  const observed = {
+    diagnostics: null as RuntimeTransformDiagnostics | null,
+  };
+  try {
+    await browser.waitUntil(
+      async () => {
+        observed.diagnostics = await invoke<RuntimeTransformDiagnostics | null>(
+          'get_runtime_transform_diagnostics',
+        );
+        const failure = observed.diagnostics?.failure;
+        return Boolean(
+          failure &&
+          failure.scope_uid === scopeUid &&
+          failure.transform_uid === transformUid &&
+          failure.attempt_revision > afterRevision,
+        );
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `Transform ${transformUid} did not publish a new failure diagnostic.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Transform ${transformUid} did not publish a new failure diagnostic. Last diagnostics: ${JSON.stringify(observed.diagnostics)}`,
+      { cause: error },
+    );
+  }
+
+  const diagnostics = observed.diagnostics;
+  const failure = diagnostics?.failure;
+  if (
+    !diagnostics ||
+    !failure ||
+    failure.scope_uid !== scopeUid ||
+    failure.transform_uid !== transformUid ||
+    failure.attempt_revision <= afterRevision
+  ) {
+    throw new Error(`Transform ${transformUid} diagnostics were unavailable.`);
+  }
+  return { ...diagnostics, failure };
 }
 
 async function waitForScopedRuntimeLog(
@@ -229,17 +454,20 @@ async function waitForGlobalRuntimeLogCleared(
   return latest;
 }
 
-async function waitForEditorClosed(scope: 'profile' | 'global') {
+async function waitForApplySettled(scope: 'profile' | 'global') {
   await browser.waitUntil(
     async () => {
       const currentEditor = await browser.$(
         `[data-slot="transform-chain-editor"][data-chain-scope="${scope}"]`,
       );
-      return !(await currentEditor.isDisplayed());
+      if (!(await currentEditor.isDisplayed())) return false;
+      return !(await currentEditor
+        .$('[data-slot="transform-chain-save"]')
+        .isExisting());
     },
     {
       timeout: 30_000,
-      timeoutMsg: `${scope} transform chain editor did not close.`,
+      timeoutMsg: `${scope} transform chain apply did not settle.`,
     },
   );
 }
@@ -260,14 +488,48 @@ async function waitForActiveOrder(
   scope: 'profile' | 'global',
   expected: string[],
 ) {
+  let lastObserved: (string | null)[] | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastObserved = await activeOrder(scope);
+        return JSON.stringify(lastObserved) === JSON.stringify(expected);
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `${scope} transform draft did not become ${JSON.stringify(expected)}. Last observed: ${JSON.stringify(lastObserved)}.`,
+      { cause: error },
+    );
+  }
+}
+
+async function moveActiveItemWithKeyboard(uid: string) {
+  const item = await $(
+    `[data-slot="transform-chain-active-item"][data-profile-uid="${uid}"] [data-slot="profile-chain-editor-item"]`,
+  );
+  await item.waitForDisplayed({ timeout: 15_000 });
   await browser.waitUntil(
-    async () =>
-      JSON.stringify(await activeOrder(scope)) === JSON.stringify(expected),
+    async () => (await item.getAttribute('tabindex')) === '0',
     {
       timeout: 15_000,
-      timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
+      timeoutMsg: `sortable Profile ${uid} did not become keyboard-focusable`,
     },
   );
+  await item.click();
+  assert.equal(
+    await item.isFocused(),
+    true,
+    `sortable Profile ${uid} did not receive keyboard focus`,
+  );
+  await browser.keys(Key.Space);
+  for (let index = 0; index < 12; index += 1) {
+    await browser.keys(Key.ArrowUp);
+  }
 }
 
 describe('main transform chain editor', () => {
@@ -525,9 +787,35 @@ describe('main transform chain editor', () => {
 
     try {
       handles = await browser.getWindowHandles();
-      if (handles.includes('main')) await browser.switchToWindow('main');
     } catch (error) {
       errors.push(error);
+    }
+    if (handles.includes('main')) {
+      try {
+        await browser.switchToWindow('main');
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await browser.setWindowSize(1240, 720);
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await browser.execute((uid) => {
+          const detail = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-detail"]',
+            ),
+          ).find((candidate) => candidate.dataset.profileUid === uid);
+          const viewport = detail?.closest<HTMLElement>(
+            '[data-slot="scroll-area-viewport"]',
+          );
+          if (viewport) viewport.scrollTop = 0;
+        }, localUid ?? '');
+      } catch (error) {
+        errors.push(error);
+      }
     }
     if (errors.length > 0) {
       throw new AggregateError(
@@ -555,16 +843,163 @@ describe('main transform chain editor', () => {
   // authorities. A stale `chain` field or old create IPC fails setup/assertion.
   it('edits and reorders a scoped transform chain from profile details', async () => {
     assert.ok(localUid && mergeAUid && mergeBUid && javascriptUid);
+    await browser.setWindowSize(1240, 360);
     await openRoute(`/main/profiles/profile/detail/${localUid}`);
 
-    const trigger = await $('[data-slot="profile-transform-chain"]');
+    const detailSelector = `[data-slot="profile-detail"][data-profile-uid="${localUid}"]`;
+    const trigger = await $(
+      `[data-slot="profile-transform-chain"][data-profile-uid="${localUid}"]`,
+    );
+    const editorSelector = `[data-slot="transform-chain-editor"][data-chain-scope="profile"][data-profile-uid="${localUid}"]`;
+    const editor = await $(editorSelector);
+    await $(detailSelector).waitForExist({ timeout: 15_000 });
+    await editor.waitForExist({ timeout: 15_000 });
+
+    const initialScrollTop = await browser.execute((selector) => {
+      const detail = document.querySelector<HTMLElement>(selector);
+      const viewport = detail?.closest<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!viewport) return null;
+      viewport.scrollTop = 0;
+      return viewport.scrollTop;
+    }, detailSelector);
+    assert.equal(
+      initialScrollTop,
+      0,
+      'The Profile detail scroll viewport must start at the top.',
+    );
+    await trigger.waitForClickable({ timeout: 15_000 });
+
+    const beforeScroll = await browser.execute((selector) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      const viewport = element?.closest<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!element || !viewport) return null;
+      const rect = element.getBoundingClientRect();
+      const viewportRect = viewport.getBoundingClientRect();
+      const visibleTop = viewportRect.top + viewport.clientTop;
+      const visibleBottom = visibleTop + viewport.clientHeight;
+      return {
+        top: Math.round(rect.top),
+        height: Math.round(rect.height),
+        visibleTop: Math.round(visibleTop),
+        visibleBottom: Math.round(visibleBottom),
+      };
+    }, editorSelector);
+    assert.ok(beforeScroll, 'The scoped transform editor is missing.');
+    assert.ok(
+      beforeScroll.top + beforeScroll.height / 2 > beforeScroll.visibleBottom,
+      `The editor center must start below the viewport: ${JSON.stringify(beforeScroll)}`,
+    );
+
+    await trigger.click();
+    let lastAfterScroll: ScrollViewportObservation | null = null;
+    try {
+      await browser.waitUntil(
+        async () => {
+          lastAfterScroll = await readScrollViewportObservation(editorSelector);
+          if (!lastAfterScroll) return false;
+          if (lastAfterScroll.editorHeight > lastAfterScroll.visibleHeight) {
+            return (
+              Math.abs(
+                lastAfterScroll.editorTop - lastAfterScroll.visibleTop,
+              ) <= 2
+            );
+          }
+          const center =
+            lastAfterScroll.editorTop + lastAfterScroll.editorHeight / 2;
+          return (
+            center >= lastAfterScroll.visibleTop &&
+            center <= lastAfterScroll.visibleBottom
+          );
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'Clicking the profile transform-chain action did not scroll the editor into view.',
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `Clicking the profile transform-chain action did not scroll the editor into view. Last viewport observation: ${JSON.stringify(lastAfterScroll)}`,
+        { cause: error },
+      );
+    }
+
+    let fitBefore: ScrollViewportObservation | null = null;
+    let lastFitCandidate: ScrollViewportObservation | null = null;
+    for (const height of [600, 640, 680, 720, 760, 800, 840, 900]) {
+      await browser.setWindowSize(1240, height);
+      const resetScrollTop = await browser.execute((selector) => {
+        const detail = document.querySelector<HTMLElement>(selector);
+        const viewport = detail?.closest<HTMLElement>(
+          '[data-slot="scroll-area-viewport"]',
+        );
+        if (!viewport) return null;
+        viewport.scrollTop = 0;
+        return viewport.scrollTop;
+      }, detailSelector);
+      assert.equal(
+        resetScrollTop,
+        0,
+        `The Profile detail scroll viewport must reset before the ${height}px fit check.`,
+      );
+
+      const candidate = await readScrollViewportObservation(editorSelector);
+      lastFitCandidate = candidate;
+      if (!candidate) continue;
+      const editorCenter = candidate.editorTop + candidate.editorHeight / 2;
+      const viewportCenter = candidate.visibleTop + candidate.visibleHeight / 2;
+      const scrollNeeded = editorCenter - viewportCenter;
+      if (
+        candidate.editorHeight <= candidate.visibleHeight &&
+        scrollNeeded > 8 &&
+        scrollNeeded <= candidate.maxScrollTop
+      ) {
+        fitBefore = candidate;
+        break;
+      }
+    }
+    assert.ok(
+      fitBefore,
+      `Could not find a fitting viewport with enough scroll range to center the editor. Last geometry: ${JSON.stringify(lastFitCandidate)}`,
+    );
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let lastFitAfter: ScrollViewportObservation | null = null;
+    try {
+      await browser.waitUntil(
+        async () => {
+          lastFitAfter = await readScrollViewportObservation(editorSelector);
+          if (!lastFitAfter || !fitBefore) return false;
+          const beforeCenter =
+            fitBefore.visibleTop + fitBefore.visibleHeight / 2;
+          const afterCenter =
+            lastFitAfter.visibleTop + lastFitAfter.visibleHeight / 2;
+          const editorCenter =
+            lastFitAfter.editorTop + lastFitAfter.editorHeight / 2;
+          return (
+            Math.abs(editorCenter - afterCenter) <= 2 &&
+            editorCenter >= lastFitAfter.visibleTop &&
+            editorCenter <= lastFitAfter.visibleBottom &&
+            lastFitAfter.scrollTop > fitBefore.scrollTop
+          );
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'Clicking the Profile transform-chain action did not center a fitting editor.',
+        },
+      );
+    } catch (error) {
+      throw new Error(
+        `Clicking the Profile transform-chain action did not center a fitting editor. Before: ${JSON.stringify(fitBefore)}; last observation: ${JSON.stringify(lastFitAfter)}`,
+        { cause: error },
+      );
+    }
+    await browser.setWindowSize(1240, 720);
 
     const first = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
@@ -575,31 +1010,62 @@ describe('main transform chain editor', () => {
     const javascript = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
     );
-    await first.click();
-    await second.click();
-    await javascript.click();
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeAUid,
-      mergeBUid,
-      javascriptUid,
-    ]);
+    await first.$('[data-slot="transform-chain-add"]').click();
+    await second.$('[data-slot="transform-chain-add"]').click();
+    await javascript.$('[data-slot="transform-chain-add"]').click();
+    const originalOrder = [mergeAUid, mergeBUid, javascriptUid];
+    assert.deepEqual(await activeOrder('profile'), originalOrder);
 
-    const secondRow = await editor.$(
-      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeBUid}"]`,
+    const firstActiveItem = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${mergeAUid}"]`,
     );
-    await secondRow.$('[data-slot="transform-chain-move-up"]').click();
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeBUid,
-      mergeAUid,
-      javascriptUid,
-    ]);
+    const lastActiveItem = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
+    );
+    assert.equal(
+      await firstActiveItem
+        .$('[data-slot="transform-chain-move-up"]')
+        .isEnabled(),
+      false,
+      'the first active transform cannot move above the start of the chain',
+    );
+    assert.equal(
+      await lastActiveItem
+        .$('[data-slot="transform-chain-move-down"]')
+        .isEnabled(),
+      false,
+      'the last active transform cannot move below the end of the chain',
+    );
+
+    await editor.$('[data-slot="transform-chain-reset"]').click();
+    await waitForActiveOrder('profile', []);
+    await waitForScopedChain(localUid, []);
+
+    for (const uid of originalOrder) {
+      const item = await editor.$(
+        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`,
+      );
+      await item.$('[data-slot="transform-chain-add"]').click();
+    }
+    assert.deepEqual(await activeOrder('profile'), originalOrder);
+    const keyboardOrder = [mergeBUid, mergeAUid, javascriptUid];
+    await moveActiveItemWithKeyboard(mergeBUid);
+    await waitForActiveOrder('profile', keyboardOrder);
+    await browser.keys(Key.Escape);
+    await waitForActiveOrder('profile', originalOrder);
+    await waitForScopedChain(localUid, []);
+
+    await moveActiveItemWithKeyboard(mergeBUid);
+    await waitForActiveOrder('profile', keyboardOrder);
+    await browser.keys(Key.Space);
+    await waitForActiveOrder('profile', keyboardOrder);
 
     const beforeSaveDiagnostics =
       await invoke<RuntimeTransformDiagnostics | null>(
         'get_runtime_transform_diagnostics',
       );
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForScopedChain(localUid, [mergeBUid, mergeAUid, javascriptUid]);
+    await waitForScopedChain(localUid, keyboardOrder);
     const appliedDiagnostics = await waitForScopedRuntimeLog(
       localUid,
       javascriptUid,
@@ -609,7 +1075,7 @@ describe('main transform chain editor', () => {
       appliedDiagnostics.revision > (beforeSaveDiagnostics?.revision ?? 0),
       'applied runtime revision did not advance after saving the scoped chain',
     );
-    await waitForEditorClosed('profile');
+    await waitForApplySettled('profile');
 
     const currentTrigger = await $('[data-slot="profile-transform-chain"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
@@ -793,25 +1259,36 @@ describe('main transform chain editor', () => {
     await waitForScopedChain(localUid, []);
     await openRoute('/main/profiles/merge');
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
 
-    let editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
-    await editor
-      .$(
-        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
-      )
-      .click();
-    await editor
-      .$(
-        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
-      )
-      .click();
-    assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
+    let editor = await waitForGlobalEditor();
+    const addMergeTransform = await waitForGlobalInactiveAdd(mergeAUid);
+    await addMergeTransform.click();
+    await waitForActiveOrder('global', [mergeAUid]);
+    editor = await waitForGlobalEditor();
+    const addJavascriptTransform =
+      await waitForGlobalInactiveAdd(javascriptUid);
+    await addJavascriptTransform.click();
+    const originalOrder = [mergeAUid, javascriptUid];
+    await waitForActiveOrder('global', originalOrder);
+    editor = await waitForGlobalEditor();
+    assert.deepEqual(await activeOrder('global'), originalOrder);
+
+    await editor.$('[data-slot="transform-chain-reset"]').click();
+    await waitForActiveOrder('global', []);
+    await waitForGlobalChain([]);
+
+    editor = await waitForGlobalEditor();
+    for (const [index, uid] of originalOrder.entries()) {
+      const add = await waitForGlobalInactiveAdd(uid);
+      await add.click();
+      await waitForActiveOrder('global', originalOrder.slice(0, index + 1));
+      editor = await waitForGlobalEditor();
+    }
+    await waitForActiveOrder('global', originalOrder);
+    assert.deepEqual(await activeOrder('global'), originalOrder);
 
     const beforeSaveDiagnostics =
       await invoke<RuntimeTransformDiagnostics | null>(
@@ -824,15 +1301,12 @@ describe('main transform chain editor', () => {
       ['info', 'chain ui javascript log'],
       beforeSaveDiagnostics?.revision ?? 0,
     );
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
-    let currentTrigger = await $('[data-slot="global-transform-chain"]');
+    let currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
 
     let javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
@@ -851,7 +1325,9 @@ describe('main transform chain editor', () => {
     );
 
     await javascriptRow.$('[data-slot="transform-chain-move-up"]').click();
+    await waitForActiveOrder('global', [javascriptUid, mergeAUid]);
     assert.deepEqual(await activeOrder('global'), [javascriptUid, mergeAUid]);
+    editor = await waitForGlobalEditor();
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([javascriptUid, mergeAUid]);
     const reordered = await waitForGlobalRuntimeLog(
@@ -859,30 +1335,49 @@ describe('main transform chain editor', () => {
       ['info', 'chain ui javascript log'],
       firstApplied.revision,
     );
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
-    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
+    editor = await waitForGlobalEditor();
+    javascriptRow = await editor.$(
+      `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    await javascriptRow.$('[data-slot="transform-chain-move-down"]').click();
+    await waitForActiveOrder('global', [mergeAUid, javascriptUid]);
+    assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
+    editor = await waitForGlobalEditor();
+    await editor.$('[data-slot="transform-chain-save"]').click();
+    await waitForGlobalChain([mergeAUid, javascriptUid]);
+    const movedDown = await waitForGlobalRuntimeLog(
+      javascriptUid,
+      ['info', 'chain ui javascript log'],
+      reordered.revision,
+    );
+    await waitForApplySettled('global');
+
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
+    await currentTrigger.waitForClickable({ timeout: 15_000 });
+    await currentTrigger.click();
+    editor = await waitForGlobalEditor();
     javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
     await javascriptRow.$('[data-slot="transform-chain-remove"]').click();
+    await waitForActiveOrder('global', [mergeAUid]);
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
+    editor = await waitForGlobalEditor();
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
     const cleared = await waitForGlobalRuntimeLogCleared(
       javascriptUid,
-      reordered.revision,
+      movedDown.revision,
     );
-    assert.ok(cleared.revision > reordered.revision);
-    await waitForEditorClosed('global');
+    assert.ok(cleared.revision > movedDown.revision);
+    await waitForApplySettled('global');
 
-    currentTrigger = await $('[data-slot="global-transform-chain"]');
+    currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
     editor = await $(
@@ -962,8 +1457,6 @@ describe('main transform chain editor', () => {
           'Open global transform diagnostics did not return to the empty state after external detachment.',
       },
     );
-    await editor.$('[data-slot="transform-chain-cancel"]').click();
-    await waitForEditorClosed('global');
   });
 
   // Contract: a failing JS transform candidate is rejected without changing
@@ -984,29 +1477,29 @@ describe('main transform chain editor', () => {
     assert.ok(before);
     assert.equal(before.failure, null);
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let editor = await waitForGlobalEditor();
 
-    const failingTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
-    );
-    await failingTransform.click();
+    const addFailingTransform =
+      await waitForGlobalInactiveAdd(failingJavascriptUid);
+    await addFailingTransform.click();
+    await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [
       mergeAUid,
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
-    await waitForGlobalChain([mergeAUid]);
-    await editor.waitForDisplayed({ timeout: 15_000 });
-    assert.deepEqual(await activeOrder('global'), [
-      mergeAUid,
+    const failedDiagnostics = await waitForTransformFailure(
+      null,
       failingJavascriptUid,
-    ]);
+      before.revision,
+    );
+    await waitForGlobalChain([mergeAUid]);
+    editor = await waitForGlobalEditor();
+    await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -1022,10 +1515,6 @@ describe('main transform chain editor', () => {
     assert.equal(await failure.getAttribute('data-script-type'), 'javascript');
     assert.match(await failure.getText(), /chain ui intentional failure/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1040,16 +1529,20 @@ describe('main transform chain editor', () => {
       /chain ui intentional failure/,
     );
 
-    for (const transformUid of [failingJavascriptUid, mergeAUid]) {
+    const repairOrder = [failingJavascriptUid, mergeAUid];
+    for (const [index, transformUid] of repairOrder.entries()) {
       const currentRow = await editor.$(
         `[data-slot="transform-chain-active-item"][data-profile-uid="${transformUid}"]`,
       );
       await currentRow.$('[data-slot="transform-chain-remove"]').click();
+      const remainingOrder = index === 0 ? [mergeAUid] : [];
+      await waitForActiveOrder('global', remainingOrder);
+      editor = await waitForGlobalEditor();
     }
-    await waitForActiveOrder('global', []);
+    assert.deepEqual(await activeOrder('global'), []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([]);
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
     await browser.waitUntil(
       async () => {
@@ -1107,18 +1600,20 @@ describe('main transform chain editor', () => {
     const failingTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
     );
-    await failingTransform.click();
+    await failingTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('profile'), [
       mergeAUid,
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
+    const failedDiagnostics = await waitForTransformFailure(
+      localUid,
+      failingJavascriptUid,
+      before.revision,
+    );
     await waitForScopedChain(localUid, [mergeAUid]);
     await editor.waitForDisplayed({ timeout: 15_000 });
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeAUid,
-      failingJavascriptUid,
-    ]);
+    await waitForActiveOrder('profile', [mergeAUid, failingJavascriptUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -1134,10 +1629,6 @@ describe('main transform chain editor', () => {
     assert.equal(await failure.getAttribute('data-script-type'), 'javascript');
     assert.match(await failure.getText(), /chain ui intentional failure/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1160,7 +1651,7 @@ describe('main transform chain editor', () => {
     await waitForActiveOrder('profile', []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForScopedChain(localUid, []);
-    await waitForEditorClosed('profile');
+    await waitForApplySettled('profile');
 
     await browser.waitUntil(
       async () => {
@@ -1341,9 +1832,6 @@ describe('main transform chain editor', () => {
           'Open scoped transform diagnostics did not clear the failure after script repair.',
       },
     );
-
-    await editor.$('[data-slot="transform-chain-cancel"]').click();
-    await waitForEditorClosed('profile');
   });
 
   // Contract: selecting invalid overlay YAML is rejected without changing the
@@ -1364,22 +1852,25 @@ describe('main transform chain editor', () => {
     assert.ok(before);
     assert.equal(before.failure, null);
 
-    const trigger = await $('[data-slot="global-transform-chain"]');
+    const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let editor = await waitForGlobalEditor();
 
-    const failingTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingMergeUid}"]`,
-    );
-    await failingTransform.click();
+    const addFailingTransform = await waitForGlobalInactiveAdd(failingMergeUid);
+    await addFailingTransform.click();
+    await waitForActiveOrder('global', [failingMergeUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
+    const failedDiagnostics = await waitForTransformFailure(
+      null,
+      failingMergeUid,
+      before.revision,
+    );
     await waitForGlobalChain([]);
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
+    await waitForActiveOrder('global', [failingMergeUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingMergeUid}"]`,
@@ -1402,10 +1893,6 @@ describe('main transform chain editor', () => {
     assert.match(await failure.getText(), /Merge \(YAML\)/);
     assert.match(await failure.getText(), /not a mapping/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1417,15 +1904,22 @@ describe('main transform chain editor', () => {
     assert.equal(failedDiagnostics.failure.script_type, null);
     assert.match(failedDiagnostics.failure.message, /not a mapping/);
 
-    await failingRow.$('[data-slot="transform-chain-remove"]').click();
-    const validTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
+    const currentFailingRow = await editor.$(
+      '[data-slot="transform-chain-active-item"][data-profile-uid="' +
+        failingMergeUid +
+        '"]',
     );
-    await validTransform.click();
+    await currentFailingRow.$('[data-slot="transform-chain-remove"]').click();
+    await waitForActiveOrder('global', []);
+    editor = await waitForGlobalEditor();
+    const addValidTransform = await waitForGlobalInactiveAdd(mergeAUid);
+    await addValidTransform.click();
+    await waitForActiveOrder('global', [mergeAUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
-    await waitForEditorClosed('global');
+    await waitForApplySettled('global');
 
     await browser.waitUntil(
       async () => {
