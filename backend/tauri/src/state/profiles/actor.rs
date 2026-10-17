@@ -321,7 +321,9 @@ pub enum ProfilesActorMessage {
     /// profiles snapshot. Cast-only from the actor-owned periodic task and
     /// handled serially with all other mutations.
     ReconcileMaterializations,
-    StartProducers,
+    StartProducers {
+        reply: RpcReplyPort<Result<(), ProfilesError>>,
+    },
 }
 
 pub struct ProfilesActor;
@@ -2183,7 +2185,10 @@ impl Actor for ProfilesActor {
                     }
                 }
             }
-            ProfilesActorMessage::StartProducers => Self::start_producers(&myself, state).await,
+            ProfilesActorMessage::StartProducers { reply } => {
+                Self::start_producers(&myself, state).await;
+                let _ = reply.send(Ok(()));
+            }
         }
         Ok(())
     }

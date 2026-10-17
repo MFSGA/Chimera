@@ -315,11 +315,9 @@ impl ProfilesClient {
 
     /// Releases scheduled refreshes, external-file watchers and journal
     /// recovery after core startup reconciliation has completed.
-    pub(crate) fn start_producers(&self) -> Result<(), ProfilesError> {
-        self.inner
-            .actor_ref
-            .cast(ProfilesActorMessage::StartProducers)
-            .map_err(|_| ProfilesError::Rpc("profiles actor stopped".into()))
+    pub(crate) async fn start_producers(&self) -> Result<(), ProfilesError> {
+        self.call(|reply| ProfilesActorMessage::StartProducers { reply }, None)
+            .await
     }
 
     /// Fetch-before-commit remote import. No durable placeholder is written until
@@ -1079,7 +1077,7 @@ mod tests {
         );
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         tokio::time::advance(std::time::Duration::from_secs(60 + 1)).await;
         tokio::time::timeout(
             std::time::Duration::from_secs(1),
@@ -1376,7 +1374,7 @@ mod tests {
         client.replace(profiles).await.unwrap();
 
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 0);
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         tokio::time::advance(std::time::Duration::from_secs(120 * 60 + 1)).await;
         tokio::time::timeout(std::time::Duration::from_secs(1), fetched.notified())
             .await
@@ -1415,7 +1413,7 @@ mod tests {
             .await
             .unwrap();
 
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         tokio::time::advance(std::time::Duration::from_secs(240 * 60)).await;
         for _ in 0..50 {
             tokio::task::yield_now().await;
@@ -1474,7 +1472,7 @@ mod tests {
         .await
         .unwrap();
 
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         tokio::time::advance(std::time::Duration::from_secs(240 * 60)).await;
         for _ in 0..50 {
             tokio::task::yield_now().await;
@@ -1500,7 +1498,7 @@ mod tests {
             .replace_definition(ProfileId("r1".into()), file_config_item("r1").definition)
             .await
             .unwrap();
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         tokio::time::advance(std::time::Duration::from_secs(240 * 60)).await;
         for _ in 0..50 {
             tokio::task::yield_now().await;
@@ -1575,7 +1573,7 @@ mod tests {
         let barrier = client.refresh(ProfileId("missing".into()), None).await;
         assert!(matches!(barrier, Err(ProfilesError::ProfileNotFound(_))));
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 0);
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while fetch_count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
             assert!(
@@ -1585,7 +1583,7 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert_eq!(fetch_count.load(std::sync::atomic::Ordering::SeqCst), 1);
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
         for _ in 0..50 {
             tokio::task::yield_now().await;
         }
@@ -1653,7 +1651,7 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&mirrored).unwrap(), before);
         }
 
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
 
         // Production path: OS watcher casts ExternalFileChanged after the
         // external binding target changes. Poll with yields (no sleep).
@@ -1704,7 +1702,7 @@ mod tests {
             external_path(&target_path),
         ));
         client.replace(profiles).await.unwrap();
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
 
         std::fs::write(&target_path, "proxies: []\n# touched\n").unwrap();
         wait_for_updated_at(&client, "ext1").await;
@@ -1742,7 +1740,7 @@ mod tests {
         ));
         profiles.set_current(Some(ProfileId("ext1".into())));
         client.replace(profiles).await.unwrap();
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
 
         std::fs::write(&target_path, "proxies: []\n# touched\n").unwrap();
         wait_for_updated_at(&client, "ext1").await;
@@ -1781,7 +1779,7 @@ mod tests {
             external_path(&target_path),
         ));
         client.replace(profiles).await.unwrap();
-        client.start_producers().unwrap();
+        client.start_producers().await.unwrap();
 
         tokio::fs::write(&target_path, "mode: rule\nproxies: []\n")
             .await

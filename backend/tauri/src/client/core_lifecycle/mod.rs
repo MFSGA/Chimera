@@ -1514,13 +1514,10 @@ impl ChimeraClient {
                 )
             })?
             .0;
-        let producers = self
-            .inner
-            .typed_profiles
-            .as_ref()
-            .map(|profiles| profiles.start_producers())
-            .transpose()
-            .map_err(anyhow::Error::new);
+        let producers = match self.inner.typed_profiles.as_ref() {
+            Some(profiles) => profiles.start_producers().await.map_err(anyhow::Error::new),
+            None => Ok(()),
+        };
 
         match (startup, producers) {
             (Err(startup), Err(producers)) => {
