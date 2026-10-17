@@ -977,9 +977,12 @@ describe('remote profile auto-update', () => {
       );
       await browser.switchToWindow('main');
       await focusWindow('main');
+      // The main WebView may be idle while the legacy window runs this sync;
+      // its status query can take one idle polling interval to observe it.
       await waitForSuccessfulSyncHistory(uid, {
         minimumSuccessfulRunCount: successfulRunCountBeforeLegacySync + 1,
         admissionSequence: legacySyncSequence,
+        timeout: 75_000,
       });
     });
   });
