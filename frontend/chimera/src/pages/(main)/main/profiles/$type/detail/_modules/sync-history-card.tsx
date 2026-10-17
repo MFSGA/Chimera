@@ -245,7 +245,7 @@ function Notice({
       )}
     >
       <Icon className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-      <div className="wrap-break-word min-w-0">{children}</div>
+      <div className={cn('min-w-0', 'wrap-break-word')}>{children}</div>
     </div>
   );
 }
@@ -330,14 +330,14 @@ function RunEntry({
           </time>
         </span>
 
-        <Chip icon={trigger.icon} className="@md:inline-flex hidden">
+        <Chip icon={trigger.icon} className={cn('hidden', '@md:inline-flex')}>
           {trigger.label}
         </Chip>
 
         <span
           title={trigger.label}
           data-slot="profile-sync-run-trigger"
-          className="text-on-surface-variant @md:hidden shrink-0"
+          className={cn('text-on-surface-variant', 'shrink-0', '@md:hidden')}
         >
           <trigger.icon className="size-5" />
           <span className="sr-only">{trigger.label}</span>
@@ -523,14 +523,14 @@ export function SyncHistoryCard({ uid }: { uid: string }) {
                               >
                                 <time
                                   dateTime={entry.time}
-                                  className="text-on-surface-variant pt-1 font-mono text-[11px] tabular-nums leading-none"
+                                  className={cn('text-on-surface-variant', 'pt-1', 'font-mono', 'text-[11px]', 'leading-none', 'tabular-nums')}
                                 >
                                   {dayjs(entry.time).format('HH:mm:ss')}
                                 </time>
 
                                 <LogLevelBadge>{entry.level}</LogLevelBadge>
 
-                                <span className="wrap-anywhere min-w-0 whitespace-pre-wrap font-mono text-xs leading-relaxed">
+                                <span className={cn('min-w-0', 'wrap-anywhere', 'whitespace-pre-wrap', 'font-mono', 'text-xs', 'leading-relaxed')}>
                                   {entry.fields.message ?? entry.fields.stage}
                                 </span>
                               </li>
