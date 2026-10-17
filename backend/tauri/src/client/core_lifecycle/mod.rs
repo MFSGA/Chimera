@@ -35,6 +35,8 @@ const COMPLETED_LIMIT: usize = 32;
 
 type OperationId = u64;
 
+struct CompletedLifecycleOperation(anyhow::Result<()>);
+
 #[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
 pub(crate) struct CoreLifecycleStatus {
     pub(crate) active: Option<OperationId>,
@@ -185,7 +187,6 @@ enum Message {
     #[cfg(not(test))]
     RefreshServiceStatus,
     RecoverCore,
-    StartupReconcile,
     RuntimeDirty,
     DirtyTick,
     DeferredRetry {
@@ -874,17 +875,6 @@ impl Actor for ApplicationWorkflowActor {
                     tracing::debug!(%error, "failed to refresh cached service status");
                 }
             }
-            Message::StartupReconcile => {
-                if state.uncertain || state.shutting_down {
-                    tracing::warn!(
-                        uncertain = state.uncertain,
-                        shutting_down = state.shutting_down,
-                        "ignoring startup reconcile because lifecycle is unavailable"
-                    );
-                } else {
-                    state.push_background(Command::Reconcile);
-                }
-            }
             Message::RecoverCore => {
                 if state.uncertain || state.shutting_down {
                     tracing::warn!(
@@ -1257,6 +1247,52 @@ impl CoreLifecycleClient {
         }
     }
 
+    async fn startup_reconcile(&self) -> anyhow::Result<CompletedLifecycleOperation> {
+        self.startup_reconcile_with_timeout(None).await
+    }
+
+    async fn startup_reconcile_with_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<CompletedLifecycleOperation> {
+        match self.0.as_ref() {
+            CoreLifecycleClientInner::Actor {
+                actor_ref, next_id, ..
+            } => {
+                let id = next_id.fetch_add(1, Ordering::Relaxed);
+                match actor_ref
+                    .call(
+                        |reply| {
+                            Message::Request(Request {
+                                command: Command::Reconcile,
+                                response: Response {
+                                    id,
+                                    reply: Some(reply),
+                                },
+                                deferred_retry: None,
+                            })
+                        },
+                        timeout,
+                    )
+                    .await
+                {
+                    Ok(CallResult::Success(result)) => Ok(CompletedLifecycleOperation(result)),
+                    Ok(CallResult::Timeout) => anyhow::bail!(
+                        "startup core lifecycle operation {id} timed out; it may still be queued or running"
+                    ),
+                    Ok(CallResult::SenderError) => anyhow::bail!(
+                        "startup core lifecycle actor reply dropped for operation {id}; outcome is unknown"
+                    ),
+                    Err(error) => Err(error.into()),
+                }
+            }
+            #[cfg(test)]
+            CoreLifecycleClientInner::Direct { workflow, .. } => Ok(CompletedLifecycleOperation(
+                workflow.lock().await.execute(Command::Reconcile).await,
+            )),
+        }
+    }
+
     pub(crate) fn status(&self) -> CoreLifecycleStatus {
         match self.0.as_ref() {
             CoreLifecycleClientInner::Actor { status, .. } => status.lock().clone(),
@@ -1306,18 +1342,6 @@ impl CoreLifecycleClient {
         };
         if actor_ref.cast(Message::Request(request)).is_err() {
             tracing::warn!("failed to enqueue service endpoint-down recovery");
-        }
-    }
-
-    pub(super) fn request_startup_reconcile(&self) -> anyhow::Result<()> {
-        match self.0.as_ref() {
-            CoreLifecycleClientInner::Actor { actor_ref, .. } => actor_ref
-                .cast(Message::StartupReconcile)
-                .map_err(|error| anyhow::anyhow!("failed to enqueue startup reconcile: {error}")),
-            #[cfg(test)]
-            CoreLifecycleClientInner::Direct { .. } => {
-                anyhow::bail!("startup reconcile requires the lifecycle actor")
-            }
         }
     }
 
@@ -1476,8 +1500,37 @@ impl CoreLifecycleClient {
 }
 
 impl ChimeraClient {
-    pub(crate) fn init_core(&self) -> anyhow::Result<()> {
-        self.inner.core_lifecycle.request_startup_reconcile()
+    pub(crate) async fn init_core(&self) -> anyhow::Result<()> {
+        // The producer gate is released only after a terminal lifecycle reply.
+        // An ambiguous transport error must leave it held until startup is retried.
+        let startup = self
+            .inner
+            .core_lifecycle
+            .startup_reconcile()
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "startup reconciliation did not return a terminal reply; Profile background producers remain held: {error:#}"
+                )
+            })?
+            .0;
+        let producers = self
+            .inner
+            .typed_profiles
+            .as_ref()
+            .map(|profiles| profiles.start_producers())
+            .transpose()
+            .map_err(anyhow::Error::new);
+
+        match (startup, producers) {
+            (Err(startup), Err(producers)) => {
+                tracing::warn!(%producers, "profile producers could not be released after startup failure");
+                Err(startup)
+            }
+            (Err(startup), _) => Err(startup),
+            (_, Err(producers)) => Err(producers),
+            (Ok(()), Ok(_)) => Ok(()),
+        }
     }
 
     pub(crate) async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
@@ -2443,7 +2496,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_reconcile_enters_lifecycle_mailbox() {
+    async fn startup_reconcile_waits_for_lifecycle_completion() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let client = CoreLifecycleClient::spawn(
             Arc::new(RecordingCore {
@@ -2460,7 +2513,50 @@ mod tests {
         .await
         .unwrap();
 
-        client.request_startup_reconcile().unwrap();
+        let completed = client
+            .startup_reconcile()
+            .await
+            .expect("startup reconcile should complete through the lifecycle actor");
+        completed
+            .0
+            .expect("startup reconcile should return its terminal operation result");
+        assert!(events.lock().unwrap().contains(&"rebuild"));
+    }
+
+    #[tokio::test]
+    async fn timed_out_startup_reconcile_has_no_terminal_completion() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let stop_started = Arc::new(Notify::new());
+        let release_stop = Arc::new(Notify::new());
+        let client = CoreLifecycleClient::spawn(
+            Arc::new(RecordingCore {
+                events: events.clone(),
+                stop_started: stop_started.clone(),
+                release_stop: release_stop.clone(),
+                recovery_notify: Arc::new(Notify::new()),
+                run_type: RunType::Normal,
+            }),
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+
+        let stop_client = client.clone();
+        let stop = tokio::spawn(async move { stop_client.stop_core().await });
+        tokio::time::timeout(Duration::from_secs(1), stop_started.notified())
+            .await
+            .expect("stop should occupy the lifecycle actor");
+
+        let startup = client
+            .startup_reconcile_with_timeout(Some(Duration::from_millis(1)))
+            .await;
+        assert!(startup.is_err());
+        assert!(!events.lock().unwrap().contains(&"rebuild"));
+
+        release_stop.notify_one();
+        stop.await.unwrap().unwrap();
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
                 if events.lock().unwrap().contains(&"rebuild") {
@@ -2470,7 +2566,7 @@ mod tests {
             }
         })
         .await
-        .expect("startup reconcile should be admitted by the lifecycle actor");
+        .expect("timed-out startup reconcile remains queued and later completes");
     }
 
     #[tokio::test]

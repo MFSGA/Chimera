@@ -148,11 +148,20 @@ pub struct ProfilesActorState {
     next_refresh_token: u64,
     pending_imports: HashMap<ImportOperationToken, PendingImport>,
     next_import_token: u64,
+    gate: ProducerGate,
     jobs: ProfileJobs,
     jobs_revision: u64,
     external_watchers: ExternalWatchers,
     /// Periodic journal recovery. Background task only casts; actor owns work.
     reconcile_task: Option<JoinHandle<()>>,
+}
+
+/// Background profile producers stay held until core startup reconciliation
+/// finishes, then stop admitting work when the actor shuts down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProducerGate {
+    Held,
+    Running,
 }
 
 struct PendingRefresh {
@@ -312,6 +321,7 @@ pub enum ProfilesActorMessage {
     /// profiles snapshot. Cast-only from the actor-owned periodic task and
     /// handled serially with all other mutations.
     ReconcileMaterializations,
+    StartProducers,
 }
 
 pub struct ProfilesActor;
@@ -453,12 +463,50 @@ impl ProfilesActor {
         state.jobs_revision = state.jobs_revision.saturating_add(1);
         if let Err(error) = state
             .jobs
-            .reconcile(snapshot, myself, state.jobs_revision, true)
+            .reconcile(
+                snapshot,
+                myself,
+                state.jobs_revision,
+                state.gate == ProducerGate::Running,
+            )
             .await
         {
             tracing::error!(%error, "failed to reconcile profile sync jobs");
         }
-        state.external_watchers.reconcile(snapshot, myself);
+        if state.gate == ProducerGate::Running {
+            state.external_watchers.reconcile(snapshot, myself);
+        }
+    }
+
+    async fn start_producers(
+        myself: &ActorRef<ProfilesActorMessage>,
+        state: &mut ProfilesActorState,
+    ) {
+        if state.gate != ProducerGate::Held {
+            return;
+        }
+
+        state.gate = ProducerGate::Running;
+        let snapshot = Self::current_state(state);
+        Self::reconcile_committed(myself, state, &snapshot).await;
+        state.jobs.catch_up(&snapshot).await;
+
+        let actor = myself.clone();
+        state.reconcile_task = Some(tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(MATERIALIZATION_RECONCILE_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Startup already reconciled in pre_start; skip the immediate first tick.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                if actor
+                    .cast(ProfilesActorMessage::ReconcileMaterializations)
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
     }
 
     async fn run_state_write<F>(
@@ -1107,7 +1155,7 @@ impl Actor for ProfilesActor {
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         args: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
         // Startup recovery must finish before jobs/watchers/mutations are
@@ -1128,6 +1176,15 @@ impl Actor for ProfilesActor {
             })?;
         Self::log_reconcile_report(&report);
 
+        args.jobs
+            .reconcile(
+                &args.manager.snapshot_handle().load().state,
+                &myself,
+                1,
+                false,
+            )
+            .await?;
+
         let index = ProfileDependencyIndex::build(&args.manager.snapshot_handle().load().state);
         Ok(ProfilesActorState {
             mutations: args.mutations,
@@ -1140,39 +1197,12 @@ impl Actor for ProfilesActor {
             next_refresh_token: 1,
             pending_imports: HashMap::new(),
             next_import_token: 1,
+            gate: ProducerGate::Held,
             jobs: args.jobs,
-            jobs_revision: 0,
+            jobs_revision: 1,
             external_watchers: ExternalWatchers::default(),
             reconcile_task: None,
         })
-    }
-
-    async fn post_start(
-        &self,
-        myself: ActorRef<Self::Msg>,
-        state: &mut Self::State,
-    ) -> Result<(), ActorProcessingErr> {
-        let snapshot = Self::current_state(state);
-        Self::reconcile_committed(&myself, state, &snapshot).await;
-        state.jobs.catch_up(&snapshot).await;
-
-        let actor = myself.clone();
-        state.reconcile_task = Some(tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(MATERIALIZATION_RECONCILE_INTERVAL);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // Startup already reconciled in pre_start; skip the immediate first tick.
-            ticker.tick().await;
-            loop {
-                ticker.tick().await;
-                if actor
-                    .cast(ProfilesActorMessage::ReconcileMaterializations)
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        }));
-        Ok(())
     }
 
     async fn handle(
@@ -1474,10 +1504,16 @@ impl Actor for ProfilesActor {
             ProfilesActorMessage::RefreshRemote {
                 uid,
                 patch,
-                origin: _origin,
+                origin,
                 context,
                 reply,
             } => {
+                if matches!(
+                    (origin, state.gate),
+                    (RefreshOrigin::Scheduled, ProducerGate::Held)
+                ) {
+                    return Ok(());
+                }
                 if state.pending_refresh.contains_key(&uid) {
                     if let Some(reply) = reply {
                         let _ = reply.send(Err(ProfilesError::RefreshFailed {
@@ -1918,6 +1954,9 @@ impl Actor for ProfilesActor {
                 let _ = pending.reply.send(result);
             }
             ProfilesActorMessage::ExternalFileChanged { uid } => {
+                if state.gate != ProducerGate::Running {
+                    return Ok(());
+                }
                 let snapshot = Self::current_state(state);
                 let Some(item) = snapshot.items.get(&uid) else {
                     return Ok(());
@@ -2131,6 +2170,9 @@ impl Actor for ProfilesActor {
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::ReconcileMaterializations => {
+                if state.gate != ProducerGate::Running {
+                    return Ok(());
+                }
                 match Self::reconcile_materializations(state).await {
                     Ok(report) => Self::log_reconcile_report(&report),
                     Err(error) => {
@@ -2141,6 +2183,7 @@ impl Actor for ProfilesActor {
                     }
                 }
             }
+            ProfilesActorMessage::StartProducers => Self::start_producers(&myself, state).await,
         }
         Ok(())
     }
