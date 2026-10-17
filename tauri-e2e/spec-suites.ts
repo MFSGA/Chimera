@@ -24,7 +24,6 @@ export const baseE2eSuites = {
     './specs/profiles-detail-main.e2e.ts',
     './specs/profiles-layout.e2e.ts',
     './specs/profiles-main-layout.e2e.ts',
-    './specs/subscription-onboarding-legacy.e2e.ts',
   ],
   settings: [
     './specs/application-typed-state.e2e.ts',
@@ -70,6 +69,7 @@ export const baseE2eSuites = {
 
 export const isolatedE2eSuites = {
   'profile-auto-update-main': ['./specs/profile-auto-update.e2e.ts'],
+  'subscription-onboarding': ['./specs/subscription-onboarding-legacy.e2e.ts'],
 } as const;
 
 const combine = (...groups: readonly (readonly string[])[]) => groups.flat();

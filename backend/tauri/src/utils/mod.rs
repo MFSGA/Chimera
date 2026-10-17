@@ -6,6 +6,7 @@ pub mod collect;
 pub mod config;
 /// 9
 pub mod dirs;
+pub mod exit;
 pub mod help;
 pub mod hwid;
 /// 5
