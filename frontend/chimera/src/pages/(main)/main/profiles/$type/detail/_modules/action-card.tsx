@@ -39,6 +39,22 @@ const ActionButton = ({
   />
 );
 
+function scrollViewportImmediately(viewport: HTMLElement, top: number) {
+  const previous = viewport.style.getPropertyValue('scroll-behavior');
+  const previousPriority =
+    viewport.style.getPropertyPriority('scroll-behavior');
+  viewport.style.setProperty('scroll-behavior', 'auto', 'important');
+  try {
+    viewport.scrollTop = top;
+  } finally {
+    if (previous) {
+      viewport.style.setProperty('scroll-behavior', previous, previousPriority);
+    } else {
+      viewport.style.removeProperty('scroll-behavior');
+    }
+  }
+}
+
 function scrollToProfileTransformChainEditor(profileUid: string) {
   const editor = Array.from(
     document.querySelectorAll<HTMLElement>(
@@ -66,11 +82,16 @@ function scrollToProfileTransformChainEditor(profileUid: string) {
     viewportRect.top -
     viewport.clientTop -
     centerOffset;
+  const target = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
 
-  viewport.scrollTo({
-    top: Math.min(maxScrollTop, Math.max(0, targetScrollTop)),
-    behavior: 'instant',
-  });
+  try {
+    viewport.scrollTo({ top: target, behavior: 'instant' });
+  } catch {
+    // Fall back below for WebViews that reject the instant scroll behavior.
+  }
+  if (Math.abs(viewport.scrollTop - target) > 1) {
+    scrollViewportImmediately(viewport, target);
+  }
 }
 
 export default function ActionCard({
