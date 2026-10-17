@@ -2,6 +2,7 @@ import { commands } from './bindings';
 
 export * from './system-dns';
 export * from './use-profile';
+export * from './use-profile-sync';
 export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 

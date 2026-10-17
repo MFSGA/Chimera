@@ -1,6 +1,7 @@
 import {
   getRemoteSource,
   useProfile,
+  useProfileSyncStatus,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
@@ -17,9 +18,15 @@ import {
   CardHeader,
 } from '@/components/ui/card';
 import { LinearProgress } from '@/components/ui/linear-progress';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
+import { formatDate } from '@/utils/date';
 import { message } from '@/utils/notification';
 import UpdateOptionEditor from './update-option-editor';
 
@@ -31,6 +38,7 @@ export default function SubscriptionCard({
   profile: ProfileQueryResultItem;
 }) {
   const { update } = useProfile();
+  const syncStatus = useProfileSyncStatus(profile.uid);
   const remote = getRemoteSource(profile);
   const usage = useMemo(() => {
     if (!remote) return { progress: 0, total: 0, used: 0 };
@@ -63,10 +71,6 @@ export default function SubscriptionCard({
 
   const updatedAt = remote.updated_at || null;
   const expire = remote.subscription?.expire || null;
-  const nextUpdate =
-    updatedAt && remote.option.update_interval_minutes
-      ? updatedAt + remote.option.update_interval_minutes * 60
-      : null;
 
   return (
     <Card className="col-span-2">
@@ -84,17 +88,22 @@ export default function SubscriptionCard({
         <LinearProgress value={usage.progress} />
 
         <div className="flex items-center justify-between gap-2 text-sm font-bold">
-          <span
-            title={
-              nextUpdate
-                ? dayjs(nextUpdate * 1000).format('YYYY-MM-DD HH:mm:ss')
-                : undefined
-            }
-          >
-            {m.profile_subscription_updated_at({
-              updated: updatedAt ? dayjs(updatedAt * 1000).fromNow() : '-',
-            })}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span>
+                {m.profile_subscription_updated_at({
+                  updated: updatedAt ? dayjs(updatedAt * 1000).fromNow() : '-',
+                })}
+              </span>
+            </TooltipTrigger>
+            {syncStatus.data?.next_run_at ? (
+              <TooltipContent side="bottom">
+                {m.profile_subscription_next_update_at({
+                  next: formatDate(syncStatus.data.next_run_at),
+                })}
+              </TooltipContent>
+            ) : null}
+          </Tooltip>
           {expire ? (
             <span>
               {m.profile_subscription_expires_in({

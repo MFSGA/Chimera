@@ -153,6 +153,42 @@ pub async fn get_profiles(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_profile_sync_status(
+    client: State<'_, ChimeraClient>,
+    uid: ProfileUid,
+) -> Result<crate::client::jobs::ProfileSyncStatus> {
+    Ok(client
+        .profile_sync_status(chimera_config::profile::ProfileId(uid))
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_profile_sync_runs(
+    client: State<'_, ChimeraClient>,
+    uid: ProfileUid,
+    after: Option<chimera_jobs::dto::RunCursorDto>,
+) -> Result<chimera_jobs::dto::RunPageDto> {
+    Ok(client
+        .profile_sync_runs(chimera_config::profile::ProfileId(uid), after)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_profile_sync_logs(
+    client: State<'_, ChimeraClient>,
+    uid: ProfileUid,
+    run: String,
+    after: Option<String>,
+) -> Result<chimera_jobs::dto::LogPageDto> {
+    Ok(client
+        .profile_sync_logs(chimera_config::profile::ProfileId(uid), run, after)
+        .await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_runtime_transform_diagnostics(
     client: State<'_, ChimeraClient>,
 ) -> Result<Option<RuntimeTransformDiagnostics>> {
@@ -594,8 +630,10 @@ pub fn open_that(path: String) -> Result {
 
 #[tauri::command]
 #[specta::specta]
-pub fn cleanup_processes(app_handle: AppHandle) -> Result {
-    crate::utils::help::cleanup_processes(&app_handle)?;
+pub async fn cleanup_processes(app_handle: AppHandle) -> Result {
+    // The updater invokes this after downloading and immediately before
+    // installation, which may terminate the process without a Tauri exit event.
+    crate::utils::exit::shutdown_before_exit(&app_handle).await?;
     Ok(())
 }
 
