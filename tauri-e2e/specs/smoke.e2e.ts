@@ -38,8 +38,16 @@ async function assertConnectSourcesAreAvailable(windowName: string) {
       `${windowName} data URL request was blocked: ${result.data.error}`,
     );
   }
-  assert.equal(result.data.type, 'opaque');
-  assert.equal(result.data.status, 0);
+  if (result.data.type === 'opaque') {
+    assert.equal(result.data.ok, false);
+    assert.equal(result.data.status, 0);
+    assert.equal(result.data.body, '');
+  } else {
+    assert.equal(result.data.type, 'basic');
+    assert.equal(result.data.ok, true);
+    assert.equal(result.data.status, 200);
+    assert.equal(result.data.body, 'chimera-csp-probe');
+  }
 }
 
 describe('Chimera desktop smoke test', () => {
@@ -115,7 +123,8 @@ describe('Chimera desktop smoke test', () => {
   });
 
   // Contract: from each supported desktop window, same-origin fetch is readable
-  // and a data: no-cors fetch completes as an opaque response. The prior policy
+  // and a data: no-cors fetch resolves, whether this WebView exposes its
+  // readable payload or an opaque response. The prior policy
   // blocked data: requests; bundled non-macOS WebViews also need 'self'.
   it('allows same-origin and data URL fetches in both desktop windows', async () => {
     await browser.switchToWindow('legacy');
