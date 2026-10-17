@@ -67,10 +67,7 @@ function scrollToProfileTransformChainEditor(profileUid: string) {
     viewport.clientTop -
     centerOffset;
 
-  viewport.scrollTo({
-    top: Math.min(maxScrollTop, Math.max(0, targetScrollTop)),
-    behavior: 'smooth',
-  });
+  viewport.scrollTop = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
 }
 
 export default function ActionCard({

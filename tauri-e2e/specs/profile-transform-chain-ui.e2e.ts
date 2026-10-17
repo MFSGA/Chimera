@@ -588,12 +588,35 @@ describe('main transform chain editor', () => {
 
     try {
       handles = await browser.getWindowHandles();
-      if (handles.includes('main')) {
-        await browser.switchToWindow('main');
-        await browser.setWindowSize(1240, 720);
-      }
     } catch (error) {
       errors.push(error);
+    }
+    if (handles.includes('main')) {
+      try {
+        await browser.switchToWindow('main');
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await browser.setWindowSize(1240, 720);
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        await browser.execute((uid) => {
+          const detail = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-detail"]',
+            ),
+          ).find((candidate) => candidate.dataset.profileUid === uid);
+          const viewport = detail?.closest<HTMLElement>(
+            '[data-slot="scroll-area-viewport"]',
+          );
+          if (viewport) viewport.scrollTop = 0;
+        }, localUid ?? '');
+      } catch (error) {
+        errors.push(error);
+      }
     }
     if (errors.length > 0) {
       throw new AggregateError(
