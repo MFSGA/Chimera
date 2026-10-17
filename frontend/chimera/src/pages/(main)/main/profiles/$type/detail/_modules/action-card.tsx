@@ -56,42 +56,41 @@ function scrollViewportImmediately(viewport: HTMLElement, top: number) {
 }
 
 function scrollToProfileTransformChainEditor(profileUid: string) {
-  const editor = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
-    ),
-  ).find((candidate) => candidate.dataset.profileUid === profileUid);
-  const viewport = editor?.closest<HTMLElement>(
-    '[data-slot="scroll-area-viewport"]',
-  );
-  if (!editor || !viewport) return;
+  // Measure on the next frame so the target uses the post-click layout.
+  requestAnimationFrame(() => {
+    const routeUid = window.location.pathname.split('/').filter(Boolean).at(-1);
+    if (!routeUid || decodeURIComponent(routeUid) !== profileUid) return;
 
-  const editorRect = editor.getBoundingClientRect();
-  const viewportRect = viewport.getBoundingClientRect();
-  const centerOffset = Math.max(
-    0,
-    (viewport.clientHeight - editorRect.height) / 2,
-  );
-  const maxScrollTop = Math.max(
-    0,
-    viewport.scrollHeight - viewport.clientHeight,
-  );
-  const targetScrollTop =
-    viewport.scrollTop +
-    editorRect.top -
-    viewportRect.top -
-    viewport.clientTop -
-    centerOffset;
-  const target = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
+    const editor = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[data-slot="transform-chain-editor"][data-chain-scope="profile"]',
+      ),
+    ).find((candidate) => candidate.dataset.profileUid === profileUid);
+    const viewport = editor?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]',
+    );
+    if (!editor || !viewport) return;
 
-  try {
-    viewport.scrollTo({ top: target, behavior: 'instant' });
-  } catch {
-    // Fall back below for WebViews that reject the instant scroll behavior.
-  }
-  if (Math.abs(viewport.scrollTop - target) > 1) {
+    const editorRect = editor.getBoundingClientRect();
+    const viewportRect = viewport.getBoundingClientRect();
+    const centerOffset = Math.max(
+      0,
+      (viewport.clientHeight - editorRect.height) / 2,
+    );
+    const maxScrollTop = Math.max(
+      0,
+      viewport.scrollHeight - viewport.clientHeight,
+    );
+    const targetScrollTop =
+      viewport.scrollTop +
+      editorRect.top -
+      viewportRect.top -
+      viewport.clientTop -
+      centerOffset;
+    const target = Math.min(maxScrollTop, Math.max(0, targetScrollTop));
+
     scrollViewportImmediately(viewport, target);
-  }
+  });
 }
 
 export default function ActionCard({
