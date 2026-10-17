@@ -122,30 +122,88 @@ describe('main traffic analysis', () => {
       'Collapsing the traffic sidebar did not restore its label.',
     );
 
+    const allScopeSelector =
+      '[data-slot="traffic-scope-item"][data-scope="all"]';
+    const activeScopeSelector =
+      '[data-slot="traffic-scope-item"][data-scope="active"]';
     const closedScopeSelector =
       '[data-slot="traffic-scope-item"][data-scope="closed"]';
-    await $(closedScopeSelector).click();
+
     await browser.waitUntil(
       async () =>
         browser.execute(
-          () => new URLSearchParams(location.search).get('scope') === 'closed',
+          (selector) => document.querySelector(selector) !== null,
+          allScopeSelector,
         ),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'The traffic scope controls did not mount.',
+      },
+    );
+
+    const readTrafficScopeState = () =>
+      browser.execute(
+        (allSelector, activeSelector, closedSelector) => {
+          const search = new URLSearchParams(location.search);
+          const isChecked = (selector: string) =>
+            document.querySelector(selector)?.getAttribute('aria-checked') ===
+            'true';
+
+          return {
+            scope: search.get('scope') ?? 'all',
+            allChecked: isChecked(allSelector),
+            activeChecked: isChecked(activeSelector),
+            closedChecked: isChecked(closedSelector),
+          };
+        },
+        allScopeSelector,
+        activeScopeSelector,
+        closedScopeSelector,
+      );
+
+    await browser.waitUntil(
+      async () => {
+        const state = await readTrafficScopeState();
+        return (
+          (state.scope === 'all' && state.allChecked) ||
+          (state.scope === 'active' && state.activeChecked) ||
+          (state.scope === 'closed' && state.closedChecked)
+        );
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: 'The initial traffic scope did not settle.',
+      },
+    );
+
+    if (!(await readTrafficScopeState()).allChecked) {
+      await $(allScopeSelector).click();
+      await browser.waitUntil(
+        async () => {
+          const state = await readTrafficScopeState();
+          return state.scope === 'all' && state.allChecked;
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: 'Selecting All did not establish the traffic scope.',
+        },
+      );
+    }
+
+    const beforeClosedSelection = await readTrafficScopeState();
+    assert.equal(beforeClosedSelection.scope, 'all');
+    assert.equal(beforeClosedSelection.allChecked, true);
+    assert.equal(beforeClosedSelection.closedChecked, false);
+
+    await $(closedScopeSelector).click();
+    await browser.waitUntil(
+      async () => {
+        const state = await readTrafficScopeState();
+        return state.scope === 'closed' && state.closedChecked;
+      },
       {
         timeout: 10_000,
         timeoutMsg: 'Selecting Closed did not update the traffic URL.',
-      },
-    );
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          (selector) =>
-            document.querySelector(selector)?.getAttribute('aria-checked') ===
-            'true',
-          closedScopeSelector,
-        ),
-      {
-        timeout: 10_000,
-        timeoutMsg: 'The Closed scope control did not settle after navigation.',
       },
     );
 
