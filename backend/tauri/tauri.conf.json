@@ -38,7 +38,9 @@
       "resources"
     ],
     "externalBin": [
+      "sidecar/clash",
       "sidecar/mihomo",
+      "sidecar/mihomo-alpha",
       "sidecar/clash-rs",
       "sidecar/chimera-client",
       "sidecar/chimera-client-alpha",
