@@ -6,6 +6,9 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+const TEST_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(35);
+const TEST_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 #[derive(Default)]
 pub struct Faults {
     pub fail_admit: AtomicBool,
@@ -112,26 +115,31 @@ pub fn capture() -> LogCapture {
     LogCapture::new(LogPolicy::default())
 }
 pub async fn settled(client: &JobsClient) {
-    // Actor RPC acknowledgement yields instead of sleeping; bounded test guard.
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if client.inspect().await.unwrap().active.is_empty() {
-                break;
-            }
-            tokio::task::yield_now().await;
+    // Journal recovery backs off for up to 30 seconds; leave that lifecycle
+    // budget available to the test instead of timing out while recovery runs.
+    // Use a wall-clock deadline because some callers pause Tokio time.
+    let deadline = std::time::Instant::now() + TEST_WAIT_TIMEOUT;
+    loop {
+        if client.inspect().await.unwrap().active.is_empty() {
+            break;
         }
-    })
-    .await
-    .unwrap();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "job service did not settle within {TEST_WAIT_TIMEOUT:?}"
+        );
+        tokio::task::yield_now().await;
+    }
 }
 
 pub async fn drain(service: &mut JobsService) {
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    // A shutdown call can consume the service's full 30-second shutdown
+    // budget. Keep a small margin for the final close notification.
+    tokio::time::timeout(TEST_WAIT_TIMEOUT, async {
         loop {
             if service.shutdown().await.unwrap().closed {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(TEST_POLL_INTERVAL).await;
         }
     })
     .await
