@@ -55,11 +55,25 @@ function scrollViewportImmediately(viewport: HTMLElement, top: number) {
   }
 }
 
-function scrollToProfileTransformChainEditor(profileUid: string) {
+function scrollToProfileTransformChainEditor(type: string, profileUid: string) {
   // Measure on the next frame so the target uses the post-click layout.
   requestAnimationFrame(() => {
-    const routeUid = window.location.pathname.split('/').filter(Boolean).at(-1);
-    if (!routeUid || decodeURIComponent(routeUid) !== profileUid) return;
+    const routeSegments = window.location.pathname.split('/').filter(Boolean);
+    if (
+      routeSegments.at(-5) !== 'main' ||
+      routeSegments.at(-4) !== 'profiles' ||
+      routeSegments.at(-3) !== type ||
+      routeSegments.at(-2) !== 'detail'
+    ) {
+      return;
+    }
+    const encodedRouteUid = routeSegments.at(-1);
+    if (!encodedRouteUid) return;
+    try {
+      if (decodeURIComponent(encodedRouteUid) !== profileUid) return;
+    } catch {
+      return;
+    }
 
     const editor = Array.from(
       document.querySelectorAll<HTMLElement>(
@@ -157,7 +171,7 @@ export default function ActionCard({
           disabled={isPending}
           data-slot="profile-transform-chain"
           data-profile-uid={profile.uid}
-          onClick={() => scrollToProfileTransformChainEditor(profile.uid)}
+          onClick={() => scrollToProfileTransformChainEditor(type, profile.uid)}
         >
           <AccountTreeRounded className="size-4 shrink-0" />
           <span className="truncate">{m.profile_menu_proxy_chains()}</span>
