@@ -164,8 +164,9 @@ export function useKvStorage<T>(
       ) {
         return;
       }
-      if (!pendingWritesRef.current.isActiveKey(key) || eventKey !== key)
+      if (!pendingWritesRef.current.isActiveKey(key) || eventKey !== key) {
         return;
+      }
 
       if (event.payload.value === null) {
         revisionRef.current.set(key, (revisionRef.current.get(key) ?? 0) + 1);
