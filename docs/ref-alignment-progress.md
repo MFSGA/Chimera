@@ -2,11 +2,12 @@
 
 ## 当前参考基线同步（本批）
 
-- 上游：Clash Nyanpasu `main`，已 fetch 并核对到 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`，验证时间为 2026-10-17 UTC。
-- Chimera `master` 当前固定 gitlink：`31019da14006b384b3272c72b4088179a9e72c47`；本批更新 `ref` 到上述上游提交。自该 pin 以来新增 2 个提交：`b78fe96e9` 撤销未通过验证的 macOS DMG Finder 布局最终化工作流步骤，`a4f706fe7` 更新上游 Rust `interprocess` 依赖。
-- 递归子模块：`backend/nyanpasu-runtime` 仍为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`，其 `nyanpasu-utils` 仍为 `7d923f82a1982b0513b0037ac9cbaf78e3dd3f3d`；本批没有同步或修改 Chimera 自身 runtime 子模块。
-- 范围与价值评估：本批只更新固定参考 gitlink 与基线记录。最新上游差异未包含可直接移植的产品运行时代码；`interprocess` 变化属于上游依赖，按当前任务约束暂不把它合入 Chimera，后续只有在确认本地对应调用确有收益并完成兼容验证后再评估。DMG Finder 工作流已由上游撤销，不移植其失败实现。
-- 验证：本地 fetch 后，`ref` HEAD 与当次获取的 `origin/main` tip 一致，参考仓库及递归子模块干净；更新文档通过 Prettier 和 `git diff --check`。仅修改参考 gitlink 与记录，不涉及 Chimera 产品构建或桌面 E2E；PR CI 只验证仓库门禁，不会断言该 SHA 或检查上游实时 tip。
+- 上游：Clash Nyanpasu `main`，已核对最新提交 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`（2026-10-17 UTC）。
+- Chimera 原固定 gitlink：`31019da14006b384b3272c72b4088179a9e72c47`；本 PR 把 `ref` 更新到上述提交。此前 PR 草案目标为 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；从该草案基线到最新上游增加 3 个提交：`8f9d7e3a30` 更新上游 `libc`，`6b609e4140` 更新上游 `@hookform/resolvers`，`d43819fbb2` 修复隐藏窗口时 WebView 的可见性与内存目标。
+- 对齐差异：上游新增 `backend/tauri/src/window/engine.rs::set_in_sight` 和 `backend/tauri/src/window/manager.rs::follow_minimized`，在 Windows 窗口隐藏/最小化时隐藏 WebView 并请求低内存目标，在窗口恢复时恢复可见性。Chimera 对应实现目前集中在 `backend/tauri/src/window.rs` 的 `AppWindow::create` / `focus_existing_window`，窗口事件由 `backend/tauri/src/lib.rs` 处理，尚无等价的 WebView 可见性跟随逻辑；这是下一批值得评估的共享运行时对齐项，需补充 Windows 生命周期回归验证后再迁移。上游两个依赖更新只记入基线，不移植到 Chimera。
+- 上游范围：`a4f706f..d43819f` 仅改 5 个文件（两个窗口运行时文件、`backend/Cargo.lock`、`frontend/nyanpasu/package.json`、`pnpm-lock.yaml`）；runtime 递归子模块 gitlink 未变化。本批只更新参考 gitlink 和本记录，不改变 Chimera 产品代码、依赖、IPC、持久化或宿主网络行为。
+- 验证：通过 `git ls-remote` 核对上游 `main` tip，并在外接构建卷的浅克隆确认 checkout HEAD 为 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`、工作树干净；对比 `a4f706f..d43819f` 的文件清单及窗口代码。主卷仅余约 104 MiB，直接在原 `ref` 子模块 fetch 未能写入 `FETCH_HEAD`；因此本 PR 记录的是已独立核实的上游提交，原本地子模块目录暂未切换。仅更新 gitlink 与文档，不运行产品构建或桌面 E2E；PR CI 不检查实时上游 tip。
+- 风险：L2（参考基线与后续依赖/运行时审查来源变更）。回滚时恢复原 `ref` gitlink `31019da14006b384b3272c72b4088179a9e72c47`，并撤回本节。
 
 ## Dashboard 小组件库与 DnD Grid（实现、独立复核、CI/E2E 完成，已合入 master）
 
