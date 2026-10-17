@@ -2,11 +2,11 @@
 
 ## 当前参考基线同步（本批）
 
-- 上游：Clash Nyanpasu `main`，已从 `origin/main` 获取并核对到 `31019da14006b384b3272c72b4088179a9e72c47`，验证时间为 2026-10-17 UTC。
-- Chimera 最新 `master` 原固定 gitlink：`685042aaedaea26a591900be0b494dfe8efd79b0`；本批将 `ref` 更新到上述上游提交。该上游提交领先原固定基线 3 个提交，包含 TanStack Router monorepo 更新、manifest 版本更新和 macOS DMG Finder 布局元数据生成。
+- 上游：Clash Nyanpasu `main`，已 fetch 并核对到 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`，验证时间为 2026-10-17 UTC。
+- Chimera `master` 当前固定 gitlink：`31019da14006b384b3272c72b4088179a9e72c47`；本批更新 `ref` 到上述上游提交。自该 pin 以来新增 2 个提交：`b78fe96e9` 撤销未通过验证的 macOS DMG Finder 布局最终化工作流步骤，`a4f706fe7` 更新上游 Rust `interprocess` 依赖。
 - 递归子模块：`backend/nyanpasu-runtime` 仍为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`，其 `nyanpasu-utils` 仍为 `7d923f82a1982b0513b0037ac9cbaf78e3dd3f3d`；本批没有同步或修改 Chimera 自身 runtime 子模块。
-- 范围：本批只更新固定参考 gitlink 与基线记录，不把上游依赖、widget 运行时代码或其他产品代码直接复制进 Chimera；下一批应按完整功能检查新基线中的高价值差异。
-- 验证：本地 fetch 后，`ref` HEAD 与当次获取的 `origin/main` tip 一致；ref 根工作区及递归子模块干净；两份更新文档通过 Prettier 和 `git diff --check`。PR CI/E2E 会在目标 ref gitlink 检出上运行常规门禁，不会专门断言所记录的 SHA 或验证上游实时 tip。
+- 范围与价值评估：本批只更新固定参考 gitlink 与基线记录。最新上游差异未包含可直接移植的产品运行时代码；`interprocess` 变化属于上游依赖，按当前任务约束暂不把它合入 Chimera，后续只有在确认本地对应调用确有收益并完成兼容验证后再评估。DMG Finder 工作流已由上游撤销，不移植其失败实现。
+- 验证：本地 fetch 后，`ref` HEAD 与当次获取的 `origin/main` tip 一致，参考仓库及递归子模块干净；更新文档通过 Prettier 和 `git diff --check`。仅修改参考 gitlink 与记录，不涉及 Chimera 产品构建或桌面 E2E；PR CI 只验证仓库门禁，不会断言该 SHA 或检查上游实时 tip。
 
 ## Dashboard 小组件库与 DnD Grid（实现、独立复核、CI/E2E 完成，已合入 master）
 
