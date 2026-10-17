@@ -24,6 +24,7 @@
 | LESSON-20261016-001 | 2026-10-16 | Development   | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
 | LESSON-20261016-002 | 2026-10-16 | Frontend / CI | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
 | LESSON-20261017-001 | 2026-10-17 | E2E / CI      | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Open      |
+| LESSON-20261017-005 | 2026-10-17 | E2E / Windows | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
 
 ## 单条模板
 
@@ -226,3 +227,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后 `pnpm typecheck`、`pnpm --filter=chimera-ui build`、E2E harness typecheck、harness 单测（25/25）、`pnpm lint:frontend-boundaries`、格式检查、`pnpm prepare:check` 和 `git diff --check` 通过。初始 SHA 的远端 Windows Edge profiles E2E 尚在排队；加入本经验记录会产生新提交 SHA，必须重新验证新 SHA，不复用旧 SHA 的结果。
 - 风险/回滚和清理证据（如涉及宿主状态）：L3 工程经验记录；不改产品运行行为、用户数据或宿主状态。回滚只需还原本条索引和记录。维护者已明确批准添加并推送该记录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：已有提交 hook 将 `pnpm typecheck:chimera` 作为 staged frontend 文件检查；继续保留该门禁，UI 边界状态变更需复核 prop 声明、传参和渲染解构三处。无 CI 门禁变化。
+
+### LESSON-20261017-005：视口之外的编辑器不依赖平滑滚动完成定位
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Verified（修复代码在 PR #484 head 的 Windows Desktop E2E 中通过；lesson-only 新提交仍需 CI）
+- 严重度：Low
+- 模块：Profile / E2E / Windows WebView2
+- master commit / ref gitlink SHA / 平台与测试环境：PR #484 base `ae48f24ae5012a47533784695d7109cafb753d12`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Windows GitHub Actions，Microsoft Edge 154。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #484](https://github.com/MFSGA/Chimera/pull/484)；[失败 run 38962020671](https://github.com/MFSGA/Chimera/actions/runs/38962020671) 的 head 为 `b66eb2ffc8b08d3c6de8c249ea609fac9e4e0b5d`；[通过 run 39018873894](https://github.com/MFSGA/Chimera/actions/runs/39018873894) 的 head 为 `62e561fb149c675f1f39dc8e1ba4132d026de287`。
+- 预期行为：用户打开 Profile transform-chain 编辑区时，即使编辑区在当前滚动视口之外，也应把目标定位到可见区域；测试清理应恢复视口位置，避免影响后续用例。
+- 真实异常、复现步骤与证据：Windows Edge 154 的 360px 高窗口中，点击 Profile transform-chain 操作后等待编辑区出现。失败日志报告 `editorTop=335`、`visibleBottom=351`、`maxScrollTop=820`，但 `scrollTop=49`，因此编辑区仍未进入可用视口；目标断言超时，所属 hermetic 运行共 51 个 spec 通过、2 个失败。失败来自 E2E 对平滑滚动完成位置的预期，不代表本次 Profiles 数据或持久化失败。
+- 确认的根因与排除项：在 CI 的小视口下依赖 `scroll-behavior: smooth` 动画没有稳定到达目标；有界等待结束时滚动仅推进 49px。没有证据表明 Profile transform-chain 状态或持久化被破坏。
+- 修复提交、差异映射及保留的兼容性边界：`frontend/chimera/src/pages/(main)/main/profiles/$type/detail/_modules/action-card.tsx` 计算目标偏移后临时将视口 `scroll-behavior` 设为 `auto !important` 并直接设置 `scrollTop`，随后恢复原样式；`tauri-e2e/specs/profile-transform-chain-ui.e2e.ts` 在失败清理时将 Profile 视口复位到顶部。保留窗口尺寸和可见性断言，不把定位动画当成用户业务结果。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败 run 38962020671 在 `profile-transform-chain-ui.e2e.ts` 的视口定位等待处失败；修复后该 spec 随 hermetic suite 在 run 39018873894 对 PR head `62e561fb` 通过。测试继续注册在 `profiles`、`critical` 和 `hermetic` suite；没有新增跳过或重试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：GitHub Windows Desktop E2E run 39018873894 对应精确实现 head `62e561fb149c675f1f39dc8e1ba4132d026de287`，结论 success。新增本条仅修改 LESSONS.md；该 lesson-only 提交的 CI/E2E 仍待新 SHA 运行，不能复用为新 SHA 的检查通过证据。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅新增工程经验记录，不改变产品状态、持久数据或宿主设置；回滚时移除本条及索引行即可。失败清理现在显式复位测试窗口滚动位置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：为视口之外的元素设计桌面 E2E 时，断言目标可见状态与所需滚动距离；避免等待未经验证的平滑动画到达最终位置，并在失败清理中恢复测试拥有的滚动状态。维护者已批准此 L3 lesson；没有修改 CI 门禁。
