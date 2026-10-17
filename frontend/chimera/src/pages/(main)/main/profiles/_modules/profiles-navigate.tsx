@@ -3,6 +3,7 @@ import { cn } from '@chimera/ui';
 import { Link, useMatchRoute } from '@tanstack/react-router';
 import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
 import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
+import LanguageRounded from '~icons/material-symbols/language-rounded';
 import LuaIcon from '~icons/mdi/language-lua';
 import ChipLine from '~icons/mingcute/chip-line';
 import YamlIcon from '~icons/nonicons/yaml-16';
@@ -17,13 +18,19 @@ import { ProfileType } from './consts';
 const LinkButton = ({
   href,
   exact = false,
+  dataSlot,
   children,
-}: PropsWithChildren<{ href: string; exact?: boolean }>) => {
+}: PropsWithChildren<{ href: string; exact?: boolean; dataSlot?: string }>) => {
   const matchRoute = useMatchRoute();
   const isActive = !!matchRoute({ to: href, fuzzy: !exact });
 
   return (
-    <Button variant="fab" data-active={String(isActive)} asChild>
+    <Button
+      variant="fab"
+      data-active={String(isActive)}
+      data-slot={dataSlot}
+      asChild
+    >
       <Link
         className={cn(
           'h-14',
@@ -90,7 +97,7 @@ const ROUTES = {
         <ScriptIcon className="size-8" />
         <YamlIcon
           data-profile-type-badge="merge"
-          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-orange-400 p-0.75 dark:bg-orange-700"
+          className="p-0.75 absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-orange-400 dark:bg-orange-700"
         />
       </div>
     ),
@@ -125,6 +132,22 @@ export default function ProfilesNavigate({
       ))}
 
       <Separator />
+      <LinkButton
+        href="/main/profiles/global"
+        dataSlot="global-transform-chain-nav"
+      >
+        <div className="flex size-8 items-center justify-center">
+          <LanguageRounded className="size-6" />
+        </div>
+        <div className="text-sm font-medium">
+          <p>{m.profile_global_transform_title()}</p>
+          <p className="text-xs text-zinc-500">
+            {m.profile_profile_label_count({
+              count: query.data?.global_transforms?.length ?? 0,
+            })}
+          </p>
+        </div>
+      </LinkButton>
       <LinkButton href="/main/profiles/inspect">Profile Inspect</LinkButton>
     </div>
   );

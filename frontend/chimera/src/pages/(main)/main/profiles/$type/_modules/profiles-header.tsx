@@ -9,7 +9,6 @@ import { ProfileType } from '../../_modules/consts';
 import ProfileQuickImport from '../../_modules/profile-quick-import';
 import { Route as IndexRoute } from '../index';
 import ChainProfileImport from './chain-profile-import';
-import TransformChainEditor from './transform-chain-editor';
 
 const BackButton = () => (
   <Button icon className="flex items-center justify-center md:hidden" asChild>
@@ -48,16 +47,17 @@ export default function ProfilesHeader() {
             {labels[type as ProfileType]}
           </p>
           <div className="flex shrink-0 items-center gap-2">
-            <TransformChainEditor>
-              <Button
-                variant="fab"
-                icon
-                aria-label={m.profile_title_global_proxy_chains()}
-                data-slot="global-transform-chain"
-              >
+            <Button
+              variant="fab"
+              icon
+              aria-label={m.profile_title_global_proxy_chains()}
+              data-slot="global-transform-chain"
+              asChild
+            >
+              <Link to="/main/profiles/global">
                 <AccountTreeRounded className="size-6" />
-              </Button>
-            </TransformChainEditor>
+              </Link>
+            </Button>
             <ChainProfileImport />
           </div>
         </div>

@@ -1,9 +1,10 @@
-import { getRemoteSource, useProfile } from '@chimera/interface';
+import { getRemoteSource, isConfigItem, useProfile } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
 import { Button } from '@/components/ui/button';
 import TextMarquee from '@/components/ui/text-marquee';
 import ActionCard from './_modules/action-card';
+import ChianEditorCard from './_modules/chian-editor-card';
 import DetailHeader from './_modules/detail-header';
 import ProfileNameEditor from './_modules/profile-name-editor';
 import SubscriptionCard from './_modules/subscription-card';
@@ -46,6 +47,7 @@ function RouteComponent() {
         {getRemoteSource(profile) && <SubscriptionCard profile={profile} />}
         {getRemoteSource(profile) && <SyncHistoryCard uid={uid} />}
         <ActionCard type={type} profile={profile} />
+        {isConfigItem(profile) && <ChianEditorCard profile={profile} />}
       </div>
     </div>
   );
