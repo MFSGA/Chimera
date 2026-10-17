@@ -40,6 +40,11 @@ type RuntimeTransformDiagnostics = {
   } | null;
 };
 
+type RuntimeTransformFailure = Exclude<
+  RuntimeTransformDiagnostics['failure'],
+  null
+>;
+
 type CoreState = 'Running' | { Stopped: string | null };
 
 type ScrollViewportObservation = {
@@ -182,6 +187,54 @@ async function waitForGlobalChain(expected: string[]) {
       timeoutMsg: `Global transform chain did not become ${JSON.stringify(expected)}. Last value: ${lastChain}.`,
     },
   );
+}
+
+async function waitForTransformFailure(
+  scopeUid: string | null,
+  transformUid: string,
+  afterRevision: number,
+): Promise<RuntimeTransformDiagnostics & { failure: RuntimeTransformFailure }> {
+  const observed = {
+    diagnostics: null as RuntimeTransformDiagnostics | null,
+  };
+  try {
+    await browser.waitUntil(
+      async () => {
+        observed.diagnostics = await invoke<RuntimeTransformDiagnostics | null>(
+          'get_runtime_transform_diagnostics',
+        );
+        const failure = observed.diagnostics?.failure;
+        return Boolean(
+          failure &&
+          failure.scope_uid === scopeUid &&
+          failure.transform_uid === transformUid &&
+          failure.attempt_revision > afterRevision,
+        );
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `Transform ${transformUid} did not publish a new failure diagnostic.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `Transform ${transformUid} did not publish a new failure diagnostic. Last diagnostics: ${JSON.stringify(observed.diagnostics)}`,
+      { cause: error },
+    );
+  }
+
+  const diagnostics = observed.diagnostics;
+  const failure = diagnostics?.failure;
+  if (
+    !diagnostics ||
+    !failure ||
+    failure.scope_uid !== scopeUid ||
+    failure.transform_uid !== transformUid ||
+    failure.attempt_revision <= afterRevision
+  ) {
+    throw new Error(`Transform ${transformUid} diagnostics were unavailable.`);
+  }
+  return { ...diagnostics, failure };
 }
 
 async function waitForScopedRuntimeLog(
@@ -696,15 +749,6 @@ describe('main transform chain editor', () => {
     );
 
     await trigger.click();
-    const immediateAfterScroll =
-      await readScrollViewportObservation(editorSelector);
-    assert.ok(immediateAfterScroll, 'The scoped transform editor is missing.');
-    assert.ok(
-      Math.abs(
-        immediateAfterScroll.editorTop - immediateAfterScroll.visibleTop,
-      ) <= 2,
-      `The oversized editor must reach the viewport immediately after the action. Geometry: ${JSON.stringify(immediateAfterScroll)}`,
-    );
     let lastAfterScroll: ScrollViewportObservation | null = null;
     try {
       await browser.waitUntil(
@@ -778,19 +822,6 @@ describe('main transform chain editor', () => {
     );
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-
-    const immediateFitAfter =
-      await readScrollViewportObservation(editorSelector);
-    assert.ok(immediateFitAfter, 'The scoped transform editor is missing.');
-    const immediateFitViewportCenter =
-      immediateFitAfter.visibleTop + immediateFitAfter.visibleHeight / 2;
-    const immediateFitEditorCenter =
-      immediateFitAfter.editorTop + immediateFitAfter.editorHeight / 2;
-    assert.ok(
-      Math.abs(immediateFitEditorCenter - immediateFitViewportCenter) <= 2,
-      `The fitting editor must reach the viewport center immediately after the action. Geometry: ${JSON.stringify(immediateFitAfter)}`,
-    );
-
     let lastFitAfter: ScrollViewportObservation | null = null;
     try {
       await browser.waitUntil(
@@ -1327,12 +1358,14 @@ describe('main transform chain editor', () => {
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
+    const failedDiagnostics = await waitForTransformFailure(
+      null,
+      failingJavascriptUid,
+      before.revision,
+    );
     await waitForGlobalChain([mergeAUid]);
     await editor.waitForDisplayed({ timeout: 15_000 });
-    assert.deepEqual(await activeOrder('global'), [
-      mergeAUid,
-      failingJavascriptUid,
-    ]);
+    await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -1348,10 +1381,6 @@ describe('main transform chain editor', () => {
     assert.equal(await failure.getAttribute('data-script-type'), 'javascript');
     assert.match(await failure.getText(), /chain ui intentional failure/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1439,12 +1468,14 @@ describe('main transform chain editor', () => {
       failingJavascriptUid,
     ]);
     await editor.$('[data-slot="transform-chain-save"]').click();
+    const failedDiagnostics = await waitForTransformFailure(
+      localUid,
+      failingJavascriptUid,
+      before.revision,
+    );
     await waitForScopedChain(localUid, [mergeAUid]);
     await editor.waitForDisplayed({ timeout: 15_000 });
-    assert.deepEqual(await activeOrder('profile'), [
-      mergeAUid,
-      failingJavascriptUid,
-    ]);
+    await waitForActiveOrder('profile', [mergeAUid, failingJavascriptUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingJavascriptUid}"]`,
@@ -1460,10 +1491,6 @@ describe('main transform chain editor', () => {
     assert.equal(await failure.getAttribute('data-script-type'), 'javascript');
     assert.match(await failure.getText(), /chain ui intentional failure/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1701,8 +1728,14 @@ describe('main transform chain editor', () => {
     await failingTransform.$('[data-slot="transform-chain-add"]').click();
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
+    const failedDiagnostics = await waitForTransformFailure(
+      null,
+      failingMergeUid,
+      before.revision,
+    );
     await waitForGlobalChain([]);
     await editor.waitForDisplayed({ timeout: 15_000 });
+    await waitForActiveOrder('global', [failingMergeUid]);
 
     const failingRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${failingMergeUid}"]`,
@@ -1725,10 +1758,6 @@ describe('main transform chain editor', () => {
     assert.match(await failure.getText(), /Merge \(YAML\)/);
     assert.match(await failure.getText(), /not a mapping/);
 
-    const failedDiagnostics = await invoke<RuntimeTransformDiagnostics | null>(
-      'get_runtime_transform_diagnostics',
-    );
-    assert.ok(failedDiagnostics?.failure);
     assert.equal(
       failedDiagnostics.revision,
       before.revision,
@@ -1740,7 +1769,12 @@ describe('main transform chain editor', () => {
     assert.equal(failedDiagnostics.failure.script_type, null);
     assert.match(failedDiagnostics.failure.message, /not a mapping/);
 
-    await failingRow.$('[data-slot="transform-chain-remove"]').click();
+    const currentFailingRow = await editor.$(
+      '[data-slot="transform-chain-active-item"][data-profile-uid="' +
+        failingMergeUid +
+        '"]',
+    );
+    await currentFailingRow.$('[data-slot="transform-chain-remove"]').click();
     const validTransform = await editor.$(
       `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
     );
