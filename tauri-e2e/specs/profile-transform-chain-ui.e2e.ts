@@ -57,6 +57,9 @@ type ScrollViewportObservation = {
   maxScrollTop: number;
 };
 
+const GLOBAL_TRANSFORM_EDITOR_SELECTOR =
+  '[data-slot="transform-chain-editor"][data-chain-scope="global"]';
+
 function requireApplied<T>(outcome: MutationOutcome<T>, operation: string): T {
   return appliedValue(outcome, operation);
 }
@@ -130,6 +133,27 @@ async function openRoute(pathname: string) {
       timeoutMsg: `Route ${pathname} did not render.`,
     },
   );
+}
+
+async function waitForGlobalEditor() {
+  const editor = await $(GLOBAL_TRANSFORM_EDITOR_SELECTOR);
+  await editor.waitForDisplayed({
+    timeout: 15_000,
+    timeoutMsg: 'The global transform editor did not become visible.',
+  });
+  return editor;
+}
+
+async function waitForGlobalInactiveAdd(uid: string) {
+  const itemSelector = `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`;
+  const item = await $(itemSelector);
+  await item.waitForDisplayed({
+    timeout: 15_000,
+    timeoutMsg: `Global transform candidate ${uid} did not return to the available list.`,
+  });
+  const add = await $(`${itemSelector} [data-slot="transform-chain-add"]`);
+  await add.waitForClickable({ timeout: 15_000 });
+  return add;
 }
 
 async function readScrollViewportObservation(
@@ -1127,10 +1151,7 @@ describe('main transform chain editor', () => {
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
 
-    let editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let editor = await waitForGlobalEditor();
     await editor
       .$(
         `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
@@ -1151,14 +1172,13 @@ describe('main transform chain editor', () => {
     await waitForActiveOrder('global', []);
     await waitForGlobalChain([]);
 
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
+    editor = await waitForGlobalEditor();
     for (const uid of originalOrder) {
-      const item = await editor.$(
-        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`,
-      );
-      await item.$('[data-slot="transform-chain-add"]').click();
+      const add = await waitForGlobalInactiveAdd(uid);
+      await add.click();
+      await $(
+        `[data-slot="transform-chain-active-item"][data-profile-uid="${uid}"]`,
+      ).waitForDisplayed({ timeout: 15_000 });
     }
     await waitForActiveOrder('global', originalOrder);
     assert.deepEqual(await activeOrder('global'), originalOrder);
@@ -1179,10 +1199,7 @@ describe('main transform chain editor', () => {
     let currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
 
     let javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
@@ -1214,10 +1231,7 @@ describe('main transform chain editor', () => {
     currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
     javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
@@ -1235,10 +1249,7 @@ describe('main transform chain editor', () => {
     currentTrigger = await $('[data-slot="global-transform-chain-nav"]');
     await currentTrigger.waitForClickable({ timeout: 15_000 });
     await currentTrigger.click();
-    editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
     javascriptRow = await editor.$(
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
@@ -1356,15 +1367,12 @@ describe('main transform chain editor', () => {
     const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let editor = await waitForGlobalEditor();
 
-    const failingTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingJavascriptUid}"]`,
-    );
-    await failingTransform.$('[data-slot="transform-chain-add"]').click();
+    const addFailingTransform =
+      await waitForGlobalInactiveAdd(failingJavascriptUid);
+    await addFailingTransform.click();
+    await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
     assert.deepEqual(await activeOrder('global'), [
       mergeAUid,
       failingJavascriptUid,
@@ -1376,7 +1384,7 @@ describe('main transform chain editor', () => {
       before.revision,
     );
     await waitForGlobalChain([mergeAUid]);
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
     await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
 
     const failingRow = await editor.$(
@@ -1729,15 +1737,11 @@ describe('main transform chain editor', () => {
     const trigger = await $('[data-slot="global-transform-chain-nav"]');
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
-    const editor = await $(
-      '[data-slot="transform-chain-editor"][data-chain-scope="global"]',
-    );
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    let editor = await waitForGlobalEditor();
 
-    const failingTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${failingMergeUid}"]`,
-    );
-    await failingTransform.$('[data-slot="transform-chain-add"]').click();
+    const addFailingTransform = await waitForGlobalInactiveAdd(failingMergeUid);
+    await addFailingTransform.click();
+    await waitForActiveOrder('global', [failingMergeUid]);
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     const failedDiagnostics = await waitForTransformFailure(
@@ -1746,7 +1750,7 @@ describe('main transform chain editor', () => {
       before.revision,
     );
     await waitForGlobalChain([]);
-    await editor.waitForDisplayed({ timeout: 15_000 });
+    editor = await waitForGlobalEditor();
     await waitForActiveOrder('global', [failingMergeUid]);
 
     const failingRow = await editor.$(
