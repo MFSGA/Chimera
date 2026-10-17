@@ -309,9 +309,12 @@ function sanitizeArtifactPart(value: string): string {
 
 async function captureFailedTest(
   test: { parent?: string; title?: string },
+  _context: unknown,
   result: { passed: boolean; error?: unknown },
 ): Promise<void> {
-  if (!artifactDirectory || result.passed || !browser.sessionId) return;
+  if (!artifactDirectory || !result || result.passed || !browser.sessionId) {
+    return;
+  }
 
   const name = [test.parent, test.title]
     .filter((part): part is string => Boolean(part))

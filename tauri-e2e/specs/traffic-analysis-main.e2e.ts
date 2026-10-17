@@ -2,6 +2,54 @@ import assert from 'node:assert/strict';
 import { displayedElement, focusElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
 
+const sidebarToggleSelector = '[data-slot="navigation-sidebar-toggle"]';
+
+async function readSidebarToggleState() {
+  return browser.execute((selector) => {
+    const toggle = document.querySelector(selector);
+    return toggle
+      ? {
+          expanded: toggle.getAttribute('aria-expanded'),
+          label: toggle.getAttribute('aria-label'),
+        }
+      : null;
+  }, sidebarToggleSelector);
+}
+
+type SidebarToggleState = Awaited<ReturnType<typeof readSidebarToggleState>>;
+
+async function waitForSidebarToggleState(
+  matches: (state: SidebarToggleState) => boolean,
+  timeoutMessage: string,
+) {
+  let lastState: SidebarToggleState = null;
+
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await readSidebarToggleState();
+        return matches(lastState);
+      },
+      { timeout: 10_000, timeoutMsg: timeoutMessage },
+    );
+  } catch (error) {
+    try {
+      lastState = await readSidebarToggleState();
+    } catch (diagnosticError) {
+      throw new AggregateError(
+        [error, diagnosticError],
+        `${timeoutMessage} The final sidebar state could not be read. Last observed state: ${JSON.stringify(lastState)}.`,
+        { cause: error },
+      );
+    }
+
+    throw new Error(
+      `${timeoutMessage} Last observed state: ${JSON.stringify(lastState)}.`,
+      { cause: error },
+    );
+  }
+}
+
 describe('main traffic analysis', () => {
   beforeEach(async () => {
     await ensureMainWindow();
@@ -52,32 +100,26 @@ describe('main traffic analysis', () => {
       },
     );
 
-    const sidebarToggle = await $('[data-slot="navigation-sidebar-toggle"]');
-    const collapsedLabel = await sidebarToggle.getAttribute('aria-label');
+    const sidebarToggle = await $(sidebarToggleSelector);
+    const collapsedState = await readSidebarToggleState();
+    const collapsedLabel = collapsedState?.label;
     assert.ok(collapsedLabel);
-    assert.equal(await sidebarToggle.getAttribute('aria-expanded'), 'false');
+    assert.equal(collapsedState?.expanded, 'false');
     await sidebarToggle.click();
-    await browser.waitUntil(
-      async () =>
-        (await sidebarToggle.getAttribute('aria-expanded')) === 'true' &&
-        (await sidebarToggle.getAttribute('aria-label')) !== collapsedLabel,
-      {
-        timeout: 10_000,
-        timeoutMsg: 'Expanding the traffic sidebar did not update its label.',
-      },
+    await waitForSidebarToggleState(
+      (state) =>
+        state?.expanded === 'true' &&
+        Boolean(state.label) &&
+        state.label !== collapsedLabel,
+      'Expanding the traffic sidebar did not update its label.',
     );
-    const expandedLabel = await sidebarToggle.getAttribute('aria-label');
+    const expandedLabel = (await readSidebarToggleState())?.label;
     assert.ok(expandedLabel);
     assert.notEqual(expandedLabel, collapsedLabel);
-    await sidebarToggle.click();
-    await browser.waitUntil(
-      async () =>
-        (await sidebarToggle.getAttribute('aria-expanded')) === 'false' &&
-        (await sidebarToggle.getAttribute('aria-label')) === collapsedLabel,
-      {
-        timeout: 10_000,
-        timeoutMsg: 'Collapsing the traffic sidebar did not restore its label.',
-      },
+    await $(sidebarToggleSelector).click();
+    await waitForSidebarToggleState(
+      (state) => state?.expanded === 'false' && state.label === collapsedLabel,
+      'Collapsing the traffic sidebar did not restore its label.',
     );
 
     const closedScopeSelector =

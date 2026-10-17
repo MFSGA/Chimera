@@ -19,3 +19,16 @@
 | Unit counterpart              | `pnpm --filter=chimera-ui test:traffic` proves default search values, query/topology request mappings, transient query retry, and pause options; it does not prove desktop behavior.                                                                                                                                                                                                                                                                                           |
 | Reference mapping             | `ref/frontend/nyanpasu/src/pages/(main)/main/topology/` → `frontend/chimera/src/pages/(main)/main/topology/`; query schema and control semantics retained. Chimera's existing `Sidebar`, `useTrafficReport`, connection filters and cross-navigation are the adapters.                                                                                                                                                                                                         |
 | Deliberate partial difference | Upstream local-IP probing and its opt-in/geolocation index are not ported. The map displays unknown local source regions rather than probing a public IP service. Revisit only with an explicit opt-in, TUN exclusion, and dedicated privacy-safe tests.                                                                                                                                                                                                                       |
+
+Earlier logs show WebDriver `execute/async` timeouts followed by the
+`scrollIntoView` fallback; those timeouts alone do not establish the final test
+result. The shared `afterTest` hook had read the Mocha context instead of its
+third-argument result, causing successful runs to produce failure artifacts.
+After correcting that signature, the latest isolated macOS WebKit run passed
+1/1 with no failure artifacts. Windows validation on the new SHA remains
+pending.
+
+The toggle's changing ARIA attributes are read from the current DOM after each
+transition, rather than from a WebDriver element handle retained across
+rerenders. If a transition times out, the failure includes the final observed
+toggle state.
