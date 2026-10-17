@@ -9,8 +9,8 @@ use anyhow::Result;
 use chimera_config::profile::{
     ConfigDefinition, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
     OverlayTransform, ProfileDefinition, ProfileId, ProfileItem, ProfileMetadata, ProfileSource,
-    Profiles as RuntimeProfiles, ScriptRuntime, ScriptTransform, SubscriptionInfo,
-    TransformDefinition,
+    Profiles as RuntimeProfiles, RemoteSyncInterval, ScriptRuntime, ScriptTransform,
+    SubscriptionInfo, TransformDefinition,
 };
 use time::OffsetDateTime;
 
@@ -160,7 +160,9 @@ fn remote_source(profile: &RemoteProfile) -> Result<ProfileSource> {
             user_agent: profile.option.user_agent.clone(),
             with_proxy: profile.option.with_proxy,
             self_proxy: profile.option.self_proxy,
-            update_interval_minutes: profile.option.update_interval_minutes,
+            update_interval_minutes: RemoteSyncInterval::from_minutes(
+                profile.option.update_interval_minutes,
+            ),
         },
         subscription: SubscriptionInfo {
             upload: nonzero(profile.extra.upload),
@@ -203,7 +205,11 @@ fn unix_timestamp(value: usize) -> Option<OffsetDateTime> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::profile::item::{local::LocalProfile, shared::ProfileShared};
+    use crate::config::profile::item::{
+        local::LocalProfile,
+        remote::{RemoteProfile, RemoteProfileOptions},
+        shared::ProfileShared,
+    };
 
     fn local(uid: &str, file: &str) -> Profile {
         Profile::Local(LocalProfile {
@@ -216,6 +222,25 @@ mod tests {
             },
             symlinks: None,
             chain: Vec::new(),
+        })
+    }
+
+    fn remote(uid: &str, update_interval_minutes: u64) -> Profile {
+        Profile::Remote(RemoteProfile {
+            url: url::Url::parse("https://example.com/subscription.yaml").unwrap(),
+            option: RemoteProfileOptions {
+                update_interval_minutes,
+                ..RemoteProfileOptions::default()
+            },
+            shared: ProfileShared {
+                uid: uid.into(),
+                name: uid.into(),
+                file: format!("{uid}.yaml"),
+                desc: None,
+                updated: 1,
+            },
+            chain: Vec::new(),
+            extra: Default::default(),
         })
     }
 
@@ -243,5 +268,24 @@ mod tests {
         let source = Profiles::default();
         let runtime = to_runtime_profiles(&source).unwrap();
         assert!(runtime.current.is_none());
+    }
+
+    #[test]
+    fn preserves_disabled_remote_sync_interval_in_runtime_adapter() {
+        let mut source = Profiles::default();
+        source.items = vec![remote("r1", 0)];
+
+        let runtime = to_runtime_profiles(&source).unwrap();
+        let item = runtime.items.get(&ProfileId("r1".into())).unwrap();
+        let ProfileDefinition::Config {
+            config: ConfigDefinition::File(file),
+        } = &item.definition
+        else {
+            panic!("expected file-backed Profile")
+        };
+        let ProfileSource::Remote { option, .. } = &file.source else {
+            panic!("expected remote source")
+        };
+        assert_eq!(option.update_interval_minutes, RemoteSyncInterval::DISABLED);
     }
 }

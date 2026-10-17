@@ -3,9 +3,13 @@ import {
   useProfile,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { AnimatePresence } from 'motion/react';
-import { useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useState, type ComponentProps } from 'react';
+import { Controller, useForm } from 'react-hook-form';
+import { z } from 'zod';
 import { useBlockTask } from '@/components/providers/block-task-provider';
+import { AnimatedItem } from '@/components/ui/animated-item';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -27,77 +31,119 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import AnimatedErrorItem from '../../../_modules/error-item';
 
+// Mirrors the backend default; saved when auto update is on and the interval
+// is left empty. The subscription's suggested interval is applied at import.
+const DEFAULT_UPDATE_INTERVAL_MINUTES = 120;
+
+// The backend disables scheduled and startup syncs with zero minutes.
+const AUTO_UPDATE_OFF_MINUTES = 0;
+
+const formSchema = z.object({
+  user_agent: z.string().optional(),
+  with_proxy: z.boolean().optional(),
+  self_proxy: z.boolean().optional(),
+  auto_update: z.boolean(),
+  update_interval: z
+    .number()
+    .min(1, { message: m.profile_form_option_update_interval_min_error() })
+    .nullable()
+    .optional(),
+});
+
+const remoteOptionOf = (profile: ProfileQueryResultItem) =>
+  getRemoteSource(profile)?.option;
+
 export default function UpdateOptionEditor({
   profile,
   ...props
 }: ComponentProps<typeof ModalTrigger> & {
   profile: ProfileQueryResultItem;
 }) {
-  const remote = getRemoteSource(profile);
   const { patchRemoteOptions } = useProfile();
   const [open, setOpen] = useState(false);
-  const [userAgent, setUserAgent] = useState(remote?.option.user_agent ?? '');
-  const [withProxy, setWithProxy] = useState(
-    remote?.option.with_proxy ?? false,
-  );
-  const [selfProxy, setSelfProxy] = useState(
-    remote?.option.self_proxy ?? false,
-  );
-  const [interval, setInterval] = useState<number | null>(
-    remote?.option.update_interval_minutes ?? null,
-  );
-  const [error, setError] = useState<string | null>(null);
 
-  const reset = () => {
-    setUserAgent(remote?.option.user_agent ?? '');
-    setWithProxy(remote?.option.with_proxy ?? false);
-    setSelfProxy(remote?.option.self_proxy ?? false);
-    setInterval(remote?.option.update_interval_minutes ?? null);
-    setError(null);
-  };
-  const close = () => {
-    setOpen(false);
-    reset();
-  };
+  const getDefaultValues = useCallback(() => {
+    const option = remoteOptionOf(profile);
+    const minutes = option?.update_interval_minutes;
+    return {
+      user_agent: option?.user_agent ?? '',
+      with_proxy: option?.with_proxy ?? false,
+      self_proxy: option?.self_proxy ?? false,
+      auto_update: minutes !== AUTO_UPDATE_OFF_MINUTES,
+      update_interval:
+        minutes != null && minutes > AUTO_UPDATE_OFF_MINUTES ? minutes : null,
+    };
+  }, [profile]);
 
-  const task = useBlockTask(`patch-remote-options-${profile.uid}`, async () => {
-    if (!remote) return;
-    if (interval != null && interval < 1) {
-      setError(m.profile_update_interval_label());
-      return;
-    }
-
-    try {
-      await patchRemoteOptions.mutateAsync({
-        uid: profile.uid,
-        patch: {
-          user_agent: userAgent.trim() || null,
-          with_proxy: withProxy,
-          self_proxy: selfProxy,
-          update_interval_minutes: interval,
-        },
-      });
-      close();
-    } catch (cause) {
-      await message(`Update failed: \n ${formatError(cause)}`, {
-        title: m.common_error(),
-        kind: 'error',
-      });
-    }
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: getDefaultValues(),
   });
-  const submit = useLockFn(task.execute);
 
-  if (!remote) return null;
+  const autoUpdate = form.watch('auto_update');
+
+  useEffect(() => {
+    form.reset(getDefaultValues());
+  }, [form, getDefaultValues]);
+
+  const handleClose = () => {
+    setOpen(false);
+    form.reset(getDefaultValues());
+  };
+
+  const blockTask = useBlockTask(
+    `update-remote-profile-${profile.uid}`,
+    form.handleSubmit(
+      async (data) => {
+        try {
+          await patchRemoteOptions.mutateAsync({
+            uid: profile.uid,
+            patch: {
+              user_agent: data.user_agent || null,
+              with_proxy: data.with_proxy ?? null,
+              self_proxy: data.self_proxy ?? null,
+              update_interval_minutes: data.auto_update
+                ? (data.update_interval ?? DEFAULT_UPDATE_INTERVAL_MINUTES)
+                : AUTO_UPDATE_OFF_MINUTES,
+            },
+          });
+          handleClose();
+        } catch (error) {
+          message(`Update failed: \n ${formatError(error)}`, {
+            title: m.common_error(),
+            kind: 'error',
+          });
+        }
+      },
+      (error) => {
+        console.error(error);
+        message(formatError(error), {
+          title: m.common_error(),
+          kind: 'error',
+        });
+      },
+    ),
+  );
+
+  const handleSubmit = useLockFn(blockTask.execute);
+  const option = remoteOptionOf(profile);
+
+  if (!option) return null;
 
   return (
     <Modal
       open={open}
       onOpenChange={(next) => {
-        if (next) setOpen(true);
-        else close();
+        if (next) {
+          form.reset(getDefaultValues());
+          setOpen(true);
+        } else {
+          handleClose();
+        }
       }}
     >
       <ModalTrigger {...props} />
+
       <ModalContent>
         <Card className="w-96">
           <CardHeader>
@@ -105,50 +151,111 @@ export default function UpdateOptionEditor({
           </CardHeader>
 
           <CardContent>
-            <div className="mt-2 flex items-center gap-2">
-              <Input
-                label={m.profile_user_agent_label()}
-                variant="outlined"
-                value={userAgent}
-                onChange={(event) => setUserAgent(event.target.value)}
-              />
-            </div>
+            <Controller
+              control={form.control}
+              name="user_agent"
+              render={({ field }) => (
+                <div className="mt-2 flex items-center gap-2">
+                  <Input
+                    label={m.profile_user_agent_label()}
+                    variant="outlined"
+                    {...field}
+                  />
+                </div>
+              )}
+            />
 
-            <div className="mt-2 flex items-center gap-2">
-              <NumericInput
-                label={m.profile_update_interval_label()}
-                variant="outlined"
-                min={1}
-                step={1}
-                value={interval}
-                onChange={(value) => {
-                  setInterval(value);
-                  setError(null);
-                }}
-              />
+            <Controller
+              control={form.control}
+              name="auto_update"
+              render={({ field }) => (
+                <SwitchItem
+                  className="mt-2"
+                  data-slot="profile-auto-update-switch"
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                >
+                  <span>{m.profile_update_option_auto_update_label()}</span>
+                </SwitchItem>
+              )}
+            />
 
-              <AnimatePresence>
-                {error && (
-                  <AnimatedErrorItem className="text-error">
-                    {error}
-                  </AnimatedErrorItem>
-                )}
-              </AnimatePresence>
-            </div>
+            <AnimatePresence initial={false}>
+              {autoUpdate && (
+                <AnimatedItem key="update-interval">
+                  <Controller
+                    control={form.control}
+                    name="update_interval"
+                    render={({ field }) => (
+                      <div className="mt-2 space-y-2">
+                        <NumericInput
+                          data-slot="profile-update-interval"
+                          label={m.profile_update_interval_label()}
+                          variant="outlined"
+                          min={1}
+                          step={1}
+                          value={field.value}
+                          onChange={field.onChange}
+                        />
+                        <p className="text-on-surface-variant px-1 text-xs">
+                          {m.profile_update_option_interval_hint({
+                            minutes: DEFAULT_UPDATE_INTERVAL_MINUTES,
+                          })}
+                        </p>
+                        <AnimatePresence>
+                          {form.formState.errors.update_interval && (
+                            <AnimatedErrorItem className="text-error">
+                              {form.formState.errors.update_interval.message}
+                            </AnimatedErrorItem>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    )}
+                  />
+                </AnimatedItem>
+              )}
+            </AnimatePresence>
 
-            <SwitchItem checked={withProxy} onCheckedChange={setWithProxy}>
-              <span>{m.profile_with_proxy_label()}</span>
-            </SwitchItem>
-            <SwitchItem checked={selfProxy} onCheckedChange={setSelfProxy}>
-              <span>{m.profile_self_proxy_label()}</span>
-            </SwitchItem>
+            <Controller
+              control={form.control}
+              name="with_proxy"
+              render={({ field }) => (
+                <SwitchItem
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                >
+                  <span>{m.profile_with_proxy_label()}</span>
+                </SwitchItem>
+              )}
+            />
+            <Controller
+              control={form.control}
+              name="self_proxy"
+              render={({ field }) => (
+                <SwitchItem
+                  checked={field.value}
+                  onCheckedChange={field.onChange}
+                >
+                  <span>{m.profile_self_proxy_label()}</span>
+                </SwitchItem>
+              )}
+            />
           </CardContent>
 
           <CardFooter className="gap-1">
-            <Button onClick={() => void submit()} loading={task.isPending}>
+            <Button
+              data-slot="profile-update-options-save"
+              onClick={() => void handleSubmit()}
+              loading={blockTask.isPending}
+            >
               {m.common_save()}
             </Button>
-            <Button onClick={close}>{m.common_cancel()}</Button>
+            <Button
+              data-slot="profile-update-options-cancel"
+              onClick={handleClose}
+            >
+              {m.common_cancel()}
+            </Button>
           </CardFooter>
         </Card>
       </ModalContent>

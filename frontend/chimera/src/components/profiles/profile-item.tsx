@@ -173,6 +173,7 @@ export const ProfileItem = memo(function ProfileItem({
       {Object.entries(menuMapping).map(([key, func]) => (
         <MenuItem
           key={key}
+          data-slot={key === 'Edit Info' ? 'profile-edit-menu-item' : undefined}
           onClick={(event) => {
             cleanDeepClickEvent(event);
             handleMenuClick(func);
@@ -189,6 +190,8 @@ export const ProfileItem = memo(function ProfileItem({
   return (
     <>
       <Paper
+        data-slot="profile-item"
+        data-profile-uid={item.uid}
         className="relative transition-all"
         sx={[
           {
@@ -287,6 +290,7 @@ export const ProfileItem = memo(function ProfileItem({
 
             <Tooltip title={m.profile_menu_tooltip()}>
               <Button
+                data-slot="profile-menu-trigger"
                 size="small"
                 variant="contained"
                 className="!size-8 !min-w-0"

@@ -1,0 +1,95 @@
+import type {
+  Dimension,
+  TopologyRequest,
+  TrafficQuery,
+  TrafficRange,
+} from '@chimera/interface';
+import { z } from 'zod';
+import {
+  RANGES,
+  searchFilterSchema,
+  toTrafficFilters,
+} from '../../_modules/traffic-filters';
+
+export const TEMPLATES = ['origin', 'source', 'inbound', 'process'] as const;
+
+export type LayerTemplate = (typeof TEMPLATES)[number];
+
+export const DEFAULT_TEMPLATE: LayerTemplate = 'origin';
+
+/** How many nodes a flow column shows before the rest merge into "other". */
+export const LIMITS = [5, 7, 10, 20, 'all'] as const;
+
+export type Limit = (typeof LIMITS)[number];
+
+export const DEFAULT_LIMIT: Limit = 7;
+
+/** The column layouts of the flow view, from the first column to the last. */
+export const LAYER_TEMPLATES: Record<LayerTemplate, readonly Dimension[]> = {
+  origin: ['origin', 'rule', 'chain', 'exit'],
+  source: ['source', 'target', 'exit'],
+  inbound: ['inbound', 'rule', 'exit'],
+  process: ['process', 'target', 'exit'],
+};
+
+// The page state lives in the URL, so a view can be reloaded and shared.
+export const VIEWS = [
+  'overview',
+  'flow',
+  'map',
+  'source',
+  'inbound',
+  'target',
+  'exit',
+  'process',
+] as const;
+
+export const trafficSearchSchema = z.object({
+  range: z.enum(RANGES).default('last_hour'),
+  scope: z.enum(['all', 'active', 'closed']).default('all'),
+  filters: z.array(searchFilterSchema).default([]),
+  // Legacy shared URLs choose a child route through this parameter.
+  view: z.enum(VIEWS).optional(),
+  // Name of a topology layer template; the first one when absent.
+  layers: z.enum(TEMPLATES).optional(),
+  metric: z.enum(['bytes', 'connections']).default('bytes'),
+  limit: z.literal(LIMITS).default(DEFAULT_LIMIT),
+});
+
+export type TrafficSearch = z.infer<typeof trafficSearchSchema>;
+
+export const toQuery = ({
+  range,
+  scope,
+  filters,
+}: Pick<TrafficSearch, 'range' | 'scope' | 'filters'>): TrafficQuery => ({
+  range,
+  scope,
+  filters: toTrafficFilters(filters),
+});
+
+/** The columns of the flow view are the template's; the map's are regions. */
+export const toTopologyRequest = ({
+  view,
+  layers,
+  limit,
+}: Pick<TrafficSearch, 'view' | 'layers' | 'limit'>): TopologyRequest | null =>
+  view !== 'flow' && view !== 'map'
+    ? null
+    : view === 'map'
+      ? {
+          // The third layer splits each destination region by how it was located.
+          layers: ['source_region', 'destination_region', 'destination_basis'],
+          // The map places every region, so none merges into "other".
+          limit_per_layer: null,
+        }
+      : {
+          layers: [...LAYER_TEMPLATES[layers ?? DEFAULT_TEMPLATE]],
+          limit_per_layer: limit === 'all' ? null : limit,
+        };
+
+// Short ranges move fast; longer ones read from hourly records.
+export const pollInterval = (range: TrafficRange) =>
+  range === 'last_hour' || range === 'last6_hours' || range === 'last24_hours'
+    ? 2_000
+    : 10_000;

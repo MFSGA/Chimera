@@ -6,7 +6,7 @@ import { openMainRoute } from './main-window.js';
 const targetPath = '/main/rules';
 
 describe('main rules reference layout', () => {
-  before(async () => {
+  beforeEach(async () => {
     await browser.setWindowSize(1240, 638);
     await browser.execute(() => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
@@ -76,49 +76,86 @@ describe('main rules reference layout', () => {
     }
   });
 
-  it('uses the main ref tooltip for collapsed sidebar items', async () => {
-    const sidebar = await $('[data-slot="slider-sidebar"]');
-    const firstItem = await sidebar.$('a');
-    await firstItem.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((element) => {
-      element.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          pointerType: 'mouse',
-        }),
-      );
-    }, firstItem);
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() =>
-          Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
-        ),
-      { timeout: 15_000, timeoutMsg: 'Rules sidebar tooltip did not open.' },
+  it('opens the ref tooltip for a focused collapsed sidebar item', async () => {
+    const triggerSelector =
+      '[data-slot="rules-proxy-item"][data-proxy-item-kind="all"]';
+    const triggers = await $$(triggerSelector);
+    assert.equal(
+      triggers.length,
+      1,
+      'The all-proxies sidebar link selector must identify exactly one item.',
+    );
+    const trigger = await $(triggerSelector);
+    await trigger.waitForDisplayed({ timeout: 15_000 });
+
+    assert.equal(
+      await trigger.isFocused(),
+      false,
+      'The tooltip trigger must start unfocused.',
+    );
+    const focused = await browser.execute((selector) => {
+      const target = document.querySelector<HTMLElement>(selector);
+      if (!target) return false;
+      target.focus();
+      return document.activeElement === target;
+    }, triggerSelector);
+    assert.equal(
+      focused,
+      true,
+      'The all-proxies sidebar link did not receive focus.',
     );
 
-    const state = await browser.execute(() => {
-      const trigger = document.querySelector<HTMLElement>(
-        '[data-slot="slider-sidebar"] a',
-      );
-      const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
-      const rect = (element: HTMLElement | null) =>
-        element
-          ? {
-              x: Math.round(element.getBoundingClientRect().x),
-              y: Math.round(element.getBoundingClientRect().y),
-              width: Math.round(element.getBoundingClientRect().width),
-              height: Math.round(element.getBoundingClientRect().height),
-            }
-          : null;
+    const inspectTooltip = () =>
+      browser.execute((selector) => {
+        const trigger = document.querySelector<HTMLElement>(selector);
+        const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
+        const rect = (element: HTMLElement | null) =>
+          element
+            ? {
+                x: Math.round(element.getBoundingClientRect().x),
+                y: Math.round(element.getBoundingClientRect().y),
+                width: Math.round(element.getBoundingClientRect().width),
+                height: Math.round(element.getBoundingClientRect().height),
+              }
+            : null;
 
-      return {
-        trigger: rect(trigger),
-        tooltip: rect(tooltip),
-        triggerText: trigger?.textContent?.trim() ?? '',
-        tooltipText: tooltip?.textContent?.trim() ?? '',
-        tooltipSide: tooltip?.dataset.side ?? '',
-      };
-    });
+        return {
+          focused: !!trigger && document.activeElement === trigger,
+          trigger: rect(trigger),
+          tooltip: rect(tooltip),
+          triggerText: trigger?.textContent?.trim() ?? '',
+          tooltipText: tooltip?.textContent?.trim() ?? '',
+          tooltipSide: tooltip?.dataset.side ?? '',
+        };
+      }, triggerSelector);
+
+    let state = await inspectTooltip();
+    try {
+      await browser.waitUntil(
+        async () => {
+          state = await inspectTooltip();
+          return (
+            state.focused &&
+            !!state.tooltip &&
+            state.tooltipText === state.triggerText
+          );
+        },
+        { timeout: 15_000, timeoutMsg: 'Rules sidebar tooltip did not open.' },
+      );
+    } catch (error) {
+      try {
+        state = await inspectTooltip();
+      } catch (diagnosticError) {
+        throw new Error(
+          `Rules sidebar tooltip did not open; last observed state: ${JSON.stringify(state)}; final diagnostic failed: ${String(diagnosticError)}`,
+          { cause: error },
+        );
+      }
+      throw new Error(
+        `Rules sidebar tooltip did not open; final state: ${JSON.stringify(state)}`,
+        { cause: error },
+      );
+    }
 
     assert.ok(state.trigger, JSON.stringify(state, null, 2));
     assert.ok(state.tooltip, JSON.stringify(state, null, 2));

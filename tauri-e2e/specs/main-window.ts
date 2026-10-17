@@ -76,31 +76,39 @@ const animatedOutletHosts = [
   '[data-slot="proxies-content"]',
 ] as const;
 
-async function waitForMainRouteSettled(timeout = 15_000) {
+async function waitForMainRouteSettled(
+  timeout = 15_000,
+  waitForNestedOutlets = true,
+) {
   await browser.waitUntil(
     async () =>
-      browser.execute((selectors) => {
-        const hostGroups = selectors.map((selector) =>
-          Array.from(document.querySelectorAll<HTMLElement>(selector)),
-        );
-        const appContent = hostGroups[0];
-        if (appContent.length !== 1 || appContent[0].children.length === 0) {
-          return false;
-        }
+      browser.execute(
+        (selectors) => {
+          const hostGroups = selectors.map((selector) =>
+            Array.from(document.querySelectorAll<HTMLElement>(selector)),
+          );
+          const appContent = hostGroups[0];
+          if (appContent.length !== 1 || appContent[0].children.length === 0) {
+            return false;
+          }
 
-        const currentRoute = appContent[0].firstElementChild;
-        if (
-          !currentRoute ||
-          Number.parseFloat(getComputedStyle(currentRoute).opacity) < 0.99
-        ) {
-          return false;
-        }
+          const currentRoute = appContent[0].firstElementChild;
+          if (
+            !currentRoute ||
+            Number.parseFloat(getComputedStyle(currentRoute).opacity) < 0.99
+          ) {
+            return false;
+          }
 
-        return hostGroups.slice(1).every((hosts) => {
-          if (hosts.length > 1) return false;
-          return hosts.length === 0 || hosts[0].children.length === 1;
-        });
-      }, animatedOutletHosts),
+          return hostGroups.slice(1).every((hosts) => {
+            if (hosts.length > 1) return false;
+            return hosts.length === 0 || hosts[0].children.length === 1;
+          });
+        },
+        waitForNestedOutlets
+          ? animatedOutletHosts
+          : animatedOutletHosts.slice(0, 1),
+      ),
     {
       timeout,
       timeoutMsg: 'The Chimera main route animation did not settle.',
@@ -118,7 +126,10 @@ export async function ensureMainWindow() {
   await waitForMainApp();
 }
 
-export async function openMainRoute(pathname: string) {
+export async function openMainRoute(
+  pathname: string,
+  options: { waitForNestedOutlets?: boolean } = {},
+) {
   await ensureMainWindow();
 
   if ((await browser.execute(() => location.pathname)) !== pathname) {
@@ -148,5 +159,5 @@ export async function openMainRoute(pathname: string) {
       ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },
   );
-  await waitForMainRouteSettled();
+  await waitForMainRouteSettled(15_000, options.waitForNestedOutlets ?? true);
 }

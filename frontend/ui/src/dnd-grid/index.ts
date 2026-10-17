@@ -1,19 +1,14 @@
-/**
- * DnD Grid 导出入口
- *
- * 迁移自 ref: `src/components/ui/dnd-grid/index.ts`
- *
- * 导出所有公共组件、Hook 和类型
- */
-
 export { DndGrid, type DndGridProps } from './dnd-grid';
 export { DndGridItem, type DndGridItemProps } from './dnd-grid-item';
-export { DndGridProvider } from './context';
+export { DndGridSource, type DndGridSourceProps } from './dnd-grid-source';
+export { DndGridProvider, useDndGridContext } from './context';
 export { useDndGridRoot, type ActiveDrag } from './root-context';
 export { DndGridRoot } from './dnd-grid-root';
+export { hasOverlap, isOverlap } from './utils';
 export type {
   DndGridItemType,
   GridItemConstraints,
+  GridPosition,
   GridSize,
   ResizeHandle,
 } from './types';

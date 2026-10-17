@@ -732,16 +732,6 @@ fn migrate_remote_options(uid: &str, option: Option<&Value>) -> Result<Mapping, 
                 (Some(legacy), None) => legacy,
                 (None, None) => 120,
             };
-            if interval == 0 {
-                return Err(fail(
-                    if option.contains_key("update_interval_minutes") {
-                        "option.update_interval_minutes"
-                    } else {
-                        "option.update_interval"
-                    },
-                    "zero interval is not representable in the clean schema; fix the profile before migrating",
-                ));
-            }
             out.insert("update_interval_minutes".into(), Value::from(interval));
         }
         Some(_) => return Err(fail("option", "option must be a mapping")),
@@ -1388,6 +1378,18 @@ config:
     }
 
     #[test]
+    fn remote_option_zero_interval_migrates_as_disabled_auto_sync() {
+        for key in ["update_interval", "update_interval_minutes"] {
+            let yaml = format!(
+                "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {{{key}: 0}}\n"
+            );
+            let out = migrated(&yaml);
+            let option = out["config"]["source"]["option"].as_mapping().unwrap();
+            assert_eq!(option["update_interval_minutes"], Value::from(0));
+        }
+    }
+
+    #[test]
     fn remote_option_conflicting_interval_keys_fail_explicitly() {
         let err = migrate_item_for_test(item(
             "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {update_interval: 60, update_interval_minutes: 240}\n",
@@ -1427,12 +1429,6 @@ config:
             .unwrap_err();
         assert_eq!(err.uid.as_deref(), Some("r1"));
         assert_eq!(err.field_path, "url");
-
-        let err = migrate_item_for_test(item(
-            "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {update_interval: 0}\n",
-        ))
-        .unwrap_err();
-        assert_eq!(err.field_path, "option.update_interval");
 
         let err = migrate_item_for_test(item(
             "uid: r1\ntype: remote\nname: A\nfile: r1.yaml\nurl: https://e.com\noption: {bogus: 1}\n",
