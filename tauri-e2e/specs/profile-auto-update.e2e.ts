@@ -568,16 +568,19 @@ describe('remote profile auto-update', () => {
       let requestCount = 0;
       let holdNextSubscriptionResponse = false;
       let finishHeldSubscriptionResponse!: () => void;
-      let finishManualSyncDuringCleanup = false;
-      let fixtureUid: string | undefined;
+      const manualSyncCleanupState = {
+        fixtureUid: undefined as string | undefined,
+        waitForCompletion: false,
+      };
       const manualSyncResponseGate = new Promise<void>((resolve) => {
         finishHeldSubscriptionResponse = resolve;
       });
       defer('release and finish a pending manual sync', async () => {
         finishHeldSubscriptionResponse();
-        if (!finishManualSyncDuringCleanup || !fixtureUid) return;
+        const fixtureUid = manualSyncCleanupState.fixtureUid;
+        if (!manualSyncCleanupState.waitForCompletion || !fixtureUid) return;
         await waitForManualSyncLoading(fixtureUid, false, 30_000);
-        finishManualSyncDuringCleanup = false;
+        manualSyncCleanupState.waitForCompletion = false;
       });
       const server = createServer(async (_request, response) => {
         requestCount += 1;
@@ -612,7 +615,7 @@ describe('remote profile auto-update', () => {
         },
       });
       const uid = outcome.value;
-      fixtureUid = uid;
+      manualSyncCleanupState.fixtureUid = uid;
       defer('restore the original Profile selection', async () => {
         const profiles = await readProfiles();
         if ((profiles.current ?? null) !== uid) return;
@@ -711,7 +714,7 @@ describe('remote profile auto-update', () => {
       // Request count advances before the Profile commit and query invalidation;
       // hold the response until the user-visible task state confirms the click.
       holdNextSubscriptionResponse = true;
-      finishManualSyncDuringCleanup = true;
+      manualSyncCleanupState.waitForCompletion = true;
       await manualSync.click();
       try {
         await browser.waitUntil(async () => requestCount > beforeManualSync, {
@@ -728,7 +731,7 @@ describe('remote profile auto-update', () => {
       await waitForManualSyncLoading(uid, true, 15_000);
       finishHeldSubscriptionResponse();
       await waitForManualSyncLoading(uid, false, 30_000);
-      finishManualSyncDuringCleanup = false;
+      manualSyncCleanupState.waitForCompletion = false;
 
       await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
