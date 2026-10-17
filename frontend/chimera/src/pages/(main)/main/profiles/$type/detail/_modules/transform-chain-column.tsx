@@ -81,13 +81,13 @@ function ItemContent({
           : undefined
       }
       className={cn(
-        'bg-surface-variant/40 flex min-w-0 select-none items-center gap-3 rounded-2xl py-2.5 pl-4 pr-2.5',
+        'bg-surface-variant/40 flex min-w-0 items-center gap-3 rounded-2xl py-2.5 pr-2.5 pl-4 select-none',
         // Only colours transition: dnd-kit animates the item's position itself,
         // and animating shadows or transforms on every card is costly while the
         // columns reflow.
         'transition-colors motion-reduce:transition-none',
         'focus-visible:outline-primary focus-visible:outline-2 focus-visible:outline-offset-2',
-        compact && 'gap-2.5 rounded-xl py-2 pl-3 pr-2',
+        compact && 'gap-2.5 rounded-xl py-2 pr-2 pl-3',
         draggable &&
           'hover:bg-surface-variant/70 cursor-grab touch-none active:cursor-grabbing',
         dragging && 'bg-secondary-container scale-[1.02] shadow-lg',
@@ -369,7 +369,7 @@ export const TransformChainColumn = memo(function TransformChainColumn({
               {active &&
                 (runtimeLogsByUid.get(profile.uid)?.length ?? 0) > 0 && (
                   <div
-                    className="mt-2 max-h-28 space-y-1 overflow-y-auto border-t pr-1 pt-2"
+                    className="mt-2 max-h-28 space-y-1 overflow-y-auto border-t pt-2 pr-1"
                     data-slot="transform-runtime-logs"
                   >
                     {runtimeLogsByUid
@@ -404,7 +404,7 @@ export const TransformChainColumn = memo(function TransformChainColumn({
                     {PROFILE_TYPE_NAMES[profileTypeOf(profile)]} · r
                     {runtimeFailure.attempt_revision}
                   </p>
-                  <p className="break-words font-mono opacity-80">
+                  <p className="font-mono break-words opacity-80">
                     {runtimeFailure.message}
                   </p>
                 </div>

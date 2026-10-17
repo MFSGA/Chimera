@@ -97,7 +97,7 @@ const ROUTES = {
         <ScriptIcon className="size-8" />
         <YamlIcon
           data-profile-type-badge="merge"
-          className="p-0.75 absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-orange-400 dark:bg-orange-700"
+          className="absolute -right-0.5 bottom-0 size-4 rotate-12 rounded bg-orange-400 p-0.75 dark:bg-orange-700"
         />
       </div>
     ),
