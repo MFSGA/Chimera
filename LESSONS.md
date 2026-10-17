@@ -12,16 +12,17 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块          | 问题与证据                                                                                                      | 状态      |
-| ------------------- | ---------- | ------------- | --------------------------------------------------------------------------------------------------------------- | --------- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI     | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
-| LESSON-20261014-003 | 2026-10-14 | Profile / E2E | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
-| LESSON-20261014-004 | 2026-10-14 | Development   | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
-| LESSON-20261015-001 | 2026-10-15 | E2E           | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
-| LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
-| LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | Development   | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| 编号                | 日期       | 模块           | 问题与证据                                                                                                                                          | 状态      |
+| ------------------- | ---------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI      | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成                                            | Open      |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E  | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成                                     | Open      |
+| LESSON-20261014-003 | 2026-10-14 | Profile / E2E  | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                                                          | Open      |
+| LESSON-20261014-004 | 2026-10-14 | Development    | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                                                              | Mitigated |
+| LESSON-20261015-001 | 2026-10-15 | E2E            | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正                                              | Verified  |
+| LESSON-20261015-002 | 2026-10-15 | E2E            | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验                                               | Open      |
+| LESSON-20261015-003 | 2026-10-15 | Development    | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                                                             | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Development    | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查                                                 | Mitigated |
+| LESSON-20261017-001 | 2026-10-17 | Profile / Rust | `start_producers()` 的 fire-and-forget cast 早于 scheduler/watcher 注册返回，导致 Profile 测试竞态；await actor reply 后 72/72 通过，远端复验待完成 | Open      |
 
 ## 单条模板
 
@@ -190,3 +191,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：中断后确认没有本次依赖安装或构建进程；直接 TypeScript harness 检查通过、unit tests 25/25、Prettier 与 `git diff --check` 通过。没有本机构建最新 E2E binary；该分支的 Windows CI 才能验证当前 app/test 组合。
 - 风险/回滚和清理证据（如涉及宿主状态）：未修改跟踪源码以外的配置；测试 runtime/artifacts 使用仓库 `cleanupRuntimeDirectory` 安全删除。依赖虚拟 store 保留在隔离 worktree 中，系统空间仍约 1.1 GiB 可用；未触及其他 worktree 或用户 app。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：此前另一 worktree 的 WDIO exec 已出现相同安装副作用，故记录为重复流程错误。开始运行 pnpm 检查前须确认工作树依赖已准备；否则从同一 checkout 的现成二进制运行单项检查，避免 `pnpm exec` 和并行安装。没有修改 CI 或治理门禁。
+
+### LESSON-20261017-001：Profile producer 启动必须等待 actor 注册处理完成
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（本地修复和测试通过；PR #485 最新 SHA 的远端 CI/E2E 待复验）
+- 严重度：Low
+- 模块：Profile / Rust / Core startup / CI
+- master commit / ref gitlink SHA / 平台与测试环境：PR #485 修复提交 `d1c78138`、文档修正提交 `e0629eb9`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Apple Silicon macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #485](https://github.com/MFSGA/Chimera/pull/485)，修复提交 `d1c78138`；最新 [CI run 39003119453](https://github.com/MFSGA/Chimera/actions/runs/39003119453) 与 [Desktop E2E run 39003119439](https://github.com/MFSGA/Chimera/actions/runs/39003119439) 已创建，状态为 pending。
+- 预期行为：核心启动协调确认终态后，Profiles actor 完成后台 jobs、外部文件 watcher 和 journal reconciliation 的启动尝试，再让调用方继续；测试推进虚拟时间或修改被监视文件时，actor 必须已处理 producer 启动消息。
+- 真实异常、复现步骤与证据：原 `ProfilesClient::start_producers()` 只向 actor cast `StartProducers` 后立即返回。新增 profile suite 中，`external_background_commit_does_not_bypass_the_mutation_participant` 在并行运行中出现竞态，定时刷新用例会等待超时；单独重跑外部文件用例可通过，而单独运行 `import_suggestion_is_committed_and_reschedules_the_timer` 会卡在虚拟时钟等待。测试在 actor 尚未处理 cast 前就推进 Tokio paused time 或写入文件，故本地结果取决于 actor 调度时序。
+- 确认的根因与排除项：cast 只保证消息排入 actor mailbox，不保证 handler 已运行；调用方把消息投递误当作 scheduler/watcher 已就绪。不是 ref 的预期功能差异或持久化问题。ref `31019da` 的 `ProfilesClient::start_producers` 也使用 cast；本 PR 增加 Chimera 内部 request/reply await 作为启动同步边界，差异已记录在 `docs/ref-alignment-profiles.md` DIFF-PROFILE-04。
+- 修复提交、差异映射及保留的兼容性边界：`d1c78138` 将 `StartProducers` 改为带 reply 的 actor call，`ProfilesClient::start_producers()` 等待回复，`ChimeraClient::init_core()` 在 lifecycle terminal reply 后等待该调用；重复 release 仍保持幂等。文档更正提交 `e0629eb9` 说明这是 best-effort 注册尝试完成，不保证各个 watcher/job 均成功注册。无公共 IPC、持久化格式或 agent contract 变化。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：cast-only 版本在本地 profile suite 中发生上述 scheduler/watcher 时序失败；await 回复后 `backend/tauri/src/client/profiles.rs` 的 Profile 测试全套通过。该修复没有新增独立测试入口，而是让现有生产者启动、定时刷新与外部 watcher 测试等待真实 actor 完成边界。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera startup_reconcile -- --nocapture` 通过 2/2；`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera client::profiles::tests:: -- --test-threads=4` 通过 72/72；`cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features`、包级 rustfmt、Prettier 与 `git diff --check` 通过。提交钩子的 rustfmt/Clippy 也通过。Reviewer 静态审查无 P0–P2；其独立测试复跑因主机卷空间不足无法完成。本机桌面 startup/UI E2E 未运行，远端 checks 仍 pending。
+- 风险/回滚和清理证据（如涉及宿主状态）：回滚为恢复原 cast-only 启动调用及无 reply 的 actor message；这会重新允许调用方早于 producer handler 完成而继续。未修改主机网络、持久化数据或用户 Profile。审查器新建的失败 Cargo target 已经 cargo clean 清理，未触碰其他构建缓存。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界，并在最新 PR SHA 的 CI/E2E 结束后更新状态；不修改治理门禁。
