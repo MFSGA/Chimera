@@ -8,8 +8,8 @@
   after an error. If a Profile transaction treats that artifact as a valid
   candidate, it can commit broken source or chain state while the runtime still
   reflects an earlier config.
-- Boundary: desktop UI E2E for chain selection, save, draft retention, and
-  diagnostics. The invalid script body is injected with `save_profile_file`
+- Boundary: desktop UI E2E for chain selection, reset, save, reordering, draft
+  retention, and diagnostics. The invalid script body is injected with `save_profile_file`
   IPC, so that case proves the Profile transaction/file boundary and its UI
   feedback; it does not prove typing the broken body into the editor.
 - Base suites: `profiles` and `critical`; at the time of the recorded Windows
@@ -41,7 +41,24 @@
   with a row-level failure and a nonblocking in-app notice; unrelated errors
   retain the native error dialog. Rejected script saves keep the profile editor
   open and surface the attempt diagnostic. A refresh is not used to create the
-  expected current-page state.
+  expected current-page state. The profile chain editor is now an inline card on profile details; the
+  global chain has its own route. The profile action must scroll the initially
+  offscreen editor into view; the scoped UI E2E asserts this viewport transition
+  before continuing with chain edits. Its desktop spec now uses WebdriverIO special-key input to pick up a
+  sortable item, move it, cancel and verify draft restoration, then repeat and
+  save the reordered chain. Scoped and global UI checks also use Reset to
+  discard an unsaved draft, verify the stored chain stays unchanged, and check
+  that the first/last move buttons disable at their bounds. The vendored
+  driver's element click explicitly focuses the item, so this covers the
+  `KeyboardSensor` interaction after focus; it does not verify Tab focus order.
+  Earlier pass evidence below covers the previous modal and cannot verify this
+  candidate.
+- Pointer drag-and-drop remains unverified in desktop E2E. The pinned Tauri
+  WebDriver emits `MouseEvent` for pointer actions, while the editor's
+  `PointerSensor` listens for pointer events. The move-up/down buttons remain
+  separately covered. Removal condition: run the reorder-and-persist contract
+  on a dedicated desktop runner using an alternate, validated driver that
+  dispatches the real pointer event sequence, then record that result here.
 - Persistence and restart: rejected script edits must leave the managed file
   byte-for-byte unchanged. These cases do not claim cold-start persistence or
   restart recovery. Successful repair is checked in the active runtime and,
@@ -124,3 +141,7 @@ Windows Edge critical passed in [workflow run 37536249230](https://github.com/MF
 Both `profile-transform-chain-ui.e2e.ts` and `profiles-layout.e2e.ts` passed;
 the latter completed its action-draft assertions without refreshing the main
 window. This is the first passing Windows run for the final test setup.
+
+The profile-chain UI migration described above changes the tested controls and
+route. It needs a fresh desktop run against the candidate commit; the historical
+Windows pass is not evidence for the inline editor.
