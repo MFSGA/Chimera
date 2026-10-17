@@ -18,6 +18,17 @@ const nodeName = 'TDD SOCKS Node';
 type ProxiesResponse = {
   groups: Array<{ name: string; all: Array<{ name: string }> }>;
 };
+type DelayTriggerState = {
+  tooltipState: string | null;
+  loadingState: string | null;
+  visible: boolean;
+  rect: { top: number; right: number; bottom: number; left: number };
+  viewport: { width: number; height: number };
+  hitTarget: boolean;
+  display: string;
+  visibility: string;
+  opacity: number;
+};
 const fixture = `mixed-port: 27892
 allow-lan: false
 mode: rule
@@ -39,6 +50,48 @@ proxy-groups:
 rules:
   - MATCH,${groupName}
 `;
+
+async function readDelayTriggerState(): Promise<DelayTriggerState | null> {
+  return browser.execute(() => {
+    const trigger = document.querySelector<HTMLElement>(
+      '[data-slot="delay-test-button-trigger"]',
+    );
+    if (!trigger) return null;
+
+    const rect = trigger.getBoundingClientRect();
+    const style = window.getComputedStyle(trigger);
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(centerX, centerY);
+    const visible =
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.right > 0 &&
+      rect.bottom > 0 &&
+      rect.left < window.innerWidth &&
+      rect.top < window.innerHeight &&
+      style.display !== 'none' &&
+      style.visibility === 'visible' &&
+      Number(style.opacity) > 0;
+
+    return {
+      tooltipState: trigger.getAttribute('data-state'),
+      loadingState: trigger.getAttribute('data-loading'),
+      visible,
+      rect: {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      hitTarget: hit === trigger || trigger.contains(hit),
+      display: style.display,
+      visibility: style.visibility,
+      opacity: Number(style.opacity),
+    };
+  });
+}
 
 describe('main proxy node reference layout', () => {
   let profileUid: string | undefined;
@@ -189,20 +242,30 @@ describe('main proxy node reference layout', () => {
     }
   });
 
-  it('uses the main tooltip trigger contract for group delay testing', async () => {
-    const trigger = await $('[data-slot="delay-test-button-trigger"]');
-    await trigger.waitForDisplayed({ timeout: 15_000 });
+  // Contract: the group detail shows an unobscured delay-test action in the
+  // viewport and starts idle with its tooltip closed. The failure artifact for
+  // this view showed the action rendered and visible even though WDIO's
+  // waitForDisplayed reported it hidden; check rendered geometry and hit
+  // testing directly, then assert the action's observable state.
+  it('renders an available, idle group delay trigger', async () => {
+    let lastState: DelayTriggerState | null = null;
+    await browser.waitUntil(
+      async () => {
+        lastState = await readDelayTriggerState();
 
-    const state = await browser.execute(() => {
-      const trigger = document.querySelector<HTMLElement>(
-        '[data-slot="delay-test-button-trigger"]',
-      );
-      return {
-        tooltipState: trigger?.getAttribute('data-state') ?? null,
-        loadingState: trigger?.getAttribute('data-loading') ?? null,
-      };
-    });
+        return lastState?.visible === true && lastState.hitTarget;
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: () =>
+          `The group delay trigger did not become visible and available: ${JSON.stringify(lastState)}`,
+      },
+    );
 
+    const state = await readDelayTriggerState();
+    assert.ok(state, 'The group delay trigger was not rendered.');
+    assert.equal(state.visible, true, JSON.stringify(state, null, 2));
+    assert.equal(state.hitTarget, true, JSON.stringify(state, null, 2));
     assert.equal(state.tooltipState, 'closed', JSON.stringify(state, null, 2));
     assert.equal(state.loadingState, 'false', JSON.stringify(state, null, 2));
   });
