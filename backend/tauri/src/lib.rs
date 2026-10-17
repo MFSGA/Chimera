@@ -118,6 +118,7 @@ pub fn run() -> std::io::Result<()> {
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
+    builder = builder.manage(utils::exit::ExitBoundary::default());
 
     #[cfg(feature = "e2e")]
     {
@@ -181,7 +182,9 @@ pub fn run() -> std::io::Result<()> {
             {
                 let app_handle = app.handle().clone();
                 shutdown_hook::setup_shutdown_hook(move || {
-                    crate::log_err!(utils::help::cleanup_processes(&app_handle));
+                    crate::log_err!(utils::exit::shutdown_before_exit_blocking(
+                        &app_handle
+                    ));
                 })?;
             }
 
@@ -254,19 +257,8 @@ pub fn run() -> std::io::Result<()> {
 
     app.run(|app_handle, e| match e {
         // pay attention to this event order, otherwise the app will quit immediately after all windows are closed
-        tauri::RunEvent::ExitRequested { api, code, .. } if code.is_none() => {
-            // todo optimize for dev
-            // #[cfg(not(feature = "verge-dev"))]
-            api.prevent_exit();
-            // #[cfg(feature = "verge-dev")]
-            // utils::help::cleanup_processes(app_handle);
-        }
-        tauri::RunEvent::ExitRequested { .. } => {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            if let Some(client) = app_handle.try_state::<crate::client::ChimeraClient>() {
-                chimera_utils::runtime::block_on(client.unregister_hotkeys());
-            }
-            crate::log_err!(utils::help::cleanup_processes(app_handle));
+        tauri::RunEvent::ExitRequested { api, code, .. } => {
+            utils::exit::on_exit_requested(app_handle, code, &api);
         }
         tauri::RunEvent::WindowEvent { label, event, .. }
             if label == crate::consts::LEGACY_WINDOW_LABEL

@@ -68,6 +68,10 @@ impl PathResolver {
         self.data_dir.join(dirs::STORAGE_DB)
     }
 
+    pub fn jobs_path(&self) -> PathBuf {
+        self.data_dir.join("jobs.redb")
+    }
+
     pub fn clash_pid_path(&self) -> PathBuf {
         self.data_dir.join("clash.pid")
     }
@@ -123,6 +127,7 @@ mod tests {
     fn data_derived_paths_join_data_dir() {
         let r = resolver();
         assert_eq!(r.storage_path(), Path::new("/data").join(dirs::STORAGE_DB));
+        assert_eq!(r.jobs_path(), Path::new("/data").join("jobs.redb"));
         assert_eq!(r.clash_pid_path(), Path::new("/data").join("clash.pid"));
         assert_eq!(r.app_logs_dir(), Path::new("/data").join("logs"));
         assert_eq!(r.cache_dir(), Path::new("/data").join("cache"));
