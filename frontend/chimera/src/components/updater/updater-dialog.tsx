@@ -56,9 +56,11 @@ export default function UpdaterDialog({
 
   const handleUpdate = useLockFn(async () => {
     startPending(async () => {
+      let shutdownStarted = false;
       try {
         // Install the update. This will also restart the app on Windows!
         await update.download(onDownloadEvent);
+        shutdownStarted = true;
         await cleanupProcesses();
         // cleanup and stop core
         await update.install();
@@ -67,6 +69,16 @@ export default function UpdaterDialog({
         await relaunch();
       } catch (e) {
         console.error(e);
+        if (shutdownStarted) {
+          // The app owners have stopped for installation. If installation
+          // fails, relaunch the currently installed version to restore them.
+          try {
+            await relaunch();
+            return;
+          } catch (relaunchError) {
+            console.error(relaunchError);
+          }
+        }
         message(formatError(e), { kind: 'error', title: m.common_error() });
       }
     });

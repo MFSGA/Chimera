@@ -1,6 +1,7 @@
 //! Profiles domain state (PR-3). Tauri-free.
 
 pub mod actor;
+pub(crate) mod jobs;
 pub mod ports;
 mod scheduler;
 

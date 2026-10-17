@@ -38,6 +38,16 @@ impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
 
 pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let tasks = tokio_util::task::TaskTracker::new();
+    let jobs = tauri::async_runtime::block_on(crate::client::jobs::start(
+        paths.jobs_path(),
+        crate::utils::init::jobs_capture(),
+        shutdown.child_token(),
+        &tasks,
+    ))
+    .context("failed to start the jobs owner")?;
+    app.manage(AppShutdown { shutdown, tasks });
     let traffic_store = open_traffic_store(&paths);
     let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
         paths.clone(),
@@ -107,6 +117,9 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         profile_service,
         system_dns: Arc::new(OsSystemDnsCache),
         traffic_store,
+        jobs,
+        shutdown: app.state::<AppShutdown>().shutdown.child_token(),
+        tasks: app.state::<AppShutdown>().tasks.clone(),
         ui_sink: Arc::new(LegacyUiEventSink),
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects,
@@ -120,6 +133,23 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     app.manage(client);
     core_facade_monitor.start_service_api_monitor();
     Ok(())
+}
+
+#[derive(Clone)]
+pub(crate) struct AppShutdown {
+    pub(crate) shutdown: tokio_util::sync::CancellationToken,
+    pub(crate) tasks: tokio_util::task::TaskTracker,
+}
+
+impl AppShutdown {
+    pub(crate) fn request_shutdown(&self) {
+        self.shutdown.cancel();
+        self.tasks.close();
+    }
+
+    pub(crate) async fn wait_shutdown(&self) {
+        self.tasks.wait().await;
+    }
 }
 
 /// Traffic recording is optional; an unavailable store disables history without blocking launch.
