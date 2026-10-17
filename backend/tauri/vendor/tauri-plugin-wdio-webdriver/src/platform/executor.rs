@@ -1562,10 +1562,32 @@ pub trait PlatformExecutor<R: Runtime>: Send + Sync {
         } else {
             0
         };
+        let pointer_event_script = if matches!(event_type, PointerEventType::Down) {
+            format!(
+                r#"
+                    var pointerEvent = new PointerEvent('pointerdown', {{
+                        bubbles: true,
+                        cancelable: true,
+                        clientX: {x},
+                        clientY: {y},
+                        button: {button},
+                        buttons: {buttons},
+                        pointerId: 1,
+                        pointerType: 'mouse',
+                        isPrimary: true
+                    }});
+                    el.dispatchEvent(pointerEvent);
+                "#
+            )
+        } else {
+            String::new()
+        };
         let script = format!(
             r"(function() {{
                 var el = document.elementFromPoint({x}, {y});
                 if (!el) el = document.body;
+
+                {pointer_event_script}
 
                 var event = new MouseEvent('{event_name}', {{
                     bubbles: true,

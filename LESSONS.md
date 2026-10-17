@@ -26,6 +26,7 @@
 | LESSON-20261017-001 | 2026-10-17 | E2E / CI       | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应                                                       | Verified  |
 | LESSON-20261017-002 | 2026-10-17 | Profile / Rust | `start_producers()` 原先只投递 actor cast，调度器/文件 watcher 尚未注册时调用方已继续；await actor 回复后 Profile 测试 72/72 通过，合并后 SHA 待 CI 复验 | Open      |
 | LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                                                                    | Verified  |
+| LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                                                                | Open      |
 
 ## 单条模板
 
@@ -49,6 +50,23 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
+
+### LESSON-20261017-006：Dashboard 右键测试必须先发送 pointerdown
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（驱动修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：master `5fc556b4dc1b4724c3486d537b3d239d89c97c5e`；ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39072145858](https://github.com/MFSGA/Chimera/actions/runs/39072145858)，52 个 spec 中 50 个通过；Dashboard 编辑菜单和后续 Agent 页面导航失败。
+- 预期行为：右键 Dashboard 后，上下文菜单显示已注册的 Dashboard 操作，后续编辑流程可继续。
+- 真实异常、复现步骤与证据：Windows E2E 右键后菜单等待为 false；失败截图显示应用通用剪贴板菜单，没有 Dashboard 项。随后 Agent 页就绪等待也失败。
+- 确认的根因与排除项：ref 与 Chimera 的共享菜单 provider 都在 document capture 阶段通过 `pointerdown` 记录右键目标，再沿 DOM 查找已注册菜单。vendored 驱动只合成 `mousedown`、`mouseup` 和 `contextmenu`，没有触发该记录逻辑。对照 ref `frontend/nyanpasu/src/components/providers/context-menu-provider.tsx` 与 Chimera `frontend/chimera/src/components/providers/context-menu-provider.tsx` 后，未发现 Dashboard 菜单实现差异；Agent 页面失败发生在前一用例之后，待菜单修复后复验是否为连带失败。
+- 修复提交、差异映射及保留的兼容性边界：`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs::dispatch_pointer_event` 在按下时、对应 MouseEvent 前合成冒泡且可取消的 `pointerdown`，保留匹配右键释放后的 `contextmenu`。该修复验证应用 DOM 事件路径，不代表完整 PointerEvent 序列或真实鼠标输入。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现由上述 Windows PR E2E 运行失败；新 SHA 的复验仍待执行。相关回归仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 Windows hermetic suite 运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo check --locked --manifest-path backend/tauri/vendor/tauri-plugin-wdio-webdriver/Cargo.toml --target-dir /tmp/chimera-wdio-plugin-check` 通过；`rustfmt --edition 2021 .../executor.rs` 与 `git diff --check` 通过。Windows E2E 尚未对修复 SHA 运行；真实可信鼠标输入不在覆盖范围。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅测试驱动合成事件和测试证据文档；不修改产品菜单、持久化或宿主网络。回滚为还原驱动 PointerEvent 合成并移除此记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：更新 [U09](docs/testing/upstream-evidence.md#u09-tauri-driver-合成-pointerevent-与右键上下文菜单边界) 及 Dashboard 测试契约，后续升级驱动时重跑相同菜单最小复现；无 CI 门禁调整。
 
 ### LESSON-20261017-001：data URL E2E 应验证请求结果而非固定响应类型
 
