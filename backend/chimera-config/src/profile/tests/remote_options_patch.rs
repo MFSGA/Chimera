@@ -1,5 +1,5 @@
 //! Leaf patch semantics for `RemoteProfileOptions`.
-use crate::profile::{RemoteProfileOptions, RemoteProfileOptionsPatch};
+use crate::profile::{RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval};
 use struct_patch::Patch;
 
 #[test]
@@ -28,11 +28,27 @@ fn legacy_update_interval_alias_is_gone() {
     // The clean model drops the `update_interval` alias; only the canonical name decodes.
     let patch: RemoteProfileOptionsPatch =
         serde_yaml_ng::from_str("update_interval_minutes: 240\n").expect("canonical decodes");
-    assert_eq!(patch.update_interval_minutes, Some(240));
+    assert_eq!(
+        patch.update_interval_minutes,
+        Some(RemoteSyncInterval::from_minutes(240))
+    );
 
     let alias: RemoteProfileOptionsPatch =
         serde_yaml_ng::from_str("update_interval: 240\n").expect("unknown key is ignored");
     assert_eq!(alias.update_interval_minutes, None, "alias must NOT map");
+}
+
+#[test]
+fn zero_interval_round_trips_as_disabled_auto_sync() {
+    let mut options: RemoteProfileOptions = serde_yaml_ng::from_str("update_interval_minutes: 0\n")
+        .expect("zero interval deserializes");
+    assert!(options.update_interval_minutes.is_auto_sync_disabled());
+    assert_eq!(options.update_interval_minutes.minutes(), None);
+
+    let dumped = serde_yaml_ng::to_string(&options).expect("serializes");
+    assert!(dumped.contains("update_interval_minutes: 0"));
+    options.update_interval_minutes = RemoteSyncInterval::from_minutes(60);
+    assert_eq!(options.update_interval_minutes.minutes().unwrap().get(), 60);
 }
 
 #[test]

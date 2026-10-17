@@ -68,10 +68,15 @@ export const baseE2eSuites = {
   system: ['./specs/windows-service-tun-lifecycle.e2e.ts'],
 } as const;
 
+export const isolatedE2eSuites = {
+  'profile-auto-update-main': ['./specs/profile-auto-update.e2e.ts'],
+} as const;
+
 const combine = (...groups: readonly (readonly string[])[]) => groups.flat();
 
 export const e2eSuites = {
   ...baseE2eSuites,
+  ...isolatedE2eSuites,
   'controller-fallback': ['./specs/ipv6-runtime-setting.e2e.ts'],
   critical: combine(
     baseE2eSuites.smoke,
