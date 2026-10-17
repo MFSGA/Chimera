@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { clickElement, displayedElement, focusElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
 
-const sidebarToggleSelector = '[data-slot="navigation-sidebar-toggle"]';
+const sidebarToggleSelector =
+  '[data-slot="traffic-page"] [data-slot="navigation-sidebar-toggle"]';
 
 async function readSidebarToggleState() {
   return browser.execute((selector) => {
@@ -70,11 +71,14 @@ describe('main traffic analysis', () => {
           () =>
             location.pathname === '/main/dashboard' &&
             document.querySelector('[data-slot="dashboard-container"]') !==
-              null,
+              null &&
+            document.querySelectorAll('[data-slot="traffic-page"]').length ===
+              0,
         ),
       {
         timeout: 15_000,
-        timeoutMsg: 'The dashboard did not open before traffic navigation.',
+        timeoutMsg:
+          'The dashboard route did not settle before traffic navigation.',
       },
     );
   });
@@ -92,7 +96,8 @@ describe('main traffic analysis', () => {
         browser.execute(
           () =>
             location.pathname === '/main/topology' &&
-            document.querySelector('[data-slot="traffic-page"]') !== null,
+            document.querySelectorAll('[data-slot="traffic-page"]').length ===
+              1,
         ),
       {
         timeout: 15_000,
@@ -100,12 +105,12 @@ describe('main traffic analysis', () => {
       },
     );
 
-    const sidebarToggle = await $(sidebarToggleSelector);
+    const sidebarToggle = await displayedElement(sidebarToggleSelector);
     const collapsedState = await readSidebarToggleState();
     const collapsedLabel = collapsedState?.label;
     assert.ok(collapsedLabel);
     assert.equal(collapsedState?.expanded, 'false');
-    await sidebarToggle.click();
+    await clickElement(sidebarToggle);
     await waitForSidebarToggleState(
       (state) =>
         state?.expanded === 'true' &&
@@ -116,7 +121,7 @@ describe('main traffic analysis', () => {
     const expandedLabel = (await readSidebarToggleState())?.label;
     assert.ok(expandedLabel);
     assert.notEqual(expandedLabel, collapsedLabel);
-    await $(sidebarToggleSelector).click();
+    await clickElement(await displayedElement(sidebarToggleSelector));
     await waitForSidebarToggleState(
       (state) => state?.expanded === 'false' && state.label === collapsedLabel,
       'Collapsing the traffic sidebar did not restore its label.',
