@@ -523,14 +523,30 @@ export function SyncHistoryCard({ uid }: { uid: string }) {
                               >
                                 <time
                                   dateTime={entry.time}
-                                  className={cn('text-on-surface-variant', 'pt-1', 'font-mono', 'text-[11px]', 'leading-none', 'tabular-nums')}
+                                  className={cn(
+                                    'text-on-surface-variant',
+                                    'pt-1',
+                                    'font-mono',
+                                    'text-[11px]',
+                                    'leading-none',
+                                    'tabular-nums',
+                                  )}
                                 >
                                   {dayjs(entry.time).format('HH:mm:ss')}
                                 </time>
 
                                 <LogLevelBadge>{entry.level}</LogLevelBadge>
 
-                                <span className={cn('min-w-0', 'wrap-anywhere', 'whitespace-pre-wrap', 'font-mono', 'text-xs', 'leading-relaxed')}>
+                                <span
+                                  className={cn(
+                                    'min-w-0',
+                                    'wrap-anywhere',
+                                    'whitespace-pre-wrap',
+                                    'font-mono',
+                                    'text-xs',
+                                    'leading-relaxed',
+                                  )}
+                                >
                                   {entry.fields.message ?? entry.fields.stage}
                                 </span>
                               </li>
