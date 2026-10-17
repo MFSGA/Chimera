@@ -57,6 +57,16 @@ type ScrollViewportObservation = {
   maxScrollTop: number;
 };
 
+type UiElementObservation = {
+  count: number;
+  controlCount: number;
+  exists: boolean;
+  visible: boolean;
+  enabled: boolean | null;
+  unobstructed: boolean | null;
+  hitTarget: string | null;
+};
+
 const GLOBAL_TRANSFORM_EDITOR_SELECTOR =
   '[data-slot="transform-chain-editor"][data-chain-scope="global"]';
 
@@ -136,24 +146,126 @@ async function openRoute(pathname: string) {
 }
 
 async function waitForGlobalEditor() {
-  const editor = await $(GLOBAL_TRANSFORM_EDITOR_SELECTOR);
-  await editor.waitForDisplayed({
-    timeout: 15_000,
-    timeoutMsg: 'The global transform editor did not become visible.',
-  });
-  return editor;
+  return waitForStableUiElement(
+    GLOBAL_TRANSFORM_EDITOR_SELECTOR,
+    GLOBAL_TRANSFORM_EDITOR_SELECTOR,
+    'The global transform editor did not become visible and stable',
+    (observation) => observation.count === 1 && observation.visible,
+  );
 }
 
 async function waitForGlobalInactiveAdd(uid: string) {
   const itemSelector = `[data-slot="transform-chain-inactive-item"][data-profile-uid="${uid}"]`;
-  const item = await $(itemSelector);
-  await item.waitForDisplayed({
-    timeout: 15_000,
-    timeoutMsg: `Global transform candidate ${uid} did not return to the available list.`,
-  });
-  const add = await $(`${itemSelector} [data-slot="transform-chain-add"]`);
-  await add.waitForClickable({ timeout: 15_000 });
-  return add;
+  const addSelector = `${itemSelector} [data-slot="transform-chain-add"]`;
+  return waitForStableUiElement(
+    itemSelector,
+    addSelector,
+    `Global transform candidate ${uid} did not settle in the available list`,
+    (observation) =>
+      observation.count === 1 &&
+      observation.controlCount === 1 &&
+      observation.exists &&
+      observation.visible &&
+      observation.enabled === true &&
+      observation.unobstructed !== false,
+  );
+}
+
+async function waitForStableUiElement(
+  selector: string,
+  interactionSelector: string,
+  description: string,
+  isReady: (observation: UiElementObservation) => boolean,
+) {
+  let lastObservation: UiElementObservation | null = null;
+  let previousObservation = '';
+  let stableObservations = 0;
+  await browser.waitUntil(
+    async () => {
+      lastObservation = await readUiElementObservation(
+        selector,
+        interactionSelector,
+      );
+      const currentObservation = JSON.stringify(lastObservation);
+      stableObservations =
+        currentObservation === previousObservation ? stableObservations + 1 : 1;
+      previousObservation = currentObservation;
+      return isReady(lastObservation) && stableObservations >= 2;
+    },
+    {
+      timeout: 15_000,
+      timeoutMsg: () =>
+        `${description}. Last state: ${JSON.stringify(lastObservation)}.`,
+    },
+  );
+  return $(interactionSelector);
+}
+
+async function readUiElementObservation(
+  selector: string,
+  interactionSelector = selector,
+): Promise<UiElementObservation> {
+  return browser.execute(
+    (targetSelector, controlSelector) => {
+      const matches = document.querySelectorAll(targetSelector);
+      const target = matches[0];
+      const controls = document.querySelectorAll(controlSelector);
+      const control = document.querySelector<HTMLElement>(controlSelector);
+      if (!target || !control) {
+        return {
+          count: matches.length,
+          controlCount: controls.length,
+          exists: false,
+          visible: false,
+          enabled: null,
+          unobstructed: null,
+          hitTarget: null,
+        };
+      }
+
+      const style = window.getComputedStyle(control);
+      const rect = control.getBoundingClientRect();
+      const isVisible = (element: Element) => {
+        const elementStyle = window.getComputedStyle(element);
+        const elementRect = element.getBoundingClientRect();
+        return (
+          elementStyle.display !== 'none' &&
+          elementStyle.visibility !== 'hidden' &&
+          elementRect.width > 0 &&
+          elementRect.height > 0
+        );
+      };
+      const visible = isVisible(target) && isVisible(control);
+      const visibleLeft = Math.max(rect.left, 0);
+      const visibleRight = Math.min(rect.right, window.innerWidth);
+      const visibleTop = Math.max(rect.top, 0);
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight);
+      const inViewport =
+        visibleRight > visibleLeft && visibleBottom > visibleTop;
+      const hit = inViewport
+        ? document.elementFromPoint(
+            visibleLeft + (visibleRight - visibleLeft) / 2,
+            visibleTop + (visibleBottom - visibleTop) / 2,
+          )
+        : null;
+
+      return {
+        count: matches.length,
+        controlCount: controls.length,
+        exists: true,
+        visible,
+        enabled:
+          !control.matches(':disabled') &&
+          control.getAttribute('aria-disabled') !== 'true',
+        unobstructed: hit ? control.contains(hit) : inViewport ? false : null,
+        hitTarget: hit
+          ? `${hit.tagName.toLowerCase()}${hit.getAttribute('data-slot') ? `[data-slot="${hit.getAttribute('data-slot')}"]` : ''}`
+          : null,
+      };
+    },
+    selector,
+    interactionSelector,
+  );
 }
 
 async function readScrollViewportObservation(
@@ -1152,20 +1264,16 @@ describe('main transform chain editor', () => {
     await trigger.click();
 
     let editor = await waitForGlobalEditor();
-    await editor
-      .$(
-        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
-      )
-      .$('[data-slot="transform-chain-add"]')
-      .click();
-    await editor
-      .$(
-        `[data-slot="transform-chain-inactive-item"][data-profile-uid="${javascriptUid}"]`,
-      )
-      .$('[data-slot="transform-chain-add"]')
-      .click();
+    const addMergeTransform = await waitForGlobalInactiveAdd(mergeAUid);
+    await addMergeTransform.click();
+    await waitForActiveOrder('global', [mergeAUid]);
+    editor = await waitForGlobalEditor();
+    const addJavascriptTransform =
+      await waitForGlobalInactiveAdd(javascriptUid);
+    await addJavascriptTransform.click();
     const originalOrder = [mergeAUid, javascriptUid];
     await waitForActiveOrder('global', originalOrder);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), originalOrder);
 
     await editor.$('[data-slot="transform-chain-reset"]').click();
@@ -1173,12 +1281,11 @@ describe('main transform chain editor', () => {
     await waitForGlobalChain([]);
 
     editor = await waitForGlobalEditor();
-    for (const uid of originalOrder) {
+    for (const [index, uid] of originalOrder.entries()) {
       const add = await waitForGlobalInactiveAdd(uid);
       await add.click();
-      await $(
-        `[data-slot="transform-chain-active-item"][data-profile-uid="${uid}"]`,
-      ).waitForDisplayed({ timeout: 15_000 });
+      await waitForActiveOrder('global', originalOrder.slice(0, index + 1));
+      editor = await waitForGlobalEditor();
     }
     await waitForActiveOrder('global', originalOrder);
     assert.deepEqual(await activeOrder('global'), originalOrder);
@@ -1218,7 +1325,9 @@ describe('main transform chain editor', () => {
     );
 
     await javascriptRow.$('[data-slot="transform-chain-move-up"]').click();
+    await waitForActiveOrder('global', [javascriptUid, mergeAUid]);
     assert.deepEqual(await activeOrder('global'), [javascriptUid, mergeAUid]);
+    editor = await waitForGlobalEditor();
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([javascriptUid, mergeAUid]);
     const reordered = await waitForGlobalRuntimeLog(
@@ -1236,7 +1345,9 @@ describe('main transform chain editor', () => {
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
     await javascriptRow.$('[data-slot="transform-chain-move-down"]').click();
+    await waitForActiveOrder('global', [mergeAUid, javascriptUid]);
     assert.deepEqual(await activeOrder('global'), [mergeAUid, javascriptUid]);
+    editor = await waitForGlobalEditor();
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid, javascriptUid]);
     const movedDown = await waitForGlobalRuntimeLog(
@@ -1254,7 +1365,9 @@ describe('main transform chain editor', () => {
       `[data-slot="transform-chain-active-item"][data-profile-uid="${javascriptUid}"]`,
     );
     await javascriptRow.$('[data-slot="transform-chain-remove"]').click();
+    await waitForActiveOrder('global', [mergeAUid]);
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
+    editor = await waitForGlobalEditor();
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
     const cleared = await waitForGlobalRuntimeLogCleared(
@@ -1373,6 +1486,7 @@ describe('main transform chain editor', () => {
       await waitForGlobalInactiveAdd(failingJavascriptUid);
     await addFailingTransform.click();
     await waitForActiveOrder('global', [mergeAUid, failingJavascriptUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [
       mergeAUid,
       failingJavascriptUid,
@@ -1415,13 +1529,17 @@ describe('main transform chain editor', () => {
       /chain ui intentional failure/,
     );
 
-    for (const transformUid of [failingJavascriptUid, mergeAUid]) {
+    const repairOrder = [failingJavascriptUid, mergeAUid];
+    for (const [index, transformUid] of repairOrder.entries()) {
       const currentRow = await editor.$(
         `[data-slot="transform-chain-active-item"][data-profile-uid="${transformUid}"]`,
       );
       await currentRow.$('[data-slot="transform-chain-remove"]').click();
+      const remainingOrder = index === 0 ? [mergeAUid] : [];
+      await waitForActiveOrder('global', remainingOrder);
+      editor = await waitForGlobalEditor();
     }
-    await waitForActiveOrder('global', []);
+    assert.deepEqual(await activeOrder('global'), []);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([]);
     await waitForApplySettled('global');
@@ -1742,6 +1860,7 @@ describe('main transform chain editor', () => {
     const addFailingTransform = await waitForGlobalInactiveAdd(failingMergeUid);
     await addFailingTransform.click();
     await waitForActiveOrder('global', [failingMergeUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [failingMergeUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     const failedDiagnostics = await waitForTransformFailure(
@@ -1791,10 +1910,12 @@ describe('main transform chain editor', () => {
         '"]',
     );
     await currentFailingRow.$('[data-slot="transform-chain-remove"]').click();
-    const validTransform = await editor.$(
-      `[data-slot="transform-chain-inactive-item"][data-profile-uid="${mergeAUid}"]`,
-    );
-    await validTransform.$('[data-slot="transform-chain-add"]').click();
+    await waitForActiveOrder('global', []);
+    editor = await waitForGlobalEditor();
+    const addValidTransform = await waitForGlobalInactiveAdd(mergeAUid);
+    await addValidTransform.click();
+    await waitForActiveOrder('global', [mergeAUid]);
+    editor = await waitForGlobalEditor();
     assert.deepEqual(await activeOrder('global'), [mergeAUid]);
     await editor.$('[data-slot="transform-chain-save"]').click();
     await waitForGlobalChain([mergeAUid]);
