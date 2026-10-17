@@ -18,6 +18,21 @@ const nodeName = 'TDD SOCKS Node';
 type ProxiesResponse = {
   groups: Array<{ name: string; all: Array<{ name: string }> }>;
 };
+type DelayTriggerState = {
+  tooltipState: string | null;
+  loadingState: string | null;
+  visible: boolean;
+  rect: { top: number; right: number; bottom: number; left: number };
+  viewport: { width: number; height: number };
+  hitTarget: boolean;
+  hitFailures: number;
+  blockers: string[];
+  disabled: boolean;
+  ariaDisabled: string | null;
+  display: string;
+  visibility: string;
+  opacity: number;
+};
 const fixture = `mixed-port: 27892
 allow-lan: false
 mode: rule
@@ -39,6 +54,113 @@ proxy-groups:
 rules:
   - MATCH,${groupName}
 `;
+
+async function readDelayTriggerState(): Promise<DelayTriggerState | null> {
+  return browser.execute(() => {
+    const trigger = document.querySelector<HTMLButtonElement>(
+      '[data-slot="delay-test-button-trigger"]',
+    );
+    if (!trigger) return null;
+
+    const rect = trigger.getBoundingClientRect();
+    const style = window.getComputedStyle(trigger);
+    const blockers: string[] = [];
+    if (style.visibility !== 'visible') {
+      blockers.push(`trigger has visibility:${style.visibility}`);
+    }
+    const withinViewport =
+      rect.width > 0 &&
+      rect.height > 0 &&
+      rect.left >= 0 &&
+      rect.top >= 0 &&
+      rect.right <= window.innerWidth &&
+      rect.bottom <= window.innerHeight;
+    if (!withinViewport) blockers.push('outside viewport');
+
+    for (
+      let ancestor: HTMLElement | null = trigger;
+      ancestor;
+      ancestor = ancestor.parentElement
+    ) {
+      const ancestorStyle = window.getComputedStyle(ancestor);
+      const label = `${ancestor.tagName.toLowerCase()}${ancestor.id ? `#${ancestor.id}` : ''}`;
+      if (ancestorStyle.display === 'none') {
+        blockers.push(`${label} has display:none`);
+      }
+      if (Number(ancestorStyle.opacity) <= 0) {
+        blockers.push(`${label} has opacity:0`);
+      }
+      if (ancestorStyle.contentVisibility === 'hidden') {
+        blockers.push(`${label} has content-visibility:hidden`);
+      }
+
+      if (ancestor === trigger) continue;
+
+      const ancestorRect = ancestor.getBoundingClientRect();
+      const scaleX = ancestor.offsetWidth
+        ? ancestorRect.width / ancestor.offsetWidth
+        : 1;
+      const scaleY = ancestor.offsetHeight
+        ? ancestorRect.height / ancestor.offsetHeight
+        : 1;
+      const clipLeft = ancestorRect.left + ancestor.clientLeft * scaleX;
+      const clipTop = ancestorRect.top + ancestor.clientTop * scaleY;
+      const clipRight = clipLeft + ancestor.clientWidth * scaleX;
+      const clipBottom = clipTop + ancestor.clientHeight * scaleY;
+      if (
+        ['hidden', 'clip', 'scroll', 'auto', 'overlay'].includes(
+          ancestorStyle.overflowX,
+        ) &&
+        (rect.left < clipLeft || rect.right > clipRight)
+      ) {
+        blockers.push(`${label} clips the trigger horizontally`);
+      }
+      if (
+        ['hidden', 'clip', 'scroll', 'auto', 'overlay'].includes(
+          ancestorStyle.overflowY,
+        ) &&
+        (rect.top < clipTop || rect.bottom > clipBottom)
+      ) {
+        blockers.push(`${label} clips the trigger vertically`);
+      }
+    }
+
+    let hitFailures = 0;
+    for (const xPart of [0.35, 0.5, 0.65]) {
+      for (const yPart of [0.35, 0.5, 0.65]) {
+        const hit = document.elementFromPoint(
+          rect.left + rect.width * xPart,
+          rect.top + rect.height * yPart,
+        );
+        if (!hit || (hit !== trigger && !trigger.contains(hit))) {
+          hitFailures += 1;
+        }
+      }
+    }
+    const visible = blockers.length === 0;
+
+    return {
+      tooltipState: trigger.getAttribute('data-state'),
+      loadingState: trigger.getAttribute('data-loading'),
+      visible,
+      rect: {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+      },
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      hitTarget: hitFailures === 0,
+      hitFailures,
+      blockers,
+      disabled: trigger.disabled,
+      ariaDisabled: trigger.getAttribute('aria-disabled'),
+      display: style.display,
+      visibility: style.visibility,
+      opacity: Number(style.opacity),
+    };
+  });
+}
 
 describe('main proxy node reference layout', () => {
   let profileUid: string | undefined;
@@ -189,20 +311,46 @@ describe('main proxy node reference layout', () => {
     }
   });
 
-  it('uses the main tooltip trigger contract for group delay testing', async () => {
-    const trigger = await $('[data-slot="delay-test-button-trigger"]');
-    await trigger.waitForDisplayed({ timeout: 15_000 });
+  // Contract: the group detail shows the full delay-test action within the
+  // viewport and ancestor overflow clips; inset hit-test samples stay on the button.
+  // It starts idle with its tooltip closed. The failure artifact for
+  // this view showed the action rendered and visible even though WDIO's
+  // waitForDisplayed reported it hidden; check rendered geometry and hit
+  // testing representative points inside its rounded edge, then assert the
+  // action's enabled, idle state.
+  it('renders an available, idle group delay trigger', async () => {
+    let lastState: DelayTriggerState | null = null;
+    try {
+      await browser.waitUntil(
+        async () => {
+          lastState = await readDelayTriggerState();
 
-    const state = await browser.execute(() => {
-      const trigger = document.querySelector<HTMLElement>(
-        '[data-slot="delay-test-button-trigger"]',
+          return (
+            lastState?.visible === true &&
+            lastState.hitTarget &&
+            !lastState.disabled &&
+            lastState.ariaDisabled !== 'true'
+          );
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'The group delay trigger did not become visible and available.',
+        },
       );
-      return {
-        tooltipState: trigger?.getAttribute('data-state') ?? null,
-        loadingState: trigger?.getAttribute('data-loading') ?? null,
-      };
-    });
+    } catch (error) {
+      throw new Error(
+        `The group delay trigger did not become visible and available: ${JSON.stringify(lastState)}`,
+        { cause: error },
+      );
+    }
 
+    const state = await readDelayTriggerState();
+    assert.ok(state, 'The group delay trigger was not rendered.');
+    assert.equal(state.visible, true, JSON.stringify(state, null, 2));
+    assert.equal(state.hitTarget, true, JSON.stringify(state, null, 2));
+    assert.equal(state.disabled, false, JSON.stringify(state, null, 2));
+    assert.notEqual(state.ariaDisabled, 'true', JSON.stringify(state, null, 2));
     assert.equal(state.tooltipState, 'closed', JSON.stringify(state, null, 2));
     assert.equal(state.loadingState, 'false', JSON.stringify(state, null, 2));
   });

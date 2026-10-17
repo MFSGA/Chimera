@@ -1,21 +1,15 @@
 import { consola } from './deno/utils/logger.ts';
 import { githubApiHeaders } from './github-api.ts';
+import type { ArchMapping } from './src/prepare/types.ts';
+import {
+  extractVersionFromAssetList,
+  fetchText as fetchVersionText,
+  isValidVersion,
+} from './src/prepare/versions.ts';
+
+export type { ArchMapping } from './src/prepare/types.ts';
 
 // === Types ===
-
-export type SupportedArch =
-  | 'windows-i386'
-  | 'windows-x86_64'
-  | 'windows-arm64'
-  | 'linux-aarch64'
-  | 'linux-amd64'
-  | 'linux-i386'
-  | 'linux-armv7'
-  | 'linux-armv7hf'
-  | 'darwin-arm64'
-  | 'darwin-x64';
-
-export type ArchMapping = Record<SupportedArch, string>;
 
 export type LatestVersionResolver = Promise<{
   name: string;
@@ -59,34 +53,8 @@ async function getLatestRelease(owner: string, repo: string): Promise<string> {
   return data.tag_name;
 }
 
-function isValidVersion(version?: string): version is string {
-  return Boolean(version && /^[A-Za-z0-9._+-]+$/.test(version));
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function extractVersionFromAssetList(
-  page: string,
-  assetTemplate: string,
-): string | undefined {
-  const [prefix, suffix] = assetTemplate.split('{}');
-  if (prefix === undefined || suffix === undefined) return undefined;
-
-  const matcher = new RegExp(
-    `${escapeRegExp(prefix)}([A-Za-z0-9._+-]+)${escapeRegExp(suffix)}`,
-  );
-  const matched = page.match(matcher)?.[1];
-  return isValidVersion(matched) ? matched : undefined;
-}
-
 async function fetchText(url: string): Promise<string | undefined> {
-  const resp = await fetch(url, { headers: githubApiHeaders() });
-  if (!resp.ok) {
-    return undefined;
-  }
-  return await resp.text();
+  return await fetchVersionText(url, { headers: githubApiHeaders() });
 }
 
 // === Resolvers ===
