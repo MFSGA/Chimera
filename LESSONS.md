@@ -12,21 +12,24 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块           | 问题与证据                                                                                                                                               | 状态      |
-| ------------------- | ---------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI      | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成                                                 | Open      |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E  | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成                                          | Open      |
-| LESSON-20261014-003 | 2026-10-14 | Profile / E2E  | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                                                               | Open      |
-| LESSON-20261014-004 | 2026-10-14 | Development    | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                                                                   | Mitigated |
-| LESSON-20261015-001 | 2026-10-15 | E2E            | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正                                                   | Verified  |
-| LESSON-20261015-002 | 2026-10-15 | E2E            | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验                                                    | Open      |
-| LESSON-20261015-003 | 2026-10-15 | Development    | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                                                                  | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | Development    | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查                                                      | Mitigated |
-| LESSON-20261016-002 | 2026-10-16 | Frontend / CI  | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                                                         | Mitigated |
-| LESSON-20261017-001 | 2026-10-17 | E2E / CI       | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应                                                       | Verified  |
-| LESSON-20261017-002 | 2026-10-17 | Profile / Rust | `start_producers()` 原先只投递 actor cast，调度器/文件 watcher 尚未注册时调用方已继续；await actor 回复后 Profile 测试 72/72 通过，合并后 SHA 待 CI 复验 | Open      |
-| LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                                                                    | Verified  |
-| LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                                                                | Open      |
+| 编号                | 日期       | 模块           | 问题与证据                                                                                                      | 状态      |
+| ------------------- | ---------- | -------------- | --------------------------------------------------------------------------------------------------------------- | --------- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI      | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E  | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
+| LESSON-20261014-003 | 2026-10-14 | Profile / E2E  | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
+| LESSON-20261014-004 | 2026-10-14 | Development    | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
+| LESSON-20261015-001 | 2026-10-15 | E2E            | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
+| LESSON-20261015-002 | 2026-10-15 | E2E            | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
+| LESSON-20261015-003 | 2026-10-15 | Development    | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Development    | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| LESSON-20261016-002 | 2026-10-16 | Frontend / CI  | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
+| LESSON-20261017-001 | 2026-10-17 | E2E / CI       | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Verified  |
+| LESSON-20261017-002 | 2026-10-17 | Profile / Rust | `start_producers()` 原先只投递 actor cast；await actor 回复后 Profile 测试 72/72、PR #485 CI/E2E 通过并已合入   | Verified  |
+| LESSON-20261017-003 | 2026-10-17 | E2E            | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
+| LESSON-20261017-004 | 2026-10-17 | CI / Linux     | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
+| LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
+| LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
+| LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 的持久化读失败和输入弹窗等待未稳定复现目标状态；改为保持故障直到可见并重新查询元素，待 Windows 复验     | Open      |
 
 ## 单条模板
 
@@ -50,23 +53,6 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
-
-### LESSON-20261017-006：Dashboard 右键测试必须先发送 pointerdown
-
-- 日期与时区：2026-10-17 UTC
-- 状态：Open（驱动修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
-- 严重度：Low
-- 模块：E2E / Windows
-- master commit / ref gitlink SHA / 平台与测试环境：master `5fc556b4dc1b4724c3486d537b3d239d89c97c5e`；ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39072145858](https://github.com/MFSGA/Chimera/actions/runs/39072145858)，52 个 spec 中 50 个通过；Dashboard 编辑菜单和后续 Agent 页面导航失败。
-- 预期行为：右键 Dashboard 后，上下文菜单显示已注册的 Dashboard 操作，后续编辑流程可继续。
-- 真实异常、复现步骤与证据：Windows E2E 右键后菜单等待为 false；失败截图显示应用通用剪贴板菜单，没有 Dashboard 项。随后 Agent 页就绪等待也失败。
-- 确认的根因与排除项：ref 与 Chimera 的共享菜单 provider 都在 document capture 阶段通过 `pointerdown` 记录右键目标，再沿 DOM 查找已注册菜单。vendored 驱动只合成 `mousedown`、`mouseup` 和 `contextmenu`，没有触发该记录逻辑。对照 ref `frontend/nyanpasu/src/components/providers/context-menu-provider.tsx` 与 Chimera `frontend/chimera/src/components/providers/context-menu-provider.tsx` 后，未发现 Dashboard 菜单实现差异；Agent 页面失败发生在前一用例之后，待菜单修复后复验是否为连带失败。
-- 修复提交、差异映射及保留的兼容性边界：`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs::dispatch_pointer_event` 在按下时、对应 MouseEvent 前合成冒泡且可取消的 `pointerdown`，保留匹配右键释放后的 `contextmenu`。该修复验证应用 DOM 事件路径，不代表完整 PointerEvent 序列或真实鼠标输入。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现由上述 Windows PR E2E 运行失败；新 SHA 的复验仍待执行。相关回归仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 Windows hermetic suite 运行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo check --locked --manifest-path backend/tauri/vendor/tauri-plugin-wdio-webdriver/Cargo.toml --target-dir /tmp/chimera-wdio-plugin-check` 通过；`rustfmt --edition 2021 .../executor.rs` 与 `git diff --check` 通过。Windows E2E 尚未对修复 SHA 运行；真实可信鼠标输入不在覆盖范围。
-- 风险/回滚和清理证据（如涉及宿主状态）：仅测试驱动合成事件和测试证据文档；不修改产品菜单、持久化或宿主网络。回滚为还原驱动 PointerEvent 合成并移除此记录。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：更新 [U09](docs/testing/upstream-evidence.md#u09-tauri-driver-合成-pointerevent-与右键上下文菜单边界) 及 Dashboard 测试契约，后续升级驱动时重跑相同菜单最小复现；无 CI 门禁调整。
 
 ### LESSON-20261017-001：data URL E2E 应验证请求结果而非固定响应类型
 
@@ -247,6 +233,40 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：L3 工程经验记录；不改产品运行行为、用户数据或宿主状态。回滚只需还原本条索引和记录。维护者已明确批准添加并推送该记录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：已有提交 hook 将 `pnpm typecheck:chimera` 作为 staged frontend 文件检查；继续保留该门禁，UI 边界状态变更需复核 prop 声明、传参和渲染解构三处。无 CI 门禁变化。
 
+### LESSON-20261017-003：桌面 E2E 应以目标窗口和用户可见状态准备路由
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Verified（历史通过 SHA `13699341fc9389b4c18369609618e2fc944dddc3` 的 Windows Desktop E2E 及隔离套件通过）
+- 严重度：Low
+- 模块：E2E / main UI / WebKit
+- master commit / ref gitlink SHA / 平台与测试环境：历史通过 PR #489 head `13699341fc9389b4c18369609618e2fc944dddc3`，当时 base `aed52c17959ff1a332e7a8c165cf8fda987b3faa`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Apple Silicon macOS/WebKit 605.1.15 与 GitHub Actions Windows Edge 154，使用隔离 Cargo target、runtime 和 artifact 目录。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 `traffic-analysis-main.e2e.ts` 定向 WebKit 调试；早期 Windows 失败见 [CI run 39015988294](https://github.com/MFSGA/Chimera/actions/runs/39015988294) 和 [run 39034891250](https://github.com/MFSGA/Chimera/actions/runs/39034891250)；精确最终 SHA 的 [Windows Desktop E2E run 39037138976](https://github.com/MFSGA/Chimera/actions/runs/39037138976) 通过。
+- 预期行为：用例先选中 main 窗口，再设置视口并通过可见导航进入稳定 Dashboard；菜单操作使用 WebKit 支持且可观察的真实键盘激活，随后断言 URL 与控件状态。
+- 真实异常、复现步骤与证据：最初的路由 helper 在页面内容已渲染时仍因要求恰有一个 `app-content` host 超时，诊断读数为两个 host 且各有一个子节点、透明度均为 1。另在选择 main 窗口前设置视口会在切换后仍显示移动导航，Radix 动画期间直接查找选项也不稳定。Windows Edge 154 在展开侧栏后 `aria-expanded` 为 `true`，但通过此前获取的 WDIO 元素句柄读到的 `aria-label` 为空，失败于 `assert.ok(expandedLabel)`（run `39015988294`）。复核本机运行时发现 `captureFailedTest` 把 WebdriverIO 9.32/Mocha 9.32 `afterTest` 的第二个参数（Mocha context）误当作结果对象；`passed` 因而是 undefined，成功用例也生成截图/HTML。此前据这些产物判断本机失败没有依据。旧运行日志中的滚动 `execute/async` 超时随后走了 WebdriverIO 的 `scrollIntoView` fallback，不能单独作为用例失败证据。随后 Windows Edge run `39034891250` 在展开侧栏后仍观察到 `aria-expanded=false`、标签为折叠状态；截图只捕获到一个 traffic page，因此该产物不能证明失败由退出中的旧路由导致。
+- 确认的根因与排除项：路由准备条件、窗口选择顺序和动画中选项定位问题已有证据。Windows 旧 SHA 的失败是否由跨重渲染复用元素句柄造成尚未独立证明；第二次展开失败的具体触发原因也未从产物中确认。应用的 `AnimatedOutletPreset` 使用 `AnimatePresence` 保留退出路由，旧页面短暂留在 DOM 是已确认的生命周期行为；历史通过 SHA `13699341fc9389b4c18369609618e2fc944dddc3` 的 Windows hermetic E2E 已通过新路由稳定等待和侧栏状态读取。没有证据显示早期失败触发了宿主网络或持久状态变化。
+- 修复映射及保留边界：`tauri-e2e/specs/traffic-analysis-main.e2e.ts` 先调用 `ensureMainWindow()`，再设置视口；需要回到 Dashboard 时通过可见 navbar 导航并等待稳定页面标记，且等待退出中的 traffic page 离开 DOM；进入 Topology 后要求恰有一个 traffic page，再从该页定位侧栏控件。指标菜单用触发器 focus 与 Enter/ArrowDown/Enter；侧栏切换后的 ARIA 状态现在由当前 DOM 快照读取。所有点击仍由 WDIO 对可见控件执行，共享路由 helper 与业务断言未放宽。
+- 回归验证及注册位置：用例保留在 `main` suite，覆盖 Traffic 导航、范围/指标 URL、Flow/Geography 筛选保留及侧栏标签切换。侧栏属性改为每次从当前 DOM 读取并重定位控件。历史通过 SHA `13699341fc9389b4c18369609618e2fc944dddc3` 的 Windows hermetic E2E run `39037138976` 为 53/53 通过；Profile auto-update 与 controller fallback 各 1/1 通过。
+- 验证命令与覆盖：在修正 `afterTest` 参数顺序后，执行 `CHIMERA_E2E_BINARY=/Volumes/Ventoy/Chimera/traffic-analysis-target/debug/chimera CHIMERA_E2E_RUNTIME_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-runtime-20261017-final-evidence CHIMERA_E2E_ARTIFACT_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-artifacts-20261017-final-evidence pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/traffic-analysis-main.e2e.ts`，macOS WebKit 605.1.15 报告 1/1 通过；隔离产物目录仅含运行日志，没有失败截图/HTML。二进制 SHA-256 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`。GitHub Windows Desktop E2E run `39037138976` 精确测试 PR SHA，53/53 specs 通过；精确 SHA 的 CI run `39037138645` 中三平台 lint 和 Tauri 构建全部通过。这些链接只证明历史 SHA `13699341fc9389b4c18369609618e2fc944dddc3`；当前验收状态以 PR #489 最新检查为准。
+- 风险/回滚和清理证据：用例只改变其隔离窗口尺寸和 route；runtime、artifact、cargo target 均位于本次独立目录，没有改用户 Profile、系统代理或 TUN。回滚为恢复该 spec 之前的路由准备和菜单选择步骤。
+- 后续防复发措施：跨窗口用例先确保目标窗口被选中再设置视口；路由断言等待业务可见标记及退出路由清理；在交互前确认当前路由只有一个目标页；动画控件用稳定的用户输入流程；状态更新后从当前 DOM 读取属性，并在等待失败时保留最后观察值。E2E 失败钩子需按当前 WDIO 版本读取第三个结果参数，并用 reporter 状态与产物交叉核对；LESSONS 条目 ID 保持唯一，已删除重复的 `LESSON-20261017-003` 副本。没有调整 CI 或权限门禁。
+
+### LESSON-20261017-004：前端-only CI 门禁不得直接编译 Tauri Rust 测试
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Verified（PR #489 当前 SHA 的 Ubuntu 后端工作区测试和前端 harness 测试通过；Desktop E2E 的独立失败记录在 LESSON-20261017-003）
+- 严重度：Low
+- 模块：CI / Linux / Rust
+- PR head commit / ref gitlink SHA / 平台与测试环境：PR #489 失败 SHA `b46ae47111ad90ea2c3e869c3a9cf397b88fdd9a`；修复 SHA `4f5d216b4f64890b676a59e27a4821b2d3ce1398`；本地 ref `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；GitHub Actions `ubuntu-latest`。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #489](https://github.com/MFSGA/Chimera/pull/489)，[失败 CI run 39014838489](https://github.com/MFSGA/Chimera/actions/runs/39014838489)，[修复后 CI run 39015789669](https://github.com/MFSGA/Chimera/actions/runs/39015789669)，[当前 SHA 的 CI run 39015988284](https://github.com/MFSGA/Chimera/actions/runs/39015988284)，[当前 SHA 的独立桌面 E2E run 39015988294](https://github.com/MFSGA/Chimera/actions/runs/39015988294)。初始失败 job 在 `Test E2E harness and frontend models` 执行 Rust 测试时，`glib-sys` 的 `pkg-config` 找不到 `glib-2.0`，退出码 101。
+- 预期行为：前端-only job 只执行前端与 E2E harness 检查；需要 Tauri 系统库的 Rust 测试只在安装了 Tauri 依赖的后端 job 运行。
+- 真实异常、复现步骤与证据：前端测试步骤额外执行 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib features::agent::history::tests`。Linux 的 `Tauri dependencies` 步骤仅在 `BACKEND == true` 时安装 GTK/GLib，因此纯前端改动未准备这些库便开始编译 Tauri crate。
+- 确认的根因与排除项：该 agent history 单测被放在 `FRONTEND == true` 门禁中，和 Rust/Tauri 依赖的后端测试环境不匹配；并非测试断言或产品逻辑失败。后端门禁中的 `pnpm test:backend` 已运行 workspace 全部 crate 和 all features，包含该单测。
+- 修复提交、差异映射及保留的兼容性边界：提交 `4f5d216b` 从 `Test E2E harness and frontend models` 移除重复 Rust 命令；保留受 `BACKEND == true` 控制的 `pnpm test:backend`，因此后端改动仍执行该覆盖并在 Ubuntu 先安装 Tauri 依赖。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现的失败证据为 CI run `39014838489`。PR #489 当前 SHA 的 CI run `39015988284` 中，Ubuntu `Test E2E harness and frontend models` 与 `Test backend workspace` 均通过；后者包含该 agent history Rust 单测。桌面 E2E run `39015988294` 的 Traffic 用例失败属于独立的测试交互问题，不影响此工作流修复结论。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm exec prettier --check .github/workflows/ci.yaml`、`actionlint -ignore SC2086 .github/workflows/ci.yaml` 与 `git diff --check` 通过；PR #489 当前 SHA 的 Ubuntu 后端工作区和前端 harness 测试均通过。未在本机执行 Ubuntu 后端工作区测试；其他平台构建仍在执行。未忽略时 actionlint 只报告原有 `STORE_PATH` 导出脚本的 SC2086，与本次差异无关。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅调整测试所在的 CI 步骤，不改变测试断言、产品行为或权限；回滚时可恢复该 Rust 命令到前端步骤。没有宿主网络、Service、TUN 或个人配置变更。
+- 后续防复发措施：新增 Rust/Tauri 测试时，确认它位于 `BACKEND == true` 且 Tauri 系统依赖已安装的后端门禁；避免在前端-only job 重复执行 workspace 已覆盖的测试。
+
 ### LESSON-20261017-005：视口之外的编辑器不依赖平滑滚动完成定位
 
 - 日期与时区：2026-10-17 UTC
@@ -267,16 +287,50 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261017-002：Profile producer 启动必须等待 actor 注册处理完成
 
 - 日期与时区：2026-10-17 UTC
-- 状态：Open（本地修复和测试通过；PR #485 最新 SHA 的远端 CI/E2E 待复验）
+- 状态：Verified（PR #485 精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 CI/E2E 通过，且已合并）
 - 严重度：Low
 - 模块：Profile / Rust / Core startup / CI
 - master commit / ref gitlink SHA / 平台与测试环境：PR #485 修复提交 `d1c78138`、文档修正提交 `e0629eb9`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Apple Silicon macOS。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #485](https://github.com/MFSGA/Chimera/pull/485)，修复提交 `d1c78138`；前一 SHA 的 final CI run `39003206524` 与 Desktop E2E run `39003206571` 通过；同步 master 的新 SHA 将重新执行门禁。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #485](https://github.com/MFSGA/Chimera/pull/485)，精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 [CI run 39037029299](https://github.com/MFSGA/Chimera/actions/runs/39037029299) 与 [Desktop E2E run 39037029364](https://github.com/MFSGA/Chimera/actions/runs/39037029364) 均通过；合并提交 `5fc556b4dc1b4724c3486d537b3d239d89c97c5e` 与该已测 head 的 tree 相同。
 - 预期行为：核心启动协调确认终态后，Profiles actor 完成后台 jobs、外部文件 watcher 和 journal reconciliation 的启动尝试，再让调用方继续；测试推进虚拟时间或修改被监视文件时，actor 必须已处理 producer 启动消息。
 - 真实异常、复现步骤与证据：原 `ProfilesClient::start_producers()` 只向 actor cast `StartProducers` 后立即返回。新增 profile suite 中，`external_background_commit_does_not_bypass_the_mutation_participant` 在并行运行中出现竞态，定时刷新用例会等待超时；单独重跑外部文件用例可通过，而单独运行 `import_suggestion_is_committed_and_reschedules_the_timer` 会卡在虚拟时钟等待。测试在 actor 尚未处理 cast 前就推进 Tokio paused time 或写入文件，故本地结果取决于 actor 调度时序。
 - 确认的根因与排除项：cast 只保证消息排入 actor mailbox，不保证 handler 已运行；调用方把消息投递误当作 scheduler/watcher 已就绪。不是 ref 的预期功能差异或持久化问题。ref `31019da` 的 `ProfilesClient::start_producers` 也使用 cast；本 PR 增加 Chimera 内部 request/reply await 作为启动同步边界，差异已记录在 `docs/ref-alignment-profiles.md` DIFF-PROFILE-06。
 - 修复提交、差异映射及保留的兼容性边界：`d1c78138` 将 `StartProducers` 改为带 reply 的 actor call，`ProfilesClient::start_producers()` 等待回复，`ChimeraClient::init_core()` 在 lifecycle terminal reply 后等待该调用；重复 release 仍保持幂等。文档更正提交 `e0629eb9` 说明这是 best-effort 注册尝试完成，不保证各个 watcher/job 均成功注册。无公共 IPC、持久化格式或 agent contract 变化。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：cast-only 版本在本地 profile suite 中发生上述 scheduler/watcher 时序失败；await 回复后 `backend/tauri/src/client/profiles.rs` 的 Profile 测试全套通过。该修复没有新增独立测试入口，而是让现有生产者启动、定时刷新与外部 watcher 测试等待真实 actor 完成边界。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera startup_reconcile -- --nocapture` 通过 2/2；`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera client::profiles::tests:: -- --test-threads=4` 通过 72/72；`cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features`、包级 rustfmt、Prettier 与 `git diff --check` 通过。提交钩子的 rustfmt/Clippy 也通过。Reviewer 静态审查无 P0–P2；其独立测试复跑因主机卷空间不足无法完成。本机桌面 startup/UI E2E 未运行；同步 master 后新 SHA 需完成远端复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera startup_reconcile -- --nocapture` 通过 2/2；`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera client::profiles::tests:: -- --test-threads=4` 通过 72/72；`cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features`、包级 rustfmt、Prettier 与 `git diff --check` 通过。提交钩子的 rustfmt/Clippy 也通过。Reviewer 静态审查无 P0–P2；其独立测试复跑因主机卷空间不足无法完成。本机桌面 startup/UI E2E 未运行；远端 CI/E2E 已对合并所用的相同 tree 完成验证。
 - 风险/回滚和清理证据（如涉及宿主状态）：回滚为恢复原 cast-only 启动调用及无 reply 的 actor message；这会重新允许调用方早于 producer handler 完成而继续。未修改主机网络、持久化数据或用户 Profile。审查器新建的失败 Cargo target 已经 cargo clean 清理，未触碰其他构建缓存。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界，并在最新 PR SHA 的 CI/E2E 结束后更新状态；不修改治理门禁。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界；PR #485 的精确 head CI/E2E 已通过后更新本条状态；不修改治理门禁。
+
+### LESSON-20261017-006：Dashboard 右键测试必须先发送 pointerdown
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（驱动修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：master `5fc556b4dc1b4724c3486d537b3d239d89c97c5e`；ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39072145858](https://github.com/MFSGA/Chimera/actions/runs/39072145858)，52 个 spec 中 50 个通过；Dashboard 编辑菜单和后续 Agent 页面导航失败。
+- 预期行为：右键 Dashboard 后，上下文菜单显示已注册的 Dashboard 操作，后续编辑流程可继续。
+- 真实异常、复现步骤与证据：Windows E2E 右键后菜单等待为 false；失败截图显示应用通用剪贴板菜单，没有 Dashboard 项。随后 Agent 页就绪等待也失败。
+- 确认的根因与排除项：ref 与 Chimera 的共享菜单 provider 都在 document capture 阶段通过 `pointerdown` 记录右键目标，再沿 DOM 查找已注册菜单。vendored 驱动只合成 `mousedown`、`mouseup` 和 `contextmenu`，没有触发该记录逻辑。对照 ref `frontend/nyanpasu/src/components/providers/context-menu-provider.tsx` 与 Chimera `frontend/chimera/src/components/providers/context-menu-provider.tsx` 后，未发现 Dashboard 菜单实现差异；Agent 页面失败发生在前一用例之后，待菜单修复后复验是否为连带失败。
+- 修复提交、差异映射及保留的兼容性边界：`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs::dispatch_pointer_event` 在按下时、对应 MouseEvent 前合成冒泡且可取消的 `pointerdown`，保留匹配右键释放后的 `contextmenu`。该修复验证应用 DOM 事件路径，不代表完整 PointerEvent 序列或真实鼠标输入。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现由上述 Windows PR E2E 运行失败；新 SHA 的复验仍待执行。相关回归仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 Windows hermetic suite 运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo check --locked --manifest-path backend/tauri/vendor/tauri-plugin-wdio-webdriver/Cargo.toml --target-dir /tmp/chimera-wdio-plugin-check` 通过；`rustfmt --edition 2021 .../executor.rs` 与 `git diff --check` 通过。Windows E2E 尚未对修复 SHA 运行；真实可信鼠标输入不在覆盖范围。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅测试驱动合成事件和测试证据文档；不修改产品菜单、持久化或宿主网络。回滚为还原驱动 PointerEvent 合成并移除此记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：更新 [U09](docs/testing/upstream-evidence.md#u09-tauri-driver-合成-pointerevent-与右键上下文菜单边界) 及 Dashboard 测试契约，后续升级驱动时重跑相同菜单最小复现；无 CI 门禁调整。
+
+### LESSON-20261017-007：等待可观察的失败状态并在重渲染后重新查询控件
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：失败 head `ce86b993fcc9f21d863abd0c59e61c00bf192d00`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39074305271](https://github.com/MFSGA/Chimera/actions/runs/39074305271)，52 个 spec 中 50 个通过；Dashboard retry 和 main input 两个 spec 失败。
+- 预期行为：注入存储读取故障后，Dashboard 应显示 `load-error`，释放故障后 Retry 应恢复；外部控制器弹窗出现后，输入框聚焦应显示浮动标签。
+- 真实异常、复现步骤与证据：Dashboard 用例未观察到 `load-error`，失败截图显示 Dashboard 已返回正常视图，而清理前页面已进入编辑模式。main input 用例等待弹窗触发器时超时；该运行保存的失败后 HTML/截图显示触发器存在且可见。现有证据不能确认第二项是产品缺陷或唯一根因。
+- 确认的根因与排除项：一次性 `get_storage_item` 注入没有保证故障状态持续到 E2E 读到 `load-error`；用例因而没有可靠地测试恢复路径。main input 的超时原因尚未完全确认，失败后 DOM 证据与控件异步出现/重渲染竞态相符，但不能单凭该快照断定根因。
+- 修复提交、差异映射及保留的兼容性边界：Dashboard 用例让目标存储命令持续失败，直到已观察到 `load-error` 后显式释放；main input 用例在等待卡片和触发器可见后按 selector 重新查询触发器，并等待聚焦标签到达浮动状态。测试仍通过真实 UI 控件及 Tauri IPC 边界验证，不直接触发 DOM click。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败于上述 Windows run；修复后的同一用例由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 和 `tauri-e2e/specs/main-input.e2e.ts` 注册在 hermetic suite，精确新 SHA 的 Windows 复验待执行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后本机 `node_modules/.bin/tsc --noEmit -p tauri-e2e/tsconfig.json` 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
+- 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 故障注入和等待方式；恢复原 Tauri invoke、KV 配置及 UI 状态由现有清理逻辑负责。没有宿主网络、Service、TUN 或个人配置变更。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：等待被测状态而非单次注入后的固定时序；发生等待失败时结合失败前页面产物定位，避免只凭超时推断产品缺陷。新 SHA 的 Windows 复验通过后更新状态。

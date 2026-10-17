@@ -403,40 +403,65 @@ describe('main dashboard reference layout', () => {
       );
     };
 
-    const failNextWidgetConfigOperation = async (failedCommand: string) =>
-      browser.execute((commandToFail) => {
+    const failNextWidgetConfigOperation = async (
+      failedCommand: string,
+      persistUntilReleased = false,
+    ) =>
+      browser.execute(
+        (commandToFail, keepFailing) => {
+          type TauriInternals = {
+            invoke: (
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<unknown>;
+            widgetConfigOriginalInvoke?: TauriInternals['invoke'];
+            widgetConfigStopFailure?: () => void;
+          };
+          const internals = (
+            window as Window & { __TAURI_INTERNALS__?: TauriInternals }
+          ).__TAURI_INTERNALS__;
+          if (!internals) {
+            throw new Error('Tauri page internals are unavailable.');
+          }
+          if (internals.widgetConfigOriginalInvoke) {
+            throw new Error('A widget storage failure is already installed.');
+          }
+
+          const originalInvoke = internals.invoke;
+          let failureActive = true;
+          internals.widgetConfigOriginalInvoke = originalInvoke;
+          internals.widgetConfigStopFailure = () => {
+            failureActive = false;
+          };
+          internals.invoke = async (command, args) => {
+            if (
+              failureActive &&
+              command === commandToFail &&
+              args?.key === 'dashboard-widget-configs'
+            ) {
+              if (!keepFailing) failureActive = false;
+              throw new Error(`Injected ${commandToFail} failure.`);
+            }
+            return originalInvoke.call(internals, command, args);
+          };
+        },
+        failedCommand,
+        persistUntilReleased,
+      );
+
+    const stopWidgetConfigFailure = async () =>
+      browser.execute(() => {
         type TauriInternals = {
-          invoke: (
-            command: string,
-            args?: Record<string, unknown>,
-          ) => Promise<unknown>;
-          widgetConfigOriginalInvoke?: TauriInternals['invoke'];
+          widgetConfigStopFailure?: () => void;
         };
         const internals = (
           window as Window & { __TAURI_INTERNALS__?: TauriInternals }
         ).__TAURI_INTERNALS__;
-        if (!internals) {
-          throw new Error('Tauri page internals are unavailable.');
+        if (!internals?.widgetConfigStopFailure) {
+          throw new Error('The widget storage failure is not installed.');
         }
-        if (internals.widgetConfigOriginalInvoke) {
-          throw new Error('A widget storage failure is already installed.');
-        }
-
-        const originalInvoke = internals.invoke;
-        let failNext = true;
-        internals.widgetConfigOriginalInvoke = originalInvoke;
-        internals.invoke = async (command, args) => {
-          if (
-            failNext &&
-            command === commandToFail &&
-            args?.key === 'dashboard-widget-configs'
-          ) {
-            failNext = false;
-            throw new Error(`Injected ${commandToFail} failure.`);
-          }
-          return originalInvoke.call(internals, command, args);
-        };
-      }, failedCommand);
+        internals.widgetConfigStopFailure();
+      });
 
     const restoreWidgetConfigInvoke = async () =>
       browser.execute(() => {
@@ -446,6 +471,7 @@ describe('main dashboard reference layout', () => {
             args?: Record<string, unknown>,
           ) => Promise<unknown>;
           widgetConfigOriginalInvoke?: TauriInternals['invoke'];
+          widgetConfigStopFailure?: () => void;
         };
         const internals = (
           window as Window & { __TAURI_INTERNALS__?: TauriInternals }
@@ -455,6 +481,7 @@ describe('main dashboard reference layout', () => {
         }
         internals.invoke = internals.widgetConfigOriginalInvoke;
         delete internals.widgetConfigOriginalInvoke;
+        delete internals.widgetConfigStopFailure;
       });
 
     const withRestoredWidgetConfigInvoke = async (
@@ -511,7 +538,7 @@ describe('main dashboard reference layout', () => {
     let testError: unknown;
     try {
       await openMainRoute('/main/settings/system');
-      await failNextWidgetConfigOperation('get_storage_item');
+      await failNextWidgetConfigOperation('get_storage_item', true);
       await withRestoredWidgetConfigInvoke(async () => {
         await openMainRoute(targetPath);
         await enterEditMode();
@@ -526,6 +553,7 @@ describe('main dashboard reference layout', () => {
             ),
           (state) => state === 'load-error',
         );
+        await stopWidgetConfigFailure();
         const saveButton = await $(
           '//*[@data-slot="dashboard-edit-header"]//button[.//span[normalize-space(.)="保存"]]',
         );

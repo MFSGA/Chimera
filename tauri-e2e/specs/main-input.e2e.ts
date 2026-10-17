@@ -17,11 +17,21 @@ describe('main ref input primitive', () => {
   });
 
   it('uses the ref outlined fieldset, floating label, and hidden filled line', async () => {
-    const card = await $('[data-slot="external-controller-config-card"]');
-    await card.waitForDisplayed({ timeout: 15_000 });
+    const cardSelector = '[data-slot="external-controller-config-card"]';
+    const triggerSelector = `${cardSelector} [data-slot="modal-trigger"]`;
+    await browser.waitUntil(
+      async () => {
+        const card = await $(cardSelector);
+        const trigger = await $(triggerSelector);
+        return (await card.isDisplayed()) && (await trigger.isDisplayed());
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The external controller modal trigger did not appear.',
+      },
+    );
 
-    const trigger = await card.$('[data-slot="modal-trigger"]');
-    await trigger.waitForDisplayed({ timeout: 15_000 });
+    const trigger = await $(triggerSelector);
     const placeholderContainer = await trigger.$(
       '[data-slot="modal-trigger-placeholder-container"]',
     );
@@ -30,15 +40,33 @@ describe('main ref input primitive', () => {
     );
     assert.equal(await placeholderContainer.isExisting(), true);
     assert.equal(await placeholder.isExisting(), true);
-    await browser.execute((element) => {
-      (element as HTMLElement).click();
-    }, trigger);
+    await trigger.click();
 
     const modal = await displayedElement('[data-slot="modal-content"]');
     const input = await modal.$('input');
     await input.waitForDisplayed({ timeout: 15_000 });
     await input.click();
-    await browser.pause(500);
+    await browser.waitUntil(
+      async () =>
+        browser.execute((modalNode) => {
+          const modal = modalNode as HTMLElement;
+          const input = modal.querySelector<HTMLInputElement>('input');
+          const container = input?.parentElement ?? null;
+          const label = container?.querySelector<HTMLElement>('label') ?? null;
+          return Boolean(
+            input &&
+            container &&
+            label &&
+            document.activeElement === input &&
+            label.getBoundingClientRect().y <=
+              container.getBoundingClientRect().y,
+          );
+        }, modal),
+      {
+        timeout: 5_000,
+        timeoutMsg: 'The focused input label did not reach its floating state.',
+      },
+    );
 
     const state = await browser.execute((modalNode) => {
       const modal = modalNode as HTMLElement;

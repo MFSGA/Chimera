@@ -151,7 +151,9 @@ export default function TrafficLayout({
                 )}
               </NavigationSidebarContent>
             </ScrollArea>
-            <NavigationSidebarToggle aria-label={m.traffic_sidebar()}>
+            <NavigationSidebarToggle
+              expandLabel={m.navigation_sidebar_expand()}
+            >
               {m.navigation_sidebar_collapse()}
             </NavigationSidebarToggle>
           </NavigationSidebar>
