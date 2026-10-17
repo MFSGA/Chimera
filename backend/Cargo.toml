@@ -6,6 +6,7 @@ members = [
   "chimera-core-manager",
   "chimera-core-metadata",
   "chimera-traffic",
+  "chimera-jobs",
   "chimera-macro",
   "chimera-utils",
   "tauri",
@@ -20,6 +21,7 @@ resolver = "2"
 edition = "2024"
 version = "0.1.0"
 authors = ["zzzgydi", "keiko233", "chimera_rust@proton.me"]
+repository = "https://github.com/MFSGA/Chimera"
 license = "GPL-3.0"
 
 [profile.release]
@@ -39,6 +41,7 @@ chimera-ipc = { path = "chimera-runtime/chimera_ipc", features = [
 ] }
 
 thiserror = "2"
+serde = { version = "1", features = ["derive"] }
 
 reqwest = { version = "0.13", default-features = false, features = [
   "charset",
@@ -50,6 +53,9 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "parking_lot"] }
 
 tracing = "0.1"
 fs-err = { version = "3.1.2", features = ["tokio"] }

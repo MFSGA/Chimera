@@ -5,6 +5,8 @@ import path from 'node:path';
 import type {
   MutationOutcome,
   ProfileDocument_Deserialize,
+  ProfileSyncStatus,
+  RunPageDto,
 } from '../../frontend/interface/src/ipc/bindings.js';
 import { displayedElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
@@ -16,6 +18,7 @@ import {
 } from './profile-fixtures.js';
 
 const fixtureProfileName = `Auto Update E2E ${process.pid}-${Date.now()}`;
+// Contract: docs/testing/contracts/profile-sync-history.md
 const screenshotRunId = process.env.GITHUB_RUN_ID
   ? `${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT ?? '1'}`
   : `local-${process.pid}-${Date.now()}`;
@@ -114,6 +117,179 @@ async function waitForPersistedInterval(uid: string, expected: number) {
     throw new Error(
       `profiles.yaml did not persist interval ${expected}; last observed ${String(lastObserved)}.`,
       { cause },
+    );
+  }
+}
+
+async function waitForSuccessfulSyncHistory(
+  uid: string,
+  {
+    minimumSuccessfulRunCount = 1,
+    admissionSequence,
+    timeout = 30_000,
+  }: {
+    minimumSuccessfulRunCount?: number;
+    admissionSequence?: string;
+    timeout?: number;
+  } = {},
+) {
+  let lastObserved = 'not observed';
+  let lastState:
+    | {
+        cardVisible: boolean;
+        latestRunVisible: boolean;
+        latestRunStatus: string | null;
+        latestRunAdmissionSequence: string | null;
+        successfulRunCount: number;
+        renderedLogCount: number;
+      }
+    | undefined;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute((profileUid) => {
+          const card = document.querySelector<HTMLElement>(
+            `[data-slot="profile-sync-history"][data-profile-uid="${profileUid}"]`,
+          );
+          const runs = Array.from(
+            card?.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-sync-run"]',
+            ) ?? [],
+          );
+          const latestRun = runs[0];
+          const isDisplayed = (element: HTMLElement | null | undefined) => {
+            if (!element) return false;
+            const style = getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.height > 0 &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              style.opacity !== '0'
+            );
+          };
+          return {
+            cardVisible: isDisplayed(card),
+            latestRunVisible: isDisplayed(latestRun),
+            latestRunStatus: latestRun?.dataset.runStatus ?? null,
+            latestRunAdmissionSequence:
+              latestRun?.dataset.admissionSequence ?? null,
+            successfulRunCount: runs.filter(
+              (run) => run.dataset.runStatus === 'succeeded',
+            ).length,
+            renderedLogCount:
+              latestRun?.querySelectorAll('[data-slot="profile-sync-logs"] li')
+                .length ?? 0,
+          };
+        }, uid);
+        lastObserved = JSON.stringify(lastState);
+        return (
+          lastState.cardVisible &&
+          lastState.latestRunVisible &&
+          lastState.latestRunStatus === 'succeeded' &&
+          (admissionSequence === undefined ||
+            lastState.latestRunAdmissionSequence === admissionSequence) &&
+          lastState.successfulRunCount >= minimumSuccessfulRunCount &&
+          lastState.renderedLogCount > 0
+        );
+      },
+      {
+        timeout,
+        timeoutMsg: `Profile ${uid} did not show a completed sync with logs.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `Profile ${uid} did not show a completed sync with logs; last observed ${lastObserved}.`,
+      { cause },
+    );
+  }
+  assert.ok(lastState, `Profile ${uid} sync history was not observed.`);
+  return lastState.successfulRunCount;
+}
+
+async function waitForExternalManualSync(
+  uid: string,
+  previousSequence: string | null,
+): Promise<string> {
+  let lastObserved = 'not observed';
+  let completedSequence: string | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const status = await invoke<ProfileSyncStatus>(
+          'get_profile_sync_status',
+          { uid },
+        );
+        if (
+          !status.latest_run_sequence ||
+          status.latest_run_sequence === previousSequence
+        ) {
+          lastObserved = `sequence unchanged at ${String(previousSequence)}`;
+          return false;
+        }
+        const page = await invoke<RunPageDto>('get_profile_sync_runs', {
+          uid,
+          after: null,
+        });
+        const run = page.items.find(
+          (item) => item.admission_sequence === status.latest_run_sequence,
+        );
+        lastObserved = JSON.stringify({
+          latestRunSequence: status.latest_run_sequence,
+          latestRunState: run?.state.kind,
+          latestRunTrigger: run?.trigger,
+        });
+        if (!run || run.trigger !== 'manual' || run.state.kind !== 'finished') {
+          return false;
+        }
+        if (run.state.completion.outcome.kind !== 'succeeded') return false;
+        completedSequence = status.latest_run_sequence;
+        return true;
+      },
+      {
+        timeout: 30_000,
+        timeoutMsg: `External manual sync for Profile ${uid} did not finish.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `External manual sync for Profile ${uid} did not finish; last observed ${lastObserved}.`,
+      { cause },
+    );
+  }
+  assert.ok(
+    completedSequence,
+    `Profile ${uid} sync sequence was not observed.`,
+  );
+  return completedSequence;
+}
+
+async function focusWindow(label: string) {
+  await invoke<void>('plugin:window|set_focus', { label });
+  let lastState = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await browser.execute(() => ({
+          visibility: document.visibilityState,
+          hasFocus: document.hasFocus(),
+        }));
+        lastState = JSON.stringify(state);
+        return state.visibility === 'visible' && state.hasFocus;
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Window did not receive focus.',
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      'Window ' + label + ' did not receive focus; ' + lastState + '.',
+      {
+        cause,
+      },
     );
   }
 }
@@ -733,6 +909,9 @@ describe('remote profile auto-update', () => {
       await waitForManualSyncLoading(uid, false, 30_000);
       manualSyncCleanupState.waitForCompletion = false;
 
+      const successfulRunCountBeforeLegacySync =
+        await waitForSuccessfulSyncHistory(uid);
+
       await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
         '[data-slot="modal-content"][data-state="open"] [data-slot="profile-auto-update-switch"]',
@@ -839,6 +1018,38 @@ describe('remote profile auto-update', () => {
       await legacySave.click();
       await waitForInterval(uid, 0);
       await waitForPersistedInterval(uid, 0);
+
+      const beforeLegacyManualSync = await invoke<ProfileSyncStatus>(
+        'get_profile_sync_status',
+        { uid },
+      );
+      const beforeLegacyRequestCount = requestCount;
+      const legacyManualSync = await profileItem.$(
+        '[data-slot="profile-update-button"]',
+      );
+      await legacyManualSync.waitForDisplayed({ timeout: 15_000 });
+      await legacyManualSync.click();
+      await browser.waitUntil(
+        async () => requestCount > beforeLegacyRequestCount,
+        {
+          timeout: 30_000,
+          timeoutMsg:
+            'The legacy Profile update control did not fetch the local subscription.',
+        },
+      );
+      const legacySyncSequence = await waitForExternalManualSync(
+        uid,
+        beforeLegacyManualSync.latest_run_sequence,
+      );
+      await browser.switchToWindow('main');
+      await focusWindow('main');
+      // The main WebView may be idle while the legacy window runs this sync;
+      // its status query can take one idle polling interval to observe it.
+      await waitForSuccessfulSyncHistory(uid, {
+        minimumSuccessfulRunCount: successfulRunCountBeforeLegacySync + 1,
+        admissionSequence: legacySyncSequence,
+        timeout: 75_000,
+      });
     });
   });
 });

@@ -14,6 +14,24 @@ export const commands = {
     typedError<ProfileDocument_Serialize, string>(
       __TAURI_INVOKE('get_profiles'),
     ),
+  getProfileSyncStatus: (uid: string) =>
+    typedError<ProfileSyncStatus, string>(
+      __TAURI_INVOKE('get_profile_sync_status', { uid }),
+    ),
+  getProfileSyncRuns: (
+    uid: string,
+    after: {
+      sequence: string;
+      id: string;
+    } | null,
+  ) =>
+    typedError<RunPageDto, string>(
+      __TAURI_INVOKE('get_profile_sync_runs', { uid, after }),
+    ),
+  getProfileSyncLogs: (uid: string, run: string, after: string | null) =>
+    typedError<LogPageDto, string>(
+      __TAURI_INVOKE('get_profile_sync_logs', { uid, run, after }),
+    ),
   getRuntimeTransformDiagnostics: () =>
     typedError<
       {
@@ -990,6 +1008,12 @@ export type CommitReceipt = {
   runtime: RuntimeCommitStatus;
 };
 
+export type CompletionDto = {
+  outcome: OutcomeDto;
+  output: OutputDto;
+  journal: JournalDto;
+};
+
 /**  A profile that can produce a complete config and can be selected by current. */
 export type ConfigDefinition =
   ConfigDefinition_Serialize | ConfigDefinition_Deserialize;
@@ -1631,6 +1655,9 @@ export type IpsbResponse = {
   country_code: string;
 };
 
+export type JournalDto =
+  { kind: 'durable' } | { kind: 'degraded'; code: string };
+
 export type LocalBinding = LocalBinding_Serialize | LocalBinding_Deserialize;
 
 export type LocalBinding_Deserialize =
@@ -1660,6 +1687,20 @@ export type LocalBinding_Serialize =
       target: ExternalProfilePath;
       mode: ExternalMode;
     };
+
+export type LogDto = {
+  run_id: string;
+  sequence: string;
+  time: string;
+  level: string;
+  target: string;
+  fields: { [key in string]: string };
+};
+
+export type LogPageDto = {
+  items: LogDto[];
+  next: string | null;
+};
 
 export type LogSpan = 'log' | 'info' | 'warn' | 'error';
 
@@ -1806,6 +1847,18 @@ export type OperatorTag =
         step_index: number;
       };
     };
+
+export type OutcomeDto =
+  | { kind: 'succeeded' }
+  | { kind: 'failed'; code: string; message: string }
+  | { kind: 'cancelled' }
+  | { kind: 'interrupted' }
+  | { kind: 'skipped' };
+
+export type OutputDto =
+  | { kind: 'json_text'; value: string }
+  | { kind: 'unavailable'; code: string }
+  | { kind: 'none' };
 
 export type PatchClashCoreConfig =
   PatchClashCoreConfig_Serialize | PatchClashCoreConfig_Deserialize;
@@ -2035,6 +2088,16 @@ export type ProfileSubscriptionInfo = {
   expire?: number | null;
 };
 
+export type ProfileSyncStatus = {
+  scheduled: boolean;
+  next_run_at: string | null;
+  latest_run_sequence: string | null;
+  active: RunDto[];
+  journal_degraded: boolean;
+  registration_error: string | null;
+  history_limit: number;
+};
+
 export type Proxies = Proxies_Serialize | Proxies_Deserialize;
 
 export type ProxiesSelectorMode = 'normal' | 'hidden' | 'submenu';
@@ -2183,6 +2246,37 @@ export type RuleKey = {
   kind: string;
   payload: string;
 };
+
+export type RunCursorDto = {
+  sequence: string;
+  id: string;
+};
+
+export type RunDto = {
+  id: string;
+  job: string;
+  definition_version: string;
+  admission_sequence: string;
+  trigger: string;
+  scheduled_at: string | null;
+  admitted_at: string;
+  finished_at: string | null;
+  state: RunStateDto;
+  last_log_sequence: string;
+  dropped_log_count: string;
+};
+
+export type RunPageDto = {
+  items: RunDto[];
+  next: RunCursorDto | null;
+};
+
+export type RunStateDto =
+  | { kind: 'admitted' }
+  | { kind: 'running' }
+  | { kind: 'cancelling' }
+  | { kind: 'finalizing' }
+  | { kind: 'finished'; completion: CompletionDto };
 
 export type RunType =
   /**  Run as child process directly */
