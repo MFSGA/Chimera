@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createServer, type Server } from 'node:http';
+import path from 'node:path';
 import { planSubscriptionProfileCleanup } from '../subscription-onboarding-cleanup.js';
 
 /*
@@ -18,7 +20,7 @@ import { planSubscriptionProfileCleanup } from '../subscription-onboarding-clean
 磁盘/刷新/冷启动：不适用；本契约只验证首次页面装配
 失败或边界场景：任一流程区域缺失时断言失败；网络行为和宿主设置不在本契约范围
 等待预算：页面挂载最多 30 秒；本地 fallback 主路径最多 45 秒
-诊断：失败由 WDIO 保存错误；设置 CHIMERA_E2E_ARTIFACT_DIR 时额外保存截图和 HTML，产物不含订阅凭据
+诊断：失败由 WDIO 保存错误；系统代理/TUN 前置条件失败时只报告 typed/legacy 配置中的对应布尔值；设置 CHIMERA_E2E_ARTIFACT_DIR 时额外保存截图和 HTML，产物不含订阅凭据
 资源与清理：关闭本地 HTTP 服务；修改前保存原始 Profile/语言；仅清理本轮唯一名称的测试 Profile，并按已尝试的变更恢复语言和缓存；初始化失败不盲目取消激活 Profile
 回归敏感性：缺少任一固定流程区域、输入控件、成功后的代理选择、失败后的重试入口或误显示结果区域时断言失败
 相关规则与例外：T01、T02、T04、T14；本地服务证明应用调用链，不证明公网网络、系统代理授权或 TUN 驱动行为
@@ -80,6 +82,28 @@ async function collectCleanupError(errors: unknown[], action: CleanupAction) {
   }
 }
 
+function persistedConfigFlag(fileName: string, field: string): string {
+  const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
+  assert.ok(runtime, 'CHIMERA_E2E_RUNTIME_DIR is not configured.');
+  const file = path.join(runtime, 'config', fileName);
+  if (!fs.existsSync(file)) return 'missing';
+
+  const contents = fs.readFileSync(file, 'utf8');
+  const value = new RegExp(`^${field}:\\s*(true|false)\\s*$`, 'm').exec(
+    contents,
+  )?.[1];
+  return value ?? 'unset';
+}
+
+function persistedProxyDiagnostics(): string {
+  return [
+    `application.yaml.enable_system_proxy=${persistedConfigFlag('application.yaml', 'enable_system_proxy')}`,
+    `chimera-config.yaml.enable_system_proxy=${persistedConfigFlag('chimera-config.yaml', 'enable_system_proxy')}`,
+    `clash-config.yaml.enable_tun_mode=${persistedConfigFlag('clash-config.yaml', 'enable_tun_mode')}`,
+    `chimera-config.yaml.enable_tun_mode=${persistedConfigFlag('chimera-config.yaml', 'enable_tun_mode')}`,
+  ].join('; ');
+}
+
 describe('legacy subscription onboarding', () => {
   let server: Server | undefined;
   let serverPort: number | undefined;
@@ -101,15 +125,21 @@ describe('legacy subscription onboarding', () => {
     );
 
     // A failed precondition must not mutate the app or the host.
+    const systemProxyEnabled = Boolean(initialVerge.enable_system_proxy);
     assert.equal(
-      Boolean(initialVerge.enable_system_proxy),
+      systemProxyEnabled,
       false,
-      'System proxy must be disabled before E2E setup.',
+      systemProxyEnabled
+        ? `System proxy must be disabled before E2E setup. Persisted flags: ${persistedProxyDiagnostics()}.`
+        : 'System proxy must be disabled before E2E setup.',
     );
+    const tunEnabled = Boolean(initialVerge.enable_tun_mode);
     assert.equal(
-      Boolean(initialVerge.enable_tun_mode),
+      tunEnabled,
       false,
-      'TUN must be disabled before E2E setup.',
+      tunEnabled
+        ? `TUN must be disabled before E2E setup. Persisted flags: ${persistedProxyDiagnostics()}.`
+        : 'TUN must be disabled before E2E setup.',
     );
 
     languagePatchAttempted = true;
