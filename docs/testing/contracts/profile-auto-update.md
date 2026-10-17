@@ -18,7 +18,7 @@
 
 初始状态：捕获当前 Profile；读取并确认系统代理与 TUN 关闭；创建唯一 loopback subscription 和远程 Profile，默认 interval 为 120。因为 fixture 由 IPC 建立，首次 UI 操作前重新加载 main window，使 Profile query 从持久层读取 fixture；此准备刷新不参与被测结果。
 
-被测操作：在 main Profile 详情页关闭 Auto Update 并保存；点击 Manual Sync；重新开启 Auto Update、保持 interval 为空并保存；在 legacy `/profiles` 通过 Profile 菜单打开编辑器，将 interval 输入为 0 并保存。
+被测操作：在 main Profile 详情页关闭 Auto Update 并保存；点击 Manual Sync；确认 loopback 请求已到达且按钮进入 loading 状态后再放行响应，并等待按钮退出 loading（包括 Profile 查询失效刷新）后，重新开启 Auto Update、保持 interval 为空并保存；在 legacy `/profiles` 通过 Profile 菜单打开编辑器，将 interval 输入为 0 并保存。
 
 权威结果：`get_profiles` 返回该 Profile 的数值间隔；独立读取隔离运行目录的 `config/profiles.yaml`，核对同一 UID 的落盘字段；loopback 服务请求计数增加证明关闭自动更新后手动同步仍会发起真实请求。
 
@@ -28,13 +28,13 @@
 
 失败或边界场景：若测试启动前系统代理或 TUN 已开启则立即失败且不修改宿主状态；所有订阅请求由本地服务器处理。测试没有等待两小时，因此“零值不会按周期自动刷新”由 Rust scheduler 单测覆盖，桌面 E2E 不作该时间跨度声明。
 
-等待预算：loopback 监听 15 秒；页面、控件和状态收敛各最多 15 秒；手动 HTTP 刷新最多 30 秒；选择恢复及删除各最多 30 秒；`withCleanup` 保留主体错误并执行全部清理。
+等待预算：下列均为各阶段独立上限：loopback 监听 15 秒，页面、控件和状态收敛各 15 秒，手动同步依次最多等待请求到达 30 秒、按钮进入 loading 15 秒、放行响应后的查询刷新完成 30 秒。`mochaOpts.timeout` 为每个测试 120 秒硬超时；这些阶段上限不是在硬超时之外另加的预算。若同步仍未完成，清理会放行响应并最多等待刷新结束 30 秒；随后恢复 Profile 选择和删除 fixture 各最多等待 30 秒。极端情况下各阶段等待之和会超过 120 秒，Mocha 外层超时会先触发，无法保证所有后续清理阶段都能用满上限。`withCleanup` 在主体结束或失败后按注册顺序执行清理、保留主体错误，并先收敛手动刷新再关闭 loopback 服务。
 
 诊断：WDIO 最终错误、失败截图和页面源由当前 harness 管理；使用合成 Profile 名称和 loopback URL，不保存凭据或外部订阅地址。
 
 资源与清理：关闭 loopback server；若 fixture Profile 变为 current，则恢复原 UID（或原来的 `null`）；删除唯一 Profile 并确认不存在。测试开始前检查代理/TUN，整个契约不更改这些宿主设置。清理步骤分别登记，主体异常不会跳过后续清理。
 
-回归敏感性：后端拒绝 0、前端开关仍写正值、默认值丢失、手动同步控件失效、legacy 远程配置写入错误路径或 profile 文件未持久化时，分别在目标断言失败。
+回归敏感性：后端拒绝 0、前端开关仍写正值、默认值丢失、手动同步控件失效、刷新尚未完成时 UI 查询重置正在编辑的表单、legacy 远程配置写入错误路径或 profile 文件未持久化时，分别在目标断言失败。
 
 相关规则与例外：T01、T02、T03、T04、T05、T06、T07、T10、T14；没有原生鼠标可信事件或冷启动覆盖。本地系统代理/TUN 检查是宿主状态前置条件，loopback 请求不证明公网代理或 TUN 行为。
 

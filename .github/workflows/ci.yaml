@@ -215,7 +215,6 @@ jobs:
           pnpm test:profiles:query
           pnpm test:hotkeys
           pnpm test:agent:intent
-          cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib features::agent::history::tests
 
       - name: Test backend workspace
         if: env.BACKEND == 'true'
