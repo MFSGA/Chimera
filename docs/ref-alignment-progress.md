@@ -1491,6 +1491,17 @@ DIFF-001 至 DIFF-012 是此前基于
 - 审查和批准：需独立复核真实 diff、ref 符号映射、失败/清理路径和宿主影响；L2 maintainer approval 后才提交和推送。
 - 回滚：迁移或手工恢复已保存 0 的 interval 后，再回滚模型、配置兼容、调度器和 UI；避免旧程序把 0 当作无效配置。
 
+## DIFF-058：流量报告暂停策略与桌面导航验证收敛
+
+- 目标与非目标：将共享流量报告在 `refetchInterval: false` 时的暂停语义对齐本地 ref，并验证主界面流量路由在真实桌面窗口中的查询状态和侧栏辅助标签。此批不迁移 ref 的默认 2 秒轮询或 `placeholderData`，不增加本地 IP 探测，也不测试系统代理、TUN、运行时采集或连接详情的规则用量交叉跳转。
+- 基线与映射：功能提交最初基于父仓库 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a` 和 ref gitlink `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；当时只读 ref 检查在 `6feb4a71016e54260c1592f3a0d63a0169a2b40a`。随后本分支合入最新父仓库 master `ae48f24ae5012a47533784695d7109cafb753d12`（其 ref gitlink 为 `31019da14006b384b3272c72b4088179a9e72c47`）；本次另行 fetch 并核实 ref 最新 `origin/main` 为 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`，ref 根目录和递归子模块均干净。`6feb4a71..a4f706fe` 未改动本批映射的 `ref/frontend/query/src/ipc/use-traffic-report.ts::useTrafficReport` 与 `ref/frontend/ui/src/navigation-sidebar.tsx::NavigationSidebarToggle`；该区间新增/调整 Flow Sankey 文件和 topology transition，将作为下一批对齐。`useTrafficReport` 的暂停、窗口聚焦/网络重连和 `retry: false` 行为对应 `frontend/interface/src/ipc/use-traffic.ts::useTrafficReport`。导航侧栏对应 `frontend/chimera/src/components/ui/navigation-sidebar.tsx::NavigationSidebarToggle`；Chimera 增加可选 `expandLabel`，拓扑侧栏传入本地化展开/收起文案。未重命名上游共享符号。
+- 类别与接口：L2，共享查询行为会被拓扑和 Connections 状态统计使用；另有主界面可访问标签及四种语言消息。`useTrafficReport` 的选项限定为 `{ enabled?: boolean; refetchInterval?: number | false }`，并新增可测试的 `trafficReportQueryOptions` 描述器供 hook 复用。搜索确认 legacy 页面和 agent 当前没有 `useTrafficReport` 调用点；主界面仍通过同一共享 hook 读取。未改 IPC 命令、持久化、后端 runtime、legacy UI 或 agent 合同。
+- 保留差异：相较当前 ref，Chimera 的 hook 仍未设置 ref 的默认 2 秒 `refetchInterval` 和按 topology layers 保留 `placeholderData`。显式配置轮询的调用方按 ref 关闭自动 retry 并由下一轮恢复；未配置轮询的 Connections 调用方保留 QueryClient retry，避免瞬时错误后不再恢复。此项只部分对齐，默认轮询和 placeholder 行为后续按调用方需要单独评估。
+- 测试契约与验收：`docs/testing/contracts/traffic-analysis-main.md` 更新为 L2，并说明当前覆盖边界。已注册的 `tauri-e2e/specs/traffic-analysis-main.e2e.ts` 通过真实 main 窗口验证 Dashboard 准备、Traffic 导航、侧栏展开/收起标签变化、Closed scope、键盘选择 Connections，以及 Flow/Geography 保留 URL 状态。共享 hook 的单测验证未提供轮询时瞬时 IPC 错误会按 QueryClient 策略重试、显式轮询会留待下一轮恢复、暂停选项会关闭 focus/reconnect/retry。桌面 E2E 不声称覆盖这些后台事件、Connections 详情跳转、Tab 顺序或原生鼠标事件。
+- 实际验证：`pnpm --filter=chimera-ui test:traffic` 8/8；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25；`pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`pnpm --filter=chimera-ui build`、Prettier 和 `git diff --check` 均通过。使用外接盘独立 Cargo target 构建 `backend/tauri` 的 `e2e` feature 成功，最终二进制 SHA-256 为 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`。v6 和 v7 两次桌面运行失败并生成失败截图/HTML，日志有 `execute/async` 超时；之前文档将其报告为通过属错误。相同二进制在 2026-10-17T07:31:21Z 通过新隔离目录 v8 运行，macOS WebKit 605.1.15 为 1/1 通过；失败产物目录为空。精确命令见 `LESSON-20261017-003`。单次通过尚不能说明间歇性超时已稳定消除；本地未运行 Windows/Linux E2E；当时新 SHA 的远端验证状态见下一条。
+- 最新远端复验：PR #489 head `c50d0e68c44b558c2cb5b97dfdd6e43ecf253018` 的 Windows Desktop E2E run [39018118841](https://github.com/MFSGA/Chimera/actions/runs/39018118841) 通过。独立复核随后发现 Closed scope 断言缺少可靠前态；当前后续补丁先建立并断言 `scope=all`，再切换到 Closed，因此前述通过结果不覆盖新增的状态转移断言。CI run [39018118834](https://github.com/MFSGA/Chimera/actions/runs/39018118834) 的 macOS/Windows 构建仍待完成；后续补丁的新 SHA 需重新执行门禁。
+- 风险、回滚与审批：不改变宿主网络、服务权限或用户数据。产品回滚限于恢复 `useTrafficReport` 原查询选项、拓扑侧栏标签调用/消息及本批 E2E/契约；ref gitlink 同步保持为独立任务。L2 产品改动需维护者复核和明确批准；因同时更新 `LESSONS.md`，该提交还需 L3 维护者批准。
+
 ## DIFF-056：按 ref 拆分核心 sidecar 解析器并补齐打包入口
 
 - 目标：把二进制信息、平台映射和版本解析从 `scripts/check.ts` 收拢到 ref 对应的

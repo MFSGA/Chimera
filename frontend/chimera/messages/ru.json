@@ -776,6 +776,7 @@
   "navigation_return_to": "Назад: {page}",
   "topology_title": "Трафик",
   "navigation_sidebar_collapse": "Свернуть боковую панель",
+  "navigation_sidebar_expand": "Развернуть боковую панель",
   "topology_caption": "Выберите узел, чтобы отфильтровать данные. Узлы сверх лимита объединяются в категорию «Другие».",
   "topology_connection_count": "Соединений: {count}",
   "topology_flow": "Маршруты соединений",

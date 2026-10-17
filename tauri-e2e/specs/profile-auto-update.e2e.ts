@@ -40,7 +40,12 @@ function remoteUpdateInterval(
   if (item.config.source.type !== 'remote') {
     throw new Error(`Profile ${uid} is not remote.`);
   }
-  return item.config.source.option?.update_interval_minutes ?? 120;
+  const interval = item.config.source.option?.update_interval_minutes;
+  assert.ok(
+    typeof interval === 'number',
+    `Profile ${uid} has no numeric update interval.`,
+  );
+  return interval;
 }
 
 function persistedUpdateInterval(uid: string): number {
@@ -180,6 +185,38 @@ async function waitForSwitchChecked(selector: string, expected: boolean) {
     }
     throw new Error(
       `The Auto Update switch did not become ${String(expected)}; last observed ${lastObserved}.${screenshotEvidence}`,
+      { cause },
+    );
+  }
+}
+
+async function waitForManualSyncLoading(
+  uid: string,
+  expected: boolean,
+  timeout: number,
+) {
+  let lastObserved = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastObserved = await browser.execute((expectedUid) => {
+          const button = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="profile-manual-sync"]',
+            ),
+          ).find((candidate) => candidate.dataset.profileUid === expectedUid);
+          return button?.getAttribute('data-loading') ?? 'missing';
+        }, uid);
+        return lastObserved === String(expected);
+      },
+      {
+        timeout,
+        timeoutMsg: `Manual sync loading did not become ${String(expected)}.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `Manual sync loading did not become ${String(expected)}; last observed ${lastObserved}.`,
       { cause },
     );
   }
@@ -529,8 +566,28 @@ describe('remote profile auto-update', () => {
       );
 
       let requestCount = 0;
-      const server = createServer((_request, response) => {
+      let holdNextSubscriptionResponse = false;
+      let finishHeldSubscriptionResponse!: () => void;
+      const manualSyncCleanupState = {
+        fixtureUid: undefined as string | undefined,
+        waitForCompletion: false,
+      };
+      const manualSyncResponseGate = new Promise<void>((resolve) => {
+        finishHeldSubscriptionResponse = resolve;
+      });
+      defer('release and finish a pending manual sync', async () => {
+        finishHeldSubscriptionResponse();
+        const fixtureUid = manualSyncCleanupState.fixtureUid;
+        if (!manualSyncCleanupState.waitForCompletion || !fixtureUid) return;
+        await waitForManualSyncLoading(fixtureUid, false, 30_000);
+        manualSyncCleanupState.waitForCompletion = false;
+      });
+      const server = createServer(async (_request, response) => {
         requestCount += 1;
+        if (holdNextSubscriptionResponse) {
+          holdNextSubscriptionResponse = false;
+          await manualSyncResponseGate;
+        }
         const body = 'proxies: []\n';
         response.writeHead(200, {
           'content-type': 'application/yaml',
@@ -558,6 +615,7 @@ describe('remote profile auto-update', () => {
         },
       });
       const uid = outcome.value;
+      manualSyncCleanupState.fixtureUid = uid;
       defer('restore the original Profile selection', async () => {
         const profiles = await readProfiles();
         if ((profiles.current ?? null) !== uid) return;
@@ -653,6 +711,10 @@ describe('remote profile auto-update', () => {
         `[data-slot="profile-manual-sync"][data-profile-uid="${uid}"]`,
       );
       await manualSync.waitForExist({ timeout: 15_000 });
+      // Request count advances before the Profile commit and query invalidation;
+      // hold the response until the user-visible task state confirms the click.
+      holdNextSubscriptionResponse = true;
+      manualSyncCleanupState.waitForCompletion = true;
       await manualSync.click();
       try {
         await browser.waitUntil(async () => requestCount > beforeManualSync, {
@@ -666,6 +728,10 @@ describe('remote profile auto-update', () => {
           { cause },
         );
       }
+      await waitForManualSyncLoading(uid, true, 15_000);
+      finishHeldSubscriptionResponse();
+      await waitForManualSyncLoading(uid, false, 30_000);
+      manualSyncCleanupState.waitForCompletion = false;
 
       await openMainUpdateOptions(uid);
       const cancelSwitch = await $(
