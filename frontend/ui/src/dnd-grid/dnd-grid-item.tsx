@@ -1,47 +1,41 @@
-/**
- * DnD Grid 项组件
- *
- * 迁移自 ref: `src/components/ui/dnd-grid/dnd-grid-item.tsx`
- *
- * 职责：
- * - 渲染单个网格项，使用 @dnd-kit 的 useDraggable 实现拖拽
- * - 使用 motion 的 useSpring 实现放置后弹性动画
- * - 提供调整大小的拖拽手柄（ResizeKnob）
- * - 支持覆盖层模式（DragOverlay 内渲染时跳过定位逻辑）
- *
- * 两种渲染模式：
- * 1. isOverlay: 仅在 DragOverlay 内使用，简单包裹子元素以填充 overlay div
- * 2. 普通模式：使用 DndGridItemDraggable 包含完整拖拽和定位逻辑
- */
-
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { useDraggable } from '@dnd-kit/core';
 import {
   AnimatePresence,
   motion,
+  useIsPresent,
+  useReducedMotion,
   useSpring,
   type Transition,
 } from 'motion/react';
-import { useLayoutEffect, useRef, type PropsWithChildren } from 'react';
+import {
+  PropsWithChildren,
+  useLayoutEffect,
+  useRef,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useDndGridContext } from './context';
-import type { GridItemConstraints } from './types';
+import type { GridItemConstraints, ItemRect } from './types';
 
-/** 位置弹性动画配置 */
 const SPRING_OPTIONS = {
   stiffness: 350,
   damping: 35,
 } as Transition;
 
-/** 调整大小时过渡动画配置 */
 const RESIZE_SPRING = {
   type: 'spring',
   stiffness: 400,
   damping: 35,
 } as Transition;
 
-/** 普通布局变化的瞬间过渡（无动画） */
 const INSTANT = {
   duration: 0,
+} as Transition;
+
+const PRESENCE_SPRING = {
+  type: 'spring',
+  stiffness: 420,
+  damping: 34,
 } as Transition;
 
 export type DndGridItemProps<T extends string> = PropsWithChildren<{
@@ -50,12 +44,6 @@ export type DndGridItemProps<T extends string> = PropsWithChildren<{
 }> &
   GridItemConstraints;
 
-/**
- * 调整大小手柄组件
- *
- * 位于项右下角，使用 Pointer Events 实现拖拽
- * 通过 onPointerDown/Move/Up 跟踪拖拽坐标变化
- */
 function ResizeKnob({
   onStart,
   onMove,
@@ -65,6 +53,9 @@ function ResizeKnob({
   onMove: (x: number, y: number) => void;
   onEnd: () => void;
 }) {
+  const isPresent = useIsPresent();
+  const reducedMotion = useReducedMotion();
+
   return (
     <motion.div
       className={cn(
@@ -73,20 +64,26 @@ function ResizeKnob({
         'touch-none select-none',
       )}
       data-slot="resize-handle"
-      onPointerDown={(e) => {
+      aria-hidden={!isPresent}
+      style={{ pointerEvents: isPresent ? 'auto' : 'none' }}
+      onPointerDown={(e: ReactPointerEvent<HTMLDivElement>) => {
+        if (!isPresent) {
+          return;
+        }
+
         e.preventDefault();
         e.stopPropagation();
         e.currentTarget.setPointerCapture(e.pointerId);
         onStart(e.clientX, e.clientY);
       }}
-      onPointerMove={(e) => {
+      onPointerMove={(e: ReactPointerEvent<HTMLDivElement>) => {
         if (!e.currentTarget.hasPointerCapture(e.pointerId)) {
           return;
         }
 
         onMove(e.clientX, e.clientY);
       }}
-      onPointerUp={(e) => {
+      onPointerUp={(e: ReactPointerEvent<HTMLDivElement>) => {
         if (!e.currentTarget.hasPointerCapture(e.pointerId)) {
           return;
         }
@@ -94,7 +91,7 @@ function ResizeKnob({
         e.currentTarget.releasePointerCapture(e.pointerId);
         onEnd();
       }}
-      onPointerCancel={(e) => {
+      onPointerCancel={(e: ReactPointerEvent<HTMLDivElement>) => {
         if (!e.currentTarget.hasPointerCapture(e.pointerId)) {
           return;
         }
@@ -102,25 +99,18 @@ function ResizeKnob({
         e.currentTarget.releasePointerCapture(e.pointerId);
         onEnd();
       }}
-      initial={{
-        scale: 0.85,
-        opacity: 0,
-      }}
+      initial={reducedMotion ? false : { scale: 0.85, opacity: 0 }}
       animate={{
         scale: 1,
         opacity: 1,
       }}
-      exit={{
-        scale: 0.85,
-        opacity: 0,
-      }}
+      exit={reducedMotion ? { opacity: 0 } : { scale: 0.85, opacity: 0 }}
       transition={{
         type: 'tween',
-        duration: 0.1,
+        duration: reducedMotion ? 0 : 0.2,
         ease: 'easeOut',
       }}
     >
-      {/* 右下角拖拽手柄图标 */}
       <svg
         className="size-full cursor-se-resize"
         viewBox="11 11 7 7"
@@ -138,15 +128,6 @@ function ResizeKnob({
   );
 }
 
-/**
- * 可拖拽的网格项
- *
- * 包含完整的定位、拖拽和调整大小逻辑：
- * - 使用 useDraggable 注册拖拽
- * - 使用 useSpring 实现放置后回弹动画
- * - 在编辑模式下显示调整大小手柄
- * - 拖拽时自身变为透明，由 DragOverlay 替代显示
- */
 function DndGridItemDraggable<T extends string>({
   id,
   className,
@@ -171,26 +152,28 @@ function DndGridItemDraggable<T extends string>({
     onResizeEnd,
   } = useDndGridContext();
 
-  // 在每次渲染时同步约束（确保调整大小前约束始终最新）
+  // Write constraints synchronously during render so they're always up-to-date
+  // before any resize interaction can occur.
   constraintsMapRef.current[id] = { minW, minH, maxW, maxH };
+
+  const isPresent = useIsPresent();
+  const reducedMotion = useReducedMotion();
 
   const item = displayItems.find((i) => i.id === id);
 
-  // 拖拽禁用条件：disabled 或没有任何其他项正在被调整大小
+  // Disable drag while any item is being resized
   const { attributes, listeners, setNodeRef } = useDraggable({
     id: dragIdPrefix ? `${dragIdPrefix}${id}` : id,
     disabled: disabled || !item || resizingItemId !== null,
     data: item,
   });
 
-  // 放置后弹性动画
   const springX = useSpring(0, SPRING_OPTIONS);
   const springY = useSpring(0, SPRING_OPTIONS);
 
   const dropInfo = dropInfoMap[id];
   const prevDropInfoRef = useRef<typeof dropInfo>(undefined);
 
-  // 当有新的放置信息时，跳转到放置位置并弹回
   useLayoutEffect(() => {
     if (!dropInfo || dropInfo === prevDropInfoRef.current || !item) {
       return;
@@ -204,26 +187,43 @@ function DndGridItemDraggable<T extends string>({
     springY.set(0);
   }, [dropInfo, item, getItemRect, springX, springY]);
 
-  if (!item) {
+  // A removed item stays until its exit animation finishes. Keep it where it
+  // was: a new target, such as after a grid resize, would stall the exit.
+  const exitRectRef = useRef<ItemRect | null>(null);
+  const presentRect = item && isPresent ? getItemRect(item) : null;
+  if (presentRect) {
+    exitRectRef.current = presentRect;
+  }
+  const rect = isPresent ? presentRect : exitRectRef.current;
+
+  if (!rect) {
     return null;
   }
 
-  const rect = getItemRect(item);
   const isActiveItem = activeItemId === id;
   const isResizing = resizingItemId === id;
+
+  const position = {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+  // Items appear and leave with a pop only while the grid is being edited,
+  // not when a layout loads or adapts to a new size. The exit stays defined
+  // and turns instant instead: motion never finishes an exit that appears
+  // in the same render that removes the item.
+  const hidden = reducedMotion ? { opacity: 0 } : { opacity: 0, scale: 0.85 };
+  const presence = disabled || reducedMotion ? INSTANT : PRESENCE_SPRING;
 
   return (
     <motion.div
       ref={setNodeRef}
-      initial={false}
-      animate={{
-        left: rect.left,
-        top: rect.top,
-        width: rect.width,
-        height: rect.height,
-      }}
-      transition={
-        isResizing
+      initial={disabled ? false : { ...position, ...hidden }}
+      animate={{ ...position, opacity: 1, scale: 1 }}
+      exit={hidden}
+      transition={{
+        ...(isResizing
           ? {
               left: RESIZE_SPRING,
               top: RESIZE_SPRING,
@@ -235,22 +235,32 @@ function DndGridItemDraggable<T extends string>({
               top: INSTANT,
               width: INSTANT,
               height: INSTANT,
-            }
-      }
+            }),
+        opacity: presence,
+        scale: presence,
+      }}
       className={cn('group', className)}
       style={{
         position: 'absolute',
         touchAction: 'none',
-        opacity: isActiveItem ? 0 : 1,
+        // Opacity belongs to the presence animation; hide the dragged item
+        // without animating it.
+        visibility: isActiveItem ? 'hidden' : undefined,
+        pointerEvents: isPresent ? undefined : 'none',
         x: springX,
         y: springY,
       }}
-      {...attributes}
+      {...(!disabled ? attributes : {})}
       {...listeners}
+      onPointerDown={(event: ReactPointerEvent<HTMLDivElement>) => {
+        // Portaled controls bubble through React but are outside the drag surface.
+        if (event.currentTarget.contains(event.target as Node)) {
+          listeners?.onPointerDown?.(event);
+        }
+      }}
     >
       {children}
 
-      {/* 编辑模式下显示调整大小手柄 */}
       <AnimatePresence>
         {!disabled && !sourceOnly && (
           <ResizeKnob
@@ -264,13 +274,6 @@ function DndGridItemDraggable<T extends string>({
   );
 }
 
-/**
- * DndGridItem 组件 - 入口
- *
- * 根据是否为覆盖层模式分派到不同的渲染路径：
- * - isOverlay: 直接包裹 children，不执行定位（由 DragOverlay 的样式控制）
- * - 普通模式: 使用 DndGridItemDraggable 包含完整功能
- */
 export function DndGridItem<T extends string>({
   id,
   className,
@@ -283,7 +286,7 @@ export function DndGridItem<T extends string>({
   const { isOverlay } = useDndGridContext();
 
   if (isOverlay) {
-    // DragOverlay 内部：跳过定位和拖拽逻辑，只填充 overlay 容器
+    // Inside DragOverlay: skip positioning and drag logic �?just fill the overlay div.
     return <div className={cn('size-full', className)}>{children}</div>;
   }
 

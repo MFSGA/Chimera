@@ -18,9 +18,11 @@
 | LESSON-20261014-002 | 2026-10-14 | Proxies / E2E | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
 | LESSON-20261014-003 | 2026-10-14 | Profile / E2E | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
 | LESSON-20261014-004 | 2026-10-14 | Development   | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
+| LESSON-20261015-001 | 2026-10-15 | E2E           | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
 | LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
 | LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | Frontend / CI | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Development   | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| LESSON-20261016-002 | 2026-10-16 | Frontend / CI | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
 
 ## 单条模板
 
@@ -122,6 +124,23 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：清理只针对本任务 worktree 中由失败 hook 新建的 Cargo 构建目录，`cargo clean` 报告移除 3614 文件 / 701.5 MiB；无宿主网络、Service 或 TUN 操作。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行 Rust 构建后若 hook 也需编译，`git commit` 命令必须显式继承 `CARGO_TARGET_DIR`；无治理门禁调整。
 
+### LESSON-20261015-001：跨窗口 E2E 就绪检查必须使用窗口对应的 UI 标记
+
+- 日期与时区：2026-10-15 UTC
+- 状态：Verified
+- 严重度：Low
+- 模块：E2E / main UI / legacy UI
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `c7d21d47a374009161f271c4512722c5c5cd8eae`、PR #482 测试前 head `24ea62a3f42458c31d0860b172396e34340050d3`、ref `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；macOS Apple Silicon、WebKit 605.1.15，使用隔离 E2E runtime 和本地专用 app ID。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #482](https://github.com/MFSGA/Chimera/pull/482)；本地失败信息为 `The legacy Profile window did not render after navigation.`，运行产物位于本次任务的外接盘临时目录。
+- 预期行为：main-first 套件在 main UI 验证完成后创建 legacy 窗口；测试须确认 legacy 前端已挂载，再打开 Profile 列表并验证共享 Profile。
+- 真实异常、复现步骤与证据：首次添加就绪等待时检查 `[data-slot="app-root"]`。该标记只属于 main UI；legacy 页面有自己的根节点与 `data-testid="sidebar-route-profiles"` 导航项。main-first 本地运行在进入 legacy Profile 断言前超时，确认等待条件引用了错误窗口的 DOM 合同。
+- 确认的根因与排除项：根因为 E2E 等待器误用 main-only 标记，不是 Profile 后端状态问题。首次尝试也遇到内部磁盘空间不足；将本次生成的构建缓存及临时目录放到外接盘后，排除了该环境限制。
+- 修复提交、差异映射及保留的兼容性边界：PR #482 在 `tauri-e2e/specs/profile-auto-update.e2e.ts` 改为等待 legacy 专属侧栏项挂载后再导航；`tauri-e2e/README.md` 说明隔离 main-first 套件与默认 legacy 窗口生命周期的区别。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现为上述 main-first 本地 E2E 超时；修复后 `profile-auto-update-main` 在同一主机、独立 app ID 和外接盘 runtime 下通过 1/1。套件由 `isolatedE2eSuites` 注册，并由 `spec-suites.test.ts` 检查只运行一次。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite profile-auto-update-main --logLevel error`，1/1 通过；`pnpm --filter @chimera/tauri-e2e typecheck` 和 25 项 harness unit tests 通过。更新后的 Windows CI 仍须确认平台行为。
+- 风险/回滚和清理证据（如涉及宿主状态）：用例只使用隔离 runtime 与 loopback 服务，并注册 Profile/窗口清理；没有启用系统代理或 TUN。回滚时可恢复上一版测试与 suite 配置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：main 与 legacy 使用不同 DOM 标记；新增跨窗口用例前须从目标页面源码确认挂载信号。没有调整门禁。
+
 ### LESSON-20261015-002：路由就绪等待应限定到当前用例需要的出口
 
 - 日期与时区：2026-10-15 UTC
@@ -156,7 +175,24 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：没有清理或删除任何 Cargo target；只产生/复用了 Cargo 编译产物，主源码未改。以后需要的 target 放在各自的 worktree 子目录或独立外接盘目录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-004 涉及 hook 未继承 CARGO_TARGET_DIR；本次另外确认 target 本身也不能跨 worktree 共用。无 CI 门禁变化。
 
-### LESSON-20261016-001：行边界状态必须在渲染组件中完整解构
+### LESSON-20261016-001：未准备的 worktree 中 pnpm 命令会触发依赖安装
+
+- 日期与时区：2026-10-16 UTC
+- 状态：Mitigated（本次安装已中断；留下的虚拟 store 未清除，以免误删未知的预存依赖）
+- 严重度：Low
+- 模块：Development / E2E / CI
+- master commit / ref gitlink SHA / 平台与测试环境：PR #486 head `8d6a6dfb9e2d0ec19bde94f8dd77a2eeb6e9c78d`；ref gitlink `685042aaedaea26a591900be0b494dfe8efd79b0`；Apple Silicon macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #486](https://github.com/MFSGA/Chimera/pull/486)，本机检查期间 `pnpm exec prettier` 输出自动依赖验证与安装进度；此前同日一次 `pnpm --filter @chimera/tauri-e2e exec wdio` 也触发依赖安装，并在 `Chimera_Client/target/debug` 启动 Rust 编译。
+- 预期行为：运行检查时只调用选定的检查工具，不启动隐式安装或与检查无关的 Rust 构建。
+- 真实异常、复现步骤与证据：在新 E2E worktree 中并行启动 `pnpm --filter @chimera/tauri-e2e typecheck` 与 `pnpm exec prettier --check ...`。后者输出 lockfile verification、依赖解析与 package cloning 进度；两条命令立即以 Ctrl-C 中断。此前的 WDIO exec 安装/编译也在约 84 秒后中断。当前 worktree 内 `.pnpm` 虚拟 store 显示约 1.8 GiB 逻辑内容；系统可用空间从约 1.2 GiB 降到 1.1 GiB。中止后未发现 pnpm、cargo 或 rustc 进程，也没有新增跟踪文件。
+- 确认的根因与排除项：调用 pnpm 的 exec/run 入口时，当前环境因该 worktree 依赖链接未准备完成而开始自动依赖验证和安装；并行 pnpm 命令共用这一准备过程。该现象是本地验证流程失误，不是产品失败或 CI 失败。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码改动。本次改用预装的 Prettier 和 TypeScript 二进制，并在 `node_modules` 中临时链接主 checkout 的准备依赖完成检查，随后移除这些临时链接；没有清理无法区分归属的 `.pnpm` 虚拟 store。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：这是本地执行流程错误，不适用产品回归测试；不能通过重试 pnpm 命令来证明该流程安全。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：中断后确认没有本次依赖安装或构建进程；直接 TypeScript harness 检查通过、unit tests 25/25、Prettier 与 `git diff --check` 通过。没有本机构建最新 E2E binary；该分支的 Windows CI 才能验证当前 app/test 组合。
+- 风险/回滚和清理证据（如涉及宿主状态）：未修改跟踪源码以外的配置；测试 runtime/artifacts 使用仓库 `cleanupRuntimeDirectory` 安全删除。依赖虚拟 store 保留在隔离 worktree 中，系统空间仍约 1.1 GiB 可用；未触及其他 worktree 或用户 app。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：此前另一 worktree 的 WDIO exec 已出现相同安装副作用，故记录为重复流程错误。开始运行 pnpm 检查前须确认工作树依赖已准备；否则从同一 checkout 的现成二进制运行单项检查，避免 `pnpm exec` 和并行安装。没有修改 CI 或治理门禁。
+
+### LESSON-20261016-002：行边界状态必须在渲染组件中完整解构
 
 - 日期与时区：2026-10-16 UTC
 - 状态：Mitigated（提交钩子已拦截并修复；PR #484 的新 SHA 桌面 E2E 仍待验证）

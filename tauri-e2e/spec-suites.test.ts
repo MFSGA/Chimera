@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { baseE2eSuites, e2eSuites } from './spec-suites.ts';
+import { baseE2eSuites, e2eSuites, isolatedE2eSuites } from './spec-suites.ts';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
 const specsDirectory = path.join(configDirectory, 'specs');
@@ -25,9 +25,14 @@ function collectSpecs(directory: string): string[] {
     .sort();
 }
 
-test('base E2E suites partition every spec exactly once', () => {
+test('registered E2E suites partition every spec exactly once', () => {
   const discovered = collectSpecs(specsDirectory);
-  const grouped = Object.values(baseE2eSuites).flat().sort();
+  const grouped = [
+    ...Object.values(baseE2eSuites),
+    ...Object.values(isolatedE2eSuites),
+  ]
+    .flat()
+    .sort();
 
   assert.equal(
     new Set(grouped).size,
@@ -50,6 +55,16 @@ test('critical and hermetic suites have intentional coverage boundaries', () => 
     e2eSuites.hermetic.includes(baseE2eSuites.network[0]),
     false,
     'LAN test must stay out of hermetic CI because it requires an external WSL/LAN client',
+  );
+  assert.deepEqual(
+    e2eSuites['profile-auto-update-main'],
+    ['./specs/profile-auto-update.e2e.ts'],
+    'Profile auto-update must start in its dedicated main-window session',
+  );
+  assert.equal(
+    e2eSuites.all.includes('./specs/profile-auto-update.e2e.ts'),
+    false,
+    'main-window lifecycle suite runs separately from legacy-start suites',
   );
   assert.deepEqual(
     [...e2eSuites.all].sort(),

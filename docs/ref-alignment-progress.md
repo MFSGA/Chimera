@@ -1,9 +1,24 @@
 # ref 对齐进度
 
-主仓库此前固定的 `ref` 基线为 `813673a8e84b51265467f02277fc7e739837f61e`。
-2026-10-14 已从 `origin/main` 核实并检出上游最新提交
-`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；当前候选 gitlink 指向该提交，
-子模块工作区干净。自原基线以来上游合入了 TanStack Router、meta-json-schema、
+## Dashboard 小组件库与 DnD Grid（实现及独立复核完成，待提交审批）
+
+- 目标：将可复用网格组件迁到 `@chimera/ui` 并对齐上游拖拽源 API；Dashboard 小组件库提供搜索、直接添加，以及将条目拖到网格指定位置。保留现有六种小组件、`dashboard-widgets` 持久化格式和当前布局自适应逻辑。
+- 非目标：本批不增加新的小组件类型，不改 legacy UI、agent、核心服务或系统网络行为。
+- 基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`（2026-10-16 fetch 后核对）。master 原有 ref gitlink 为 `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；本分支会把 gitlink 更新到该基线。当前隔离工作树未初始化 ref 内部 runtime 子模块，指针为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`；本功能只读取 ref 的前端源码，不依赖 runtime 内容。
+- 参考映射：`ref/frontend/ui/src/dnd-grid/*` → `frontend/ui/src/dnd-grid/*`；新增上游 `DndGridSource`、`DndGridSourceData`、网格命中坐标和 `onExternalDrop`；`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/_modules/widget-placement.ts` → Chimera Dashboard `_modules/widget-placement.ts`；WidgetSheet 沿用上游可搜索条目和直接添加交互，但使用 Chimera 当前的 Vaul 抽屉及六项 `RENDER_MAP`。`use-grid-layout` 继续依赖 Chimera 已锁定的 `lodash-es`，其余网格结构和符号按 ref 对齐。
+- 保留差异及收敛计划：当前 ref 有 16 种 Dashboard 小组件，Chimera 已实现其中 6 种。本批保留 Chimera 现有六项，不复制依赖尚未迁入的 Profile/traffic-report/provider widget 实现与配置；当对应组件和数据合同进入 Chimera 后，再按完整 widget 模块迁入并扩展库列表。
+- 接口影响：`@chimera/ui` 新增 `dnd-grid` 与 `search-field` 导出；Dashboard 的拖拽源通过 `onExternalDrop(id, position)` 添加小组件。存储 schema 不变。legacy UI 与 agent 不调用此主界面布局 API。
+- 风险：L2（共享 UI 交互及已持久化布局的写入路径）。验收包括定位添加、冲突拒绝、无位置时追加、搜索/直接添加和已有布局恢复；主机网络无影响。
+- 实际验证：placement 定向测试 3/3 通过；共享 UI TypeScript 检查、Vite 生产构建、前端边界检查、Prettier 检查及 `git diff --check` 通过。锁文件可解析，四个新增 UI importer 与 manifest 版本一致。全量 Chimera 类型检查仍在未修改的 connections、context-menu、editor、profiles/columns 和测试 Node 类型声明处失败；未报告本批改动文件。独立复核首次发现 Add 按钮未阻止 TouchSensor 的长按事件，已补 `touchstart` 冒泡拦截；复核后续未发现可执行缺陷。
+- 未覆盖：桌面 E2E 未运行；当前锁定的 Tauri WebDriver 操作合成 `MouseEvent`，无法证明真实 PointerSensor/TouchSensor 拖拽，搜索和直接添加也未在运行中的桌面窗口验证。`pnpm prepare:check` 未运行，因为它会下载/安装 sidecar 二进制，与此纯前端切片无关。隔离工作树的 `pnpm install --frozen-lockfile` 卡在 supply-chain lockfile 校验；没有绕过该校验，使用本机已安装依赖直接运行定向命令。
+- 独立审查：最终复核没有发现可操作缺陷。审查环境因不能创建本地 IPC socket 而未能自行启动定向测试；该测试已在工作区命令行直接执行并通过。
+- 回滚：撤销该功能提交并把 ref gitlink 恢复为 `c08aa9d9`；用户存储 schema 未变，不需要数据迁移。
+- 提交要求：须在独立复核后取得维护者对 L2 的明确批准；CI 与桌面 E2E 未完成或失败时不得宣称通过，也不得合并。
+
+当前 profile 同步分支的只读参考检出为 Clash Nyanpasu `main` 的提交
+`c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`，该提交在上游 Actions 页面对应
+`main` 构建，子模块工作区干净。主仓库 `master` 基线为
+`e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；本分支将 ref 更新至 `c08aa9d9`。自原基线以来上游合入了 TanStack Router、meta-json-schema、
 Playwright、Prettier 和 router-plugin 更新，流量分析侧栏路由重整，以及完整的
 profile transform-chain 编辑改进和相应浏览器测试；还补充了 worktree CoW 说明。
 递归子模块指针未变。此同步只更新参考基线，不等于将依赖或界面代码直接应用到
@@ -1418,3 +1433,39 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验证：`pnpm typecheck` 通过；`pnpm --filter=chimera-ui build` 通过；`pnpm --filter=chimera-ui test:traffic`，5 passed；`pnpm --filter @chimera/tauri-e2e test:unit`，25 passed；`pnpm lint:frontend-boundaries`、对全部改动前端/契约文件的 Prettier 检查和 `git diff --check` 通过。`pnpm e2e:tauri:build` **未通过**：本机磁盘仅有约 3.2 GB 可用，Rust 在生成 `backend/target/e2e/debug/deps/libchimera_lib.a` 时报告 `No space left on device`；仅删除本次新建的 `backend/target/e2e` 构建输出恢复空间。真实桌面 `traffic-analysis-main.e2e.ts` 因无可执行文件而未运行，不能据此声称桌面验证通过；远端 PR Desktop E2E 仍需按新 SHA 验证。
 - 风险与回滚：本批不改变宿主网络、服务权限或用户数据；完整回滚需移除 `frontend/chimera/src/pages/(main)/main/topology/`、`frontend/chimera/src/pages/(main)/main/_modules/{data-page.tsx,use-usage-label-of.ts}`、`frontend/chimera/src/utils/{traffic-retention,traffic-usage}.ts`、`frontend/chimera/src/components/ui/navigation-sidebar.tsx`、`frontend/chimera/src/assets/maps/`，并恢复 `frontend/chimera/src/components/ui/button.tsx`、`frontend/interface/src/ipc/use-traffic.ts`、`frontend/chimera/src/pages/(main)/_modules/navbar.tsx`、`frontend/chimera/src/pages/(main)/main/connections/index.tsx`、`frontend/chimera/messages/{en,ru,zh-cn,zh-tw}.json`、`frontend/chimera/package.json` 和 `frontend/chimera/src/routeTree.gen.ts`。同时移除 `frontend/chimera/tests/traffic-search.test.ts` 及其 package script、`tauri-e2e/specs/traffic-analysis-main.e2e.ts` 与 `tauri-e2e/spec-suites.ts` 注册、`docs/testing/contracts/traffic-analysis-main.md` 和本 DIFF 记录。地图 generator 未迁入；若未来要让地图数据更新自动对齐 ref，需单独补齐可复现生成器。
 - 收敛条件：在补入并验证本机 Tauri E2E 之前，标记为“前端构建和单测通过、桌面 E2E 未验证”。只有在明确批准 IP 定位的隐私/网络合同并通过专用隔离测试后，才评估迁移 ref local-IP probe；legacy UI 和 agent 继续复用同一共享数据 API，不复制业务逻辑。
+
+## DIFF-055：远程 Profile 可关闭自动同步
+
+- 目标：按 ref 增加远程 Profile 的自动同步开关；间隔设为 0 时，周期刷新与启动补刷停止，手动同步仍可用。
+- 非目标：不改变手动同步语义，不改 Core/Service 协议、代理/TUN 宿主设置、Agent API 或 legacy UI 的路由和导航；legacy 编辑器保留数字间隔输入，并只增加说明 0 会关闭自动同步的提示。
+- ref 基线更新：该功能分支原本基于 master 的 `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；本工作树当时 checkout 在
+  `c85406d3a16ba61cecf7f8aec7a5a051523cbc2d`，这是上游 PR #5775 提交，不是 main。现更新到主线
+  `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`。GitHub 直接 fetch 超时；目标
+  commit 已在本地对象库，且上游 Actions 页显示 `c08aa9d9` 的 main 构建。更新后 `git -C ref status --short` 为空。
+- 映射：ref `backend/nyanpasu-config/src/profile/source.rs::RemoteSyncInterval`、
+  `backend/tauri/src/state/profiles/actor.rs` 的自动刷新处理和
+  `frontend/nyanpasu/src/pages/(main)/main/profiles/$type/detail/_modules/update-option-editor.tsx`；Chimera 对应
+  `backend/chimera-config/src/profile/source.rs::RemoteSyncInterval`、
+  `backend/tauri/src/state/profiles/scheduler.rs::RemoteUpdateScheduler`、
+  `backend/tauri/src/client/profiles.rs`、`frontend/chimera/.../update-option-editor.tsx`，生成类型位于
+  `frontend/interface/src/ipc/bindings.ts`。legacy 入口通过共享 `ProfilesClient` 保存，并由
+  `frontend/chimera/src/components/profiles/profile-dialog.tsx` 适配数值间隔。
+- 完整性：模型、配置校验、旧配置适配、迁移、actor 调度与 IPC patch 都接受 0；调度器取消周期任务且跳过启动补刷；保留
+  手动刷新；main UI 按 ref 使用 `react-hook-form`/`zodResolver` 开关编辑，重新开启且间隔留空时保存默认 120；legacy 表单仍
+  显示数字间隔并允许 0；修复 legacy 对只读远程物化文件的编辑路径，避免更新选项时错误 upsert 文件内容。
+- 持久化与接口：远程 profile 的 `update_interval_minutes` 现在允许 0，IPC 序列化仍是数字，`bindings.ts` 由既有生成器更新；
+  不改变 YAML 键或其他用户数据。增加 `@hookform/resolvers` 以保持 main editor 的 ref 表单结构。
+- 风险：L2（持久配置、调度器与共享 Profile API）。任何 scope 重叠仍按 L2 处理。
+- 验收：Rust 定向测试、main/legacy/E2E TypeScript 检查、manifest tests、前端 IPC 边界检查、真实桌面流程以及 loopback 手动
+  请求均已执行。本机 WebKit 后台窗口会暂停 Motion 退场动画，视觉折叠与冷启动恢复不在本次实测覆盖内；远端 CI/E2E 尚未启动，
+  不宣称通过。
+- 实际验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config profile`；`chimera` 的
+  `scheduler_stops_refreshing_when_interval_is_patched_to_zero`、
+  `disabled_auto_sync_skips_startup_catch_up_but_allows_manual_refresh`、
+  `preserves_disabled_remote_sync_interval_in_runtime_adapter` 定向测试均通过。`pnpm typecheck:chimera`、
+  `pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、
+  `pnpm test:manifest`（8/8）、`pnpm lint:frontend-boundaries`、`pnpm lint:oxlint` 与 Prettier 检查通过。
+  WebKit 桌面 spec `profile-auto-update.e2e.ts` 1/1 通过，使用隔离运行目录和 loopback HTTP fixture；未覆盖真实公网、系统代理/TUN、
+  前台动画与冷启动。执行命令和运行环境详见 `docs/testing/contracts/profile-auto-update.md`。
+- 审查和批准：需独立复核真实 diff、ref 符号映射、失败/清理路径和宿主影响；L2 maintainer approval 后才提交和推送。
+- 回滚：迁移或手工恢复已保存 0 的 interval 后，再回滚模型、配置兼容、调度器和 UI；避免旧程序把 0 当作无效配置。
