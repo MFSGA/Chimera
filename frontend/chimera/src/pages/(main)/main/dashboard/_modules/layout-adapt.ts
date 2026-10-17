@@ -16,12 +16,12 @@
  * 5. 若最小尺寸也无法放置，丢弃该项
  */
 
-import type {
-  DndGridItemType,
-  GridItemConstraints,
-  GridSize,
-} from '@/components/ui/dnd-grid';
-import { isOverlap } from '@/components/ui/dnd-grid/utils';
+import {
+  isOverlap,
+  type DndGridItemType,
+  type GridItemConstraints,
+  type GridSize,
+} from '@chimera/ui/dnd-grid';
 
 /**
  * 将 GridSize 转换为存储键名 `{cols}x{rows}`

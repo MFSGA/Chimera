@@ -1,6 +1,29 @@
 # ref 对齐进度
 
-当前 profile 同步分支的只读参考检出为 Clash Nyanpasu `main` 的提交
+## 当前参考基线同步（本批）
+
+- 上游：Clash Nyanpasu `main`，已从 `origin/main` 获取并核对到 `31019da14006b384b3272c72b4088179a9e72c47`，验证时间为 2026-10-17 UTC。
+- Chimera 最新 `master` 原固定 gitlink：`685042aaedaea26a591900be0b494dfe8efd79b0`；本批将 `ref` 更新到上述上游提交。该上游提交领先原固定基线 3 个提交，包含 TanStack Router monorepo 更新、manifest 版本更新和 macOS DMG Finder 布局元数据生成。
+- 递归子模块：`backend/nyanpasu-runtime` 仍为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`，其 `nyanpasu-utils` 仍为 `7d923f82a1982b0513b0037ac9cbaf78e3dd3f3d`；本批没有同步或修改 Chimera 自身 runtime 子模块。
+- 范围：本批只更新固定参考 gitlink 与基线记录，不把上游依赖、widget 运行时代码或其他产品代码直接复制进 Chimera；下一批应按完整功能检查新基线中的高价值差异。
+- 验证：本地 fetch 后，`ref` HEAD 与当次获取的 `origin/main` tip 一致；ref 根工作区及递归子模块干净；两份更新文档通过 Prettier 和 `git diff --check`。PR CI/E2E 会在目标 ref gitlink 检出上运行常规门禁，不会专门断言所记录的 SHA 或验证上游实时 tip。
+
+## Dashboard 小组件库与 DnD Grid（实现、独立复核、CI/E2E 完成，已合入 master）
+
+- 目标：将可复用网格组件迁到 `@chimera/ui` 并对齐上游拖拽源 API；Dashboard 小组件库提供搜索、直接添加，以及将条目拖到网格指定位置。保留现有六种小组件、`dashboard-widgets` 持久化格式和当前布局自适应逻辑。
+- 非目标：本批不增加新的小组件类型，不改 legacy UI、agent、核心服务或系统网络行为。
+- 基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`（2026-10-16 fetch 后核对）。PR #486 将 master 原有 ref gitlink `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7` 更新到该基线，并于 2026-10-17 以 rebase 方式合入，merge commit `72d61000a63bca6920cc2c55d9a812392bac4c43`。该功能只读取 ref 的前端源码；当时 ref 内部 runtime 指针为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`。
+- 参考映射：`ref/frontend/ui/src/dnd-grid/*` → `frontend/ui/src/dnd-grid/*`；新增上游 `DndGridSource`、`DndGridSourceData`、网格命中坐标和 `onExternalDrop`；`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/_modules/widget-placement.ts` → Chimera Dashboard `_modules/widget-placement.ts`；WidgetSheet 沿用上游可搜索条目和直接添加交互，但使用 Chimera 当前的 Vaul 抽屉及六项 `RENDER_MAP`。`use-grid-layout` 继续依赖 Chimera 已锁定的 `lodash-es`，其余网格结构和符号按 ref 对齐。
+- 保留差异及收敛计划：当前 ref 有 16 种 Dashboard 小组件，Chimera 已实现其中 6 种。本批保留 Chimera 现有六项，不复制依赖尚未迁入的 Profile/traffic-report/provider widget 实现与配置；当对应组件和数据合同进入 Chimera 后，再按完整 widget 模块迁入并扩展库列表。
+- 接口影响：`@chimera/ui` 新增 `dnd-grid` 与 `search-field` 导出；Dashboard 的拖拽源通过 `onExternalDrop(id, position)` 添加小组件。存储 schema 不变。legacy UI 与 agent 不调用此主界面布局 API。
+- 风险：L2（共享 UI 交互及已持久化布局的写入路径）。验收包括定位添加、冲突拒绝、无位置时追加、搜索/直接添加和已有布局恢复；主机网络无影响。
+- 实际验证：placement 定向测试 3/3 通过；共享 UI TypeScript 检查、Vite 生产构建、前端边界检查、Prettier 检查及 `git diff --check` 通过。锁文件可解析，四个新增 UI importer 与 manifest 版本一致。全量 Chimera 类型检查仍在未修改的 connections、context-menu、editor、profiles/columns 和测试 Node 类型声明处失败；未报告本批改动文件。独立复核首次发现 Add 按钮未阻止 TouchSensor 的长按事件，已补 `touchstart` 冒泡拦截；复核后续未发现可执行缺陷。
+- 未覆盖：桌面 E2E 未运行；当前锁定的 Tauri WebDriver 操作合成 `MouseEvent`，无法证明真实 PointerSensor/TouchSensor 拖拽，搜索和直接添加也未在运行中的桌面窗口验证。`pnpm prepare:check` 未运行，因为它会下载/安装 sidecar 二进制，与此纯前端切片无关。隔离工作树的 `pnpm install --frozen-lockfile` 卡在 supply-chain lockfile 校验；没有绕过该校验，使用本机已安装依赖直接运行定向命令。
+- 独立审查：最终复核没有发现可操作缺陷。审查环境因不能创建本地 IPC socket 而未能自行启动定向测试；该测试已在工作区命令行直接执行并通过。
+- 回滚：单独回滚 PR #486 时，其 ref gitlink 应恢复为该 PR 前的 `c08aa9d9`；用户存储 schema 未变，不需要数据迁移。若本节顶部记录的后续 ref 基线同步已合并，回滚 Dashboard 功能时应保留新的 ref pin。
+- 合并与验证：PR #486 的 CI run `38959272484`、Tauri E2E run `38959272498` 全部通过；独立复核无阻塞项。已于 2026-10-17 以 rebase 方式合入 `master`（merge commit `72d61000a63bca6920cc2c55d9a812392bac4c43`）。
+
+此前 Profile 同步批次的只读参考检出为 Clash Nyanpasu `main` 的提交
 `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`，该提交在上游 Actions 页面对应
 `main` 构建，子模块工作区干净。主仓库 `master` 基线为
 `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；本分支将 ref 更新至 `c08aa9d9`。自原基线以来上游合入了 TanStack Router、meta-json-schema、
@@ -1281,6 +1304,18 @@ DIFF-001 至 DIFF-012 是此前基于
 - 收敛条件：当 Chimera 迁移到与 ref 相同的持久化 job scheduler 时，重看首次 tick 的注册时刻与 catch-up 语义；保留
   “deadline 不依赖 task 首次 poll 时刻”的确定性要求。
 
+## DIFF-048：允许 WebView 同源与 data URL 请求
+
+- ref 基线：PR #478 rebase 到 master 后使用 gitlink 固定的 `31019da14006b384b3272c72b4088179a9e72c47`。已直接读取该 commit 的 `backend/tauri/tauri.conf.json::app.security.csp`，其 `connect-src` 包含 `'self' data:`；没有移动或更新 `ref/`。
+- ref 到 Chimera 映射：`ref/backend/tauri/tauri.conf.json::app.security.csp` 对应 `backend/tauri/tauri.conf.json::app.security.csp`。只在 `connect-src` 加入 `'self' data:`，其它 CSP 来源不变。
+- 类别与风险：共享 WebView 安全策略对齐，L2；smoke E2E 是 Chimera 扩展。
+- 本轮实现：同一 Tauri CSP 覆盖 legacy 与 main WebView。Smoke 从两个窗口分别请求当前文档同源 URL，并以 `no-cors` 请求内存中的 `data:` URL；同源响应必须成功，`data:` 响应必须为 opaque 且状态 0。缺少来源时请求被 CSP 阻止，断言会失败。
+- 影响入口：Tauri 共用 CSP 覆盖 legacy 和 main 两个窗口；Agent 直接使用共享 application API，不经 WebView 请求，因此不受该策略影响。没有改动 UI、IPC、配置持久化、运行时核心或 Service，也不验证公网代理。
+- 测试契约：`tauri-e2e/specs/smoke.e2e.ts` 的 `allows same-origin and data URL fetches in both desktop windows`，位于现有 `smoke` 基础套件并随 PR 的 `hermetic` suite 执行。每个窗口先确认目标路由/窗口，再进行有界 fetch；检查真实 WebView 观察到的响应，不写入页面或应用状态。无外网和用户数据。
+- 验证：已完成 E2E harness typecheck、harness unit tests 25/25、Oxlint、Prettier、Tauri JSON/CSP 解析及 `git diff --check`。本机 macOS 桌面 E2E 未运行；本地完整打包需要较大 Cargo target 且磁盘空间不足。合入 master 基线后，Windows Desktop `hermetic` 会执行真实 legacy/main WebView 用例；其结果仍待新 SHA 验证。
+- 保留差异：legacy UI 保持现有窗口和用户流程；`data:` 响应是 opaque，测试不读取正文。没有其它收敛工作。
+- 回滚：还原 `connect-src` 新增的 `'self' data:` 和本 smoke 用例即可；不迁移用户数据或更改宿主网络设置。
+
 ## DIFF-049：滚动 Chimera Client Alpha 资产失败后刷新
 
 - ref 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，与远端 `main` 一致，工作树干净。该提交相对原分析基线 `67999753918c7b9879ddd2bacdef74246bfef1dd` 未改变本条映射的 `scripts/src/prepare` 文件。
@@ -1458,9 +1493,9 @@ DIFF-001 至 DIFF-012 是此前基于
 ## DIFF-056：流量报告暂停策略与桌面导航验证收敛
 
 - 目标与非目标：将共享流量报告在 `refetchInterval: false` 时的暂停语义对齐本地 ref，并验证主界面流量路由在真实桌面窗口中的查询状态和侧栏辅助标签。此批不迁移 ref 的默认 2 秒轮询或 `placeholderData`，不增加本地 IP 探测，也不测试系统代理、TUN、运行时采集或连接详情的规则用量交叉跳转。
-- 基线与映射：父仓库基于 master `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a`，固定 gitlink 仍为 `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；本地只读 `ref/` 工作区在检查时为 `6feb4a71016e54260c1592f3a0d63a0169a2b40a` 且干净。`c08aa9d9..6feb4a71` 未改动本批映射文件；gitlink 同步排除在本批之外，作为独立任务处理。`ref/frontend/query/src/ipc/use-traffic-report.ts::useTrafficReport` 的暂停、窗口聚焦/网络重连和 `retry: false` 行为对应 `frontend/interface/src/ipc/use-traffic.ts::useTrafficReport`。`ref/frontend/ui/src/navigation-sidebar.tsx::NavigationSidebarToggle` 对应 `frontend/chimera/src/components/ui/navigation-sidebar.tsx::NavigationSidebarToggle`；Chimera 增加可选 `expandLabel`，拓扑侧栏传入本地化展开/收起文案。未重命名上游共享符号。
+- 基线与映射：功能提交最初基于父仓库 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a` 和 ref gitlink `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；当时只读 ref 检查在 `6feb4a71016e54260c1592f3a0d63a0169a2b40a`。随后本分支合入最新父仓库 master `ae48f24ae5012a47533784695d7109cafb753d12`（其 ref gitlink 为 `31019da14006b384b3272c72b4088179a9e72c47`）；本次另行 fetch 并核实 ref 最新 `origin/main` 为 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`，ref 根目录和递归子模块均干净。`6feb4a71..a4f706fe` 未改动本批映射的 `ref/frontend/query/src/ipc/use-traffic-report.ts::useTrafficReport` 与 `ref/frontend/ui/src/navigation-sidebar.tsx::NavigationSidebarToggle`；该区间新增/调整 Flow Sankey 文件和 topology transition，将作为下一批对齐。`useTrafficReport` 的暂停、窗口聚焦/网络重连和 `retry: false` 行为对应 `frontend/interface/src/ipc/use-traffic.ts::useTrafficReport`。导航侧栏对应 `frontend/chimera/src/components/ui/navigation-sidebar.tsx::NavigationSidebarToggle`；Chimera 增加可选 `expandLabel`，拓扑侧栏传入本地化展开/收起文案。未重命名上游共享符号。
 - 类别与接口：L2，共享查询行为会被拓扑和 Connections 状态统计使用；另有主界面可访问标签及四种语言消息。`useTrafficReport` 的选项限定为 `{ enabled?: boolean; refetchInterval?: number | false }`，并新增可测试的 `trafficReportQueryOptions` 描述器供 hook 复用。搜索确认 legacy 页面和 agent 当前没有 `useTrafficReport` 调用点；主界面仍通过同一共享 hook 读取。未改 IPC 命令、持久化、后端 runtime、legacy UI 或 agent 合同。
 - 保留差异：相较当前 ref，Chimera 的 hook 仍未设置 ref 的默认 2 秒 `refetchInterval` 和按 topology layers 保留 `placeholderData`。显式配置轮询的调用方按 ref 关闭自动 retry 并由下一轮恢复；未配置轮询的 Connections 调用方保留 QueryClient retry，避免瞬时错误后不再恢复。此项只部分对齐，默认轮询和 placeholder 行为后续按调用方需要单独评估。
 - 测试契约与验收：`docs/testing/contracts/traffic-analysis-main.md` 更新为 L2，并说明当前覆盖边界。已注册的 `tauri-e2e/specs/traffic-analysis-main.e2e.ts` 通过真实 main 窗口验证 Dashboard 准备、Traffic 导航、侧栏展开/收起标签变化、Closed scope、键盘选择 Connections，以及 Flow/Geography 保留 URL 状态。共享 hook 的单测验证未提供轮询时瞬时 IPC 错误会按 QueryClient 策略重试、显式轮询会留待下一轮恢复、暂停选项会关闭 focus/reconnect/retry。桌面 E2E 不声称覆盖这些后台事件、Connections 详情跳转、Tab 顺序或原生鼠标事件。
-- 实际验证：`pnpm --filter=chimera-ui test:traffic` 8/8；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25；`pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`pnpm --filter=chimera-ui build`、Prettier 和 `git diff --check` 均通过。使用外接盘独立 Cargo target 构建 `backend/tauri` 的 `e2e` feature 成功，最终二进制 SHA-256 为 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`。v6 和 v7 两次桌面运行失败并生成失败截图/HTML，日志有 `execute/async` 超时；之前文档将其报告为通过属错误。相同二进制在 2026-10-17T07:31:21Z 通过新隔离目录 v8 运行，macOS WebKit 605.1.15 为 1/1 通过；失败产物目录为空。精确命令见 `LESSON-20261016-001`。单次通过尚不能说明间歇性超时已稳定消除；未运行 Windows/Linux E2E，新 SHA 远程 CI 尚未启动。
+- 实际验证：`pnpm --filter=chimera-ui test:traffic` 8/8；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25；`pnpm --filter @chimera/tauri-e2e typecheck`、`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`pnpm --filter=chimera-ui build`、Prettier 和 `git diff --check` 均通过。使用外接盘独立 Cargo target 构建 `backend/tauri` 的 `e2e` feature 成功，最终二进制 SHA-256 为 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`。v6 和 v7 两次桌面运行失败并生成失败截图/HTML，日志有 `execute/async` 超时；之前文档将其报告为通过属错误。相同二进制在 2026-10-17T07:31:21Z 通过新隔离目录 v8 运行，macOS WebKit 605.1.15 为 1/1 通过；失败产物目录为空。精确命令见 `LESSON-20261017-003`。单次通过尚不能说明间歇性超时已稳定消除；未运行 Windows/Linux E2E，新 SHA 远程 CI 尚未启动。
 - 风险、回滚与审批：不改变宿主网络、服务权限或用户数据。产品回滚限于恢复 `useTrafficReport` 原查询选项、拓扑侧栏标签调用/消息及本批 E2E/契约；ref gitlink 同步保持为独立任务。L2 产品改动需维护者复核和明确批准；因同时更新 `LESSONS.md`，该提交还需 L3 维护者批准。

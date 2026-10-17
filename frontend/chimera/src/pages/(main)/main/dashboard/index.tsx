@@ -30,17 +30,6 @@
  */
 
 import { useKvStorage } from '@chimera/interface';
-import { DragOverlay } from '@dnd-kit/core';
-import { createFileRoute } from '@tanstack/react-router';
-import AddRounded from '~icons/material-symbols/add-rounded';
-import EditRounded from '~icons/material-symbols/edit-rounded';
-import { useCallback, useRef, useState } from 'react';
-import {
-  RegisterContextMenu,
-  RegisterContextMenuContent,
-  RegisterContextMenuTrigger,
-} from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import {
   DndGrid,
   DndGridProvider,
@@ -48,9 +37,20 @@ import {
   useDndGridRoot,
   type DndGridItemType,
   type GridItemConstraints,
+  type GridPosition,
   type GridSize,
-} from '@/components/ui/dnd-grid';
-import { hasOverlap } from '@/components/ui/dnd-grid/utils';
+} from '@chimera/ui/dnd-grid';
+import { DragOverlay } from '@dnd-kit/core';
+import { createFileRoute } from '@tanstack/react-router';
+import AddRounded from '~icons/material-symbols/add-rounded';
+import EditRounded from '~icons/material-symbols/edit-rounded';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  RegisterContextMenu,
+  RegisterContextMenuContent,
+  RegisterContextMenuTrigger,
+} from '@/components/providers/context-menu-provider';
+import { ContextMenuItem } from '@/components/ui/context-menu';
 import * as m from '@/paraglide/messages';
 import {
   DashboardItem,
@@ -69,6 +69,7 @@ import {
   sizeKey,
 } from './_modules/layout-adapt';
 import { useDashboardContext } from './_modules/provider';
+import { placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 
 /**
@@ -171,7 +172,7 @@ function DashboardDragOverlay({
  * 使用 ref 跟踪最新状态，避免闭包过期问题。
  */
 const WidgetRender = () => {
-  const { isEditing, setOpenSheet } = useDashboardContext();
+  const { isEditing } = useDashboardContext();
 
   // 持久化布局存储（从 KvStorage 读取/写入）
   const [layoutStorage, setLayoutStorage] = useKvStorage<LayoutStorage>(
@@ -182,6 +183,10 @@ const WidgetRender = () => {
   // 当前显示的 widget 项列表
   const [displayItems, setDisplayItems] =
     useState<DashboardItem[]>(DEFAULT_ITEMS);
+  const placedTypes = useMemo(
+    () => new Set(displayItems.map(({ type }) => type)),
+    [displayItems],
+  );
 
   // 使用 ref 避免闭包过期
   const layoutStorageRef = useRef(layoutStorage);
@@ -252,53 +257,27 @@ const WidgetRender = () => {
   );
 
   /**
-   * 从 WidgetSheet 添加新 widget
-   *
-   * 逻辑：
-   * 1. 使用 WIDGET_MIN_SIZE_MAP 获取 widget 的最小尺寸
-   * 2. 在网格中从左上到右下扫描空闲位置
-   * 3. 如果找到空闲位置，放置在那里
-   * 4. 如果无空闲位置，放置在最后一行的下一个可用行
+   * Add a widget from the library, preferring the cell under the pointer.
    */
   const addWidgetFromSheet = useCallback(
-    (widgetId: WidgetId) => {
-      const { minW, minH } = WIDGET_MIN_SIZE_MAP[widgetId];
-      const { cols, rows } = gridSizeRef.current;
+    (widgetId: WidgetId, position?: GridPosition) => {
+      const gridSize = gridSizeRef.current;
+      if (!gridSize) return;
+
+      const { cols, rows } = gridSize;
       const current = displayItemsRef.current;
       const instanceId = crypto.randomUUID();
+      const placement = placeWidget({
+        id: instanceId,
+        type: widgetId,
+        items: current,
+        cols,
+        rows,
+        minimum: WIDGET_MIN_SIZE_MAP[widgetId],
+        position,
+      });
 
-      // 扫描空闲位置
-      const findPlacement = (): DashboardItem => {
-        for (let y = 0; y <= rows; y++) {
-          for (let x = 0; x <= cols - minW; x++) {
-            const candidate: DashboardItem = {
-              id: instanceId,
-              type: widgetId,
-              x,
-              y,
-              w: minW,
-              h: minH,
-            };
-
-            if (!hasOverlap(current, instanceId, candidate)) {
-              return candidate;
-            }
-          }
-        }
-
-        // 无空闲位置 → 追加到最底部
-        const maxY = current.reduce((m, i) => Math.max(m, i.y + i.h), 0);
-        return {
-          id: instanceId,
-          type: widgetId,
-          x: 0,
-          y: maxY,
-          w: minW,
-          h: minH,
-        };
-      };
-
-      handleLayoutChange([...current, findPlacement()]);
+      if (placement) handleLayoutChange([...current, placement]);
     },
     [handleLayoutChange],
   );
@@ -316,6 +295,9 @@ const WidgetRender = () => {
           items={displayItems}
           onLayoutChange={(newItems) =>
             handleLayoutChange(normalizeItems(newItems))
+          }
+          onExternalDrop={(id, position) =>
+            addWidgetFromSheet(id as WidgetId, position)
           }
           minCellSize={64}
           onSizeChange={handleSizeChange}
@@ -343,10 +325,7 @@ const WidgetRender = () => {
       <DashboardDragOverlay displayItems={displayItemsRef.current} />
 
       {/* Widget 添加面板 */}
-      <WidgetSheet
-        onSourceDrop={(id) => addWidgetFromSheet(id)}
-        onSourceDragStart={() => setOpenSheet(false)}
-      />
+      <WidgetSheet placedTypes={placedTypes} onAdd={addWidgetFromSheet} />
     </DndGridRoot>
   );
 };

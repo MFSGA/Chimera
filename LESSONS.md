@@ -21,7 +21,9 @@
 | LESSON-20261015-001 | 2026-10-15 | E2E           | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
 | LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
 | LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | E2E           | Traffic WebKit 用例修正路由、窗口和菜单准备；v6/v7 超时，v8 同一二进制通过，仍需 CI 复验                        | Open      |
+| LESSON-20261016-001 | 2026-10-16 | Development   | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| LESSON-20261017-001 | 2026-10-17 | E2E / CI      | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Open      |
+| LESSON-20261017-003 | 2026-10-17 | E2E           | Traffic WebKit 用例修正路由、窗口和菜单准备；v6/v7 超时，v8 同一二进制通过，仍需 CI 复验                        | Open      |
 
 ## 单条模板
 
@@ -45,6 +47,23 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
+
+### LESSON-20261017-001：data URL E2E 应验证请求结果而非固定响应类型
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（断言已修正，等待 PR 新 SHA 的 Windows CI/E2E 复验）
+- 严重度：Low
+- 模块：E2E / CI / WebView CSP
+- master commit / ref gitlink SHA / 平台与测试环境：master `79c7cb8aa53686cd67effc3d021bd06aaad3e914`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Windows runner，Microsoft Edge 154。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #478](https://github.com/MFSGA/Chimera/pull/478)，[Tauri E2E run 39003668695](https://github.com/MFSGA/Chimera/actions/runs/39003668695)。Hermetic 53 个 spec 中 52 个通过；唯一失败来自新加 smoke 断言，实际 `Response.type` 为 `basic`，而测试预期 `opaque`。单独的 Profile auto-update E2E 通过。
+- 预期行为：两个桌面窗口均能成功读取 same-origin 页面，并通过 `connect-src data:` 完成 data URL 请求；no-cors 响应可以是标准 opaque 响应，也可以是 WebView 暴露的 readable basic 响应。
+- 真实异常、复现步骤与证据：Windows Edge 154 在 `fetch('data:text/plain,chimera-csp-probe', { mode: 'no-cors' })` 上返回 `type: 'basic'`，导致测试在类型断言处失败；此前同一窗口的请求已返回 HTTP 成功响应。失败不表示 CSP 拒绝请求。
+- 确认的根因与排除项：测试将 `no-cors` data URL 的响应类别误设为固定的 `opaque`。响应类型不是所测 CSP 功能的产品合同；工作流日志没有显示请求被阻止，也没有其他 smoke 或 hermetic spec 失败。
+- 修复提交、差异映射及保留的兼容性边界：`tauri-e2e/specs/smoke.e2e.ts::assertConnectSourcesAreAvailable` 接受 `opaque`（状态码 0、空 body）或 `basic`（状态码 200、完整 probe payload），其他响应类型失败。CSP 产品策略保持不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原断言在上述 Windows Edge run 失败；修正用例仍注册于默认 smoke 和 `hermetic`。等待新 SHA 的桌面复验，以确认 payload 断言实际通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：已确认远端失败为 52/53 通过；新的格式、类型检查与 Windows E2E 尚待新 SHA CI 执行。此本地测试修复不声称证明 macOS WebKit 或其他 WebView 的响应类型。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改测试断言和经验记录，不改变宿主代理/TUN、持久化或 CSP 策略；可回滚为恢复原 `type/status` 断言并移除此条记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：后续 `data:` no-cors 测试先断言 fetch 已 resolve；只有 WebView 返回 readable basic 响应时才断言 payload，标准 opaque 响应应检查其受限元数据。无 CI 门禁变更。
 
 ### LESSON-20261014-001：epoch PID 记录可能在检查后、读取前被并发清理
 
@@ -174,14 +193,48 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：没有清理或删除任何 Cargo target；只产生/复用了 Cargo 编译产物，主源码未改。以后需要的 target 放在各自的 worktree 子目录或独立外接盘目录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-004 涉及 hook 未继承 CARGO_TARGET_DIR；本次另外确认 target 本身也不能跨 worktree 共用。无 CI 门禁变化。
 
-### LESSON-20261016-001：桌面 E2E 应以目标窗口和用户可见状态准备路由
+### LESSON-20261016-001：未准备的 worktree 中 pnpm 命令会触发依赖安装
 
 - 日期与时区：2026-10-16 UTC
+- 状态：Mitigated（本次安装已中断；留下的虚拟 store 未清除，以免误删未知的预存依赖）
+- 严重度：Low
+- 模块：Development / E2E / CI
+- master commit / ref gitlink SHA / 平台与测试环境：PR #486 head `8d6a6dfb9e2d0ec19bde94f8dd77a2eeb6e9c78d`；ref gitlink `685042aaedaea26a591900be0b494dfe8efd79b0`；Apple Silicon macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #486](https://github.com/MFSGA/Chimera/pull/486)，本机检查期间 `pnpm exec prettier` 输出自动依赖验证与安装进度；此前同日一次 `pnpm --filter @chimera/tauri-e2e exec wdio` 也触发依赖安装，并在 `Chimera_Client/target/debug` 启动 Rust 编译。
+- 预期行为：运行检查时只调用选定的检查工具，不启动隐式安装或与检查无关的 Rust 构建。
+- 真实异常、复现步骤与证据：在新 E2E worktree 中并行启动 `pnpm --filter @chimera/tauri-e2e typecheck` 与 `pnpm exec prettier --check ...`。后者输出 lockfile verification、依赖解析与 package cloning 进度；两条命令立即以 Ctrl-C 中断。此前的 WDIO exec 安装/编译也在约 84 秒后中断。当前 worktree 内 `.pnpm` 虚拟 store 显示约 1.8 GiB 逻辑内容；系统可用空间从约 1.2 GiB 降到 1.1 GiB。中止后未发现 pnpm、cargo 或 rustc 进程，也没有新增跟踪文件。
+- 确认的根因与排除项：调用 pnpm 的 exec/run 入口时，当前环境因该 worktree 依赖链接未准备完成而开始自动依赖验证和安装；并行 pnpm 命令共用这一准备过程。该现象是本地验证流程失误，不是产品失败或 CI 失败。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码改动。本次改用预装的 Prettier 和 TypeScript 二进制，并在 `node_modules` 中临时链接主 checkout 的准备依赖完成检查，随后移除这些临时链接；没有清理无法区分归属的 `.pnpm` 虚拟 store。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：这是本地执行流程错误，不适用产品回归测试；不能通过重试 pnpm 命令来证明该流程安全。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：中断后确认没有本次依赖安装或构建进程；直接 TypeScript harness 检查通过、unit tests 25/25、Prettier 与 `git diff --check` 通过。没有本机构建最新 E2E binary；该分支的 Windows CI 才能验证当前 app/test 组合。
+- 风险/回滚和清理证据（如涉及宿主状态）：未修改跟踪源码以外的配置；测试 runtime/artifacts 使用仓库 `cleanupRuntimeDirectory` 安全删除。依赖虚拟 store 保留在隔离 worktree 中，系统空间仍约 1.1 GiB 可用；未触及其他 worktree 或用户 app。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：此前另一 worktree 的 WDIO exec 已出现相同安装副作用，故记录为重复流程错误。开始运行 pnpm 检查前须确认工作树依赖已准备；否则从同一 checkout 的现成二进制运行单项检查，避免 `pnpm exec` 和并行安装。没有修改 CI 或治理门禁。
+
+### LESSON-20261017-003：桌面 E2E 应以目标窗口和用户可见状态准备路由
+
+- 日期与时区：2026-10-17 UTC
 - 状态：Open
 - 严重度：Low
 - 模块：E2E / main UI / WebKit
-- master commit / ref gitlink SHA / 平台与测试环境：测试基线 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a`；ref `6feb4a71016e54260c1592f3a0d63a0169a2b40a`；Apple Silicon macOS、WebKit 605.1.15，独立 Cargo target、runtime 和 artifact 目录。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 `traffic-analysis-main.e2e.ts` 定向 WebKit 调试；v6/v7 失败与 v8 通过的构建分别在验证记录中列明，避免将早期构建误写为最终通过的二进制。
+- master commit / ref gitlink SHA / 平台与测试环境：测试基线 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a`；最新父仓库 master `ae48f24ae5012a47533784695d7109cafb753d12`；本地 ref `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；Apple Silicon macOS、WebKit 605.1.15，独立 Cargo target、runtime 和 artifact 目录。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 `traffic-analysis-main.e2e.ts` 定向 WebKit 调试；v6/v7 失败与 v8 通过的构建分别在验证记录中列明。
+- 预期行为：用例先选中 main 窗口，再设置视口并通过可见导航进入稳定 Dashboard；菜单操作使用 WebKit 支持且可观察的真实键盘激活，随后断言 URL 与控件状态。
+- 真实异常、复现步骤与证据：最初的路由 helper 在页面内容已渲染时仍因要求恰有一个 `app-content` host 超时，诊断读数为两个 host 且各有一个子节点、透明度均为 1。随后在选择 main 窗口前设置 1280 × 720，切换窗口后仍呈现 800 × 640 的移动导航；直接查找 Radix 下拉选项在 WebKit 动画期间不可见。后续 v6、v7 两次运行的目录都含有失败截图/HTML，逐 spec 日志还记录 `execute/async` 超时；WDIO 配置只在失败时保存这些截图/HTML，因此原先把这两个目录记成通过没有证据支持。v8 使用新隔离目录和相同二进制通过 1/1。
+- 确认的根因与排除项：已确认的代码问题均属于 E2E 准备/驱动边界，不是流量页面或查询失败：路由准备条件依赖与该用例无关的单一 host 计数；窗口尺寸应用在目标窗口选择前；Radix 动画期间对隐藏选项使用 displayed/focus 操作不可靠。v6/v7 间歇性超时的具体原因尚未定位，不能因 v8 单次通过就认定已稳定解决。也确认原先记录通过是证据核对失误；防复发要求核对 reporter 最终结果和失败产物语义。没有证据显示这些失败触发了宿主网络或持久状态变化。
+- 修复映射及保留边界：`tauri-e2e/specs/traffic-analysis-main.e2e.ts` 现在先调用 `ensureMainWindow()`，再设置尺寸；如需回到 Dashboard，通过可见 navbar 导航并等待稳定页面标记；指标菜单在触发器 focus 后用 Enter、ArrowDown、Enter 完成选择。共享路由 helper 未因此放宽全局等待条件。
+- 回归验证及注册位置：用例保留在 `main` suite，并通过同一真实 WebKit 路径验证 Traffic 导航、范围/指标 URL、Flow/Geography 筛选保留及侧栏标签切换。v6/v7 运行失败，v8 使用相同二进制和新的隔离目录通过 1/1；仍需新 SHA 的 CI 复验以判断超时是否稳定消除。
+- 验证命令与覆盖：`CHIMERA_E2E_BINARY=/Volumes/Ventoy/Chimera/traffic-analysis-target/debug/chimera CHIMERA_E2E_RUNTIME_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-runtime-20261017-review CHIMERA_E2E_ARTIFACT_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-artifacts-20261017-review pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/traffic-analysis-main.e2e.ts`，2026-10-17T07:31:21Z 在 macOS WebKit 605.1.15 上 1/1 通过，二进制 SHA-256 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`；通过运行没有失败截图/HTML。没有验证 Windows Edge/Linux 或原生 Tab/鼠标行为；新 SHA 远程 CI 尚未运行。
+- 风险/回滚和清理证据：用例只改变其隔离窗口尺寸和 route；runtime、artifact、cargo target 均位于本次独立目录，没有改用户 Profile、系统代理或 TUN。回滚为恢复该 spec 之前的路由准备和菜单选择步骤。
+- 后续防复发措施：跨窗口用例先确保目标窗口被选中再设置视口；路由断言等待业务可见标记；动画控件用稳定的用户输入流程，不以隐藏 DOM 节点可见作为菜单状态证据。记录 E2E 结果前须核对最终 reporter 状态和失败产物生成条件。没有调整 CI 或权限门禁。
+
+### LESSON-20261017-003：桌面 E2E 应以目标窗口和用户可见状态准备路由
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open
+- 严重度：Low
+- 模块：E2E / main UI / WebKit
+- master commit / ref gitlink SHA / 平台与测试环境：测试基线 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a`；最新父仓库 master `ae48f24ae5012a47533784695d7109cafb753d12`；本地 ref `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；Apple Silicon macOS、WebKit 605.1.15，独立 Cargo target、runtime 和 artifact 目录。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 `traffic-analysis-main.e2e.ts` 定向 WebKit 调试；v6/v7 失败与 v8 通过的构建分别在验证记录中列明。
 - 预期行为：用例先选中 main 窗口，再设置视口并通过可见导航进入稳定 Dashboard；菜单操作使用 WebKit 支持且可观察的真实键盘激活，随后断言 URL 与控件状态。
 - 真实异常、复现步骤与证据：最初的路由 helper 在页面内容已渲染时仍因要求恰有一个 `app-content` host 超时，诊断读数为两个 host 且各有一个子节点、透明度均为 1。随后在选择 main 窗口前设置 1280 × 720，切换窗口后仍呈现 800 × 640 的移动导航；直接查找 Radix 下拉选项在 WebKit 动画期间不可见。后续 v6、v7 两次运行的目录都含有失败截图/HTML，逐 spec 日志还记录 `execute/async` 超时；WDIO 配置只在失败时保存这些截图/HTML，因此原先把这两个目录记成通过没有证据支持。v8 使用新隔离目录和相同二进制通过 1/1。
 - 确认的根因与排除项：已确认的代码问题均属于 E2E 准备/驱动边界，不是流量页面或查询失败：路由准备条件依赖与该用例无关的单一 host 计数；窗口尺寸应用在目标窗口选择前；Radix 动画期间对隐藏选项使用 displayed/focus 操作不可靠。v6/v7 间歇性超时的具体原因尚未定位，不能因 v8 单次通过就认定已稳定解决。也确认原先记录通过是证据核对失误；防复发要求核对 reporter 最终结果和失败产物语义。没有证据显示这些失败触发了宿主网络或持久状态变化。
