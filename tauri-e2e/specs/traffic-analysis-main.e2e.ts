@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { displayedElement, focusElement } from './interaction.js';
+import { clickElement, displayedElement, focusElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
 
 const sidebarToggleSelector = '[data-slot="navigation-sidebar-toggle"]';
@@ -195,17 +195,37 @@ describe('main traffic analysis', () => {
     assert.equal(beforeClosedSelection.allChecked, true);
     assert.equal(beforeClosedSelection.closedChecked, false);
 
-    await $(closedScopeSelector).click();
-    await browser.waitUntil(
-      async () => {
-        const state = await readTrafficScopeState();
-        return state.scope === 'closed' && state.closedChecked;
-      },
-      {
-        timeout: 10_000,
-        timeoutMsg: 'Selecting Closed did not update the traffic URL.',
-      },
-    );
+    let closedSelection = beforeClosedSelection;
+    try {
+      const closedScope = await displayedElement(closedScopeSelector);
+      await clickElement(closedScope);
+      await browser.waitUntil(
+        async () => {
+          closedSelection = await readTrafficScopeState();
+          return (
+            closedSelection.scope === 'closed' && closedSelection.closedChecked
+          );
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: 'Selecting Closed did not update the traffic URL.',
+        },
+      );
+    } catch (cause) {
+      try {
+        closedSelection = await readTrafficScopeState();
+      } catch (diagnosticCause) {
+        throw new AggregateError(
+          [cause, diagnosticCause],
+          `Selecting Closed failed; final traffic scope could not be read. Last observed state: ${JSON.stringify(closedSelection)}.`,
+          { cause },
+        );
+      }
+      throw new Error(
+        `Selecting Closed did not update the traffic URL; last observed state: ${JSON.stringify(closedSelection)}.`,
+        { cause },
+      );
+    }
 
     const metricTrigger = await displayedElement(
       '[data-slot="traffic-metric-trigger"]',
