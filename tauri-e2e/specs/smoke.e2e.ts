@@ -1,4 +1,54 @@
 import assert from 'node:assert/strict';
+import { openMainRoute } from './main-window.js';
+
+async function assertConnectSourcesAreAvailable(windowName: string) {
+  const result = await browser.execute(async () => {
+    const readResponse = async (url: string, mode?: RequestMode) => {
+      try {
+        const response = await fetch(url, {
+          cache: 'no-store',
+          mode,
+          signal: AbortSignal.timeout(5_000),
+        });
+        return {
+          status: response.status,
+          ok: response.ok,
+          type: response.type,
+          body: (await response.text()).slice(0, 80),
+        };
+      } catch (error) {
+        return { error: String(error) };
+      }
+    };
+
+    return {
+      sameOrigin: await readResponse(window.location.href),
+      data: await readResponse('data:text/plain,chimera-csp-probe', 'no-cors'),
+    };
+  });
+
+  if ('error' in result.sameOrigin) {
+    assert.fail(
+      `${windowName} same-origin request was blocked: ${result.sameOrigin.error}`,
+    );
+  }
+  assert.equal(result.sameOrigin.ok, true);
+  if ('error' in result.data) {
+    assert.fail(
+      `${windowName} data URL request was blocked: ${result.data.error}`,
+    );
+  }
+  if (result.data.type === 'opaque') {
+    assert.equal(result.data.ok, false);
+    assert.equal(result.data.status, 0);
+    assert.equal(result.data.body, '');
+  } else {
+    assert.equal(result.data.type, 'basic');
+    assert.equal(result.data.ok, true);
+    assert.equal(result.data.status, 200);
+    assert.equal(result.data.body, 'chimera-csp-probe');
+  }
+}
 
 describe('Chimera desktop smoke test', () => {
   before(async () => {
@@ -70,5 +120,17 @@ describe('Chimera desktop smoke test', () => {
         browser.execute(() => window.location.pathname === '/settings'),
       { timeout: 15_000, timeoutMsg: 'Settings navigation did not complete.' },
     );
+  });
+
+  // Contract: from each supported desktop window, same-origin fetch is readable
+  // and a data: no-cors fetch resolves, whether this WebView exposes its
+  // readable payload or an opaque response. The prior policy
+  // blocked data: requests; bundled non-macOS WebViews also need 'self'.
+  it('allows same-origin and data URL fetches in both desktop windows', async () => {
+    await browser.switchToWindow('legacy');
+    await assertConnectSourcesAreAvailable('Legacy');
+
+    await openMainRoute('/main/dashboard');
+    await assertConnectSourcesAreAvailable('Main');
   });
 });
