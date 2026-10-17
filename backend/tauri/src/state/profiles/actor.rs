@@ -7,8 +7,8 @@ use chimera_config::profile::{
     ConfigDefinition, ExternalMode, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
     ProfileDefinition, ProfileDependencyIndex, ProfileId, ProfileItem, ProfileMetadata,
     ProfileMetadataPatch, ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles,
-    RemoteProfileOptions, RemoteProfileOptionsPatch, ScriptRuntime, SubscriptionInfo,
-    TransformDefinition,
+    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
+    SubscriptionInfo, TransformDefinition,
 };
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
@@ -1774,7 +1774,8 @@ impl Actor for ProfilesActor {
                         if !pending.update_interval_explicit
                             && let Some(minutes) = suggested_update_interval_minutes
                         {
-                            option.update_interval_minutes = minutes;
+                            option.update_interval_minutes =
+                                RemoteSyncInterval::from_minutes(minutes);
                         }
                         let mut metadata = pending.metadata;
                         if let Some(name) = synced_name(metadata.custom_name, &filename) {

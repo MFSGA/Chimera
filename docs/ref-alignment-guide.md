@@ -13,9 +13,17 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     813673a8e84b51265467f02277fc7e739837f61e
-verified:   2026-10-14 fetched and fast-forwarded from origin/main
+commit:     c08aa9d9a17953aa2464cdae61390d5c3f9afbc7
+verified:   2026-10-14; upstream Actions showed this main commit
+previous gitlink: e81eeaea46a9c229478cd29c9555b5c072f7e6cc
+previous checkout: c85406d3a16ba61cecf7f8aec7a5a051523cbc2d (PR #5775, not main)
 ```
+
+The direct GitHub fetch timed out during the 2026-10-14 update. The target main
+commit was already present in the local submodule object store; `ref/` was
+checked out at that clean commit and the upstream [Actions page](https://github.com/libnyanpasu/clash-nyanpasu/actions)
+identified it as the main-branch build. Recheck and fetch the remote before the
+next baseline update.
 
 每个迁移切片开始前执行：
 

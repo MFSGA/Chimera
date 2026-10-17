@@ -1,6 +1,6 @@
 //! Per-uid background refresh/watch services owned by ProfilesActor.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, num::NonZeroU64, path::PathBuf};
 
 use anyhow::Context as _;
 use chimera_config::profile::{
@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use super::actor::ProfilesActorMessage;
 
 struct Entry {
-    interval_minutes: u64,
+    interval_minutes: NonZeroU64,
     handle: JoinHandle<()>,
 }
 
@@ -140,7 +140,7 @@ impl RemoteUpdateScheduler {
         actor: &ActorRef<ProfilesActorMessage>,
         catch_up: bool,
     ) {
-        let desired: HashMap<ProfileId, (u64, Option<time::OffsetDateTime>)> = profiles
+        let desired: HashMap<ProfileId, (NonZeroU64, Option<time::OffsetDateTime>)> = profiles
             .items
             .iter()
             .filter_map(|(uid, item)| match item.definition.source() {
@@ -148,10 +148,10 @@ impl RemoteUpdateScheduler {
                     option,
                     materialized,
                     ..
-                }) if option.update_interval_minutes > 0 => Some((
-                    uid.clone(),
-                    (option.update_interval_minutes, materialized.updated_at),
-                )),
+                }) => option
+                    .update_interval_minutes
+                    .minutes()
+                    .map(|interval| (uid.clone(), (interval, materialized.updated_at))),
                 _ => None,
             })
             .collect();
@@ -178,10 +178,10 @@ impl RemoteUpdateScheduler {
             }
             let overdue = catch_up
                 && updated_at.is_none_or(|at| {
-                    time::OffsetDateTime::now_utc() - at
-                        >= time::Duration::minutes(interval_minutes as i64)
+                    (time::OffsetDateTime::now_utc() - at).whole_seconds() as i128
+                        >= i128::from(interval_minutes.get()) * 60
                 });
-            let period = std::time::Duration::from_secs(interval_minutes * 60);
+            let period = std::time::Duration::from_secs(interval_minutes.get().saturating_mul(60));
             let first_refresh_at = tokio::time::Instant::now() + period;
             let actor = actor.clone();
             let tick_uid = uid.clone();

@@ -16,8 +16,8 @@
  * - CoreShortcuts: 当前运行核心状态卡片
  */
 
+import type { DndGridItemType } from '@chimera/ui/dnd-grid';
 import type { ReactNode } from 'react';
-import type { DndGridItemType } from '@/components/ui/dnd-grid';
 import { CoreShortcutsWidget, ProxyShortcutsWidget } from './widget-shortcut';
 import {
   ConnectionsWidget,

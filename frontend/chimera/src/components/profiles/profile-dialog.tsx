@@ -193,7 +193,9 @@ export const ProfileDialog = ({
         return;
       }
 
-      await contentFn.upsert.mutateAsync(value);
+      // Remote profile files are materialized by subscription refresh and are
+      // read-only; edit their metadata and sync options without saving content.
+      if (!remoteSource) await contentFn.upsert.mutateAsync(value);
 
       await patchMetadata.mutateAsync({
         uid,
@@ -375,6 +377,7 @@ export const ProfileDialog = ({
               control={control}
               render={({ field, fieldState }) => (
                 <TextField
+                  data-slot="legacy-profile-update-interval"
                   {...commonProps}
                   size="small"
                   type="number"
@@ -388,7 +391,10 @@ export const ProfileDialog = ({
                   onBlur={field.onBlur}
                   inputRef={field.ref}
                   error={!!fieldState.error}
-                  helperText={fieldState.error?.message}
+                  helperText={
+                    fieldState.error?.message ??
+                    m.profile_update_option_disabled_hint()
+                  }
                   slotProps={{
                     htmlInput: { min: 0 },
                     input: {
