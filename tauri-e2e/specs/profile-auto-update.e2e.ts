@@ -8,6 +8,7 @@ import type {
   ProfileSyncStatus,
   RunPageDto,
 } from '../../frontend/interface/src/ipc/bindings.js';
+import { displayedElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
 import {
   committedValue,
@@ -459,6 +460,69 @@ async function captureMainProfileState(uid: string) {
   return `${stateEvidence}${screenshotEvidence}`;
 }
 
+async function captureLegacyProfileState(uid: string) {
+  let stateEvidence = 'Legacy UI state capture failed before inspection.';
+  try {
+    const state = await browser.execute((expectedUid) => {
+      const target = document.querySelector<HTMLElement>(
+        `[data-slot="profile-item"][data-profile-uid="${expectedUid}"]`,
+      );
+      const visible = (element: HTMLElement) =>
+        element.getClientRects().length > 0 &&
+        getComputedStyle(element).visibility !== 'hidden';
+      return {
+        url: location.href,
+        visibility: document.visibilityState,
+        profile: target?.innerText.slice(0, 500) ?? null,
+        editItems: Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-slot="profile-edit-menu-item"]',
+          ),
+          (item) => ({
+            visible: visible(item),
+            text: item.innerText,
+            rects: item.getClientRects().length,
+          }),
+        ),
+        intervalFields: Array.from(
+          document.querySelectorAll<HTMLInputElement>(
+            'input[name="option.update_interval_minutes"]',
+          ),
+          (input) => ({
+            value: input.value,
+            visible: visible(input),
+            slot: input.parentElement?.parentElement?.dataset.slot ?? null,
+          }),
+        ),
+        bodyText: document.body.innerText.slice(-1200),
+      };
+    }, uid);
+    stateEvidence = `Last legacy Profile UI state: ${JSON.stringify(state)}.`;
+  } catch (stateError) {
+    stateEvidence = `Legacy Profile UI state capture failed: ${String(stateError)}.`;
+  }
+
+  let screenshotEvidence = '';
+  const artifactDirectory = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+  if (artifactDirectory) {
+    const screenshotPath = path.join(
+      artifactDirectory,
+      screenshotRunId,
+      'profile-auto-update.e2e',
+      'disables-scheduled-sync-while-keeping-manual-sync-available-in-both-uis',
+      `legacy-profile-${uid}-before-cleanup-${++screenshotAttempt}.png`,
+    );
+    try {
+      fs.mkdirSync(path.dirname(screenshotPath), { recursive: true });
+      await browser.saveScreenshot(screenshotPath);
+      screenshotEvidence = ` Failure screenshot: ${screenshotPath}.`;
+    } catch (screenshotError) {
+      screenshotEvidence = ` Screenshot capture failed: ${String(screenshotError)}.`;
+    }
+  }
+  return `${stateEvidence}${screenshotEvidence}`;
+}
+
 async function openProfileDetail(uid: string) {
   const pathname = `/main/profiles/profile/detail/${uid}`;
   let currentPath = await browser.execute(() => location.pathname);
@@ -773,20 +837,39 @@ describe('remote profile auto-update', () => {
       const profileItem = await $(
         `[data-slot="profile-item"][data-profile-uid="${uid}"]`,
       );
-      await profileItem.waitForExist({ timeout: 15_000 });
       const menuTrigger = await profileItem.$(
         '[data-slot="profile-menu-trigger"]',
       );
-      await menuTrigger.waitForExist({ timeout: 15_000 });
-      await menuTrigger.click();
-      const editMenuItem = await $('[data-slot="profile-edit-menu-item"]');
-      await editMenuItem.waitForExist({ timeout: 15_000 });
-      await editMenuItem.click();
-
+      const legacyName = await $('input[name="name"]');
       const legacyInterval = await $(
-        '[data-slot="legacy-profile-update-interval"] input',
+        'input[name="option.update_interval_minutes"]',
       );
-      await legacyInterval.waitForExist({ timeout: 15_000 });
+      try {
+        await profileItem.waitForDisplayed({ timeout: 15_000 });
+        await menuTrigger.waitForDisplayed({ timeout: 15_000 });
+        await menuTrigger.click();
+        const editMenuItem = await displayedElement(
+          '[data-slot="profile-edit-menu-item"]',
+        );
+        await editMenuItem.click();
+        await legacyName.waitForDisplayed({ timeout: 15_000 });
+        await legacyInterval.waitForDisplayed({ timeout: 15_000 });
+        assert.equal(
+          await legacyName.getValue(),
+          fixtureProfileName,
+          'The legacy editor opened for a different Profile.',
+        );
+        assert.equal(
+          await legacyInterval.getValue(),
+          '120',
+          'The legacy editor did not load the saved update interval.',
+        );
+      } catch (cause) {
+        throw new Error(
+          `The legacy Profile edit flow failed: ${String(cause)}. ${await captureLegacyProfileState(uid)}`,
+          { cause },
+        );
+      }
       await legacyInterval.setValue('0');
       assert.equal(await legacyInterval.getValue(), '0');
       const legacySave = await $('button=OK');

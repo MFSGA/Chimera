@@ -1,0 +1,55 @@
+import type {
+  DragEndEvent,
+  DragMoveEvent,
+  DragStartEvent,
+} from '@dnd-kit/core';
+import { createContext, useContext } from 'react';
+import type { GridPosition } from './types';
+
+export type GridRegistration = {
+  itemIds: string[];
+  dragIdPrefix: string;
+  sourceOnly: boolean;
+  handleDragStart: (e: DragStartEvent) => void;
+  handleDragMove: (e: DragMoveEvent) => void;
+  handleDragEnd: (e: DragEndEvent) => void;
+  handleDragCancel: () => void;
+  getCellSize: () => { cellW: number; cellH: number; gap: number };
+  getDropPosition: (clientX: number, clientY: number) => GridPosition | null;
+  onExternalDrop?: (itemId: string, position: GridPosition) => void;
+  onSourceDragStart?: () => void;
+};
+
+/** Drag data of a `DndGridSource`; the grid under the release point adds the item. */
+export type DndGridSourceData = {
+  kind: 'dnd-grid-source';
+  itemId: string;
+  dragIdPrefix: string;
+  w: number;
+  h: number;
+  onDragStart?: () => void;
+};
+
+export function isDndGridSourceData(data: unknown): data is DndGridSourceData {
+  return (data as DndGridSourceData | undefined)?.kind === 'dnd-grid-source';
+}
+
+export type ActiveDrag = {
+  itemId: string;
+  dragIdPrefix: string;
+  dims: { width: number; height: number };
+};
+
+export type DndGridRootContextValue = {
+  registerGrid: (gridId: string, reg: GridRegistration) => void;
+  unregisterGrid: (gridId: string) => void;
+  activeDrag: ActiveDrag | null;
+};
+
+export const DndGridRootContext = createContext<DndGridRootContextValue | null>(
+  null,
+);
+
+export function useDndGridRoot() {
+  return useContext(DndGridRootContext);
+}

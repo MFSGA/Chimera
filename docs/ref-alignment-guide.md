@@ -13,17 +13,16 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     c08aa9d9a17953aa2464cdae61390d5c3f9afbc7
-verified:   2026-10-14; upstream Actions showed this main commit
-previous gitlink: e81eeaea46a9c229478cd29c9555b5c072f7e6cc
-previous checkout: c85406d3a16ba61cecf7f8aec7a5a051523cbc2d (PR #5775, not main)
+commit:     31019da14006b384b3272c72b4088179a9e72c47
+verified:   2026-10-17; fetched origin/main and matched its advertised tip
+previous gitlink: 685042aaedaea26a591900be0b494dfe8efd79b0
+nested runtime: be2f561102fe898cb7a294ef14de3f4c65b68f81 (unchanged)
 ```
 
-The direct GitHub fetch timed out during the 2026-10-14 update. The target main
-commit was already present in the local submodule object store; `ref/` was
-checked out at that clean commit and the upstream [Actions page](https://github.com/libnyanpasu/clash-nyanpasu/actions)
-identified it as the main-branch build. Recheck and fetch the remote before the
-next baseline update.
+The target commit was fetched from `origin/main`; its root and recursive
+submodule worktrees are clean. This pin records the reference implementation
+only. It does not automatically apply upstream dependency changes or product
+code to Chimera; each shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 
