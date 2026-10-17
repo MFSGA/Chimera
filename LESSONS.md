@@ -21,6 +21,7 @@
 | LESSON-20261015-001 | 2026-10-15 | E2E           | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
 | LESSON-20261015-002 | 2026-10-15 | E2E           | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
 | LESSON-20261015-003 | 2026-10-15 | Development   | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | E2E           | Traffic WebKit 用例修正路由、窗口和菜单准备；v6/v7 超时，v8 同一二进制通过，仍需 CI 复验                        | Open      |
 
 ## 单条模板
 
@@ -172,3 +173,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：首次跨 worktree 构建失败（E0308/E0369/E0277）；PR #481 目标用例在单独已有 E2E binary 上通过 1/1，但这不能作为 PR #481 本地 build 成功证据。PR #482 自己的 target 后续在原 worktree 恢复构建成功，二进制 SHA-256 `dd0c94f945119e9ce5e72839585deaf96349f36fa155f4a0200bdb082383d8ad`；随后该分支的 profile suite 在此二进制上通过 1/1。隔离构建目录并分别验证两项已完成；该过程错误没有产品测试覆盖。
 - 风险/回滚和清理证据（如涉及宿主状态）：没有清理或删除任何 Cargo target；只产生/复用了 Cargo 编译产物，主源码未改。以后需要的 target 放在各自的 worktree 子目录或独立外接盘目录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：LESSON-20261014-004 涉及 hook 未继承 CARGO_TARGET_DIR；本次另外确认 target 本身也不能跨 worktree 共用。无 CI 门禁变化。
+
+### LESSON-20261016-001：桌面 E2E 应以目标窗口和用户可见状态准备路由
+
+- 日期与时区：2026-10-16 UTC
+- 状态：Open
+- 严重度：Low
+- 模块：E2E / main UI / WebKit
+- master commit / ref gitlink SHA / 平台与测试环境：测试基线 `83a7223da5d9d9c6c789bcc32cc320aecf3ee60a`；ref `6feb4a71016e54260c1592f3a0d63a0169a2b40a`；Apple Silicon macOS、WebKit 605.1.15，独立 Cargo target、runtime 和 artifact 目录。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地 `traffic-analysis-main.e2e.ts` 定向 WebKit 调试；v6/v7 失败与 v8 通过的构建分别在验证记录中列明，避免将早期构建误写为最终通过的二进制。
+- 预期行为：用例先选中 main 窗口，再设置视口并通过可见导航进入稳定 Dashboard；菜单操作使用 WebKit 支持且可观察的真实键盘激活，随后断言 URL 与控件状态。
+- 真实异常、复现步骤与证据：最初的路由 helper 在页面内容已渲染时仍因要求恰有一个 `app-content` host 超时，诊断读数为两个 host 且各有一个子节点、透明度均为 1。随后在选择 main 窗口前设置 1280 × 720，切换窗口后仍呈现 800 × 640 的移动导航；直接查找 Radix 下拉选项在 WebKit 动画期间不可见。后续 v6、v7 两次运行的目录都含有失败截图/HTML，逐 spec 日志还记录 `execute/async` 超时；WDIO 配置只在失败时保存这些截图/HTML，因此原先把这两个目录记成通过没有证据支持。v8 使用新隔离目录和相同二进制通过 1/1。
+- 确认的根因与排除项：已确认的代码问题均属于 E2E 准备/驱动边界，不是流量页面或查询失败：路由准备条件依赖与该用例无关的单一 host 计数；窗口尺寸应用在目标窗口选择前；Radix 动画期间对隐藏选项使用 displayed/focus 操作不可靠。v6/v7 间歇性超时的具体原因尚未定位，不能因 v8 单次通过就认定已稳定解决。也确认原先记录通过是证据核对失误；防复发要求核对 reporter 最终结果和失败产物语义。没有证据显示这些失败触发了宿主网络或持久状态变化。
+- 修复映射及保留边界：`tauri-e2e/specs/traffic-analysis-main.e2e.ts` 现在先调用 `ensureMainWindow()`，再设置尺寸；如需回到 Dashboard，通过可见 navbar 导航并等待稳定页面标记；指标菜单在触发器 focus 后用 Enter、ArrowDown、Enter 完成选择。共享路由 helper 未因此放宽全局等待条件。
+- 回归验证及注册位置：用例保留在 `main` suite，并通过同一真实 WebKit 路径验证 Traffic 导航、范围/指标 URL、Flow/Geography 筛选保留及侧栏标签切换。v6/v7 运行失败，v8 使用相同二进制和新的隔离目录通过 1/1；仍需新 SHA 的 CI 复验以判断超时是否稳定消除。
+- 验证命令与覆盖：`CHIMERA_E2E_BINARY=/Volumes/Ventoy/Chimera/traffic-analysis-target/debug/chimera CHIMERA_E2E_RUNTIME_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-runtime-20261017-review CHIMERA_E2E_ARTIFACT_DIR=/Volumes/Ventoy/Chimera/traffic-analysis-artifacts-20261017-review pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/traffic-analysis-main.e2e.ts`，2026-10-17T07:31:21Z 在 macOS WebKit 605.1.15 上 1/1 通过，二进制 SHA-256 `920c0cec03ff6cd854dc13e1ffb02c167bc866fb136d8aa8cc56a4caebb5e84e`；通过运行没有失败截图/HTML。没有验证 Windows Edge/Linux 或原生 Tab/鼠标行为；新 SHA 远程 CI 尚未运行。
+- 风险/回滚和清理证据：用例只改变其隔离窗口尺寸和 route；runtime、artifact、cargo target 均位于本次独立目录，没有改用户 Profile、系统代理或 TUN。回滚为恢复该 spec 之前的路由准备和菜单选择步骤。
+- 后续防复发措施：跨窗口用例先确保目标窗口被选中再设置视口；路由断言等待业务可见标记；动画控件用稳定的用户输入流程，不以隐藏 DOM 节点可见作为菜单状态证据。记录 E2E 结果前须核对最终 reporter 状态和失败产物生成条件。没有调整 CI 或权限门禁。

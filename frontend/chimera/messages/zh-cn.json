@@ -771,6 +771,7 @@
   "navigation_return_to": "返回{page}",
   "topology_title": "流量",
   "navigation_sidebar_collapse": "收起侧栏",
+  "navigation_sidebar_expand": "展开侧栏",
   "topology_caption": "选择节点即按其筛选。超出上限的节点归入「其他」。",
   "topology_connection_count": "{count} 条连接",
   "topology_flow": "连接路径",

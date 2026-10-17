@@ -771,6 +771,7 @@
   "navigation_return_to": "Back to {page}",
   "topology_title": "Traffic",
   "navigation_sidebar_collapse": "Collapse sidebar",
+  "navigation_sidebar_expand": "Expand sidebar",
   "topology_caption": "Select a node to filter by it. Nodes beyond the limit are grouped as Other.",
   "topology_connection_count": "{count} connections",
   "topology_flow": "Connection paths",

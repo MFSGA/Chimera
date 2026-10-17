@@ -1,17 +1,34 @@
 import assert from 'node:assert/strict';
 import { displayedElement, focusElement } from './interaction.js';
-import { openMainRoute } from './main-window.js';
+import { ensureMainWindow } from './main-window.js';
 
 describe('main traffic analysis', () => {
-  before(async () => {
-    await browser.setWindowSize(1280, 720);
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'en');
-    });
-  });
-
   beforeEach(async () => {
-    await openMainRoute('/main/dashboard');
+    await ensureMainWindow();
+    await browser.setWindowSize(1280, 720);
+
+    const currentPath = await browser.execute(() => location.pathname);
+    if (currentPath !== '/main/dashboard') {
+      const dashboardLink = await $(
+        '[data-slot="app-navbar"] a[href="/main/dashboard"]',
+      );
+      await dashboardLink.waitForDisplayed({ timeout: 10_000 });
+      await dashboardLink.click();
+    }
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            location.pathname === '/main/dashboard' &&
+            document.querySelector('[data-slot="dashboard-container"]') !==
+              null,
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The dashboard did not open before traffic navigation.',
+      },
+    );
   });
 
   /* Contract TRAFFIC-URL-STATE: visible controls own the route's traffic query. */
@@ -36,7 +53,32 @@ describe('main traffic analysis', () => {
     );
 
     const sidebarToggle = await $('[data-slot="navigation-sidebar-toggle"]');
-    assert.ok(await sidebarToggle.getAttribute('aria-label'));
+    const collapsedLabel = await sidebarToggle.getAttribute('aria-label');
+    assert.ok(collapsedLabel);
+    assert.equal(await sidebarToggle.getAttribute('aria-expanded'), 'false');
+    await sidebarToggle.click();
+    await browser.waitUntil(
+      async () =>
+        (await sidebarToggle.getAttribute('aria-expanded')) === 'true' &&
+        (await sidebarToggle.getAttribute('aria-label')) !== collapsedLabel,
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Expanding the traffic sidebar did not update its label.',
+      },
+    );
+    const expandedLabel = await sidebarToggle.getAttribute('aria-label');
+    assert.ok(expandedLabel);
+    assert.notEqual(expandedLabel, collapsedLabel);
+    await sidebarToggle.click();
+    await browser.waitUntil(
+      async () =>
+        (await sidebarToggle.getAttribute('aria-expanded')) === 'false' &&
+        (await sidebarToggle.getAttribute('aria-label')) === collapsedLabel,
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Collapsing the traffic sidebar did not restore its label.',
+      },
+    );
 
     const closedScopeSelector =
       '[data-slot="traffic-scope-item"][data-scope="closed"]';
@@ -69,7 +111,7 @@ describe('main traffic analysis', () => {
       '[data-slot="traffic-metric-trigger"]',
     );
     await focusElement(metricTrigger);
-    await browser.keys('ArrowDown');
+    await browser.keys('Enter');
     await browser.waitUntil(
       async () =>
         (await metricTrigger.getAttribute('aria-expanded')) === 'true',
@@ -78,10 +120,7 @@ describe('main traffic analysis', () => {
         timeoutMsg: 'The traffic metric menu did not open after activation.',
       },
     );
-    const connectionsMetric = await displayedElement(
-      '[data-slot="traffic-metric-option"][data-value="connections"]',
-    );
-    await focusElement(connectionsMetric);
+    await browser.keys('ArrowDown');
     await browser.keys('Enter');
     await browser.waitUntil(
       async () =>
