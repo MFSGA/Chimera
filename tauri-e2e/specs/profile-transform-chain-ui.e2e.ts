@@ -352,14 +352,24 @@ async function waitForActiveOrder(
   scope: 'profile' | 'global',
   expected: string[],
 ) {
-  await browser.waitUntil(
-    async () =>
-      JSON.stringify(await activeOrder(scope)) === JSON.stringify(expected),
-    {
-      timeout: 15_000,
-      timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
-    },
-  );
+  let lastObserved: (string | null)[] | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastObserved = await activeOrder(scope);
+        return JSON.stringify(lastObserved) === JSON.stringify(expected);
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `${scope} transform draft did not become ${JSON.stringify(expected)}.`,
+      },
+    );
+  } catch (error) {
+    throw new Error(
+      `${scope} transform draft did not become ${JSON.stringify(expected)}. Last observed: ${JSON.stringify(lastObserved)}.`,
+      { cause: error },
+    );
+  }
 }
 
 async function moveActiveItemWithKeyboard(uid: string) {
@@ -784,7 +794,7 @@ describe('main transform chain editor', () => {
 
     let fitBefore: ScrollViewportObservation | null = null;
     let lastFitCandidate: ScrollViewportObservation | null = null;
-    for (const height of [600, 640, 680, 720, 760, 800, 840]) {
+    for (const height of [600, 640, 680, 720, 760, 800, 840, 900]) {
       await browser.setWindowSize(1240, height);
       const resetScrollTop = await browser.execute((selector) => {
         const detail = document.querySelector<HTMLElement>(selector);
@@ -1134,6 +1144,7 @@ describe('main transform chain editor', () => {
       .$('[data-slot="transform-chain-add"]')
       .click();
     const originalOrder = [mergeAUid, javascriptUid];
+    await waitForActiveOrder('global', originalOrder);
     assert.deepEqual(await activeOrder('global'), originalOrder);
 
     await editor.$('[data-slot="transform-chain-reset"]').click();
@@ -1149,6 +1160,7 @@ describe('main transform chain editor', () => {
       );
       await item.$('[data-slot="transform-chain-add"]').click();
     }
+    await waitForActiveOrder('global', originalOrder);
     assert.deepEqual(await activeOrder('global'), originalOrder);
 
     const beforeSaveDiagnostics =
