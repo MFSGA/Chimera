@@ -13,9 +13,16 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     69353fc9a7d7e4e427211a85cdaa0b9c07a4f01a
-verified:   2026-10-13 fetched and fast-forwarded from origin/main
+commit:     31019da14006b384b3272c72b4088179a9e72c47
+verified:   2026-10-17; fetched origin/main and matched its advertised tip
+previous gitlink: 685042aaedaea26a591900be0b494dfe8efd79b0
+nested runtime: be2f561102fe898cb7a294ef14de3f4c65b68f81 (unchanged)
 ```
+
+The target commit was fetched from `origin/main`; its root and recursive
+submodule worktrees are clean. This pin records the reference implementation
+only. It does not automatically apply upstream dependency changes or product
+code to Chimera; each shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 

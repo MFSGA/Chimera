@@ -32,7 +32,10 @@ export function useTrafficSummary() {
 
 export function useTrafficReport(
   request: ReportRequest,
-  options?: Pick<UseQueryOptions<TrafficReport, Error>, 'enabled'>,
+  options?: Pick<
+    UseQueryOptions<TrafficReport, Error>,
+    'enabled' | 'refetchInterval'
+  >,
 ) {
   return useQuery({
     queryKey: ['traffic-report', request],
@@ -86,7 +89,7 @@ export function useTrafficUsage(
   query: TrafficQuery,
   dimension: Dimension,
   metric: Metric,
-  limit = 100,
+  limit = 50,
 ) {
   return useInfiniteQuery({
     queryKey: ['traffic-usage', query, dimension, metric, limit],
@@ -102,6 +105,7 @@ export function useTrafficUsage(
         ),
       ),
     getNextPageParam: (page: UsagePage) => page.next,
+    retry: false,
   });
 }
 

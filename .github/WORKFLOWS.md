@@ -6,16 +6,16 @@
 
 ## 1. 已部署流程
 
-| 工作流                                  | 触发条件                                                     | 当前实际边界/权限                                                                                                                                      |
-| --------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ci.yaml`（CI）                         | PR/push 至 `main`、`master`、`dev`、`release-*`              | `contents: read`；按路径分类运行跨系统 lint/Rust/frontend/tests/build，文档类变化可能仅运行 Ubuntu 格式/基础步骤                                       |
-| `e2e.yaml`（Tauri E2E）                 | PR 至上述分支、相关路径 push、定时每日及 workflow_dispatch   | `contents: read`；Windows PR 使用 `hermetic`，相关 push 为 `smoke`，定时为 `hermetic`；额外执行 controller-fallback                                    |
-| `renovate.yaml`（Renovate）             | 每 6 小时/手动/配置变更 push                                 | 有 `contents/pull-requests/issues: write`，使用 `RENOVATE_TOKEN`；`renovate.json` 允许 **patch/minor 在检查通过后自动合并**，不是通用 Codex auto-merge |
-| `daily.yml`（Daily）                    | 定时每日/手动                                                | `contents: write`；生成 `manifest/version.json`，变化时可能自动 commit/push；还存在 `dev` 分支清单任务                                                 |
-| `target-dev-build.yaml`（开发版构建）   | 定时每日/手动                                                | 为各平台构建 `pre-release` 资产，串联 tag、上传、updater 等**写状态**作业                                                                              |
-| `publish.yaml`（稳定发布入口）          | **手动 workflow_dispatch**，versionType 为 major/minor/patch | `contents/actions/discussions: write`，更新版本/变更日志、提交/tag，生成 draft Release 并 dispatch `target-release-build.yaml`                         |
-| `target-release-build.yaml`（发行链路） | 手动 workflow_dispatch（由 Publish 触发或单独调用）          | 预检 tag 与 draft Release；构建多个平台资产、创建 updater；部分 job 使用 `contents: write`、`id-token: write`，并向子工作流传递 secrets                |
-| `deps-*.yaml`                           | 受控可复用工作流                                             | 打包/上传/更新 tag、签名及 updater；属于发行权限边界，需单独 L3 审查                                                                                   |
+| 工作流                                  | 触发条件                                                     | 当前实际边界/权限                                                                                                                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ci.yaml`（CI）                         | PR/push 至 `main`、`master`、`dev`、`release-*`              | `contents: read`；按路径分类运行跨系统 lint/Rust/frontend/tests/build，文档类变化可能仅运行 Ubuntu 格式/基础步骤                                                                                   |
+| `e2e.yaml`（Tauri E2E）                 | PR 至上述分支、相关路径 push、定时每日及 workflow_dispatch   | `contents: read`；Windows PR/定时先运行 `hermetic`，E2E 二进制成功构建后再以独立 app 会话运行 `profile-auto-update-main`；相关 push 为 `smoke`；手动运行可选独立套件；额外执行 controller-fallback |
+| `renovate.yaml`（Renovate）             | 每 6 小时/手动/配置变更 push                                 | 有 `contents/pull-requests/issues: write`，使用 `RENOVATE_TOKEN`；`renovate.json` 允许 **patch/minor 在检查通过后自动合并**，不是通用 Codex auto-merge                                             |
+| `daily.yml`（Daily）                    | 定时每日/手动                                                | `contents: write`；生成 `manifest/version.json`，变化时可能自动 commit/push；还存在 `dev` 分支清单任务                                                                                             |
+| `target-dev-build.yaml`（开发版构建）   | 定时每日/手动                                                | 为各平台构建 `pre-release` 资产，串联 tag、上传、updater 等**写状态**作业                                                                                                                          |
+| `publish.yaml`（稳定发布入口）          | **手动 workflow_dispatch**，versionType 为 major/minor/patch | `contents/actions/discussions: write`，更新版本/变更日志、提交/tag，生成 draft Release 并 dispatch `target-release-build.yaml`                                                                     |
+| `target-release-build.yaml`（发行链路） | 手动 workflow_dispatch（由 Publish 触发或单独调用）          | 预检 tag 与 draft Release；构建多个平台资产、创建 updater；部分 job 使用 `contents: write`、`id-token: write`，并向子工作流传递 secrets                                                            |
+| `deps-*.yaml`                           | 受控可复用工作流                                             | 打包/上传/更新 tag、签名及 updater；属于发行权限边界，需单独 L3 审查                                                                                                                               |
 
 重要：`ci.yaml` 中 Rust 测试只在相关路径分类为 backend 后执行，并非所有 PR 都有完整跨平台 Rust 覆盖。更重要的是 `e2e.yaml` 的 PR hermetic 测试包含 Agent fixture，不会验证真实系统代理修改、Service 安装、TUN、网络、升级或冷启动。
 

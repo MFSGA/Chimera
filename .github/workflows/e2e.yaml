@@ -34,6 +34,7 @@ on:
           - critical
           - runtime
           - profiles
+          - profile-auto-update-main
           - settings
           - main
           - hermetic
@@ -119,8 +120,11 @@ jobs:
 
       - name: Prepare sidecars and resources
         run: pnpm prepare:check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Tauri E2E binary
+        id: build-e2e
         run: pnpm e2e:tauri:build
         env:
           NODE_OPTIONS: '--max_old_space_size=4096'
@@ -128,6 +132,11 @@ jobs:
       - name: Run ${{ env.E2E_SUITE }} suite
         shell: pwsh
         run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite $env:E2E_SUITE
+
+      - name: Run Profile auto-update main-first regression
+        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'schedule') && steps.build-e2e.outcome == 'success' }}
+        shell: pwsh
+        run: pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --suite profile-auto-update-main
 
       - name: Run controller fallback regression
         shell: pwsh

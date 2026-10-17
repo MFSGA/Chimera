@@ -12,7 +12,8 @@ use std::{
 use anyhow::{Context, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior, replace_atomic};
 use chimera_config::profile::{
-    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions, SubscriptionInfo,
+    ExternalProfilePath, ManagedProfilePath, Profiles, RemoteProfileOptions, RemoteSyncInterval,
+    SubscriptionInfo,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -2395,7 +2396,7 @@ mod tests {
             user_agent: None,
             with_proxy,
             self_proxy,
-            update_interval_minutes: 120,
+            update_interval_minutes: RemoteSyncInterval::default(),
         }
     }
 

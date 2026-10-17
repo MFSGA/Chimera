@@ -88,6 +88,28 @@ CI 在 Tauri 2.12 下编译 `tauri-plugin-wdio-webdriver@1.3.0` 失败：Tauri �
 
 项目测试在这条特定边界接受该最终响应，仅当它匹配元素 click 的 no-window 错误且独立读取的句柄列表确认编辑器窗口消失。其他错误、或窗口仍存在时均失败。此断言证明取消按钮关闭了 WebView，不证明原生鼠标输入。升级 WDIO 或 vendored 驱动时重跑此场景；若点击响应能正常返回，移除错误兼容分支。
 
+## U08 Tauri driver 的键盘输入与焦点边界
+
+核对项目当前 vendored `tauri-plugin-wdio-webdriver` 源码（Cargo.lock 中为
+1.4.0）及锁定的 `webdriverio@9.32.0`。WDIO 的 `Key.Tab` 序列化为 WebDriver
+特殊字符 `\uE004`；普通字符串 `'TAB'` 是三个可打印字符。即使传入 `Key.Tab`，
+vendored 插件的 `src/platform/executor.rs::dispatch_key_event` 也只在
+`document.activeElement` 上调用 `dispatchEvent(new KeyboardEvent('keydown'...))`
+和 `keyup`，没有让浏览器执行 Tab 默认焦点遍历。因此 `browser.keys(Key.Tab)`
+不能证明链接可通过 Tab 顺序到达。
+
+证据位置：`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/server/handlers/actions.rs`
+的 `KeyDown`/`KeyUp` 分支（约 210–240 行）将动作委派给 executor；
+`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs`
+的 `dispatch_key_event`（约 1216–1355 行）在活动元素上合成键盘事件。源码调用链中
+没有浏览器级键盘输入或默认 Tab 导航。
+
+受限测试可通过 `HTMLElement.focus()` 触发浏览器焦点变化，并验证 Radix
+Tooltip 对焦点的响应，但必须将边界写成“焦点触发行为”，不得声称验证 Tab 顺序。
+需要验收实际 Tab 顺序时，使用具备浏览器原生键盘输入的专用驱动/系统测试，并以
+目标链路的最小复现确认其确实改变 `document.activeElement`。升级 WDIO 或 vendored
+驱动后，重跑该复现并更新本条记录。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。
