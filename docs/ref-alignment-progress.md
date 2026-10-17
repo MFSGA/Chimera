@@ -1,24 +1,33 @@
 # ref 对齐进度
 
-## Dashboard 现有小组件配置（实现完成，待审批）
+## 当前参考基线同步（本批）
+
+- 上游：Clash Nyanpasu `main`，已核对最新提交 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`（2026-10-17 UTC）。
+- Chimera 原固定 gitlink：`31019da14006b384b3272c72b4088179a9e72c47`；本 PR 把 `ref` 更新到上述提交。此前 PR 草案目标为 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；从该草案基线到最新上游增加 3 个提交：`8f9d7e3a30` 更新上游 `libc`，`6b609e4140` 更新上游 `@hookform/resolvers`，`d43819fbb2` 修复隐藏窗口时 WebView 的可见性与内存目标。
+- 对齐差异：上游新增 `backend/tauri/src/window/engine.rs::set_in_sight` 和 `backend/tauri/src/window/manager.rs::follow_minimized`，在 Windows 窗口隐藏/最小化时隐藏 WebView 并请求低内存目标，在窗口恢复时恢复可见性。Chimera 对应实现目前集中在 `backend/tauri/src/window.rs` 的 `AppWindow::create` / `focus_existing_window`，窗口事件由 `backend/tauri/src/lib.rs` 处理，尚无等价的 WebView 可见性跟随逻辑；这是下一批值得评估的共享运行时对齐项，需补充 Windows 生命周期回归验证后再迁移。上游两个依赖更新只记入基线，不移植到 Chimera。
+- 上游范围：`a4f706f..d43819f` 仅改 5 个文件（两个窗口运行时文件、`backend/Cargo.lock`、`frontend/nyanpasu/package.json`、`pnpm-lock.yaml`）；runtime 递归子模块 gitlink 未变化。本批只更新参考 gitlink 和本记录，不改变 Chimera 产品代码、依赖、IPC、持久化或宿主网络行为。
+- 验证：通过 `git ls-remote` 核对上游 `main` tip，并在外接构建卷的浅克隆确认 checkout HEAD 为 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`、工作树干净；对比 `a4f706f..d43819f` 的文件清单及窗口代码。主卷仅余约 104 MiB，直接在原 `ref` 子模块 fetch 未能写入 `FETCH_HEAD`；因此本 PR 记录的是已独立核实的上游提交，原本地子模块目录暂未切换。仅更新 gitlink 与文档，不运行产品构建或桌面 E2E；PR CI 不检查实时上游 tip。
+- 风险：L2（参考基线与后续依赖/运行时审查来源变更）。回滚时恢复原 `ref` gitlink `31019da14006b384b3272c72b4088179a9e72c47`，并撤回本节。
+
+## Dashboard 现有小组件配置（实现完成，待 PR CI）
 
 - 目标：按固定 `ref/` 基线为 Chimera 已支持的六种 Dashboard 小组件补齐逐实例配置、默认值恢复、保存状态和错误重试，并继续使用现有共享 KV 存储与跨窗口事件。
 - 非目标：本批不迁入缺失的十种小组件，不更改 Dashboard 布局键/数据结构，不改 legacy UI、Agent、核心服务或宿主网络行为。
-- 参考基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`；开始前确认 `git -C ref status --short` 为空。
+- 参考基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`；功能实现时的参考基线；该提交是当前 `ref` 基线 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3` 的祖先。
 - 参考映射：`ref/frontend/nyanpasu/src/components/widgets/{widget-config.ts,provider.tsx,widget-config-menu.tsx,widget-config-row.tsx,widget-item.tsx,widget-sparkline.tsx,widget-shortcut.tsx}` → `frontend/chimera/src/pages/(main)/main/dashboard/_modules/` 对应配置、Provider、菜单、行、WidgetItem 和两类 widget 文件；`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/_modules/edit-action.tsx` → Chimera `_modules/edit-action.tsx`；`ref/frontend/query/src/hooks/use-kv-storage.ts` → `frontend/interface/src/hooks/use-kv-storage.ts`（保留 Chimera bindings/事件接口并补齐返回写入状态和读取错误恢复）。
-- 变更接口：新增存储键 `dashboard-widget-configs`，版本化、按 widget instance id 保存；现有布局 KV 键和 schema 不变。`useKvStorage` setter 增加成功布尔值，状态对象增加 `readError` 与 `refresh`；现有调用方可继续忽略这些新增结果。Traffic Down/Up、Connections、Memory、Proxy Shortcuts、Core Shortcuts 均按实例读取/保存配置；Provider 将连续变更交给 hook 的串行写入队列，并只展示最新写入结果，避免保存中的后续调整被丢弃。已准备在 frontend CI 中登记配置模型单测，尚待 L3 审批。
+- 变更接口：新增存储键 `dashboard-widget-configs`，版本化、按 widget instance id 保存；现有布局 KV 键和 schema 不变。`useKvStorage` setter 增加成功布尔值，状态对象增加 `readError` 与 `refresh`；现有调用方可继续忽略这些新增结果。Traffic Down/Up、Connections、Memory、Proxy Shortcuts、Core Shortcuts 均按实例读取/保存配置；Provider 将连续变更交给 hook 的串行写入队列，并只展示最新写入结果，避免保存中的后续调整被丢弃。配置模型单测已登记到 frontend CI；本次 workflow 改动已获维护者批准。
 - 验收：六种配置可打开、变更并持久化；读取失败可重试且不阻塞退出编辑，写入失败不显示成功；配置独立于布局并能恢复默认值；主 Dashboard E2E 覆盖读取/写入失败及重试、刷新后状态；单元测试覆盖配置归一化、未知/非法字段和实例隔离。
 - 风险：L2（共享持久化 hook 与 Dashboard 用户偏好）。测试计划：配置模型单测、E2E harness 单测、frontend typecheck/build、frontend boundary check、主 UI dashboard E2E、格式和 diff 检查；真实桌面覆盖缺失时如实标记。
-- 回滚：回滚此切片的前端/接口代码和配置 UI；不删除已有 Dashboard 布局键或 `dashboard-widget-configs` 数据。需维护者在独立审查后批准 L2 提交/推送；若将单元测试登记进 `.github/workflows/ci.yaml`，该 L3 workflow 改动另行提交审查并须获维护者批准。
+- 回滚：回退本批前端/接口代码、配置 UI 和测试入口；保留既有 Dashboard 布局键，并且不删除 `dashboard-widget-configs` 数据。该 L2 功能与 L3 workflow 改动已获维护者批准。
 - 保留差异与收敛计划：ref 的 `CoreShortcuts.showChannel` 依赖 core status 返回活动 controller（HTTP、Named Pipe 或 Unix Socket）。Chimera 的 `get_core_status` 目前只返回 state、变化时间和 run type；本批保留该 IPC 合同，不伪造通道信息。若需达到该项能力，后续独立 L2 批次应从共享 core status/应用 API 暴露运行时 controller，并验证正常、Service 与失败/未知状态。ref 还包含十种当前 Chimera Dashboard 尚未提供的 widget；本批为 Chimera 已有六种补齐配置，不声称迁完整个 ref widget catalogue。ref 的 `LauncherMenu`、`NumberStepper`、`ShapeToggle` 及快捷键按钮的 `presentation/elastic` API 未在 Chimera UI 包中；配置 popover 和快捷键使用现有 Radix、Button、Switch 与系统代理/TUN 控件适配，保留字段语义与动作，菜单/按钮呈现细节待共享 UI 原语对齐时再收敛。另，ref 的 `useKvStorage` 对不同 key 共用写入计数和 revision；独立复核发现不同 key 的写入可能误挡新 key 首次读取，A→B→A 时旧 key 迟到的写入回声也可能覆盖新值。本批将写入计数、revision 与回声按 key 隔离，并由 `KvStorageWriteEchoes` 在全局事件流中消费非活动 key 的未完成回声，避免它们覆盖当前状态；这与 ref 有意不同，后续 ref hook 更新时须重新核对并保留保护。三个可执行单测覆盖 A→B→A、非活动 key 回声和相同值并行写入；本地没有独立 React hook 浏览器测试器，真实 hook 生命周期仍未桌面实测。
-- 测试与实际结果：Dashboard 配置模型与布局模型定向测试 6/6；配置模型及 KV 回声 registry（`frontend/chimera/tests/dashboard-widget-config.test.ts`、`frontend/interface/tests/kv-storage-write-echoes.test.ts`）6/6，且已登记在 frontend CI 的 `test:dashboard-widget-config` 命令；`tauri-e2e` 当前注册的 Node unit tests 25/25；frontend interface、Chimera 与 E2E TypeScript 检查通过（Chimera 类型检查使用临时生成的 Paraglide 声明 shim，未将其纳入版本控制）；`scripts/check-frontend-boundaries.ts`、改动文件 Oxlint、Prettier、四语言 865 个 message key parity 与 `git diff --check` 通过。桌面 E2E 未在本机运行。Paraglide compile 在输出“Compiling inlang project ...”后 30 秒无进展，Vite production build 也停在项目编译阶段；进程无 CPU 活动。对应两个 CDN module URL 的 HTTP HEAD 均返回 200，因此当前原因尚未定位；未把旧生成目录或临时类型 shim 当作生成验证。远端 CI/E2E 尚未开始。
-- 当前状态：功能代码、配置与 KV 回声单测、主 Dashboard 刷新持久化 E2E、CI 单测入口和对齐记录已准备；真实桌面运行及本机 Paraglide 生成仍未验证。最终独立复核没有发现可操作 P0–P2 问题；复核者确认无 React hook 测试运行器，因此 A→B→A 覆盖测试使用生产回声登记器，React 生命周期集成由桌面 E2E/CI 补证。用户已授权本批提交推送；推送后需读取并处理 CI/E2E 结果，不能将待运行检查视为通过。
+- 测试与实际结果：Dashboard 配置模型与布局模型定向测试 6/6；配置模型及 KV 回声 registry（`frontend/chimera/tests/dashboard-widget-config.test.ts`、`frontend/interface/tests/kv-storage-write-echoes.test.ts`）6/6，且已登记在 frontend CI 的 `test:dashboard-widget-config` 命令；`tauri-e2e` 当前注册的 Node unit tests 25/25；frontend interface、Chimera 与 E2E TypeScript 检查通过（Chimera 类型检查使用临时生成的 Paraglide 声明 shim，未将其纳入版本控制）；`scripts/check-frontend-boundaries.ts`、改动文件 Oxlint、Prettier、四语言 865 个 message key parity 与 `git diff --check` 通过。桌面 E2E 未在本机运行。Paraglide compile 在输出“Compiling inlang project ...”后 30 秒无进展，Vite production build 也停在项目编译阶段；进程无 CPU 活动。对应两个 CDN module URL 的 HTTP HEAD 均返回 200，因此当前原因尚未定位；未把旧生成目录或临时类型 shim 当作生成验证。该分支同步最新 master 后的新 PR SHA 将运行远端 CI/E2E；此处记录的是同步前本地检查结果。
+- 当前状态：功能代码、配置与 KV 回声单测、主 Dashboard 刷新持久化 E2E、CI 单测入口和对齐记录已准备；真实桌面运行及本机 Paraglide 生成仍未验证。最终独立复核没有发现可操作 P0–P2 问题；复核者确认无 React hook 测试运行器，因此 A→B→A 覆盖测试使用生产回声登记器，React 生命周期集成由桌面 E2E/CI 补证。用户已批准提交、推送并开 PR；PR CI/E2E 尚未运行，不能将待运行检查视为通过。
 
-## Dashboard 小组件库与 DnD Grid（实现及独立复核完成，待提交审批）
+## Dashboard 小组件库与 DnD Grid（实现、独立复核、CI/E2E 完成，已合入 master）
 
 - 目标：将可复用网格组件迁到 `@chimera/ui` 并对齐上游拖拽源 API；Dashboard 小组件库提供搜索、直接添加，以及将条目拖到网格指定位置。保留现有六种小组件、`dashboard-widgets` 持久化格式和当前布局自适应逻辑。
 - 非目标：本批不增加新的小组件类型，不改 legacy UI、agent、核心服务或系统网络行为。
-- 基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`（2026-10-16 fetch 后核对）。master 原有 ref gitlink 为 `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`；本分支会把 gitlink 更新到该基线。当前隔离工作树未初始化 ref 内部 runtime 子模块，指针为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`；本功能只读取 ref 的前端源码，不依赖 runtime 内容。
+- 基线：Clash Nyanpasu `main` `685042aaedaea26a591900be0b494dfe8efd79b0`（2026-10-16 fetch 后核对）。PR #486 将 master 原有 ref gitlink `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7` 更新到该基线，并于 2026-10-17 以 rebase 方式合入，merge commit `72d61000a63bca6920cc2c55d9a812392bac4c43`。该功能只读取 ref 的前端源码；当时 ref 内部 runtime 指针为 `be2f561102fe898cb7a294ef14de3f4c65b68f81`。
 - 参考映射：`ref/frontend/ui/src/dnd-grid/*` → `frontend/ui/src/dnd-grid/*`；新增上游 `DndGridSource`、`DndGridSourceData`、网格命中坐标和 `onExternalDrop`；`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/_modules/widget-placement.ts` → Chimera Dashboard `_modules/widget-placement.ts`；WidgetSheet 沿用上游可搜索条目和直接添加交互，但使用 Chimera 当前的 Vaul 抽屉及六项 `RENDER_MAP`。`use-grid-layout` 继续依赖 Chimera 已锁定的 `lodash-es`，其余网格结构和符号按 ref 对齐。
 - 保留差异及收敛计划：当前 ref 有 16 种 Dashboard 小组件，Chimera 已实现其中 6 种。本批保留 Chimera 现有六项，不复制依赖尚未迁入的 Profile/traffic-report/provider widget 实现与配置；当对应组件和数据合同进入 Chimera 后，再按完整 widget 模块迁入并扩展库列表。
 - 接口影响：`@chimera/ui` 新增 `dnd-grid` 与 `search-field` 导出；Dashboard 的拖拽源通过 `onExternalDrop(id, position)` 添加小组件。存储 schema 不变。legacy UI 与 agent 不调用此主界面布局 API。
@@ -26,10 +35,10 @@
 - 实际验证：placement 定向测试 3/3 通过；共享 UI TypeScript 检查、Vite 生产构建、前端边界检查、Prettier 检查及 `git diff --check` 通过。锁文件可解析，四个新增 UI importer 与 manifest 版本一致。全量 Chimera 类型检查仍在未修改的 connections、context-menu、editor、profiles/columns 和测试 Node 类型声明处失败；未报告本批改动文件。独立复核首次发现 Add 按钮未阻止 TouchSensor 的长按事件，已补 `touchstart` 冒泡拦截；复核后续未发现可执行缺陷。
 - 未覆盖：桌面 E2E 未运行；当前锁定的 Tauri WebDriver 操作合成 `MouseEvent`，无法证明真实 PointerSensor/TouchSensor 拖拽，搜索和直接添加也未在运行中的桌面窗口验证。`pnpm prepare:check` 未运行，因为它会下载/安装 sidecar 二进制，与此纯前端切片无关。隔离工作树的 `pnpm install --frozen-lockfile` 卡在 supply-chain lockfile 校验；没有绕过该校验，使用本机已安装依赖直接运行定向命令。
 - 独立审查：最终复核没有发现可操作缺陷。审查环境因不能创建本地 IPC socket 而未能自行启动定向测试；该测试已在工作区命令行直接执行并通过。
-- 回滚：撤销该功能提交并把 ref gitlink 恢复为 `c08aa9d9`；用户存储 schema 未变，不需要数据迁移。
-- 提交要求：须在独立复核后取得维护者对 L2 的明确批准；CI 与桌面 E2E 未完成或失败时不得宣称通过，也不得合并。
+- 回滚：单独回滚 PR #486 时，其 ref gitlink 应恢复为该 PR 前的 `c08aa9d9`；用户存储 schema 未变，不需要数据迁移。若本节顶部记录的后续 ref 基线同步已合并，回滚 Dashboard 功能时应保留新的 ref pin。
+- 合并与验证：PR #486 的 CI run `38959272484`、Tauri E2E run `38959272498` 全部通过；独立复核无阻塞项。已于 2026-10-17 以 rebase 方式合入 `master`（merge commit `72d61000a63bca6920cc2c55d9a812392bac4c43`）。
 
-当前 profile 同步分支的只读参考检出为 Clash Nyanpasu `main` 的提交
+此前 Profile 同步批次的只读参考检出为 Clash Nyanpasu `main` 的提交
 `c08aa9d9a17953aa2464cdae61390d5c3f9afbc7`，该提交在上游 Actions 页面对应
 `main` 构建，子模块工作区干净。主仓库 `master` 基线为
 `e81eeaea46a9c229478cd29c9555b5c072f7e6cc`；本分支将 ref 更新至 `c08aa9d9`。自原基线以来上游合入了 TanStack Router、meta-json-schema、
@@ -1310,6 +1319,18 @@ DIFF-001 至 DIFF-012 是此前基于
 - 收敛条件：当 Chimera 迁移到与 ref 相同的持久化 job scheduler 时，重看首次 tick 的注册时刻与 catch-up 语义；保留
   “deadline 不依赖 task 首次 poll 时刻”的确定性要求。
 
+## DIFF-048：允许 WebView 同源与 data URL 请求
+
+- ref 基线：PR #478 rebase 到 master 后使用 gitlink 固定的 `31019da14006b384b3272c72b4088179a9e72c47`。已直接读取该 commit 的 `backend/tauri/tauri.conf.json::app.security.csp`，其 `connect-src` 包含 `'self' data:`；没有移动或更新 `ref/`。
+- ref 到 Chimera 映射：`ref/backend/tauri/tauri.conf.json::app.security.csp` 对应 `backend/tauri/tauri.conf.json::app.security.csp`。只在 `connect-src` 加入 `'self' data:`，其它 CSP 来源不变。
+- 类别与风险：共享 WebView 安全策略对齐，L2；smoke E2E 是 Chimera 扩展。
+- 本轮实现：同一 Tauri CSP 覆盖 legacy 与 main WebView。Smoke 从两个窗口分别请求当前文档同源 URL，并以 `no-cors` 请求内存中的 `data:` URL；同源响应必须成功，`data:` 响应必须为 opaque 且状态 0。缺少来源时请求被 CSP 阻止，断言会失败。
+- 影响入口：Tauri 共用 CSP 覆盖 legacy 和 main 两个窗口；Agent 直接使用共享 application API，不经 WebView 请求，因此不受该策略影响。没有改动 UI、IPC、配置持久化、运行时核心或 Service，也不验证公网代理。
+- 测试契约：`tauri-e2e/specs/smoke.e2e.ts` 的 `allows same-origin and data URL fetches in both desktop windows`，位于现有 `smoke` 基础套件并随 PR 的 `hermetic` suite 执行。每个窗口先确认目标路由/窗口，再进行有界 fetch；检查真实 WebView 观察到的响应，不写入页面或应用状态。无外网和用户数据。
+- 验证：已完成 E2E harness typecheck、harness unit tests 25/25、Oxlint、Prettier、Tauri JSON/CSP 解析及 `git diff --check`。本机 macOS 桌面 E2E 未运行；本地完整打包需要较大 Cargo target 且磁盘空间不足。合入 master 基线后，Windows Desktop `hermetic` 会执行真实 legacy/main WebView 用例；其结果仍待新 SHA 验证。
+- 保留差异：legacy UI 保持现有窗口和用户流程；`data:` 响应是 opaque，测试不读取正文。没有其它收敛工作。
+- 回滚：还原 `connect-src` 新增的 `'self' data:` 和本 smoke 用例即可；不迁移用户数据或更改宿主网络设置。
+
 ## DIFF-049：滚动 Chimera Client Alpha 资产失败后刷新
 
 - ref 基线：本地 `ref/` commit `813673a8e84b51265467f02277fc7e739837f61e`，与远端 `main` 一致，工作树干净。该提交相对原分析基线 `67999753918c7b9879ddd2bacdef74246bfef1dd` 未改变本条映射的 `scripts/src/prepare` 文件。
@@ -1483,3 +1504,80 @@ DIFF-001 至 DIFF-012 是此前基于
   前台动画与冷启动。执行命令和运行环境详见 `docs/testing/contracts/profile-auto-update.md`。
 - 审查和批准：需独立复核真实 diff、ref 符号映射、失败/清理路径和宿主影响；L2 maintainer approval 后才提交和推送。
 - 回滚：迁移或手工恢复已保存 0 的 interval 后，再回滚模型、配置兼容、调度器和 UI；避免旧程序把 0 当作无效配置。
+
+## DIFF-056：按 ref 拆分核心 sidecar 解析器并补齐打包入口
+
+- 目标：把二进制信息、平台映射和版本解析从 `scripts/check.ts` 收拢到 ref 对应的
+  `scripts/src/prepare/` 模块；准备并打包 Chimera 当前支持的所有 core sidecar。
+- 非目标：本批不搬迁下载/解压实现、进度显示或任务执行器，不改 Core/Service IPC、用户配置、
+  数据格式或宿主网络行为；不引入 Chimera 尚未公开支持的 Meow core。
+- ref 基线：`813673a8e84b51265467f02277fc7e739837f61e`（本地 `ref/` 与 `origin/main` 一致，
+  工作树干净）。
+- ref 到 Chimera 的路径与符号映射：
+  - `ref/scripts/src/prepare/types.ts` 的 `ClashManifest`、`ResolveInfo`、`TaskDetail`、
+    `DownloadProgress`、`DownloadResult`、`ResolveOptions` → `scripts/src/prepare/types.ts` 同名类型。
+  - `ref/scripts/src/prepare/platform.ts::{normalizePlatform, normalizeArch, mapArch}` →
+    `scripts/src/prepare/platform.ts` 同名函数；保留 ref 架构并扩展到 Chimera manifest 已支持的
+    十种平台/架构组合。
+  - `ref/scripts/src/prepare/versions.ts::{normalizeVersion, isValidVersion,
+    extractVersionFromAssetList, fetchText}` → `scripts/src/prepare/versions.ts` 同名函数；
+    `scripts/manifest.ts` 复用版本提取和文本请求实现。
+  - `ref/scripts/src/prepare/binaries.ts::createBinaryResolvers` 及 Clash Premium、Mihomo、
+    Mihomo Alpha、Clash-rs、Clash-rs Alpha resolver → `scripts/src/prepare/binaries.ts` 同名
+    factory 和 resolver。保留 Chimera Client、Chimera Client Alpha、Chimera Service 扩展；
+    Alpha Client 的刷新继续调用 Chimera manifest resolver，Service 版本继续来自本地 Cargo manifest。
+    Mihomo Alpha 元数据请求异常时回退到版本 manifest；版本变化时通过 sidecar 版本戳使旧缓存失效。
+  - `ref/scripts/src/prepare/check.ts` 的 core task 注册和
+    `ref/backend/tauri/tauri.conf.json::bundle.externalBin` → 当前 `scripts/check.ts` 的
+    task 注册及 `backend/tauri/tauri.conf.json::bundle.externalBin`。本批让 Clash Premium 和
+    Mihomo Alpha sidecar 同时进入准备与 Tauri 打包清单，避免仅能解析却未随应用分发。
+- 保留差异与收敛状态：记录创建时为部分迁移；后续 DIFF-057（PR #480）已把下载/解压、资源解析、
+  进度和任务调度迁入同一 `scripts/src/prepare/` 模块，`scripts/check.ts` 保留为兼容委托入口。
+  当前仅保留窄范围产品差异：ref 支持 Meow，但 Chimera 的应用配置和 IPC core 合同没有 Meow 变体，
+  service endpoint 也拒绝该类型（底层 metadata 仍保留枚举），因此不注册 Meow sidecar。现有十种
+  manifest 架构映射和 Chimera Service/Client 资产命名保留。
+- 变更接口：新增内部 `createBinaryResolvers(BinaryResolverOptions)` factory；新增平台与版本 helper
+  模块；`scripts/check.ts` 通过 factory 解析现有及补齐的 sidecar；Tauri bundle 增加 `clash` 和
+  `mihomo-alpha` external binaries。无应用 IPC、前端 API、持久化或用户配置接口变化。
+- 风险：L2（sidecar 下载、二进制分发及运行时 core 资源）。首轮独立审查发现 Alpha 缓存失效和
+  元数据网络异常回退两项阻断问题；已增加版本戳校验与 pinned-manifest 回退及回归测试。修正后的独立复审已完成，
+  无代码阻断项；审查建议同步修正本记录的测试数量与复审状态，现已更新。用户要求在远端 CI 运行期间继续独立批次；
+  本批可在本地验收与独立复核完成后并行推送，但必须等本批自己的必需检查与审查通过后才能合并。
+- 验收条件：十种架构均得到对应资产映射；Alpha 版本解析可刷新，元数据不可用时能回退且缓存按版本失效；
+  Service 版本、归档名和 SHA-256 清单 URL 由本地 crate 版本推导；当前支持的 core sidecar 已注册准备任务并列入 bundle；Deno
+  锁定测试、类型检查、lint、格式和差异检查通过；独立审查无阻塞项；推送该批 SHA 后所需 CI 与
+  桌面 E2E 成功，失败则在同一分支修复并以新 SHA 重验。
+- 验证计划与限制：`pnpm test:manifest`、带仓库 Deno 配置的冻结锁测试、`deno check`、
+  `pnpm typecheck`、`pnpm lint:oxlint`、Prettier、`git diff --check`；推送后依赖 CI 的各平台
+  lint/build 和 Tauri Desktop E2E 检查 sidecar 下载与打包。未在本机运行会下载并替换忽略 sidecar
+  文件的 `pnpm prepare:check`，也未声称其本地通过。
+- 回滚：在本批 feature 分支撤销上述解析器、task 注册、externalBin、测试入口/锁和本条记录；
+  不需数据迁移或用户状态恢复。
+- 阶段证据：DIFF-056 初始切片的 `pnpm test:manifest` 曾为 17/17；DIFF-057 完成后，全管线测试为
+  28/28。测试入口固定使用 `scripts/deno.lock`，并将测试使用的 `@std/assert` 版本写入该锁，
+  防止在仓库根目录生成额外锁文件。DIFF-057 当前切片的 Deno frozen check、Oxlint、Prettier
+  与差异检查也通过。曾实际运行 `pnpm prepare:check --arch arm64 --sidecar-host aarch64-apple-darwin`，
+  但下载反复重试且无进度后中断；随后对 Clash Premium、Mihomo Alpha 与 Chimera Client Alpha 的 GitHub 元数据/资产 URL
+  执行请求均在 12 秒超时，故本地实际下载与安装未验证，不能记为通过。该批仍为部分迁移；推送后需记录该 SHA 的
+  CI/E2E 结果，远端未通过前不得合并；DIFF-057 已完成此处预留的管线迁移。
+
+## DIFF-057：迁移 prepare 下载、资源安装、进度和任务执行器
+
+- 目标：完成上一切片预留的 prepare 管线迁移，将下载/解压、资源解析、进度渲染和任务调度放入 ref 对应的 `scripts/src/prepare/` 文件，并让 `pnpm prepare:check` 直接运行该入口。
+- 非目标：不改变 manifest 版本解析、平台映射、应用 Core/Service IPC、用户配置、宿主网络/TUN 行为；不注册应用未支持的 Meow core；不在本机下载或替换真实 sidecar/资源来验证。
+- 风险：L2（准备并原子安装 sidecar 与运行资源）。维护者已批准该批次提交/推送；合并仍需新 SHA 的 CI/E2E 通过。
+- ref 基线：`813673a8e84b51265467f02277fc7e739837f61e`，本地 `ref/` 已核对为该 SHA 且工作区干净；本批未改动或重新同步 ref。
+- ref 到 Chimera 的路径与符号映射：
+  - `ref/scripts/src/prepare/download.ts::{downloadFile, extractZip, extractTarGz, gunzipFile}` → `scripts/src/prepare/download.ts` 同名函数；流式下载和解包流程沿用 ref。
+  - `ref/scripts/src/prepare/progress.ts::{ProgressRenderer, formatSize, formatSpeed, formatProgressSize, formatResolveInfo}` → `scripts/src/prepare/progress.ts` 同名类和函数。
+  - `ref/scripts/src/prepare/resources.ts::{resolveResource, resolveSidecar, resolveWintun}` → `scripts/src/prepare/resources.ts` 同名解析器；保留 Chimera 现有 Alpha metadata refresh、sidecar SHA-256 和临时版本戳。
+  - `ref/scripts/src/prepare/check.ts::{runTask, resolveSidecarHost, main}` → `scripts/src/prepare/check.ts` 同名入口和任务执行路径；`createPrepareTasks`、`selectPrepareTasks` 放在 `scripts/src/prepare/tasks.ts`，并由独立测试检查支持的核心、资源和 Windows 任务。使用 Chimera 的 logger、manifest、资源路径，并注册 Clash、Mihomo、Mihomo Alpha、Clash-rs/Alpha、Chimera Client/Alpha、Chimera Service、Wintun、MMDB、GeoIP、GeoSite 与 Windows loopback 工具。保留十种架构和现有服务/客户端资产名。
+  - 历史入口 `scripts/check.ts` 保留为兼容委托；`package.json::prepare:check` 改为直接运行新模块。
+- 保留差异与缺陷修正：不注册上游 Meow，因为 Chimera 的 core 配置/IPC/service 合同不支持它；用现有 `verifyAndInstallSidecar` 为 sidecar 保留校验和 staged atomic install。普通资源现在也先写入同目录临时文件、下载完成后再替换：中断下载会留下半截文件并被下次按“已缓存”采用，已用测试复现该旧行为并验证新实现保留原缓存、清理临时文件。Wintun 的每次重试都会丢弃未完成归档；DLL 经同目录暂存并原子替换，失败时保留上次可用版本。迁移同时保留 DIFF-052 中仅针对 Chimera Client Alpha 滚动资产 404 的 1/2/4/8 秒有限重试；其他 sidecar 及非 404 错误不进入此延迟重试。这些是窄范围恢复性修正，ref 应在后续切片复查。
+- 影响范围：仅改变 Node/Deno prepare 脚本入口、脚本测试执行权限和本地准备资源流程；主界面、legacy UI、agent、持久化数据和宿主代理状态不变。
+- 验收：下载、失败清理、Alpha 刷新及有界 404 重试、非 404 快速失败、checksum 失败保留旧 sidecar、Wintun 重试与旧 DLL 保留、任务进度、注册任务清单、历史入口和所有当前 core task 可检查；`pnpm test:manifest`、Deno frozen check、workspace typecheck、oxlint、Prettier 和 diff 检查通过；独立复核无阻断项；推送后的必需平台 CI 与 Desktop E2E 通过。
+- 验证计划/限制：使用假 HTTP 响应和隔离临时目录覆盖下载与恢复；本地 `pnpm prepare:check` 会访问网络并替换被忽略的 sidecar/resource 文件，本批不运行该命令。全平台真实下载与 Tauri 打包由本批推送后的工作流验证。
+- 回滚：回退 `scripts/src/prepare/{check,download,progress,resources}.ts`、相应测试/测试入口、`prepare:check` 路径及本条记录；无用户数据迁移。
+- 当前本地证据：`pnpm test:manifest` 28 passed、0 failed；新增假 HTTP 用例验证滚动 Alpha 在短暂 404 后恢复、重试预算耗尽时失败，以及 503 不触发延迟重试；恢复成功检查实际安装字节和版本戳，耗尽场景检查原 sidecar 与版本戳保持不变。任务级回归用例实际执行 Alpha task，验证该重试策略生效且 Mihomo Alpha 不使用该策略。下载与资源测试通过共享 `withTempFetch` 包装，在 setup/body 失败时仍独立恢复 fetch mock、清理临时目录并保留主要与清理异常。`deno check --frozen --config scripts/deno.jsonc scripts/check.ts scripts/src/prepare/check.ts scripts/src/prepare/tasks.ts`、`pnpm lint:oxlint`、Prettier、`git diff --check` 通过。更新到当前 master 的外部 worktree 中，前端/E2E typecheck 因 node_modules symlink 指向另一个 worktree 且缺少解析依赖，未能有效执行；本批新 SHA 的 CI 将提供类型检查与构建复验。针对旧 CI 失败的 `client::profiles::tests::import_suggestion_is_committed_and_reschedules_the_timer` 定向 Rust 测试在本机通过 1/1；本机 `pnpm prepare:check` 未运行，不宣称真实资源下载/安装已验证。
+- 远端失败证据（修复前的 #480 head `c797797d16cc2453b01ca460a2adf3e6b90a1d67`）：CI https://github.com/MFSGA/Chimera/actions/runs/38558416365 的 Ubuntu 后端测试因观察 fetch 与 actor 提交之间的竞态失败，现已改为等待提交后的快照；Desktop E2E https://github.com/MFSGA/Chimera/actions/runs/38558416387 的 Windows 运行中 51/52 个 spec 通过，`rules-main-proxy-icon.e2e.ts` 未加载图标。PR #479 的缓存 generation 修复已通过全平台 CI 和 Desktop E2E，并于 2026-10-14 合入 master；#480 的新 SHA 仍须重新执行必需检查。当前本地 `pnpm prepare:check` 未运行，不代表真实资源下载/安装验证通过。
+- 后续远端复验（PR #480 head `4a92a6916f16e2f768f2e83c1db608958fc88a49`）：[CI run 38571885904](https://github.com/MFSGA/Chimera/actions/runs/38571885904) 的 Linux/Windows lint 通过，macOS lint 在 `pnpm prepare:check` 下载 `chimera-client-alpha` 时收到 `404`；同一 SHA 的 [Desktop E2E run 38571885920](https://github.com/MFSGA/Chimera/actions/runs/38571885920) 通过。失败发生于 2026-10-14 13:31 UTC。GitHub 于 2026-10-15 02:51 UTC 发布的 [`Chimera_Client` latest release](https://github.com/MFSGA/Chimera_Client/releases/tag/latest) 当前包含预期的 `chimera-client-0.27.1-aarch64-apple-darwin.tar.gz` 资产；这说明该资产后来可用，但不能单独证明失败的历史原因。没有更改 resolver 或扩大重试预算；新 SHA 的 macOS prepare 检查仍须重新验证。当前本地没有运行 `pnpm prepare:check`，也没有下载或替换 sidecar。

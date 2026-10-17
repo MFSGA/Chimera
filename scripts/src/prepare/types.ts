@@ -20,7 +20,20 @@ export interface BinInfo {
   tmpFile: string;
   downloadURL: string;
   checksumURL?: string;
+  /**
+   * Re-resolves the binary from the live release when the pinned download is
+   * gone, such as after a rolling alpha tag moved past the manifest version.
+   */
   refresh?: () => Promise<BinInfo>;
+}
+
+export interface ClashManifest {
+  URL_PREFIX: string;
+  BACKUP_URL_PREFIX?: string;
+  BACKUP_LATEST_DATE?: string;
+  VERSION?: string;
+  VERSION_URL?: string;
+  ARCH_MAPPING: ArchMapping;
 }
 
 export interface VersionManifest {
@@ -44,4 +57,38 @@ export interface VersionManifest {
     clash_rs_alpha: ArchMapping;
   };
   updated_at: string;
+}
+
+export interface ResolveInfo {
+  file: string;
+  version?: string;
+  size?: number;
+  speed?: number;
+  cached: boolean;
+}
+
+export interface TaskDetail {
+  version?: string;
+  size?: string;
+  speed?: string;
+  cached?: boolean;
+  file?: string;
+  note?: string;
+}
+
+export interface DownloadProgress {
+  downloaded: number;
+  total?: number;
+  speed?: number;
+  version?: string;
+}
+
+export interface DownloadResult {
+  size: number;
+  speed?: number;
+}
+
+export interface ResolveOptions {
+  force?: boolean;
+  onProgress?: (progress: DownloadProgress) => void;
 }
