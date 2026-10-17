@@ -30,19 +30,28 @@ export function useTrafficSummary() {
   });
 }
 
-export function useTrafficReport(
+export function trafficReportQueryOptions(
   request: ReportRequest,
-  options?: Pick<
-    UseQueryOptions<TrafficReport, Error>,
-    'enabled' | 'refetchInterval'
-  >,
+  options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
-  return useQuery({
+  const paused = options?.refetchInterval === false;
+
+  return {
     queryKey: ['traffic-report', request],
     queryFn: async () =>
       unwrapResult(await commands.queryTrafficReport(request)),
     ...options,
-  });
+    refetchOnWindowFocus: !paused,
+    refetchOnReconnect: !paused,
+    ...(options?.refetchInterval === undefined ? {} : { retry: false }),
+  };
+}
+
+export function useTrafficReport(
+  request: ReportRequest,
+  options?: { enabled?: boolean; refetchInterval?: number | false },
+) {
+  return useQuery(trafficReportQueryOptions(request, options));
 }
 
 export function useTrafficActiveConnectionIds(

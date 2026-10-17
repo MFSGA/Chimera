@@ -243,8 +243,13 @@ export function NavigationSidebarToggle({
   children,
   className,
   onClick,
+  expandLabel,
+  'aria-label': ariaLabel,
   ...props
-}: Omit<ComponentProps<typeof Button>, 'children'> & { children: string }) {
+}: Omit<ComponentProps<typeof Button>, 'children'> & {
+  children: string;
+  expandLabel?: string;
+}) {
   const { open, setOpen } = useSidebar();
 
   return (
@@ -253,6 +258,7 @@ export function NavigationSidebarToggle({
       hideCollapsedLabel
       icon={<MenuOpenRounded />}
       className={cn(navigationSidebarToggleVariants(), className)}
+      aria-label={expandLabel ? (open ? children : expandLabel) : ariaLabel}
       aria-expanded={open}
       data-slot="navigation-sidebar-toggle"
       onClick={(event) => {
