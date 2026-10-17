@@ -696,6 +696,15 @@ describe('main transform chain editor', () => {
     );
 
     await trigger.click();
+    const immediateAfterScroll =
+      await readScrollViewportObservation(editorSelector);
+    assert.ok(immediateAfterScroll, 'The scoped transform editor is missing.');
+    assert.ok(
+      Math.abs(
+        immediateAfterScroll.editorTop - immediateAfterScroll.visibleTop,
+      ) <= 2,
+      `The oversized editor must reach the viewport immediately after the action. Geometry: ${JSON.stringify(immediateAfterScroll)}`,
+    );
     let lastAfterScroll: ScrollViewportObservation | null = null;
     try {
       await browser.waitUntil(
@@ -769,6 +778,18 @@ describe('main transform chain editor', () => {
     );
     await trigger.waitForClickable({ timeout: 15_000 });
     await trigger.click();
+
+    const immediateFitAfter =
+      await readScrollViewportObservation(editorSelector);
+    assert.ok(immediateFitAfter, 'The scoped transform editor is missing.');
+    const immediateFitViewportCenter =
+      immediateFitAfter.visibleTop + immediateFitAfter.visibleHeight / 2;
+    const immediateFitEditorCenter =
+      immediateFitAfter.editorTop + immediateFitAfter.editorHeight / 2;
+    assert.ok(
+      Math.abs(immediateFitEditorCenter - immediateFitViewportCenter) <= 2,
+      `The fitting editor must reach the viewport center immediately after the action. Geometry: ${JSON.stringify(immediateFitAfter)}`,
+    );
 
     let lastFitAfter: ScrollViewportObservation | null = null;
     try {
