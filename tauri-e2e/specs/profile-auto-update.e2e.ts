@@ -118,7 +118,15 @@ async function waitForPersistedInterval(uid: string, expected: number) {
 
 async function waitForSuccessfulSyncHistory(
   uid: string,
-  minimumSuccessfulRunCount = 1,
+  {
+    minimumSuccessfulRunCount = 1,
+    admissionSequence,
+    timeout = 30_000,
+  }: {
+    minimumSuccessfulRunCount?: number;
+    admissionSequence?: string;
+    timeout?: number;
+  } = {},
 ) {
   let lastObserved = 'not observed';
   let lastState:
@@ -126,6 +134,7 @@ async function waitForSuccessfulSyncHistory(
         cardVisible: boolean;
         latestRunVisible: boolean;
         latestRunStatus: string | null;
+        latestRunAdmissionSequence: string | null;
         successfulRunCount: number;
         renderedLogCount: number;
       }
@@ -159,6 +168,8 @@ async function waitForSuccessfulSyncHistory(
             cardVisible: isDisplayed(card),
             latestRunVisible: isDisplayed(latestRun),
             latestRunStatus: latestRun?.dataset.runStatus ?? null,
+            latestRunAdmissionSequence:
+              latestRun?.dataset.admissionSequence ?? null,
             successfulRunCount: runs.filter(
               (run) => run.dataset.runStatus === 'succeeded',
             ).length,
@@ -172,12 +183,14 @@ async function waitForSuccessfulSyncHistory(
           lastState.cardVisible &&
           lastState.latestRunVisible &&
           lastState.latestRunStatus === 'succeeded' &&
+          (admissionSequence === undefined ||
+            lastState.latestRunAdmissionSequence === admissionSequence) &&
           lastState.successfulRunCount >= minimumSuccessfulRunCount &&
           lastState.renderedLogCount > 0
         );
       },
       {
-        timeout: 30_000,
+        timeout,
         timeoutMsg: `Profile ${uid} did not show a completed sync with logs.`,
       },
     );
@@ -194,8 +207,9 @@ async function waitForSuccessfulSyncHistory(
 async function waitForExternalManualSync(
   uid: string,
   previousSequence: string | null,
-) {
+): Promise<string> {
   let lastObserved = 'not observed';
+  let completedSequence: string | null = null;
   try {
     await browser.waitUntil(
       async () => {
@@ -203,7 +217,10 @@ async function waitForExternalManualSync(
           'get_profile_sync_status',
           { uid },
         );
-        if (status.latest_run_sequence === previousSequence) {
+        if (
+          !status.latest_run_sequence ||
+          status.latest_run_sequence === previousSequence
+        ) {
           lastObserved = `sequence unchanged at ${String(previousSequence)}`;
           return false;
         }
@@ -222,7 +239,9 @@ async function waitForExternalManualSync(
         if (!run || run.trigger !== 'manual' || run.state.kind !== 'finished') {
           return false;
         }
-        return run.state.completion.outcome.kind === 'succeeded';
+        if (run.state.completion.outcome.kind !== 'succeeded') return false;
+        completedSequence = status.latest_run_sequence;
+        return true;
       },
       {
         timeout: 30_000,
@@ -233,6 +252,39 @@ async function waitForExternalManualSync(
     throw new Error(
       `External manual sync for Profile ${uid} did not finish; last observed ${lastObserved}.`,
       { cause },
+    );
+  }
+  assert.ok(
+    completedSequence,
+    `Profile ${uid} sync sequence was not observed.`,
+  );
+  return completedSequence;
+}
+
+async function focusWindow(label: string) {
+  await invoke<void>('plugin:window|set_focus', { label });
+  let lastState = 'not observed';
+  try {
+    await browser.waitUntil(
+      async () => {
+        const state = await browser.execute(() => ({
+          visibility: document.visibilityState,
+          hasFocus: document.hasFocus(),
+        }));
+        lastState = JSON.stringify(state);
+        return state.visibility === 'visible' && state.hasFocus;
+      },
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Window did not receive focus.',
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      'Window ' + label + ' did not receive focus; ' + lastState + '.',
+      {
+        cause,
+      },
     );
   }
 }
@@ -919,15 +971,16 @@ describe('remote profile auto-update', () => {
             'The legacy Profile update control did not fetch the local subscription.',
         },
       );
-      await waitForExternalManualSync(
+      const legacySyncSequence = await waitForExternalManualSync(
         uid,
         beforeLegacyManualSync.latest_run_sequence,
       );
       await browser.switchToWindow('main');
-      await waitForSuccessfulSyncHistory(
-        uid,
-        successfulRunCountBeforeLegacySync + 1,
-      );
+      await focusWindow('main');
+      await waitForSuccessfulSyncHistory(uid, {
+        minimumSuccessfulRunCount: successfulRunCountBeforeLegacySync + 1,
+        admissionSequence: legacySyncSequence,
+      });
     });
   });
 });
