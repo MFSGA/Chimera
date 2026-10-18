@@ -440,10 +440,9 @@ describe('main dashboard reference layout', () => {
       failedCommand: string,
       persistUntilReleased = false,
     ) => {
-      // The Tauri internals object can outlive a WebView document refresh. Clear
-      // existing test-owned interceptor state before installing a new one.
-      await restoreWidgetConfigInvoke();
-      await browser.execute(
+      // Clear and replace the test-owned interceptor in one WebDriver command
+      // so both steps target the same active page context.
+      const injection = await browser.execute(
         (commandToFail, keepFailing) => {
           type TauriInternals = {
             invoke: (
@@ -461,9 +460,25 @@ describe('main dashboard reference layout', () => {
           if (!internals) {
             throw new Error('Tauri page internals are unavailable.');
           }
-          if (internals.widgetConfigOriginalInvoke) {
-            throw new Error('A widget storage failure is already installed.');
+
+          const hadStaleMarker = Boolean(
+            internals.widgetConfigOriginalInvoke ||
+            internals.widgetConfigInjectedInvoke ||
+            internals.widgetConfigStopFailure,
+          );
+          const staleOriginalInvoke = internals.widgetConfigOriginalInvoke;
+          const staleInjectedInvoke = internals.widgetConfigInjectedInvoke;
+          const staleInvokeMatches =
+            Boolean(staleInjectedInvoke) &&
+            internals.invoke === staleInjectedInvoke;
+          internals.widgetConfigStopFailure?.();
+          if (staleOriginalInvoke && staleInvokeMatches) {
+            internals.invoke = staleOriginalInvoke;
           }
+          delete internals.widgetConfigOriginalInvoke;
+          delete internals.widgetConfigInjectedInvoke;
+          delete internals.widgetConfigStopFailure;
+          delete internals.widgetConfigFailureCalls;
 
           const originalInvoke = internals.invoke;
           let failureActive = true;
@@ -495,9 +510,26 @@ describe('main dashboard reference layout', () => {
               'The widget storage failure could not wrap Tauri invoke.',
             );
           }
+          return {
+            installed:
+              internals.invoke === internals.widgetConfigInjectedInvoke &&
+              internals.widgetConfigOriginalInvoke === originalInvoke,
+            hadStaleMarker,
+            staleInvokeMatches,
+          };
         },
         failedCommand,
         persistUntilReleased,
+      );
+      if (injection.hadStaleMarker) {
+        console.warn(
+          `Cleared stale Dashboard test interceptor state (invoke matched previous wrapper: ${injection.staleInvokeMatches}).`,
+        );
+      }
+      assert.equal(
+        injection.installed,
+        true,
+        `The storage failure interceptor must be installed in the active WebView (stale marker cleared: ${injection.hadStaleMarker}; stale invoke matched: ${injection.staleInvokeMatches}).`,
       );
     };
 
@@ -544,7 +576,7 @@ describe('main dashboard reference layout', () => {
         if (!internals || !originalInvoke) return;
         internals.widgetConfigStopFailure?.();
         if (
-          !internals.widgetConfigInjectedInvoke ||
+          internals.widgetConfigInjectedInvoke &&
           internals.invoke === internals.widgetConfigInjectedInvoke
         ) {
           internals.invoke = originalInvoke;

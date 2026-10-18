@@ -29,7 +29,7 @@
 | LESSON-20261017-004 | 2026-10-17 | CI / Linux     | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
 | LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
 | LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
-| LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 新运行确认输入 CSS 高度为 56px、窗口矩形为 53px；Dashboard 用例增加 fresh-mount 与故障调用证据，待复验  | Open      |
+| LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 run 39089126084 再现 Dashboard 注入器残留；原子清理/安装待 Windows 复验                                 | Open      |
 
 ## 单条模板
 
@@ -334,4 +334,4 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前修复的本机 Prettier 检查、`tsc --noEmit -p tauri-e2e/tsconfig.json`、E2E harness 单测 25/25 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 故障注入和等待方式；恢复原 Tauri invoke、KV 配置及 UI 状态由现有清理逻辑负责。没有宿主网络、Service、TUN 或个人配置变更。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：等待被测状态而非单次注入后的固定时序；发生等待失败时结合失败前页面产物定位，避免只凭超时推断产品缺陷。新 SHA 的 Windows 复验通过后更新状态。
-- 最新复现与修复状态：Windows run [39086974019](https://github.com/MFSGA/Chimera/actions/runs/39086974019) 在首个存储故障注入前发现 Tauri internals 上已有测试专用 `widgetConfigOriginalInvoke` 标记，导致 Dashboard 用例在准备阶段失败；来源尚未确认。清理现在会停止并清除残留测试拦截器，只有当前 `invoke` 仍是该拦截器时才恢复旧函数，以免覆盖运行时更新后的函数；安装后通过函数身份确认拦截器仍有效。相同运行中 main input 在输入框已聚焦、标签已浮起后立即读取到 fieldset `1px`，ref 的 focused 状态应为 `2px`。测试现在等待计算边框达到 `2px` 再采样，仍保留原精确样式断言。独立审查还发现 cleanup 在等待保存结束时超时会提前退出，未尝试恢复原 KV 值、刷新及再次验证；现已改为逐项尝试恢复和核验，并汇总清理错误。以上修复的 Windows 复验待执行。
+- 最新复现与修复状态：Windows run [39086974019](https://github.com/MFSGA/Chimera/actions/runs/39086974019) 首次报告注入前已有测试专用 `widgetConfigOriginalInvoke` 标记。head `e1aa541` 虽然加入独立清理，但 Windows run [39089126084](https://github.com/MFSGA/Chimera/actions/runs/39089126084) 再次在同一注入前失败；52 个 spec 中 51 个通过。两次日志确认标记残留，尚不能确定它的来源。最新修复将清理与安装合并进一次 WebDriver 执行，并核验拦截器确实安装在当前 WebView；精确 SHA 的 Windows 复验待执行。该 run 中 main input 已通过：输入框聚焦后等待计算边框达到 `2px`，仍保留原精确样式断言。Dashboard cleanup 现会逐项尝试恢复原 KV 值、读回、刷新及最终核验，并汇总清理错误。
