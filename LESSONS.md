@@ -325,12 +325,12 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 严重度：Low
 - 模块：E2E / Windows
 - master commit / ref gitlink SHA / 平台与测试环境：失败 head `ce86b993fcc9f21d863abd0c59e61c00bf192d00`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39074305271](https://github.com/MFSGA/Chimera/actions/runs/39074305271) 与 [39077318693](https://github.com/MFSGA/Chimera/actions/runs/39077318693)，后者 52 个 spec 中 50 个通过；Dashboard retry 和 main input 两个 spec 失败。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39074305271](https://github.com/MFSGA/Chimera/actions/runs/39074305271) 与 [39077318693](https://github.com/MFSGA/Chimera/actions/runs/39077318693)，后者 52 个 spec 中 50 个通过；Dashboard retry 和 main input 两个 spec 失败。随后 head `a4e62e56` 的 [run 39084190736](https://github.com/MFSGA/Chimera/actions/runs/39084190736) 中，Dashboard 的 `get_storage_item` 故障计数仍为 0，hermetic 为 51/52；main input 已通过。
 - 预期行为：注入存储读取故障后，Dashboard 应显示 `load-error`，释放故障后 Retry 应恢复；外部控制器弹窗出现后，输入框聚焦应显示浮动标签。
 - 真实异常、复现步骤与证据：两次运行均未观察到 Dashboard `load-error`；39077318693 的失败截图显示页面进入编辑模式但无错误提示。main input 在同一运行断言 DOM 矩形高度为 56px 时得到 53px；失败诊断同时显示计算样式高度为 56px。
-- 确认的根因与排除项：Dashboard 前一版用例未证明新挂载的 Dashboard provider 实际调用了被注入失败的存储命令，因而没能证明错误路径执行；这不单独证明产品读错误处理存在缺陷。Windows WebView 的元素矩形与计算 CSS 尺寸不同，`getBoundingClientRect()` 的 53px 不表示 `h-14` 样式错误，计算样式仍为 56px。
-- 修复提交、差异映射及保留的兼容性边界：Dashboard 用例先确认离开路由后容器已卸载，再安装故障并导航回来；增加失败调用计数，等待 `get_storage_item` 确实被拦截后再断言可见错误，仍在错误状态出现后才释放故障。main input 固定窗口、中文、light theme 与字体加载，设置后恢复原主题；继续断言 `h-14` 的 56px 计算样式及浮动标签等行为，不再要求平台缩放后的矩形恰好为 56px。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败于上述 Windows run；修复后的同一用例仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 和 `tauri-e2e/specs/main-input.e2e.ts` 注册在 hermetic suite，精确新 SHA 的 Windows 复验待执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后本机 Prettier 检查、`tsc --noEmit -p tauri-e2e/tsconfig.json` 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
+- 确认的根因与排除项：Dashboard 的失败注入计数在 run `39084190736` 中仍为 0，说明目标存储读取没有到达拦截器；这不能证明产品读错误处理存在缺陷。CI 日志不足以确定为何目标调用没有到达拦截器。Windows WebView 的元素矩形与计算 CSS 尺寸不同，`getBoundingClientRect()` 的 53px 不表示 `h-14` 样式错误，计算样式仍为 56px。
+- 修复提交、差异映射及保留的兼容性边界：此前 Dashboard 用例确认离开路由后容器已卸载，并增加失败调用计数，但未能让目标读取到达拦截器。当前 PR 修复让测试在同一 WebView 文档内设置 SPA 路由，并在等待读取前验证拦截器仍安装；这是针对已观测失败的可验证测试修正，是否解决原失败仍待新 SHA E2E 复验。main input 固定窗口、中文、light theme 与字体加载，设置后恢复原主题；继续断言 `h-14` 的 56px 计算样式及浮动标签等行为，不再要求平台缩放后的矩形恰好为 56px。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：Dashboard 用例在 `39084190736` 失败于“存储故障调用计数 > 0”；当前同文档路由与拦截器存续断言仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 注册在 hermetic suite，精确新 SHA 的 Windows 复验待执行。main input 在 `39084190736` 通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：当前修复的本机 Prettier 检查、`tsc --noEmit -p tauri-e2e/tsconfig.json`、E2E harness 单测 25/25 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 故障注入和等待方式；恢复原 Tauri invoke、KV 配置及 UI 状态由现有清理逻辑负责。没有宿主网络、Service、TUN 或个人配置变更。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：等待被测状态而非单次注入后的固定时序；发生等待失败时结合失败前页面产物定位，避免只凭超时推断产品缺陷。新 SHA 的 Windows 复验通过后更新状态。

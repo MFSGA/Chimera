@@ -435,7 +435,10 @@ describe('main dashboard reference layout', () => {
           internals.widgetConfigStopFailure = () => {
             failureActive = false;
           };
-          internals.invoke = async (command, args) => {
+          const injectedInvoke: TauriInternals['invoke'] = async (
+            command,
+            args,
+          ) => {
             if (
               failureActive &&
               command === commandToFail &&
@@ -448,10 +451,26 @@ describe('main dashboard reference layout', () => {
             }
             return originalInvoke.call(internals, command, args);
           };
+          internals.invoke = injectedInvoke;
+          if (internals.invoke !== injectedInvoke) {
+            throw new Error(
+              'The widget storage failure could not wrap Tauri invoke.',
+            );
+          }
         },
         failedCommand,
         persistUntilReleased,
       );
+
+    const navigateMainRouteWithoutReload = async (pathname: string) => {
+      // This is setup for the storage contract, not a navigation assertion.
+      // Keep the injected invoke wrapper in the same WebView document.
+      await browser.execute((target) => {
+        history.pushState({}, '', target);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      }, pathname);
+      await openMainRoute(pathname);
+    };
 
     const stopWidgetConfigFailure = async () =>
       browser.execute(() => {
@@ -558,7 +577,26 @@ describe('main dashboard reference layout', () => {
       );
       await failNextWidgetConfigOperation('get_storage_item', true);
       await withRestoredWidgetConfigInvoke(async () => {
-        await openMainRoute(targetPath);
+        await navigateMainRouteWithoutReload(targetPath);
+        const injectionState = await browser.execute(() => {
+          const internals = (
+            window as Window & {
+              __TAURI_INTERNALS__?: {
+                widgetConfigOriginalInvoke?: unknown;
+                widgetConfigFailureCalls?: number;
+              };
+            }
+          ).__TAURI_INTERNALS__;
+          return {
+            installed: Boolean(internals?.widgetConfigOriginalInvoke),
+            path: location.pathname,
+          };
+        });
+        assert.deepEqual(
+          injectionState,
+          { installed: true, path: targetPath },
+          'The storage failure interceptor must survive Dashboard route setup.',
+        );
         await waitForObservedValue(
           'Widget storage read failure injection',
           () =>
