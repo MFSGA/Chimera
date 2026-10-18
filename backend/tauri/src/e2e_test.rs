@@ -2,7 +2,6 @@ use std::sync::OnceLock;
 
 use parking_lot::Mutex;
 use serde::Serialize;
-use tauri::{Runtime, plugin::TauriPlugin};
 
 const WIDGET_CONFIG_KEY: &str = "dashboard-widget-configs";
 
@@ -17,7 +16,7 @@ struct StorageFailure {
 
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct StorageFailureStatus {
+pub struct StorageFailureStatus {
     operation: Option<String>,
     armed: bool,
     triggered: bool,
@@ -31,7 +30,7 @@ fn storage_failure() -> &'static Mutex<StorageFailure> {
 }
 
 #[tauri::command]
-fn arm_widget_storage_failure(
+pub fn e2e_arm_widget_storage_failure(
     operation: String,
     persist_until_released: bool,
 ) -> Result<(), String> {
@@ -50,7 +49,7 @@ fn arm_widget_storage_failure(
 }
 
 #[tauri::command]
-fn widget_storage_failure_status() -> StorageFailureStatus {
+pub fn e2e_widget_storage_failure_status() -> StorageFailureStatus {
     let failure = storage_failure().lock();
     StorageFailureStatus {
         operation: failure.operation.clone(),
@@ -61,7 +60,7 @@ fn widget_storage_failure_status() -> StorageFailureStatus {
 }
 
 #[tauri::command]
-fn clear_widget_storage_failure() {
+pub fn e2e_clear_widget_storage_failure() {
     *storage_failure().lock() = StorageFailure::default();
 }
 
@@ -86,51 +85,41 @@ pub fn fail_storage_operation(operation: &str, key: &str) -> Result<(), crate::i
     )))
 }
 
-pub fn init<R: Runtime>() -> TauriPlugin<R> {
-    tauri::plugin::Builder::new("e2e")
-        .invoke_handler(tauri::generate_handler![
-            arm_widget_storage_failure,
-            widget_storage_failure_status,
-            clear_widget_storage_failure
-        ])
-        .build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        arm_widget_storage_failure, clear_widget_storage_failure, fail_storage_operation,
-        widget_storage_failure_status,
+        e2e_arm_widget_storage_failure, e2e_clear_widget_storage_failure,
+        e2e_widget_storage_failure_status, fail_storage_operation,
     };
 
     #[test]
     fn storage_failure_is_scoped_observable_and_clearable() {
-        assert!(arm_widget_storage_failure("remove_storage_item".to_owned(), false).is_err());
-        clear_widget_storage_failure();
-        arm_widget_storage_failure("set_storage_item".to_owned(), false).unwrap();
+        assert!(e2e_arm_widget_storage_failure("remove_storage_item".to_owned(), false).is_err());
+        e2e_clear_widget_storage_failure();
+        e2e_arm_widget_storage_failure("set_storage_item".to_owned(), false).unwrap();
 
         assert!(fail_storage_operation("set_storage_item", "another-key").is_ok());
         assert!(fail_storage_operation("get_storage_item", "dashboard-widget-configs").is_ok());
         assert!(fail_storage_operation("set_storage_item", "dashboard-widget-configs").is_err());
         assert_eq!(
-            widget_storage_failure_status().calls,
+            e2e_widget_storage_failure_status().calls,
             1,
             "one-shot failure should be counted exactly once"
         );
-        assert!(!widget_storage_failure_status().armed);
+        assert!(!e2e_widget_storage_failure_status().armed);
 
-        clear_widget_storage_failure();
-        assert_eq!(widget_storage_failure_status().calls, 0);
-        arm_widget_storage_failure("get_storage_item".to_owned(), true).unwrap();
+        e2e_clear_widget_storage_failure();
+        assert_eq!(e2e_widget_storage_failure_status().calls, 0);
+        e2e_arm_widget_storage_failure("get_storage_item".to_owned(), true).unwrap();
 
         assert!(fail_storage_operation("get_storage_item", "dashboard-widget-configs").is_err());
         assert!(fail_storage_operation("get_storage_item", "dashboard-widget-configs").is_err());
-        let status = widget_storage_failure_status();
+        let status = e2e_widget_storage_failure_status();
         assert!(status.armed);
         assert!(status.triggered);
         assert_eq!(status.calls, 2);
 
-        clear_widget_storage_failure();
+        e2e_clear_widget_storage_failure();
         assert!(fail_storage_operation("get_storage_item", "dashboard-widget-configs").is_ok());
     }
 }

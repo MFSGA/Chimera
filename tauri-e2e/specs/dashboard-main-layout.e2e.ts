@@ -6,6 +6,25 @@ import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/dashboard';
 
+function formatErrorDetails(error: unknown, seen = new Set<unknown>()): string {
+  if (!(error instanceof Error)) return String(error);
+  if (seen.has(error)) return '[circular error]';
+  seen.add(error);
+
+  const details = [error.stack ?? `${error.name}: ${error.message}`];
+  if (error instanceof AggregateError) {
+    details.push(
+      ...Array.from(error.errors, (nestedError) =>
+        formatErrorDetails(nestedError, seen),
+      ),
+    );
+  }
+  if (error.cause !== undefined) {
+    details.push(`Caused by: ${formatErrorDetails(error.cause, seen)}`);
+  }
+  return details.join('\n');
+}
+
 describe('main dashboard reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
@@ -340,9 +359,7 @@ describe('main dashboard reference layout', () => {
       try {
         fs.writeFileSync(
           `${artifactBase}.before-cleanup.error.txt`,
-          error instanceof Error
-            ? (error.stack ?? error.message)
-            : String(error),
+          error instanceof Error ? formatErrorDetails(error) : String(error),
         );
       } catch (captureError) {
         captureErrors.push(String(captureError));
@@ -460,7 +477,7 @@ describe('main dashboard reference layout', () => {
             }
           ).__TAURI_INTERNALS__?.invoke;
           if (!invoke) throw new Error('Tauri page internals are unavailable.');
-          return invoke<T>(`plugin:e2e|${name}`, parameters);
+          return invoke<T>(name, parameters);
         },
         command,
         args,
@@ -470,7 +487,7 @@ describe('main dashboard reference layout', () => {
       operation: 'get_storage_item' | 'set_storage_item',
       persistUntilReleased = false,
     ) => {
-      await invokeE2eCommand<void>('arm_widget_storage_failure', {
+      await invokeE2eCommand<void>('e2e_arm_widget_storage_failure', {
         operation,
         persistUntilReleased,
       });
@@ -478,11 +495,11 @@ describe('main dashboard reference layout', () => {
 
     const readWidgetStorageFailure = () =>
       invokeE2eCommand<WidgetStorageFailureStatus>(
-        'widget_storage_failure_status',
+        'e2e_widget_storage_failure_status',
       );
 
     const clearWidgetStorageFailure = () =>
-      invokeE2eCommand<void>('clear_widget_storage_failure');
+      invokeE2eCommand<void>('e2e_clear_widget_storage_failure');
 
     const withClearedWidgetStorageFailure = async (
       operation: () => Promise<void>,
@@ -502,7 +519,7 @@ describe('main dashboard reference layout', () => {
         if (operationFailed) {
           throw new AggregateError(
             [operationError, cleanupError],
-            'Widget storage operation and failure cleanup both failed.',
+            `Widget storage operation and failure cleanup both failed.\nOperation error:\n${formatErrorDetails(operationError)}\nCleanup error:\n${formatErrorDetails(cleanupError)}`,
           );
         }
         throw cleanupError;
@@ -762,7 +779,7 @@ describe('main dashboard reference layout', () => {
       if (testFailed) {
         throw new AggregateError(
           [testError, cleanupError],
-          'Dashboard widget configuration test and cleanup both failed.',
+          `Dashboard widget configuration test and cleanup both failed.\nTest error:\n${formatErrorDetails(testError)}\nCleanup error:\n${formatErrorDetails(cleanupError)}`,
         );
       }
       throw cleanupError;

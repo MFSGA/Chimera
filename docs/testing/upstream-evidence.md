@@ -138,11 +138,14 @@ contextmenu；若驱动原生提供菜单所需事件，再移除此兼容实现
 `configurable`；按 ECMAScript 默认值，已定义的 `invoke` 属性不可赋值替换或删除。
 
 PR #490 的 Windows run `39116055509` 因 E2E 尝试替换该函数而在拦截器安装断言失败。
-这项测试设置没有拦截到实际存储 IPC，不能证明 Dashboard 业务恢复逻辑失败。当前做法是在
-`e2e` Cargo feature 下注册独立 `e2e` 插件，并只在真实
-`get_storage_item` / `set_storage_item` 命令入口，对 `dashboard-widget-configs` 执行
-可观察、可清理的故障注入；普通 invoke 保持原状，生产构建不包含 fixture。测试通过插件状态
-确认故障命中了真实 IPC，然后由可见 UI Retry 验证恢复。运行 target SHA 的 Windows E2E
+这项测试设置没有拦截到实际存储 IPC，不能证明 Dashboard 业务恢复逻辑失败。随后改用独立
+`e2e` Tauri 插件后，Windows run `39160740767` 的 Dashboard 用例仍失败；失败包装只输出
+外层 `AggregateError`，没有呈现内部 IPC 错误。核对 `main-capability.json` 和 Tauri ACL
+后发现，该测试插件既没有权限清单，也没有加入窗口 capability，WebView 无权调用其命令。
+当前改为在 `e2e` Cargo feature 下把测试控制命令分发到应用级 invoke handler，同时在真实
+`get_storage_item` / `set_storage_item` 入口，仅对 `dashboard-widget-configs` 执行可观察、可清理的
+故障注入；生产构建不包含测试命令或 fixture。失败诊断会递归保留 `AggregateError` 内部错误。
+测试通过触发计数确认故障命中了真实 IPC，再由可见 UI Retry 验证恢复。新 SHA 的 Windows E2E
 通过后更新该结论与 `LESSON-20261017-007` 状态。
 
 ## 升级依赖时必须复核
