@@ -28,7 +28,7 @@
 | LESSON-20261017-003 | 2026-10-17 | E2E            | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
 | LESSON-20261017-004 | 2026-10-17 | CI / Linux     | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
 | LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
-| LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 元素未出现时调用 `waitForDisplayed` 超时；WDIO 9.32.0 不等待元素存在，改为每轮重新查询，待复验          | Open      |
+| LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
 
 ## 单条模板
 
@@ -303,16 +303,16 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261018-001：异步出现的元素需要在每次轮询中重新查询
 
 - 日期与时区：2026-10-18 UTC
-- 状态：Open（选择器轮询修复已在 PR #477 工作树完成；精确新 SHA 的 Windows E2E 待复验）
+- 状态：Verified（选择器轮询修复在 PR #477 精确 SHA `6612c0f93b0c77af193919123bc2360150afb6de` 的 Windows Desktop E2E run `39084555437` 通过；后续只增强超时诊断，新的提交仍需门禁复验）
 - 严重度：Low
 - 模块：E2E / Windows
 - master commit / ref gitlink SHA / 平台与测试环境：master `e9d9392b901681db0eb46fc00144e83b00cb4f34`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E；WebdriverIO 9.32.0。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #477](https://github.com/MFSGA/Chimera/pull/477)，[Tauri E2E run 39076767361](https://github.com/MFSGA/Chimera/actions/runs/39076767361) 首次尝试中 `clash-settings-main.e2e.ts` 的目标可见性等待超时；HTML 与截图产物显示 Clash 设置页已渲染且目标卡片存在。相同 SHA 的第二次尝试中 hermetic suite 已通过，其他隔离回归仍在执行。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #477](https://github.com/MFSGA/Chimera/pull/477)，[Tauri E2E run 39076767361](https://github.com/MFSGA/Chimera/actions/runs/39076767361) 首次尝试中 `clash-settings-main.e2e.ts` 的目标可见性等待超时；HTML 与截图产物显示 Clash 设置页已渲染且目标卡片存在。相同 SHA 的重跑以及修复 SHA `6612c0f` 的 [Windows Desktop E2E run 39084555437](https://github.com/MFSGA/Chimera/actions/runs/39084555437) 均通过。
 - 预期行为：进入 Clash 设置页后，patch settings group 可见，随后快照断言其卡片层级符合 ref。
 - 真实异常、复现步骤与证据：首次 CI 尝试在创建单个 WDIO 元素对象后调用 `waitForDisplayed({ timeout: 15_000 })`，报告元素仍未显示；失败后采集的 HTML 和截图中路由及目标 group 可见。
 - 确认的根因与排除项：锁定 `webdriverio@9.32.0` 的 `waitForDisplayed` 在同一个元素对象上调用 `isDisplayed` 进行轮询；该版本源码明确说明它不会等待元素存在，`isDisplayed` 在对象没有 element ID 时返回 `false`。因此目标首次异步渲染时，单个已创建元素对象不会代表后续 selector 查询。失败产物中的正确页面排除了产品卡片缺失；这次记录的是测试等待边界，不是产品 UI 回归。
 - 修复提交、差异映射及保留的兼容性边界：测试改为在只读 `browser.waitUntil` 每轮重新执行精确的 direct-child selector，再检查当前元素是否显示。ref 布局断言不变；更新 U02 记录所用 WDIO 版本源码事实。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现的 15 秒等待在上述首次 Windows run 失败；新轮询修复仍由 `tauri-e2e/specs/clash-settings-main.e2e.ts` 注册于 hermetic suite，精确新 SHA 复验待执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：修改后的 Prettier 检查与 `git diff --check` 本地通过；E2E 类型检查未能本地执行，因为该 worktree 缺少 WDIO/Node 类型定义，离线 pnpm 安装因锁定依赖 tarball 未缓存而中止。新 SHA 的 Windows E2E 将验证类型检查及实际可见等待；没有声称旧代码在所有运行中稳定失败。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现的 15 秒等待在上述首次 Windows run 失败；重新查询选择器的修复已在精确 SHA `6612c0f` 的 Windows Desktop E2E 中通过，并继续注册于 `tauri-e2e/specs/clash-settings-main.e2e.ts` hermetic suite。超时消息现保留最后一次 `exists`/`displayed` 观测；此诊断增强提交的门禁待复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：首个修复 SHA 的 Windows Desktop E2E run `39084555437` 通过；其完整 CI run `39084555350` 中 Changes、三平台 lint 均通过，macOS/Windows/Ubuntu Tauri builds 当时仍在执行。当前诊断增强的 Prettier 检查与 `git diff --check` 本地通过；E2E 类型检查未能在本机执行，因为该 worktree 缺少 WDIO/Node 类型定义，离线 pnpm 安装因锁定依赖 tarball 未缓存而中止。没有声称旧代码在所有运行中稳定失败。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改测试轮询和测试工具依据记录，不改产品、持久数据或宿主状态；可恢复单次元素查询与 `waitForDisplayed`。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：对可能晚于路由就绪出现的 DOM 节点，在轮询回调内重新查询 selector；不添加固定暂停。新 SHA 的 Windows E2E 通过后更新状态；无 CI 门禁调整。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：对可能晚于路由就绪出现的 DOM 节点，在轮询回调内重新查询 selector；等待失败时输出最后一次存在/可见状态；不添加固定暂停。无 CI 门禁调整。

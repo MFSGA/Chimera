@@ -19,16 +19,27 @@ describe('main clash settings reference layout', () => {
 
     const patchGroupSelector =
       '[data-slot="patch-settings-container"] > [data-slot="settings-group"]';
-    await browser.waitUntil(
-      async () => {
-        const patchGroup = await $(patchGroupSelector);
-        return patchGroup.isDisplayed();
-      },
-      {
-        timeout: 15_000,
-        timeoutMsg: 'The Clash patch settings group did not become visible.',
-      },
-    );
+    let lastObserved = 'not observed';
+    try {
+      await browser.waitUntil(
+        async () => {
+          const patchGroup = await $(patchGroupSelector);
+          const exists = await patchGroup.isExisting();
+          const displayed = exists && (await patchGroup.isDisplayed());
+          lastObserved = JSON.stringify({ exists, displayed });
+          return displayed;
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg: 'The Clash patch settings group did not become visible.',
+        },
+      );
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : String(error);
+      throw new Error(`${failure} Last observed: ${lastObserved}.`, {
+        cause: error,
+      });
+    }
 
     const state = await browser.execute(() => {
       const patchGroup = document.querySelector(
