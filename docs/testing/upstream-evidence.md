@@ -1,6 +1,6 @@
 # 测试依赖上游依据与版本边界
 
-核对日期：2026-10-06。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
+核对日期：2026-10-18。本文支撑[测试规范](README.md)，仅研究测试依赖，不以业务项目 `ref/` 作为驱动行为依据。
 
 ## U01 锁定版本与证据优先级
 
@@ -22,6 +22,7 @@
 核对 `webdriverio@9.32.0` 的发布元数据、锁定完整性和 `waitUntil`、`reloadSession`、元素命令源码；npm 发布元数据给出的源码提交是 `5c2a318d9a5e8424a2f2de95df9374b89bda7936`，发布完整性为 `sha512-A7r7SnvZ6eEJROIWAG6GMOlV82W2Pl7FDjXLn/tJ4L8BEc3yjCrDWzY4EB9i4MtPZwlNZoHgNV9fYYKn7JWAew==`。安装目录可能因工作区尚未重新安装而暂时保留旧包，不能以旧包文件冒充锁定版本依据。
 
 - 源码事实：`waitUntil` 使用计时器调用条件函数；`timeoutMsg` 可为字符串或函数，传入函数时只在超时时求值。静态错误文本不会自动更新。项目要求：失败时附上最新快照；若使用函数，快照读取仍应只读，见 T05。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/browser/waitUntil.ts)
+- 源码事实：`waitForDisplayed` 在同一个元素对象上轮询 `isDisplayed`，并明确不等待元素存在；`isDisplayed` 对没有 element ID 的对象直接返回 `false`。异步渲染的目标需要在 `browser.waitUntil` 条件内重新执行 `$()`，不能先保存一个不存在的元素对象再调用 `waitForDisplayed`。[固定提交源码：waitForDisplayed](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/element/waitForDisplayed.ts)、[isDisplayed](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/element/isDisplayed.ts)
 - 源码事实：元素命令的隐式等待只解决元素定位/重新获取，不代表业务事务完成。项目要求：等待具体业务结果。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/utils/implicitWait.ts)
 - 源码事实：`reloadSession` 删除旧会话后请求协议层创建新会话，并调用 `onReload` hooks；其中并没有针对 Chimera 的应用进程退出、磁盘持久化或内核重启验证。项目要求：冷启动契约必须另外验证进程生命周期。[固定提交源码](https://github.com/webdriverio/webdriverio/blob/5c2a318d9a5e8424a2f2de95df9374b89bda7936/packages/webdriverio/src/commands/browser/reloadSession.ts)
 
