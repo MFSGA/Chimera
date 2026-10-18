@@ -6,6 +6,9 @@ import { openMainRoute } from './main-window.js';
 const targetPath = '/main/settings/clash';
 
 describe('main clash settings reference layout', () => {
+  // Contract: after the fixed-window main settings route settles, the patch
+  // group becomes visible and its direct card hierarchy matches the ref. Poll
+  // with a fresh selector because WDIO does not wait for it to exist.
   it('uses the ref card hierarchy and excludes the system-only UWP tool', async () => {
     await browser.setWindowSize(1240, 638);
     await browser.execute(() => {
@@ -14,10 +17,29 @@ describe('main clash settings reference layout', () => {
     await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
 
-    const patchGroup = await $(
-      '[data-slot="patch-settings-container"] > [data-slot="settings-group"]',
-    );
-    await patchGroup.waitForDisplayed({ timeout: 15_000 });
+    const patchGroupSelector =
+      '[data-slot="patch-settings-container"] > [data-slot="settings-group"]';
+    let lastObserved = 'not observed';
+    try {
+      await browser.waitUntil(
+        async () => {
+          const patchGroup = await $(patchGroupSelector);
+          const exists = await patchGroup.isExisting();
+          const displayed = exists && (await patchGroup.isDisplayed());
+          lastObserved = JSON.stringify({ exists, displayed });
+          return displayed;
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg: 'The Clash patch settings group did not become visible.',
+        },
+      );
+    } catch (error) {
+      const failure = error instanceof Error ? error.message : String(error);
+      throw new Error(`${failure} Last observed: ${lastObserved}.`, {
+        cause: error,
+      });
+    }
 
     const state = await browser.execute(() => {
       const patchGroup = document.querySelector(
