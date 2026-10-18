@@ -51,7 +51,6 @@ import {
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
 import { ContextMenuItem } from '@/components/ui/context-menu';
-import * as m from '@/paraglide/messages';
 import {
   DashboardItem,
   DEFAULT_ITEMS,
@@ -60,7 +59,9 @@ import {
   RENDER_MAP,
   WIDGET_MIN_SIZE_MAP,
   WidgetId,
-} from './_modules/consts';
+} from '@/components/widgets/consts';
+import { useDashboardContext } from '@/components/widgets/provider';
+import * as m from '@/paraglide/messages';
 import EditAction from './_modules/edit-action';
 import {
   adaptLayout,
@@ -68,7 +69,6 @@ import {
   findClosestStoredLayout,
   sizeKey,
 } from './_modules/layout-adapt';
-import { useDashboardContext } from './_modules/provider';
 import { placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
 

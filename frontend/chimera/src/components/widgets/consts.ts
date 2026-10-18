@@ -1,7 +1,7 @@
 /**
  * Dashboard Widget 常量与类型定义
  *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/consts.ts`
+ * 迁移自 ref: `src/components/widgets/consts.ts`
  *
  * 定义 Dashboard DnD 网格系统的核心组件枚举、渲染映射和默认布局。
  *

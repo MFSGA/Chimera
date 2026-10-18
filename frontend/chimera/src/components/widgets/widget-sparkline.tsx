@@ -1,7 +1,7 @@
 /**
  * Dashboard Sparkline 趋势图 Widget
  *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/widget-sparkline.tsx`
+ * 迁移自 ref: `src/components/widgets/widget-sparkline.tsx`
  *
  * 四个 Widget 组件，使用 Sparkline 趋势图展示实时数据：
  * 1. TrafficDownWidget — 下行流量趋势（附带总流量）

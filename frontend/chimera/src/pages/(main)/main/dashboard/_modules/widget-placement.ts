@@ -1,5 +1,5 @@
 import { hasOverlap, type GridPosition } from '@chimera/ui/dnd-grid';
-import type { DashboardItem, WidgetId } from './consts';
+import type { DashboardItem, WidgetId } from '@/components/widgets/consts';
 
 export function placeWidget({
   id,

@@ -15,9 +15,9 @@ import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
+import { useDashboardContext } from '@/components/widgets/provider';
+import { WidgetConfigSaveStatus } from '@/components/widgets/widget-config-menu';
 import * as m from '@/paraglide/messages';
-import { useDashboardContext } from './provider';
-import { WidgetConfigSaveStatus } from './widget-config-menu';
 
 export default function EditAction() {
   const {

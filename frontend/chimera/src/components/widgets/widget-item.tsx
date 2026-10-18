@@ -1,7 +1,7 @@
 /**
  * Dashboard Widget 容器项
  *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/widget-item.tsx`
+ * 迁移自 ref: `src/components/widgets/widget-item.tsx`
  *
  * 包装 DndGridItem，添加编辑模式下的关闭按钮。
  * 关闭按钮通过 AnimatePresence 实现显隐动画。

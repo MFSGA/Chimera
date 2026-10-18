@@ -6,7 +6,7 @@ import {
   getWidgetConfig,
   normalizeWidgetConfigStorage,
   WidgetId,
-} from '../src/pages/(main)/main/dashboard/_modules/widget-config.ts';
+} from '../src/components/widgets/widget-config.ts';
 
 test('normalizes persisted widget settings and rejects invalid values', () => {
   const normalized = normalizeWidgetConfigStorage({
