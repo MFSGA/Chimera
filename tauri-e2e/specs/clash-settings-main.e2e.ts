@@ -6,6 +6,9 @@ import { openMainRoute } from './main-window.js';
 const targetPath = '/main/settings/clash';
 
 describe('main clash settings reference layout', () => {
+  // Contract: after the fixed-window main settings route settles, the patch
+  // group becomes visible and its direct card hierarchy matches the ref. Poll
+  // with a fresh selector because WDIO does not wait for it to exist.
   it('uses the ref card hierarchy and excludes the system-only UWP tool', async () => {
     await browser.setWindowSize(1240, 638);
     await browser.execute(() => {
@@ -14,10 +17,18 @@ describe('main clash settings reference layout', () => {
     await openMainRoute(targetPath);
     await browser.setWindowSize(1240, 638);
 
-    const patchGroup = await $(
-      '[data-slot="patch-settings-container"] > [data-slot="settings-group"]',
+    const patchGroupSelector =
+      '[data-slot="patch-settings-container"] > [data-slot="settings-group"]';
+    await browser.waitUntil(
+      async () => {
+        const patchGroup = await $(patchGroupSelector);
+        return patchGroup.isDisplayed();
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The Clash patch settings group did not become visible.',
+      },
     );
-    await patchGroup.waitForDisplayed({ timeout: 15_000 });
 
     const state = await browser.execute(() => {
       const patchGroup = document.querySelector(
