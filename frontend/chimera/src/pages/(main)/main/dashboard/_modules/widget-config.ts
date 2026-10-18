@@ -91,6 +91,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export function normalizeWidgetConfigStorage(
   raw: unknown,
 ): WidgetConfigStorage {
+  if (isRecord(raw) && Object.hasOwn(raw, 'version') && raw.version !== 1) {
+    throw new Error(
+      `Unsupported dashboard widget config version: ${String(raw.version)}`,
+    );
+  }
+
   if (!isRecord(raw) || raw.version !== 1 || !isRecord(raw.byInstance)) {
     return EMPTY_WIDGET_CONFIG_STORAGE;
   }

@@ -177,21 +177,32 @@ export function useKvStorage<T>(
         return;
       }
 
+      let parsed: unknown;
       try {
         const firstParsed = JSON.parse(event.payload.value);
-        const parsed =
+        parsed =
           typeof firstParsed === 'string'
             ? JSON.parse(firstParsed)
             : firstParsed;
-        const migrated = applyMigrate(parsed);
-        revisionRef.current.set(key, (revisionRef.current.get(key) ?? 0) + 1);
-        valueRef.current = migrated;
-        setValueState(migrated);
-        setReadError(null);
-        setLocalCache(key, migrated);
       } catch {
         // ignore invalid JSON from event
+        return;
       }
+
+      let migrated: T;
+      try {
+        migrated = applyMigrate(parsed);
+      } catch (error) {
+        revisionRef.current.set(key, (revisionRef.current.get(key) ?? 0) + 1);
+        setReadError(error);
+        return;
+      }
+
+      revisionRef.current.set(key, (revisionRef.current.get(key) ?? 0) + 1);
+      valueRef.current = migrated;
+      setValueState(migrated);
+      setReadError(null);
+      setLocalCache(key, migrated);
     });
 
     return () => {

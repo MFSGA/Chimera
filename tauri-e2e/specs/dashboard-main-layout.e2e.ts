@@ -659,6 +659,101 @@ describe('main dashboard reference layout', () => {
         );
       });
 
+      const futureVersionValue = JSON.stringify({
+        version: 2,
+        byInstance: {
+          'traffic-down': {
+            type: 'traffic-down',
+            unit: 'bits',
+            futureOption: 'keep-me',
+          },
+        },
+      });
+      await writeStoredValue(futureVersionValue);
+      await waitForObservedValue(
+        'Unsupported widget config version from storage event',
+        () =>
+          browser.execute(
+            () =>
+              document
+                .querySelector('[data-slot="widget-config-save-status"]')
+                ?.getAttribute('data-save-state') ?? null,
+          ),
+        (state) => state === 'load-error',
+      );
+      await enterEditMode();
+      await (
+        await $(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
+        )
+      ).click();
+      const futureVersionUnitToggle = await $(
+        'button[aria-label^="速率单位:"]',
+      );
+      await waitForObservedValue(
+        'Widget setting control after unsupported config version',
+        () => futureVersionUnitToggle.isDisplayed(),
+        Boolean,
+      );
+      assert.equal(
+        await futureVersionUnitToggle.isEnabled(),
+        false,
+        'settings must be disabled when persisted data uses an unknown version',
+      );
+      assert.equal(
+        await $('[aria-label="恢复默认设置"]').isEnabled(),
+        false,
+        'reset must be disabled when persisted data uses an unknown version',
+      );
+      assert.equal(
+        await readStoredValue(),
+        futureVersionValue,
+        'an unsupported version event must preserve the raw stored value',
+      );
+
+      await browser.refresh();
+      await openMainRoute(targetPath);
+      await enterEditMode();
+      await waitForObservedValue(
+        'Unsupported widget config version on initial read',
+        () =>
+          browser.execute(
+            () =>
+              document
+                .querySelector('[data-slot="widget-config-save-status"]')
+                ?.getAttribute('data-save-state') ?? null,
+          ),
+        (state) => state === 'load-error',
+      );
+      await (
+        await $(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
+        )
+      ).click();
+      const futureVersionInitialReadToggle = await $(
+        'button[aria-label^="速率单位:"]',
+      );
+      await waitForObservedValue(
+        'Widget setting control after unsupported config read',
+        () => futureVersionInitialReadToggle.isDisplayed(),
+        Boolean,
+      );
+      assert.equal(
+        await futureVersionInitialReadToggle.isEnabled(),
+        false,
+        'settings must stay disabled when initial storage uses an unknown version',
+      );
+      assert.equal(
+        await readStoredValue(),
+        futureVersionValue,
+        'an unsupported version read must preserve the raw stored value',
+      );
+      await writeStoredValue(JSON.stringify({ version: 1, byInstance: {} }));
+      await browser.refresh();
+      await openMainRoute(targetPath);
+      await enterEditMode();
+      await openTrafficConfig();
+
       await enterEditMode();
       await openTrafficConfig();
       await (await $('[aria-label="恢复默认设置"]')).click();

@@ -86,11 +86,13 @@ test('normalizes persisted widget settings and rejects invalid values', () => {
   assert.equal('unknown-0' in normalized.byInstance, false);
 });
 
-test('uses defaults for malformed storage and mismatched widget instances', () => {
-  assert.equal(
-    normalizeWidgetConfigStorage({ version: 2, byInstance: {} }),
-    EMPTY_WIDGET_CONFIG_STORAGE,
-  );
+test('rejects unknown versions and defaults malformed storage and mismatches', () => {
+  for (const version of [2, '2']) {
+    assert.throws(
+      () => normalizeWidgetConfigStorage({ version, byInstance: {} }),
+      new RegExp(`Unsupported dashboard widget config version: ${version}`),
+    );
+  }
   assert.equal(
     getWidgetConfig(
       { version: 1, byInstance: {} },
