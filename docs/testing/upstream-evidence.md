@@ -128,6 +128,23 @@ Dashboard 再通过该目标查找已注册的菜单项。Windows hermetic E2E �
 升级 WebDriver 或 vendored 插件时，先用同一 Dashboard 右键最小复现核对 PointerEvent 与
 contextmenu；若驱动原生提供菜单所需事件，再移除此兼容实现。
 
+## U10 Tauri invoke 属性与 Dashboard IPC 故障注入边界
+
+核对 Cargo.lock 锁定的 `tauri@2.12.0` crates.io 包，checksum 为
+`cb20ef8e6f97d6fe03039666cd82861f09a38b56291fa2f0f9fe140023f61c1a`。
+检查发布源码 `scripts/core.js` 中 `Object.defineProperty(window.__TAURI_INTERNALS__,
+'invoke', { value: ... })`，以及 `src/manager/webview.rs` 对
+`window.__TAURI_INTERNALS__` 的同类定义。两处均没有设置 `writable` 或
+`configurable`；按 ECMAScript 默认值，已定义的 `invoke` 属性不可赋值替换或删除。
+
+PR #490 的 Windows run `39116055509` 因 E2E 尝试替换该函数而在拦截器安装断言失败。
+这项测试设置没有拦截到实际存储 IPC，不能证明 Dashboard 业务恢复逻辑失败。当前做法是在
+`e2e` Cargo feature 下注册独立 `e2e` 插件，并只在真实
+`get_storage_item` / `set_storage_item` 命令入口，对 `dashboard-widget-configs` 执行
+可观察、可清理的故障注入；普通 invoke 保持原状，生产构建不包含 fixture。测试通过插件状态
+确认故障命中了真实 IPC，然后由可见 UI Retry 验证恢复。运行 target SHA 的 Windows E2E
+通过后更新该结论与 `LESSON-20261017-007` 状态。
+
 ## 升级依赖时必须复核
 
 升级 WebdriverIO、service、Rust 插件、Mocha 或断言依赖时，同步核对锁文件并更新本记录。至少检查点击/输入事件、窗口切换、等待异常、session 与进程生命周期、mock 恢复、hook 次序和日志采集。用最小兼容性用例验证受影响行为，再按 T14 运行对应套件。

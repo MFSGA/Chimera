@@ -1099,6 +1099,9 @@ pub async fn create_profile(
 #[tauri::command]
 #[specta::specta]
 pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<String>> {
+    #[cfg(feature = "e2e")]
+    crate::e2e_test::fail_storage_operation("get_storage_item", &key)?;
+
     let storage = app_handle.state::<Storage>();
     let namespaced_key = web_key(&key);
     if let Some(value) = storage.get_item(&namespaced_key)? {
@@ -1110,6 +1113,9 @@ pub fn get_storage_item(app_handle: AppHandle, key: String) -> Result<Option<Str
 #[tauri::command]
 #[specta::specta]
 pub fn set_storage_item(app_handle: AppHandle, key: String, value: String) -> Result {
+    #[cfg(feature = "e2e")]
+    crate::e2e_test::fail_storage_operation("set_storage_item", &key)?;
+
     app_handle
         .state::<Storage>()
         .set_item(web_key(&key), &value)?;

@@ -12,6 +12,8 @@ use crate::{
     utils::{init, resolve},
 };
 
+#[cfg(feature = "e2e")]
+mod e2e_test;
 mod ipc;
 mod network_probe;
 
@@ -123,6 +125,7 @@ pub fn run() -> std::io::Result<()> {
     #[cfg(feature = "e2e")]
     {
         builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+        builder = builder.plugin(crate::e2e_test::init());
     }
 
     #[cfg(all(

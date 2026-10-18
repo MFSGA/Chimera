@@ -366,7 +366,7 @@ describe('main dashboard reference layout', () => {
         }
       };
 
-      await attemptCleanup(() => restoreWidgetConfigInvoke());
+      await attemptCleanup(() => clearWidgetStorageFailure());
       let saveState: string | null = null;
       try {
         saveState = await browser.execute(
@@ -436,158 +436,55 @@ describe('main dashboard reference layout', () => {
       );
     };
 
-    const failNextWidgetConfigOperation = async (
-      failedCommand: string,
+    type WidgetStorageFailureStatus = {
+      operation: string | null;
+      armed: boolean;
+      triggered: boolean;
+      calls: number;
+    };
+
+    const invokeE2eCommand = async <T>(
+      command: string,
+      args: Record<string, unknown> = {},
+    ): Promise<T> =>
+      browser.execute(
+        async (name, parameters) => {
+          const invoke = (
+            window as Window & {
+              __TAURI_INTERNALS__?: {
+                invoke: <R>(
+                  command: string,
+                  args?: Record<string, unknown>,
+                ) => Promise<R>;
+              };
+            }
+          ).__TAURI_INTERNALS__?.invoke;
+          if (!invoke) throw new Error('Tauri page internals are unavailable.');
+          return invoke<T>(`plugin:e2e|${name}`, parameters);
+        },
+        command,
+        args,
+      );
+
+    const armWidgetStorageFailure = async (
+      operation: 'get_storage_item' | 'set_storage_item',
       persistUntilReleased = false,
     ) => {
-      // Clear and replace the test-owned interceptor in one WebDriver command
-      // so both steps target the same active page context.
-      const injection = await browser.execute(
-        (commandToFail, keepFailing) => {
-          type TauriInternals = {
-            invoke: (
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<unknown>;
-            widgetConfigOriginalInvoke?: TauriInternals['invoke'];
-            widgetConfigInjectedInvoke?: TauriInternals['invoke'];
-            widgetConfigStopFailure?: () => void;
-            widgetConfigFailureCalls?: number;
-          };
-          const internals = (
-            window as Window & { __TAURI_INTERNALS__?: TauriInternals }
-          ).__TAURI_INTERNALS__;
-          if (!internals) {
-            throw new Error('Tauri page internals are unavailable.');
-          }
-
-          const hadStaleMarker = Boolean(
-            internals.widgetConfigOriginalInvoke ||
-            internals.widgetConfigInjectedInvoke ||
-            internals.widgetConfigStopFailure,
-          );
-          const staleOriginalInvoke = internals.widgetConfigOriginalInvoke;
-          const staleInjectedInvoke = internals.widgetConfigInjectedInvoke;
-          const staleInvokeMatches =
-            Boolean(staleInjectedInvoke) &&
-            internals.invoke === staleInjectedInvoke;
-          internals.widgetConfigStopFailure?.();
-          if (staleOriginalInvoke && staleInvokeMatches) {
-            internals.invoke = staleOriginalInvoke;
-          }
-          delete internals.widgetConfigOriginalInvoke;
-          delete internals.widgetConfigInjectedInvoke;
-          delete internals.widgetConfigStopFailure;
-          delete internals.widgetConfigFailureCalls;
-
-          const originalInvoke = internals.invoke;
-          let failureActive = true;
-          internals.widgetConfigOriginalInvoke = originalInvoke;
-          internals.widgetConfigFailureCalls = 0;
-          internals.widgetConfigStopFailure = () => {
-            failureActive = false;
-          };
-          const injectedInvoke: TauriInternals['invoke'] = async (
-            command,
-            args,
-          ) => {
-            if (
-              failureActive &&
-              command === commandToFail &&
-              args?.key === 'dashboard-widget-configs'
-            ) {
-              internals.widgetConfigFailureCalls =
-                (internals.widgetConfigFailureCalls ?? 0) + 1;
-              if (!keepFailing) failureActive = false;
-              throw new Error(`Injected ${commandToFail} failure.`);
-            }
-            return originalInvoke.call(internals, command, args);
-          };
-          internals.widgetConfigInjectedInvoke = injectedInvoke;
-          internals.invoke = injectedInvoke;
-          if (internals.invoke !== injectedInvoke) {
-            throw new Error(
-              'The widget storage failure could not wrap Tauri invoke.',
-            );
-          }
-          return {
-            installed:
-              internals.invoke === internals.widgetConfigInjectedInvoke &&
-              internals.widgetConfigOriginalInvoke === originalInvoke,
-            hadStaleMarker,
-            staleInvokeMatches,
-          };
-        },
-        failedCommand,
+      await invokeE2eCommand<void>('arm_widget_storage_failure', {
+        operation,
         persistUntilReleased,
-      );
-      if (injection.hadStaleMarker) {
-        console.warn(
-          `Cleared stale Dashboard test interceptor state (invoke matched previous wrapper: ${injection.staleInvokeMatches}).`,
-        );
-      }
-      assert.equal(
-        injection.installed,
-        true,
-        `The storage failure interceptor must be installed in the active WebView (stale marker cleared: ${injection.hadStaleMarker}; stale invoke matched: ${injection.staleInvokeMatches}).`,
-      );
+      });
     };
 
-    const navigateMainRouteWithoutReload = async (pathname: string) => {
-      // This is setup for the storage contract, not a navigation assertion.
-      // Keep the injected invoke wrapper in the same WebView document.
-      await browser.execute((target) => {
-        history.pushState({}, '', target);
-        window.dispatchEvent(new PopStateEvent('popstate'));
-      }, pathname);
-      await openMainRoute(pathname);
-    };
+    const readWidgetStorageFailure = () =>
+      invokeE2eCommand<WidgetStorageFailureStatus>(
+        'widget_storage_failure_status',
+      );
 
-    const stopWidgetConfigFailure = async () =>
-      browser.execute(() => {
-        type TauriInternals = {
-          widgetConfigStopFailure?: () => void;
-        };
-        const internals = (
-          window as Window & { __TAURI_INTERNALS__?: TauriInternals }
-        ).__TAURI_INTERNALS__;
-        if (!internals?.widgetConfigStopFailure) {
-          throw new Error('The widget storage failure is not installed.');
-        }
-        internals.widgetConfigStopFailure();
-      });
+    const clearWidgetStorageFailure = () =>
+      invokeE2eCommand<void>('clear_widget_storage_failure');
 
-    const restoreWidgetConfigInvoke = async () =>
-      browser.execute(() => {
-        type TauriInternals = {
-          invoke: (
-            command: string,
-            args?: Record<string, unknown>,
-          ) => Promise<unknown>;
-          widgetConfigOriginalInvoke?: TauriInternals['invoke'];
-          widgetConfigInjectedInvoke?: TauriInternals['invoke'];
-          widgetConfigStopFailure?: () => void;
-          widgetConfigFailureCalls?: number;
-        };
-        const internals = (
-          window as Window & { __TAURI_INTERNALS__?: TauriInternals }
-        ).__TAURI_INTERNALS__;
-        const originalInvoke = internals?.widgetConfigOriginalInvoke;
-        if (!internals || !originalInvoke) return;
-        internals.widgetConfigStopFailure?.();
-        if (
-          internals.widgetConfigInjectedInvoke &&
-          internals.invoke === internals.widgetConfigInjectedInvoke
-        ) {
-          internals.invoke = originalInvoke;
-        }
-        delete internals.widgetConfigOriginalInvoke;
-        delete internals.widgetConfigInjectedInvoke;
-        delete internals.widgetConfigStopFailure;
-        delete internals.widgetConfigFailureCalls;
-      });
-
-    const withRestoredWidgetConfigInvoke = async (
+    const withClearedWidgetStorageFailure = async (
       operation: () => Promise<void>,
     ) => {
       let operationFailed = false;
@@ -600,12 +497,12 @@ describe('main dashboard reference layout', () => {
       }
 
       try {
-        await restoreWidgetConfigInvoke();
+        await clearWidgetStorageFailure();
       } catch (cleanupError) {
         if (operationFailed) {
           throw new AggregateError(
             [operationError, cleanupError],
-            'Widget storage operation and invoke cleanup both failed.',
+            'Widget storage operation and failure cleanup both failed.',
           );
         }
         throw cleanupError;
@@ -653,48 +550,18 @@ describe('main dashboard reference layout', () => {
           ),
         (mounted) => !mounted,
       );
-      await withRestoredWidgetConfigInvoke(async () => {
-        await failNextWidgetConfigOperation('get_storage_item', true);
-        await navigateMainRouteWithoutReload(targetPath);
-        const injectionState = await browser.execute(() => {
-          const internals = (
-            window as Window & {
-              __TAURI_INTERNALS__?: {
-                widgetConfigOriginalInvoke?: unknown;
-                widgetConfigInjectedInvoke?: unknown;
-                invoke?: unknown;
-                widgetConfigFailureCalls?: number;
-              };
-            }
-          ).__TAURI_INTERNALS__;
-          return {
-            installed: Boolean(
-              internals?.widgetConfigOriginalInvoke &&
-              internals.invoke === internals.widgetConfigInjectedInvoke,
-            ),
-            path: location.pathname,
-          };
-        });
-        assert.deepEqual(
-          injectionState,
-          { installed: true, path: targetPath },
-          'The storage failure interceptor must survive Dashboard route setup.',
-        );
+      await withClearedWidgetStorageFailure(async () => {
+        await armWidgetStorageFailure('get_storage_item', true);
+        await openMainRoute(targetPath);
         await waitForObservedValue(
-          'Widget storage read failure injection',
-          () =>
-            browser.execute(() => {
-              const internals = (
-                window as Window & {
-                  __TAURI_INTERNALS__?: {
-                    widgetConfigFailureCalls?: number;
-                  };
-                }
-              ).__TAURI_INTERNALS__;
-              return internals?.widgetConfigFailureCalls ?? 0;
-            }),
-          (count) => count > 0,
+          'Widget storage read failure reached the real IPC command',
+          async () => (await readWidgetStorageFailure()).calls,
+          (calls) => calls > 0,
         );
+        const readFailure = await readWidgetStorageFailure();
+        assert.equal(readFailure.operation, 'get_storage_item');
+        assert.equal(readFailure.armed, true);
+        assert.equal(readFailure.triggered, true);
         await enterEditMode();
         await waitForObservedValue(
           'Widget config read error',
@@ -707,7 +574,7 @@ describe('main dashboard reference layout', () => {
             ),
           (state) => state === 'load-error',
         );
-        await stopWidgetConfigFailure();
+        await clearWidgetStorageFailure();
         const saveButton = await $(
           '//*[@data-slot="dashboard-edit-header"]//button[.//span[normalize-space(.)="保存"]]',
         );
@@ -844,8 +711,8 @@ describe('main dashboard reference layout', () => {
       await waitForStoredUnit('bytes');
       await waitForUnitControl();
 
-      await withRestoredWidgetConfigInvoke(async () => {
-        await failNextWidgetConfigOperation('set_storage_item');
+      await withClearedWidgetStorageFailure(async () => {
+        await armWidgetStorageFailure('set_storage_item');
         await $('button[aria-label="速率单位: B/s"]').click();
         const saveError = await $(
           '[data-slot="widget-config-save-status"][data-save-state="error"]',
@@ -855,6 +722,12 @@ describe('main dashboard reference layout', () => {
           () => saveError.getAttribute('data-save-state'),
           (state) => state === 'error',
         );
+        assert.deepEqual(await readWidgetStorageFailure(), {
+          operation: 'set_storage_item',
+          armed: false,
+          triggered: true,
+          calls: 1,
+        });
         assert.equal(
           await readStoredUnit(),
           'bytes',
