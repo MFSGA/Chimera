@@ -575,8 +575,8 @@ describe('main dashboard reference layout', () => {
           ),
         (mounted) => !mounted,
       );
-      await failNextWidgetConfigOperation('get_storage_item', true);
       await withRestoredWidgetConfigInvoke(async () => {
+        await failNextWidgetConfigOperation('get_storage_item', true);
         await navigateMainRouteWithoutReload(targetPath);
         const injectionState = await browser.execute(() => {
           const internals = (
@@ -666,8 +666,8 @@ describe('main dashboard reference layout', () => {
       await waitForStoredUnit('bytes');
       await waitForUnitControl();
 
-      await failNextWidgetConfigOperation('set_storage_item');
       await withRestoredWidgetConfigInvoke(async () => {
+        await failNextWidgetConfigOperation('set_storage_item');
         await $('button[aria-label="速率单位: B/s"]').click();
         const saveError = await $(
           '[data-slot="widget-config-save-status"][data-save-state="error"]',
