@@ -329,7 +329,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 预期行为：注入存储读取故障后，Dashboard 应显示 `load-error`，释放故障后 Retry 应恢复；外部控制器弹窗出现后，输入框聚焦应显示浮动标签。
 - 真实异常、复现步骤与证据：两次运行均未观察到 Dashboard `load-error`；39077318693 的失败截图显示页面进入编辑模式但无错误提示。main input 在同一运行断言 DOM 矩形高度为 56px 时得到 53px；失败诊断同时显示计算样式高度为 56px。
 - 确认的根因与排除项：Dashboard 前一版用例未证明新挂载的 Dashboard provider 实际调用了被注入失败的存储命令，因而没能证明错误路径执行；这不单独证明产品读错误处理存在缺陷。Windows WebView 的元素矩形与计算 CSS 尺寸不同，`getBoundingClientRect()` 的 53px 不表示 `h-14` 样式错误，计算样式仍为 56px。
-- 修复提交、差异映射及保留的兼容性边界：Dashboard 用例先确认离开路由后容器已卸载，再安装故障并导航回来；增加失败调用计数，等待 `get_storage_item` 确实被拦截后再断言可见错误，仍在错误状态出现后才释放故障。main input 继续断言 `h-14` 的 56px 计算样式及浮动标签等可观察行为，不再要求平台缩放后的矩形恰好为 56px。
+- 修复提交、差异映射及保留的兼容性边界：Dashboard 用例先确认离开路由后容器已卸载，再安装故障并导航回来；增加失败调用计数，等待 `get_storage_item` 确实被拦截后再断言可见错误，仍在错误状态出现后才释放故障。main input 固定窗口、中文、light theme 与字体加载，设置后恢复原主题；继续断言 `h-14` 的 56px 计算样式及浮动标签等行为，不再要求平台缩放后的矩形恰好为 56px。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败于上述 Windows run；修复后的同一用例仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 和 `tauri-e2e/specs/main-input.e2e.ts` 注册在 hermetic suite，精确新 SHA 的 Windows 复验待执行。
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后本机 Prettier 检查、`tsc --noEmit -p tauri-e2e/tsconfig.json` 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 故障注入和等待方式；恢复原 Tauri invoke、KV 配置及 UI 状态由现有清理逻辑负责。没有宿主网络、Service、TUN 或个人配置变更。

@@ -5,6 +5,46 @@ import { displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/settings/web-ui';
+type ThemeMode = 'light' | 'dark' | 'system';
+
+let originalThemeMode: ThemeMode = 'system';
+let themeModeOverrideInstalled = false;
+
+async function readThemeMode(): Promise<ThemeMode> {
+  return browser.execute(async () => {
+    const internals = (
+      window as Window & {
+        __TAURI_INTERNALS__?: {
+          invoke: <T>(command: string) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    if (!internals) throw new Error('Tauri page internals are unavailable.');
+    const config = await internals.invoke<{ theme_mode?: ThemeMode }>(
+      'get_verge_config',
+    );
+    return config.theme_mode ?? 'system';
+  });
+}
+
+async function writeThemeMode(themeMode: ThemeMode) {
+  await browser.execute(async (mode) => {
+    const internals = (
+      window as Window & {
+        __TAURI_INTERNALS__?: {
+          invoke: <T>(
+            command: string,
+            args?: Record<string, unknown>,
+          ) => Promise<T>;
+        };
+      }
+    ).__TAURI_INTERNALS__;
+    if (!internals) throw new Error('Tauri page internals are unavailable.');
+    await internals.invoke<null>('patch_verge_config', {
+      payload: { theme_mode: mode },
+    });
+  }, themeMode);
+}
 
 describe('main ref input primitive', () => {
   before(async () => {
@@ -13,11 +53,39 @@ describe('main ref input primitive', () => {
       localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
     });
     await openMainRoute(targetPath);
+    originalThemeMode = await readThemeMode();
+    await writeThemeMode('light');
+    themeModeOverrideInstalled = true;
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() =>
+          document.documentElement.classList.contains('light'),
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The main input test did not enter light theme.',
+      },
+    );
+    await browser.execute(async () => {
+      await document.fonts.ready;
+    });
     await browser.setWindowSize(1240, 638);
   });
 
-  // Contract: on the Web UI settings route, focusing the populated controller
-  // field floats its label and keeps the ref's outlined border and hidden line.
+  after(async () => {
+    if (!themeModeOverrideInstalled) return;
+    await writeThemeMode(originalThemeMode);
+    await browser.waitUntil(
+      async () => readThemeMode().then((mode) => mode === originalThemeMode),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The original theme mode was not restored.',
+      },
+    );
+  });
+
+  // Contract: at a fixed window size, Chinese locale, light theme and loaded
+  // fonts, focusing the controller floats its label and shows the ref field.
   // Windows WebView can report a scaled 53px rect while `h-14` remains 56px CSS.
   it('uses the ref outlined fieldset, floating label, and hidden filled line', async () => {
     const cardSelector = '[data-slot="external-controller-config-card"]';
