@@ -416,6 +416,7 @@ describe('main dashboard reference layout', () => {
             ) => Promise<unknown>;
             widgetConfigOriginalInvoke?: TauriInternals['invoke'];
             widgetConfigStopFailure?: () => void;
+            widgetConfigFailureCalls?: number;
           };
           const internals = (
             window as Window & { __TAURI_INTERNALS__?: TauriInternals }
@@ -430,6 +431,7 @@ describe('main dashboard reference layout', () => {
           const originalInvoke = internals.invoke;
           let failureActive = true;
           internals.widgetConfigOriginalInvoke = originalInvoke;
+          internals.widgetConfigFailureCalls = 0;
           internals.widgetConfigStopFailure = () => {
             failureActive = false;
           };
@@ -439,6 +441,8 @@ describe('main dashboard reference layout', () => {
               command === commandToFail &&
               args?.key === 'dashboard-widget-configs'
             ) {
+              internals.widgetConfigFailureCalls =
+                (internals.widgetConfigFailureCalls ?? 0) + 1;
               if (!keepFailing) failureActive = false;
               throw new Error(`Injected ${commandToFail} failure.`);
             }
@@ -472,6 +476,7 @@ describe('main dashboard reference layout', () => {
           ) => Promise<unknown>;
           widgetConfigOriginalInvoke?: TauriInternals['invoke'];
           widgetConfigStopFailure?: () => void;
+          widgetConfigFailureCalls?: number;
         };
         const internals = (
           window as Window & { __TAURI_INTERNALS__?: TauriInternals }
@@ -482,6 +487,7 @@ describe('main dashboard reference layout', () => {
         internals.invoke = internals.widgetConfigOriginalInvoke;
         delete internals.widgetConfigOriginalInvoke;
         delete internals.widgetConfigStopFailure;
+        delete internals.widgetConfigFailureCalls;
       });
 
     const withRestoredWidgetConfigInvoke = async (
@@ -538,9 +544,36 @@ describe('main dashboard reference layout', () => {
     let testError: unknown;
     try {
       await openMainRoute('/main/settings/system');
+      await browser.refresh();
+      await openMainRoute('/main/settings/system');
+      await waitForObservedValue(
+        'Dashboard provider unmounted before read failure injection',
+        () =>
+          browser.execute(() =>
+            Boolean(
+              document.querySelector('[data-slot="dashboard-container"]'),
+            ),
+          ),
+        (mounted) => !mounted,
+      );
       await failNextWidgetConfigOperation('get_storage_item', true);
       await withRestoredWidgetConfigInvoke(async () => {
         await openMainRoute(targetPath);
+        await waitForObservedValue(
+          'Widget storage read failure injection',
+          () =>
+            browser.execute(() => {
+              const internals = (
+                window as Window & {
+                  __TAURI_INTERNALS__?: {
+                    widgetConfigFailureCalls?: number;
+                  };
+                }
+              ).__TAURI_INTERNALS__;
+              return internals?.widgetConfigFailureCalls ?? 0;
+            }),
+          (count) => count > 0,
+        );
         await enterEditMode();
         await waitForObservedValue(
           'Widget config read error',
