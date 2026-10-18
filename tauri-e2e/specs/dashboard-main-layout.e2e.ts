@@ -357,33 +357,66 @@ describe('main dashboard reference layout', () => {
     const restoreOriginalWidgetConfig = async (
       originalValue: string | null,
     ) => {
-      const saveState = await browser.execute(
-        () =>
-          document
-            .querySelector('[data-slot="widget-config-save-status"]')
-            ?.getAttribute('data-save-state') ?? null,
-      );
-      if (saveState === 'saving') {
-        await waitForObservedValue(
-          'Widget setting write completion before cleanup',
+      const cleanupErrors: unknown[] = [];
+      const attemptCleanup = async (operation: () => Promise<unknown>) => {
+        try {
+          await operation();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      };
+
+      await attemptCleanup(() => restoreWidgetConfigInvoke());
+      let saveState: string | null = null;
+      try {
+        saveState = await browser.execute(
           () =>
-            browser.execute(
-              () =>
-                document
-                  .querySelector('[data-slot="widget-config-save-status"]')
-                  ?.getAttribute('data-save-state') ?? null,
-            ),
-          (state) => state !== 'saving',
+            document
+              .querySelector('[data-slot="widget-config-save-status"]')
+              ?.getAttribute('data-save-state') ?? null,
+        );
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      if (saveState === 'saving') {
+        await attemptCleanup(() =>
+          waitForObservedValue(
+            'Widget setting write completion before cleanup',
+            () =>
+              browser.execute(
+                () =>
+                  document
+                    .querySelector('[data-slot="widget-config-save-status"]')
+                    ?.getAttribute('data-save-state') ?? null,
+              ),
+            (state) => state !== 'saving',
+          ),
         );
       }
-      await writeStoredValue(originalValue);
-      assert.equal(
-        await readStoredValue(),
-        originalValue,
-        'cleanup must restore the original dashboard widget configuration',
+      await attemptCleanup(() => writeStoredValue(originalValue));
+      await attemptCleanup(async () =>
+        assert.equal(
+          await readStoredValue(),
+          originalValue,
+          'cleanup must restore the original dashboard widget configuration',
+        ),
       );
-      await browser.refresh();
-      await openMainRoute(targetPath);
+      await attemptCleanup(() => browser.refresh());
+      await attemptCleanup(() => openMainRoute(targetPath));
+      await attemptCleanup(async () =>
+        assert.equal(
+          await readStoredValue(),
+          originalValue,
+          'the original widget configuration must remain after cleanup refresh',
+        ),
+      );
+      if (cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (cleanupErrors.length > 1) {
+        throw new AggregateError(
+          cleanupErrors,
+          'Dashboard widget configuration cleanup had multiple failures.',
+        );
+      }
     };
 
     const readStoredUnit = async (): Promise<string | null> => {
@@ -406,8 +439,11 @@ describe('main dashboard reference layout', () => {
     const failNextWidgetConfigOperation = async (
       failedCommand: string,
       persistUntilReleased = false,
-    ) =>
-      browser.execute(
+    ) => {
+      // The Tauri internals object can outlive a WebView document refresh. Clear
+      // existing test-owned interceptor state before installing a new one.
+      await restoreWidgetConfigInvoke();
+      await browser.execute(
         (commandToFail, keepFailing) => {
           type TauriInternals = {
             invoke: (
@@ -415,6 +451,7 @@ describe('main dashboard reference layout', () => {
               args?: Record<string, unknown>,
             ) => Promise<unknown>;
             widgetConfigOriginalInvoke?: TauriInternals['invoke'];
+            widgetConfigInjectedInvoke?: TauriInternals['invoke'];
             widgetConfigStopFailure?: () => void;
             widgetConfigFailureCalls?: number;
           };
@@ -451,6 +488,7 @@ describe('main dashboard reference layout', () => {
             }
             return originalInvoke.call(internals, command, args);
           };
+          internals.widgetConfigInjectedInvoke = injectedInvoke;
           internals.invoke = injectedInvoke;
           if (internals.invoke !== injectedInvoke) {
             throw new Error(
@@ -461,6 +499,7 @@ describe('main dashboard reference layout', () => {
         failedCommand,
         persistUntilReleased,
       );
+    };
 
     const navigateMainRouteWithoutReload = async (pathname: string) => {
       // This is setup for the storage contract, not a navigation assertion.
@@ -494,17 +533,24 @@ describe('main dashboard reference layout', () => {
             args?: Record<string, unknown>,
           ) => Promise<unknown>;
           widgetConfigOriginalInvoke?: TauriInternals['invoke'];
+          widgetConfigInjectedInvoke?: TauriInternals['invoke'];
           widgetConfigStopFailure?: () => void;
           widgetConfigFailureCalls?: number;
         };
         const internals = (
           window as Window & { __TAURI_INTERNALS__?: TauriInternals }
         ).__TAURI_INTERNALS__;
-        if (!internals?.widgetConfigOriginalInvoke) {
-          throw new Error('The widget storage failure was not installed.');
+        const originalInvoke = internals?.widgetConfigOriginalInvoke;
+        if (!internals || !originalInvoke) return;
+        internals.widgetConfigStopFailure?.();
+        if (
+          !internals.widgetConfigInjectedInvoke ||
+          internals.invoke === internals.widgetConfigInjectedInvoke
+        ) {
+          internals.invoke = originalInvoke;
         }
-        internals.invoke = internals.widgetConfigOriginalInvoke;
         delete internals.widgetConfigOriginalInvoke;
+        delete internals.widgetConfigInjectedInvoke;
         delete internals.widgetConfigStopFailure;
         delete internals.widgetConfigFailureCalls;
       });
@@ -583,12 +629,17 @@ describe('main dashboard reference layout', () => {
             window as Window & {
               __TAURI_INTERNALS__?: {
                 widgetConfigOriginalInvoke?: unknown;
+                widgetConfigInjectedInvoke?: unknown;
+                invoke?: unknown;
                 widgetConfigFailureCalls?: number;
               };
             }
           ).__TAURI_INTERNALS__;
           return {
-            installed: Boolean(internals?.widgetConfigOriginalInvoke),
+            installed: Boolean(
+              internals?.widgetConfigOriginalInvoke &&
+              internals.invoke === internals.widgetConfigInjectedInvoke,
+            ),
             path: location.pathname,
           };
         });

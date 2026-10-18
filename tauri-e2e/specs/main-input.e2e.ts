@@ -138,6 +138,20 @@ describe('main ref input primitive', () => {
         timeoutMsg: 'The focused input label did not reach its floating state.',
       },
     );
+    await browser.waitUntil(
+      async () =>
+        browser.execute((modalNode) => {
+          const fieldset = (modalNode as HTMLElement).querySelector('fieldset');
+          return (
+            fieldset !== null &&
+            getComputedStyle(fieldset).borderTopWidth === '2px'
+          );
+        }, modal),
+      {
+        timeout: 5_000,
+        timeoutMsg: 'The focused ref fieldset did not reach its 2px border.',
+      },
+    );
 
     const state = await browser.execute((modalNode) => {
       const modal = modalNode as HTMLElement;

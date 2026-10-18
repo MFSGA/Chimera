@@ -334,3 +334,4 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前修复的本机 Prettier 检查、`tsc --noEmit -p tauri-e2e/tsconfig.json`、E2E harness 单测 25/25 和 `git diff --check` 通过；新 SHA 的 Windows E2E 尚未执行。未声称已验证真实鼠标输入或弹窗在其他平台的行为。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 故障注入和等待方式；恢复原 Tauri invoke、KV 配置及 UI 状态由现有清理逻辑负责。没有宿主网络、Service、TUN 或个人配置变更。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：等待被测状态而非单次注入后的固定时序；发生等待失败时结合失败前页面产物定位，避免只凭超时推断产品缺陷。新 SHA 的 Windows 复验通过后更新状态。
+- 最新复现与修复状态：Windows run [39086974019](https://github.com/MFSGA/Chimera/actions/runs/39086974019) 在首个存储故障注入前发现 Tauri internals 上已有测试专用 `widgetConfigOriginalInvoke` 标记，导致 Dashboard 用例在准备阶段失败；来源尚未确认。清理现在会停止并清除残留测试拦截器，只有当前 `invoke` 仍是该拦截器时才恢复旧函数，以免覆盖运行时更新后的函数；安装后通过函数身份确认拦截器仍有效。相同运行中 main input 在输入框已聚焦、标签已浮起后立即读取到 fieldset `1px`，ref 的 focused 状态应为 `2px`。测试现在等待计算边框达到 `2px` 再采样，仍保留原精确样式断言。独立审查还发现 cleanup 在等待保存结束时超时会提前退出，未尝试恢复原 KV 值、刷新及再次验证；现已改为逐项尝试恢复和核验，并汇总清理错误。以上修复的 Windows 复验待执行。
