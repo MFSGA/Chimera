@@ -33,6 +33,7 @@
 | LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
 | LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
+| LESSON-20261019-002 | 2026-10-19 | E2E / Windows  | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 
 ## 单条模板
 
@@ -389,3 +390,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：CI run `39180855195` 三平台 lint 和构建均通过，E2E harness 类型检查通过；Dashboard 桌面 E2E 在 run `39180855095` 因错误根节点断言失败。新 SHA Windows 桌面复验待执行。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅 E2E 临时改写主题设置，suite cleanup 读回验证原值；无产品或宿主网络变更。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：主题断言须对照 provider 实际 DOM 更新目标；语言和主题测试环境只设置用例真正依赖的偏好。无 CI 门禁调整。
+
+### LESSON-20261019-002：成功重试后重新打开配置弹层再检查控件
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Open（测试步骤已修正；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `fec8f0ecb450aed73bffb8d622a799881c8b7b94`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39189516640](https://github.com/MFSGA/Chimera/actions/runs/39189516640)，hermetic 51/52 个 spec 通过；Dashboard recovery 用例在成功写入后检查控件时失败。
+- 预期行为：重试保存成功后，UI 与后端值一致；点击编辑栏中的 Retry 后，测试重新打开配置弹层再验证设置控件可用。
+- 真实异常、复现步骤与证据：run `39189516640` 已确认 Traffic 显示 `bit/s` 且持久值为 `bits`，随后 `waitForUnitControl` 观察到 `undefined`。失败前 HTML/截图显示 Dashboard 仍在编辑模式，但 widget 配置弹层已关闭，速度单位控件不在 DOM 中。
+- 确认的根因与排除项：测试点击编辑栏中的重试按钮后直接轮询弹层内的 speed-unit 控件；重试按钮位于弹层之外，点击它会关闭弹层，因此不存在待查询元素。故障注入和写入重试已成功，不是产品保存失败。
+- 修复提交、差异映射及保留的兼容性边界：移除只检查现存控件的 `waitForUnitControl`；在重试后和重置后调用已有 `openTrafficConfig`，先按可见 UI 重新打开弹层，再确认速度单位控件可见且启用。产品代码不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败见 run `39189516640`；修复后的恢复步骤仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 注册在 Windows hermetic suite，新 SHA 结果待验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39189516650` 的 CI 三平台检查与 Tauri 构建全部通过；run `39189516640` 证明失败注入、重试写入和持久值断言已通过，但在弹层可见性检查失败。新 SHA Windows 桌面复验待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 的可见 UI 交互顺序；已有清理仍恢复原 widget 配置，不改持久化实现或宿主网络。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次状态提交、路由或菜单操作后重新检查并按需打开目标控件的宿主弹层，不沿用已关闭弹层中的元素引用。无 CI 门禁调整。

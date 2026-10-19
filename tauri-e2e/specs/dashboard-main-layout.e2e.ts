@@ -603,17 +603,6 @@ describe('main dashboard reference layout', () => {
       );
     };
 
-    const waitForUnitControl = async () => {
-      const unitToggle = await $(
-        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
-      );
-      await waitForObservedValue(
-        'Traffic widget settings save',
-        () => unitToggle.isEnabled(),
-        Boolean,
-      );
-    };
-
     const originalStoredValue = await readStoredValue();
     let testFailed = false;
     let testError: unknown;
@@ -788,7 +777,7 @@ describe('main dashboard reference layout', () => {
       await (await $('[data-slot="widget-config-reset"]')).click();
       await waitForRateUnit('B/s');
       await waitForStoredUnit('bytes');
-      await waitForUnitControl();
+      await openTrafficConfig();
 
       await withClearedWidgetStorageFailure(async () => {
         await armWidgetStorageFailure('set_storage_item');
@@ -819,7 +808,7 @@ describe('main dashboard reference layout', () => {
       await (await $('[data-slot="widget-config-save-status"] button')).click();
       await waitForRateUnit('bit/s');
       await waitForStoredUnit('bits');
-      await waitForUnitControl();
+      await openTrafficConfig();
 
       await browser.refresh();
       await openMainRoute(targetPath);
@@ -830,7 +819,7 @@ describe('main dashboard reference layout', () => {
       await (await $('[data-slot="widget-config-reset"]')).click();
       await waitForRateUnit('B/s');
       await waitForStoredUnit('bytes');
-      await waitForUnitControl();
+      await openTrafficConfig();
     } catch (error) {
       testFailed = true;
       testError = error;
