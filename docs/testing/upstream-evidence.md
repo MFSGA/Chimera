@@ -65,7 +65,7 @@
 
 项目现有[下拉菜单测试](../../tauri-e2e/specs/main-dropdown-menu.e2e.ts)通过设置焦点再按 Enter 激活菜单，并等待动画后检查几何。这与上述限制相符，但它不能替代本次发布源码核对。键盘激活适合验证菜单布局，鼠标可用性仍需独立覆盖。
 
-当前项目使用的桌面驱动是 vendored `tauri-plugin-wdio-webdriver@1.4.0`，并带兼容补丁 `e4bdb66`。在实际 vendored 源码中，`src/server/handlers/actions.rs` 的 `PointerAction::Move` 分支调用 `dispatch_pointer_event(PointerEventType::Move, ...)`；`src/platform/executor.rs` 的该方法把 `Move` 映射为 `MouseEvent("mousemove")`。因此 `moveTo()` 可以验证驱动的合成 mousemove 路径，但不能证明浏览器收到真实 `PointerEvent`，也不能作为 Radix Tooltip 鼠标悬停行为的验收。对应的受限测试及移除条件见[Profile 导入动作测试契约](contracts/profile-import-accessible-action.md)。
+当前项目使用的桌面驱动是 vendored `tauri-plugin-wdio-webdriver@1.4.0`，并带兼容补丁 `e4bdb66`。本地为 Dashboard 右键菜单另加了有限兼容处理：`PointerEventType::Down` 先在同一目标合成不可信 `PointerEvent("pointerdown")`，再发送原有 MouseEvent；其余路径仍按原实现合成 MouseEvent。在 `PointerAction::Move` 中，`dispatch_pointer_event(PointerEventType::Move, ...)` 映射为 `MouseEvent("mousemove")`。因此 `moveTo()` 可以验证驱动的合成 mousemove 路径，但不能证明浏览器收到真实 `PointerEvent`，也不能作为 Radix Tooltip 鼠标悬停行为的验收。对应的受限测试及移除条件见[Profile 导入动作测试契约](contracts/profile-import-accessible-action.md)。
 
 ## U05 Mocha 异步与 hooks
 
@@ -110,6 +110,43 @@ Tooltip 对焦点的响应，但必须将边界写成“焦点触发行为”，
 需要验收实际 Tab 顺序时，使用具备浏览器原生键盘输入的专用驱动/系统测试，并以
 目标链路的最小复现确认其确实改变 `document.activeElement`。升级 WDIO 或 vendored
 驱动后，重跑该复现并更新本条记录。
+
+## U09 Tauri driver 合成 PointerEvent 与右键上下文菜单边界
+
+锁定的 `webdriverio@9.32.0` 中，`element.click({ button: 'right' })` 使用
+`performActions`。本项目 vendored `tauri-plugin-wdio-webdriver@1.4.0` 在 WebView
+内合成事件不会触发浏览器原生右键默认行为。ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`
+和 Chimera 的 `context-menu-provider` 都在文档捕获阶段监听 `pointerdown`，记录右键目标；
+Dashboard 再通过该目标查找已注册的菜单项。Windows hermetic E2E 运行
+`39072145858` 中，52 个 spec 有 2 个失败，Dashboard 等待没有看到菜单；失败截图显示
+应用的通用剪贴板菜单，没有 Dashboard 项。固定 ref 与本地相关产品代码的对照表明，
+这次差异在测试驱动事件序列，不在 Dashboard 菜单实现。
+
+兼容实现只在按下阶段发送冒泡、可取消的不可信 `pointerdown`，随后发送原有 MouseEvent；
+匹配的 secondary-button 按下/释放后仍发送 `contextmenu` MouseEvent。Windows E2E 重跑用于
+验证该事件序列能进入应用菜单处理链，不能证明可信原生鼠标输入或完整 PointerEvent 序列。
+升级 WebDriver 或 vendored 插件时，先用同一 Dashboard 右键最小复现核对 PointerEvent 与
+contextmenu；若驱动原生提供菜单所需事件，再移除此兼容实现。
+
+## U10 Tauri invoke 属性与 Dashboard IPC 故障注入边界
+
+核对 Cargo.lock 锁定的 `tauri@2.12.0` crates.io 包，checksum 为
+`cb20ef8e6f97d6fe03039666cd82861f09a38b56291fa2f0f9fe140023f61c1a`。
+检查发布源码 `scripts/core.js` 中 `Object.defineProperty(window.__TAURI_INTERNALS__,
+'invoke', { value: ... })`，以及 `src/manager/webview.rs` 对
+`window.__TAURI_INTERNALS__` 的同类定义。两处均没有设置 `writable` 或
+`configurable`；按 ECMAScript 默认值，已定义的 `invoke` 属性不可赋值替换或删除。
+
+PR #490 的 Windows run `39116055509` 因 E2E 尝试替换该函数而在拦截器安装断言失败。
+这项测试设置没有拦截到实际存储 IPC，不能证明 Dashboard 业务恢复逻辑失败。随后改用独立
+`e2e` Tauri 插件后，Windows run `39160740767` 的 Dashboard 用例仍失败；失败包装只输出
+外层 `AggregateError`，没有呈现内部 IPC 错误。核对 `main-capability.json` 和 Tauri ACL
+后发现，该测试插件既没有权限清单，也没有加入窗口 capability，WebView 无权调用其命令。
+当前改为在 `e2e` Cargo feature 下把测试控制命令分发到应用级 invoke handler，同时在真实
+`get_storage_item` / `set_storage_item` 入口，仅对 `dashboard-widget-configs` 执行可观察、可清理的
+故障注入；生产构建不包含测试命令或 fixture。失败诊断会递归保留 `AggregateError` 内部错误。
+测试通过触发计数确认故障命中了真实 IPC，再由可见 UI Retry 验证恢复。新 SHA 的 Windows E2E
+通过后更新该结论与 `LESSON-20261017-007` 状态。
 
 ## 升级依赖时必须复核
 

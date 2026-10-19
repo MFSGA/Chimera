@@ -188,6 +188,9 @@ pub async fn perform<R: Runtime + 'static>(
     // Position of the last primary-button press, used to synthesize a `click`
     // when the matching release lands on the same spot (a click, not a drag).
     let mut primary_down_pos: Option<(i32, i32)> = None;
+    // Position of the last secondary-button press, used to synthesize the
+    // browser's contextmenu default action when a right-click is released.
+    let mut secondary_down_pos: Option<(i32, i32)> = None;
     let mut modifier_state = ModifierState::default();
 
     // Process actions tick-by-tick across sources (W3C): the action at index N from every source runs
@@ -254,6 +257,8 @@ pub async fn perform<R: Runtime + 'static>(
                                     .await?;
                                 if *button == 0 {
                                     primary_down_pos = Some((pointer_state.x, pointer_state.y));
+                                } else if *button == 2 {
+                                    secondary_down_pos = Some((pointer_state.x, pointer_state.y));
                                 }
                                 // Track pressed button
                                 let mut sessions = state.sessions.write().await;
@@ -293,6 +298,20 @@ pub async fn perform<R: Runtime + 'static>(
                                             .await?;
                                     }
                                     primary_down_pos = None;
+                                } else if *button == 2 {
+                                    if secondary_down_pos
+                                        == Some((pointer_state.x, pointer_state.y))
+                                    {
+                                        executor
+                                            .dispatch_pointer_event(
+                                                PointerEventType::ContextMenu,
+                                                pointer_state.x,
+                                                pointer_state.y,
+                                                *button,
+                                            )
+                                            .await?;
+                                    }
+                                    secondary_down_pos = None;
                                 }
                                 // Remove from tracked buttons
                                 let mut sessions = state.sessions.write().await;

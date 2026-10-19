@@ -15,11 +15,19 @@ import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
+import { useDashboardContext } from '@/components/widgets/provider';
+import { WidgetConfigSaveStatus } from '@/components/widgets/widget-config-menu';
 import * as m from '@/paraglide/messages';
-import { useDashboardContext } from './provider';
 
 export default function EditAction() {
-  const { isEditing, setIsEditing, setOpenSheet } = useDashboardContext();
+  const {
+    isEditing,
+    setIsEditing,
+    setOpenSheet,
+    saveStatus,
+    configLoading,
+    configReadError,
+  } = useDashboardContext();
 
   return (
     <AnimatePresence>
@@ -66,12 +74,22 @@ export default function EditAction() {
           {/* 保存按钮 - 退出编辑模式 */}
           <Button
             variant="flat"
+            disabled={configLoading || saveStatus.state !== 'saved'}
             className="flex h-8 items-center gap-1 px-3 text-sm text-nowrap"
+            data-slot="dashboard-edit-save"
             onClick={() => setIsEditing(false)}
           >
             <DoneRounded />
             <span>{m.common_save()}</span>
           </Button>
+
+          {(configLoading ||
+            configReadError ||
+            saveStatus.state !== 'saved') && (
+            <div className="bg-surface absolute bottom-full left-1/2 mb-2 min-w-48 -translate-x-1/2 rounded-full px-3 py-1.5">
+              <WidgetConfigSaveStatus />
+            </div>
+          )}
         </motion.div>
       )}
     </AnimatePresence>

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import type { WidgetId } from '../src/pages/(main)/main/dashboard/_modules/consts';
+import type { WidgetId } from '../src/components/widgets/consts';
 import { placeWidget } from '../src/pages/(main)/main/dashboard/_modules/widget-placement';
 
 /*

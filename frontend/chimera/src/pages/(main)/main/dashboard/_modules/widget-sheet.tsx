@@ -13,9 +13,13 @@ import { useState, type ComponentType } from 'react';
 import { Drawer } from 'vaul';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  RENDER_MAP,
+  WIDGET_MIN_SIZE_MAP,
+  WidgetId,
+} from '@/components/widgets/consts';
+import { useDashboardContext } from '@/components/widgets/provider';
 import * as m from '@/paraglide/messages';
-import { RENDER_MAP, WIDGET_MIN_SIZE_MAP, WidgetId } from './consts';
-import { useDashboardContext } from './provider';
 
 const WIDGET_TITLE_MAP: Record<WidgetId, () => string> = {
   [WidgetId.TrafficDown]: m.dashboard_widget_traffic_download,

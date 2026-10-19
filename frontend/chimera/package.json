@@ -9,7 +9,8 @@
     "test:profile-sync-history": "tsx --test tests/profile-sync-history.test.ts",
     "test:connections": "tsx --test tests/connections-model.test.ts",
     "test:traffic": "tsx --test tests/traffic-search.test.ts ../interface/tests/traffic-report-query.test.ts",
-    "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts"
+    "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",
+    "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts ../interface/tests/kv-storage-write-echoes.test.ts"
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",

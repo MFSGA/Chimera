@@ -8,7 +8,10 @@ import {
   type CoreState,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { useDndGridContext } from '@chimera/ui/dnd-grid';
 import { Link } from '@tanstack/react-router';
+import NetworkPingRounded from '~icons/material-symbols/network-ping-rounded';
+import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { useMemo } from 'react';
 import {
   SystemProxyButton,
@@ -22,12 +25,18 @@ import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
+import { useWidgetConfig } from './provider';
+import { WidgetId, type WidgetConfigs } from './widget-config';
 import WidgetItem from './widget-item';
 
 /** Resolve and render the current proxy mode badge. */
-const ProxyTitleRow = () => {
-  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
-  const { value: enableTunMode } = useSetting('enable_tun_mode');
+const ProxyTitleRow = ({
+  enableSystemProxy,
+  enableTunMode,
+}: {
+  enableSystemProxy: boolean | undefined;
+  enableTunMode: boolean | undefined;
+}) => {
   const { data: systemProxyStatus } = useSystemProxy();
   const {
     query: { data: clashConfigs },
@@ -85,14 +94,90 @@ export function ProxyShortcutsWidget({
   id,
   onCloseClick,
 }: WidgetComponentProps) {
-  return (
-    <WidgetItem id={id} minW={3} minH={2} onCloseClick={onCloseClick}>
-      <Card className="flex size-full flex-col justify-between">
-        <ProxyTitleRow />
+  const config = useWidgetConfig(id, WidgetId.ProxyShortcuts);
+  const { value: enableSystemProxy } = useSetting('enable_system_proxy');
+  const { value: enableTunMode } = useSetting('enable_tun_mode');
+  const { sourceOnly, isOverlay } = useDndGridContext();
+  const isPreview = sourceOnly || isOverlay;
+  const buttons =
+    config.order === 'system-first' ? ['system', 'tun'] : ['tun', 'system'];
 
-        <CardContent className="flex-1 gap-3">
-          <SystemProxyButton className="h-full rounded-3xl" />
-          <TunModeButton className="h-full rounded-3xl" />
+  return (
+    <WidgetItem
+      id={id}
+      widgetType={WidgetId.ProxyShortcuts}
+      minW={3}
+      minH={2}
+      onCloseClick={onCloseClick}
+    >
+      <Card className="flex size-full flex-col justify-between">
+        <ProxyTitleRow
+          enableSystemProxy={enableSystemProxy ?? undefined}
+          enableTunMode={enableTunMode ?? undefined}
+        />
+
+        <CardContent
+          className="flex-1 flex-row items-stretch gap-2"
+          data-slot="proxy-shortcut-buttons"
+        >
+          {buttons
+            .filter(
+              (button) =>
+                config.buttons === 'both' || config.buttons === button,
+            )
+            .map((button) => {
+              const isSystem = button === 'system';
+              const isActive = isPreview
+                ? isSystem
+                : isSystem
+                  ? Boolean(enableSystemProxy)
+                  : Boolean(enableTunMode);
+              const className =
+                'h-full min-w-0 flex-1 basis-0 rounded-3xl px-2 transition-[flex-grow] duration-300 motion-reduce:transition-none';
+              const style = {
+                flexGrow:
+                  config.buttons === 'both' &&
+                  config.layout === 'flex' &&
+                  isActive
+                    ? 1.65
+                    : 1,
+              };
+              if (isPreview) {
+                return (
+                  <Button
+                    key={button}
+                    variant="raised"
+                    disabled
+                    className={className}
+                    style={style}
+                  >
+                    {isSystem ? (
+                      <NetworkPingRounded />
+                    ) : (
+                      <SettingsEthernetRounded />
+                    )}
+                    <span>
+                      {isSystem
+                        ? m.settings_system_proxy_system_proxy_label()
+                        : m.settings_system_proxy_tun_mode_label()}
+                    </span>
+                  </Button>
+                );
+              }
+              return button === 'system' ? (
+                <SystemProxyButton
+                  key={button}
+                  className={className}
+                  style={style}
+                />
+              ) : (
+                <TunModeButton
+                  key={button}
+                  className={className}
+                  style={style}
+                />
+              );
+            })}
         </CardContent>
       </Card>
     </WidgetItem>
@@ -132,7 +217,11 @@ const CoreStatusBadge = () => {
 };
 
 /** Render the selected core, version, and live status. */
-const CurrentCoreCard = () => {
+const CurrentCoreCard = ({
+  config,
+}: {
+  config: WidgetConfigs[WidgetId.CoreShortcuts];
+}) => {
   const { query: clashCores } = useClashCores();
   const { value: currentCoreKey } = useSetting('clash_core');
   const currentCoreIcon = useCoreIcon(currentCoreKey);
@@ -145,7 +234,8 @@ const CurrentCoreCard = () => {
     <Button
       variant="raised"
       className={cn(
-        'group flex flex-1 items-center gap-4 rounded-2xl pr-3 pl-4',
+        'group grid h-auto min-w-0 flex-1 gap-2 rounded-2xl px-3 py-2 text-left',
+        'grid-rows-1',
         'bg-surface-variant/30 hover:bg-surface-variant',
       )}
       data-running={String(isRunning)}
@@ -153,56 +243,47 @@ const CurrentCoreCard = () => {
       asChild
     >
       <Link to="/main/settings/clash">
-        <img
-          src={currentCoreIcon}
-          alt={currentCore?.name ?? currentCoreKey ?? ''}
-          className="size-12 shrink-0"
-          data-slot="core-icon"
-        />
-
         <div
-          className="flex flex-1 flex-col items-start gap-1 truncate"
-          data-slot="core-info"
+          className="flex w-full min-w-0 items-center gap-3"
+          data-slot="current-core-info"
         >
-          <div className="font-semibold" data-slot="core-name">
-            {currentCore?.name ?? currentCoreKey ?? '-'}
-          </div>
-
+          <img
+            src={currentCoreIcon}
+            alt={currentCore?.name ?? currentCoreKey ?? ''}
+            className="size-12 shrink-0"
+            data-slot="core-icon"
+          />
           <div
-            className="text-zinc-700 dark:text-zinc-300"
-            data-slot="core-version"
+            className="flex min-w-0 flex-1 flex-col items-start gap-1 truncate"
+            data-slot="core-info"
           >
-            {currentCore?.currentVersion ?? '-'}
+            <div className="truncate font-semibold" data-slot="core-name">
+              {currentCore?.name ?? currentCoreKey ?? '-'}
+            </div>
+            {config.showVersion && (
+              <div
+                className="truncate text-xs text-zinc-700 dark:text-zinc-300"
+                data-slot="core-version"
+              >
+                {currentCore?.currentVersion ?? '-'}
+              </div>
+            )}
           </div>
-        </div>
-
-        <div
-          className="flex items-center gap-2 truncate pr-2"
-          data-slot="core-status"
-        >
-          <div className="truncate" data-slot="core-status-text">
-            {isRunning
-              ? m.dashboard_widget_core_status_running()
-              : m.dashboard_widget_core_status_stopped()}
-          </div>
-
           <div
-            className="relative flex size-3 shrink-0"
-            data-slot="core-status-indicator"
+            className="flex shrink-0 items-center gap-2 truncate"
+            data-slot="core-status"
           >
+            <span className="truncate text-xs" data-slot="core-status-text">
+              {isRunning
+                ? m.dashboard_widget_core_status_running()
+                : m.dashboard_widget_core_status_stopped()}
+            </span>
             <span
               className={cn(
-                'absolute inline-flex size-full animate-ping rounded-full opacity-75',
-                'group-data-[running=true]:bg-green-500',
-                'group-data-[running=false]:opacity-0',
+                'size-3 shrink-0 rounded-full',
+                isRunning ? 'bg-green-500' : 'bg-gray-400',
               )}
-            />
-            <span
-              className={cn(
-                'relative inline-flex size-full rounded-full',
-                'group-data-[running=true]:bg-green-500',
-                'group-data-[running=false]:bg-gray-400',
-              )}
+              data-slot="core-status-indicator"
             />
           </div>
         </div>
@@ -216,8 +297,15 @@ export function CoreShortcutsWidget({
   id,
   onCloseClick,
 }: WidgetComponentProps) {
+  const config = useWidgetConfig(id, WidgetId.CoreShortcuts);
   return (
-    <WidgetItem id={id} minW={4} minH={2} onCloseClick={onCloseClick}>
+    <WidgetItem
+      id={id}
+      widgetType={WidgetId.CoreShortcuts}
+      minW={4}
+      minH={2}
+      onCloseClick={onCloseClick}
+    >
       <Card className="flex size-full flex-col justify-between">
         <CardHeader>
           <span className="shrink-0 font-bold">
@@ -227,7 +315,7 @@ export function CoreShortcutsWidget({
         </CardHeader>
 
         <CardContent className="flex-1">
-          <CurrentCoreCard />
+          <CurrentCoreCard config={config} />
         </CardContent>
       </Card>
     </WidgetItem>

@@ -1,7 +1,7 @@
 /**
  * Dashboard Sparkline 趋势图 Widget
  *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/widget-sparkline.tsx`
+ * 迁移自 ref: `src/components/widgets/widget-sparkline.tsx`
  *
  * 四个 Widget 组件，使用 Sparkline 趋势图展示实时数据：
  * 1. TrafficDownWidget — 下行流量趋势（附带总流量）
@@ -40,6 +40,8 @@ import { Sparkline } from '@/components/ui/sparkline';
 import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
+import { useWidgetConfig } from './provider';
+import { WidgetId } from './widget-config';
 import WidgetItem, { type WidgetItemProps } from './widget-item';
 
 /**
@@ -65,12 +67,15 @@ function SparklineCard({
   maxW,
   maxH,
   data,
+  showChart = true,
+  widgetType,
   className,
   children,
   onCloseClick,
   ...props
 }: ComponentProps<typeof Card> & {
   data: number[];
+  showChart?: boolean;
 } & WidgetItemProps) {
   return (
     <WidgetItem
@@ -79,14 +84,19 @@ function SparklineCard({
       minW={minW}
       maxW={maxW}
       maxH={maxH}
+      widgetType={widgetType}
       onCloseClick={onCloseClick}
     >
       <Card
         className={cn('relative isolate size-full', className)}
         data-slot="widget-sparkline-card"
+        data-widget-type={widgetType}
+        data-widget-id={id}
         {...props}
       >
-        <Sparkline data={data} className="absolute inset-0 z-0" />
+        {showChart && (
+          <Sparkline data={data} className="absolute inset-0 z-0" />
+        )}
 
         <CardContent
           className="relative z-10 flex size-full flex-col justify-between"
@@ -160,6 +170,7 @@ function SparklineCardBottom({ className, ...props }: ComponentProps<'div'>) {
  * - 总下载量（从连接汇总数据中获取）
  */
 export function TrafficDownWidget({ id, onCloseClick }: WidgetComponentProps) {
+  const config = useWidgetConfig(id, WidgetId.TrafficDown);
   const { data: clashTraffic } = useClashTraffic();
   const { data: clashConnections } = useClashConnections();
   const total = clashConnections?.at(-1)?.downloadTotal;
@@ -167,6 +178,8 @@ export function TrafficDownWidget({ id, onCloseClick }: WidgetComponentProps) {
   return (
     <SparklineCard
       id={id}
+      widgetType={WidgetId.TrafficDown}
+      showChart={config.showChart}
       data={padData(
         clashTraffic?.map((item) => item.down),
         MAX_TRAFFIC_HISTORY,
@@ -178,15 +191,21 @@ export function TrafficDownWidget({ id, onCloseClick }: WidgetComponentProps) {
       </SparklineCardTitle>
 
       <SparklineCardContent>
-        {filesize(clashTraffic?.at(-1)?.down ?? 0, { standard: 'iec' })}/s
+        {filesize(clashTraffic?.at(-1)?.down ?? 0, {
+          standard: config.unit === 'bits' ? 'si' : 'iec',
+          bits: config.unit === 'bits',
+        })}
+        /s
       </SparklineCardContent>
 
-      <SparklineCardBottom>
-        {total !== undefined &&
-          m.dashboard_widget_traffic_total({
-            value: filesize(total, { standard: 'iec' }),
-          })}
-      </SparklineCardBottom>
+      {config.showTotal && (
+        <SparklineCardBottom>
+          {total !== undefined &&
+            m.dashboard_widget_traffic_total({
+              value: filesize(total, { standard: 'iec' }),
+            })}
+        </SparklineCardBottom>
+      )}
     </SparklineCard>
   );
 }
@@ -200,6 +219,7 @@ export function TrafficDownWidget({ id, onCloseClick }: WidgetComponentProps) {
  * - 总上传量（从连接汇总数据中获取）
  */
 export function TrafficUpWidget({ id, onCloseClick }: WidgetComponentProps) {
+  const config = useWidgetConfig(id, WidgetId.TrafficUp);
   const { data: clashTraffic } = useClashTraffic();
   const { data: clashConnections } = useClashConnections();
   const total = clashConnections?.at(-1)?.uploadTotal;
@@ -207,6 +227,8 @@ export function TrafficUpWidget({ id, onCloseClick }: WidgetComponentProps) {
   return (
     <SparklineCard
       id={id}
+      widgetType={WidgetId.TrafficUp}
+      showChart={config.showChart}
       data={padData(
         clashTraffic?.map((item) => item.up),
         MAX_TRAFFIC_HISTORY,
@@ -218,15 +240,21 @@ export function TrafficUpWidget({ id, onCloseClick }: WidgetComponentProps) {
       </SparklineCardTitle>
 
       <SparklineCardContent>
-        {filesize(clashTraffic?.at(-1)?.up ?? 0, { standard: 'iec' })}/s
+        {filesize(clashTraffic?.at(-1)?.up ?? 0, {
+          standard: config.unit === 'bits' ? 'si' : 'iec',
+          bits: config.unit === 'bits',
+        })}
+        /s
       </SparklineCardContent>
 
-      <SparklineCardBottom>
-        {total !== undefined &&
-          m.dashboard_widget_traffic_total({
-            value: filesize(total, { standard: 'iec' }),
-          })}
-      </SparklineCardBottom>
+      {config.showTotal && (
+        <SparklineCardBottom>
+          {total !== undefined &&
+            m.dashboard_widget_traffic_total({
+              value: filesize(total, { standard: 'iec' }),
+            })}
+        </SparklineCardBottom>
+      )}
     </SparklineCard>
   );
 }
@@ -239,16 +267,19 @@ export function TrafficUpWidget({ id, onCloseClick }: WidgetComponentProps) {
  * - 当前连接数
  */
 export function ConnectionsWidget({ id, onCloseClick }: WidgetComponentProps) {
+  const config = useWidgetConfig(id, WidgetId.Connections);
   const { data: clashConnections } = useClashConnections();
 
   return (
     <SparklineCard
       id={id}
+      widgetType={WidgetId.Connections}
+      showChart={config.showChart}
       data={padData(
         clashConnections?.map(
           (item: ClashConnectionsSnapshot) => item.connections?.length ?? 0,
         ),
-        MAX_CONNECTIONS_HISTORY,
+        Math.min(MAX_CONNECTIONS_HISTORY, config.samples),
       )}
       onCloseClick={onCloseClick}
     >
@@ -274,14 +305,17 @@ export function ConnectionsWidget({ id, onCloseClick }: WidgetComponentProps) {
  * - 仅在 mihomo 核心支持时显示有效数据
  */
 export function MemoryWidget({ id, onCloseClick }: WidgetComponentProps) {
+  const config = useWidgetConfig(id, WidgetId.Memory);
   const { data: clashMemory } = useClashMemory();
 
   return (
     <SparklineCard
       id={id}
+      widgetType={WidgetId.Memory}
+      showChart={config.showChart}
       data={padData(
         clashMemory?.map((item) => item.inuse),
-        MAX_MEMORY_HISTORY,
+        Math.min(MAX_MEMORY_HISTORY, config.samples),
       )}
       onCloseClick={onCloseClick}
     >

@@ -12,6 +12,8 @@ use crate::{
     utils::{init, resolve},
 };
 
+#[cfg(feature = "e2e")]
+mod e2e_test;
 mod ipc;
 mod network_probe;
 
@@ -144,6 +146,27 @@ pub fn run() -> std::io::Result<()> {
         builder = builder.plugin(tauri_plugin_deep_link::init());
     }
 
+    let specta_invoke_handler = specta_builder.invoke_handler();
+    #[cfg(feature = "e2e")]
+    let e2e_invoke_handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+        crate::e2e_test::e2e_arm_widget_storage_failure,
+        crate::e2e_test::e2e_widget_storage_failure_status,
+        crate::e2e_test::e2e_clear_widget_storage_failure
+    ];
+    let invoke_handler = move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+        #[cfg(feature = "e2e")]
+        if matches!(
+            invoke.message.command(),
+            "e2e_arm_widget_storage_failure"
+                | "e2e_widget_storage_failure_status"
+                | "e2e_clear_widget_storage_failure"
+        ) {
+            return e2e_invoke_handler(invoke);
+        }
+
+        specta_invoke_handler(invoke)
+    };
+
     builder = builder
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
@@ -154,7 +177,7 @@ pub fn run() -> std::io::Result<()> {
                 }
             }
         })
-        .invoke_handler(specta_builder.invoke_handler())
+        .invoke_handler(invoke_handler)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_shell::init())

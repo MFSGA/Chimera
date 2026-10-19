@@ -18,7 +18,7 @@
  */
 
 import { createFileRoute, Outlet } from '@tanstack/react-router';
-import { DashboardProvider } from './_modules/provider';
+import { DashboardProvider } from '@/components/widgets/provider';
 
 /**
  * 注册 TanStack Router 文件路由

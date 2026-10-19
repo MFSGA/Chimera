@@ -28,7 +28,12 @@
 | LESSON-20261017-003 | 2026-10-17 | E2E            | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
 | LESSON-20261017-004 | 2026-10-17 | CI / Linux     | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
 | LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
+| LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
+| LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
 | LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
+| LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
+| LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
+| LESSON-20261019-002 | 2026-10-19 | E2E / Windows  | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 
 ## 单条模板
 
@@ -300,6 +305,41 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：回滚为恢复原 cast-only 启动调用及无 reply 的 actor message；这会重新允许调用方早于 producer handler 完成而继续。未修改主机网络、持久化数据或用户 Profile。审查器新建的失败 Cargo target 已经 cargo clean 清理，未触碰其他构建缓存。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界；PR #485 的精确 head CI/E2E 已通过后更新本条状态；不修改治理门禁。
 
+### LESSON-20261017-006：Dashboard 右键测试必须先发送 pointerdown
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（驱动修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：master `5fc556b4dc1b4724c3486d537b3d239d89c97c5e`；ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39072145858](https://github.com/MFSGA/Chimera/actions/runs/39072145858)，52 个 spec 中 50 个通过；Dashboard 编辑菜单和后续 Agent 页面导航失败。
+- 预期行为：右键 Dashboard 后，上下文菜单显示已注册的 Dashboard 操作，后续编辑流程可继续。
+- 真实异常、复现步骤与证据：Windows E2E 右键后菜单等待为 false；失败截图显示应用通用剪贴板菜单，没有 Dashboard 项。随后 Agent 页就绪等待也失败。
+- 确认的根因与排除项：ref 与 Chimera 的共享菜单 provider 都在 document capture 阶段通过 `pointerdown` 记录右键目标，再沿 DOM 查找已注册菜单。vendored 驱动只合成 `mousedown`、`mouseup` 和 `contextmenu`，没有触发该记录逻辑。对照 ref `frontend/nyanpasu/src/components/providers/context-menu-provider.tsx` 与 Chimera `frontend/chimera/src/components/providers/context-menu-provider.tsx` 后，未发现 Dashboard 菜单实现差异；Agent 页面失败发生在前一用例之后，待菜单修复后复验是否为连带失败。
+- 修复提交、差异映射及保留的兼容性边界：`backend/tauri/vendor/tauri-plugin-wdio-webdriver/src/platform/executor.rs::dispatch_pointer_event` 在按下时、对应 MouseEvent 前合成冒泡且可取消的 `pointerdown`，保留匹配右键释放后的 `contextmenu`。该修复验证应用 DOM 事件路径，不代表完整 PointerEvent 序列或真实鼠标输入。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现由上述 Windows PR E2E 运行失败；新 SHA 的复验仍待执行。相关回归仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 Windows hermetic suite 运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo check --locked --manifest-path backend/tauri/vendor/tauri-plugin-wdio-webdriver/Cargo.toml --target-dir /tmp/chimera-wdio-plugin-check` 通过；`rustfmt --edition 2021 .../executor.rs` 与 `git diff --check` 通过。Windows E2E 尚未对修复 SHA 运行；真实可信鼠标输入不在覆盖范围。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅测试驱动合成事件和测试证据文档；不修改产品菜单、持久化或宿主网络。回滚为还原驱动 PointerEvent 合成并移除此记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：更新 [U09](docs/testing/upstream-evidence.md#u09-tauri-driver-合成-pointerevent-与右键上下文菜单边界) 及 Dashboard 测试契约，后续升级驱动时重跑相同菜单最小复现；无 CI 门禁调整。
+
+### LESSON-20261017-007：等待可观察的失败状态并在重渲染后重新查询控件
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Open（修复已在 PR #490 工作树完成；新 SHA 的 Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：失败 head `ce86b993fcc9f21d863abd0c59e61c00bf192d00`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39074305271](https://github.com/MFSGA/Chimera/actions/runs/39074305271) 与 [39077318693](https://github.com/MFSGA/Chimera/actions/runs/39077318693)，后者 52 个 spec 中 50 个通过；Dashboard retry 和 main input 两个 spec 失败。随后 head `a4e62e56` 的 [run 39084190736](https://github.com/MFSGA/Chimera/actions/runs/39084190736) 中，Dashboard 的 `get_storage_item` 故障计数仍为 0，hermetic 为 51/52；main input 已通过。
+- 预期行为：注入存储读取故障后，Dashboard 应显示 `load-error`，释放故障后 Retry 应恢复；外部控制器弹窗出现后，输入框聚焦应显示浮动标签。
+- 真实异常、复现步骤与证据：两次运行均未观察到 Dashboard `load-error`；39077318693 的失败截图显示页面进入编辑模式但无错误提示。main input 在同一运行断言 DOM 矩形高度为 56px 时得到 53px；失败诊断同时显示计算样式高度为 56px。
+- 确认的根因与排除项：锁定 Tauri 2.12.0 的 `scripts/core.js` 以 `Object.defineProperty` 且只提供 `value` 定义 `__TAURI_INTERNALS__.invoke`；未声明的 `writable` 和 `configurable` 默认均为 false。因此赋值不能替换该函数。run `39116055509` 的失败明确为 “The widget storage failure could not wrap Tauri invoke.”，验证了注入前提错误；这不表示 Dashboard 业务恢复逻辑失败。随后 run `39160740767` 的错误聚合只输出外层栈，隐藏了测试控制 IPC 的内部错误。Tauri 窗口 capability 未声明自定义 `e2e` 插件权限，且该插件没有权限清单，因此插件命令不允许 WebView 调用。Windows WebView 的元素矩形与计算 CSS 尺寸不同，`getBoundingClientRect()` 的 53px 不表示 `h-14` 样式错误，计算样式仍为 56px。
+- 修复提交、差异映射及保留的兼容性边界：用仅在 Cargo `e2e` feature 编译的应用级 IPC 命令控制 fixture，在 `get_storage_item` / `set_storage_item` 实际 IPC 入口按唯一 key 注入故障，并通过状态命令确认触发；spec 不再改写 Tauri `invoke`。失败清理会清除后端 fixture；成功 Retry 仍经原 IPC。失败证据现在递归保存 `AggregateError` 内部错误。该修复当前位于 PR #490 工作树，精确新 SHA 的 Windows E2E 待复验。main input 固定窗口、中文、light theme 与字体加载，设置后恢复原主题；继续断言 `h-14` 的 56px 计算样式及浮动标签等行为，不再要求平台缩放后的矩形恰好为 56px。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：head `517f8f0` 在安装 JS 拦截器时失败，Windows E2E 没有证明 Dashboard 故障恢复行为。当前 spec 使用 E2E-only Rust fixture，并断言实际 IPC 触发计数与界面错误/重试；仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 注册在 hermetic suite，新的应用级命令分发待 Windows 复验。main input 在此前运行中通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：应用级命令修复后，`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera --features e2e e2e_test::tests -- --test-threads=1` 为 1/1 通过，`cargo +nightly check --manifest-path backend/Cargo.toml --locked -p chimera --lib --no-default-features` 通过，E2E harness TypeScript 检查、Dashboard spec Oxlint、相关 Prettier 检查、Rust 格式检查和 `git diff --check` 均通过。pnpm 封装的 typecheck 因 worktree 共享 `node_modules` 符号链接触发 unsafe task-run-state 错误，直接运行等价的 TypeScript 检查通过。精确新 SHA 的 Windows E2E run `39168311925` 与 CI run `39168311983` 尚在执行；未声称桌面 E2E 已在本机运行，也未声称已验证真实鼠标输入或弹窗在其他平台的行为。
+- 风险/回滚和清理证据（如涉及宿主状态）：fixture 只在 `e2e` feature 编译；spec 清除故障状态后由既有逻辑恢复 KV 配置及 UI 状态。没有宿主网络、Service、TUN 或个人配置变更。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：根据测试依赖上游证据，避免替换宿主定义的不可写 WebView IPC 函数；使用范围受限、状态可观察并可清理的 E2E 后端边界。等待状态读取和 UI 错误而非固定时序。新 SHA 的 Windows 复验通过后更新状态。
+- 最新复现与修复状态：run [39086974019](https://github.com/MFSGA/Chimera/actions/runs/39086974019) 与 [39089126084](https://github.com/MFSGA/Chimera/actions/runs/39089126084) 曾在拦截器检查前失败；head `517f8f0` 的 E2E run [39116055509](https://github.com/MFSGA/Chimera/actions/runs/39116055509) 再现 invoke 不可覆盖导致注入失败，hermetic 其余 51/52 个 spec 通过。后续 run [39160740767](https://github.com/MFSGA/Chimera/actions/runs/39160740767) 再现 Dashboard 用例失败，定位到独立测试插件没有 WebView capability 权限，且 aggregate 错误未展开内部原因。当前修复改为 E2E feature 下的应用级测试 IPC，保留真实存储命令入口按 key 注入并检查触发状态；Windows E2E 尚待新 SHA 复验。该 run 中 main input 已通过：输入框聚焦后等待计算边框达到 `2px`，仍保留原精确样式断言。Dashboard cleanup 会先清除 fixture，再逐项恢复原 KV 值、读回、刷新及最终核验，并汇总清理错误。
+
 ### LESSON-20261018-001：异步出现的元素需要在每次轮询中重新查询
 
 - 日期与时区：2026-10-18 UTC
@@ -316,3 +356,54 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：首个修复 SHA 的 Windows Desktop E2E run `39084555437` 通过；其完整 CI run `39084555350` 中 Changes、三平台 lint 均通过，macOS/Windows/Ubuntu Tauri builds 当时仍在执行。当前诊断增强的 Prettier 检查与 `git diff --check` 本地通过；E2E 类型检查未能在本机执行，因为该 worktree 缺少 WDIO/Node 类型定义，离线 pnpm 安装因锁定依赖 tarball 未缓存而中止。没有声称旧代码在所有运行中稳定失败。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改测试轮询和测试工具依据记录，不改产品、持久数据或宿主状态；可恢复单次元素查询与 `waitForDisplayed`。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：对可能晚于路由就绪出现的 DOM 节点，在轮询回调内重新查询 selector；等待失败时输出最后一次存在/可见状态；不添加固定暂停。无 CI 门禁调整。
+
+### LESSON-20261018-002：E2E 控件定位不能假设当前语言
+
+- 日期与时区：2026-10-18 UTC
+- 状态：Open（选择器与显示环境修复已在 PR #490 工作树完成；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `ad81c3f67724f8b572520fac10d34b07b52e895f`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39169449230](https://github.com/MFSGA/Chimera/actions/runs/39169449230)，51/52 个 spec 通过；Dashboard 用例在进入存储恢复步骤前失败。
+- 预期行为：Dashboard 右键菜单已打开时，测试识别编辑项并继续执行；配置控件可跨受支持语言稳定定位。
+- 真实异常、复现步骤与证据：失败等待报告 `Dashboard edit menu; last observed: false`。同一 run 的 before-cleanup HTML 显示菜单的 `data-state="open"`，编辑项文本为 `Edit Widgets`。
+- 确认的根因与排除项：spec 以中文 `编辑组件` 判断菜单是否打开；英文菜单被错判为关闭后再次右键，关闭已显示菜单。单位、重置、保存控件亦依赖中文 aria-label。证据显示产品菜单已正常打开；失败来自测试本地化假设，不是 Dashboard 菜单行为回归。
+- 修复提交、差异映射及保留的兼容性边界：在菜单编辑项、配置选项、重置和保存按钮添加稳定 `data-slot` / `data-config-field`；测试通过这些属性定位，并用 `patch_verge_config` 固定 `zh-cn` 与 light theme，suite 结束时恢复原配置。选择器扩展不改变用户可见行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现见 run `39169449230`；修复继续由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 `main` / Windows `hermetic` suite 验证。新 SHA 的桌面复验尚未完成。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：E2E TypeScript、25/25 harness 单元测试、widget 单测 6/6、Oxlint、Prettier、frontend boundary 脚本及 `git diff --check` 通过。pnpm 包装命令受共享 `node_modules` 符号链接的安全检查阻止，已直接运行等价工具。没有本机桌面 E2E 结果；新 SHA Windows E2E 待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试在独立 E2E 配置中暂时修改应用主题，并在 suite cleanup 恢复、读回；产品仅增加定位属性。不修改用户配置、宿主网络或系统设置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：测试 locator 使用稳定业务属性，不依赖翻译文案；布局用例仅固定其依赖的主题并恢复原设置。不修改 CI 门禁。
+
+### LESSON-20261019-001：主题 E2E 断言必须查询实际主题根节点
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Open（断言已修正；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `8337acd7a8caa72545c77987b775fcb913ec016e`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39180855095](https://github.com/MFSGA/Chimera/actions/runs/39180855095)，51/52 个 spec 通过；Dashboard spec 在 `before all` 超时退出。
+- 预期行为：测试设为浅色主题后，应确认主题已应用，再开始依赖该主题的布局断言。
+- 真实异常、复现步骤与证据：Windows runner 在 `Dashboard test locale and light theme did not apply` 超时；超时条件读取 `[data-slot="app-root"]` 是否含 `light` 类。
+- 确认的根因与排除项：`ExperimentalThemeProvider` 的 `applyRootStyleVar` 将主题类加到 `document.getElementById('root')`，而不是内部的 `[data-slot="app-root"]`。因此检查的是错误 DOM 节点；不是配置写入失败或主题未应用。
+- 修复提交、差异映射及保留的兼容性边界：测试现在只通过配置 IPC 临时设置主题，不再改语言；等待并断言真实 `#root` 主题类，suite cleanup 恢复并读回原主题。产品代码不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败见 run `39180855095`；修复后的同一 Dashboard spec 继续由 Windows hermetic suite 执行，新的 SHA 结果待验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：CI run `39180855195` 三平台 lint 和构建均通过，E2E harness 类型检查通过；Dashboard 桌面 E2E 在 run `39180855095` 因错误根节点断言失败。新 SHA Windows 桌面复验待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅 E2E 临时改写主题设置，suite cleanup 读回验证原值；无产品或宿主网络变更。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：主题断言须对照 provider 实际 DOM 更新目标；语言和主题测试环境只设置用例真正依赖的偏好。无 CI 门禁调整。
+
+### LESSON-20261019-002：成功重试后重新打开配置弹层再检查控件
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Open（测试步骤已修正；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `fec8f0ecb450aed73bffb8d622a799881c8b7b94`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39189516640](https://github.com/MFSGA/Chimera/actions/runs/39189516640)，hermetic 51/52 个 spec 通过；Dashboard recovery 用例在成功写入后检查控件时失败。
+- 预期行为：重试保存成功后，UI 与后端值一致；点击编辑栏中的 Retry 后，测试重新打开配置弹层再验证设置控件可用。
+- 真实异常、复现步骤与证据：run `39189516640` 已确认 Traffic 显示 `bit/s` 且持久值为 `bits`，随后 `waitForUnitControl` 观察到 `undefined`。失败前 HTML/截图显示 Dashboard 仍在编辑模式，但 widget 配置弹层已关闭，速度单位控件不在 DOM 中。
+- 确认的根因与排除项：测试点击编辑栏中的重试按钮后直接轮询弹层内的 speed-unit 控件；重试按钮位于弹层之外，点击它会关闭弹层，因此不存在待查询元素。故障注入和写入重试已成功，不是产品保存失败。
+- 修复提交、差异映射及保留的兼容性边界：移除只检查现存控件的 `waitForUnitControl`；在重试后和重置后调用已有 `openTrafficConfig`，先按可见 UI 重新打开弹层，再确认速度单位控件可见且启用。产品代码不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败见 run `39189516640`；修复后的恢复步骤仍由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 注册在 Windows hermetic suite，新 SHA 结果待验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39189516650` 的 CI 三平台检查与 Tauri 构建全部通过；run `39189516640` 证明失败注入、重试写入和持久值断言已通过，但在弹层可见性检查失败。新 SHA Windows 桌面复验待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 的可见 UI 交互顺序；已有清理仍恢复原 widget 配置，不改持久化实现或宿主网络。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次状态提交、路由或菜单操作后重新检查并按需打开目标控件的宿主弹层，不沿用已关闭弹层中的元素引用。无 CI 门禁调整。

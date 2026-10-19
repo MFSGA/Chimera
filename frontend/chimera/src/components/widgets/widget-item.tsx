@@ -1,7 +1,7 @@
 /**
  * Dashboard Widget 容器项
  *
- * 迁移自 ref: `src/pages/(main)/main/dashboard/_modules/widget-item.tsx`
+ * 迁移自 ref: `src/components/widgets/widget-item.tsx`
  *
  * 包装 DndGridItem，添加编辑模式下的关闭按钮。
  * 关闭按钮通过 AnimatePresence 实现显隐动画。
@@ -20,8 +20,11 @@ import CloseRounded from '~icons/material-symbols/close-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { Button } from '@/components/ui/button';
 import type { WidgetComponentProps } from './consts';
+import type { WidgetId } from './widget-config';
+import WidgetConfigMenu from './widget-config-menu';
 
-export type WidgetItemProps = DndGridItemProps<string> & WidgetComponentProps;
+export type WidgetItemProps = DndGridItemProps<string> &
+  WidgetComponentProps & { widgetType: WidgetId };
 
 /**
  * WidgetItem — 可拖拽、可关闭的 widget 容器
@@ -37,6 +40,7 @@ export default function WidgetItem({
   children,
   className,
   onCloseClick,
+  widgetType,
   ...props
 }: WidgetItemProps) {
   const { disabled, sourceOnly } = useDndGridContext();
@@ -80,6 +84,12 @@ export default function WidgetItem({
               <CloseRounded className="size-4" />
             </motion.button>
           </Button>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {!disabled && !sourceOnly && (
+          <WidgetConfigMenu id={props.id} type={widgetType} />
         )}
       </AnimatePresence>
     </DndGridItem>
