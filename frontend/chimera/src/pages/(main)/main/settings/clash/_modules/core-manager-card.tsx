@@ -172,7 +172,7 @@ function CoreItem({
   item: ClashCoresDetail;
   onClick: (core: ClashCore_Serialize) => void;
 }) {
-  const { value: currentCore } = useSetting('clash_core');
+  const { value: currentCore } = useSetting('core');
   const icon = useCoreIcon(core);
   const isSelected = core === currentCore;
   const haveNewVersion = item.latestVersion
@@ -267,7 +267,7 @@ export default function CoreManagerCard() {
     fetchRemote,
   } = useClashCores();
   const { deleteConnections } = useClashConnections();
-  const { value: currentCoreKey } = useSetting('clash_core');
+  const { value: currentCoreKey } = useSetting('core');
   const currentCoreIcon = useCoreIcon(currentCoreKey);
   const currentCore = currentCoreKey && clashCores.data?.[currentCoreKey];
 

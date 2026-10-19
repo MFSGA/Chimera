@@ -15,6 +15,7 @@ use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Result;
 use chimera_config::clash::config::overrides::Mode;
+use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
 use ractor::{Actor, ActorRef, rpc::CallResult};
 
 use self::{
@@ -227,18 +228,20 @@ impl ChimeraClient {
     }
 
     async fn set_system_proxy(&self, enabled: bool) -> Result<()> {
-        self.patch_verge(crate::config::chimera::IVerge {
+        self.patch_app_config(ChimeraAppConfigPatch {
             enable_system_proxy: Some(enabled),
             ..Default::default()
         })
-        .await
+        .await?;
+        Ok(())
     }
 
     async fn set_tun_mode(&self, enabled: bool) -> Result<()> {
-        self.patch_verge(crate::config::chimera::IVerge {
+        self.patch_clash_config(ClashConfigPatch {
             enable_tun_mode: Some(enabled),
             ..Default::default()
         })
-        .await
+        .await?;
+        Ok(())
     }
 }

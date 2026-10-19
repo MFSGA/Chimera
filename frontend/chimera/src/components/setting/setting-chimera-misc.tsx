@@ -1,8 +1,9 @@
 import {
+  useClashSetting,
   useSetting,
-  type BreakWhenProxyChange as BreakWhenProxyChangeType,
   type LoggingLevel_Serialize,
   type ProxiesSelectorMode,
+  type ProxyChangeBreakMode,
 } from '@chimera/interface';
 import { BaseCard, MenuItem, SwitchItem } from '@chimera/ui';
 import { List } from '@mui/material';
@@ -34,16 +35,14 @@ const AppLogLevel = () => {
 };
 
 const BreakWhenProxyChange = () => {
-  const breakWhenProxyChange = useSetting('break_when_proxy_change');
-  const checked = breakWhenProxyChange.value
-    ? breakWhenProxyChange.value !== 'none'
-    : false;
+  const breakWhenProxyChange = useClashSetting('break_connection');
+  const checked = breakWhenProxyChange.value?.on_proxy_change !== 'off';
 
   const handleChange = useLockFn(async () => {
     try {
-      await breakWhenProxyChange.upsert(
-        (checked ? 'none' : 'all') as BreakWhenProxyChangeType,
-      );
+      await breakWhenProxyChange.upsert({
+        on_proxy_change: checked ? 'off' : 'all',
+      });
     } catch (error) {
       message(
         m.settings_proxies_break_change_update_failed() +
@@ -67,33 +66,39 @@ const BreakWhenProxyChange = () => {
 };
 
 const BreakWhenProfileChange = () => {
-  const breakWhenProfileChange = useSetting('break_when_profile_change');
+  const breakWhenProfileChange = useClashSetting('break_connection');
 
   return (
     <SwitchItem
       label={m.settings_chimera_enhance_break_when_profile_change_label()}
-      checked={Boolean(breakWhenProfileChange.value)}
+      checked={Boolean(breakWhenProfileChange.value?.on_profile_change)}
       onChange={() =>
-        breakWhenProfileChange.upsert(!breakWhenProfileChange.value)
+        breakWhenProfileChange.upsert({
+          on_profile_change: !breakWhenProfileChange.value?.on_profile_change,
+        })
       }
     />
   );
 };
 
 const BreakWhenModeChange = () => {
-  const breakWhenModeChange = useSetting('break_when_mode_change');
+  const breakWhenModeChange = useClashSetting('break_connection');
 
   return (
     <SwitchItem
       label={m.settings_chimera_enhance_break_when_mode_change_label()}
-      checked={Boolean(breakWhenModeChange.value)}
-      onChange={() => breakWhenModeChange.upsert(!breakWhenModeChange.value)}
+      checked={Boolean(breakWhenModeChange.value?.on_mode_change)}
+      onChange={() =>
+        breakWhenModeChange.upsert({
+          on_mode_change: !breakWhenModeChange.value?.on_mode_change,
+        })
+      }
     />
   );
 };
 
 const TrayProxiesSelector = () => {
-  const { value, upsert } = useSetting('clash_tray_selector');
+  const { value, upsert } = useSetting('tray_selector_mode');
 
   const trayProxiesSelectorMode = {
     normal: m.settings_chimera_tray_type_normal(),

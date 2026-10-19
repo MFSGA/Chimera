@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
 use sha2::Digest;
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, WebviewWindow};
@@ -10,10 +11,8 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::sync::Mutex;
 
 use crate::{
-    client::ChimeraClient,
-    config::{chimera::IVerge, runtime::ClashConfigOverrides},
-    core::clash::transaction::TransactionOutcome,
-    feat,
+    client::ChimeraClient, config::runtime::ClashConfigOverrides,
+    core::clash::transaction::TransactionOutcome, feat,
 };
 
 use super::{
@@ -723,11 +722,12 @@ async fn set_tun_enabled(
 
 async fn persist_tun_enabled(client: &ChimeraClient, enabled: bool) -> AgentResult<()> {
     client
-        .patch_verge(IVerge {
+        .patch_clash_config(ClashConfigPatch {
             enable_tun_mode: Some(enabled),
             ..Default::default()
         })
         .await
+        .map(|_| ())
         .map_err(|_| AgentCommandError::ActionFailed)
 }
 
@@ -877,11 +877,12 @@ async fn disable_stale_system_proxy(
 
 async fn persist_system_proxy_desired(client: &ChimeraClient, enabled: bool) -> AgentResult<()> {
     client
-        .patch_verge(IVerge {
+        .patch_app_config(ChimeraAppConfigPatch {
             enable_system_proxy: Some(enabled),
             ..Default::default()
         })
         .await
+        .map(|_| ())
         .map_err(|_| AgentCommandError::ActionFailed)
 }
 

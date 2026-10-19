@@ -1,4 +1,4 @@
-import { useSetting } from '@chimera/interface';
+import { useClashSetting } from '@chimera/interface';
 import { Switch } from '@/components/ui/switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
@@ -14,11 +14,13 @@ import {
 } from '../../_modules/settings-card';
 
 export default function BreakWhenProfileChangeSwitch() {
-  const breakWhenProfileChange = useSetting('break_when_profile_change');
+  const breakWhenProfileChange = useClashSetting('break_connection');
 
   const handleChange = useLockFn(async () => {
     try {
-      await breakWhenProfileChange.upsert(!breakWhenProfileChange.value);
+      await breakWhenProfileChange.upsert({
+        on_profile_change: !breakWhenProfileChange.value?.on_profile_change,
+      });
     } catch (error) {
       message(
         `Update break when profile change failed!\n Error: ${formatError(error)}`,
@@ -45,7 +47,7 @@ export default function BreakWhenProfileChangeSwitch() {
           </ItemLabel>
 
           <Switch
-            checked={Boolean(breakWhenProfileChange.value)}
+            checked={Boolean(breakWhenProfileChange.value?.on_profile_change)}
             onCheckedChange={handleChange}
             loading={breakWhenProfileChange.isPending}
           />

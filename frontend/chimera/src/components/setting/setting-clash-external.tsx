@@ -1,9 +1,9 @@
 import {
   useClashCoreConfig,
   useClashInfo,
+  useClashSetting,
   useRuntimeProfile,
-  useSetting,
-  type ExternalControllerPortStrategy,
+  type PortStrategyKind,
 } from '@chimera/interface';
 import { BaseCard, BaseItem, Expand, MenuItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
@@ -73,7 +73,7 @@ const ExternalController = () => {
 };
 
 const PortStrategy = () => {
-  const { value, upsert } = useSetting('clash_strategy');
+  const { value, upsert } = useClashSetting('external_controller');
 
   const portStrategyOptions = {
     allow_fallback: m.settings_clash_settings_allow_fallback_label(),
@@ -81,10 +81,7 @@ const PortStrategy = () => {
     random: m.settings_clash_settings_random_label(),
   };
 
-  const selected = useMemo(
-    () => value?.external_controller_port_strategy || 'allow_fallback',
-    [value],
-  );
+  const selected = useMemo(() => value?.port.kind || 'allow_fallback', [value]);
 
   return (
     <MenuItem
@@ -94,8 +91,7 @@ const PortStrategy = () => {
       selectSx={{ width: 160 }}
       onSelected={async (nextValue) => {
         await upsert({
-          external_controller_port_strategy:
-            nextValue as ExternalControllerPortStrategy,
+          port: { kind: nextValue as PortStrategyKind },
         });
       }}
     />

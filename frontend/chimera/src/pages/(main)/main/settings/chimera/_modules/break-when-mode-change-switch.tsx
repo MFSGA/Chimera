@@ -1,4 +1,4 @@
-import { useSetting } from '@chimera/interface';
+import { useClashSetting } from '@chimera/interface';
 import { Switch } from '@/components/ui/switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
@@ -14,11 +14,13 @@ import {
 } from '../../_modules/settings-card';
 
 export default function BreakWhenModeChangeSwitch() {
-  const breakWhenModeChange = useSetting('break_when_mode_change');
+  const breakWhenModeChange = useClashSetting('break_connection');
 
   const handleChange = useLockFn(async () => {
     try {
-      await breakWhenModeChange.upsert(!breakWhenModeChange.value);
+      await breakWhenModeChange.upsert({
+        on_mode_change: !breakWhenModeChange.value?.on_mode_change,
+      });
     } catch (error) {
       message(
         `Update break when mode change failed!\n Error: ${formatError(error)}`,
@@ -45,7 +47,7 @@ export default function BreakWhenModeChangeSwitch() {
           </ItemLabel>
 
           <Switch
-            checked={Boolean(breakWhenModeChange.value)}
+            checked={Boolean(breakWhenModeChange.value?.on_mode_change)}
             onCheckedChange={handleChange}
             loading={breakWhenModeChange.isPending}
           />

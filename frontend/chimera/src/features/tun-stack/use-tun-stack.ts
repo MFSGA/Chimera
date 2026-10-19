@@ -1,4 +1,5 @@
 import {
+  useClashSetting,
   useRuntimeProfile,
   useSetting,
   type TunStack,
@@ -30,8 +31,8 @@ export const getTunStackOptions = (
 
 /** Keep TUN stack changes serialized and refresh every runtime view they affect. */
 export const useTunStackAction = () => {
-  const tunStack = useSetting('tun_stack');
-  const enableTunMode = useSetting('enable_tun_mode');
+  const tunStack = useClashSetting('tun_stack');
+  const enableTunMode = useClashSetting('enable_tun_mode');
   const runtimeProfile = useRuntimeProfile();
   const [isPending, setIsPending] = useState(false);
 

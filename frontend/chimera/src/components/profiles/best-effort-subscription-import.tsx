@@ -1,6 +1,7 @@
 import {
   commands,
   unwrapResult,
+  useClashSetting,
   useProfile,
   useSetting,
   type NetworkProbeResult,
@@ -222,7 +223,7 @@ export function BestEffortSubscriptionImport() {
   const stepDefinitions = getStepDefinitions();
   const { create } = useProfile();
   const systemProxy = useSetting('enable_system_proxy');
-  const tunMode = useSetting('enable_tun_mode');
+  const tunMode = useClashSetting('enable_tun_mode');
   const [url, setUrl] = useState('');
   const [steps, setSteps] = useState(createInitialSteps);
   const [isRunning, setIsRunning] = useState(false);

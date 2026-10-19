@@ -1,8 +1,4 @@
-import {
-  useClashConfig,
-  useClashCoreConfig,
-  useSetting,
-} from '@chimera/interface';
+import { useClashConfig, useClashSetting } from '@chimera/interface';
 import { BaseCard, BaseItem, Expand, SwitchItem } from '@chimera/ui';
 import Done from '@mui/icons-material/Done';
 import { Button, List, TextField } from '@mui/material';
@@ -13,12 +9,12 @@ import { message } from '@/utils/notification';
 const MIXED_PORT_FALLBACK = 7890;
 
 const ClashPort = () => {
-  const { value, upsert } = useSetting('verge_mixed_port');
+  const { value, upsert } = useClashSetting('mixed_port');
   const { query } = useClashConfig();
-  const { upsert: upsertClashCore } = useClashCoreConfig();
 
   const port = useMemo(
-    () => query.data?.['mixed-port'] || value || MIXED_PORT_FALLBACK,
+    () =>
+      query.data?.['mixed-port'] || value?.start_port || MIXED_PORT_FALLBACK,
     [query.data, value],
   );
 
@@ -41,8 +37,7 @@ const ClashPort = () => {
       return;
     }
 
-    await upsertClashCore.mutateAsync({ 'mixed-port': parsed });
-    await upsert(parsed);
+    await upsert({ start_port: parsed });
   };
 
   return (
@@ -74,11 +69,11 @@ const ClashPort = () => {
 };
 
 const RandomPort = () => {
-  const { value, upsert } = useSetting('enable_random_port');
+  const { value, upsert } = useClashSetting('mixed_port');
 
   const handleRandomPort = async () => {
     try {
-      await upsert(!value);
+      await upsert({ kind: value?.kind === 'random' ? 'fixed' : 'random' });
     } catch (e) {
       message(JSON.stringify(e), {
         title: m.common_error(),
@@ -95,7 +90,7 @@ const RandomPort = () => {
   return (
     <SwitchItem
       label={m.settings_clash_settings_random_port_label()}
-      checked={value || false}
+      checked={value?.kind === 'random'}
       onChange={handleRandomPort}
     />
   );

@@ -27,7 +27,7 @@ const CurrentCoreIcon = ({
   className,
   ...props
 }: Omit<ComponentProps<'img'>, 'src'>) => {
-  const { value } = useSetting('clash_core');
+  const { value } = useSetting('core');
   const icon = useCoreIcon(value ?? 'mihomo');
 
   return <img src={icon} className={cn('size-full', className)} {...props} />;

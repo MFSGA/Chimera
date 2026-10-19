@@ -23,7 +23,7 @@ function LatencyTag({ name, value }: { name: string; value: number }) {
 
 export const TimingPanel = ({ data }: { data: Record<string, number> }) => {
   const isDrawer = useAtomValue(atomIsDrawer);
-  const { value } = useSetting('clash_core');
+  const { value } = useSetting('core');
   const supportMemory = value && ['mihomo', 'mihomo-alpha'].includes(value);
 
   return (

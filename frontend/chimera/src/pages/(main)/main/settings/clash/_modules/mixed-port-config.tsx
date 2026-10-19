@@ -1,8 +1,4 @@
-import {
-  useClashConfig,
-  useClashCoreConfig,
-  useSetting,
-} from '@chimera/interface';
+import { useClashConfig, useClashSetting } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -37,16 +33,14 @@ const DEFAULT_MIXED_PORT = 7890;
 export default function MixedPortConfig() {
   const [open, setOpen] = useState(false);
 
-  const mixedPort = useSetting('verge_mixed_port');
+  const mixedPort = useClashSetting('mixed_port');
 
   const clashConfig = useClashConfig();
-
-  const clashCoreConfig = useClashCoreConfig();
 
   const currentMixedPort = useMemo(
     () =>
       clashConfig.query.data?.['mixed-port'] ||
-      mixedPort.value ||
+      mixedPort.value?.start_port ||
       DEFAULT_MIXED_PORT,
     [clashConfig.query.data, mixedPort.value],
   );
@@ -73,10 +67,7 @@ export default function MixedPortConfig() {
     }
 
     try {
-      await clashCoreConfig.upsert.mutateAsync({
-        'mixed-port': draft,
-      });
-      await mixedPort.upsert(draft);
+      await mixedPort.upsert({ start_port: draft });
 
       setOpen(false);
     } catch (error) {
@@ -135,9 +126,7 @@ export default function MixedPortConfig() {
               <Button
                 variant="flat"
                 disabled={!isValid}
-                loading={
-                  clashCoreConfig.upsert.isPending || mixedPort.isPending
-                }
+                loading={mixedPort.isPending}
                 onClick={() => void handleSubmit()}
               >
                 {m.common_apply()}

@@ -1,4 +1,9 @@
-import { useClashConfig, useSetting, useSystemProxy } from '@chimera/interface';
+import {
+  useClashConfig,
+  useClashSetting,
+  useSetting,
+  useSystemProxy,
+} from '@chimera/interface';
 import { NetworkPing, SettingsEthernet } from '@mui/icons-material';
 import { Chip, Paper, type ChipProps } from '@mui/material';
 import Grid from '@mui/material/Grid';
@@ -21,7 +26,7 @@ const TitleComp = () => {
   } = useClashConfig();
   const systemProxy = useSystemProxy();
   const { value: enableSystemProxy } = useSetting('enable_system_proxy');
-  const { value: enableTunMode } = useSetting('enable_tun_mode');
+  const { value: enableTunMode } = useClashSetting('enable_tun_mode');
   const mixedPort = clashConfigs?.['mixed-port'];
 
   const status = useMemo<{

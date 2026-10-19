@@ -1,3 +1,6 @@
+import type { I18nLanguage } from '@chimera/interface';
+import type { Locale } from '@/paraglide/runtime';
+
 export const languageOptions = {
   en: 'English',
   ru: 'Русский',
@@ -33,4 +36,17 @@ export const languageQuirks: {
       minWidth: 180,
     },
   },
+};
+
+export const toI18nLanguage = (locale: Locale): I18nLanguage => {
+  switch (locale) {
+    case 'en':
+      return 'en-US';
+    case 'ru':
+      return 'ru';
+    case 'zh-cn':
+      return 'zh-CN';
+    case 'zh-tw':
+      return 'zh-TW';
+  }
 };

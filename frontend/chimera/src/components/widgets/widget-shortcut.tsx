@@ -1,6 +1,7 @@
 import {
   useClashConfig,
   useClashCores,
+  useClashSetting,
   useCoreStatus,
   useSetting,
   useSystemProxy,
@@ -96,7 +97,7 @@ export function ProxyShortcutsWidget({
 }: WidgetComponentProps) {
   const config = useWidgetConfig(id, WidgetId.ProxyShortcuts);
   const { value: enableSystemProxy } = useSetting('enable_system_proxy');
-  const { value: enableTunMode } = useSetting('enable_tun_mode');
+  const { value: enableTunMode } = useClashSetting('enable_tun_mode');
   const { sourceOnly, isOverlay } = useDndGridContext();
   const isPreview = sourceOnly || isOverlay;
   const buttons =
@@ -223,7 +224,7 @@ const CurrentCoreCard = ({
   config: WidgetConfigs[WidgetId.CoreShortcuts];
 }) => {
   const { query: clashCores } = useClashCores();
-  const { value: currentCoreKey } = useSetting('clash_core');
+  const { value: currentCoreKey } = useSetting('core');
   const currentCoreIcon = useCoreIcon(currentCoreKey);
   const currentCore = currentCoreKey && clashCores.data?.[currentCoreKey];
   const coreStatusQuery = useCoreStatus();

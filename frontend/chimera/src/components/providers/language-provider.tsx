@@ -3,6 +3,7 @@ import { locale } from 'dayjs';
 import { createContext, PropsWithChildren, useContext, useEffect } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import { getLocale, Locale, locales, setLocale } from '@/paraglide/runtime';
+import { toI18nLanguage } from '@/utils/language';
 
 const LanguageContext = createContext<{
   language?: Locale;
@@ -36,7 +37,7 @@ export const LanguageProvider = ({ children }: PropsWithChildren) => {
   const configuredLocale = normalizeConfiguredLocale(language.value);
 
   const setLanguage = useLockFn(async (value: Locale) => {
-    await language.upsert(value);
+    await language.upsert(toI18nLanguage(value));
     setLocale(value);
   });
 

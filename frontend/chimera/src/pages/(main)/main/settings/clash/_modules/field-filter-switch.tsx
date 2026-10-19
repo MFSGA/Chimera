@@ -1,4 +1,4 @@
-import { useSetting } from '@chimera/interface';
+import { useClashSetting, useSetting } from '@chimera/interface';
 import { Switch } from '@/components/ui/switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
@@ -11,7 +11,7 @@ import {
 } from '../../_modules/settings-card';
 
 export default function FieldFilterButton() {
-  const { value, upsert, isPending } = useSetting('enable_clash_fields');
+  const { value, upsert, isPending } = useClashSetting('enable_clash_fields');
 
   const handleFieldFilter = useLockFn(async (input: boolean) => {
     try {

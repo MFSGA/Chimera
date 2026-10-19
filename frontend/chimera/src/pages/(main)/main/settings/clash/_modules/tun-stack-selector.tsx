@@ -1,4 +1,5 @@
 import {
+  useClashSetting,
   useRuntimeProfile,
   useSetting,
   type TunStack,
@@ -26,11 +27,11 @@ import {
 } from '../../_modules/settings-card';
 
 export default function TunStackSelector() {
-  const coreType = useSetting('clash_core');
+  const coreType = useSetting('core');
 
-  const tunStack = useSetting('tun_stack');
+  const tunStack = useClashSetting('tun_stack');
 
-  const enableTunMode = useSetting('enable_tun_mode');
+  const enableTunMode = useClashSetting('enable_tun_mode');
 
   const runtimeProfile = useRuntimeProfile();
 

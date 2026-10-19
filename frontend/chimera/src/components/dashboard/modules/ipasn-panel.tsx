@@ -43,7 +43,7 @@ export const IPASNPanel = ({ refreshCount }: { refreshCount: number }) => {
   const { data, refetch, isFetching } = useIPSB();
   const [showIPAddress, setShowIPAddress] = useState(false);
   const isDrawer = useAtomValue(atomIsDrawer);
-  const { value } = useSetting('clash_core');
+  const { value } = useSetting('core');
   const supportMemory = value && ['mihomo', 'mihomo-alpha'].includes(value);
 
   return (

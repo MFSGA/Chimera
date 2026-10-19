@@ -1,4 +1,9 @@
-import { openThat, useClashInfo, useSetting } from '@chimera/interface';
+import {
+  openThat,
+  useClashInfo,
+  useClashSetting,
+  useSetting,
+} from '@chimera/interface';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
 import DeleteRounded from '~icons/material-symbols/delete-rounded';
@@ -79,7 +84,7 @@ const EditItemButton = ({
   children,
 }: PropsWithChildren<{ defaultUrl?: string; index?: number }>) => {
   const [open, setOpen] = useState(false);
-  const { value, upsert } = useSetting('web_ui_list');
+  const { value, upsert } = useClashSetting('web_ui_list');
   const labels = useUrlLabels();
   const [draft, setDraft] = useState(defaultUrl ?? '');
 
@@ -163,7 +168,7 @@ const EditItemButton = ({
 const WebUIItem = ({ url, index }: { url: string; index: number }) => {
   const labels = useUrlLabels();
   const formattedUrl = formatUrl(url, labels);
-  const { value, upsert } = useSetting('web_ui_list');
+  const { value, upsert } = useClashSetting('web_ui_list');
 
   return (
     <Card className="w-full min-w-0 space-y-4 overflow-hidden">
@@ -206,7 +211,7 @@ const EmptyItem = () => (
 );
 
 export default function WebUI() {
-  const { value } = useSetting('web_ui_list');
+  const { value } = useClashSetting('web_ui_list');
 
   return (
     <div className="space-y-3">

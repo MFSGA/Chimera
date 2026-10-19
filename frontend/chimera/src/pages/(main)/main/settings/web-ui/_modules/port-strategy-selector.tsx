@@ -1,7 +1,4 @@
-import {
-  useSetting,
-  type ExternalControllerPortStrategy,
-} from '@chimera/interface';
+import { useClashSetting, type PortStrategyKind } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,22 +18,18 @@ import {
 } from '../../_modules/settings-card';
 
 export default function PortStrategySelector() {
-  const { value, upsert } = useSetting('clash_strategy');
+  const { value, upsert } = useClashSetting('external_controller');
 
   const messages = {
     allow_fallback: m.settings_clash_settings_allow_fallback_label(),
     fixed: m.settings_clash_settings_fixed_label(),
     random: m.settings_clash_settings_random_label(),
-  } as Record<ExternalControllerPortStrategy, string>;
+  } as Record<PortStrategyKind, string>;
 
-  const current = value?.external_controller_port_strategy || 'allow_fallback';
+  const current = value?.port.kind || 'allow_fallback';
 
-  const handlePortStrategyChange = async (
-    value: ExternalControllerPortStrategy,
-  ) => {
-    await upsert({
-      external_controller_port_strategy: value,
-    });
+  const handlePortStrategyChange = async (value: PortStrategyKind) => {
+    await upsert({ port: { kind: value } });
   };
 
   return (
@@ -71,9 +64,7 @@ export default function PortStrategySelector() {
               checked={current === key}
               key={key}
               onSelect={() =>
-                void handlePortStrategyChange(
-                  key as ExternalControllerPortStrategy,
-                )
+                void handlePortStrategyChange(key as PortStrategyKind)
               }
             >
               {label}

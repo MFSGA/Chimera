@@ -247,7 +247,9 @@ export function ExperimentalThemeProvider({ children }: PropsWithChildren) {
         themeMode.value === ThemeMode.LIGHT ||
         themeMode.value === ThemeMode.DARK
       ) {
-        applyThemeMode(themeMode.value);
+        applyThemeMode(
+          themeMode.value === 'dark' ? ThemeMode.DARK : ThemeMode.LIGHT,
+        );
       } else {
         // Setting value may still be loading; keep current class to avoid visual flicker.
       }

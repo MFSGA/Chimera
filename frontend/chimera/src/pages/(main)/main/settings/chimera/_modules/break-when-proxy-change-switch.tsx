@@ -1,4 +1,4 @@
-import { useSetting, type BreakWhenProxyChange } from '@chimera/interface';
+import { useClashSetting, type ProxyChangeBreakMode } from '@chimera/interface';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,12 +21,12 @@ import {
 } from '../../_modules/settings-card';
 
 export default function BreakWhenProxyChangeSwitch() {
-  const breakWhenProxyChange = useSetting('break_when_proxy_change');
-  const value = breakWhenProxyChange.value ?? 'none';
+  const breakWhenProxyChange = useClashSetting('break_connection');
+  const value = breakWhenProxyChange.value?.on_proxy_change ?? 'off';
 
-  const handleChange = useLockFn(async (mode: BreakWhenProxyChange) => {
+  const handleChange = useLockFn(async (mode: ProxyChangeBreakMode) => {
     try {
-      await breakWhenProxyChange.upsert(mode);
+      await breakWhenProxyChange.upsert({ on_proxy_change: mode });
     } catch (error) {
       await message(
         `${m.settings_proxies_break_change_update_failed()}\n${formatError(error)}`,
@@ -36,10 +36,10 @@ export default function BreakWhenProxyChangeSwitch() {
   });
 
   const options = {
-    none: m.settings_chimera_enhance_break_when_proxy_change_none(),
-    chain: m.settings_chimera_enhance_break_when_proxy_change_chain(),
+    off: m.settings_chimera_enhance_break_when_proxy_change_none(),
+    proxy_group: m.settings_chimera_enhance_break_when_proxy_change_chain(),
     all: m.settings_chimera_enhance_break_when_proxy_change_all(),
-  } satisfies Record<BreakWhenProxyChange, string>;
+  } satisfies Record<ProxyChangeBreakMode, string>;
 
   return (
     <SettingsCard data-slot="break-when-proxy-change-selector">
@@ -75,7 +75,7 @@ export default function BreakWhenProxyChangeSwitch() {
               checked={value === key}
               disabled={breakWhenProxyChange.isPending}
               key={key}
-              onSelect={() => void handleChange(key as BreakWhenProxyChange)}
+              onSelect={() => void handleChange(key as ProxyChangeBreakMode)}
             >
               {label}
             </DropdownMenuCheckboxItem>

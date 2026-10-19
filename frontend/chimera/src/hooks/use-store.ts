@@ -8,7 +8,7 @@ import { coreTypeAtom } from '@/store/clash';
 export function useCoreType() {
   const [coreType, setCoreType] = useAtom(coreTypeAtom);
 
-  const { upsert } = useSetting('clash_core');
+  const { upsert } = useSetting('core');
 
   const setter = (value: typeof coreType) => {
     setCoreType(value);

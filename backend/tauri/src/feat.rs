@@ -1,10 +1,11 @@
 use anyhow::Result;
+use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
 use serde_yaml::Mapping;
 use tauri::{AppHandle, Manager};
 
 use crate::{
     client::ChimeraClient,
-    config::{chimera::IVerge, runtime::ClashConfigOverrides},
+    config::runtime::ClashConfigOverrides,
     core::{clash::transaction::TransactionOutcome, handle},
     log_err,
 };
@@ -97,11 +98,11 @@ pub fn toggle_system_proxy(app_handle: &AppHandle) {
     };
 
     tauri::async_runtime::spawn(async move {
-        let patch = IVerge {
+        let patch = ChimeraAppConfigPatch {
             enable_system_proxy: Some(!enabled),
-            ..IVerge::default()
+            ..Default::default()
         };
-        if let Err(err) = client.patch_verge(patch).await {
+        if let Err(err) = client.patch_app_config(patch).await {
             log::error!(target: "app", "failed to toggle system proxy: {err:?}");
         }
     });
@@ -124,11 +125,11 @@ pub fn toggle_tun_mode(app_handle: &AppHandle) {
     };
 
     tauri::async_runtime::spawn(async move {
-        let patch = IVerge {
+        let patch = ClashConfigPatch {
             enable_tun_mode: Some(!enabled),
-            ..IVerge::default()
+            ..Default::default()
         };
-        if let Err(err) = client.patch_verge(patch).await {
+        if let Err(err) = client.patch_clash_config(patch).await {
             log::error!(target: "app", "failed to toggle tun mode: {err:?}");
         }
     });

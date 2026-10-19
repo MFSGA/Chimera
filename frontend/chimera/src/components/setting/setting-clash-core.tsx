@@ -24,7 +24,7 @@ export const SettingClashCore = () => {
 
   const [expand, setExpand] = useState(false);
 
-  const { value: currentCore } = useSetting('clash_core');
+  const { value: currentCore } = useSetting('core');
 
   const {
     query: clashCores,

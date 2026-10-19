@@ -1,4 +1,4 @@
-import { useClashInfo, useSetting } from '@chimera/interface';
+import { useClashInfo, useClashSetting, useSetting } from '@chimera/interface';
 import { BaseCard, BaseDialog, Expand } from '@chimera/ui';
 import AddIcon from '@mui/icons-material/Add';
 import {
@@ -32,7 +32,7 @@ const AddRecordButton = ({ onClick }: { onClick: () => void }) => {
 };
 
 export const SettingClashWeb = () => {
-  const { value, upsert } = useSetting('web_ui_list');
+  const { value, upsert } = useClashSetting('web_ui_list');
 
   const { data } = useClashInfo();
 
@@ -54,7 +54,7 @@ export const SettingClashWeb = () => {
 
   const deleteItem = useLockFn(async (index: number) => {
     await upsert(
-      value ? value.slice(0, index).concat(value.slice(index + 1)) : null,
+      (value ?? []).slice(0, index).concat((value ?? []).slice(index + 1)),
     );
   });
 

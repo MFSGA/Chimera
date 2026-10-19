@@ -2,7 +2,6 @@ import {
   commands,
   unwrapResult,
   useProfile,
-  type IVerge_Deserialize,
   type PendingDeepLinkEntry,
 } from '@chimera/interface';
 import { useNavigate } from '@tanstack/react-router';
@@ -18,6 +17,7 @@ import {
 import * as m from '@/paraglide/messages';
 import { setLocale } from '@/paraglide/runtime';
 import { formatError } from '@/utils';
+import { toI18nLanguage } from '@/utils/language';
 
 const APP_WINDOW_LABELS = new Set(['legacy', 'main']);
 
@@ -38,21 +38,17 @@ export const SchemeProvider = () => {
 
     const settingsGateway: DeepLinkSettingsGateway = {
       getSystemProxyEnabled: async () => {
-        const config = unwrapResult(await commands.getVergeConfig());
-        return config.enable_system_proxy ?? false;
+        const config = unwrapResult(await commands.getAppConfig());
+        return config.enable_system_proxy;
       },
       setSystemProxyEnabled: async (enabled) => {
         unwrapResult(
-          await commands.patchVergeConfig({
-            enable_system_proxy: enabled,
-          } as unknown as IVerge_Deserialize),
+          await commands.patchAppConfig({ enable_system_proxy: enabled }),
         );
       },
       setLanguage: async (locale) => {
         unwrapResult(
-          await commands.patchVergeConfig({
-            language: locale,
-          } as unknown as IVerge_Deserialize),
+          await commands.patchAppConfig({ language: toI18nLanguage(locale) }),
         );
         setLocale(locale);
       },

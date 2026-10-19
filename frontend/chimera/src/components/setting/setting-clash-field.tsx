@@ -1,4 +1,4 @@
-import { useProfile, useSetting } from '@chimera/interface';
+import { useClashSetting, useProfile, useSetting } from '@chimera/interface';
 import { BaseCard, BaseDialog } from '@chimera/ui';
 import { Box, Typography } from '@mui/material';
 import Grid from '@mui/material/Grid';
@@ -75,7 +75,7 @@ const FieldsControl = ({
 };
 
 const ClashFieldSwitch = () => {
-  const { value, upsert } = useSetting('enable_clash_fields');
+  const { value, upsert } = useClashSetting('enable_clash_fields');
 
   return (
     <LabelSwitch
