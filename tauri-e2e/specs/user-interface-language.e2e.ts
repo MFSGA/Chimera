@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const mainSettingsPath = '/main/settings/user-interface';
 
-type VergeConfig = {
+type AppConfig = {
   language?: string | null;
 };
 
@@ -117,7 +117,7 @@ async function waitForLocaleSynchronization(handle: string) {
     await browser.waitUntil(
       async () => {
         const [config, ui] = await Promise.all([
-          invoke<VergeConfig>('get_verge_config'),
+          invoke<AppConfig>('get_app_config'),
           browser.execute(() => ({
             ready:
               document.readyState === 'complete' &&
@@ -222,7 +222,7 @@ describe('application language selection', () => {
       { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
     );
 
-    const config = await invoke<VergeConfig>('get_verge_config');
+    const config = await invoke<AppConfig>('get_app_config');
     originalLanguage = config.language ?? null;
     for (const handle of await browser.getWindowHandles()) {
       if (handle !== 'legacy' && handle !== 'main') continue;
@@ -255,12 +255,12 @@ describe('application language selection', () => {
     await browser.setWindowSize(1240, 638);
     await openUserInterfaceSettings();
 
-    await invoke('patch_verge_config', { payload: { language: 'en' } });
+    await invoke('patch_app_config', { patch: { language: 'en' } });
     await browser.waitUntil(
       async () =>
         ['en', 'en-us'].includes(
           (
-            (await invoke<VergeConfig>('get_verge_config')).language ?? ''
+            (await invoke<AppConfig>('get_app_config')).language ?? ''
           ).toLowerCase(),
         ),
       {
@@ -291,13 +291,13 @@ describe('application language selection', () => {
     const cleanupErrors: Error[] = [];
     try {
       if (originalLanguage !== undefined) {
-        await invoke('patch_verge_config', {
-          payload: { language: originalLanguage },
+        await invoke('patch_app_config', {
+          patch: { language: originalLanguage },
         });
         await browser.waitUntil(
           async () =>
-            ((await invoke<VergeConfig>('get_verge_config')).language ??
-              null) === originalLanguage,
+            ((await invoke<AppConfig>('get_app_config')).language ?? null) ===
+            originalLanguage,
           {
             timeout: 15_000,
             timeoutMsg: 'The original language setting was not restored.',
@@ -418,7 +418,7 @@ describe('application language selection', () => {
       await browser.waitUntil(
         async () => {
           const [config, ui] = await Promise.all([
-            invoke<VergeConfig>('get_verge_config'),
+            invoke<AppConfig>('get_app_config'),
             browser.execute(() => ({
               language: document.documentElement.lang,
               selectedLanguage: document
