@@ -407,3 +407,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39189516650` 的 CI 三平台检查与 Tauri 构建全部通过；run `39189516640` 证明失败注入、重试写入和持久值断言已通过，但在弹层可见性检查失败。新 SHA Windows 桌面复验待执行。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 E2E 的可见 UI 交互顺序；已有清理仍恢复原 widget 配置，不改持久化实现或宿主网络。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次状态提交、路由或菜单操作后重新检查并按需打开目标控件的宿主弹层，不沿用已关闭弹层中的元素引用。无 CI 门禁调整。
+
+### LESSON-20261019-003：配置回滚后重新协调运行时
+
+- 日期与时区：2026-10-19 UTC
+- 状态：独立 L2 复核完成，代码修复已在本地集成分支实现；maintainer 对本记录的批准与合入 master 待完成
+- 严重度：Medium
+- 模块：Settings / Clash runtime
+- master commit / ref gitlink SHA / 平台与测试环境：master `02d7e3fc`；本地只读 ref checkout `685042aaedaea26a591900be0b494dfe8efd79b0`（父仓库 gitlink 为 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`）；macOS 本地复核与 Rust 测试。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地独立复核发现；无远端 PR 或 CI 运行。
+- 预期行为：Clash typed patch 已应用候选运行配置后，若旧配置镜像写盘失败，恢复源配置并重新协调当前持久配置对应的运行态；若运行态补偿也失败，返回原始错误及补偿错误。
+- 真实异常、复现步骤与证据：`ClashConfigClient::patch_typed_config` 原来先替换持久状态、reconcile 候选运行态，再写 legacy Clash/Verge 镜像；后续保存失败时只做 CAS 状态回滚和文件补写，没有恢复内核配置。文件系统写失败可使 API 返回错误但新运行态仍生效。复核通过代码调用顺序确认可达；未注入真实磁盘错误。
+- 确认的根因与排除项：候选运行态应用与持久化完成处于分开的步骤；失败分支将源数据回滚误认为已恢复整体事务，遗漏了对回滚后最新状态的 lifecycle reconcile。
+- 修复提交、差异映射及保留的兼容性边界：在 Clash typed patch 的补偿路径中，尽力完成 CAS 回滚与镜像保存后，对当前最新 typed 配置重新调用现有 core lifecycle；同时汇总并返回 CAS、保存和运行态补偿错误。未增加新的配置业务层或兼容入口。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`backend/tauri/src/client/clash_config.rs` 的 `typed_clash_patch_restores_source_and_runtime_after_persistence_failure` 通过真实 Clash 状态 actor 与配置文件注入 legacy persistence 回调错误，并观察来源配置与模拟运行态均回滚；`typed_clash_compensation_reports_runtime_reconcile_failure` 验证运行态补偿错误与 CAS 冲突均保留。测试未注入真实磁盘保存错误或真实内核协调失败。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera typed_clash_patch_restores_source_and_runtime_after_persistence_failure -- --nocapture` 1/1；完整 `cargo test --quiet --locked --manifest-path backend/Cargo.toml -p chimera` 572 passed、0 failed、1 ignored；`cargo check`、目标 crate `cargo fmt -- --check` 与 `git diff --check` 通过。桌面 E2E 和真实磁盘故障注入未执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅改变失败补偿时的 core reconcile 与错误聚合；回退实现 commit 会恢复原补偿路径。无宿主网络或系统设置操作。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：所有“运行态已变更、源持久化未完成”的失败路径都须验证源状态恢复后重新 reconcile 最新状态；必要时使用故障注入覆盖保存失败及 CAS 冲突。未修改 CI 门禁。
