@@ -2,6 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// Contract: a direct typed Clash IPC patch changes the running core and the
+// isolated clash-config.yaml; an invalid typed port patch leaves both intact.
+// This is an integration check, not a claim about the settings page UI.
+
 interface ClashInfo {
   secret?: string;
   server: string;
@@ -74,8 +78,11 @@ async function waitForRuntimeIPv6(): Promise<boolean> {
 }
 
 async function patchIPv6(value: boolean): Promise<void> {
-  await invoke<null>('patch_clash_config', {
-    payload: { ipv6: value },
+  const config = await invoke<{ overrides: Record<string, unknown> }>(
+    'get_clash_config',
+  );
+  await invoke<unknown>('patch_clash_config', {
+    patch: { overrides: { ...config.overrides, ipv6: value } },
   });
 }
 
@@ -116,12 +123,27 @@ async function waitForCommittedIPv6(expected: boolean) {
 }
 
 describe('typed Clash saved-state ownership', () => {
-  it('commits runtime overrides through ClashConfigActor and restores the original value', async () => {
+  it('applies typed runtime overrides and rejects an invalid patch without changing state', async () => {
     await waitForApp();
     const original = await waitForRuntimeIPv6();
     const changed = !original;
+    const file = clashConfigPath();
+    const originalConfig = fs.existsSync(file)
+      ? fs.readFileSync(file, 'utf8')
+      : null;
 
     try {
+      await assert.rejects(
+        invoke<unknown>('patch_clash_config', {
+          patch: { mixed_port: { start_port: 65_536 } },
+        }),
+      );
+      assert.equal(await readRuntimeIPv6(), original);
+      assert.equal(fs.existsSync(file), originalConfig !== null);
+      if (originalConfig !== null) {
+        assert.equal(fs.readFileSync(file, 'utf8'), originalConfig);
+      }
+
       await patchIPv6(changed);
       await waitForCommittedIPv6(changed);
 

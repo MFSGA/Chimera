@@ -271,7 +271,7 @@ async function runSeedPhase(): Promise<void> {
   await invoke<null>('patch_verge_config', {
     payload: { enable_auto_check_update: true },
   });
-  await invoke<null>('patch_clash_config', { payload: { ipv6: false } });
+  await invoke<null>('patch_runtime_overrides', { patch: { ipv6: false } });
 
   const original = await browser.getWindowSize();
   await browser.setWindowSize(

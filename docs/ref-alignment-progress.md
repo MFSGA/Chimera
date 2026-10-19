@@ -1,5 +1,20 @@
 # ref 对齐进度
 
+## App/Clash typed settings 接入（实现完成，独立复核与 Windows 桌面 E2E 待完成）
+
+- 目标：按固定 ref 的 typed settings hooks 和 IPC 合同，让主界面、legacy UI 及共享组件通过同一组 typed application API 读取和修改应用设置、Clash 持久设置；runtime-only 的 Clash 覆盖仍通过独立 runtime API 应用。
+- 非目标：本批不删除受支持的 legacy UI、Chimera Client/Service、旧用户配置读取、legacy IPC 或 Agent 能力；不迁移 Dashboard/Session/Profile 等无关设置域，不改 TUN 授权策略。
+- 参考基线：Clash Nyanpasu `ref` HEAD `685042aaedaea26a591900be0b494dfe8efd79b0`；`git -C ref status --short` 干净。父仓库的 `ref` gitlink 与当前只读 checkout 不同是该工作分支原有状态，本批不移动或修改子模块。
+- 参考路径和符号：`ref/frontend/query/src/ipc/use-settings.ts::{useTypedConfig,useTypedConfigField,useSettings,useSetting,useClashSettings,useClashSetting}` → `frontend/interface/src/ipc/use-settings.ts`；`ref/backend/tauri/src/ipc.rs` 的 typed app/Clash get/patch commands 与 `ref/backend/tauri/src/client/{application,clash_config}.rs` → 对应 Chimera IPC/client；`ref/backend/chimera-config/src/{application,clash/config}` → `backend/chimera-config/src/{application,clash/config}`。保留上游的 sparse typed patch、React Query invalidation 和字段 hook 结构。
+- 变更接口：新增/注册 `get_app_config`、`patch_app_config(ChimeraAppConfigPatch)`、`get_clash_config`、`patch_clash_config(ClashConfigPatch)`；生成 TypeScript IPC bindings。旧的 core `/configs` 操作命名为 `patch_runtime_overrides`，避免它与保存型 `patch_clash_config` 混用。共享 `useSettings/useSetting/useClashSettings/useClashSetting` 现在调用 typed API；locale 只在 UI 边界映射到后端枚举。
+- 运行时行为：typed Clash patch 依据共享 `classify_clash` 和 `RequestedRuntimeFields` 判定是否需要 core lifecycle reconcile。改变运行输入会重建并应用当前核心配置；重复提交运行字段也会重新尝试；只改 Web UI 列表等 UI 字段不会重建核心。App typed `core`、`enable_builtin_enhanced` 和已连接 Service 模式下的 `enable_service_mode` 写入经过 core lifecycle actor，先 reconcile 候选运行配置，再按版本提交持久设置；候选 reconcile 失败时尝试恢复最新持久设置对应的运行态，版本冲突后也恢复最新持久设置对应的运行状态，恢复失败会连同原错误返回。App/Clash typed patch 将当前 runtime 的 mixed port 发布给 effect actor，再由现有 typed system-proxy effect 应用新端口；不在新入口中直接读取 Verge 端口或调用旧 `init_sysproxy`。
+- 保留的兼容边界：`LegacyVergeBridge`/`LegacyClashBridge` 继续把 typed 持久状态投影给尚未迁完的核心、Service 与旧配置存储消费者；`get_verge_config/patch_verge_config` 只保留为旧 IPC surface 和显式兼容性验证入口。主界面、快捷键、托盘开关、系统事件与 Agent 网络动作现已调用 typed app/Clash API，不再经过旧 `patch_verge` 业务路径。App runtime patch 复用现有 core lifecycle actor 和 CoreFacade 适配层，没有另建兼容业务路径；这仍与 ref 的 ApplicationWorkflow mutation coordinator 不同，待 Chimera 运行时生命周期收敛后再评估统一。旧配置字段别名仅保留在 Rust 输入反序列化边界，生成的前端 patch contract 暴露规范字段。下一步应迁完仍依赖旧 IPC 的测试/调用者，再评估删除命令；typed→旧配置投影在完成旧文件迁移与 Service 消费者收敛前保留为单向适配。
+- 验收：主/legacy UI 共用 typed hooks；生成 bindings 与 Rust patch 可选字段一致；Clash 运行字段变更实际触发生命周期 reconcile，UI-only字段只持久化；运行态和 `clash-config.yaml` 同步；错误输入不改变运行态或文件；保留旧配置和 Service/Agent 入口。
+- 风险：L2（共享持久配置、运行时核心协调、系统代理）。测试计划：配置模型单测、Clash reconcile 判定单测、backend check、typed-state E2E、interface/E2E 类型检查、改动文件格式检查、diff 检查；主/legacy UI 使用同一 hooks，桌面覆盖以 hermetic settings suite 验证。
+- 回滚：回退 typed hooks/commands 和调用点，恢复原有 settings/runtime IPC 命名及前端调用；保留原配置文件与用户数据，不删除 `application.yaml` 或 `clash-config.yaml`。合并前需 L2 独立复核；提交/推送需维护者明确批准。
+- 实际验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config` 143/143；完整 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera` 最终默认并行复跑 569 passed、0 failed、1 ignored，其中新增内置增强候选配置回归测试通过；Service Mode typed patch 的候选失败恢复、版本冲突恢复也有回归测试。一次较早的并行全套运行中 3 个 Profile 文件监听用例超时；3 个用例各自单独重跑及完整串行运行均通过，之后完整默认并行复跑也通过，因此未确认产品回归。`cargo check`、`frontend/interface` 与 E2E TypeScript 检查、E2E harness 单测 25/25、`pnpm lint:frontend-boundaries`、目标 Rust rustfmt、改动 TS/文档 Prettier、`git diff --check` 通过。Rust 全套测试中的 generated-bindings freshness 检查通过；pnpm 对临时 worktree 的 `.pnpm` hoist symlink 发出安装警告，但该测试通过。全量 `frontend/chimera` typecheck 未验证：本 worktree 缺少 Paraglide 生成目录，生成器在解析项目远程模块时无输出停滞后已中止；复用另一 worktree 的旧生成输出也产生消息键过期错误，故不作通过结论。桌面 E2E 尚未本机运行。`clash-typed-state.e2e.ts` 位于 hermetic/settings suite，直接通过 typed IPC 观察内核 `/configs` 与隔离配置文件，并检查无效端口输入保持两者不变；`windows-service-tun-lifecycle.e2e.ts` 也已改用 typed `get_app_config`/`patch_app_config` 和 `get_clash_config`/`patch_clash_config` 覆盖真实服务切换入口，两者都完成 TypeScript 检查但未在本机运行桌面 E2E。
+
+
 ## 当前参考基线同步（本批）
 
 - 上游：Clash Nyanpasu `main`，已核对最新提交 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`（2026-10-17 UTC）。

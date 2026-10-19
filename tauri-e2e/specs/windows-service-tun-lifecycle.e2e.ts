@@ -23,9 +23,12 @@ type CoreState = 'Running' | { Stopped: string | null };
 type RunType = 'normal' | 'service' | 'elevated';
 type ServiceStatus = 'not_installed' | 'stopped' | 'running';
 
-interface VergeConfig {
-  enable_tun_mode?: boolean | null;
-  enable_service_mode?: boolean | null;
+interface AppConfig {
+  enable_service_mode: boolean;
+}
+
+interface ClashConfig {
+  enable_tun_mode: boolean;
 }
 
 interface ServiceStatusInfo {
@@ -130,8 +133,24 @@ async function waitForCore(
   }
 }
 
-async function patchVerge(payload: Partial<VergeConfig>): Promise<void> {
-  await invoke<null>('patch_verge_config', { payload });
+async function readAppConfig(): Promise<AppConfig> {
+  return invoke<AppConfig>('get_app_config');
+}
+
+async function readClashConfig(): Promise<ClashConfig> {
+  return invoke<ClashConfig>('get_clash_config');
+}
+
+async function patchServiceMode(enabled: boolean): Promise<void> {
+  await invoke<null>('patch_app_config', {
+    patch: { enable_service_mode: enabled },
+  });
+}
+
+async function patchTunMode(enabled: boolean): Promise<void> {
+  await invoke<null>('patch_clash_config', {
+    patch: { enable_tun_mode: enabled },
+  });
 }
 
 async function runTunSmoke(): Promise<TunSmokeReport> {
@@ -216,14 +235,15 @@ describe('Windows Service + TUN system lifecycle', () => {
       'Refusing to take ownership of an existing Chimera Service: ' +
         JSON.stringify(initialService),
     );
-    const initialVerge = await invoke<VergeConfig>('get_verge_config');
+    const initialApp = await readAppConfig();
+    const initialClash = await readClashConfig();
     assert.equal(
-      initialVerge.enable_tun_mode ?? false,
+      initialClash.enable_tun_mode,
       false,
       'Refusing to override an existing TUN setting.',
     );
     assert.equal(
-      initialVerge.enable_service_mode ?? false,
+      initialApp.enable_service_mode,
       false,
       'Refusing to override an existing Service Mode setting.',
     );
@@ -254,7 +274,7 @@ describe('Windows Service + TUN system lifecycle', () => {
         'Service did not start',
       );
 
-      await patchVerge({ enable_service_mode: true });
+      await patchServiceMode(true);
       await waitForCore(
         (state, runType) => state === 'Running' && runType === 'service',
         'Core did not hand off to Service Mode',
@@ -267,15 +287,12 @@ describe('Windows Service + TUN system lifecycle', () => {
         'Service host did not become ready for the E2E runtime',
       );
 
-      await patchVerge({ enable_tun_mode: true });
+      await patchTunMode(true);
       await waitForCore(
         (state, runType) => state === 'Running' && runType === 'service',
         'Service core did not remain running after TUN enable',
       );
-      assert.equal(
-        (await invoke<VergeConfig>('get_verge_config')).enable_tun_mode,
-        true,
-      );
+      assert.equal((await readClashConfig()).enable_tun_mode, true);
       assert.equal(
         (await runTunSmoke()).checks.some(
           (check) => check.name === 'service_core_running' && check.passed,
@@ -306,8 +323,8 @@ describe('Windows Service + TUN system lifecycle', () => {
     }
 
     await collectCleanupError(cleanupErrors, async () => {
-      if ((await invoke<VergeConfig>('get_verge_config')).enable_tun_mode) {
-        await patchVerge({ enable_tun_mode: false });
+      if ((await readClashConfig()).enable_tun_mode) {
+        await patchTunMode(false);
         await waitForCore(
           (state) => state === 'Running',
           'Core did not settle after TUN cleanup',
@@ -315,8 +332,8 @@ describe('Windows Service + TUN system lifecycle', () => {
       }
     });
     await collectCleanupError(cleanupErrors, async () => {
-      if ((await invoke<VergeConfig>('get_verge_config')).enable_service_mode) {
-        await patchVerge({ enable_service_mode: false });
+      if ((await readAppConfig()).enable_service_mode) {
+        await patchServiceMode(false);
         await waitForCore(
           (state, runType) => state === 'Running' && runType !== 'service',
           'Core did not hand back to Local during cleanup',
