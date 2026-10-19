@@ -34,6 +34,7 @@
 | LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 | LESSON-20261019-002 | 2026-10-19 | E2E / Windows  | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
+| LESSON-20261019-006 | 2026-10-19 | Rust / Windows | PR #494 取消刷新测试用 `notify_waiters` 可能丢失尚未登记的 waiter；修复待新 SHA CI 复验                         | Mitigated |
 
 ## 单条模板
 
@@ -458,3 +459,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机桌面用例使用过期的 ignored Paraglide runtime（其中 locales 列表缺 `ja`），因此菜单选择失败；为重新生成前端构建，`pnpm e2e:tauri:build` 在加载 Inlang CDN 模块时超过两分钟无输出，本机桌面结果未验证。新的 Windows hermetic E2E 必须对新 SHA 复验，CI pending 不作通过处理。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 的配置观察源、准备/恢复调用和契约记录；等待轮询仅读状态，测试原有 cleanup 继续恢复用户语言、窗口缓存、URL 与尺寸。可回退该 spec 和对应经验记录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：异步初始化的主 UI 测试须用 UI 实际消费的 typed 配置源作为权威值，再等待 DOM/缓存收敛；独立验证 legacy 镜像时使用对应的转换契约。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
+
+### LESSON-20261019-006：Notify 的广播唤醒不会保存尚未登记的通知
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（针对性用例重复通过、完整库测试通过；新 SHA CI 待完成）
+- 严重度：Low
+- 模块：Rust / Profile refresh tests
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 前一版 head `16b03b37c9a8c7021508ddecfb704fbc0dd68fae`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；GitHub Actions Windows。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Windows backend job 118216586922 in run 39296098353](https://github.com/MFSGA/Chimera/actions/runs/39296098353/job/118216586922)。Run 后来被新 SHA 取消；该 job 已结束并明确失败：`caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 在 2 秒期限内未结束，后端工作区 587 项通过、1 项失败、1 项忽略。
+- 预期行为：取消 refresh 的等待方后，后台 fetch 仍应结束，actor 清除 `pending_refresh`，后续 refresh 能成功。
+- 真实异常、复现步骤与证据：失败测试收到 fetcher 发送的 `started` oneshot 后立刻取消调用方，并调用 `release_fetch.notify_waiters()`；Windows CI 的第二次 refresh 轮询持续遇到进行中状态，最终触发 2 秒 timeout。Tokio 1.53.3 源码明确说明 `notify_waiters()` 不为未来的 `notified().await` 保存 permit。
+- 确认的根因与排除项：`started` 仅证明 fetcher 已发送通知，不能证明其任务已经轮询并登记 `self.release.notified()`。若 `notify_waiters()` 先于 waiter 登记，唤醒不会保留，fetcher 永远停住。该测试从 ref `backend/tauri/src/client/profiles.rs` 同步而来，ref commit `53b004ccb3508d0673b6cb691be65e0e48bdd593` 中有相同竞态；证据指向测试同步问题，不是生产 actor 路径。
+- 修复提交、差异映射及保留的兼容性边界：只在 Chimera `backend/tauri/src/client/profiles.rs::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 将 release 改为 `notify_one()`。锁定 Tokio 1.53.3 的实现会保存一个 permit，使后续 waiter 可消费；不改 refresh actor 或 production behavior。此处按 AGENTS.md 对已证实 ref 缺陷作最小偏离，下一次同步该测试时重查 ref 是否已修复。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败见 Windows run `39296098353`；修正后运行相同 Rust 单测并重复执行，以覆盖通知早于 waiter 登记的顺序。测试位于 `backend/tauri/src/client/profiles.rs` Rust 单元测试模块；新 SHA Windows CI 待复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：核对 Cargo.lock 锁定的 Tokio `1.53.3` 源码；定向 Rust 单测以 `--exact` 连续运行 10 次，10/10 通过；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --all-features --quiet` 为 585 passed、0 failed、1 ignored。Windows 新 SHA workflow 待完成；这两项本地测试不能代替平台 CI。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试同步调整，不改变应用运行或用户数据；回滚为恢复该用例中的 `notify_waiters()`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：使用 Tokio Notify 作为一次性 release barrier 时，优先使用 `notify_one()`；只有需要广播给已登记的一组 waiters 时才使用 `notify_waiters()`。未改 CI 门禁。

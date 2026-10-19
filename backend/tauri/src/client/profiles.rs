@@ -2592,7 +2592,8 @@ mod tests {
             "caller-aborted refresh must cancel the waiting call future"
         );
 
-        release_fetch.notify_waiters();
+        // Preserve the release signal if fetch has not registered its waiter yet.
+        release_fetch.notify_one();
 
         // CommitRefreshed removes pending_refresh even when the reply port is gone.
         // Bound the poll so a stuck pending_refresh fails the test instead of hanging CI.
