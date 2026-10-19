@@ -7,12 +7,10 @@ import { openMainRoute } from './main-window.js';
 const targetPath = '/main/dashboard';
 
 type AppAppearance = {
-  language?: string | null;
   theme_mode?: string | null;
 };
 
-let originalAppearance:
-  { language: string | null; theme_mode: string | null } | undefined;
+let originalThemeMode: string | null | undefined;
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
   return browser.execute(
@@ -57,45 +55,38 @@ describe('main dashboard reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
     const currentAppearance = await invoke<AppAppearance>('get_verge_config');
-    originalAppearance = {
-      language: currentAppearance.language ?? null,
-      theme_mode: currentAppearance.theme_mode ?? null,
-    };
+    originalThemeMode = currentAppearance.theme_mode ?? null;
     await invoke('patch_verge_config', {
-      payload: { language: 'zh-cn', theme_mode: 'light' },
+      payload: { theme_mode: 'light' },
     });
+    const configuredAppearance =
+      await invoke<AppAppearance>('get_verge_config');
+    assert.equal(
+      configuredAppearance.theme_mode,
+      'light',
+      'Dashboard test light theme was not persisted.',
+    );
     await openMainRoute(targetPath);
     await browser.waitUntil(
       async () =>
-        browser.execute(
-          () =>
-            document
-              .querySelector('[data-slot="navbar-label"]')
-              ?.textContent?.trim() === '概览' &&
-            document
-              .querySelector('[data-slot="app-root"]')
-              ?.classList.contains('light'),
+        browser.execute(() =>
+          document.getElementById('root')?.classList.contains('light'),
         ),
       {
         timeout: 10_000,
-        timeoutMsg: 'Dashboard test locale and light theme did not apply.',
+        timeoutMsg: 'Dashboard test light theme did not apply to the app root.',
       },
     );
     await browser.setWindowSize(1240, 638);
   });
 
   after(async () => {
-    if (!originalAppearance) return;
-    await invoke('patch_verge_config', { payload: originalAppearance });
+    if (originalThemeMode === undefined) return;
+    await invoke('patch_verge_config', {
+      payload: { theme_mode: originalThemeMode },
+    });
     const restoredAppearance = await invoke<AppAppearance>('get_verge_config');
-    assert.equal(
-      restoredAppearance.language ?? null,
-      originalAppearance.language,
-    );
-    assert.equal(
-      restoredAppearance.theme_mode ?? null,
-      originalAppearance.theme_mode,
-    );
+    assert.equal(restoredAppearance.theme_mode ?? null, originalThemeMode);
   });
 
   it('uses ref cards, real core artwork, and main settings links', async () => {

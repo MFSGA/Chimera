@@ -32,6 +32,7 @@
 | LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
 | LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
 | LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
+| LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 
 ## 单条模板
 
@@ -369,5 +370,22 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 修复提交、差异映射及保留的兼容性边界：在菜单编辑项、配置选项、重置和保存按钮添加稳定 `data-slot` / `data-config-field`；测试通过这些属性定位，并用 `patch_verge_config` 固定 `zh-cn` 与 light theme，suite 结束时恢复原配置。选择器扩展不改变用户可见行为。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现见 run `39169449230`；修复继续由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 `main` / Windows `hermetic` suite 验证。新 SHA 的桌面复验尚未完成。
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：E2E TypeScript、25/25 harness 单元测试、widget 单测 6/6、Oxlint、Prettier、frontend boundary 脚本及 `git diff --check` 通过。pnpm 包装命令受共享 `node_modules` 符号链接的安全检查阻止，已直接运行等价工具。没有本机桌面 E2E 结果；新 SHA Windows E2E 待复验。
-- 风险/回滚和清理证据（如涉及宿主状态）：测试在独立 E2E 配置中暂时修改应用语言/主题，并在 suite cleanup 恢复、读回；产品仅增加定位属性。不修改用户配置、宿主网络或系统设置。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：测试 locator 使用稳定业务属性，不依赖翻译文案；布局用例固定语言、主题并恢复原设置。不修改 CI 门禁。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试在独立 E2E 配置中暂时修改应用主题，并在 suite cleanup 恢复、读回；产品仅增加定位属性。不修改用户配置、宿主网络或系统设置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：测试 locator 使用稳定业务属性，不依赖翻译文案；布局用例仅固定其依赖的主题并恢复原设置。不修改 CI 门禁。
+
+### LESSON-20261019-001：主题 E2E 断言必须查询实际主题根节点
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Open（断言已修正；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `8337acd7a8caa72545c77987b775fcb913ec016e`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39180855095](https://github.com/MFSGA/Chimera/actions/runs/39180855095)，51/52 个 spec 通过；Dashboard spec 在 `before all` 超时退出。
+- 预期行为：测试设为浅色主题后，应确认主题已应用，再开始依赖该主题的布局断言。
+- 真实异常、复现步骤与证据：Windows runner 在 `Dashboard test locale and light theme did not apply` 超时；超时条件读取 `[data-slot="app-root"]` 是否含 `light` 类。
+- 确认的根因与排除项：`ExperimentalThemeProvider` 的 `applyRootStyleVar` 将主题类加到 `document.getElementById('root')`，而不是内部的 `[data-slot="app-root"]`。因此检查的是错误 DOM 节点；不是配置写入失败或主题未应用。
+- 修复提交、差异映射及保留的兼容性边界：测试现在只通过配置 IPC 临时设置主题，不再改语言；等待并断言真实 `#root` 主题类，suite cleanup 恢复并读回原主题。产品代码不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败见 run `39180855095`；修复后的同一 Dashboard spec 继续由 Windows hermetic suite 执行，新的 SHA 结果待验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：CI run `39180855195` 三平台 lint 和构建均通过，E2E harness 类型检查通过；Dashboard 桌面 E2E 在 run `39180855095` 因错误根节点断言失败。新 SHA Windows 桌面复验待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅 E2E 临时改写主题设置，suite cleanup 读回验证原值；无产品或宿主网络变更。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：主题断言须对照 provider 实际 DOM 更新目标；语言和主题测试环境只设置用例真正依赖的偏好。无 CI 门禁调整。
