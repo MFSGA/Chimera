@@ -309,8 +309,11 @@ impl ChimeraClient {
             None,
         )?;
 
-        let service_mode_patch = patch.enable_service_mode.is_some();
-        if service_mode_patch {
+        let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
+        if super::application_workflow::impact::application_patch_requires_reconcile(
+            &patch,
+            service_connected,
+        ) {
             self.inner
                 .core_lifecycle
                 .patch_application_config(patch)

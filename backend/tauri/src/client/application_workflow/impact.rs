@@ -210,6 +210,19 @@ impl RequestedRuntimeFields {
     }
 }
 
+/// Whether applying an application-config patch must enter the core lifecycle.
+///
+/// Core selection and builtin-enhancement changes always affect the generated
+/// runtime config. A Service Mode change does so only when the service host is
+/// connected; disconnected host preferences remain a source-config save.
+pub(crate) fn application_patch_requires_reconcile(
+    patch: &ChimeraAppConfigPatch,
+    service_connected: bool,
+) -> bool {
+    RequestedRuntimeFields::of_application(patch).names_any()
+        && (patch.core.is_some() || patch.enable_builtin_enhanced.is_some() || service_connected)
+}
+
 /// Typed request intent that the committed candidate cannot express.
 ///
 /// A pure diff of the source config loses the difference between "the user did

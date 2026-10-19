@@ -273,7 +273,10 @@ impl CoreLifecycleWorkflow {
         patch: ChimeraAppConfigPatch,
         service_connected: bool,
     ) -> anyhow::Result<()> {
-        if patch.enable_service_mode.is_none() || !service_connected {
+        if !crate::client::application_workflow::impact::application_patch_requires_reconcile(
+            &patch,
+            service_connected,
+        ) {
             self.application.patch_typed(patch).await?;
             return Ok(());
         }
@@ -283,10 +286,9 @@ impl CoreLifecycleWorkflow {
         candidate.apply(patch);
         let forward = self.application.prepare_replace(candidate.clone()).await?;
 
-        // A Service Mode change selects the core execution host. Reconcile
-        // that candidate through the lifecycle actor before committing its
-        // persisted source, so a failed host transition cannot leave settings
-        // claiming a runtime that never started.
+        // Runtime-affecting application settings must be reconciled against
+        // their candidate before the source config commits. This keeps core,
+        // builtin enhancement, and Service Mode changes atomic with runtime.
         if let Err(candidate_error) = self
             .reconcile_application(candidate, service_connected)
             .await
@@ -304,7 +306,7 @@ impl CoreLifecycleWorkflow {
                 .await
             {
                 Ok(()) => Err(candidate_error.context(
-                    "failed to reconcile Service Mode candidate; restored the latest persisted runtime",
+                    "failed to reconcile application runtime candidate; restored the latest persisted runtime",
                 )),
                 Err(restore_error) => Err(anyhow::anyhow!(
                     "{candidate_error:#}; failed to restore the latest persisted application runtime: {restore_error:#}"
@@ -324,7 +326,7 @@ impl CoreLifecycleWorkflow {
                     previous.version
                 )
             }
-            Err(error) => error.context("failed to commit Service Mode application config"),
+            Err(error) => error.context("failed to commit runtime-affecting application config"),
         };
 
         let restore =

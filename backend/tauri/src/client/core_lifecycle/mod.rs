@@ -498,11 +498,15 @@ impl ApplicationWorkflowState {
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
-        let service_mode_reconcile = matches!(
+        let is_service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
+        let application_runtime_reconcile = matches!(
             &request.command,
             Command::PatchApplicationConfig { patch, .. }
-                if patch.enable_service_mode.is_some()
-        ) && crate::core::service::ipc::get_ipc_state().is_connected();
+                if crate::client::application_workflow::impact::application_patch_requires_reconcile(
+                    patch,
+                    is_service_connected,
+                )
+        );
         let reconciled = matches!(
             &request.command,
             Command::Reconcile
@@ -511,7 +515,7 @@ impl ApplicationWorkflowState {
                 | Command::RecoverCore
                 | Command::SelectCore(_)
                 | Command::ReplaceCoreBinary(_)
-        ) || service_mode_reconcile;
+        ) || application_runtime_reconcile;
         let service_phase = match &request.command {
             Command::InstallService(_) => Some(ServicePhase::Installing),
             Command::StartService { .. } => Some(ServicePhase::StartingDaemon),
@@ -551,7 +555,7 @@ impl ApplicationWorkflowState {
             service_connected, ..
         } = &mut command
         {
-            *service_connected = service_mode_reconcile;
+            *service_connected = is_service_connected;
         }
         let actor = myself.clone();
         let task = tokio::spawn(async move {
@@ -1724,6 +1728,11 @@ mod tests {
         fail_first_reconcile: AtomicBool,
     }
 
+    struct ApplicationPatchRecordingCore {
+        application: ApplicationClient,
+        observations: Arc<Mutex<Vec<(bool, bool)>>>,
+    }
+
     struct TestApplicationBridge;
 
     impl crate::state::mirror::VergeLegacyBridge for TestApplicationBridge {
@@ -2097,6 +2106,56 @@ mod tests {
         async fn on_profile_change(&self, _break_when: bool) {}
     }
 
+    #[async_trait]
+    impl CoreLifecyclePort for ApplicationPatchRecordingCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("application patch must pass its typed runtime candidate")
+        }
+
+        async fn reconcile_profiles(
+            &self,
+            _clash: ClashConfig,
+            _target_core: ClashCore,
+            _run_type: RunType,
+            _profiles: Arc<chimera_config::profile::Profiles>,
+            app: chimera_config::application::ChimeraAppConfig,
+            _staged_content: std::collections::BTreeMap<String, String>,
+        ) -> anyhow::Result<()> {
+            self.observations.lock().unwrap().push((
+                app.enable_builtin_enhanced,
+                self.application.get_typed().enable_builtin_enhanced,
+            ));
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
     #[tokio::test]
     async fn service_mode_config_patch_reconciles_before_persisting_candidate() {
         let application = ApplicationClient::static_state(
@@ -2142,6 +2201,56 @@ mod tests {
             )]
         );
         assert!(application.get_typed().enable_service_mode);
+    }
+
+    #[tokio::test]
+    async fn builtin_enhancement_patch_reconciles_candidate_before_persisting() {
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let profiles_dir = tempfile::tempdir().unwrap();
+        let profiles_path =
+            camino::Utf8PathBuf::from_path_buf(profiles_dir.path().join("profiles.yaml")).unwrap();
+        let profiles_manager = chimera_core::state::PersistentStateManagerSetup::<
+            chimera_config::profile::Profiles,
+            crate::core::migration::modules::profiles::ProfilesFormat,
+        >::builder()
+        .config_path(profiles_path)
+        .assemble()
+        .from_state(chimera_config::profile::Profiles::default())
+        .await
+        .unwrap();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            Some(profiles_manager.snapshot_handle()),
+            Arc::new(ApplicationPatchRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+
+        workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_builtin_enhanced: Some(false),
+                    ..Default::default()
+                },
+                false,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*observations.lock().unwrap(), [(false, true)]);
+        assert!(!application.get_typed().enable_builtin_enhanced);
     }
 
     #[tokio::test]
