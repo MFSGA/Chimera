@@ -5,7 +5,7 @@
 //! this transitional client keeps those storage semantics while centralizing
 //! reads, validation, mutation, and running-core coordination here.
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use camino::Utf8PathBuf;
@@ -306,6 +306,64 @@ impl ClashConfigClient {
         owner: &ChimeraClient,
         patch: ClashConfigPatch,
     ) -> Result<ClashConfigSnapshot> {
+        let candidate_patch = patch.clone();
+        self.patch_typed_config_with(
+            patch,
+            || async {
+                if candidate_patch.enable_tun_mode.is_some() {
+                    self.apply_legacy_patch_runtime(owner, &candidate_patch)
+                        .await
+                } else {
+                    update_core_config(owner).await
+                }
+            },
+            || async { update_core_config(owner).await },
+            || {
+                Config::clash().data().save_config()?;
+                Config::verge().data().save_file()?;
+                Ok(())
+            },
+            || {
+                let mut failures = Vec::new();
+                if let Err(error) = Config::clash().data().save_config() {
+                    failures.push(format!(
+                        "legacy clash rollback persistence failed: {error:#}"
+                    ));
+                }
+                if let Err(error) = Config::verge().data().save_file() {
+                    failures.push(format!(
+                        "legacy Verge rollback persistence failed: {error:#}"
+                    ));
+                }
+                failures
+            },
+        )
+        .await
+    }
+
+    async fn patch_typed_config_with<
+        ApplyCandidate,
+        ApplyCandidateFuture,
+        ReconcileLatest,
+        ReconcileLatestFuture,
+        SaveCandidate,
+        SaveRollback,
+    >(
+        &self,
+        patch: ClashConfigPatch,
+        apply_candidate: ApplyCandidate,
+        reconcile_latest: ReconcileLatest,
+        save_candidate: SaveCandidate,
+        save_rollback: SaveRollback,
+    ) -> Result<ClashConfigSnapshot>
+    where
+        ApplyCandidate: FnOnce() -> ApplyCandidateFuture,
+        ApplyCandidateFuture: Future<Output = Result<()>>,
+        ReconcileLatest: FnOnce() -> ReconcileLatestFuture,
+        ReconcileLatestFuture: Future<Output = Result<()>>,
+        SaveCandidate: FnOnce() -> Result<()>,
+        SaveRollback: FnOnce() -> Vec<String>,
+    {
         let snapshot = self.get_snapshot().await?;
         let mut next = snapshot.state.clone();
         next.apply(patch.clone());
@@ -329,53 +387,39 @@ impl ClashConfigClient {
 
         let finalize = async {
             if reconcile_runtime {
-                if patch.enable_tun_mode.is_some() {
-                    self.apply_legacy_patch_runtime(owner, &patch).await?;
-                } else {
-                    update_core_config(owner).await?;
-                }
+                apply_candidate().await?;
             }
-            Config::clash().data().save_config()?;
-            Config::verge().data().save_file()?;
+            save_candidate()?;
             Ok::<_, anyhow::Error>(())
         }
         .await;
 
         if let Err(primary) = finalize {
+            let mut failures = Vec::new();
             match self
                 .replace_prepared_if_version(committed.version, rollback)
                 .await
             {
                 Ok(ConditionalReplaceResult::Replaced(_)) => {}
                 Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
-                    bail!(
-                        "{primary:#}; clash rollback conflict: expected {}, actual {actual_version}",
+                    failures.push(format!(
+                        "clash rollback conflict: expected {}, actual {actual_version}",
                         committed.version
-                    );
+                    ));
                 }
                 Err(error) => {
-                    bail!("{primary:#}; clash rollback failed: {error:#}");
+                    failures.push(format!("clash rollback failed: {error:#}"));
                 }
             }
+            failures.extend(save_rollback());
 
-            let mut failures = Vec::new();
-            if let Err(error) = Config::clash().data().save_config() {
-                failures.push(format!(
-                    "legacy clash rollback persistence failed: {error:#}"
-                ));
-            }
-            if let Err(error) = Config::verge().data().save_file() {
-                failures.push(format!(
-                    "legacy Verge rollback persistence failed: {error:#}"
-                ));
-            }
-            if failures.is_empty() {
-                return Err(primary);
-            }
-            bail!(
-                "{primary:#}; compensation failures: {}",
-                failures.join("; ")
-            );
+            return Err(finish_typed_clash_compensation(
+                primary,
+                failures,
+                reconcile_runtime,
+                reconcile_latest,
+            )
+            .await);
         }
 
         Ok(committed)
@@ -687,6 +731,32 @@ async fn validate_external_controller_change(
     Ok(())
 }
 
+async fn finish_typed_clash_compensation<F, Fut>(
+    primary: anyhow::Error,
+    mut failures: Vec<String>,
+    reconcile_runtime: bool,
+    reconcile: F,
+) -> anyhow::Error
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    if reconcile_runtime {
+        if let Err(error) = reconcile().await {
+            failures.push(format!("runtime rollback reconcile failed: {error:#}"));
+        }
+    }
+
+    if failures.is_empty() {
+        primary
+    } else {
+        anyhow::anyhow!(
+            "{primary:#}; compensation failures: {}",
+            failures.join("; ")
+        )
+    }
+}
+
 async fn apply_clash_runtime_change(client: &ChimeraClient, plan: &ClashPatchPlan) -> Result<()> {
     if !plan.requires_restart {
         return Ok(());
@@ -836,6 +906,94 @@ mod tests {
             &runtime_changed,
             &runtime_patch
         ));
+    }
+
+    #[tokio::test]
+    async fn typed_clash_patch_restores_source_and_runtime_after_persistence_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Utf8PathBuf::from_path_buf(dir.path().join("clash-config.yaml")).unwrap();
+        let mirrored_tun = Arc::new(Mutex::new(None));
+        let client = ClashConfigClient::new(
+            path.clone(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: mirrored_tun.clone(),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        let reconciled_tun = Arc::new(Mutex::new(Vec::new()));
+        let candidate_client = client.clone();
+        let candidate_observations = reconciled_tun.clone();
+        let recovery_client = client.clone();
+        let recovery_observations = reconciled_tun.clone();
+        let mut patch = ClashConfig::new_empty_patch();
+        patch.enable_tun_mode = Some(true);
+
+        let error = client
+            .patch_typed_config_with(
+                patch,
+                move || async move {
+                    candidate_observations
+                        .lock()
+                        .unwrap()
+                        .push(candidate_client.get_typed().enable_tun_mode);
+                    Ok(())
+                },
+                move || async move {
+                    recovery_observations
+                        .lock()
+                        .unwrap()
+                        .push(recovery_client.get_typed().enable_tun_mode);
+                    Ok(())
+                },
+                || anyhow::bail!("injected legacy persistence failure"),
+                || Vec::new(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("injected legacy persistence failure")
+        );
+        assert_eq!(*reconciled_tun.lock().unwrap(), [true, false]);
+        assert!(!client.get_typed().enable_tun_mode);
+        assert_eq!(*mirrored_tun.lock().unwrap(), Some(false));
+        let persisted: ClashConfig = serde_yaml::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(!persisted.enable_tun_mode);
+    }
+
+    #[tokio::test]
+    async fn typed_clash_compensation_reports_runtime_reconcile_failure() {
+        let error = finish_typed_clash_compensation(
+            anyhow::anyhow!("legacy mirror write failed"),
+            vec!["clash rollback conflict: expected 2, actual 3".into()],
+            true,
+            || async { anyhow::bail!("core stayed on the candidate") },
+        )
+        .await;
+
+        let message = format!("{error:#}");
+        assert!(message.contains("legacy mirror write failed"));
+        assert!(message.contains("clash rollback conflict: expected 2, actual 3"));
+        assert!(message.contains("runtime rollback reconcile failed"));
+        assert!(message.contains("core stayed on the candidate"));
+    }
+
+    #[tokio::test]
+    async fn typed_clash_compensation_skips_runtime_without_runtime_patch() {
+        let error = finish_typed_clash_compensation(
+            anyhow::anyhow!("legacy mirror write failed"),
+            Vec::new(),
+            false,
+            || async { anyhow::bail!("runtime should not be reconciled") },
+        )
+        .await;
+
+        assert_eq!(error.to_string(), "legacy mirror write failed");
     }
 
     #[test]
