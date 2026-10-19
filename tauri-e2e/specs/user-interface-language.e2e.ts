@@ -8,6 +8,20 @@ type VergeConfig = {
   language?: string | null;
 };
 
+const supportedLocales = new Set(['en', 'ja', 'ru', 'zh-cn', 'zh-tw']);
+const localeAliases: Record<string, string> = {
+  'en-us': 'en',
+  'ja-jp': 'ja',
+};
+
+function normalizeLocale(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const normalized = value.toLowerCase();
+  const locale = localeAliases[normalized] ?? normalized;
+  return supportedLocales.has(locale) ? locale : null;
+}
+
 type LocaleSnapshot = {
   cache: string | null;
   documentLanguage: string;
@@ -97,6 +111,52 @@ async function openUserInterfaceSettings() {
   });
 }
 
+async function waitForLocaleSynchronization(handle: string) {
+  let lastState: unknown;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const [config, ui] = await Promise.all([
+          invoke<VergeConfig>('get_verge_config'),
+          browser.execute(() => ({
+            ready:
+              document.readyState === 'complete' &&
+              (document.getElementById('root')?.childElementCount ?? 0) > 0,
+            language: document.documentElement.lang.toLowerCase(),
+            cachedLanguage: localStorage.getItem(
+              btoa('paraglide-language-cache'),
+            ),
+          })),
+        ]);
+        const configuredLocale = normalizeLocale(config.language);
+        const cachedLocale = normalizeLocale(ui.cachedLanguage);
+        const expectedLocale = configuredLocale ?? cachedLocale ?? 'en';
+        const cacheSynchronized =
+          configuredLocale === null || cachedLocale === configuredLocale;
+        lastState = {
+          handle,
+          configured: config.language,
+          cachedLocale,
+          cacheSynchronized,
+          expectedLocale,
+          ...ui,
+        };
+        return ui.ready && ui.language === expectedLocale && cacheSynchronized;
+      },
+      {
+        timeout: 30_000,
+        interval: 250,
+        timeoutMsg: `${handle} locale did not synchronize before its snapshot.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} locale did not synchronize before its snapshot: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
+}
+
 async function restoreLocaleSnapshot(handle: string, snapshot: LocaleSnapshot) {
   if (!(await browser.getWindowHandles()).includes(handle)) return;
 
@@ -140,6 +200,11 @@ async function restoreWindowState(
   }
 }
 
+/**
+ * Contract: Select Japanese through the main UI keyboard menu; backend config,
+ * persisted config, main UI after reload, and legacy proxy UI must all agree.
+ * The test restores each window's original locale cache, route, and size.
+ */
 describe('application language selection', () => {
   let originalLanguage: string | null | undefined;
   const localeSnapshots = new Map<string, LocaleSnapshot>();
@@ -164,6 +229,7 @@ describe('application language selection', () => {
       await browser.switchToWindow(handle);
       originalWindowSizes.set(handle, await browser.getWindowSize());
       originalUrls.set(handle, await browser.getUrl());
+      await waitForLocaleSynchronization(handle);
       localeSnapshots.set(
         handle,
         await browser.execute(() => ({
@@ -177,6 +243,7 @@ describe('application language selection', () => {
     if (!localeSnapshots.has('main')) {
       originalWindowSizes.set('main', await browser.getWindowSize());
       originalUrls.set('main', await browser.getUrl());
+      await waitForLocaleSynchronization('main');
       localeSnapshots.set(
         'main',
         await browser.execute(() => ({
