@@ -441,3 +441,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：初始键集断言失败 1 次；补齐后的 localization suite 4/4 通过，macOS WebKit 桌面用例最终干净运行 1/1。测试命令里的重复 Paraglide 生成曾因 CDN 插件请求无响应运行近两分钟后中断；现删除重复生成，沿用 CI 前端构建生成的 runtime。候选桌面运行使用未打包 core sidecar 的 E2E binary，仅作为日语 UI/配置路径验证。更早的两次 E2E 分别出现 WebDriver execute/sync 超时自动重试，以及 after hook 清理失败，根因未确认。完整 `chimera-config` 套件 147/147 通过，其中旧版 enum 回退复位测试通过；完整 runtime/core 桌面覆盖和 Windows CI/E2E 尚未执行。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅更新日语消息目录和对应验证记录；回滚该目录补丁会重新暴露当前主线缺失的翻译。无用户数据或宿主状态变化。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：从旧分支移植消息目录时，先比较目标基线与目标语言目录的键和插值字段，再运行已注册的 localization suite；CI 新步骤待单独批准。
+
+### LESSON-20261019-005：语言 E2E 快照必须等待配置与界面收敛
+
+- 日期与时区：2026-10-19 UTC
+- 状态：修复已在 PR #494 本地工作树完成；新 SHA 的 Windows Desktop E2E 待复验
+- 严重度：Low
+- 模块：E2E / Localization
+- master commit / ref gitlink SHA / 平台与测试环境：失败 SHA `3f609dfa166c68c9009232ed912b615ca4a84e84`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；Windows Edge 153 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852)；hermetic suite 52/53 个 spec 通过。
+- 预期行为：测试变更语言前保存稳定的各窗口初始状态，并在 afterAll 中恢复后端配置、缓存、DOM 语言、路由和窗口尺寸。
+- 真实异常、复现步骤与证据：Windows hermetic suite 的日语键盘切换、持久化、主窗口重载及 legacy UI 断言均通过；afterAll 恢复时主窗口报告 `Could not restore main locale`。失败发生在窗口快照清理路径。
+- 确认的根因与排除项：before hook 只等待根节点渲染就读取语言快照；这不保证异步 LanguageProvider 已按后端配置协调 DOM 语言和 Paraglide 缓存。测试因此可能保存启动瞬态，并在清理时恢复该瞬态。语言切换功能断言本身通过，失败不是日语选择或持久化路径失败。
+- 修复提交、差异映射及保留的兼容性边界：在快照前只读轮询后端语言、DOM 语言与缓存；后端有受支持的语言时，要求 DOM 与规范化缓存都等于后端值后才保存快照。未改产品初始化逻辑、功能断言或窗口恢复行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现由 `tauri-e2e/specs/user-interface-language.e2e.ts` 的 Windows hermetic run `39290359852` 证明；同一 spec 保持注册于现有 suite。新 SHA 的桌面复验待执行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机前端构建停在 Paraglide/Inlang 网络插件初始化阶段，故桌面 E2E 尚未本机运行；将以推送后 Windows hermetic E2E 复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：只修改 E2E 快照等待条件与经验记录；轮询仅读取窗口语言状态，不写配置或宿主网络。可回退测试 helper 与对应记录恢复原快照时序。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：语言/主题等有异步初始化的测试，在捕获恢复快照前应等待权威配置与实际 UI 状态收敛；超时保留最后状态诊断。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
