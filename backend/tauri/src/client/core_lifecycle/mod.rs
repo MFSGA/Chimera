@@ -498,6 +498,11 @@ impl ApplicationWorkflowState {
         let id = request.response.id;
         let shutdown = matches!(&request.command, Command::Shutdown);
         let deferred_retry = request.deferred_retry.clone();
+        let service_mode_reconcile = matches!(
+            &request.command,
+            Command::PatchApplicationConfig { patch, .. }
+                if patch.enable_service_mode.is_some()
+        ) && crate::core::service::ipc::get_ipc_state().is_connected();
         let reconciled = matches!(
             &request.command,
             Command::Reconcile
@@ -506,7 +511,7 @@ impl ApplicationWorkflowState {
                 | Command::RecoverCore
                 | Command::SelectCore(_)
                 | Command::ReplaceCoreBinary(_)
-        );
+        ) || service_mode_reconcile;
         let service_phase = match &request.command {
             Command::InstallService(_) => Some(ServicePhase::Installing),
             Command::StartService { .. } => Some(ServicePhase::StartingDaemon),
@@ -541,7 +546,13 @@ impl ApplicationWorkflowState {
             self.publish_service_phase(phase);
         }
 
-        let command = request.command;
+        let mut command = request.command;
+        if let Command::PatchApplicationConfig {
+            service_connected, ..
+        } = &mut command
+        {
+            *service_connected = service_mode_reconcile;
+        }
         let actor = myself.clone();
         let task = tokio::spawn(async move {
             let (result, workflow_panicked, request_runtime_rebuild, application_workflow) =
@@ -1445,6 +1456,17 @@ impl CoreLifecycleClient {
         self.execute(Command::SelectCore(core)).await
     }
 
+    pub(super) async fn patch_application_config(
+        &self,
+        patch: chimera_config::application::ChimeraAppConfigPatch,
+    ) -> anyhow::Result<()> {
+        self.execute(Command::PatchApplicationConfig {
+            patch,
+            service_connected: false,
+        })
+        .await
+    }
+
     pub(super) async fn replace_core_binary(
         &self,
         artifact: PreparedCoreBinary,
@@ -1647,6 +1669,7 @@ mod tests {
     };
 
     use async_trait::async_trait;
+    use chimera_config::application::ChimeraAppConfigPatch;
     use chimera_config::clash::config::ClashConfig;
     use chimera_ipc::api::status::CoreState;
     use tokio::sync::Notify;
@@ -1692,6 +1715,28 @@ mod tests {
     struct ServiceHandoffCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         local: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    struct ServiceModeRecordingCore {
+        application: ApplicationClient,
+        observations: Arc<Mutex<Vec<(RunType, ClashCore, bool)>>>,
+        mutate_application_on_first_reconcile: AtomicBool,
+        fail_first_reconcile: AtomicBool,
+    }
+
+    struct TestApplicationBridge;
+
+    impl crate::state::mirror::VergeLegacyBridge for TestApplicationBridge {
+        fn prepare(
+            &self,
+            _snap: &chimera_config::application::ChimeraAppConfig,
+        ) -> anyhow::Result<Box<dyn crate::state::mirror::PreparedLegacyMirror>> {
+            Ok(Box::new(crate::state::mirror::NoopPreparedLegacyMirror))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::application::ChimeraAppConfig> {
+            Ok(chimera_config::application::ChimeraAppConfig::default())
+        }
     }
 
     #[async_trait]
@@ -1992,6 +2037,237 @@ mod tests {
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for ServiceModeRecordingCore {
+        async fn reconcile(
+            &self,
+            _clash: ClashConfig,
+            target_core: ClashCore,
+            run_type: RunType,
+        ) -> anyhow::Result<()> {
+            let app = self.application.get_typed();
+            self.observations.lock().unwrap().push((
+                run_type,
+                target_core,
+                app.enable_service_mode,
+            ));
+            if self
+                .mutate_application_on_first_reconcile
+                .swap(false, AtomicOrdering::AcqRel)
+            {
+                self.application
+                    .patch_typed(ChimeraAppConfigPatch {
+                        core: Some(ClashCore::ClashRsAlpha),
+                        enable_builtin_enhanced: Some(false),
+                        ..Default::default()
+                    })
+                    .await?;
+            }
+            if self
+                .fail_first_reconcile
+                .swap(false, AtomicOrdering::AcqRel)
+            {
+                anyhow::bail!("injected Service Mode reconcile failure");
+            }
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn change_core(&self, _core: ClashCore) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                state: CoreState::Stopped(None),
+                state_changed_at: 0,
+                run_type: RunType::Normal,
+            })
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[tokio::test]
+    async fn service_mode_config_patch_reconciles_before_persisting_candidate() {
+        let application = ApplicationClient::static_state(
+            chimera_config::application::ChimeraAppConfig::default(),
+        );
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ServiceModeRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+                mutate_application_on_first_reconcile: AtomicBool::new(false),
+                fail_first_reconcile: AtomicBool::new(false),
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+
+        workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_service_mode: Some(true),
+                    ..Default::default()
+                },
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [(
+                RunType::Service,
+                chimera_config::application::ChimeraAppConfig::default().core,
+                false
+            )]
+        );
+        assert!(application.get_typed().enable_service_mode);
+    }
+
+    #[tokio::test]
+    async fn service_mode_config_patch_restores_latest_runtime_after_version_conflict() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path =
+            camino::Utf8PathBuf::from_path_buf(directory.path().join("application.yaml")).unwrap();
+        let application = ApplicationClient::new(
+            config_path,
+            chimera_config::application::ChimeraAppConfig::default(),
+            Arc::new(TestApplicationBridge),
+        )
+        .await
+        .unwrap();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ServiceModeRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+                mutate_application_on_first_reconcile: AtomicBool::new(true),
+                fail_first_reconcile: AtomicBool::new(false),
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+
+        let error = workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_service_mode: Some(true),
+                    ..Default::default()
+                },
+                true,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("application config version conflict")
+        );
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [
+                (
+                    RunType::Service,
+                    chimera_config::application::ChimeraAppConfig::default().core,
+                    false
+                ),
+                (RunType::Normal, ClashCore::ClashRsAlpha, false)
+            ]
+        );
+        let latest = application.get_typed();
+        assert!(!latest.enable_service_mode);
+        assert!(!latest.enable_builtin_enhanced);
+        assert_eq!(latest.core, ClashCore::ClashRsAlpha);
+    }
+
+    #[tokio::test]
+    async fn service_mode_config_patch_restores_latest_runtime_after_candidate_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path =
+            camino::Utf8PathBuf::from_path_buf(directory.path().join("application.yaml")).unwrap();
+        let application = ApplicationClient::new(
+            config_path,
+            chimera_config::application::ChimeraAppConfig::default(),
+            Arc::new(TestApplicationBridge),
+        )
+        .await
+        .unwrap();
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let workflow = CoreLifecycleWorkflow::new(
+            application.clone(),
+            ClashConfigClient::legacy().unwrap(),
+            None,
+            Arc::new(ServiceModeRecordingCore {
+                application: application.clone(),
+                observations: observations.clone(),
+                mutate_application_on_first_reconcile: AtomicBool::new(true),
+                fail_first_reconcile: AtomicBool::new(true),
+            }),
+            Arc::new(RecordingInstaller {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+            Arc::new(RecordingService {
+                events: Arc::new(Mutex::new(Vec::new())),
+            }),
+        );
+
+        let error = workflow
+            .patch_application_config(
+                ChimeraAppConfigPatch {
+                    enable_service_mode: Some(true),
+                    ..Default::default()
+                },
+                true,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error:#}").contains("injected Service Mode reconcile failure"));
+        assert!(format!("{error:#}").contains("restored the latest persisted runtime"));
+        assert_eq!(
+            *observations.lock().unwrap(),
+            [
+                (
+                    RunType::Service,
+                    chimera_config::application::ChimeraAppConfig::default().core,
+                    false
+                ),
+                (RunType::Normal, ClashCore::ClashRsAlpha, false)
+            ]
+        );
+        assert!(!application.get_typed().enable_service_mode);
+        assert!(!application.get_typed().enable_builtin_enhanced);
+        assert_eq!(application.get_typed().core, ClashCore::ClashRsAlpha);
     }
 
     #[tokio::test]
@@ -2969,7 +3245,7 @@ mod tests {
     async fn binary_replacement_runs_stop_install_restart_in_lifecycle_mailbox() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
-        let target = crate::bridge::verge::legacy_core_from_typed(application.get_typed().core);
+        let target = application.get_typed().core;
         let release_stop = Arc::new(Notify::new());
         release_stop.notify_one();
         let runtime_paths =
@@ -3021,7 +3297,7 @@ mod tests {
     async fn binary_install_failure_finishes_update_without_restarting_core() {
         let events = Arc::new(Mutex::new(Vec::new()));
         let application = ApplicationClient::legacy().unwrap();
-        let target = crate::bridge::verge::legacy_core_from_typed(application.get_typed().core);
+        let target = application.get_typed().core;
         let release_stop = Arc::new(Notify::new());
         release_stop.notify_one();
         let client = CoreLifecycleClient::spawn_with_installer(

@@ -1,14 +1,9 @@
 use std::sync::Arc;
 
-use chimera_config::application::{
-    ChimeraAppConfig, ClashCore as AppClashCore, I18nLanguage, ThemeMode,
-};
+use chimera_config::application::{ChimeraAppConfig, I18nLanguage, ThemeMode};
 
 use crate::{
-    config::{
-        chimera::{ClashCore, IVerge},
-        core::Config,
-    },
+    config::{chimera::IVerge, core::Config},
     state::mirror::{PreparedLegacyMirror, VergeLegacyBridge as VergeLegacyBridgeTrait},
 };
 
@@ -16,7 +11,7 @@ pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<Chimera
     let mut next = ChimeraAppConfig::default();
 
     if let Some(value) = &legacy.app_log_level {
-        next.app_log_level = super::yaml_convert(value)?;
+        next.app_log_level = value.clone();
     }
     if let Some(value) = &legacy.language {
         next.language = language_from_legacy(value).unwrap_or(next.language);
@@ -54,7 +49,7 @@ pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<Chimera
         next.theme_color = value;
     }
     if let Some(value) = legacy.clash_core {
-        next.core = super::yaml_convert(value)?;
+        next.core = value;
     }
     if let Some(value) = legacy.enable_builtin_enhanced {
         next.enable_builtin_enhanced = value;
@@ -69,13 +64,13 @@ pub(crate) fn application_from_legacy(legacy: &IVerge) -> anyhow::Result<Chimera
         next.traffic_retention = value;
     }
     if let Some(value) = legacy.clash_tray_selector {
-        next.tray_selector_mode = super::yaml_convert(value)?;
+        next.tray_selector_mode = value;
     }
     if let Some(value) = legacy.always_on_top {
         next.always_on_top = value;
     }
     if let Some(value) = legacy.window_type {
-        next.window_type = super::yaml_convert(value)?;
+        next.window_type = value;
     }
 
     Ok(next)
@@ -85,7 +80,7 @@ pub(crate) fn apply_app_config_to_legacy_verge(
     draft: &mut IVerge,
     snap: &ChimeraAppConfig,
 ) -> anyhow::Result<()> {
-    draft.app_log_level = Some(super::yaml_convert(&snap.app_log_level)?);
+    draft.app_log_level = Some(snap.app_log_level.clone());
     draft.language = Some(super::yaml_convert(snap.language)?);
     draft.theme_mode = Some(super::yaml_convert(snap.theme_mode)?);
     draft.lighten_animation_effects = Some(snap.lighten_animation_effects);
@@ -101,14 +96,14 @@ pub(crate) fn apply_app_config_to_legacy_verge(
     };
     draft.proxy_guard_interval = Some(snap.proxy_guard_interval);
     draft.theme_color = Some(super::yaml_convert(&snap.theme_color)?);
-    draft.clash_core = Some(super::yaml_convert(snap.core)?);
+    draft.clash_core = Some(snap.core);
     draft.enable_builtin_enhanced = Some(snap.enable_builtin_enhanced);
     draft.max_log_files = Some(snap.max_log_files);
     draft.enable_auto_check_update = Some(snap.enable_auto_check_update);
     draft.traffic_retention = Some(snap.traffic_retention);
-    draft.clash_tray_selector = Some(super::yaml_convert(snap.tray_selector_mode)?);
+    draft.clash_tray_selector = Some(snap.tray_selector_mode);
     draft.always_on_top = Some(snap.always_on_top);
-    draft.window_type = Some(super::yaml_convert(snap.window_type)?);
+    draft.window_type = Some(snap.window_type);
     Ok(())
 }
 
@@ -181,30 +176,6 @@ impl VergeLegacyBridgeTrait for LegacyVergeBridge {
     }
 }
 
-pub(crate) fn legacy_core_from_typed(core: AppClashCore) -> ClashCore {
-    match core {
-        AppClashCore::ClashPremium => ClashCore::ClashPremium,
-        AppClashCore::ClashRs => ClashCore::ClashRs,
-        AppClashCore::Mihomo => ClashCore::Mihomo,
-        AppClashCore::ChimeraClient => ClashCore::ChimeraClient,
-        AppClashCore::ChimeraClientAlpha => ClashCore::ChimeraClientAlpha,
-        AppClashCore::MihomoAlpha => ClashCore::MihomoAlpha,
-        AppClashCore::ClashRsAlpha => ClashCore::ClashRsAlpha,
-    }
-}
-
-pub(crate) fn typed_core_from_legacy(core: ClashCore) -> AppClashCore {
-    match core {
-        ClashCore::ClashPremium => AppClashCore::ClashPremium,
-        ClashCore::ClashRs => AppClashCore::ClashRs,
-        ClashCore::Mihomo => AppClashCore::Mihomo,
-        ClashCore::ChimeraClient => AppClashCore::ChimeraClient,
-        ClashCore::ChimeraClientAlpha => AppClashCore::ChimeraClientAlpha,
-        ClashCore::MihomoAlpha => AppClashCore::MihomoAlpha,
-        ClashCore::ClashRsAlpha => AppClashCore::ClashRsAlpha,
-    }
-}
-
 fn language_from_legacy(value: &str) -> Option<I18nLanguage> {
     match value.to_ascii_lowercase().as_str() {
         "en" | "en-us" => Some(I18nLanguage::English),
@@ -264,7 +235,7 @@ mod tests {
 
         assert_eq!(typed.language, I18nLanguage::SimplifiedChinese);
         assert_eq!(typed.theme_mode, ThemeMode::Dark);
-        assert_eq!(typed.core, AppClashCore::ChimeraClient);
+        assert_eq!(typed.core, ClashCore::ChimeraClient);
         assert_eq!(typed.tray_selector_mode, AppProxiesSelectorMode::Hidden);
         assert_eq!(typed.window_type, AppWindowType::Main);
         assert_eq!(typed.proxy_guard_interval, 15);
@@ -280,7 +251,7 @@ mod tests {
         let typed = application_from_legacy(&IVerge::default())
             .expect("default legacy app config should project");
 
-        assert_eq!(typed.core, AppClashCore::Mihomo);
+        assert_eq!(typed.core, ClashCore::Mihomo);
         assert_eq!(typed.proxy_guard_interval, 10);
         assert_eq!(typed.window_type, AppWindowType::Legacy);
         assert!(typed.enable_builtin_enhanced);
@@ -290,9 +261,15 @@ mod tests {
 
     #[test]
     fn chimera_client_alpha_channel_survives_legacy_bridge_round_trip() {
-        let core = AppClashCore::ChimeraClientAlpha;
-
-        assert_eq!(legacy_core_from_typed(core), ClashCore::ChimeraClientAlpha);
-        assert_eq!(typed_core_from_legacy(ClashCore::ChimeraClientAlpha), core);
+        let legacy = IVerge {
+            clash_core: Some(ClashCore::ChimeraClientAlpha),
+            ..IVerge::default()
+        };
+        assert_eq!(
+            application_from_legacy(&legacy)
+                .expect("legacy core should project")
+                .core,
+            ClashCore::ChimeraClientAlpha
+        );
     }
 }

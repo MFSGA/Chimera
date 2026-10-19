@@ -140,7 +140,7 @@ impl ApplicationClient {
         Ok(())
     }
 
-    async fn get(&self) -> anyhow::Result<ApplicationSnapshot> {
+    pub(super) async fn get(&self) -> anyhow::Result<ApplicationSnapshot> {
         match self.inner.as_ref() {
             ApplicationClientInner::Actor { .. } => {
                 self.call(ApplicationActorMessage::Get, Some(APPLICATION_READ_TIMEOUT))
@@ -178,7 +178,7 @@ impl ApplicationClient {
         }
     }
 
-    async fn prepare_replace(
+    pub(super) async fn prepare_replace(
         &self,
         state: ChimeraAppConfig,
     ) -> anyhow::Result<PreparedTypedReplace<ChimeraAppConfig>> {
@@ -204,7 +204,7 @@ impl ApplicationClient {
         }
     }
 
-    async fn replace_prepared_if_version(
+    pub(super) async fn replace_prepared_if_version(
         &self,
         expected_version: u64,
         prepared: PreparedTypedReplace<ChimeraAppConfig>,
@@ -291,25 +291,151 @@ impl ChimeraClient {
         self.inner.application.patch_legacy(self, patch).await
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn patch_app_config(
         &self,
         patch: ChimeraAppConfigPatch,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<super::MutationOutcome<()>> {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let reconcile_hotkeys = patch.hotkeys.is_some();
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(hotkeys) = patch.hotkeys.as_deref() {
             super::hotkey::validate_bindings(hotkeys, self.inner.accelerators.as_ref())?;
         }
-        self.inner.application.patch_typed(patch).await?;
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        if reconcile_hotkeys {
-            self.reconcile_hotkeys().await;
+
+        #[cfg(windows)]
+        validate_windows_service_mode_tun_transition(
+            patch.enable_service_mode,
+            self.get_clash_config()?.enable_tun_mode,
+            None,
+        )?;
+
+        let service_mode_patch = patch.enable_service_mode.is_some();
+        if service_mode_patch {
+            self.inner
+                .core_lifecycle
+                .patch_application_config(patch)
+                .await?;
+        } else {
+            self.inner.application.patch_typed(patch).await?;
         }
-        Config::verge().data().save_file()?;
-        handle::Handle::refresh_verge();
-        Ok(())
+        let snapshot = self.inner.application.get().await?;
+        let mut degradations = Vec::new();
+
+        // Keep the legacy Verge file current while existing service and agent
+        // entry points still read it. The typed application.yaml is already
+        // committed, so a mirror write failure is reported as degraded.
+        if let Err(error) = Config::verge().data().save_file() {
+            degradations.push(super::Degradation {
+                phase: super::runtime::DegradationPhase::LegacyMirror,
+                code: "legacy_application_mirror_write_failed".into(),
+                message: format!("failed to persist legacy application mirror: {error:#}"),
+                retryable: true,
+            });
+        }
+
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let clash = self.get_clash_config()?;
+            let inputs = super::effects::plan::ApplicationEffectInputs::project(
+                &snapshot.state,
+                &clash,
+                None,
+            );
+            self.publish_runtime_port_binding();
+            super::effects::ports::CommitNotifications::application_committed(
+                &self.inner.effects,
+                inputs.app,
+                Vec::new(),
+            );
+
+            if reconcile_hotkeys {
+                let status = self.reconcile_hotkeys().await;
+                if let Some(degradation) = super::effects::status::degradation_of(&status) {
+                    degradations.push(degradation);
+                }
+            }
+        }
+
+        self.inner.ui_sink.refresh_verge();
+        Ok(
+            super::MutationOutcome::from_parts((), degradations).with_commit(
+                super::runtime::CommitReceipt {
+                    operation_id: None,
+                    domain: "application".into(),
+                    source_version: snapshot.version,
+                    runtime: super::runtime::RuntimeCommitStatus::Pending,
+                },
+            ),
+        )
+    }
+
+    pub(crate) async fn patch_clash_config(
+        &self,
+        patch: chimera_config::clash::config::ClashConfigPatch,
+    ) -> anyhow::Result<super::MutationOutcome<()>> {
+        if patch.enable_tun_mode == Some(true) {
+            #[cfg(target_os = "macos")]
+            {
+                let app = self.get_app_config()?;
+                let service_connected = crate::core::service::ipc::get_ipc_state().is_connected();
+                if !(app.enable_service_mode && service_connected) {
+                    let core: chimera_utils::core::CoreType = (&app.core).into();
+                    tokio::task::spawn_blocking(move || {
+                        crate::core::manager::grant_permission(&core)
+                    })
+                    .await
+                    .context("macOS TUN authorization task failed")?
+                    .context("failed to grant selected core the macOS TUN permission")?;
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            crate::core::service::ensure_tun_host_ready(self)
+                .await
+                .context("Windows TUN service preflight failed")?;
+        }
+
+        let snapshot = self
+            .inner
+            .clash_config
+            .patch_typed_config(self, patch)
+            .await?;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let app = self.get_app_config()?;
+            let clash = self.get_clash_config()?;
+            let inputs = super::effects::plan::ApplicationEffectInputs::project(&app, &clash, None);
+            self.publish_runtime_port_binding();
+            super::effects::ports::CommitNotifications::clash_committed(
+                &self.inner.effects,
+                inputs.clash,
+            );
+        }
+        self.inner.ui_sink.refresh_clash();
+
+        Ok(
+            super::MutationOutcome::from_parts((), Vec::new()).with_commit(
+                super::runtime::CommitReceipt {
+                    operation_id: None,
+                    domain: "clash".into(),
+                    source_version: snapshot.version,
+                    runtime: super::runtime::RuntimeCommitStatus::Pending,
+                },
+            ),
+        )
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    fn publish_runtime_port_binding(&self) {
+        let ports = chimera_config::runtime::executor::ResolvedPortBindings {
+            mixed_port: self.clash_info().port,
+            ..Default::default()
+        };
+        super::effects::ports::CommitNotifications::runtime_bound(
+            &self.inner.effects,
+            Some(ports),
+            false,
+        );
     }
 }
 

@@ -4,7 +4,7 @@
 //! Chimera sysopt, logger and tray boundaries. System proxy ownership remains
 //! transitional until the reference `SystemProxyClient` is migrated.
 
-use chimera_config::application::{I18nLanguage, LoggingLevel, NetworkStatisticWidgetConfig};
+use chimera_config::application::{I18nLanguage, NetworkStatisticWidgetConfig};
 
 use super::plan::{ProxyGuardDesired, SystemProxyDesired, TrayRefresh};
 
@@ -77,11 +77,8 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
         &self,
         desired: &super::plan::LoggerDesired,
     ) -> Result<(), EffectAdapterError> {
-        crate::utils::init::refresh_logger((
-            Some(legacy_logging_level(&desired.level)),
-            Some(desired.max_files),
-        ))
-        .map_err(|error| EffectAdapterError::failed("logger_refresh_failed", error))
+        crate::utils::init::refresh_logger((Some(desired.level.clone()), Some(desired.max_files)))
+            .map_err(|error| EffectAdapterError::failed("logger_refresh_failed", error))
     }
 
     async fn set_auto_launch(&self, enabled: bool) -> Result<(), EffectAdapterError> {
@@ -148,54 +145,5 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
             .await
             .map_err(|error| EffectAdapterError::failed("system_proxy_restore_failed", error))?
             .map_err(|error| EffectAdapterError::failed("system_proxy_restore_failed", error))
-    }
-}
-
-fn legacy_logging_level(level: &LoggingLevel) -> crate::config::chimera::LoggingLevel {
-    match level {
-        LoggingLevel::Silent => crate::config::chimera::LoggingLevel::Silent,
-        LoggingLevel::Trace => crate::config::chimera::LoggingLevel::Trace,
-        LoggingLevel::Debug => crate::config::chimera::LoggingLevel::Debug,
-        LoggingLevel::Info => crate::config::chimera::LoggingLevel::Info,
-        LoggingLevel::Warn => crate::config::chimera::LoggingLevel::Warn,
-        LoggingLevel::Error => crate::config::chimera::LoggingLevel::Error,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn application_log_levels_keep_the_legacy_reload_mapping() {
-        for (current, expected) in [
-            (
-                LoggingLevel::Silent,
-                crate::config::chimera::LoggingLevel::Silent,
-            ),
-            (
-                LoggingLevel::Trace,
-                crate::config::chimera::LoggingLevel::Trace,
-            ),
-            (
-                LoggingLevel::Debug,
-                crate::config::chimera::LoggingLevel::Debug,
-            ),
-            (
-                LoggingLevel::Info,
-                crate::config::chimera::LoggingLevel::Info,
-            ),
-            (
-                LoggingLevel::Warn,
-                crate::config::chimera::LoggingLevel::Warn,
-            ),
-            (
-                LoggingLevel::Error,
-                crate::config::chimera::LoggingLevel::Error,
-            ),
-        ] {
-            let converted = legacy_logging_level(&current);
-            assert_eq!(converted.to_string(), expected.to_string());
-        }
     }
 }

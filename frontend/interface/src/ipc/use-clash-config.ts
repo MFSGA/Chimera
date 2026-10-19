@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import { ClashRuntimeConfig, commands, PatchRuntimeConfig } from './bindings';
+import {
+  commands,
+  type ClashRuntimeConfig,
+  type PatchRuntimeConfig,
+} from './bindings';
 import { CLASH_CONFIG_QUERY_KEY } from './consts';
 
 /**
@@ -52,7 +56,7 @@ export const useClashConfig = () => {
    */
   const upsert = useMutation({
     mutationFn: async (payload: PatchRuntimeConfig) => {
-      return unwrapResult(await commands.patchClashConfig(payload));
+      return unwrapResult(await commands.patchRuntimeOverrides(payload));
     },
     onSuccess: () => {
       return queryClient.invalidateQueries({

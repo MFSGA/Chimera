@@ -5,93 +5,16 @@ mod clash_strategy;
 pub use self::clash_strategy::{ClashStrategy, ExternalControllerPortStrategy};
 
 use anyhow::Result;
-use chimera_config::application::TrafficRetention;
+pub use chimera_config::{
+    application::{ClashCore, ProxiesSelectorMode, TrafficRetention, WindowType},
+    clash::config::tun_stack::TunStack,
+};
 use chimera_macro::VergePatch;
-use enumflags2::bitflags;
 pub use logging::LoggingLevel;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
 use crate::utils::{dirs, help};
-
-// TODO: when support sing-box, remove this struct
-#[bitflags]
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Type)]
-pub enum ClashCore {
-    #[serde(rename = "clash", alias = "clash-premium")]
-    ClashPremium = 0b0001,
-    #[serde(rename = "clash-rs")]
-    ClashRs,
-    #[serde(rename = "mihomo", alias = "clash-meta")]
-    Mihomo,
-    #[serde(rename = "chimera-client", alias = "chimera", alias = "chimera_client")]
-    ChimeraClient,
-    #[serde(rename = "mihomo-alpha")]
-    MihomoAlpha,
-    #[serde(rename = "clash-rs-alpha")]
-    ClashRsAlpha,
-    #[serde(rename = "chimera-client-alpha")]
-    ChimeraClientAlpha,
-}
-
-impl Default for ClashCore {
-    fn default() -> Self {
-        Self::Mihomo
-    }
-}
-
-impl From<&ClashCore> for chimera_utils::core::CoreType {
-    fn from(core: &ClashCore) -> Self {
-        match core {
-            ClashCore::ClashPremium => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::ClashPremium,
-            ),
-            ClashCore::ClashRs => {
-                chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::ClashRust)
-            }
-            ClashCore::Mihomo => {
-                chimera_utils::core::CoreType::Clash(chimera_utils::core::ClashCoreType::Mihomo)
-            }
-            ClashCore::MihomoAlpha => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::MihomoAlpha,
-            ),
-            ClashCore::ClashRsAlpha => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::ClashRustAlpha,
-            ),
-            // Chimera client currently follows clash-rs core protocol.
-            ClashCore::ChimeraClient => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::ChimeraClient,
-            ),
-            // Both channels use Chimera Client's config/runtime contract.
-            ClashCore::ChimeraClientAlpha => chimera_utils::core::CoreType::Clash(
-                chimera_utils::core::ClashCoreType::ChimeraClientAlpha,
-            ),
-        }
-    }
-}
-
-impl std::fmt::Display for ClashCore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ClashCore::ClashPremium => write!(f, "clash"),
-            ClashCore::ClashRs => write!(f, "clash-rs"),
-            ClashCore::Mihomo => write!(f, "mihomo"),
-            ClashCore::MihomoAlpha => write!(f, "mihomo-alpha"),
-            ClashCore::ClashRsAlpha => write!(f, "clash-rs-alpha"),
-            ClashCore::ChimeraClient => write!(f, "chimera-client"),
-            ClashCore::ChimeraClientAlpha => write!(f, "chimera-client-alpha"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum WindowType {
-    Main,
-    #[default]
-    Legacy,
-}
 
 #[derive(Default, Debug, Clone, specta::Type, Deserialize, Serialize, VergePatch)]
 #[verge(patch_fn = "patch_config")]
@@ -217,7 +140,9 @@ impl IVerge {
 
     pub fn template() -> Self {
         Self {
-            clash_core: Some(ClashCore::default()),
+            // Keep the legacy Verge default stable even when the typed app
+            // config selects a feature-dependent default core.
+            clash_core: Some(ClashCore::Mihomo),
             max_log_files: Some(7), // 7 days
             app_log_level: Some(logging::LoggingLevel::default()),
             enable_auto_launch: Some(false),
@@ -294,25 +219,6 @@ pub enum BreakWhenProxyChange {
     All,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum TunStack {
-    System,
-    #[default]
-    Gvisor,
-    Mixed,
-}
-
-impl AsRef<str> for TunStack {
-    fn as_ref(&self) -> &str {
-        match self {
-            TunStack::System => "system",
-            TunStack::Gvisor => "gvisor",
-            TunStack::Mixed => "mixed",
-        }
-    }
-}
-
 #[cfg(test)]
 mod core_type_tests {
     use super::ClashCore;
@@ -329,13 +235,4 @@ mod core_type_tests {
             CoreType::Clash(ClashCoreType::ChimeraClientAlpha)
         );
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default, Type)]
-#[serde(rename_all = "snake_case")]
-pub enum ProxiesSelectorMode {
-    #[default]
-    Normal,
-    Hidden,
-    Submenu,
 }

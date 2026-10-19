@@ -4,7 +4,12 @@ pub mod window;
 
 use chimera_config::{
     application::ChimeraAppConfig,
-    clash::config::{ClashConfig, ClashConfigPatch},
+    clash::config::{
+        ClashConfig, ClashConfigPatch,
+        clash_strategy::{
+            BreakConnectionStrategyPatch, ExternalControllerStrategyPatch, PortStrategyPatch,
+        },
+    },
     state::{PersistentState, PersistentStatePatch},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -107,18 +112,31 @@ fn clash_patch_from_legacy_patch(patch: &IVerge, next: ClashConfig) -> Option<Cl
         touched = true;
     }
     if patch.enable_random_port.is_some() || patch.verge_mixed_port.is_some() {
-        clash.mixed_port = Some(next.mixed_port);
+        clash.mixed_port = PortStrategyPatch {
+            kind: Some(next.mixed_port.kind),
+            start_port: Some(next.mixed_port.start_port),
+        };
         touched = true;
     }
     if patch.clash_strategy.is_some() {
-        clash.external_controller = Some(next.external_controller);
+        clash.external_controller = ExternalControllerStrategyPatch {
+            host: Some(next.external_controller.host),
+            port: PortStrategyPatch {
+                kind: Some(next.external_controller.port.kind),
+                start_port: Some(next.external_controller.port.start_port),
+            },
+        };
         touched = true;
     }
     if patch.break_when_proxy_change.is_some()
         || patch.break_when_profile_change.is_some()
         || patch.break_when_mode_change.is_some()
     {
-        clash.break_connection = Some(next.break_connection);
+        clash.break_connection = BreakConnectionStrategyPatch {
+            on_proxy_change: Some(next.break_connection.on_proxy_change),
+            on_profile_change: Some(next.break_connection.on_profile_change),
+            on_mode_change: Some(next.break_connection.on_mode_change),
+        };
         touched = true;
     }
 
@@ -167,21 +185,12 @@ mod tests {
 
         let clash = plan.clash_config.expect("clash patch should exist");
         assert_eq!(clash.enable_tun_mode, Some(true));
+        assert_eq!(clash.mixed_port.start_port, Some(17890));
         assert_eq!(
-            clash.mixed_port.as_ref().map(|port| port.start_port),
-            Some(17890)
-        );
-        assert_eq!(
-            clash.mixed_port.as_ref().map(|port| &port.kind),
+            clash.mixed_port.kind.as_ref(),
             Some(&chimera_config::clash::config::clash_strategy::PortStrategyKind::Random)
         );
-        assert_eq!(
-            clash
-                .break_connection
-                .as_ref()
-                .map(|strategy| strategy.on_mode_change),
-            Some(true)
-        );
+        assert_eq!(clash.break_connection.on_mode_change, Some(true));
     }
 
     #[test]

@@ -301,6 +301,86 @@ impl ClashConfigClient {
         self.patch_with_overrides(owner, patch, overrides).await
     }
 
+    pub(super) async fn patch_typed_config(
+        &self,
+        owner: &ChimeraClient,
+        patch: ClashConfigPatch,
+    ) -> Result<ClashConfigSnapshot> {
+        let snapshot = self.get_snapshot().await?;
+        let mut next = snapshot.state.clone();
+        next.apply(patch.clone());
+        let reconcile_runtime = should_reconcile_clash_patch(&snapshot.state, &next, &patch);
+
+        let forward = self.prepare_replace(next).await?;
+        let rollback = self.prepare_replace(snapshot.state.clone()).await?;
+        let committed = match self
+            .replace_prepared_if_version(snapshot.version, forward)
+            .await?
+        {
+            ConditionalReplaceResult::Replaced(snapshot) => snapshot,
+            ConditionalReplaceResult::Conflict { actual_version } => {
+                bail!(
+                    "clash config version conflict: expected {}, actual {}",
+                    snapshot.version,
+                    actual_version
+                );
+            }
+        };
+
+        let finalize = async {
+            if reconcile_runtime {
+                if patch.enable_tun_mode.is_some() {
+                    self.apply_legacy_patch_runtime(owner, &patch).await?;
+                } else {
+                    update_core_config(owner).await?;
+                }
+            }
+            Config::clash().data().save_config()?;
+            Config::verge().data().save_file()?;
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+
+        if let Err(primary) = finalize {
+            match self
+                .replace_prepared_if_version(committed.version, rollback)
+                .await
+            {
+                Ok(ConditionalReplaceResult::Replaced(_)) => {}
+                Ok(ConditionalReplaceResult::Conflict { actual_version }) => {
+                    bail!(
+                        "{primary:#}; clash rollback conflict: expected {}, actual {actual_version}",
+                        committed.version
+                    );
+                }
+                Err(error) => {
+                    bail!("{primary:#}; clash rollback failed: {error:#}");
+                }
+            }
+
+            let mut failures = Vec::new();
+            if let Err(error) = Config::clash().data().save_config() {
+                failures.push(format!(
+                    "legacy clash rollback persistence failed: {error:#}"
+                ));
+            }
+            if let Err(error) = Config::verge().data().save_file() {
+                failures.push(format!(
+                    "legacy Verge rollback persistence failed: {error:#}"
+                ));
+            }
+            if failures.is_empty() {
+                return Err(primary);
+            }
+            bail!(
+                "{primary:#}; compensation failures: {}",
+                failures.join("; ")
+            );
+        }
+
+        Ok(committed)
+    }
+
     async fn patch_overrides(
         &self,
         owner: &ChimeraClient,
@@ -628,6 +708,17 @@ async fn update_core_config(client: &ChimeraClient) -> Result<()> {
     }
 }
 
+fn should_reconcile_clash_patch(
+    before: &ClashConfig,
+    after: &ClashConfig,
+    patch: &ClashConfigPatch,
+) -> bool {
+    crate::client::application_workflow::impact::classify_clash(before, after)
+        != crate::client::application_workflow::impact::RuntimeImpact::None
+        || crate::client::application_workflow::impact::RequestedRuntimeFields::of_clash(patch)
+            .names_any()
+}
+
 fn run_clash_patch_side_effects(client: &ChimeraClient, plan: &ClashPatchPlan) {
     if plan.mixed_port.is_some() {
         log_err!(sysopt::Sysopt::global().init_sysproxy());
@@ -720,6 +811,31 @@ mod tests {
         assert_eq!(ipv6, Some(true));
         assert_eq!(next.mixed_port.start_port, 17890);
         assert_eq!(next.external_controller.port.start_port, 19090);
+    }
+
+    #[test]
+    fn typed_clash_patch_reconciles_runtime_inputs_and_skips_ui_only_fields() {
+        let current = ClashConfig::default();
+
+        let mut ui_patch = ClashConfig::new_empty_patch();
+        ui_patch.web_ui_list = Some(vec!["https://example.test".into()]);
+        let mut ui_only = current.clone();
+        ui_only.apply(ui_patch.clone());
+        assert!(!should_reconcile_clash_patch(&current, &ui_only, &ui_patch));
+
+        let mut tun_patch = ClashConfig::new_empty_patch();
+        tun_patch.enable_tun_mode = Some(current.enable_tun_mode);
+        assert!(should_reconcile_clash_patch(&current, &current, &tun_patch));
+
+        let mut runtime_patch = ClashConfig::new_empty_patch();
+        runtime_patch.enable_clash_fields = Some(!current.enable_clash_fields);
+        let mut runtime_changed = current.clone();
+        runtime_changed.apply(runtime_patch.clone());
+        assert!(should_reconcile_clash_patch(
+            &current,
+            &runtime_changed,
+            &runtime_patch
+        ));
     }
 
     #[test]

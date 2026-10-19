@@ -34,40 +34,60 @@ pub enum ClashControlChannel {
 #[serde(rename_all = "snake_case")]
 pub struct ClashConfig {
     /// Clash Overrides config, used to patch clash config directly
+    #[patch(attribute(specta(optional)))]
     pub overrides: ClashGuardOverrides,
 
     /// clash tun mode
+    #[patch(attribute(specta(optional)))]
     pub enable_tun_mode: bool,
 
     /// web ui list
+    #[patch(attribute(specta(optional)))]
     pub web_ui_list: Vec<String>,
 
     /// 支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真
+    #[patch(attribute(specta(optional)))]
     pub enable_clash_fields: bool,
 
     /// 外部控制器端口策略
+    #[patch(nesting)]
+    #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
     pub external_controller: ExternalControllerStrategy,
 
     #[serde(default)]
+    #[patch(attribute(specta(optional)))]
     pub clash_control_channel: ClashControlChannel,
     #[serde(default)]
+    #[patch(attribute(specta(optional)))]
     pub clash_ipc_disable_http_controller: bool,
 
     /// Mixed Proxy(Socks5, HTTP) Port Strategy
+    #[patch(nesting)]
+    #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
     pub mixed_port: PortStrategy,
 
     /// Socks5 Proxy Port
     #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<PortStrategy>>)))]
+    #[patch(attribute(specta(optional)))]
     pub socks_port: Option<PortStrategy>,
 
     /// HTTP Proxy Port
     #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<PortStrategy>>)))]
+    #[patch(attribute(specta(optional)))]
     pub http_port: Option<PortStrategy>,
 
     /// 断开连接策略
+    #[patch(nesting)]
+    #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
     pub break_connection: BreakConnectionStrategy,
 
     /// Tun 堆栈选择
+    #[patch(attribute(specta(optional)))]
     pub tun_stack: TunStack,
 }
 
@@ -75,6 +95,28 @@ pub struct ClashConfig {
 mod patch_tests {
     use super::*;
     use struct_patch::Patch;
+
+    #[test]
+    fn nested_patches_preserve_unmodified_strategy_fields() {
+        let mut config = ClashConfig {
+            mixed_port: PortStrategy {
+                kind: PortStrategyKind::Random,
+                start_port: 18080,
+            },
+            ..ClashConfig::default()
+        };
+        let patch: ClashConfigPatch = serde_yaml_ng::from_str(
+            "mixed_port:\n  start_port: 28080\nbreak_connection:\n  on_mode_change: false\n",
+        )
+        .expect("sparse nested patch must deserialize");
+
+        config.apply(patch);
+
+        assert_eq!(config.mixed_port.kind, PortStrategyKind::Random);
+        assert_eq!(config.mixed_port.start_port, 28080);
+        assert!(!config.break_connection.on_mode_change);
+        assert!(config.break_connection.on_profile_change);
+    }
 
     #[test]
     fn old_clash_config_defaults_control_channel_without_application_fields() {

@@ -18,12 +18,15 @@ pub enum ProxyChangeBreakMode {
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, Type)))]
 pub struct BreakConnectionStrategy {
     /// 切换代理时中断连接
+    #[patch(attribute(specta(optional)))]
     pub on_proxy_change: ProxyChangeBreakMode,
 
     /// 切换配置时中断连接
+    #[patch(attribute(specta(optional)))]
     pub on_profile_change: bool,
 
     /// 切换模式时中断连接
+    #[patch(attribute(specta(optional)))]
     pub on_mode_change: bool,
 }
 

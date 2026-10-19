@@ -672,7 +672,10 @@ impl EffectsClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chimera_config::{application::ChimeraAppConfig, clash::config::ClashConfig};
+    use chimera_config::{
+        application::ChimeraAppConfig, clash::config::ClashConfig,
+        runtime::executor::ResolvedPortBindings,
+    };
     use tokio::sync::mpsc;
 
     struct RecordingEffectsPort {
@@ -757,6 +760,39 @@ mod tests {
             plan.effects(),
             &[ApplicationEffect::Tray(TrayRefresh::Part)]
         );
+        let _ = effects.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn runtime_port_binding_gives_system_proxy_the_effective_mixed_port() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let mut initial = inputs();
+        initial.app.enable_system_proxy = true;
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(RecordingEffectsPort { plans: sender }),
+            ui: Arc::new(crate::client::NoopUiEventSink),
+            initial,
+        })
+        .await
+        .expect("effects actor");
+
+        CommitNotifications::runtime_bound(
+            &effects,
+            Some(ResolvedPortBindings {
+                mixed_port: 17890,
+                ..Default::default()
+            }),
+            false,
+        );
+        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("system proxy effect plan")
+            .expect("recorded effect plan");
+
+        assert!(matches!(
+            plan.effects(),
+            [ApplicationEffect::SystemProxy(desired)] if desired.port == Some(17890)
+        ));
         let _ = effects.shutdown().await;
     }
 }

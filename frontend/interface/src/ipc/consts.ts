@@ -41,6 +41,9 @@ export const CLASH_INFO_QUERY_KEY = 'clash-info';
  */
 export const CLASH_CONFIG_QUERY_KEY = 'clash-config';
 
+/** Persistent typed Clash settings (`ClashConfig`), separate from live `/configs`. */
+export const CLASH_SETTINGS_QUERY_KEY = 'clash-settings';
+
 /**
  * Applied runtime transform diagnostics query key.
  */

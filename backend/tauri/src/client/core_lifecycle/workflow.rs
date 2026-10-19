@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use chimera_config::application::{ChimeraAppConfig, ChimeraAppConfigPatch};
+use struct_patch::Patch;
+
 use crate::client::application_workflow::workflow::ProfileRuntime;
 use crate::config::chimera::ClashCore;
 use crate::enhance::FsProfileContentSource;
@@ -19,6 +22,10 @@ pub(super) enum Command {
     Shutdown,
     #[cfg(test)]
     StopCore,
+    PatchApplicationConfig {
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+    },
     SelectCore(ClashCore),
     RecoverCore,
     Reconcile,
@@ -109,6 +116,13 @@ impl CoreLifecycleWorkflow {
             Command::Shutdown => self.core.stop().await,
             #[cfg(test)]
             Command::StopCore => self.core.stop().await,
+            Command::PatchApplicationConfig {
+                patch,
+                service_connected,
+            } => {
+                self.patch_application_config(patch, service_connected)
+                    .await
+            }
             Command::SelectCore(core) => self.select_core(core).await,
             Command::ReplaceCoreBinary(artifact) => self.replace_binary(artifact).await,
             Command::InstallService(mut transition) => transition.install_daemon().await,
@@ -233,10 +247,117 @@ impl CoreLifecycleWorkflow {
     async fn reconcile(&self) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
-        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
+        );
+        if let Some(profiles) = &self.profiles {
+            self.core
+                .reconcile_profiles(
+                    clash,
+                    target_core,
+                    run_type,
+                    Arc::new(profiles.load().state.clone()),
+                    app,
+                    Default::default(),
+                )
+                .await
+        } else {
+            self.core.reconcile(clash, target_core, run_type).await
+        }
+    }
+
+    pub(super) async fn patch_application_config(
+        &self,
+        patch: ChimeraAppConfigPatch,
+        service_connected: bool,
+    ) -> anyhow::Result<()> {
+        if patch.enable_service_mode.is_none() || !service_connected {
+            self.application.patch_typed(patch).await?;
+            return Ok(());
+        }
+
+        let previous = self.application.get().await?;
+        let mut candidate = previous.state.clone();
+        candidate.apply(patch);
+        let forward = self.application.prepare_replace(candidate.clone()).await?;
+
+        // A Service Mode change selects the core execution host. Reconcile
+        // that candidate through the lifecycle actor before committing its
+        // persisted source, so a failed host transition cannot leave settings
+        // claiming a runtime that never started.
+        if let Err(candidate_error) = self
+            .reconcile_application(candidate, service_connected)
+            .await
+        {
+            let latest = match self.application.get().await {
+                Ok(latest) => latest.state,
+                Err(read_error) => {
+                    return Err(anyhow::anyhow!(
+                        "{candidate_error:#}; failed to read the latest application config for runtime recovery: {read_error:#}"
+                    ));
+                }
+            };
+            return match self
+                .reconcile_application(latest, service_connected)
+                .await
+            {
+                Ok(()) => Err(candidate_error.context(
+                    "failed to reconcile Service Mode candidate; restored the latest persisted runtime",
+                )),
+                Err(restore_error) => Err(anyhow::anyhow!(
+                    "{candidate_error:#}; failed to restore the latest persisted application runtime: {restore_error:#}"
+                )),
+            };
+        }
+
+        let commit = self
+            .application
+            .replace_prepared_if_version(previous.version, forward)
+            .await;
+        let commit_error = match commit {
+            Ok(crate::state::ConditionalReplaceResult::Replaced(_)) => return Ok(()),
+            Ok(crate::state::ConditionalReplaceResult::Conflict { actual_version }) => {
+                anyhow::anyhow!(
+                    "application config version conflict: expected {}, actual {actual_version}",
+                    previous.version
+                )
+            }
+            Err(error) => error.context("failed to commit Service Mode application config"),
+        };
+
+        let restore =
+            match self.application.get().await {
+                Ok(latest) => {
+                    self.reconcile_application(latest.state, service_connected)
+                        .await
+                }
+                Err(error) => Err(error
+                    .context("failed to read the latest application config for runtime recovery")),
+            };
+        if let Err(rollback_error) = restore {
+            return Err(anyhow::anyhow!(
+                "{commit_error:#}; failed to restore the latest persisted application runtime: {rollback_error:#}"
+            ));
+        }
+        Err(commit_error)
+    }
+
+    async fn reconcile_application(
+        &self,
+        app: ChimeraAppConfig,
+        service_connected: bool,
+    ) -> anyhow::Result<()> {
+        let clash = self.clash.get()?;
+        let target_core = app.core;
+        let run_type = crate::core::RunType::classify(
+            app.enable_service_mode,
+            if service_connected {
+                crate::core::service::ipc::IpcState::Connected
+            } else {
+                crate::core::service::ipc::IpcState::Disconnected
+            },
         );
         if let Some(profiles) = &self.profiles {
             self.core
@@ -261,7 +382,7 @@ impl CoreLifecycleWorkflow {
     ) -> anyhow::Result<()> {
         let clash = self.clash.get()?;
         let app = self.application.get_typed();
-        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
@@ -295,7 +416,7 @@ impl CoreLifecycleWorkflow {
                         candidate_unavailable(error.to_string()),
                 )
             })?;
-        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
@@ -322,7 +443,7 @@ impl CoreLifecycleWorkflow {
 
         let previous_app = self.application.get_typed();
         let mut candidate_app = previous_app.clone();
-        candidate_app.core = crate::bridge::verge::typed_core_from_legacy(core);
+        candidate_app.core = core;
         let profile_snapshot = Arc::new(profiles.load().state.clone());
         let clash = self.clash.get()?;
         let run_type = crate::core::RunType::classify(
@@ -342,7 +463,7 @@ impl CoreLifecycleWorkflow {
             .await?;
 
         if let Err(error) = self.application.patch_core(candidate_app.core).await {
-            let previous_core = crate::bridge::verge::legacy_core_from_typed(previous_app.core);
+            let previous_core = previous_app.core;
             let rollback = self
                 .core
                 .reconcile_profiles(
@@ -365,8 +486,7 @@ impl CoreLifecycleWorkflow {
     }
 
     async fn replace_binary(&self, artifact: PreparedCoreBinary) -> anyhow::Result<()> {
-        let current_core =
-            crate::bridge::verge::legacy_core_from_typed(self.application.get_typed().core);
+        let current_core = self.application.get_typed().core;
         if current_core == artifact.target {
             self.core.stop().await?;
             self.installer.install(&artifact).await?;
@@ -435,7 +555,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
                     candidate_unavailable(error.to_string()),
             )
         })?;
-        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),
@@ -459,7 +579,7 @@ impl ProfileRuntime for CoreLifecycleWorkflow {
                     candidate_unavailable(error.to_string()),
             )
         })?;
-        let target_core = crate::bridge::verge::legacy_core_from_typed(app.core);
+        let target_core = app.core;
         let run_type = crate::core::RunType::classify(
             app.enable_service_mode,
             crate::core::service::ipc::get_ipc_state(),

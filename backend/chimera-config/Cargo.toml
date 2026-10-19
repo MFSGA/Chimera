@@ -6,8 +6,9 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["default-meta"]
+default = ["default-meta", "nesting"]
 default-meta = []
+nesting = ["struct-patch/nesting"]
 snapshot-persistence = ["dep:rmp-serde", "dep:zstd"]
 
 [dependencies]

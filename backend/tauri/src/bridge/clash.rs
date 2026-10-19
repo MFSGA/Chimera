@@ -88,7 +88,7 @@ pub(crate) fn clash_config_from_legacy(
     next.web_ui_list = legacy_verge.web_ui_list.clone().unwrap_or_default();
     next.enable_clash_fields = legacy_verge.enable_clash_fields.unwrap_or(true);
     if let Some(value) = legacy_verge.tun_stack {
-        next.tun_stack = super::yaml_convert(value)?;
+        next.tun_stack = value;
     }
 
     let mixed_port = legacy_verge
@@ -171,7 +171,7 @@ pub(crate) fn apply_clash_config_to_legacy_verge(
     draft.enable_clash_fields = Some(snap.enable_clash_fields);
     draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
     draft.verge_mixed_port = Some(snap.mixed_port.start_port);
-    draft.tun_stack = Some(super::yaml_convert(snap.tun_stack)?);
+    draft.tun_stack = Some(snap.tun_stack);
     draft.clash_strategy = Some(ClashStrategy {
         external_controller_port_strategy: super::yaml_convert(
             &snap.external_controller.port.kind,
@@ -200,21 +200,27 @@ pub(crate) fn apply_clash_patch_to_legacy_verge(
     if patch.enable_clash_fields.is_some() {
         draft.enable_clash_fields = Some(snap.enable_clash_fields);
     }
-    if patch.mixed_port.is_some() {
+    if patch.mixed_port.kind.is_some() || patch.mixed_port.start_port.is_some() {
         draft.enable_random_port = Some(matches!(snap.mixed_port.kind, PortStrategyKind::Random));
         draft.verge_mixed_port = Some(snap.mixed_port.start_port);
     }
     if patch.tun_stack.is_some() {
-        draft.tun_stack = Some(super::yaml_convert(snap.tun_stack)?);
+        draft.tun_stack = Some(snap.tun_stack);
     }
-    if patch.external_controller.is_some() {
+    if patch.external_controller.host.is_some()
+        || patch.external_controller.port.kind.is_some()
+        || patch.external_controller.port.start_port.is_some()
+    {
         draft.clash_strategy = Some(ClashStrategy {
             external_controller_port_strategy: super::yaml_convert(
                 &snap.external_controller.port.kind,
             )?,
         });
     }
-    if patch.break_connection.is_some() {
+    if patch.break_connection.on_proxy_change.is_some()
+        || patch.break_connection.on_profile_change.is_some()
+        || patch.break_connection.on_mode_change.is_some()
+    {
         let (proxy_change, profile_change, mode_change) =
             break_connection_to_legacy(&snap.break_connection);
         draft.break_when_proxy_change = Some(proxy_change);
@@ -259,6 +265,9 @@ fn break_connection_to_legacy(
 mod tests {
     use super::*;
     use crate::config::chimera::{ExternalControllerPortStrategy, TunStack};
+    use chimera_config::clash::config::clash_strategy::{
+        BreakConnectionStrategyPatch, ExternalControllerStrategyPatch, PortStrategyPatch,
+    };
     use struct_patch::Patch;
 
     #[test]
@@ -302,10 +311,23 @@ mod tests {
         patch.enable_tun_mode = Some(typed.enable_tun_mode);
         patch.web_ui_list = Some(typed.web_ui_list.clone());
         patch.enable_clash_fields = Some(typed.enable_clash_fields);
-        patch.mixed_port = Some(typed.mixed_port.clone());
+        patch.mixed_port = PortStrategyPatch {
+            kind: Some(typed.mixed_port.kind.clone()),
+            start_port: Some(typed.mixed_port.start_port),
+        };
         patch.tun_stack = Some(typed.tun_stack);
-        patch.external_controller = Some(typed.external_controller.clone());
-        patch.break_connection = Some(typed.break_connection.clone());
+        patch.external_controller = ExternalControllerStrategyPatch {
+            host: Some(typed.external_controller.host),
+            port: PortStrategyPatch {
+                kind: Some(typed.external_controller.port.kind.clone()),
+                start_port: Some(typed.external_controller.port.start_port),
+            },
+        };
+        patch.break_connection = BreakConnectionStrategyPatch {
+            on_proxy_change: Some(typed.break_connection.on_proxy_change),
+            on_profile_change: Some(typed.break_connection.on_profile_change),
+            on_mode_change: Some(typed.break_connection.on_mode_change),
+        };
 
         let mut projected = IVerge::default();
         apply_clash_patch_to_legacy_verge(&mut projected, &patch, &typed)

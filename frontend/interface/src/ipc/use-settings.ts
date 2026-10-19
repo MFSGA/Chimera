@@ -1,141 +1,102 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { merge } from 'lodash-es';
 import { unwrapResult } from '../utils';
 import {
   commands,
-  type IVerge_Deserialize,
-  type IVerge_Serialize,
+  type ChimeraAppConfig_Serialize,
+  type ChimeraAppConfigPatch_Serialize,
+  type ClashConfig,
+  type ClashConfigPatch_Serialize,
 } from './bindings';
-import { CHIMERA_SETTING_QUERY_KEY } from './consts';
+import { CHIMERA_SETTING_QUERY_KEY, CLASH_SETTINGS_QUERY_KEY } from './consts';
 
-/**
- * Custom hook for managing Verge configuration settings using React Query.
- * Provides functionality to fetch and update settings with automatic cache invalidation.
- *
- * @returns An object containing:
- * - query: UseQueryResult for fetching settings
- *   - data: Current Verge configuration
- *   - status: Query status ('loading', 'error', 'success')
- *   - error: Error object if query fails
- * - upsert: UseMutationResult for updating settings
- *   - mutate: Function to update configuration
- *   - status: Mutation status
- *
- * @example
- * ```tsx
- * const { query, upsert } = useSettings();
- *
- * // Get current settings
- * const settings = query.data;
- *
- * // Update settings
- * upsert.mutate({ theme: 'dark' });
- * ```
- */
-export const useSettings = () => {
+type ConfigPatchFn<TPatch> = (patch: TPatch) => Promise<unknown>;
+
+const useTypedConfig = <TConfig, TPatch>(
+  queryKey: readonly unknown[],
+  queryFn: () => Promise<TConfig>,
+  patchConfig: ConfigPatchFn<TPatch>,
+) => {
   const queryClient = useQueryClient();
-
-  /**
-   * A query hook that fetches Verge configuration settings.
-   * Uses React Query to manage the data fetching state.
-   *
-   * @returns UseQueryResult containing:
-   * - data: The unwrapped Verge configuration data
-   * - status: Current status of the query ('loading', 'error', 'success')
-   * - error: Error object if the query fails
-   * - other standard React Query properties
-   */
-  const query = useQuery({
-    queryKey: [CHIMERA_SETTING_QUERY_KEY],
-    queryFn: async () => {
-      return unwrapResult(await commands.getVergeConfig());
-    },
-  });
-
-  /**
-   * Mutation hook for updating Verge configuration settings
-   *
-   * @remarks
-   * Uses React Query's useMutation to manage state and side effects
-   *
-   * @param options - Partial configuration options to update
-   * @returns Mutation object containing mutate function and mutation state
-   *
-   * @example
-   * ```ts
-   * const { mutate } = upsert();
-   * mutate({ theme: 'dark' });
-   * ```
-   */
+  const query = useQuery({ queryKey, queryFn });
   const upsert = useMutation({
-    // Partial to allow for partial updates
-    mutationFn: async (options: Partial<IVerge_Serialize>) => {
-      return unwrapResult(
-        await commands.patchVergeConfig(
-          options as unknown as IVerge_Deserialize,
-        ),
-      );
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: [CHIMERA_SETTING_QUERY_KEY],
-      });
-    },
+    mutationFn: patchConfig,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
 
-  return {
-    query,
-    upsert,
-  };
+  return { query, upsert };
 };
 
-/**
- * A custom hook that manages a specific setting from the Verge configuration.
- *
- * @template K - The key type extending keyof IVerge
- * @param key - The specific setting key to manage
- * @returns An object containing:
- * - value: The current value of the specified setting
- * - upsert: Function to update the setting value
- * - Additional merged hook status properties
- *
- * @example
- * ```typescript
- * const { value, upsert } = useSetting('theme');
- * // value contains current theme setting
- * // upsert can be used to update theme setting
- * ```
- */
-export const useSetting = <K extends keyof IVerge_Serialize>(key: K) => {
-  const {
-    query: { data, ...query },
-    upsert: update,
-  } = useSettings();
-
-  /**
-   * The value retrieved from the data object using the specified key.
-   * May be undefined if either data is undefined or the key doesn't exist in data.
-   */
+const useTypedConfigField = <
+  TConfig,
+  TPatch extends object,
+  K extends keyof TConfig & keyof TPatch,
+  TClearable extends keyof TPatch = never,
+>(
+  { query, upsert: update }: ReturnType<typeof useTypedConfig<TConfig, TPatch>>,
+  key: K,
+) => {
+  const data = query.data;
   const value = data?.[key];
-
-  /**
-   * Updates a specific setting value in the Verge configuration
-   * @param value - The new value to be set for the specified key
-   * @returns void
-   * @remarks This function will not execute if the data is not available
-   */
-  const upsert = async (value: IVerge_Serialize[K]) => {
-    if (!data) {
-      return;
-    }
-
-    await update.mutateAsync({ [key]: value } as Partial<IVerge_Serialize>);
+  const upsert = async (
+    value: K extends TClearable
+      ? Exclude<TPatch[K], undefined>
+      : NonNullable<TPatch[K]>,
+  ) => {
+    if (!data) return;
+    await update.mutateAsync({ [key]: value } as TPatch);
   };
 
   return {
     value,
     upsert,
-    // merge hook status
-    ...merge(query, update),
+    isPending: update.isPending,
+    refetch: query.refetch,
   };
 };
+
+/** The typed application configuration (`ChimeraAppConfig`). */
+export const useSettings = () =>
+  useTypedConfig<ChimeraAppConfig_Serialize, ChimeraAppConfigPatch_Serialize>(
+    [CHIMERA_SETTING_QUERY_KEY],
+    async () => unwrapResult(await commands.getAppConfig()),
+    async (patch) => unwrapResult(await commands.patchAppConfig(patch)),
+  );
+
+/** Read or patch one typed application setting. */
+type ClearableAppField = 'pac_url';
+
+export const useSetting = <
+  K extends keyof ChimeraAppConfig_Serialize &
+    keyof ChimeraAppConfigPatch_Serialize,
+>(
+  key: K,
+) =>
+  useTypedConfigField<
+    ChimeraAppConfig_Serialize,
+    ChimeraAppConfigPatch_Serialize,
+    K,
+    ClearableAppField
+  >(useSettings(), key);
+
+/** Persistent typed Clash settings, separate from the running core `/configs`. */
+export const useClashSettings = () =>
+  useTypedConfig<ClashConfig, ClashConfigPatch_Serialize>(
+    [CLASH_SETTINGS_QUERY_KEY],
+    async () => unwrapResult(await commands.getClashConfig()),
+    async (patch) => unwrapResult(await commands.patchClashConfig(patch)),
+  );
+
+type ClearableClashField = 'socks_port' | 'http_port';
+
+/** Read or patch one persistent typed Clash setting. */
+export const useClashSetting = <
+  K extends keyof ClashConfig & keyof ClashConfigPatch_Serialize,
+>(
+  key: K,
+) =>
+  useTypedConfigField<
+    ClashConfig,
+    ClashConfigPatch_Serialize,
+    K,
+    ClearableClashField
+  >(useClashSettings(), key);

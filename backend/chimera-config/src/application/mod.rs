@@ -77,56 +77,91 @@ pub enum WindowType {
 #[serde(default)]
 #[patch(attribute(serde_with::skip_serializing_none))]
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, specta::Type)))]
+#[patch(attribute(specta(skip_attr = "serde")))]
 pub struct ChimeraAppConfig {
     /// app listening port for app singleton
+    #[patch(attribute(specta(optional)))]
     pub app_singleton_port: u16,
+    #[patch(attribute(specta(optional)))]
     pub app_log_level: LoggingLevel,
+    #[patch(attribute(specta(optional)))]
     pub language: I18nLanguage,
+    #[patch(attribute(specta(optional)))]
     pub theme_mode: ThemeMode,
     /// enable traffic graph
+    #[patch(attribute(specta(optional)))]
     pub traffic_graph: bool,
     /// show memory info (only for Clash Meta)
+    #[patch(attribute(specta(optional)))]
     pub enable_memory_usage: bool,
+    #[patch(attribute(specta(optional)))]
     pub lighten_animation_effects: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_service_mode: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_auto_launch: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_silent_start: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_system_proxy: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_proxy_guard: bool,
+    #[patch(attribute(specta(optional)))]
     pub system_proxy_bypass: String,
+    #[patch(attribute(specta(optional)))]
     #[patch(attribute(serde(alias = "proxy_guard_duration")))]
     pub proxy_guard_interval: u64,
     #[specta(type = String)]
     #[patch(attribute(specta(type = String)))]
+    #[patch(attribute(specta(optional)))]
     pub theme_color: CssColor,
+    #[patch(attribute(specta(optional)))]
     #[patch(attribute(serde(alias = "clash_core")))]
     pub core: ClashCore,
     /// hotkey map, formatted as `{func},{key}`
+    #[patch(attribute(specta(optional)))]
     pub hotkeys: Vec<String>,
     /// default URL used for latency tests
+    #[patch(attribute(specta(optional)))]
     pub default_latency_test: String,
+    #[patch(attribute(specta(optional)))]
     pub enable_builtin_enhanced: bool,
     /// proxy page layout column count
+    #[patch(attribute(specta(optional)))]
     pub proxy_layout_column: i32,
+    #[patch(attribute(specta(optional)))]
     pub max_log_files: usize,
+    #[patch(attribute(specta(optional)))]
     pub enable_auto_check_update: bool,
+    #[patch(attribute(specta(optional)))]
     #[patch(attribute(serde(alias = "clash_tray_selector")))]
     pub tray_selector_mode: ProxiesSelectorMode,
+    #[patch(attribute(specta(optional)))]
     pub always_on_top: bool,
+    #[patch(attribute(specta(optional)))]
     pub tray_menu_mode: TrayMenuMode,
+    #[patch(attribute(specta(optional)))]
     pub tray_menu_close_behavior: TrayMenuCloseBehavior,
+    #[patch(attribute(specta(optional)))]
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
     /// How long recorded connection traffic is kept.
     #[serde(default)]
+    #[patch(attribute(specta(optional)))]
     pub traffic_retention: TrafficRetention,
     /// PAC URL for automatic proxy configuration.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[patch(attribute(serde(default, with = "::serde_with::rust::double_option")))]
+    #[patch(attribute(specta(type = Option<Option<String>>)))]
+    #[patch(attribute(specta(optional)))]
     pub pac_url: Option<url::Url>,
+    #[patch(attribute(specta(optional)))]
     pub enable_tray_text: bool,
+    #[patch(attribute(specta(optional)))]
     pub enable_tray_traffic: bool,
     /// Use legacy UI (the original `/` route) when opening the app.
+    #[patch(attribute(specta(optional)))]
     pub use_legacy_ui: bool,
+    #[patch(attribute(specta(optional)))]
     pub window_type: WindowType,
 }
 

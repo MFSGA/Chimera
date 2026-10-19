@@ -417,6 +417,40 @@ pub async fn patch_verge_config(
 
 #[tauri::command]
 #[specta::specta]
+pub async fn get_app_config(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::application::ChimeraAppConfig> {
+    Ok(client.get_app_config()?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_app_config(
+    client: State<'_, ChimeraClient>,
+    patch: chimera_config::application::ChimeraAppConfigPatch,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.patch_app_config(patch).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn get_clash_config(
+    client: State<'_, ChimeraClient>,
+) -> Result<chimera_config::clash::config::ClashConfig> {
+    Ok(client.get_clash_config()?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn patch_clash_config(
+    client: State<'_, ChimeraClient>,
+    patch: chimera_config::clash::config::ClashConfigPatch,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.patch_clash_config(patch).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_hotkeys(client: State<'_, ChimeraClient>) -> Result<Vec<String>> {
     Ok(client.get_app_config()?.hotkeys)
 }
@@ -742,18 +776,18 @@ pub async fn get_service_install_prompt() -> Result<String> {
 
 #[tauri::command]
 #[specta::specta]
-pub async fn patch_clash_config(
+pub async fn patch_runtime_overrides(
     client: State<'_, ChimeraClient>,
-    payload: PatchRuntimeConfig,
+    patch: PatchRuntimeConfig,
 ) -> Result {
     tracing::debug!(
-        allow_lan = ?payload.allow_lan,
-        ipv6 = ?payload.ipv6,
-        log_level = ?payload.log_level,
-        mode = ?payload.mode,
+        allow_lan = ?patch.allow_lan,
+        ipv6 = ?patch.ipv6,
+        log_level = ?patch.log_level,
+        mode = ?patch.mode,
         "patch clash runtime config"
     );
-    let overrides = ClashConfigOverrides::from(payload);
+    let overrides = ClashConfigOverrides::from(patch);
     let outcome = feat::patch_running_clash_overrides(&client, overrides).await;
     match &outcome {
         clash::transaction::TransactionOutcome::Committed => {}

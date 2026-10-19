@@ -182,10 +182,13 @@ impl RequestedRuntimeFields {
                 || patch.enable_clash_fields.is_some()
                 || patch.enable_tun_mode.is_some()
                 || patch.tun_stack.is_some()
-                || patch.mixed_port.is_some()
+                || patch.mixed_port.kind.is_some()
+                || patch.mixed_port.start_port.is_some()
                 || patch.socks_port.is_some()
                 || patch.http_port.is_some()
-                || patch.external_controller.is_some()
+                || patch.external_controller.host.is_some()
+                || patch.external_controller.port.kind.is_some()
+                || patch.external_controller.port.start_port.is_some()
                 || patch.clash_control_channel.is_some()
                 || patch.clash_ipc_disable_http_controller.is_some(),
         }

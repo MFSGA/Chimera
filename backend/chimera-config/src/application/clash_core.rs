@@ -21,6 +21,7 @@ use strum::{AsRefStr, Display, EnumString, IntoStaticStr};
 )]
 #[strum(serialize_all = "kebab-case")]
 pub enum ClashCore {
+    #[strum(serialize = "clash")]
     #[serde(rename = "clash", alias = "clash-premium")]
     ClashPremium = 0b0001,
     #[serde(rename = "clash-rs")]

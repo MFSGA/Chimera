@@ -187,13 +187,29 @@ export const commands = {
     ),
   getVergeConfig: () =>
     typedError<IVerge_Serialize, string>(__TAURI_INVOKE('get_verge_config')),
+  getAppConfig: () =>
+    typedError<ChimeraAppConfig_Serialize, string>(
+      __TAURI_INVOKE('get_app_config'),
+    ),
+  patchAppConfig: (patch: ChimeraAppConfigPatch_Deserialize) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('patch_app_config', { patch }),
+    ),
+  getClashConfig: () =>
+    typedError<ClashConfig, string>(__TAURI_INVOKE('get_clash_config')),
   getHotkeyFunctions: () => __TAURI_INVOKE<string[]>('get_hotkey_functions'),
   patchVergeConfig: (payload: IVerge_Deserialize) =>
     typedError<null, string>(__TAURI_INVOKE('patch_verge_config', { payload })),
+  patchRuntimeOverrides: (patch: PatchRuntimeConfig_Deserialize) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('patch_runtime_overrides', { patch }),
+    ),
   getClashInfo: () =>
     typedError<ClashInfo, string>(__TAURI_INVOKE('get_clash_info')),
-  patchClashConfig: (payload: PatchRuntimeConfig_Deserialize) =>
-    typedError<null, string>(__TAURI_INVOKE('patch_clash_config', { payload })),
+  patchClashConfig: (patch: ClashConfigPatch_Deserialize) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('patch_clash_config', { patch }),
+    ),
   patchClashCoreConfig: (payload: PatchClashCoreConfig_Deserialize) =>
     typedError<null, string>(
       __TAURI_INVOKE('patch_clash_core_config', { payload }),
@@ -784,6 +800,31 @@ export type AgentTunSnapshot = {
 export type AgentUnsupportedIntentReason =
   'empty_input' | 'input_too_long' | 'no_matching_intent';
 
+export type BreakConnectionStrategy = {
+  /**  切换代理时中断连接 */
+  on_proxy_change: ProxyChangeBreakMode;
+  /**  切换配置时中断连接 */
+  on_profile_change: boolean;
+  /**  切换模式时中断连接 */
+  on_mode_change: boolean;
+};
+
+export type BreakConnectionStrategyPatch =
+  | BreakConnectionStrategyPatch_Serialize
+  | BreakConnectionStrategyPatch_Deserialize;
+
+export type BreakConnectionStrategyPatch_Deserialize = {
+  on_proxy_change?: ProxyChangeBreakMode | null;
+  on_profile_change?: boolean | null;
+  on_mode_change?: boolean | null;
+};
+
+export type BreakConnectionStrategyPatch_Serialize = {
+  on_proxy_change?: ProxyChangeBreakMode | null;
+  on_profile_change?: boolean | null;
+  on_mode_change?: boolean | null;
+};
+
 export type BreakWhenProxyChange = 'none' | 'chain' | 'all';
 
 export type BuildInfo = {
@@ -807,6 +848,251 @@ export type BuiltinStepKind =
 export type Bytes = {
   upload: number;
   download: number;
+};
+
+/**
+ *  Typed application-owned subset of the legacy `verge.yaml` schema.
+ *
+ *  Clash-owned fields live in `clash::config::ClashConfig`; window geometry
+ *  remains session-state compatibility until the dual-UI state migration lands.
+ */
+export type ChimeraAppConfig =
+  ChimeraAppConfig_Serialize | ChimeraAppConfig_Deserialize;
+
+export type ChimeraAppConfigPatch =
+  ChimeraAppConfigPatch_Serialize | ChimeraAppConfigPatch_Deserialize;
+
+export type ChimeraAppConfigPatch_Deserialize = {
+  app_singleton_port?: number | null;
+  app_log_level?: LoggingLevel_Deserialize | null;
+  language?: I18nLanguage | null;
+  theme_mode?: ThemeMode | null;
+  traffic_graph?: boolean | null;
+  enable_memory_usage?: boolean | null;
+  lighten_animation_effects?: boolean | null;
+  enable_service_mode?: boolean | null;
+  enable_auto_launch?: boolean | null;
+  enable_silent_start?: boolean | null;
+  enable_system_proxy?: boolean | null;
+  enable_proxy_guard?: boolean | null;
+  system_proxy_bypass?: string | null;
+  proxy_guard_interval?: number | null;
+  theme_color?: string;
+  core?: ClashCore_Deserialize | null;
+  hotkeys?: string[] | null;
+  default_latency_test?: string | null;
+  enable_builtin_enhanced?: boolean | null;
+  proxy_layout_column?: number | null;
+  max_log_files?: number | null;
+  enable_auto_check_update?: boolean | null;
+  tray_selector_mode?: ProxiesSelectorMode | null;
+  always_on_top?: boolean | null;
+  tray_menu_mode?: TrayMenuMode | null;
+  tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
+  network_statistic_widget?: NetworkStatisticWidgetConfig | null;
+  traffic_retention?: TrafficRetention | null;
+  pac_url?: string | null;
+  enable_tray_text?: boolean | null;
+  enable_tray_traffic?: boolean | null;
+  use_legacy_ui?: boolean | null;
+  window_type?: WindowType | null;
+};
+
+export type ChimeraAppConfigPatch_Serialize = {
+  app_singleton_port?: number | null;
+  app_log_level?: LoggingLevel_Serialize | null;
+  language?: I18nLanguage | null;
+  theme_mode?: ThemeMode | null;
+  traffic_graph?: boolean | null;
+  enable_memory_usage?: boolean | null;
+  lighten_animation_effects?: boolean | null;
+  enable_service_mode?: boolean | null;
+  enable_auto_launch?: boolean | null;
+  enable_silent_start?: boolean | null;
+  enable_system_proxy?: boolean | null;
+  enable_proxy_guard?: boolean | null;
+  system_proxy_bypass?: string | null;
+  proxy_guard_interval?: number | null;
+  theme_color?: string;
+  core?: ClashCore_Serialize | null;
+  hotkeys?: string[] | null;
+  default_latency_test?: string | null;
+  enable_builtin_enhanced?: boolean | null;
+  proxy_layout_column?: number | null;
+  max_log_files?: number | null;
+  enable_auto_check_update?: boolean | null;
+  tray_selector_mode?: ProxiesSelectorMode | null;
+  always_on_top?: boolean | null;
+  tray_menu_mode?: TrayMenuMode | null;
+  tray_menu_close_behavior?: TrayMenuCloseBehavior | null;
+  network_statistic_widget?: NetworkStatisticWidgetConfig | null;
+  traffic_retention?: TrafficRetention | null;
+  pac_url?: string | null;
+  enable_tray_text?: boolean | null;
+  enable_tray_traffic?: boolean | null;
+  use_legacy_ui?: boolean | null;
+  window_type?: WindowType | null;
+};
+
+/**
+ *  Typed application-owned subset of the legacy `verge.yaml` schema.
+ *
+ *  Clash-owned fields live in `clash::config::ClashConfig`; window geometry
+ *  remains session-state compatibility until the dual-UI state migration lands.
+ */
+export type ChimeraAppConfig_Deserialize = {
+  /**  app listening port for app singleton */
+  app_singleton_port?: number;
+  app_log_level?: LoggingLevel_Deserialize;
+  language?: I18nLanguage;
+  theme_mode?: ThemeMode;
+  /**  enable traffic graph */
+  traffic_graph?: boolean;
+  /**  show memory info (only for Clash Meta) */
+  enable_memory_usage?: boolean;
+  lighten_animation_effects?: boolean;
+  enable_service_mode?: boolean;
+  enable_auto_launch?: boolean;
+  enable_silent_start?: boolean;
+  enable_system_proxy?: boolean;
+  enable_proxy_guard?: boolean;
+  system_proxy_bypass?: string;
+  proxy_guard_interval?: number;
+  theme_color?: string;
+  core?: ClashCore_Deserialize;
+  /**  hotkey map, formatted as `{func},{key}` */
+  hotkeys?: string[];
+  /**  default URL used for latency tests */
+  default_latency_test?: string;
+  enable_builtin_enhanced?: boolean;
+  /**  proxy page layout column count */
+  proxy_layout_column?: number;
+  max_log_files?: number;
+  enable_auto_check_update?: boolean;
+  tray_selector_mode?: ProxiesSelectorMode;
+  always_on_top?: boolean;
+  tray_menu_mode?: TrayMenuMode;
+  tray_menu_close_behavior?: TrayMenuCloseBehavior;
+  network_statistic_widget?: NetworkStatisticWidgetConfig;
+  /**  How long recorded connection traffic is kept. */
+  traffic_retention?: TrafficRetention;
+  /**  PAC URL for automatic proxy configuration. */
+  pac_url?: string | null;
+  enable_tray_text?: boolean;
+  enable_tray_traffic?: boolean;
+  /**  Use legacy UI (the original `/` route) when opening the app. */
+  use_legacy_ui?: boolean;
+  window_type?: WindowType;
+};
+
+/**
+ *  Typed application-owned subset of the legacy `verge.yaml` schema.
+ *
+ *  Clash-owned fields live in `clash::config::ClashConfig`; window geometry
+ *  remains session-state compatibility until the dual-UI state migration lands.
+ */
+export type ChimeraAppConfig_Serialize = {
+  /**  app listening port for app singleton */
+  app_singleton_port: number;
+  app_log_level: LoggingLevel_Serialize;
+  language: I18nLanguage;
+  theme_mode: ThemeMode;
+  /**  enable traffic graph */
+  traffic_graph: boolean;
+  /**  show memory info (only for Clash Meta) */
+  enable_memory_usage: boolean;
+  lighten_animation_effects: boolean;
+  enable_service_mode: boolean;
+  enable_auto_launch: boolean;
+  enable_silent_start: boolean;
+  enable_system_proxy: boolean;
+  enable_proxy_guard: boolean;
+  system_proxy_bypass: string;
+  proxy_guard_interval: number;
+  theme_color: string;
+  core: ClashCore_Serialize;
+  /**  hotkey map, formatted as `{func},{key}` */
+  hotkeys: string[];
+  /**  default URL used for latency tests */
+  default_latency_test: string;
+  enable_builtin_enhanced: boolean;
+  /**  proxy page layout column count */
+  proxy_layout_column: number;
+  max_log_files: number;
+  enable_auto_check_update: boolean;
+  tray_selector_mode: ProxiesSelectorMode;
+  always_on_top: boolean;
+  tray_menu_mode: TrayMenuMode;
+  tray_menu_close_behavior: TrayMenuCloseBehavior;
+  network_statistic_widget: NetworkStatisticWidgetConfig;
+  /**  How long recorded connection traffic is kept. */
+  traffic_retention: TrafficRetention;
+  /**  PAC URL for automatic proxy configuration. */
+  pac_url?: string | null;
+  enable_tray_text: boolean;
+  enable_tray_traffic: boolean;
+  /**  Use legacy UI (the original `/` route) when opening the app. */
+  use_legacy_ui: boolean;
+  window_type: WindowType;
+};
+
+/**  Clash Related Config */
+export type ClashConfig = {
+  /**  Clash Overrides config, used to patch clash config directly */
+  overrides: ClashGuardOverrides;
+  /**  clash tun mode */
+  enable_tun_mode: boolean;
+  /**  web ui list */
+  web_ui_list: string[];
+  /**  支持关闭字段过滤，避免meta的新字段都被过滤掉，默认为真 */
+  enable_clash_fields: boolean;
+  /**  外部控制器端口策略 */
+  external_controller: ExternalControllerStrategy;
+  clash_control_channel?: ClashControlChannel;
+  clash_ipc_disable_http_controller?: boolean;
+  /**  Mixed Proxy(Socks5, HTTP) Port Strategy */
+  mixed_port: PortStrategy;
+  /**  Socks5 Proxy Port */
+  socks_port: PortStrategy | null;
+  /**  HTTP Proxy Port */
+  http_port: PortStrategy | null;
+  /**  断开连接策略 */
+  break_connection: BreakConnectionStrategy;
+  /**  Tun 堆栈选择 */
+  tun_stack: TunStack;
+};
+
+export type ClashConfigPatch =
+  ClashConfigPatch_Serialize | ClashConfigPatch_Deserialize;
+
+export type ClashConfigPatch_Deserialize = {
+  overrides?: ClashGuardOverrides | null;
+  enable_tun_mode?: boolean | null;
+  web_ui_list?: string[] | null;
+  enable_clash_fields?: boolean | null;
+  external_controller?: ExternalControllerStrategyPatch_Deserialize;
+  clash_control_channel?: ClashControlChannel | null;
+  clash_ipc_disable_http_controller?: boolean | null;
+  mixed_port?: PortStrategyPatch_Deserialize;
+  socks_port?: PortStrategy | null;
+  http_port?: PortStrategy | null;
+  break_connection?: BreakConnectionStrategyPatch_Deserialize;
+  tun_stack?: TunStack | null;
+};
+
+export type ClashConfigPatch_Serialize = {
+  overrides?: ClashGuardOverrides | null;
+  enable_tun_mode?: boolean | null;
+  web_ui_list?: string[] | null;
+  enable_clash_fields?: boolean | null;
+  external_controller?: ExternalControllerStrategyPatch_Serialize;
+  clash_control_channel?: ClashControlChannel | null;
+  clash_ipc_disable_http_controller?: boolean | null;
+  mixed_port?: PortStrategyPatch_Serialize;
+  socks_port?: PortStrategy | null;
+  http_port?: PortStrategy | null;
+  break_connection?: BreakConnectionStrategyPatch_Serialize;
+  tun_stack?: TunStack | null;
 };
 
 /**  One core connection plus its derived rates, as in ref's detail contract. */
@@ -866,6 +1152,8 @@ export type ClashConnectionsInfo = {
   uploadSpeed: number;
 };
 
+export type ClashControlChannel = 'prefer_ipc' | 'http_only';
+
 export type ClashCore = ClashCore_Serialize | ClashCore_Deserialize;
 
 export type ClashCoreType =
@@ -898,6 +1186,16 @@ export type ClashCore_Serialize =
   | 'mihomo-alpha'
   | 'clash-rs-alpha'
   | 'chimera-client-alpha';
+
+export type ClashGuardOverrides = {
+  'log-level': LogLevel;
+  'allow-lan': boolean;
+  mode: Mode;
+  secret: string;
+  'unified-delay': boolean;
+  'tcp-concurrent': boolean;
+  ipv6: boolean;
+};
 
 export type ClashInfo = {
   /**  clash core port */
@@ -1416,6 +1714,25 @@ export type EnvInfo = {
 export type ExternalControllerPortStrategy =
   'fixed' | 'random' | 'allow_fallback';
 
+export type ExternalControllerStrategy = {
+  host: string;
+  port: PortStrategy;
+};
+
+export type ExternalControllerStrategyPatch =
+  | ExternalControllerStrategyPatch_Serialize
+  | ExternalControllerStrategyPatch_Deserialize;
+
+export type ExternalControllerStrategyPatch_Deserialize = {
+  host?: string | null;
+  port?: PortStrategyPatch_Deserialize;
+};
+
+export type ExternalControllerStrategyPatch_Serialize = {
+  host?: string | null;
+  port?: PortStrategyPatch_Serialize;
+};
+
 export type ExternalMode = 'symlink' | 'mirror';
 
 /**  An absolute path outside the managed profile directory. */
@@ -1435,6 +1752,8 @@ export type GetSysProxyResponse = {
   bypass: string;
   server: string;
 };
+
+export type I18nLanguage = 'en-US' | 'ko' | 'ru' | 'zh-CN' | 'zh-TW';
 
 export type IVerge = IVerge_Serialize | IVerge_Deserialize;
 
@@ -1697,6 +2016,8 @@ export type LogDto = {
   fields: { [key in string]: string };
 };
 
+export type LogLevel = 'silent' | 'error' | 'warning' | 'info' | 'debug';
+
 export type LogPageDto = {
   items: LogDto[];
   next: string | null;
@@ -1736,6 +2057,8 @@ export type ManifestVersionLatest = {
 /**  What a topology orders and merges its nodes by. */
 export type Metric = 'bytes' | 'connections';
 
+export type Mode = 'rule' | 'global' | 'direct' | 'script';
+
 /**
  *  Public mutation wire aligned with REF: desired state is committed first;
  *  post-commit side-effect failures degrade instead of turning the mutation
@@ -1768,6 +2091,10 @@ export type NetworkProbeResult = {
   matches_expected_status: boolean | null;
   latency_ms: number;
 };
+
+/**  Whether the network statistic widget is shown. */
+export type NetworkStatisticWidgetConfig =
+  { kind: 'disabled' } | { kind: 'enabled'; value: StatisticWidgetVariant };
 
 export type NewProfileRequest =
   NewProfileRequest_Serialize | NewProfileRequest_Deserialize;
@@ -1898,6 +2225,32 @@ export type PatchRuntimeConfig_Serialize = {
 export type PendingDeepLinkEntry = {
   id: number;
   url: string;
+};
+
+export type PortStrategy = {
+  /**  外部控制器端口策略类型 */
+  kind: PortStrategyKind;
+  /**
+   *  外部控制器端口起始端口
+   *
+   *  用于固定或允许回退策略
+   */
+  start_port: number;
+};
+
+export type PortStrategyKind = 'fixed' | 'random' | 'allow_fallback';
+
+export type PortStrategyPatch =
+  PortStrategyPatch_Serialize | PortStrategyPatch_Deserialize;
+
+export type PortStrategyPatch_Deserialize = {
+  kind?: PortStrategyKind | null;
+  start_port?: number | null;
+};
+
+export type PortStrategyPatch_Serialize = {
+  kind?: PortStrategyKind | null;
+  start_port?: number | null;
 };
 
 /**  后处理输出 */
@@ -2100,7 +2453,7 @@ export type ProfileSyncStatus = {
 
 export type Proxies = Proxies_Serialize | Proxies_Deserialize;
 
-export type ProxiesSelectorMode = 'normal' | 'hidden' | 'submenu';
+export type ProxiesSelectorMode = 'hidden' | 'normal' | 'submenu';
 
 export type Proxies_Deserialize = {
   groups: ProxyGroupItem_Deserialize[];
@@ -2117,6 +2470,13 @@ export type Proxies_Serialize = {
   /**  3 */
   direct: ProxyItem_Serialize;
 };
+
+export type ProxyChangeBreakMode =
+  | 'off'
+  /**  仅中断当前使用的代理组的连接 */
+  | 'proxy_group'
+  /**  中断所有连接 */
+  | 'all';
 
 export type ProxyGroupItem =
   ProxyGroupItem_Serialize | ProxyGroupItem_Deserialize;
@@ -2419,6 +2779,12 @@ export type SnapshotDiffHunk = {
   lines: string[];
 };
 
+/**
+ *  Network statistic widget size. Kept in the config crate so the setting's
+ *  wire contract does not depend on the optional desktop widget implementation.
+ */
+export type StatisticWidgetVariant = 'large' | 'small';
+
 export type StatusResBody = StatusResBody_Serialize | StatusResBody_Deserialize;
 
 export type StatusResBody_Deserialize = {
@@ -2456,6 +2822,8 @@ export type StorageValueChangedEvent = {
   /**  The new JSON-encoded value, or `None` if the key was removed. */
   value: string | null;
 };
+
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type Topology = {
   /**  By layer, heaviest first, the merged node last. */
@@ -2555,6 +2923,12 @@ export type TransformDefinition_Serialize =
 export type TransformKind =
   { type: 'overlay' } | { type: 'script'; runtime: ScriptRuntime };
 
+/**  What happens to the WebView tray menu window when it loses focus. */
+export type TrayMenuCloseBehavior = 'hide' | 'close';
+
+/**  Whether the tray menu uses the system-native menu or the WebView menu. */
+export type TrayMenuMode = 'native' | 'webview';
+
 export type TunStack = 'system' | 'gvisor' | 'mixed';
 
 export type UpdateWrapper = {
@@ -2619,6 +2993,7 @@ export type WindowState = {
   fullscreen: boolean;
 };
 
+/**  Chimera-specific dual-UI selector retained as a real product difference from REF. */
 export type WindowType = 'main' | 'legacy';
 
 /* Tauri Specta runtime */

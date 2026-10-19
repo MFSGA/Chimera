@@ -21,10 +21,14 @@ pub struct ClashStrategy {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Type, Patch)]
 #[patch(attribute(serde_with::skip_serializing_none))]
 #[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Type)))]
-#[patch(attribute(serde(rename_all = "snake_case")))]
+#[patch(attribute(serde(default, rename_all = "snake_case")))]
 #[serde(rename_all = "snake_case")]
 pub struct ExternalControllerStrategy {
+    #[patch(attribute(specta(optional)))]
     pub host: IpAddr,
+    #[patch(nesting)]
+    #[patch(attribute(specta(optional)))]
+    #[patch(attribute(serde(default)))]
     pub port: PortStrategy,
 }
 
@@ -53,14 +57,19 @@ pub enum PortStrategyKind {
     AllowFallback,
 }
 
-#[derive(Default, Debug, Clone, Deserialize, Serialize, Type)]
+#[derive(Default, Debug, Clone, Deserialize, Serialize, Type, Patch)]
+#[patch(attribute(serde_with::skip_serializing_none))]
+#[patch(attribute(derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq, Type)))]
+#[patch(attribute(serde(default, rename_all = "snake_case")))]
 #[serde(rename_all = "snake_case")]
 pub struct PortStrategy {
     /// 外部控制器端口策略类型
+    #[patch(attribute(specta(optional)))]
     pub kind: PortStrategyKind,
     /// 外部控制器端口起始端口
     ///
     /// 用于固定或允许回退策略
+    #[patch(attribute(specta(optional)))]
     pub start_port: u16,
 }
 
