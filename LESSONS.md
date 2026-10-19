@@ -35,6 +35,7 @@
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 | LESSON-20261019-002 | 2026-10-19 | E2E / Windows  | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 | LESSON-20261019-006 | 2026-10-19 | Rust / Windows | PR #494 取消刷新测试用 `notify_waiters` 可能丢失尚未登记的 waiter；修复待新 SHA CI 复验                         | Mitigated |
+| LESSON-20261019-007 | 2026-10-19 | Git / Delivery | PR #494 首次 push 使用的 SSH 凭据无仓库写权限；改用活动 GitHub CLI 凭据的 HTTPS push 成功，提交 verified        | Mitigated |
 
 ## 单条模板
 
@@ -476,3 +477,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：核对 Cargo.lock 锁定的 Tokio `1.53.3` 源码；定向 Rust 单测以 `--exact` 连续运行 10 次，10/10 通过；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --all-features --quiet` 为 585 passed、0 failed、1 ignored。Windows 新 SHA workflow 待完成；这两项本地测试不能代替平台 CI。
 - 风险/回滚和清理证据（如涉及宿主状态）：测试同步调整，不改变应用运行或用户数据；回滚为恢复该用例中的 `notify_waiters()`。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：使用 Tokio Notify 作为一次性 release barrier 时，优先使用 `notify_one()`；只有需要广播给已登记的一组 waiters 时才使用 `notify_waiters()`。未改 CI 门禁。
+
+### LESSON-20261019-007：推送前核对 Git 写入凭据
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（错误 SSH 通道被拒后，使用活动 GitHub CLI 凭据通过 HTTPS 推送成功）
+- 严重度：Low
+- 模块：Git / Delivery
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 head `74b6b31d0214bb111637ef1091b69c18a8621f62`；macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)。
+- 预期行为：远程写操作由当前已授权的维护者凭据执行，提交签名可由 GitHub 验证。
+- 真实异常、复现步骤与证据：首次通过配置的 SSH push URL 推送时，GitHub 拒绝当前 SSH key；同一时刻 GitHub CLI 的活动账号有该仓库权限。随后通过一次性 `git -c credential.helper='!gh auth git-credential' push https://github.com/MFSGA/Chimera.git HEAD:refs/heads/codex/ref-update-20261019` 成功将提交推送到 PR #494；未将令牌写入命令参数或修改全局 Git 配置。
+- 确认的根因与排除项：Git SSH 和 GitHub CLI 使用不同凭据来源；活动 CLI 会话正确，并不代表默认 SSH key 对目标仓库有写权限。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码变更。此环境后续远端写操作使用 GitHub CLI credential helper 的 HTTPS 通道，除非先确认 SSH 身份有正确仓库权限。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：不适用；这是 Git 凭据选择问题，没有产品测试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `git verify-commit HEAD` 通过；GitHub API 对提交 `74b6b31d0214bb111637ef1091b69c18a8621f62` 返回 `verified: true`、`reason: valid`；HTTPS push 成功并确认 PR head 与本地 SHA 一致。预防检查为写操作前确认活动 CLI 身份与目标仓库权限，并检查实际 push URL；没有自动化凭据测试。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响该次 Git push；没有修改凭据、系统网络或全局配置。推送结果可通过后续新提交撤销，不应重写共享历史。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行远端写操作前核对 `git remote get-url --push origin` 与 `gh auth status`；若 SSH 身份无法确认，则显式使用活动 GitHub CLI credential helper。诊断记录不得保存或输出令牌与非必要账号信息。
