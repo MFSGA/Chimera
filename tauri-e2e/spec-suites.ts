@@ -41,6 +41,7 @@ export const baseE2eSuites = {
     './specs/system-tools-main.e2e.ts',
     './specs/theme-mode-setting.e2e.ts',
     './specs/user-interface-main.e2e.ts',
+    './specs/user-interface-language.e2e.ts',
     './specs/web-ui-main-layout.e2e.ts',
   ],
   agent: ['./specs/agent-assistant.e2e.ts'],

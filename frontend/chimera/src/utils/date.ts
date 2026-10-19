@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import 'dayjs/locale/ru';
+import 'dayjs/locale/ja';
 import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/zh-tw';
 import type { Locale } from '@/paraglide/runtime';

@@ -1,0 +1,29 @@
+{
+  "_version": 1,
+  "hotkey_error": {
+    "malformed_entry": "ホットキーの項目が正しくありません: {entry}",
+    "unknown_function": "不明なホットキー操作です: {function}",
+    "invalid_hotkey": "ホットキーが正しくありません: {hotkey}",
+    "missing_super_key": "グローバルホットキーには修飾キーが必要です",
+    "duplicate_accelerator": "このホットキーはすでに割り当てられています: {hotkey}"
+  },
+  "tray": {
+    "dashboard": "Chimera を表示",
+    "direct_mode": "ダイレクトモード",
+    "global_mode": "グローバルモード",
+    "rule_mode": "ルールモード",
+    "system_proxy": "システムプロキシ",
+    "tun_mode": "TUN モード",
+    "quit": "終了",
+    "open_dir": {
+      "app_config_dir": "設定ディレクトリ",
+      "app_data_dir": "データディレクトリ",
+      "core_dir": "コアディレクトリ",
+      "log_dir": "ログディレクトリ"
+    },
+    "more": {
+      "restart_clash": "コアを再起動",
+      "restart_app": "Chimera を再起動"
+    }
+  }
+}

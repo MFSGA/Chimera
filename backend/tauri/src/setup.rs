@@ -128,6 +128,7 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         window,
     })?;
+    rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     tauri::async_runtime::spawn(hotkey_action_pump(hotkey_rx, client.clone()));
     app.manage(client);

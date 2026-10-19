@@ -10,6 +10,45 @@
 
 @tailwind utilities;
 
+/*
+ * Inter only covers Latin, Greek and Cyrillic; other scripts fall through to
+ * the platform fonts. Han glyphs differ by region, so CJK locales put their
+ * regional fonts first, keyed on the `lang` attribute that follows the app
+ * language. `:where()` keeps a plain `:root` specificity so custom CSS can
+ * still override `--font-sans`.
+ */
+:root {
+  --font-sans-fallback:
+    system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
+    'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Color Emoji Flags',
+    'Color Emoji';
+}
+
+:root:where(:lang(zh-cn)) {
+  --font-sans:
+    'Inter Variable', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei UI',
+    'Microsoft YaHei', 'Noto Sans CJK SC', var(--font-sans-fallback);
+}
+
+:root:where(:lang(zh-tw)) {
+  --font-sans:
+    'Inter Variable', 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei UI',
+    'Microsoft JhengHei', 'Noto Sans CJK TC', var(--font-sans-fallback);
+}
+
+:root:where(:lang(ja)) {
+  --font-sans:
+    'Inter Variable', 'Hiragino Sans', 'Noto Sans JP',
+    'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Meiryo', 'Noto Sans CJK JP',
+    var(--font-sans-fallback);
+}
+
+:root:where(:lang(ko)) {
+  --font-sans:
+    'Inter Variable', 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic',
+    'Noto Sans CJK KR', var(--font-sans-fallback);
+}
+
 /* do not use layer */
 :where(code, kbd, pre, samp) {
   font-family: var(--font-mono);

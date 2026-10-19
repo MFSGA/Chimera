@@ -179,12 +179,17 @@ impl VergeLegacyBridgeTrait for LegacyVergeBridge {
 fn language_from_legacy(value: &str) -> Option<I18nLanguage> {
     match value.to_ascii_lowercase().as_str() {
         "en" | "en-us" => Some(I18nLanguage::English),
+        "ja" | "ja-jp" => Some(I18nLanguage::Japanese),
         "ko" | "ko-kr" => Some(I18nLanguage::Korean),
         "ru" | "ru-ru" => Some(I18nLanguage::Russian),
         "zh-cn" | "zh-hans" => Some(I18nLanguage::SimplifiedChinese),
         "zh-tw" | "zh-hant" | "zh-hk" | "zh-mo" => Some(I18nLanguage::TraditionalChinese),
         _ => None,
     }
+}
+
+pub(crate) fn locale_key_from_legacy(value: &str) -> Option<&'static str> {
+    language_from_legacy(value).map(|language| language.as_str())
 }
 
 fn theme_mode_from_legacy(value: &str) -> Option<ThemeMode> {
@@ -257,6 +262,23 @@ mod tests {
         assert!(typed.enable_builtin_enhanced);
         assert_eq!(typed.max_log_files, 7);
         assert_eq!(typed.traffic_retention, TrafficRetention::SevenDays);
+    }
+
+    #[test]
+    fn japanese_language_round_trips_through_legacy_verge_projection() {
+        let mut legacy = IVerge::default();
+        let mut typed = ChimeraAppConfig::default();
+        typed.language = I18nLanguage::Japanese;
+
+        apply_app_config_to_legacy_verge(&mut legacy, &typed)
+            .expect("Japanese locale should project to the legacy config");
+        assert_eq!(legacy.language.as_deref(), Some("ja"));
+
+        let projected = application_from_legacy(&legacy)
+            .expect("legacy Japanese locale should project to typed config");
+        assert_eq!(projected.language, I18nLanguage::Japanese);
+        assert_eq!(language_from_legacy("JA-JP"), Some(I18nLanguage::Japanese));
+        assert_eq!(locale_key_from_legacy("JA-JP"), Some("ja"));
     }
 
     #[test]

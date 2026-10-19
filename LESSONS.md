@@ -424,3 +424,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera typed_clash_patch_restores_source_and_runtime_after_persistence_failure -- --nocapture` 1/1；完整 `cargo test --quiet --locked --manifest-path backend/Cargo.toml -p chimera` 572 passed、0 failed、1 ignored；`cargo check`、目标 crate `cargo fmt -- --check` 与 `git diff --check` 通过。桌面 E2E 和真实磁盘故障注入未执行。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅改变失败补偿时的 core reconcile 与错误聚合；回退实现 commit 会恢复原补偿路径。无宿主网络或系统设置操作。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：所有“运行态已变更、源持久化未完成”的失败路径都须验证源状态恢复后重新 reconcile 最新状态；必要时使用故障注入覆盖保存失败及 CAS 冲突。未修改 CI 门禁。
+
+### LESSON-20261019-004：移植旧日语目录时校验当前主线键集
+
+- 日期与时区：2026-10-19 UTC
+- 状态：日语目录已补齐；旧版本回退配置兼容问题已有文档和回归测试，独立复核确认无 P0–P2 阻塞项；L2/L3 审批待完成
+- 严重度：Low
+- 模块：Localization / frontend
+- master commit / ref gitlink SHA / 平台与测试环境：当前 master `ae324101`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；macOS 本地移植工作树。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：无远端 PR 或 CI。初次运行 `pnpm --filter chimera-ui test:localization` 时，键集断言失败；日语目录缺少 71 个当前英文目录已有的键。
+- 预期行为：日语目录覆盖当前主线英文目录的所有键，且每条消息的插值字段一致。
+- 真实异常、复现步骤与证据：从旧 `codex/ref-ja-localization-v2` 移植后运行上述测试，发现缺少 Dashboard widget 配置、Profile transform 与 Profile sync history 等后续新增键。补齐后首版测试命令 3/3 通过；随后新增 canonical backend mapping 覆盖，当前 suite 4/4 通过。
+- 确认的根因与排除项：日语目录来自落后于当前 master 的功能分支；移植时仅验证了旧分支英文目录的键集，没有与目标基线当前英文目录重新比对。不是 Paraglide 或 locale 运行时错误。
+- 修复提交、差异映射及保留的兼容性边界：参照固定 `ref/` 日语目录补入其已有翻译，并为 ref 尚无的主线键补充日语文案；保留目标基线已有消息。未更改持久化或 locale 运行时接口。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/chimera/tests/localization.test.ts` 检查完整键集、占位符、历史别名与后端 canonical value；运行入口为 `pnpm --filter chimera-ui test:localization`，候选本地套件 4/4 通过（前端构建已生成 ignored Paraglide runtime）。该命令已加入当前候选的 CI 步骤，工作流变更须单独取得 L3 批准。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：初始键集断言失败 1 次；补齐后的 localization suite 4/4 通过，macOS WebKit 桌面用例最终干净运行 1/1。测试命令里的重复 Paraglide 生成曾因 CDN 插件请求无响应运行近两分钟后中断；现删除重复生成，沿用 CI 前端构建生成的 runtime。候选桌面运行使用未打包 core sidecar 的 E2E binary，仅作为日语 UI/配置路径验证。更早的两次 E2E 分别出现 WebDriver execute/sync 超时自动重试，以及 after hook 清理失败，根因未确认。完整 `chimera-config` 套件 147/147 通过，其中旧版 enum 回退复位测试通过；完整 runtime/core 桌面覆盖和 Windows CI/E2E 尚未执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅更新日语消息目录和对应验证记录；回滚该目录补丁会重新暴露当前主线缺失的翻译。无用户数据或宿主状态变化。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：从旧分支移植消息目录时，先比较目标基线与目标语言目录的键和插值字段，再运行已注册的 localization suite；CI 新步骤待单独批准。

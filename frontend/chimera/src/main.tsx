@@ -7,8 +7,8 @@ import React from 'react';
 import ReactDOM, { createRoot } from 'react-dom/client';
 import { routeTree } from './routeTree.gen';
 import { setupFrontendConsoleBridge } from './services/frontend-console-bridge';
-// manually import language utils, inject paraglide custom strategy
-import '@/utils/language-new';
+// Register the Paraglide strategy before rendering the application.
+import '@/utils/language';
 
 const currentWindow = getCurrentWebviewWindow();
 

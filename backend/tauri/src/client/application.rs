@@ -553,18 +553,14 @@ fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result
         sysopt::Sysopt::global().guard_proxy();
     }
 
-    if plan.language_changed
-        && let Some(language) = patch.language.as_deref()
-    {
-        rust_i18n::set_locale(language.to_lowercase().as_str());
-    }
-
     if plan.log_level_changed || plan.log_max_files_changed {
         utils::init::refresh_logger((patch.app_log_level.clone(), patch.max_log_files))?;
     }
 
     if plan.refresh_systray {
-        handle::Handle::update_systray()?;
+        if !plan.language_changed {
+            handle::Handle::update_systray()?;
+        }
     } else if plan.refresh_systray_part {
         handle::Handle::update_systray_part()?;
     }
@@ -577,6 +573,44 @@ fn legacy_finalize_error(error: anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
         "legacy mutation may have non-reversible runtime or OS side effects and requires reconciliation: {error:#}"
     )
+}
+
+fn persist_then_apply_legacy_language(
+    language: Option<&str>,
+    persist: impl FnOnce() -> Result<()>,
+    apply_locale: impl FnOnce(&str) -> Result<()>,
+) -> Result<()> {
+    // Keep the process-global locale and tray unchanged when a legacy write fails.
+    persist()?;
+
+    if let Some(language) = language {
+        let locale = crate::bridge::verge::locale_key_from_legacy(language)
+            .map(str::to_owned)
+            .unwrap_or_else(|| language.to_ascii_lowercase());
+        apply_locale(&locale)?;
+    }
+
+    Ok(())
+}
+
+fn apply_legacy_locale(
+    locale: &str,
+    previous_locale: &str,
+    mut set_locale: impl FnMut(&str),
+    mut refresh_tray: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    set_locale(locale);
+    if let Err(error) = refresh_tray() {
+        set_locale(previous_locale);
+        return match refresh_tray() {
+            Ok(()) => Err(error
+                .context("failed to refresh the language tray; the previous locale was restored")),
+            Err(restore_error) => Err(anyhow::anyhow!(
+                "failed to refresh the language tray: {error:#}; the previous locale was restored, but refreshing its tray also failed: {restore_error:#}"
+            )),
+        };
+    }
+    Ok(())
 }
 
 async fn rollback_legacy_domains(
@@ -666,6 +700,7 @@ async fn rollback_legacy_domains(
 
 async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
     let base = Config::verge().latest().clone();
+    let previous_language = client.get_app_config()?.language;
     let legacy_clash = Config::clash().latest().clone();
     let mut split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
     let application_patch = split.application.clone().unwrap_or_default();
@@ -864,10 +899,26 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .await?;
         }
         run_verge_patch_side_effects(&plan, &application_patch)?;
-        Config::verge().data().save_file()?;
-        if split.clash_config.is_some() {
-            Config::clash().data().save_config()?;
-        }
+        persist_then_apply_legacy_language(
+            plan.language_changed
+                .then(|| application_patch.language.as_deref())
+                .flatten(),
+            || {
+                Config::verge().data().save_file()?;
+                if split.clash_config.is_some() {
+                    Config::clash().data().save_config()?;
+                }
+                Ok(())
+            },
+            |locale| {
+                apply_legacy_locale(
+                    locale,
+                    previous_language.as_str(),
+                    rust_i18n::set_locale,
+                    handle::Handle::update_systray,
+                )
+            },
+        )?;
         handle::Handle::refresh_verge();
         Ok::<_, anyhow::Error>(())
     }
@@ -989,6 +1040,95 @@ mod tests {
         assert!(!selector.language_changed);
         assert!(selector.refresh_systray);
         assert!(!selector.refresh_systray_part);
+    }
+
+    #[test]
+    fn legacy_language_is_not_applied_when_persistence_fails() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let persist_events = events.clone();
+        let locale_events = events.clone();
+
+        let result = persist_then_apply_legacy_language(
+            Some("ja-JP"),
+            move || {
+                persist_events.lock().unwrap().push("persist".to_owned());
+                Err(anyhow::anyhow!("legacy save failed"))
+            },
+            move |locale| {
+                locale_events.lock().unwrap().push(locale.to_owned());
+                Ok(())
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(*events.lock().unwrap(), vec!["persist"]);
+    }
+
+    #[test]
+    fn legacy_language_applies_the_canonical_locale_after_persistence() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let persist_events = events.clone();
+        let locale_events = events.clone();
+
+        persist_then_apply_legacy_language(
+            Some("ja-JP"),
+            move || {
+                persist_events.lock().unwrap().push("persist".to_owned());
+                Ok(())
+            },
+            move |locale| {
+                locale_events
+                    .lock()
+                    .unwrap()
+                    .push(format!("locale:{locale}"));
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec!["persist".to_owned(), "locale:ja".to_owned()]
+        );
+    }
+
+    #[test]
+    fn legacy_locale_restores_previous_value_when_tray_refresh_fails() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let locale_events = events.clone();
+        let refresh_events = events.clone();
+        let refresh_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let refresh_attempts = refresh_count.clone();
+
+        let result = apply_legacy_locale(
+            "ja",
+            "en",
+            move |locale| {
+                locale_events
+                    .lock()
+                    .unwrap()
+                    .push(format!("locale:{locale}"));
+            },
+            move || {
+                refresh_events.lock().unwrap().push("refresh".to_owned());
+                if refresh_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(anyhow::anyhow!("tray refresh failed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(result.is_err());
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "locale:ja".to_owned(),
+                "refresh".to_owned(),
+                "locale:en".to_owned(),
+                "refresh".to_owned(),
+            ]
+        );
     }
 
     #[tokio::test]

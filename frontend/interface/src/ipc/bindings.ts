@@ -865,7 +865,7 @@ export type ChimeraAppConfigPatch =
 export type ChimeraAppConfigPatch_Deserialize = {
   app_singleton_port?: number | null;
   app_log_level?: LoggingLevel_Deserialize | null;
-  language?: I18nLanguage | null;
+  language?: I18nLanguage_Deserialize | null;
   theme_mode?: ThemeMode | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
@@ -901,7 +901,7 @@ export type ChimeraAppConfigPatch_Deserialize = {
 export type ChimeraAppConfigPatch_Serialize = {
   app_singleton_port?: number | null;
   app_log_level?: LoggingLevel_Serialize | null;
-  language?: I18nLanguage | null;
+  language?: I18nLanguage_Serialize | null;
   theme_mode?: ThemeMode | null;
   traffic_graph?: boolean | null;
   enable_memory_usage?: boolean | null;
@@ -944,7 +944,7 @@ export type ChimeraAppConfig_Deserialize = {
   /**  app listening port for app singleton */
   app_singleton_port?: number;
   app_log_level?: LoggingLevel_Deserialize;
-  language?: I18nLanguage;
+  language?: I18nLanguage_Deserialize;
   theme_mode?: ThemeMode;
   /**  enable traffic graph */
   traffic_graph?: boolean;
@@ -995,7 +995,7 @@ export type ChimeraAppConfig_Serialize = {
   /**  app listening port for app singleton */
   app_singleton_port: number;
   app_log_level: LoggingLevel_Serialize;
-  language: I18nLanguage;
+  language: I18nLanguage_Serialize;
   theme_mode: ThemeMode;
   /**  enable traffic graph */
   traffic_graph: boolean;
@@ -1753,7 +1753,13 @@ export type GetSysProxyResponse = {
   server: string;
 };
 
-export type I18nLanguage = 'en-US' | 'ko' | 'ru' | 'zh-CN' | 'zh-TW';
+export type I18nLanguage = I18nLanguage_Serialize | I18nLanguage_Deserialize;
+
+export type I18nLanguage_Deserialize =
+  'en' | 'en-US' | 'ja' | 'ko' | 'ru' | 'zh-cn' | 'zh-CN' | 'zh-tw' | 'zh-TW';
+
+export type I18nLanguage_Serialize =
+  'en' | 'ja' | 'ko' | 'ru' | 'zh-cn' | 'zh-tw';
 
 export type IVerge = IVerge_Serialize | IVerge_Deserialize;
 

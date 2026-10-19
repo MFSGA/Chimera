@@ -63,13 +63,7 @@ impl TauriApplicationEffectAdapters {
 #[async_trait::async_trait]
 impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
     fn set_locale(&self, language: I18nLanguage) -> Result<(), EffectAdapterError> {
-        rust_i18n::set_locale(match language {
-            I18nLanguage::English => "en-US",
-            I18nLanguage::Korean => "ko",
-            I18nLanguage::Russian => "ru",
-            I18nLanguage::SimplifiedChinese => "zh-CN",
-            I18nLanguage::TraditionalChinese => "zh-TW",
-        });
+        rust_i18n::set_locale(language.as_str());
         Ok(())
     }
 

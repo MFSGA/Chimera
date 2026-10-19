@@ -15,6 +15,7 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { useMount } from 'ahooks';
 import { lazy, useEffect } from 'react';
 import { useChimeraStorageSubscribers } from '@/hooks/use-store';
+import 'dayjs/locale/ja';
 import 'dayjs/locale/ru';
 import 'dayjs/locale/zh-cn';
 import 'dayjs/locale/zh-tw';

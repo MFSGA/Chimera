@@ -174,6 +174,21 @@ mod tests {
     use ractor::rpc::CallResult;
     use tempfile::tempdir;
 
+    struct NoopVergeMirror;
+
+    impl VergeLegacyBridge for NoopVergeMirror {
+        fn prepare(
+            &self,
+            _snap: &ChimeraAppConfig,
+        ) -> anyhow::Result<Box<dyn PreparedLegacyMirror>> {
+            Ok(Box::new(crate::state::mirror::NoopPreparedLegacyMirror))
+        }
+
+        fn snapshot_legacy(&self) -> anyhow::Result<ChimeraAppConfig> {
+            Ok(ChimeraAppConfig::default())
+        }
+    }
+
     struct FailingVergeMirror;
 
     impl VergeLegacyBridge for FailingVergeMirror {
@@ -193,7 +208,9 @@ mod tests {
         bridge: Arc<dyn VergeLegacyBridge>,
     ) -> (ActorRef<ApplicationActorMessage>, tempfile::TempDir) {
         let dir = tempdir().expect("tempdir should be created");
-        let path = camino::Utf8PathBuf::from_path_buf(dir.path().join("application.yaml"))
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir(&config_dir).expect("config directory should be created");
+        let path = camino::Utf8PathBuf::from_path_buf(config_dir.join("application.yaml"))
             .expect("temp path should be UTF-8");
         let manager = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(path)
@@ -219,6 +236,77 @@ mod tests {
             CallResult::SenderError => anyhow::bail!("application actor reply dropped"),
             CallResult::Timeout => anyhow::bail!("application actor call timed out"),
         }
+    }
+
+    #[tokio::test]
+    async fn japanese_write_failure_preserves_previous_application_state() {
+        let (actor, dir) = spawn_actor(Arc::new(NoopVergeMirror)).await;
+        let config_dir = dir.path().join("config");
+        let config_path = config_dir.join("application.yaml");
+
+        let mut initial_patch = ChimeraAppConfig::new_empty_patch();
+        initial_patch.enable_system_proxy = Some(true);
+        match actor
+            .call(
+                |reply| ApplicationActorMessage::Patch {
+                    patch: initial_patch,
+                    reply,
+                },
+                None,
+            )
+            .await
+            .expect("initial actor call should complete")
+        {
+            CallResult::Success(result) => {
+                result.expect("initial config should be persisted");
+            }
+            CallResult::SenderError => panic!("application actor reply dropped"),
+            CallResult::Timeout => panic!("application actor call timed out"),
+        }
+
+        let previous_bytes = std::fs::read(&config_path).expect("saved config should exist");
+        let before = get_snapshot(&actor)
+            .await
+            .expect("initial get should succeed");
+        assert_eq!(before.state.language.as_str(), "en");
+        assert!(before.state.enable_system_proxy);
+
+        let unavailable_dir = dir.path().join("config-unavailable");
+        std::fs::rename(&config_dir, &unavailable_dir)
+            .expect("config directory should be made unavailable");
+
+        let mut patch = ChimeraAppConfig::new_empty_patch();
+        patch.language = Some(chimera_config::application::I18nLanguage::Japanese);
+        let result = actor
+            .call(
+                |reply| ApplicationActorMessage::Patch { patch, reply },
+                None,
+            )
+            .await
+            .expect("actor call should complete");
+        match result {
+            CallResult::Success(result) => {
+                let error = result.expect_err("a missing config directory must reject the write");
+                assert!(error.to_string().contains("persist application config"));
+            }
+            CallResult::SenderError => panic!("application actor reply dropped"),
+            CallResult::Timeout => panic!("application actor call timed out"),
+        }
+
+        let after = get_snapshot(&actor)
+            .await
+            .expect("post-failure get should succeed");
+        assert_eq!(after.version, before.version);
+        assert_eq!(after.state.language, before.state.language);
+        assert!(after.state.enable_system_proxy);
+        assert_eq!(
+            std::fs::read(unavailable_dir.join("application.yaml"))
+                .expect("previous config should remain available"),
+            previous_bytes,
+        );
+
+        std::fs::rename(&unavailable_dir, &config_dir)
+            .expect("config directory should be restored");
     }
 
     #[tokio::test]

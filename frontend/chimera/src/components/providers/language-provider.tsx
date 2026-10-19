@@ -1,9 +1,19 @@
-import { useSetting } from '@chimera/interface';
+import { useSettings } from '@chimera/interface';
 import { locale } from 'dayjs';
-import { createContext, PropsWithChildren, useContext, useEffect } from 'react';
+import {
+  createContext,
+  PropsWithChildren,
+  useContext,
+  useEffect,
+  useState,
+} from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
-import { getLocale, Locale, locales, setLocale } from '@/paraglide/runtime';
-import { toI18nLanguage } from '@/utils/language';
+import { getLocale, Locale, setLocale } from '@/paraglide/runtime';
+import {
+  getCachedLanguage,
+  normalizeLanguage,
+  toI18nLanguage,
+} from '@/utils/language';
 
 const LanguageContext = createContext<{
   language?: Locale;
@@ -20,36 +30,45 @@ export const useLanguage = () => {
   return context;
 };
 
-const normalizeConfiguredLocale = (
-  value?: string | null,
-): Locale | undefined => {
-  if (!value) return undefined;
-
-  const normalized = value.toLowerCase();
-  if (normalized === 'en-us') return 'en';
-  return locales.includes(normalized as Locale)
-    ? (normalized as Locale)
-    : undefined;
-};
-
+/**
+ * Applies the language resolved by the backend, which uses the system locale
+ * on first launch and the user's saved choice afterwards.
+ */
 export const LanguageProvider = ({ children }: PropsWithChildren) => {
-  const language = useSetting('language');
-  const configuredLocale = normalizeConfiguredLocale(language.value);
+  const { query, upsert } = useSettings();
+  const persisted = normalizeLanguage(query.data?.language);
+  const settled = query.isSuccess || query.isError;
+  const [cached] = useState(getCachedLanguage);
+  const [applied, setApplied] = useState(cached !== null);
+
+  useEffect(() => {
+    if (applied || !settled) return;
+
+    if (persisted && persisted !== cached) {
+      locale(persisted);
+      setLocale(persisted, { reload: false });
+    }
+
+    setApplied(true);
+  }, [applied, settled, persisted, cached]);
+
+  useEffect(() => {
+    if (!applied || !persisted) return;
+
+    locale(persisted);
+    if (persisted === getLocale()) return;
+    setLocale(persisted);
+  }, [applied, persisted]);
 
   const setLanguage = useLockFn(async (value: Locale) => {
-    await language.upsert(toI18nLanguage(value));
+    await upsert.mutateAsync({ language: toI18nLanguage(value) });
+    locale(value);
     setLocale(value);
   });
 
-  // Keep Paraglide and dayjs aligned when another WebView changes the setting.
-  useEffect(() => {
-    if (!configuredLocale) return;
-
-    locale(configuredLocale);
-    if (getLocale() !== configuredLocale) {
-      setLocale(configuredLocale);
-    }
-  }, [configuredLocale]);
+  if (!applied) {
+    return null;
+  }
 
   return (
     <LanguageContext.Provider

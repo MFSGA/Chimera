@@ -81,7 +81,10 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 pub fn run() -> std::io::Result<()> {
     crate::log_err!(init::init_config());
     if let Some(lang) = Config::verge().latest().language.clone() {
-        rust_i18n::set_locale(lang.to_lowercase().as_str());
+        let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
+            .map(str::to_owned)
+            .unwrap_or_else(|| lang.to_ascii_lowercase());
+        rust_i18n::set_locale(&locale);
     }
 
     let specta_builder = specta_export::build_specta_builder();

@@ -1,0 +1,447 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const mainSettingsPath = '/main/settings/user-interface';
+
+type VergeConfig = {
+  language?: string | null;
+};
+
+type LocaleSnapshot = {
+  cache: string | null;
+  documentLanguage: string;
+};
+
+type WindowSize = {
+  width: number;
+  height: number;
+};
+
+function persistedLanguage(): string | null {
+  const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
+  assert.ok(
+    runtime,
+    'CHIMERA_E2E_RUNTIME_DIR must be set by the WDIO harness.',
+  );
+  const configPath = path.join(runtime, 'config', 'application.yaml');
+  if (!fs.existsSync(configPath)) return null;
+  const text = fs.readFileSync(configPath, 'utf8');
+  const value =
+    /^language:\s*["']?([^"'#\s]+)["']?\s*$/m.exec(text)?.[1] ?? null;
+  return value === 'null' || value === '~' ? null : value;
+}
+
+async function invoke<T>(command: string, args?: Record<string, unknown>) {
+  return browser.execute(
+    async (name, parameters) => {
+      const internals = (
+        window as typeof window & {
+          __TAURI_INTERNALS__: {
+            invoke: <R>(
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<R>;
+          };
+        }
+      ).__TAURI_INTERNALS__;
+      return internals.invoke<T>(name, parameters);
+    },
+    command,
+    args,
+  );
+}
+
+async function openMainWindow() {
+  await invoke('create_main_window');
+  await browser.waitUntil(
+    async () => (await browser.getWindowHandles()).includes('main'),
+    { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
+  );
+  await browser.switchToWindow('main');
+}
+
+async function openUserInterfaceSettings() {
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        () =>
+          document.documentElement.classList.contains('chimera-main') &&
+          (document.getElementById('root')?.childElementCount ?? 0) > 0 &&
+          document.querySelector('[data-slot="app-root"]') !== null,
+      ),
+    {
+      timeout: 30_000,
+      timeoutMsg: 'The main application did not finish rendering.',
+    },
+  );
+
+  if ((await browser.execute(() => location.pathname)) !== mainSettingsPath) {
+    await browser.execute((target) => {
+      const link = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>('a'),
+      ).find((candidate) => candidate.getAttribute('href') === target);
+
+      if (link) {
+        link.click();
+        return;
+      }
+
+      history.pushState({}, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }, mainSettingsPath);
+  }
+
+  await $('[data-slot="language-selector-card"]').waitForDisplayed({
+    timeout: 15_000,
+  });
+}
+
+async function restoreLocaleSnapshot(handle: string, snapshot: LocaleSnapshot) {
+  if (!(await browser.getWindowHandles()).includes(handle)) return;
+
+  await browser.switchToWindow(handle);
+  await browser.execute((cache) => {
+    const key = btoa('paraglide-language-cache');
+    if (cache === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, cache);
+  }, snapshot.cache);
+  await browser.refresh();
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (language) => document.documentElement.lang === language,
+        snapshot.documentLanguage,
+      ),
+    {
+      timeout: 15_000,
+      timeoutMsg: `${handle} did not return to its original language.`,
+    },
+  );
+  await browser.execute((cache) => {
+    const key = btoa('paraglide-language-cache');
+    if (cache === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, cache);
+  }, snapshot.cache);
+}
+
+async function restoreWindowState(
+  handle: string,
+  label: string,
+  cleanup: () => Promise<void>,
+  errors: Error[],
+) {
+  try {
+    if (!(await browser.getWindowHandles()).includes(handle)) return;
+    await browser.switchToWindow(handle);
+    await cleanup();
+  } catch (cause) {
+    errors.push(new Error(`Could not restore ${handle} ${label}.`, { cause }));
+  }
+}
+
+describe('application language selection', () => {
+  let originalLanguage: string | null | undefined;
+  const localeSnapshots = new Map<string, LocaleSnapshot>();
+  const originalUrls = new Map<string, string>();
+  const originalWindowSizes = new Map<string, WindowSize>();
+
+  before(async () => {
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+        ),
+      { timeout: 30_000, timeoutMsg: 'The Chimera frontend did not render.' },
+    );
+
+    const config = await invoke<VergeConfig>('get_verge_config');
+    originalLanguage = config.language ?? null;
+    for (const handle of await browser.getWindowHandles()) {
+      if (handle !== 'legacy' && handle !== 'main') continue;
+      await browser.switchToWindow(handle);
+      originalWindowSizes.set(handle, await browser.getWindowSize());
+      originalUrls.set(handle, await browser.getUrl());
+      localeSnapshots.set(
+        handle,
+        await browser.execute(() => ({
+          cache: localStorage.getItem(btoa('paraglide-language-cache')),
+          documentLanguage: document.documentElement.lang,
+        })),
+      );
+    }
+
+    await openMainWindow();
+    if (!localeSnapshots.has('main')) {
+      originalWindowSizes.set('main', await browser.getWindowSize());
+      originalUrls.set('main', await browser.getUrl());
+      localeSnapshots.set(
+        'main',
+        await browser.execute(() => ({
+          cache: localStorage.getItem(btoa('paraglide-language-cache')),
+          documentLanguage: document.documentElement.lang,
+        })),
+      );
+    }
+    await browser.setWindowSize(1240, 638);
+    await openUserInterfaceSettings();
+
+    await invoke('patch_verge_config', { payload: { language: 'en' } });
+    await browser.waitUntil(
+      async () =>
+        ['en', 'en-us'].includes(
+          (
+            (await invoke<VergeConfig>('get_verge_config')).language ?? ''
+          ).toLowerCase(),
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Could not prepare the test runtime in English.',
+      },
+    );
+    await browser.refresh();
+    await openUserInterfaceSettings();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document.documentElement.lang === 'en' &&
+            /English/.test(
+              document.querySelector('[data-slot="language-selector-trigger"]')
+                ?.textContent ?? '',
+            ),
+        ),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'The main UI did not render the prepared English locale.',
+      },
+    );
+  });
+
+  after(async () => {
+    const cleanupErrors: Error[] = [];
+    try {
+      if (originalLanguage !== undefined) {
+        await invoke('patch_verge_config', {
+          payload: { language: originalLanguage },
+        });
+        await browser.waitUntil(
+          async () =>
+            ((await invoke<VergeConfig>('get_verge_config')).language ??
+              null) === originalLanguage,
+          {
+            timeout: 15_000,
+            timeoutMsg: 'The original language setting was not restored.',
+          },
+        );
+        await browser.waitUntil(
+          () => persistedLanguage() === originalLanguage,
+          {
+            timeout: 15_000,
+            timeoutMsg:
+              'application.yaml did not restore the original language setting.',
+          },
+        );
+      }
+    } catch (cause) {
+      cleanupErrors.push(
+        new Error('Could not restore the original language setting.', {
+          cause,
+        }),
+      );
+    }
+
+    for (const [handle, snapshot] of localeSnapshots) {
+      await restoreWindowState(
+        handle,
+        'locale',
+        () => restoreLocaleSnapshot(handle, snapshot),
+        cleanupErrors,
+      );
+      await restoreWindowState(
+        handle,
+        'route',
+        async () => {
+          const originalUrl = originalUrls.get(handle);
+          if (originalUrl && (await browser.getUrl()) !== originalUrl) {
+            await browser.url(originalUrl);
+            await browser.waitUntil(
+              async () => (await browser.getUrl()) === originalUrl,
+              {
+                timeout: 15_000,
+                timeoutMsg: `${handle} did not return to its original route.`,
+              },
+            );
+          }
+        },
+        cleanupErrors,
+      );
+      await restoreWindowState(
+        handle,
+        'dimensions',
+        async () => {
+          const originalSize = originalWindowSizes.get(handle);
+          if (originalSize) {
+            await browser.setWindowSize(
+              originalSize.width,
+              originalSize.height,
+            );
+          }
+        },
+        cleanupErrors,
+      );
+    }
+
+    try {
+      if ((await browser.getWindowHandles()).includes('legacy')) {
+        await browser.switchToWindow('legacy');
+      }
+    } catch (cause) {
+      cleanupErrors.push(
+        new Error('Could not return focus to the legacy window.', { cause }),
+      );
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        cleanupErrors,
+        `Application language cleanup was incomplete: ${cleanupErrors
+          .map((error) => error.message)
+          .join('; ')}`,
+      );
+    }
+  });
+
+  it('selects Japanese with keyboard activation and applies it to the legacy window', async () => {
+    const trigger = await $('[data-slot="language-selector-trigger"]');
+    await trigger.waitForDisplayed();
+    await browser.execute((element) => element.focus(), trigger);
+    await browser.keys('Enter');
+
+    await browser.waitUntil(
+      async () => (await trigger.getAttribute('aria-expanded')) === 'true',
+      {
+        timeout: 10_000,
+        timeoutMsg: 'The language menu did not open from the keyboard.',
+      },
+    );
+    const menu = await $('[data-slot="language-selector-menu"]');
+    await menu.waitForExist({ timeout: 10_000 });
+    const japaneseOption = await $(
+      '//*[@data-slot="language-selector-menu"]//*[@role="menuitemcheckbox" and normalize-space(.)="日本語"]',
+    );
+    await japaneseOption.waitForExist({ timeout: 10_000 });
+    await browser.keys('ArrowDown');
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () => document.activeElement?.textContent?.trim() === '日本語',
+        ),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'ArrowDown did not focus the Japanese language option.',
+      },
+    );
+    await browser.keys('Enter');
+
+    let stableJapaneseObservations = 0;
+    let lastLanguageState: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          const [config, ui] = await Promise.all([
+            invoke<VergeConfig>('get_verge_config'),
+            browser.execute(() => ({
+              language: document.documentElement.lang,
+              selectedLanguage: document
+                .querySelector('[data-slot="language-selector-trigger"]')
+                ?.textContent?.trim(),
+            })),
+          ]);
+          lastLanguageState = { configured: config.language, ...ui };
+          const japaneseIsStable =
+            config.language?.toLowerCase() === 'ja' &&
+            ui.language === 'ja' &&
+            /日本語/.test(ui.selectedLanguage ?? '');
+          stableJapaneseObservations = japaneseIsStable
+            ? stableJapaneseObservations + 1
+            : 0;
+          return stableJapaneseObservations >= 3;
+        },
+        { timeout: 15_000, interval: 500 },
+      );
+    } catch (cause) {
+      throw new Error(
+        `Japanese did not remain synchronized: ${JSON.stringify(lastLanguageState)}`,
+        { cause },
+      );
+    }
+    await browser.waitUntil(() => persistedLanguage() === 'ja', {
+      timeout: 15_000,
+      timeoutMsg: 'application.yaml did not persist the Japanese language.',
+    });
+
+    const currentMainState = await browser.execute(() => ({
+      language: document.documentElement.lang,
+      selectedLanguage: document
+        .querySelector('[data-slot="language-selector-trigger"]')
+        ?.textContent?.trim(),
+    }));
+    assert.equal(currentMainState.language, 'ja');
+    assert.match(currentMainState.selectedLanguage ?? '', /日本語/);
+
+    await browser.refresh();
+    await openUserInterfaceSettings();
+
+    const mainState = await browser.execute(() => ({
+      language: document.documentElement.lang,
+      selectedLanguage: document
+        .querySelector('[data-slot="language-selector-trigger"]')
+        ?.textContent?.trim(),
+    }));
+    assert.equal(mainState.language, 'ja');
+    assert.match(mainState.selectedLanguage ?? '', /日本語/);
+
+    await browser.switchToWindow('legacy');
+    const legacyUrl = new URL(await browser.getUrl());
+    legacyUrl.pathname = '/proxies';
+    legacyUrl.search = '';
+    await browser.url(legacyUrl.href);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const title = document.querySelector('h1')?.textContent?.trim();
+          const modeLabels = Array.from(
+            document.querySelectorAll<HTMLButtonElement>(
+              '[role="group"] button',
+            ),
+          ).map((button) => [button.value, button.textContent?.trim()]);
+          return (
+            document.documentElement.lang === 'ja' &&
+            title === 'プロキシ' &&
+            modeLabels.some(
+              ([value, label]) => value === 'rule' && label === 'ルール',
+            ) &&
+            modeLabels.some(
+              ([value, label]) => value === 'global' && label === 'グローバル',
+            ) &&
+            modeLabels.some(
+              ([value, label]) => value === 'direct' && label === 'ダイレクト',
+            )
+          );
+        }),
+      {
+        timeout: 30_000,
+        timeoutMsg:
+          'The legacy proxy page did not render its Japanese labels after reload.',
+      },
+    );
+
+    const legacyState = await browser.execute(() => ({
+      title: document.querySelector('h1')?.textContent?.trim(),
+      language: document.documentElement.lang,
+    }));
+    assert.deepEqual(legacyState, { title: 'プロキシ', language: 'ja' });
+  });
+});
