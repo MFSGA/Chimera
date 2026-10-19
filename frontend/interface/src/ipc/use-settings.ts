@@ -20,7 +20,9 @@ const useTypedConfig = <TConfig, TPatch>(
   const query = useQuery({ queryKey, queryFn });
   const upsert = useMutation({
     mutationFn: patchConfig,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey });
+    },
   });
 
   return { query, upsert };
