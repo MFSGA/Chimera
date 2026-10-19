@@ -15,6 +15,17 @@
 - 实际验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config` 143/143；完整 `cargo test --quiet --locked --manifest-path backend/Cargo.toml -p chimera` 默认并行运行 572 passed、0 failed、1 ignored，其中新增内置增强候选配置和 Clash typed patch 回滚测试通过；Service Mode typed patch 的候选失败恢复、版本冲突恢复也有回归测试。一次较早的并行全套运行中 3 个 Profile 文件监听用例超时；3 个用例各自单独重跑及完整串行运行均通过，之后完整默认并行复跑也通过，因此未确认产品回归。`typed_clash_patch_restores_source_and_runtime_after_persistence_failure` 使用真实 Clash 状态 actor 与配置文件，在 legacy persistence 回调注入失败，并检查来源配置与模拟运行态均回滚；未执行真实磁盘保存错误注入或完整内核 E2E。`typed_clash_compensation_reports_runtime_reconcile_failure` 覆盖错误聚合。`cargo check`、`frontend/interface` 与 E2E TypeScript 检查、E2E harness 单测 25/25、`pnpm lint:frontend-boundaries`、目标 Rust rustfmt、改动 TS/文档 Prettier、`git diff --check` 通过。Rust 全套测试中的 generated-bindings freshness 检查通过；pnpm 对临时 worktree 的 `.pnpm` hoist symlink 发出安装警告，但该测试通过。全量 `frontend/chimera` typecheck 未验证：本 worktree 缺少 Paraglide 生成目录，生成器在解析项目远程模块时无输出停滞后已中止；复用另一 worktree 的旧生成输出也产生消息键过期错误，故不作通过结论。桌面 E2E 尚未本机运行。`clash-typed-state.e2e.ts` 位于 hermetic/settings suite，直接通过 typed IPC 观察内核 `/configs` 与隔离配置文件，并检查无效端口输入保持两者不变；`windows-service-tun-lifecycle.e2e.ts` 也已改用 typed `get_app_config`/`patch_app_config` 和 `get_clash_config`/`patch_clash_config` 覆盖真实服务切换入口，两者都完成 TypeScript 检查但未在本机运行桌面 E2E。
 
 
+## ref 基线同步（2026-10-19，追加上游更新）
+
+- 目标：将本地只读参考从 `53b004ccb3508d0673b6cb691be65e0e48bdd593` 更新到上游 `main` 当前 tip，为后续共享实现对齐提供最新且可复现的基线。
+- 非目标：不把上游依赖升级应用到 Chimera，不复制上游产品实现或 workflow，不改 Chimera API、持久化、用户数据或主机网络状态。
+- 基线与核验：上游仓库 `https://github.com/libnyanpasu/clash-nyanpasu`；`origin/main` 与官方 `git ls-remote` 均指向 `4eaf13b9c5dc468fdfc38272bf76b20a681d2e54`。GitHub commit verification 为 `verified: true`（reason `valid`）。父仓库本分支原 gitlink 为 `53b004ccb3508d0673b6cb691be65e0e48bdd593`；`master` 仍为 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`。
+- 上游变化：新增 3 个已签名的 Renovate 提交：`8b6843e5b6` 更新 `@tanstack/react-query` 至 `v5.104.5`，`138dddd73f` 更新 `core-js` 至 `v3.51.0`，`4eaf13b9c5` 更新 Oxlint 至 `v1.89.0`。合计改动 `frontend/nyanpasu/package.json`、`frontend/query/package.json`、`package.json` 和 `pnpm-lock.yaml`；没有产品逻辑或递归子模块 gitlink 变化。本批只移动 Chimera 的 `ref` gitlink 并记录上游变化，不迁入这些依赖版本。
+- 风险：L2（参考基线与依赖 pin）；按维护者对本轮持续对齐任务的授权执行。无 Chimera 产品接口变化。
+- 验证：从上游官方 remote fetch；比对 `origin/main` 与远端广告 tip；通过 GitHub API 核对 tip 的有效签名；检查上游提交和文件差异；确认递归子模块指针未改变、更新后 `ref` 工作区干净。运行 `pnpm exec prettier --check docs/ref-alignment-progress.md` 与 `git diff --check`；本批只改参考基线，不运行产品构建或桌面 E2E。
+- 回滚：恢复 `ref` gitlink 至 `53b004ccb3508d0673b6cb691be65e0e48bdd593`，并撤回本节记录。
+- 后续：本基线仅是源码比对依据。每个共享功能切片仍须记录具体路径/符号映射和差异；该基线的上游依赖升级不会自动成为 Chimera 依赖更新。
+
 ## ref 基线同步（2026-10-19）
 
 - 目标：把本地只读参考更新到 Clash Nyanpasu `main` 最新已验证提交，为后续共享实现对齐提供准确基线。
