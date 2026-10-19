@@ -34,13 +34,16 @@ version, and saved bytes remain intact.
 - **Initial state:** An isolated E2E runtime with the current language and both
   WebView locale caches captured. The test starts from the harness legacy
   window, opens the main window, and prepares the main UI in English through
-  test-only IPC before checking the initial state.
+  test-only `patch_app_config` IPC before checking the initial state. It reads
+  the language through `get_app_config`, the typed configuration used by the
+  main UI's settings provider; the separate typed-state contract covers the
+  legacy configuration mirror.
 - **Operation:** Focus the Language control, open its menu with Enter, move to
   `日本語` with ArrowDown, and select it with Enter. The current desktop
   driver's element click only synthesizes a DOM `click`, while the Radix menu
   opens on `pointerdown`; this contract therefore checks keyboard activation
   and makes no mouse-activation claim.
-- **Independent result:** `get_verge_config` reports `language: "ja"`, the
+- **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.
 - **Rendered result:** Before refresh, the main selector shows `日本語`; after

@@ -442,19 +442,19 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：仅更新日语消息目录和对应验证记录；回滚该目录补丁会重新暴露当前主线缺失的翻译。无用户数据或宿主状态变化。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：从旧分支移植消息目录时，先比较目标基线与目标语言目录的键和插值字段，再运行已注册的 localization suite；CI 新步骤待单独批准。
 
-### LESSON-20261019-005：语言 E2E 快照必须等待配置与界面收敛
+### LESSON-20261019-005：语言 E2E 快照须按主 UI 的配置源等待收敛
 
 - 日期与时区：2026-10-19 UTC
-- 状态：修复已在 PR #494 本地工作树完成；新 SHA 的 Windows Desktop E2E 待复验
+- 状态：测试修正已在 PR #494 工作树完成；新 SHA 的 Windows Desktop E2E 待复验
 - 严重度：Low
 - 模块：E2E / Localization
 - master commit / ref gitlink SHA / 平台与测试环境：失败 SHA `3f609dfa166c68c9009232ed912b615ca4a84e84`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；Windows Edge 153 hermetic E2E。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852)；hermetic suite 52/53 个 spec 通过。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852) 与[失败运行 39296100576](https://github.com/MFSGA/Chimera/actions/runs/39296100576)；两轮 hermetic suite 均为 52/53 个 spec 通过。
 - 预期行为：测试变更语言前保存稳定的各窗口初始状态，并在 afterAll 中恢复后端配置、缓存、DOM 语言、路由和窗口尺寸。
-- 真实异常、复现步骤与证据：Windows hermetic suite 的日语键盘切换、持久化、主窗口重载及 legacy UI 断言均通过；afterAll 恢复时主窗口报告 `Could not restore main locale`。失败发生在窗口快照清理路径。
-- 确认的根因与排除项：before hook 只等待根节点渲染就读取语言快照；这不保证异步 LanguageProvider 已按后端配置协调 DOM 语言和 Paraglide 缓存。测试因此可能保存启动瞬态，并在清理时恢复该瞬态。语言切换功能断言本身通过，失败不是日语选择或持久化路径失败。
-- 修复提交、差异映射及保留的兼容性边界：在快照前只读轮询后端语言、DOM 语言与缓存；后端有受支持的语言时，要求 DOM 与规范化缓存都等于后端值后才保存快照。未改产品初始化逻辑、功能断言或窗口恢复行为。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现由 `tauri-e2e/specs/user-interface-language.e2e.ts` 的 Windows hermetic run `39290359852` 证明；同一 spec 保持注册于现有 suite。新 SHA 的桌面复验待执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机前端构建停在 Paraglide/Inlang 网络插件初始化阶段，故桌面 E2E 尚未本机运行；将以推送后 Windows hermetic E2E 复验。
-- 风险/回滚和清理证据（如涉及宿主状态）：只修改 E2E 快照等待条件与经验记录；轮询仅读取窗口语言状态，不写配置或宿主网络。可回退测试 helper 与对应记录恢复原快照时序。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：语言/主题等有异步初始化的测试，在捕获恢复快照前应等待权威配置与实际 UI 状态收敛；超时保留最后状态诊断。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
+- 真实异常、复现步骤与证据：run `39290359852` 中日语键盘切换、持久化、主窗口重载及 legacy UI 断言均通过；afterAll 恢复时主窗口报告 `Could not restore main locale`。首次修复等待配置、DOM 与缓存收敛后，run `39296100576` 在快照前仍失败，诊断显示旧 `get_verge_config` 返回 `en`，而主 UI 的 DOM 和缓存均为 `zh-cn`。
+- 确认的根因与排除项：初始快照需要等待异步 LanguageProvider 完成同步；但第一次修复又用旧版 `get_verge_config` 作权威值。主 UI 的 `LanguageProvider` 实际经 `useSettings` 读取 typed `get_app_config`，所以旧镜像值 `en` 与当前主 UI 的 `zh-cn` 不一致，令等待条件无法满足。这是测试观察源不一致，不是日语选择或持久化路径失败。
+- 修复提交、差异映射及保留的兼容性边界：快照前改为只读轮询 typed `get_app_config`、DOM 语言与 Paraglide 缓存；测试准备和恢复也改用 `patch_app_config`。保留真实键盘菜单操作、落盘、刷新和 legacy UI 断言；typed 与旧配置镜像的转换由独立 typed-state spec 覆盖。未改产品运行逻辑。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：旧实现失败分别见 runs `39290359852` 和 `39296100576`；修正后的 spec 仍注册于现有 hermetic suite。新 SHA 的 Windows 桌面复验待执行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机桌面用例使用过期的 ignored Paraglide runtime（其中 locales 列表缺 `ja`），因此菜单选择失败；为重新生成前端构建，`pnpm e2e:tauri:build` 在加载 Inlang CDN 模块时超过两分钟无输出，本机桌面结果未验证。新的 Windows hermetic E2E 必须对新 SHA 复验，CI pending 不作通过处理。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 的配置观察源、准备/恢复调用和契约记录；等待轮询仅读状态，测试原有 cleanup 继续恢复用户语言、窗口缓存、URL 与尺寸。可回退该 spec 和对应经验记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：异步初始化的主 UI 测试须用 UI 实际消费的 typed 配置源作为权威值，再等待 DOM/缓存收敛；独立验证 legacy 镜像时使用对应的转换契约。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
