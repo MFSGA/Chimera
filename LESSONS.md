@@ -455,6 +455,6 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 确认的根因与排除项：before hook 只等待根节点渲染就读取语言快照；这不保证异步 LanguageProvider 已按后端配置协调 DOM 语言和 Paraglide 缓存。测试因此可能保存启动瞬态，并在清理时恢复该瞬态。语言切换功能断言本身通过，失败不是日语选择或持久化路径失败。
 - 修复提交、差异映射及保留的兼容性边界：在快照前只读轮询后端语言、DOM 语言与缓存；后端有受支持的语言时，要求 DOM 与规范化缓存都等于后端值后才保存快照。未改产品初始化逻辑、功能断言或窗口恢复行为。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现由 `tauri-e2e/specs/user-interface-language.e2e.ts` 的 Windows hermetic run `39290359852` 证明；同一 spec 保持注册于现有 suite。新 SHA 的桌面复验待执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机前端构建停在 Paraglide/Inlang 网络插件初始化阶段，故桌面 E2E 尚未本机运行；将以推送后 Windows hermetic E2E 复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；`pnpm prepare:check` 全部资源通过；补齐资源后 `pnpm e2e:tauri:build:rust` 通过（首次尝试因缺少 Clash sidecar 失败）。`pnpm web:build` 在 Paraglide/Inlang 网络插件初始化阶段长时间无输出后中止，因此未运行本机桌面 E2E；新 SHA 的 Windows hermetic E2E 待 CI 复验。Prettier 与 `git diff --check` 通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：只修改 E2E 快照等待条件与经验记录；轮询仅读取窗口语言状态，不写配置或宿主网络。可回退测试 helper 与对应记录恢复原快照时序。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：语言/主题等有异步初始化的测试，在捕获恢复快照前应等待权威配置与实际 UI 状态收敛；超时保留最后状态诊断。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
