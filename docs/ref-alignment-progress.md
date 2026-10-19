@@ -15,7 +15,20 @@
 - 实际验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera-config` 143/143；完整 `cargo test --quiet --locked --manifest-path backend/Cargo.toml -p chimera` 默认并行运行 572 passed、0 failed、1 ignored，其中新增内置增强候选配置和 Clash typed patch 回滚测试通过；Service Mode typed patch 的候选失败恢复、版本冲突恢复也有回归测试。一次较早的并行全套运行中 3 个 Profile 文件监听用例超时；3 个用例各自单独重跑及完整串行运行均通过，之后完整默认并行复跑也通过，因此未确认产品回归。`typed_clash_patch_restores_source_and_runtime_after_persistence_failure` 使用真实 Clash 状态 actor 与配置文件，在 legacy persistence 回调注入失败，并检查来源配置与模拟运行态均回滚；未执行真实磁盘保存错误注入或完整内核 E2E。`typed_clash_compensation_reports_runtime_reconcile_failure` 覆盖错误聚合。`cargo check`、`frontend/interface` 与 E2E TypeScript 检查、E2E harness 单测 25/25、`pnpm lint:frontend-boundaries`、目标 Rust rustfmt、改动 TS/文档 Prettier、`git diff --check` 通过。Rust 全套测试中的 generated-bindings freshness 检查通过；pnpm 对临时 worktree 的 `.pnpm` hoist symlink 发出安装警告，但该测试通过。全量 `frontend/chimera` typecheck 未验证：本 worktree 缺少 Paraglide 生成目录，生成器在解析项目远程模块时无输出停滞后已中止；复用另一 worktree 的旧生成输出也产生消息键过期错误，故不作通过结论。桌面 E2E 尚未本机运行。`clash-typed-state.e2e.ts` 位于 hermetic/settings suite，直接通过 typed IPC 观察内核 `/configs` 与隔离配置文件，并检查无效端口输入保持两者不变；`windows-service-tun-lifecycle.e2e.ts` 也已改用 typed `get_app_config`/`patch_app_config` 和 `get_clash_config`/`patch_clash_config` 覆盖真实服务切换入口，两者都完成 TypeScript 检查但未在本机运行桌面 E2E。
 
 
-## 当前参考基线同步（本批）
+## ref 基线同步（2026-10-19）
+
+- 目标：把本地只读参考更新到 Clash Nyanpasu `main` 最新已验证提交，为后续共享实现对齐提供准确基线。
+- 非目标：本批不把上游产品代码、依赖升级、工作流或发布改动复制到 Chimera；不改用户配置或网络状态。
+- 基线：上一固定提交 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；新 `main` tip 为 `53b004ccb3508d0673b6cb691be65e0e48bdd593`（21 个上游提交，GitHub commit verification 为 `verified: true`）。
+- 上游变化范围：116 个文件，包含共享 runtime effective snapshot、代理 provider summary 缓存、Updater changelog、网络统计小组件图标与 macOS 软件渲染、Tokio worker 数量限制、Windows segment heap，以及 UI/本地化和依赖更新。上游两个自动生成的 manifest commit 未签名；本批只固定并验证已签名的 tip，不把这些上游提交合入 Chimera 历史。
+- 递归子模块：`backend/nyanpasu-runtime` 更新至 `a130ca7b6015121d49e43ecd0d6af1862e60253e`；其 `crates/nyanpasu-utils` 更新至 `f57f9f077c3f1cb31da0e8261c21bee7bdd75c8f`。
+- 变更接口：仅更新主仓库 `ref` gitlink，并记录本节；不改变 Chimera API、IPC、依赖或产品行为。
+- 风险与审批：L2（参考基线/依赖 pin）。按用户明确授权更新；推送前进行独立复核和签名检查。
+- 验收与验证：从官方 GitHub HTTPS 获取上游提交；核对 `main` tip、GitHub 签名状态、递归 gitlink 和 ref 工作区清洁状态；`pnpm exec prettier --check docs/ref-alignment-progress.md` 与 `git diff --check` 均通过。该 pin-only 批不涉及产品代码，因此不运行产品构建或桌面 E2E。
+- 回滚：将 `ref` gitlink 恢复到 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`，并撤回本节记录。
+- 下一批评估：优先比对 `perf(config): share committed runtime effective snapshots` 与 Chimera typed config/runtime builder；其次审查 `perf(proxies)!: retain provider summaries in the cache` 对 IPC 和查询消费者的影响。Updater changelog 与 widget logo 作为后续独立批次评估；依赖版本不因更新 ref 自动迁入。
+
+## ref 基线同步（2026-10-17）
 
 - 上游：Clash Nyanpasu `main`，已核对最新提交 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`（2026-10-17 UTC）。
 - Chimera 原固定 gitlink：`31019da14006b384b3272c72b4088179a9e72c47`；本 PR 把 `ref` 更新到上述提交。此前 PR 草案目标为 `a4f706fe788e3570247ad2fa49636c6b4c55c98b`；从该草案基线到最新上游增加 3 个提交：`8f9d7e3a30` 更新上游 `libc`，`6b609e4140` 更新上游 `@hookform/resolvers`，`d43819fbb2` 修复隐藏窗口时 WebView 的可见性与内存目标。
