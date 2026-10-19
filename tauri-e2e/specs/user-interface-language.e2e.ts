@@ -201,9 +201,11 @@ async function restoreWindowState(
 }
 
 /**
- * Contract: Select Japanese through the main UI keyboard menu; backend config,
- * persisted config, main UI after reload, and legacy proxy UI must all agree.
- * The test restores each window's original locale cache, route, and size.
+ * Contract: Reload retained windows to establish the persisted locale, then
+ * select Japanese through the main UI keyboard menu. Backend config, persisted
+ * config, main UI after reload, and the legacy proxy page after navigation must
+ * all agree. The test restores each synchronized locale snapshot, route, and
+ * window size.
  */
 describe('application language selection', () => {
   let originalLanguage: string | null | undefined;
@@ -229,6 +231,9 @@ describe('application language selection', () => {
       await browser.switchToWindow(handle);
       originalWindowSizes.set(handle, await browser.getWindowSize());
       originalUrls.set(handle, await browser.getUrl());
+      // Other layout specs seed the Paraglide cache directly. Reload retained
+      // windows so this test snapshots the locale resolved from app config.
+      await browser.refresh();
       await waitForLocaleSynchronization(handle);
       localeSnapshots.set(
         handle,
@@ -241,8 +246,21 @@ describe('application language selection', () => {
 
     await openMainWindow();
     if (!localeSnapshots.has('main')) {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            () =>
+              document.readyState === 'complete' &&
+              (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          ),
+        {
+          timeout: 30_000,
+          timeoutMsg: 'The new main window did not finish its first render.',
+        },
+      );
       originalWindowSizes.set('main', await browser.getWindowSize());
       originalUrls.set('main', await browser.getUrl());
+      await browser.refresh();
       await waitForLocaleSynchronization('main');
       localeSnapshots.set(
         'main',
@@ -320,13 +338,29 @@ describe('application language selection', () => {
       );
     }
 
-    for (const [handle, snapshot] of localeSnapshots) {
-      await restoreWindowState(
-        handle,
-        'locale',
-        () => restoreLocaleSnapshot(handle, snapshot),
-        cleanupErrors,
-      );
+    for (const handle of originalUrls.keys()) {
+      const snapshot = localeSnapshots.get(handle);
+      if (snapshot) {
+        await restoreWindowState(
+          handle,
+          'locale',
+          () => restoreLocaleSnapshot(handle, snapshot),
+          cleanupErrors,
+        );
+      } else {
+        // A setup failure can happen after refresh but before synchronization.
+        // Re-resolve from the restored persisted config rather than retaining a
+        // partially initialized runtime locale.
+        await restoreWindowState(
+          handle,
+          'locale synchronization fallback',
+          async () => {
+            await browser.refresh();
+            await waitForLocaleSynchronization(handle);
+          },
+          cleanupErrors,
+        );
+      }
       await restoreWindowState(
         handle,
         'route',
@@ -417,26 +451,27 @@ describe('application language selection', () => {
     try {
       await browser.waitUntil(
         async () => {
-          const [config, ui] = await Promise.all([
-            invoke<AppConfig>('get_app_config'),
-            browser.execute(() => ({
-              language: document.documentElement.lang,
-              selectedLanguage: document
-                .querySelector('[data-slot="language-selector-trigger"]')
-                ?.textContent?.trim(),
-            })),
-          ]);
-          lastLanguageState = { configured: config.language, ...ui };
+          const ui = await browser.execute(() => ({
+            language: document.documentElement.lang,
+            cachedLanguage: localStorage.getItem(
+              btoa('paraglide-language-cache'),
+            ),
+            readyState: document.readyState,
+            selectedLanguage: document
+              .querySelector('[data-slot="language-selector-trigger"]')
+              ?.textContent?.trim(),
+          }));
+          lastLanguageState = ui;
           const japaneseIsStable =
-            config.language?.toLowerCase() === 'ja' &&
             ui.language === 'ja' &&
+            normalizeLocale(ui.cachedLanguage) === 'ja' &&
             /日本語/.test(ui.selectedLanguage ?? '');
           stableJapaneseObservations = japaneseIsStable
             ? stableJapaneseObservations + 1
             : 0;
           return stableJapaneseObservations >= 3;
         },
-        { timeout: 15_000, interval: 500 },
+        { timeout: 30_000, interval: 500 },
       );
     } catch (cause) {
       throw new Error(
@@ -444,6 +479,8 @@ describe('application language selection', () => {
         { cause },
       );
     }
+    const config = await invoke<AppConfig>('get_app_config');
+    assert.equal(config.language?.toLowerCase(), 'ja');
     await browser.waitUntil(() => persistedLanguage() === 'ja', {
       timeout: 15_000,
       timeoutMsg: 'application.yaml did not persist the Japanese language.',

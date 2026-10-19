@@ -446,19 +446,19 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261019-005：语言 E2E 快照须按主 UI 的配置源等待收敛
 
 - 日期与时区：2026-10-19 UTC
-- 状态：测试修正已在 PR #494 工作树完成；新 SHA 的 Windows Desktop E2E 待复验
+- 状态：Mitigated（macOS WebKit 定向桌面用例连续两次 1/1 通过，最近一次 33.6 秒且无 WDIO 告警；新 SHA 的 Windows hermetic E2E 待复验）
 - 严重度：Low
 - 模块：E2E / Localization
-- master commit / ref gitlink SHA / 平台与测试环境：失败 SHA `3f609dfa166c68c9009232ed912b615ca4a84e84`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；Windows Edge 153 hermetic E2E。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852) 与[失败运行 39296100576](https://github.com/MFSGA/Chimera/actions/runs/39296100576)；两轮 hermetic suite 均为 52/53 个 spec 通过。
+- master commit / ref gitlink SHA / 平台与测试环境：失败 SHA `3f609dfa166c68c9009232ed912b615ca4a84e84`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；Windows Edge 153 hermetic E2E 与 macOS WebKit 605.1.15 embedded E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852)、[失败运行 39296100576](https://github.com/MFSGA/Chimera/actions/runs/39296100576) 与[失败运行 39302840484](https://github.com/MFSGA/Chimera/actions/runs/39302840484)；最新 hermetic suite 为 52/53 个 spec 通过。
 - 预期行为：测试变更语言前保存稳定的各窗口初始状态，并在 afterAll 中恢复后端配置、缓存、DOM 语言、路由和窗口尺寸。
-- 真实异常、复现步骤与证据：run `39290359852` 中日语键盘切换、持久化、主窗口重载及 legacy UI 断言均通过；afterAll 恢复时主窗口报告 `Could not restore main locale`。首次修复等待配置、DOM 与缓存收敛后，run `39296100576` 在快照前仍失败，诊断显示旧 `get_verge_config` 返回 `en`，而主 UI 的 DOM 和缓存均为 `zh-cn`。
-- 确认的根因与排除项：初始快照需要等待异步 LanguageProvider 完成同步；但第一次修复又用旧版 `get_verge_config` 作权威值。主 UI 的 `LanguageProvider` 实际经 `useSettings` 读取 typed `get_app_config`，所以旧镜像值 `en` 与当前主 UI 的 `zh-cn` 不一致，令等待条件无法满足。这是测试观察源不一致，不是日语选择或持久化路径失败。
-- 修复提交、差异映射及保留的兼容性边界：快照前改为只读轮询 typed `get_app_config`、DOM 语言与 Paraglide 缓存；测试准备和恢复也改用 `patch_app_config`。保留真实键盘菜单操作、落盘、刷新和 legacy UI 断言；typed 与旧配置镜像的转换由独立 typed-state spec 覆盖。未改产品运行逻辑。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：旧实现失败分别见 runs `39290359852` 和 `39296100576`；修正后的 spec 仍注册于现有 hermetic suite。新 SHA 的 Windows 桌面复验待执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；Prettier 与 `git diff --check` 通过。本机桌面用例使用过期的 ignored Paraglide runtime（其中 locales 列表缺 `ja`），因此菜单选择失败；为重新生成前端构建，`pnpm e2e:tauri:build` 在加载 Inlang CDN 模块时超过两分钟无输出，本机桌面结果未验证。新的 Windows hermetic E2E 必须对新 SHA 复验，CI pending 不作通过处理。
-- 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 的配置观察源、准备/恢复调用和契约记录；等待轮询仅读状态，测试原有 cleanup 继续恢复用户语言、窗口缓存、URL 与尺寸。可回退该 spec 和对应经验记录。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：异步初始化的主 UI 测试须用 UI 实际消费的 typed 配置源作为权威值，再等待 DOM/缓存收敛；独立验证 legacy 镜像时使用对应的转换契约。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
+- 真实异常、复现步骤与证据：run `39290359852` 中日语键盘切换、持久化、主窗口重载及 legacy UI 断言均通过；afterAll 恢复时主窗口报告 `Could not restore main locale`。随后 run `39296100576` 显示快照前旧配置镜像为 `en`、DOM/缓存为 `zh-cn`。run `39302840484` 的最后一个失败发生在同一设置套件的语言用例 before hook：typed app config 为 `en`，而保留的 legacy 窗口 DOM 与缓存仍为 `zh-cn`；其余 52/53 个 spec（包括 Dashboard）通过。本机诊断还观察到：UI 选择日语后，测试在 15 秒等待内仍读到英语；失败诊断切换并读取窗口时，前端 mutation 随后完成，main DOM 与缓存变为 `ja`。
+- 确认的根因与排除项：布局用例 `user-interface-main.e2e.ts` 为固定文案直接把 Paraglide localStorage 缓存设为 `zh-cn`；WDIO 在 spec 之间保留 main/legacy WebView，`resetE2eWindowState()` 只恢复初始 URL，不重载这两个窗口。另一个本机复现中，语言用例以 15 秒预算轮询 UI 的同时反复从该 WebView 调用 `get_app_config`，采样仍处于切换前的 DOM；失败后读取窗口时已观察到 mutation 完成及日语 UI。测试应先让 UI/cache 达到稳定条件，再单独读取后端配置，且为 WebKit 留足等待时间。没有证据表明主 UI LanguageProvider 与 ref 不一致或日语持久化业务逻辑失败。
+- 修复提交、差异映射及保留的兼容性边界：语言用例在快照前重载保留窗口，再等待 typed `get_app_config`、DOM 与 Paraglide 缓存收敛；新建 main 窗口先等待初次渲染再快照。操作时仍通过真实键盘菜单选择日语，先只读等待 UI/cache 连续稳定三次，再读取 typed app config 和 application.yaml，并验证刷新后的 main UI；之后导航 legacy 窗口至代理页，验证该页面从已保存设置加载日语，不声称验证页面原地实时同步。若 setup 在重载后、快照前失败，cleanup 会从已恢复的持久配置重新加载并等待窗口同步。未保留产品运行逻辑改动；上游基线 `ref` SHA `53b004ccb3508d0673b6cb691be65e0e48bdd593`，LanguageProvider 与 `frontend/nyanpasu/src/components/providers/language-provider.tsx` 对齐，`frontend/interface/src/ipc/use-settings.ts` 的 mutation invalidation 语义也保持与 ref 相同；本次仅修正测试等待顺序和清理。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：旧 Windows 失败见 runs `39290359852`、`39296100576`、`39302840484`；修改后的 `user-interface-language.e2e.ts` 仍注册于现有 hermetic suite，本机 macOS WebKit 定向 spec 1/1 通过。新 SHA 的 Windows hermetic E2E 待复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 与 `pnpm typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25；`pnpm --filter chimera-ui test:localization` 4/4；`pnpm e2e:tauri:build` 通过；`pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` macOS WebKit 连续两次 1/1 通过。第一次修正后的成功运行出现 5 次 WebDriver `execute/sync` 超时告警，第二次 33.6 秒完成且无 WDIO 告警；Prettier 与 `git diff --check` 通过。新 SHA 的 Windows hermetic E2E 待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 快照、等待顺序、异常 setup 后的恢复和经验记录；观察仍通过真实 UI、typed IPC 与 application.yaml，清理继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。可回退该 spec 和对应经验记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：跨用例重用 WebView 时必须重载并等待主 UI 实际使用的 typed 配置、DOM 和缓存收敛；UI mutation 运行中先观察界面，随后再通过 IPC 核验配置，避免观察操作和被测流程重叠。legacy UI 契约须明确区分目标路由加载后的持久化语言与无需导航的窗口实时同步。该记录由维护者在本任务中明确批准；未修改 CI 门禁。
 
 ### LESSON-20261019-006：Notify 的广播唤醒不会保存尚未登记的通知
 
