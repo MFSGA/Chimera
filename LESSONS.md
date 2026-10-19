@@ -31,6 +31,7 @@
 | LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
 | LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
 | LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
+| LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
 
 ## 单条模板
 
@@ -353,3 +354,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：首个修复 SHA 的 Windows Desktop E2E run `39084555437` 通过；其完整 CI run `39084555350` 中 Changes、三平台 lint 均通过，macOS/Windows/Ubuntu Tauri builds 当时仍在执行。当前诊断增强的 Prettier 检查与 `git diff --check` 本地通过；E2E 类型检查未能在本机执行，因为该 worktree 缺少 WDIO/Node 类型定义，离线 pnpm 安装因锁定依赖 tarball 未缓存而中止。没有声称旧代码在所有运行中稳定失败。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改测试轮询和测试工具依据记录，不改产品、持久数据或宿主状态；可恢复单次元素查询与 `waitForDisplayed`。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：对可能晚于路由就绪出现的 DOM 节点，在轮询回调内重新查询 selector；等待失败时输出最后一次存在/可见状态；不添加固定暂停。无 CI 门禁调整。
+
+### LESSON-20261018-002：E2E 控件定位不能假设当前语言
+
+- 日期与时区：2026-10-18 UTC
+- 状态：Open（选择器与显示环境修复已在 PR #490 工作树完成；新 SHA Windows Desktop E2E 待复验）
+- 严重度：Low
+- 模块：E2E / Windows
+- master commit / ref gitlink SHA / 平台与测试环境：PR head `ad81c3f67724f8b572520fac10d34b07b52e895f`；ref gitlink `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`；Windows Edge 154 hermetic E2E。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #490](https://github.com/MFSGA/Chimera/pull/490)，[失败运行 39169449230](https://github.com/MFSGA/Chimera/actions/runs/39169449230)，51/52 个 spec 通过；Dashboard 用例在进入存储恢复步骤前失败。
+- 预期行为：Dashboard 右键菜单已打开时，测试识别编辑项并继续执行；配置控件可跨受支持语言稳定定位。
+- 真实异常、复现步骤与证据：失败等待报告 `Dashboard edit menu; last observed: false`。同一 run 的 before-cleanup HTML 显示菜单的 `data-state="open"`，编辑项文本为 `Edit Widgets`。
+- 确认的根因与排除项：spec 以中文 `编辑组件` 判断菜单是否打开；英文菜单被错判为关闭后再次右键，关闭已显示菜单。单位、重置、保存控件亦依赖中文 aria-label。证据显示产品菜单已正常打开；失败来自测试本地化假设，不是 Dashboard 菜单行为回归。
+- 修复提交、差异映射及保留的兼容性边界：在菜单编辑项、配置选项、重置和保存按钮添加稳定 `data-slot` / `data-config-field`；测试通过这些属性定位，并用 `patch_verge_config` 固定 `zh-cn` 与 light theme，suite 结束时恢复原配置。选择器扩展不改变用户可见行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败复现见 run `39169449230`；修复继续由 `tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的 `main` / Windows `hermetic` suite 验证。新 SHA 的桌面复验尚未完成。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：E2E TypeScript、25/25 harness 单元测试、widget 单测 6/6、Oxlint、Prettier、frontend boundary 脚本及 `git diff --check` 通过。pnpm 包装命令受共享 `node_modules` 符号链接的安全检查阻止，已直接运行等价工具。没有本机桌面 E2E 结果；新 SHA Windows E2E 待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试在独立 E2E 配置中暂时修改应用语言/主题，并在 suite cleanup 恢复、读回；产品仅增加定位属性。不修改用户配置、宿主网络或系统设置。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：测试 locator 使用稳定业务属性，不依赖翻译文案；布局用例固定语言、主题并恢复原设置。不修改 CI 门禁。

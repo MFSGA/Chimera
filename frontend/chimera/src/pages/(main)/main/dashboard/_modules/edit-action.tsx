@@ -76,6 +76,7 @@ export default function EditAction() {
             variant="flat"
             disabled={configLoading || saveStatus.state !== 'saved'}
             className="flex h-8 items-center gap-1 px-3 text-sm text-nowrap"
+            data-slot="dashboard-edit-save"
             onClick={() => setIsEditing(false)}
           >
             <DoneRounded />

@@ -358,7 +358,10 @@ function RouteComponent() {
       </RegisterContextMenuTrigger>
 
       <RegisterContextMenuContent>
-        <ContextMenuItem onSelect={() => setIsEditing(true)}>
+        <ContextMenuItem
+          data-slot="dashboard-context-menu-edit-widgets"
+          onSelect={() => setIsEditing(true)}
+        >
           <EditRounded className="size-4" />
 
           <span>{m.dashboard_context_menu_edit_widgets()}</span>

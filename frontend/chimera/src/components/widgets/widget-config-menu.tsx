@@ -26,12 +26,15 @@ import { ConfigGroup, ConfigRow } from './widget-config-row';
 type ChoiceOption<T extends string> = { value: T; label: string };
 
 function Choice<T extends string>({
+  field,
   label,
   value,
   options,
   disabled,
   onChange,
 }: {
+  field:
+    'speed-unit' | 'shortcut-layout' | 'shortcut-buttons' | 'shortcut-order';
   label: string;
   value: T;
   options: ChoiceOption<T>[];
@@ -47,6 +50,8 @@ function Choice<T extends string>({
         <Button
           variant="flat"
           className="h-8 max-w-36 gap-1 px-2 text-xs"
+          data-slot="widget-config-choice"
+          data-config-field={field}
           aria-label={`${label}: ${selected?.label ?? value}`}
           disabled={disabled || !other}
           onClick={() => other && onChange(other.value)}
@@ -62,6 +67,8 @@ function Choice<T extends string>({
     <ConfigRow label={label}>
       <select
         className="bg-surface-variant text-on-surface max-w-40 rounded-xl px-2 py-1.5 text-xs"
+        data-slot="widget-config-choice"
+        data-config-field={field}
         aria-label={label}
         value={value}
         disabled={disabled}
@@ -180,6 +187,7 @@ function ConfigFieldRows({
             onChange={(showTotal) => onChange({ ...config, showTotal })}
           />
           <Choice
+            field="speed-unit"
             label={m.dashboard_widget_traffic_config_speed_unit()}
             value={config.unit}
             disabled={disabled}
@@ -214,6 +222,7 @@ function ConfigFieldRows({
       return (
         <ConfigGroup>
           <Choice
+            field="shortcut-layout"
             label={m.dashboard_widget_proxy_shortcuts_config_layout()}
             value={config.layout}
             disabled={disabled}
@@ -230,6 +239,7 @@ function ConfigFieldRows({
             onChange={(layout) => onChange({ ...config, layout })}
           />
           <Choice
+            field="shortcut-buttons"
             label={m.dashboard_widget_proxy_shortcuts_config_buttons()}
             value={config.buttons}
             disabled={disabled}
@@ -248,6 +258,7 @@ function ConfigFieldRows({
           />
           {config.buttons === 'both' && (
             <Choice
+              field="shortcut-order"
               label={m.dashboard_widget_proxy_shortcuts_config_order()}
               value={config.order}
               disabled={disabled}
@@ -389,6 +400,7 @@ export default function WidgetConfigMenu({
             <Button
               variant="flat"
               className="size-8 min-w-0 p-0"
+              data-slot="widget-config-reset"
               aria-label={m.dashboard_widget_config_reset()}
               title={m.dashboard_widget_config_reset()}
               disabled={disabled}

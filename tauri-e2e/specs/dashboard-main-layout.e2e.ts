@@ -6,6 +6,34 @@ import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/dashboard';
 
+type AppAppearance = {
+  language?: string | null;
+  theme_mode?: string | null;
+};
+
+let originalAppearance:
+  { language: string | null; theme_mode: string | null } | undefined;
+
+async function invoke<T>(command: string, args?: Record<string, unknown>) {
+  return browser.execute(
+    async (name, parameters) => {
+      const internals = (
+        window as typeof window & {
+          __TAURI_INTERNALS__: {
+            invoke: <R>(
+              command: string,
+              args?: Record<string, unknown>,
+            ) => Promise<R>;
+          };
+        }
+      ).__TAURI_INTERNALS__;
+      return internals.invoke<T>(name, parameters);
+    },
+    command,
+    args,
+  );
+}
+
 function formatErrorDetails(error: unknown, seen = new Set<unknown>()): string {
   if (!(error instanceof Error)) return String(error);
   if (seen.has(error)) return '[circular error]';
@@ -28,11 +56,46 @@ function formatErrorDetails(error: unknown, seen = new Set<unknown>()): string {
 describe('main dashboard reference layout', () => {
   before(async () => {
     await browser.setWindowSize(1240, 638);
-    await browser.execute(() => {
-      localStorage.setItem(btoa('paraglide-language-cache'), 'zh-cn');
+    const currentAppearance = await invoke<AppAppearance>('get_verge_config');
+    originalAppearance = {
+      language: currentAppearance.language ?? null,
+      theme_mode: currentAppearance.theme_mode ?? null,
+    };
+    await invoke('patch_verge_config', {
+      payload: { language: 'zh-cn', theme_mode: 'light' },
     });
     await openMainRoute(targetPath);
+    await browser.waitUntil(
+      async () =>
+        browser.execute(
+          () =>
+            document
+              .querySelector('[data-slot="navbar-label"]')
+              ?.textContent?.trim() === '概览' &&
+            document
+              .querySelector('[data-slot="app-root"]')
+              ?.classList.contains('light'),
+        ),
+      {
+        timeout: 10_000,
+        timeoutMsg: 'Dashboard test locale and light theme did not apply.',
+      },
+    );
     await browser.setWindowSize(1240, 638);
+  });
+
+  after(async () => {
+    if (!originalAppearance) return;
+    await invoke('patch_verge_config', { payload: originalAppearance });
+    const restoredAppearance = await invoke<AppAppearance>('get_verge_config');
+    assert.equal(
+      restoredAppearance.language ?? null,
+      originalAppearance.language,
+    );
+    assert.equal(
+      restoredAppearance.theme_mode ?? null,
+      originalAppearance.theme_mode,
+    );
   });
 
   it('uses ref cards, real core artwork, and main settings links', async () => {
@@ -226,20 +289,26 @@ describe('main dashboard reference layout', () => {
         ),
       );
 
+    const editMenuItemSelector =
+      '[data-slot="dashboard-context-menu-edit-widgets"]';
+    const isEditMenuOpen = async () =>
+      browser.execute(
+        (selector) =>
+          Boolean(
+            document.querySelector(
+              `[role="menu"][data-state="open"] ${selector}`,
+            ),
+          ),
+        editMenuItemSelector,
+      );
+
     const enterEditMode = async () => {
       if (await isEditMode()) return;
-      const menuOpen = await browser.execute(() =>
-        Array.from(
-          document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
-        ).some((item) => item.innerText.trim() === '编辑组件'),
-      );
-      if (!menuOpen) {
+      if (!(await isEditMenuOpen())) {
         const dashboard = await $('[data-slot="dashboard-container"]');
         await dashboard.click({ button: 'right' });
       }
-      const editItem = await $(
-        '//*[@role="menuitem" and normalize-space(.)="编辑组件"]',
-      );
+      const editItem = await $(editMenuItemSelector);
       await waitForObservedValue(
         'Dashboard edit menu',
         () => editItem.isDisplayed(),
@@ -252,7 +321,7 @@ describe('main dashboard reference layout', () => {
     const isTrafficConfigOpen = async () =>
       browser.execute(() => {
         const control = document.querySelector(
-          'button[aria-label^="速率单位:"]',
+          '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
         );
         return Boolean(control && control.getClientRects().length > 0);
       });
@@ -265,7 +334,9 @@ describe('main dashboard reference layout', () => {
         await trigger.waitForDisplayed({ timeout: 5_000 });
         await trigger.click();
       }
-      const unitToggle = await $('button[aria-label^="速率单位:"]');
+      const unitToggle = await $(
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+      );
       await waitForObservedValue(
         'Traffic unit control visibility',
         () => unitToggle.isDisplayed(),
@@ -542,7 +613,9 @@ describe('main dashboard reference layout', () => {
     };
 
     const waitForUnitControl = async () => {
-      const unitToggle = await $('button[aria-label^="速率单位:"]');
+      const unitToggle = await $(
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+      );
       await waitForObservedValue(
         'Traffic widget settings save',
         () => unitToggle.isEnabled(),
@@ -592,9 +665,7 @@ describe('main dashboard reference layout', () => {
           (state) => state === 'load-error',
         );
         await clearWidgetStorageFailure();
-        const saveButton = await $(
-          '//*[@data-slot="dashboard-edit-header"]//button[.//span[normalize-space(.)="保存"]]',
-        );
+        const saveButton = await $('[data-slot="dashboard-edit-save"]');
         await waitForObservedValue(
           'Dashboard edit exit after widget config read error',
           () => saveButton.isEnabled(),
@@ -655,7 +726,7 @@ describe('main dashboard reference layout', () => {
         )
       ).click();
       const futureVersionUnitToggle = await $(
-        'button[aria-label^="速率单位:"]',
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
       );
       await waitForObservedValue(
         'Widget setting control after unsupported config version',
@@ -668,7 +739,7 @@ describe('main dashboard reference layout', () => {
         'settings must be disabled when persisted data uses an unknown version',
       );
       assert.equal(
-        await $('[aria-label="恢复默认设置"]').isEnabled(),
+        await $('[data-slot="widget-config-reset"]').isEnabled(),
         false,
         'reset must be disabled when persisted data uses an unknown version',
       );
@@ -698,7 +769,7 @@ describe('main dashboard reference layout', () => {
         )
       ).click();
       const futureVersionInitialReadToggle = await $(
-        'button[aria-label^="速率单位:"]',
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
       );
       await waitForObservedValue(
         'Widget setting control after unsupported config read',
@@ -723,14 +794,16 @@ describe('main dashboard reference layout', () => {
 
       await enterEditMode();
       await openTrafficConfig();
-      await (await $('[aria-label="恢复默认设置"]')).click();
+      await (await $('[data-slot="widget-config-reset"]')).click();
       await waitForRateUnit('B/s');
       await waitForStoredUnit('bytes');
       await waitForUnitControl();
 
       await withClearedWidgetStorageFailure(async () => {
         await armWidgetStorageFailure('set_storage_item');
-        await $('button[aria-label="速率单位: B/s"]').click();
+        await $(
+          '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+        ).click();
         const saveError = await $(
           '[data-slot="widget-config-save-status"][data-save-state="error"]',
         );
@@ -763,7 +836,7 @@ describe('main dashboard reference layout', () => {
 
       await enterEditMode();
       await openTrafficConfig();
-      await (await $('[aria-label="恢复默认设置"]')).click();
+      await (await $('[data-slot="widget-config-reset"]')).click();
       await waitForRateUnit('B/s');
       await waitForStoredUnit('bytes');
       await waitForUnitControl();
