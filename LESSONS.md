@@ -35,6 +35,8 @@
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows      | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 | LESSON-20261019-002 | 2026-10-19 | E2E / Windows      | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 | LESSON-20261019-005 | 2026-10-19 | E2E / Localization | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
+| LESSON-20261019-006 | 2026-10-19 | Rust / Windows     | PR #494 取消刷新测试对 `Notify` 的时序未受控；新增确定性屏障覆盖通知先于 waiter 登记的情况，历史 CI 根因未证实  | Mitigated |
+| LESSON-20261019-007 | 2026-10-19 | Git / Delivery     | PR #494 首次 push 使用的 SSH 凭据无仓库写权限；改用活动 GitHub CLI 凭据的 HTTPS push 成功，提交 verified        | Mitigated |
 
 ## 单条模板
 
@@ -459,3 +461,37 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支运行 `pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、`pnpm --filter chimera-ui test:localization`（4/4）、`pnpm lint:frontend-boundaries`、Prettier、`git diff --check`、`pnpm e2e:tauri:build` 均通过；当前本机 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 在 macOS WebKit 605.1.15 通过 1/1。此前两次定向运行亦通过 1/1。新 SHA 的 Windows hermetic E2E 尚未执行；不据此声称完整桌面矩阵通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：本修复只改变 shared settings mutation 的完成时序，使 UI 应用不等待查询 refetch；数据写入与 cache invalidation 仍执行，持久化格式和 IPC 不变。测试继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。若回滚，恢复 ref 更新前的 hook 和用例即可。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：共享设置 mutation 的 `onSuccess` 若只需触发后台 refetch，应使用不返回 invalidation Promise 的 block callback，并由 ref 对齐复核。跨用例重用 WebView 时重载并等待主 UI 的 typed 配置、DOM 和缓存收敛；先验证 UI 即时同步，再独立核验后端、磁盘、刷新和 legacy 路径。此 LESSON 更新已获维护者明确批准；未修改 CI 门禁。
+
+### LESSON-20261019-006：取消刷新测试必须控制 Notify 的登记时序
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（旧通知实现由确定性回归用例稳定复现失败，修复版本及默认 Rust 库测试通过；新 SHA CI 待完成）
+- 严重度：Low
+- 模块：Rust / Profile refresh tests
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 前一版 head `16b03b37c9a8c7021508ddecfb704fbc0dd68fae`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；GitHub Actions Windows。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Windows backend job 118216586922 in run 39296098353](https://github.com/MFSGA/Chimera/actions/runs/39296098353/job/118216586922)。Run 后来被新 SHA 取消；该 job 已结束并明确失败：`caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 在 2 秒期限内未结束，后端工作区 587 项通过、1 项失败、1 项忽略。
+- 预期行为：取消 refresh 的等待方后，后台 fetch 仍应结束，actor 清除 `pending_refresh`，后续 refresh 能成功。
+- 真实异常、复现步骤与证据：Windows job `118216586922` 的失败日志显示该用例在 2 秒期限内未完成。旧用例在收到 fetcher 的 `started` oneshot 后调用 `release_fetch.notify_waiters()`，但 `started` 只表示已发送信号，不能证明 waiter 已登记。因此历史 CI 超时与丢失通知相符，但没有证明它就是该次失败的实际根因。
+- 确认的根因与排除项：Tokio 1.53.3 的 `notify_waiters()` 不为未来的 `notified().await` 保存 permit；`notify_one()` 会保留一个 permit。旧测试没有控制通知与登记的先后顺序，无法稳定覆盖此语义。新测试增加独立的 `allow_wait` 屏障，明确先发出 release，再允许 fetcher 开始等待；这会确定性检查测试同步语义。该问题位于测试屏障，不涉及 production actor 路径。
+- 修复提交、差异映射及保留的兼容性边界：只调整 Chimera `backend/tauri/src/client/profiles.rs::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck`，增加登记前屏障并将 release 改为 `notify_one()`；不改 refresh actor 或 production behavior。ref `backend/tauri/src/client/profiles.rs` commit `53b004ccb3508d0673b6cb691be65e0e48bdd593` 采用旧测试顺序，后续同步时需重新检查该用例。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：在 `backend/tauri/src/client/profiles.rs` 的 Rust 单元测试中，用 `notify_waiters()` 临时替代 release 后，同一个 `--exact` 用例稳定在 2 秒期限失败；恢复 `notify_one()` 后同一用例 1/1 通过。通知和 waiter 注册顺序由 `allow_wait` oneshot 屏障控制。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：Cargo.lock 锁定 Tokio `1.53.3`。定向命令 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck -- --exact --nocapture` 在修复版本 1/1 通过；默认 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 为 577 passed、0 failed、1 ignored。尝试 `--all-features` 时因本机磁盘空间不足中断；Windows 新 SHA workflow 待完成，历史 CI 失败本身不能证明根因。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试同步调整，不改变应用运行或用户数据；回滚为恢复该用例中的 `notify_waiters()`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：异步测试若依赖事件先后，使用独立屏障明确控制 waiter 注册前后的顺序；一次性 release 使用 `notify_one()`，广播给已登记的一组 waiters 才使用 `notify_waiters()`。未改 CI 门禁。
+
+### LESSON-20261019-007：推送前核对 Git 写入凭据
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（错误 SSH 通道被拒后，使用活动 GitHub CLI 凭据通过 HTTPS 推送成功）
+- 严重度：Low
+- 模块：Git / Delivery
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 head `74b6b31d0214bb111637ef1091b69c18a8621f62`；macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)。
+- 预期行为：远程写操作由当前已授权的维护者凭据执行，提交签名可由 GitHub 验证。
+- 真实异常、复现步骤与证据：首次通过配置的 SSH push URL 推送时，GitHub 拒绝当前 SSH key；同一时刻 GitHub CLI 的活动账号有该仓库权限。随后通过一次性 GitHub CLI credential helper 的 HTTPS push 成功将提交推送到 PR #494；未将令牌写入命令参数或修改全局 Git 配置。
+- 确认的根因与排除项：Git SSH 和 GitHub CLI 使用不同凭据来源；活动 CLI 会话正确，并不代表默认 SSH key 对目标仓库有写权限。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码变更。此环境后续远端写操作使用 GitHub CLI credential helper 的 HTTPS 通道，除非先确认 SSH 身份有正确仓库权限。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：不适用；这是 Git 凭据选择问题，没有产品测试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地签名校验通过；GitHub API 对提交 `74b6b31d0214bb111637ef1091b69c18a8621f62` 返回 `verified: true`、`reason: valid`；HTTPS push 成功并确认 PR head 与本地 SHA 一致。预防检查为写操作前确认活动 CLI 身份与目标仓库权限，并检查实际 push URL；没有自动化凭据测试。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响该次 Git push；没有修改凭据、系统网络或全局配置。推送结果可通过后续新提交撤销，不应重写共享历史。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行远端写操作前核对 push URL 与 `gh auth status`；若 SSH 身份无法确认，则显式使用活动 GitHub CLI credential helper。诊断记录不得保存或输出令牌与非必要账号信息。
