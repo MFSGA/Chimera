@@ -26,7 +26,7 @@ they do not replace them. GitHub workflow realities are summarized in
 [WORKFLOWS.md](.github/WORKFLOWS.md).
 
 - For any nontrivial task, record objective, explicit non-goals, acceptance criteria,
-  changed interfaces, risk level L0–L3, test plan, rollback, and required approval.
+  changed interfaces, risk level L0–L3, test plan, rollback, and any approval triggers.
   Use the [AI task issue template](.github/ISSUE_TEMPLATE/ai-task.md) for tracked work.
 - Before coding, verify branch, Git state, relevant submodule SHAs, existing source
   and tests. Shared-feature tasks **must** follow the ref path/symbol mapping and
@@ -58,14 +58,29 @@ they do not replace them. GitHub workflow realities are summarized in
   coordination; if updating its remote, use `--force-with-lease`, never plain
   `--force`. Re-run required CI/review against the new commit SHA: results from
   replaced SHAs do not authorize merging the rewritten commit.
-- L0 nonbehavioral docs and L1 bounded presentation changes may be considered for
-  constrained automation **only after** branch protection, checks and review
-  enforcement are implemented. L2 includes persisted configuration, core/service
-  runtime, system proxy/TUN, IPC/agent mutations, security, dependency/sidecar pins,
-  and shared behavior. L3 covers `AGENTS.md`, governance rules, CI/release,
-  signing, secrets, update channels, privileges, and Git history rewriting.
-  L2 requires explicit human approval after review; L3 requires maintainer approval.
-  When scopes overlap, use the highest risk category.
+- Risk levels determine the required evidence and review, not a routine approval
+  pause. The user's standing instruction authorizes ordinary, scoped code
+  iterations—including L2 implementation, fixes, tests, independent review, and
+  signed commits pushed to the task branch/PR—without asking for approval at each
+  step. Continue through implementation and verification when the request is clear.
+  L2 includes persisted configuration, core/service runtime, system proxy/TUN,
+  IPC/agent mutations, security, dependency/sidecar pins, and shared behavior.
+- Get approval before implementing a major architectural change: replacing a major
+  subsystem, changing shared API/state-ownership boundaries, making a cross-cutting
+  frontend/IPC/core/Service/agent redesign, or changing the security/authorization
+  model or a persisted-data migration with broad compatibility impact. Resolve
+  ordinary local design choices autonomously and keep them within the stated goal.
+- L3 covers `AGENTS.md`, governance rules, CI/release, signing, secrets, update
+  channels, privileges, and Git history rewriting; these changes still require
+  maintainer review and approval. Separately retain task-specific authorization for
+  host-network mutations, privilege elevation, destructive data operations,
+  release/sign/publish/tag actions, remote workflow dispatch, and rewriting shared
+  or protected history. A request to implement code does not authorize merging to a
+  protected branch; merge only when the task asks for integration and all required
+  checks and repository approvals pass. Never bypass those controls.
+- The L0/L1 constrained-automation limitation applies to unattended automation,
+  not interactive, user-directed code work. When scopes overlap, use the highest
+  risk category for review and verification.
 - All PRs should complete the [PR template](.github/pull_request_template.md):
   evidence and exact commands, coverage and omissions, review findings,
   reference SHA, change risk, and rollback. Do not claim CI enforces rules that

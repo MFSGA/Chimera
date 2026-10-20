@@ -1,10 +1,10 @@
 # Chimera — 独立 Code Review 清单
 
-> 独立 Reviewer 需使用**与 Coder 不同的上下文**，查看真实 diff、固定的 `master`/ref 基线、相关代码链和实际测试/CI 日志。自称通过、fixture 响应和编译成功不能替代真实系统验收。按 [治理规范](ai-development-governance.md) 做 L0–L3 风险审批，并遵守 [测试标准](testing/README.md)。
+> 独立 Reviewer 需使用**与 Coder 不同的上下文**，查看真实 diff、固定的 `master`/ref 基线、相关代码链和实际测试/CI 日志。自称通过、fixture 响应和编译成功不能替代真实系统验收。按 [治理规范](ai-development-governance.md) 评估 L0–L3 风险及适用审批，并遵守 [测试标准](testing/README.md)。
 
 ## 1. 范围、对齐与权限
 
-- [ ] 变更目标、非目标、影响路径、最高风险级别、人工批准及回滚方式明确；没有顺便重构、偷偷改 submodule/lockfile 或提交无关用户修改。
+- [ ] 变更目标、非目标、影响路径、最高风险级别、适用的审批触发条件及回滚方式明确；没有顺便重构、偷偷改 submodule/lockfile 或提交无关用户修改。
 - [ ] 当前主仓库 `master` 基线和 `ref/` gitlink/checkout SHA、参考工作区状态已记录；若影响共通功能，ref 对应目录/文件/函数/数据模型/调用链有逐项映射。
 - [ ] 仅保留必要品牌、legacy UI、E2E、agent 和可证明的兼容/缺陷差异；没有以同名接口掩盖平行业务实现，也没有照搬已确认 ref 缺陷。
 - [ ] 若批量复制了上游文件/目录，已核对 ref SHA、完整文件范围、来源许可/版权、品牌映射白名单及实际替换结果；没有误改外部协议/IPC、序列化字段或第三方标识，也没有因整目录覆盖丢掉 Chimera-only 扩展。大范围复制不是免审查理由。
@@ -35,7 +35,7 @@
 
 ## 4. 发布、治理与 PR
 
-- [ ] `AGENTS.md`、`docs/ai-*`、`LESSONS.md`、`.github/**`、权限/签名/升级流程的修改按 L3 明确维护者批准；其他 L2 高风险行为也有人工批准。
+- [ ] `AGENTS.md`、`docs/ai-*`、`LESSONS.md`、`.github/**`、权限/签名/升级流程的修改按 L3 明确维护者批准；普通 L2 代码改动有独立审查及实际测试，不因风险标签额外等待逐项批准。重大架构调整及宿主/发布等具体高影响操作已有所需授权。
 - [ ] 没有修改 workflow 权限、分支保护、强制测试、审计或状态检查来“让 PR 绿”；Renovate 已有自动合并策略未被误套在 Codex 任务上。
 - [ ] 任务没有未经授权触发 daily/dev 预发布、`publish.yaml` 版本变更或 `target-release-build.yaml`；无凭据、Secret 或 Token 泄漏。
 - [ ] 已填写 [PR 模板](../.github/pull_request_template.md)，写明风险、实际测试结果、仍阻断的问题、ref 映射、回滚方案、独立审查结论和人工决策。
@@ -59,6 +59,6 @@ Reference path/symbol mapping and intentional differences:
 Findings: [severity, file:line, repro and evidence, suggested fix]
 Actual check commands, tests, platform and results:
 Skipped/blocked tests and device/network limitations:
-Remaining risks and required maintainer approvals:
+Remaining risks and any applicable maintainer approvals:
 Decision: REQUEST_CHANGES / COMMENT / APPROVE_WITH_EVIDENCE
 ```
