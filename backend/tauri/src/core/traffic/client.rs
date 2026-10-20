@@ -24,6 +24,12 @@ impl Drop for Inner {
 }
 
 impl TrafficClient {
+    #[cfg(test)]
+    pub(super) async fn stop_for_test(&self) -> Result<()> {
+        self.0.actor.stop_and_wait(None, None).await?;
+        Ok(())
+    }
+
     pub async fn spawn(args: TrafficArgs) -> Result<Self> {
         let (actor, _) = Actor::spawn(None, TrafficActor, args).await?;
         Ok(Self(Arc::new(Inner { actor })))

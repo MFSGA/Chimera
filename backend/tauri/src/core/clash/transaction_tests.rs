@@ -16,6 +16,7 @@ fn initial_config() -> ClashRuntimeConfig {
     ClashRuntimeConfig {
         port: None,
         mode: Some("rule".to_string()),
+        geodata_mode: None,
         ipv6: Some(true),
         socket_port: None,
         allow_lan: Some(false),
