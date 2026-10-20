@@ -876,6 +876,7 @@ mod tests {
         }
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 7,
                 run_type: RunType::Normal,

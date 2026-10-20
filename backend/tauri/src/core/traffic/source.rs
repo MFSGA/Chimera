@@ -135,6 +135,7 @@ mod tests {
         let countries = Countries::of(&[("203.0.113.7", "JP"), ("8.8.8.8", "US")]);
         let frame = ClashConnectionsFrame {
             instance_id: "core-1".into(),
+            core_instance_id: "core-1".into(),
             snapshot: ClashWsConnectionSnapshot {
                 download_total: 0,
                 upload_total: 0,

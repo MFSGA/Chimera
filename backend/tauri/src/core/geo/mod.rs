@@ -14,6 +14,9 @@ pub use adapters::FsCountryIndexSource;
 pub use client::GeoIndexClient;
 #[cfg(test)]
 pub use ports::MockCountryIndexSource;
-pub use ports::{CoreGeodataModeSource, CountryIndexSource, GeodataMode};
+pub use ports::{
+    CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, CountryIndexSource,
+    GeodataMode,
+};
 #[cfg(test)]
 pub(crate) use ports::{IndexKey, Loaded};

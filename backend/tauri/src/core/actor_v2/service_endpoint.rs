@@ -248,6 +248,7 @@ fn app_core_kind_to_type(kind: CoreKind) -> Result<chimera_utils::core::CoreType
 
 fn map_service_status(infos: &CoreInfos) -> CoreStatusSnapshot {
     CoreStatusSnapshot {
+        instance_id: infos.instance_id.clone(),
         controller: infos.controller.clone(),
         // A service without v2 detail cannot prove it is stopped. Never infer
         // a stop proof from the coarser v1 state field.

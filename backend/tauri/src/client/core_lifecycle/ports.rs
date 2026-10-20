@@ -31,6 +31,23 @@ pub(crate) struct PreparedCoreBinary {
     pub(crate) progress: Arc<dyn BinaryInstallProgress>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveCoreBinding {
+    pub(crate) instance_id: String,
+    pub(crate) info: crate::config::clash::ClashInfo,
+}
+
+fn core_instance_id(status: &CoreStatusSnapshot) -> anyhow::Result<String> {
+    if let Some(instance_id) = status.instance_id.as_ref().filter(|id| !id.is_empty()) {
+        return Ok(instance_id.clone());
+    }
+    anyhow::ensure!(
+        status.state_changed_at > 0,
+        "the running core has no stable instance identity"
+    );
+    Ok(format!("{:?}:{}", status.run_type, status.state_changed_at))
+}
+
 pub(crate) trait BinaryInstallProgress: Send + Sync + 'static {
     fn restarting(&self);
     fn finished(&self, error: Option<&str>);
@@ -206,6 +223,24 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
             anyhow::bail!("the core API is unavailable because the core is not running");
         }
         Ok(self.effective_clash_info())
+    }
+
+    /// Resolves the controller and its process identity from one stable lifecycle observation.
+    async fn active_core_binding(&self) -> anyhow::Result<ActiveCoreBinding> {
+        let before = self.status().await?;
+        anyhow::ensure!(
+            matches!(before.state, chimera_ipc::api::status::CoreState::Running),
+            "the core API is unavailable because the core is not running"
+        );
+        let instance_id = core_instance_id(&before)?;
+        let info = self.active_clash_info().await?;
+        let after = self.status().await?;
+        anyhow::ensure!(
+            matches!(after.state, chimera_ipc::api::status::CoreState::Running)
+                && core_instance_id(&after)? == instance_id,
+            "the core changed while resolving its controller"
+        );
+        Ok(ActiveCoreBinding { instance_id, info })
     }
 
     async fn on_profile_change(&self, break_when: bool);

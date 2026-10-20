@@ -1914,6 +1914,7 @@ mod tests {
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
@@ -1952,6 +1953,7 @@ mod tests {
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
@@ -1995,6 +1997,7 @@ mod tests {
         }
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: self.run_type,
@@ -2031,6 +2034,7 @@ mod tests {
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Running,
                 state_changed_at: 0,
                 run_type: if self.local.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2093,6 +2097,7 @@ mod tests {
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,
@@ -2143,6 +2148,7 @@ mod tests {
 
         async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: CoreState::Stopped(None),
                 state_changed_at: 0,
                 run_type: RunType::Normal,

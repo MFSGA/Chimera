@@ -9,4 +9,5 @@ pub(crate) struct CoreStatusSnapshot {
     pub(crate) state: CoreState,
     pub(crate) state_changed_at: i64,
     pub(crate) run_type: RunType,
+    pub(crate) instance_id: Option<String>,
 }

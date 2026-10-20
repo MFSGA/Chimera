@@ -9,15 +9,25 @@ use super::{
     GeoIndexArgs, GeoIndexClient, MockCountryIndexSource,
     actor::Message,
     fixtures::geoip_dat,
-    ports::{CoreGeodataModeSource, GeoIndexError, GeodataMode, IndexKey, Loaded},
+    ports::{
+        CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexError,
+        GeodataMode, IndexKey, Loaded,
+    },
 };
 
 struct WaitingCore;
 
 #[async_trait::async_trait]
 impl CoreGeodataModeSource for WaitingCore {
-    async fn mode(&self) -> anyhow::Result<GeodataMode> {
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
         pending().await
+    }
+}
+
+fn binding(instance_id: &str, mode: GeodataMode) -> CoreGeodataBinding {
+    CoreGeodataBinding {
+        instance_id: instance_id.into(),
+        mode,
     }
 }
 
@@ -56,7 +66,9 @@ async fn spawn(source: MockCountryIndexSource) -> GeoIndexClient {
     .unwrap()
 }
 
-async fn next(published: &mut watch::Receiver<Option<Arc<IpIndex>>>) -> Option<Arc<IpIndex>> {
+async fn next(
+    published: &mut watch::Receiver<Option<Arc<CountryIndexSnapshot>>>,
+) -> Option<Arc<CountryIndexSnapshot>> {
     tokio::time::timeout(Duration::from_secs(5), published.changed())
         .await
         .expect("an index is published")
@@ -82,9 +94,11 @@ async fn a_reported_mode_loads_and_publishes_its_index() {
     let client = spawn(source).await;
     let mut published = client.subscribe();
 
-    client.send(Message::Mode(GeodataMode::Dat));
+    client.send(Message::Mode(binding("core-one", GeodataMode::Dat)));
 
-    assert!(Arc::ptr_eq(&next(&mut published).await.unwrap(), &index));
+    let snapshot = next(&mut published).await.unwrap();
+    assert_eq!(snapshot.instance_id, "core-one");
+    assert!(Arc::ptr_eq(&snapshot.index, &index));
 }
 
 #[tokio::test]
@@ -120,18 +134,18 @@ async fn a_fallback_refresh_reloads_the_current_mode_after_a_missed_write() {
     let client = spawn(source).await;
     let mut published = client.subscribe();
 
-    client.send(Message::Mode(GeodataMode::Dat));
+    client.send(Message::Mode(binding("core-one", GeodataMode::Dat)));
     assert!(Arc::ptr_eq(
-        &next(&mut published).await.unwrap(),
+        &next(&mut published).await.unwrap().index,
         &first_index
     ));
 
     // Frequent core polls are deduplicated; the periodic fallback still reloads the same mode.
-    client.send(Message::Mode(GeodataMode::Dat));
+    client.send(Message::Mode(binding("core-one", GeodataMode::Dat)));
     client.send(Message::Refresh);
 
     assert!(Arc::ptr_eq(
-        &next(&mut published).await.unwrap(),
+        &next(&mut published).await.unwrap().index,
         &second_index
     ));
 }
@@ -167,13 +181,16 @@ async fn changing_core_mode_drops_the_incompatible_index_when_reload_fails() {
     let mut published = client.subscribe();
 
     client
-        .set_mode("core-dat".to_owned(), GeodataMode::Dat)
+        .set_mode(binding("core-dat", GeodataMode::Dat))
         .await
         .unwrap();
-    assert!(Arc::ptr_eq(&next(&mut published).await.unwrap(), &index));
+    assert!(Arc::ptr_eq(
+        &next(&mut published).await.unwrap().index,
+        &index
+    ));
 
     client
-        .set_mode("core-mmdb".to_owned(), GeodataMode::Mmdb)
+        .set_mode(binding("core-mmdb", GeodataMode::Mmdb))
         .await
         .unwrap();
 
@@ -211,13 +228,16 @@ async fn rebinding_the_same_core_mode_drops_the_prior_index_when_reload_fails() 
     let mut published = client.subscribe();
 
     client
-        .set_mode("core-before".to_owned(), GeodataMode::Dat)
+        .set_mode(binding("core-before", GeodataMode::Dat))
         .await
         .unwrap();
-    assert!(Arc::ptr_eq(&next(&mut published).await.unwrap(), &index));
+    assert!(Arc::ptr_eq(
+        &next(&mut published).await.unwrap().index,
+        &index
+    ));
 
     client
-        .set_mode("core-after".to_owned(), GeodataMode::Dat)
+        .set_mode(binding("core-after", GeodataMode::Dat))
         .await
         .unwrap();
 
@@ -243,13 +263,16 @@ async fn retrying_a_bound_core_mode_does_not_reload_its_index() {
     let mut published = client.subscribe();
 
     client
-        .set_mode("core-one".to_owned(), GeodataMode::Dat)
+        .set_mode(binding("core-one", GeodataMode::Dat))
         .await
         .unwrap();
-    assert!(Arc::ptr_eq(&next(&mut published).await.unwrap(), &index));
+    assert!(Arc::ptr_eq(
+        &next(&mut published).await.unwrap().index,
+        &index
+    ));
 
     client
-        .set_mode("core-one".to_owned(), GeodataMode::Dat)
+        .set_mode(binding("core-one", GeodataMode::Dat))
         .await
         .unwrap();
 }
@@ -267,7 +290,7 @@ async fn a_written_database_waits_for_the_core_s_mode() {
     let mut published = client.subscribe();
 
     client.send(Message::FilesChanged);
-    client.send(Message::Mode(GeodataMode::Mmdb));
+    client.send(Message::Mode(binding("core-one", GeodataMode::Mmdb)));
 
     assert!(next(&mut published).await.is_none());
 }
@@ -308,8 +331,11 @@ async fn a_failed_reload_keeps_the_index_and_its_key() {
     let client = spawn(source).await;
     let mut published = client.subscribe();
 
-    client.send(Message::Mode(GeodataMode::Dat));
-    assert!(Arc::ptr_eq(&next(&mut published).await.unwrap(), &index));
+    client.send(Message::Mode(binding("core-one", GeodataMode::Dat)));
+    assert!(Arc::ptr_eq(
+        &next(&mut published).await.unwrap().index,
+        &index
+    ));
     client.send(Message::FilesChanged);
     client.send(Message::FilesChanged);
 

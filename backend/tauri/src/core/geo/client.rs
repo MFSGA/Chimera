@@ -2,19 +2,21 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use chimera_geodata::IpIndex;
 use ractor::{Actor, ActorRef, rpc::CallResult};
 use tokio::sync::watch;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-use super::actor::{GeoIndexActor, GeoIndexArgs, Message};
+use super::{
+    actor::{GeoIndexActor, GeoIndexArgs, Message},
+    ports::{CoreGeodataBinding, CountryIndexSnapshot},
+};
 
 #[derive(Clone)]
 pub struct GeoIndexClient(Arc<Inner>);
 
 struct Inner {
     actor: ActorRef<Message>,
-    index: watch::Receiver<Option<Arc<IpIndex>>>,
+    index: watch::Receiver<Option<Arc<CountryIndexSnapshot>>>,
 }
 
 impl Drop for Inner {
@@ -25,16 +27,12 @@ impl Drop for Inner {
 
 impl GeoIndexClient {
     /// Publish the mode reported by the newly bound core before accepting its traffic frame.
-    pub async fn set_mode(
-        &self,
-        instance_id: String,
-        mode: super::ports::GeodataMode,
-    ) -> Result<()> {
+    pub async fn set_mode(&self, binding: CoreGeodataBinding) -> Result<()> {
         match self
             .0
             .actor
             .call(
-                |reply| Message::SetMode(instance_id, mode, reply),
+                |reply| Message::SetMode(binding, reply),
                 Some(std::time::Duration::from_secs(5)),
             )
             .await
@@ -57,7 +55,7 @@ impl GeoIndexClient {
         shutdown: CancellationToken,
         tasks: &TaskTracker,
     ) -> Result<Self> {
-        let (published, index) = watch::channel(None);
+        let (published, index) = watch::channel(None::<Arc<CountryIndexSnapshot>>);
         let (actor, _) = Actor::spawn(None, GeoIndexActor, (args, published)).await?;
         let cell = actor.get_cell();
         tasks.spawn(async move {
@@ -71,7 +69,7 @@ impl GeoIndexClient {
 
     /// The index of the database the running core reads; `None` until it loads, or while the
     /// core's home has no such database.
-    pub fn subscribe(&self) -> watch::Receiver<Option<Arc<IpIndex>>> {
+    pub fn subscribe(&self) -> watch::Receiver<Option<Arc<CountryIndexSnapshot>>> {
         self.0.index.clone()
     }
 

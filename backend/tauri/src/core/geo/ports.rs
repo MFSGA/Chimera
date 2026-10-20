@@ -13,6 +13,19 @@ pub enum GeodataMode {
     Dat,
 }
 
+/// The mode reported by one running core instance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoreGeodataBinding {
+    pub instance_id: String,
+    pub mode: GeodataMode,
+}
+
+/// An index is usable only for frames produced by the core instance that loaded it.
+pub struct CountryIndexSnapshot {
+    pub instance_id: String,
+    pub index: Arc<IpIndex>,
+}
+
 /// What a published index was built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexKey {
@@ -76,7 +89,7 @@ pub trait CountryIndexSource: Send + Sync + 'static {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait::async_trait]
 pub trait CoreGeodataModeSource: Send + Sync + 'static {
-    async fn mode(&self) -> anyhow::Result<GeodataMode>;
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding>;
 }
 
 /// A home without databases, for tests whose subject is not the index.

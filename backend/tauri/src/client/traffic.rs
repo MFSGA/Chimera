@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
-use chimera_geodata::IpIndex;
 use chimera_traffic::{
     ClosedCursor, ClosedPage, Dimension, Metric, ReportRequest, TrafficFilter, TrafficQuery,
     TrafficRange, TrafficReport, TrafficSummary, UsageCursor, UsageGroup, UsagePage,
@@ -18,7 +17,7 @@ use crate::client::core_lifecycle::CoreLifecyclePort;
 use crate::core::geo::GeodataMode;
 use crate::core::{
     clash::{api::ApiClient, ws::ClashConnectionsFrame},
-    geo::{CoreGeodataModeSource, GeoIndexClient},
+    geo::{CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient},
     traffic::{
         Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
         TrafficClient,
@@ -53,13 +52,21 @@ pub(super) struct ActiveCoreGeodataMode(pub(super) Arc<dyn CoreLifecyclePort>);
 
 #[async_trait]
 impl CoreGeodataModeSource for ActiveCoreGeodataMode {
-    async fn mode(&self) -> anyhow::Result<GeodataMode> {
-        let info = self.0.active_clash_info().await?;
-        let config = ApiClient::new(info)?.get_configs().await?;
-        Ok(if config.geodata_mode == Some(true) {
-            GeodataMode::Dat
-        } else {
-            GeodataMode::Mmdb
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
+        let binding = self.0.active_core_binding().await?;
+        let config = ApiClient::new(binding.info.clone())?.get_configs().await?;
+        let current = self.0.active_core_binding().await?;
+        anyhow::ensure!(
+            current.instance_id == binding.instance_id,
+            "the core changed while reading its geodata mode"
+        );
+        Ok(CoreGeodataBinding {
+            instance_id: binding.instance_id,
+            mode: if config.geodata_mode == Some(true) {
+                GeodataMode::Dat
+            } else {
+                GeodataMode::Mmdb
+            },
         })
     }
 }
@@ -93,7 +100,7 @@ impl ChimeraClient {
             .as_ref()
             .map(GeoIndexClient::subscribe)
             .unwrap_or_else(|| {
-                let (_, receiver) = watch::channel(None::<Arc<IpIndex>>);
+                let (_, receiver) = watch::channel(None::<Arc<CountryIndexSnapshot>>);
                 receiver
             });
         let geo_mode_source = geo_index.as_ref().map(|_| {

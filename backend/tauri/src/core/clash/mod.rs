@@ -44,7 +44,13 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let endpoint_client = client.clone();
     let endpoint: ws::ClashEndpointResolver = Arc::new(move || {
         let client = endpoint_client.clone();
-        Box::pin(async move { client.active_clash_info().await })
+        Box::pin(async move {
+            let binding = client.active_core_binding().await?;
+            Ok(ws::ClashWsEndpoint {
+                info: binding.info,
+                core_instance_id: binding.instance_id,
+            })
+        })
     });
     let ws_connector = ws::ClashConnectionsConnector::new(endpoint);
     if let Err(error) = client.start_traffic(ws_connector.subscribe_frames()) {

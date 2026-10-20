@@ -20,16 +20,23 @@ use super::{
 };
 use crate::core::clash::ws::{ClashConnectionsFrame, ClashWsConnectionSnapshot};
 use crate::core::geo::{
-    CoreGeodataModeSource, GeoIndexArgs, GeoIndexClient, GeodataMode, IndexKey, Loaded,
-    MockCountryIndexSource,
+    CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexArgs, GeoIndexClient,
+    GeodataMode, IndexKey, Loaded, MockCountryIndexSource,
 };
 
 struct WaitingCore;
 
 #[async_trait::async_trait]
 impl CoreGeodataModeSource for WaitingCore {
-    async fn mode(&self) -> anyhow::Result<GeodataMode> {
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
         std::future::pending().await
+    }
+}
+
+fn binding(instance_id: &str, mode: GeodataMode) -> CoreGeodataBinding {
+    CoreGeodataBinding {
+        instance_id: instance_id.into(),
+        mode,
     }
 }
 
@@ -43,11 +50,10 @@ impl FrameModeSource {
 
 #[async_trait::async_trait]
 impl CoreGeodataModeSource for FrameModeSource {
-    async fn mode(&self) -> anyhow::Result<GeodataMode> {
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
         match self.0.fetch_add(1, Ordering::SeqCst) {
-            0 => Ok(GeodataMode::Dat),
-            1 => Ok(GeodataMode::Mmdb),
-            _ => anyhow::bail!("unexpected core instance in test"),
+            0 => Ok(binding("core-instance-1", GeodataMode::Dat)),
+            _ => Ok(binding("core-instance-2", GeodataMode::Mmdb)),
         }
     }
 }
@@ -62,10 +68,11 @@ impl RetryingFrameModeSource {
 
 #[async_trait::async_trait]
 impl CoreGeodataModeSource for RetryingFrameModeSource {
-    async fn mode(&self) -> anyhow::Result<GeodataMode> {
+    async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
         match self.0.fetch_add(1, Ordering::SeqCst) {
-            0 | 2.. => Ok(GeodataMode::Dat),
+            0 => Ok(binding("core-instance-1", GeodataMode::Dat)),
             1 => anyhow::bail!("controller is restarting"),
+            2.. => Ok(binding("core-instance-2", GeodataMode::Dat)),
         }
     }
 }
@@ -94,6 +101,7 @@ fn country_index_for(country: &str) -> Arc<IpIndex> {
 fn frame(instance_id: &str, connection_id: &str) -> ClashConnectionsFrame {
     ClashConnectionsFrame {
         instance_id: instance_id.into(),
+        core_instance_id: instance_id.into(),
         snapshot: ClashWsConnectionSnapshot {
             download_total: 0,
             upload_total: 0,
@@ -163,7 +171,7 @@ async fn connection_frames_become_active_and_then_persist_as_closed() {
     let dir = tempfile::tempdir().unwrap();
     let store = Arc::new(RedbTrafficStore::open(&dir.path().join("traffic.redb")).unwrap());
     let (frames, receiver) = tokio::sync::watch::channel(None);
-    let (_, geo) = tokio::sync::watch::channel(None::<Arc<chimera_geodata::IpIndex>>);
+    let (_, geo) = tokio::sync::watch::channel(None::<Arc<CountryIndexSnapshot>>);
     let started_at = chrono::Utc::now().to_rfc3339();
     let traffic = TrafficClient::spawn(TrafficArgs {
         store,
@@ -181,6 +189,7 @@ async fn connection_frames_become_active_and_then_persist_as_closed() {
 
     frames.send_replace(Some(Arc::new(ClashConnectionsFrame {
         instance_id: "core-process-1".into(),
+        core_instance_id: "core-process-1".into(),
         snapshot: ClashWsConnectionSnapshot {
             upload_total: 120,
             download_total: 340,
@@ -242,6 +251,7 @@ async fn connection_frames_become_active_and_then_persist_as_closed() {
     );
     frames.send_replace(Some(Arc::new(ClashConnectionsFrame {
         instance_id: "core-process-1".into(),
+        core_instance_id: "core-process-1".into(),
         snapshot: ClashWsConnectionSnapshot {
             upload_total: 120,
             download_total: 340,
@@ -300,7 +310,7 @@ async fn a_new_core_frame_is_recorded_only_after_its_country_mode_is_loaded() {
                 index: first_loaded.clone(),
             })
         });
-    let second_loaded = country_index();
+    let second_loaded = country_index_for("JP");
     let second_index = second_loaded.clone();
     index_source
         .expect_load()
@@ -351,7 +361,7 @@ async fn a_new_core_frame_is_recorded_only_after_its_country_mode_is_loaded() {
     wait_for_active_id(&traffic, "00000000-0000-0000-0000-000000000001").await;
     assert_eq!(frame_modes.calls(), 1);
     assert!(Arc::ptr_eq(
-        geo_index.subscribe().borrow().as_ref().unwrap(),
+        &geo_index.subscribe().borrow().as_ref().unwrap().index,
         &first_index
     ));
 
@@ -362,9 +372,18 @@ async fn a_new_core_frame_is_recorded_only_after_its_country_mode_is_loaded() {
     wait_for_active_id(&traffic, "00000000-0000-0000-0000-000000000002").await;
     assert_eq!(frame_modes.calls(), 2);
     assert!(Arc::ptr_eq(
-        geo_index.subscribe().borrow().as_ref().unwrap(),
+        &geo_index.subscribe().borrow().as_ref().unwrap().index,
         &second_index
     ));
+
+    // A late frame from core-instance-1 must not use core-instance-2's index.
+    frames.send_replace(Some(Arc::new(frame_with_geo(
+        "core-instance-1",
+        "00000000-0000-0000-0000-000000000003",
+    ))));
+    wait_for_active_id(&traffic, "00000000-0000-0000-0000-000000000003").await;
+    assert_eq!(frame_modes.calls(), 3);
+    assert_eq!(report_source_regions(&traffic).await, vec!["CA"]);
 
     traffic.stop_for_test().await.unwrap();
     drop(geo_index);
@@ -442,7 +461,7 @@ async fn failed_new_core_mode_read_never_uses_old_geo_index_and_recovers_on_retr
     wait_for_active_id(&traffic, "00000000-0000-0000-0000-000000000011").await;
     assert_eq!(report_source_regions(&traffic).await, vec!["US"]);
     assert!(Arc::ptr_eq(
-        geo_index.subscribe().borrow().as_ref().unwrap(),
+        &geo_index.subscribe().borrow().as_ref().unwrap().index,
         &first_index
     ));
 
@@ -453,7 +472,7 @@ async fn failed_new_core_mode_read_never_uses_old_geo_index_and_recovers_on_retr
     wait_for_active_id(&traffic, "00000000-0000-0000-0000-000000000012").await;
     assert_eq!(report_source_regions(&traffic).await, vec!["CA"]);
     assert!(Arc::ptr_eq(
-        geo_index.subscribe().borrow().as_ref().unwrap(),
+        &geo_index.subscribe().borrow().as_ref().unwrap().index,
         &first_index
     ));
 
@@ -466,7 +485,7 @@ async fn failed_new_core_mode_read_never_uses_old_geo_index_and_recovers_on_retr
     assert_eq!(frame_modes.calls(), 3);
     assert_eq!(report_source_regions(&traffic).await, vec!["JP"]);
     assert!(Arc::ptr_eq(
-        geo_index.subscribe().borrow().as_ref().unwrap(),
+        &geo_index.subscribe().borrow().as_ref().unwrap().index,
         &recovered
     ));
 

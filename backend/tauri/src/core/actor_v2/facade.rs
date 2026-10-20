@@ -652,6 +652,7 @@ impl CoreFacade {
                 RunType::Normal => return local_runtime.status().await,
                 RunType::Elevated => {
                     return CoreStatusSnapshot {
+                        instance_id: None,
                         state: chimera_ipc::api::status::CoreState::Stopped(None),
                         state_changed_at: 0,
                         run_type: RunType::Elevated,
@@ -664,6 +665,7 @@ impl CoreFacade {
                 Err(error) => {
                     tracing::warn!(%error, "service core status is unavailable");
                     CoreStatusSnapshot {
+                        instance_id: None,
                         // The app-facing legacy projection has no unknown
                         // state variant. Keep the service timestamp unset so
                         // consumers do not mistake this for a fresh status.
@@ -676,6 +678,7 @@ impl CoreFacade {
         }
         let (state, state_changed_at, run_type) = self.manager.status().await;
         CoreStatusSnapshot {
+            instance_id: None,
             state: state.into_owned(),
             state_changed_at,
             run_type,
@@ -1059,6 +1062,7 @@ fn project_service_status(status: HostStatusSnapshot, run_type: RunType) -> Core
         | None => CoreState::Stopped(None),
     };
     CoreStatusSnapshot {
+        instance_id: status.instance_id,
         state,
         state_changed_at: status.state_changed_at,
         run_type,

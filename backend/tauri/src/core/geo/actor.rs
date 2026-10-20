@@ -1,12 +1,12 @@
 //! Owns the country index and keeps it in step with the core.
 use std::{sync::Arc, time::Duration};
 
-use chimera_geodata::IpIndex;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort};
 use tokio::{sync::watch, task::JoinHandle};
 
 use super::ports::{
-    CoreGeodataModeSource, CountryIndexSource, GeodataMode, IndexKey, Loaded, OnChange,
+    CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, CountryIndexSource,
+    GeodataMode, IndexKey, Loaded, OnChange,
 };
 
 /// How long to wait before asking a core that did not answer again.
@@ -21,9 +21,9 @@ pub struct GeoIndexArgs {
 
 pub(super) enum Message {
     /// A core instance answered `GET /configs`.
-    Mode(GeodataMode),
+    Mode(CoreGeodataBinding),
     /// A new traffic-feed instance has reported its mode and needs a synchronous index update.
-    SetMode(String, GeodataMode, RpcReplyPort<()>),
+    SetMode(CoreGeodataBinding, RpcReplyPort<()>),
     /// A country database in the core's home was written.
     FilesChanged,
     /// A low-frequency fallback for filesystems where the watcher missed a write.
@@ -37,7 +37,7 @@ pub(super) struct State {
     instance_id: Option<String>,
     mode: Option<GeodataMode>,
     key: Option<IndexKey>,
-    published: watch::Sender<Option<Arc<IpIndex>>>,
+    published: watch::Sender<Option<Arc<CountryIndexSnapshot>>>,
     /// Dropping it ends the watch.
     _watch: Option<Box<dyn Send>>,
     follower: JoinHandle<()>,
@@ -47,7 +47,10 @@ pub(super) struct State {
 impl Actor for GeoIndexActor {
     type Msg = Message;
     type State = State;
-    type Arguments = (GeoIndexArgs, watch::Sender<Option<Arc<IpIndex>>>);
+    type Arguments = (
+        GeoIndexArgs,
+        watch::Sender<Option<Arc<CountryIndexSnapshot>>>,
+    );
 
     async fn pre_start(
         &self,
@@ -96,11 +99,11 @@ impl Actor for GeoIndexActor {
         state: &mut State,
     ) -> Result<(), ActorProcessingErr> {
         match message {
-            Message::Mode(mode) => {
-                state.set_initial_mode(mode).await;
+            Message::Mode(binding) => {
+                state.set_initial_mode(binding).await;
             }
-            Message::SetMode(instance_id, mode, reply) => {
-                state.set_instance_mode(instance_id, mode).await;
+            Message::SetMode(binding, reply) => {
+                state.set_instance_mode(binding).await;
                 let _ = reply.send(());
             }
             Message::FilesChanged | Message::Refresh => state.reload().await,
@@ -130,23 +133,30 @@ impl Actor for GeoIndexActor {
 }
 
 impl State {
-    async fn set_initial_mode(&mut self, mode: GeodataMode) {
+    async fn set_initial_mode(&mut self, binding: CoreGeodataBinding) {
         // A traffic frame may have already bound a newer core while startup polling was in flight.
         if self.mode.is_none() {
-            self.mode = Some(mode);
+            self.instance_id = Some(binding.instance_id);
+            self.mode = Some(binding.mode);
             self.reload().await;
         }
     }
 
-    async fn set_instance_mode(&mut self, instance_id: String, mode: GeodataMode) {
-        let new_instance = self.instance_id.as_deref() != Some(instance_id.as_str());
-        if !new_instance && self.mode == Some(mode) {
+    async fn set_instance_mode(&mut self, binding: CoreGeodataBinding) {
+        let new_instance = self.instance_id.as_deref() != Some(binding.instance_id.as_str());
+        if !new_instance && self.mode == Some(binding.mode) {
             return;
         }
-        let changed = self.mode != Some(mode);
-        self.instance_id = Some(instance_id);
-        self.mode = Some(mode);
-        if new_instance || (changed && self.key.as_ref().is_some_and(|key| key.mode != mode)) {
+        let changed = self.mode != Some(binding.mode);
+        self.instance_id = Some(binding.instance_id);
+        self.mode = Some(binding.mode);
+        if new_instance
+            || (changed
+                && self
+                    .key
+                    .as_ref()
+                    .is_some_and(|key| key.mode != binding.mode))
+        {
             // Never expose a prior core's index while the newly bound core's database loads.
             self.key = None;
             self.published.send_replace(None);
@@ -178,7 +188,13 @@ impl State {
             }
             Ok(Loaded::Index { key, index }) => {
                 self.key = Some(key);
-                self.published.send_replace(Some(index));
+                if let Some(instance_id) = &self.instance_id {
+                    self.published
+                        .send_replace(Some(Arc::new(CountryIndexSnapshot {
+                            instance_id: instance_id.clone(),
+                            index,
+                        })));
+                }
             }
             // The previous index describes an older database, which beats none.
             Err(error) => tracing::warn!(
@@ -195,8 +211,8 @@ impl State {
 async fn follow_core(actor: ActorRef<Message>, source: Arc<dyn CoreGeodataModeSource>) {
     loop {
         match source.mode().await {
-            Ok(mode) => {
-                if actor.cast(Message::Mode(mode)).is_err() {
+            Ok(binding) => {
+                if actor.cast(Message::Mode(binding)).is_err() {
                     return;
                 }
                 return;
