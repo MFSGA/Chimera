@@ -28,7 +28,7 @@
 
 - 上游：Clash Nyanpasu `main` `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；通过 GitHub API 核对当前分支 tip，并确认该提交的 GitHub signature verification 为 valid。目标树中的递归 runtime gitlink 为 `a130ca7b6015121d49e43ecd0d6af1862e60253e`。
 - Chimera 原固定 gitlink：`d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`。本批仅更新参考 gitlink 和基线文档；不移植 ref 的产品代码、工作流或依赖。`d43819f..ae0db596` 共 44 个上游提交；其中新增 `nyanpasu-tsdb` 时序存储 crate 与其持久化、内存预算、恢复和故障验证体系，并更新 widget、proxy provider cache、updater changelog、配置快照和多项依赖。这些上游能力仍需逐项映射与完整验证；尤其 TSDB 属于架构迁移，不能仅凭 gitlink 更新视为已接入 Chimera。
-- 验证：GitHub API 确认 `main` tip 与目标 SHA 一致、目标提交签名有效；树中 runtime gitlink 已核实。尝试在隔离 worktree 克隆 `ref` 时 GitHub Git HTTP/2 返回 framing error，随后在已有 checkout 的浅 fetch 收到空响应，因此本地 `ref` 内容尚未检出到 `ae0db596`，不声称本地子模块干净或完成递归 checkout。PR 的新克隆/CI 仍需验证该 gitlink 可取回；本批没有产品代码，桌面 E2E 不适用。
+- 验证：GitHub API 确认 `main` tip 与目标 SHA 一致、目标提交签名有效；隔离 worktree 的 `git -C ref rev-parse HEAD` 为 `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`，`git -C ref status --short` 无输出；递归 runtime 和 `nyanpasu-utils` 子模块分别为 `a130ca7b6015121d49e43ecd0d6af1862e60253e` 与 `f57f9f077c3f1cb31da0e8261c21bee7bdd75c8f`，均已检出且干净。`git diff --check` 与文档 Prettier 检查通过。PR 的新克隆/CI 仍需验证其 checkout；本批没有产品代码，桌面 E2E 不适用。父仓库自身的 `backend/chimera-runtime` 在这个隔离 worktree 中未初始化，不属于本次 `ref` 递归状态。
 - 风险：L2（参考依赖基线）。本批只改变后续对齐的来源，不改变 Chimera 运行时、持久化、IPC 或主机网络行为。回滚时将 `ref` gitlink 恢复为 `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3`，并撤回本节与指南元数据。
 
 ## Dashboard 现有小组件配置（实现完成，待 PR CI）
