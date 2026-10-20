@@ -5,14 +5,20 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use async_trait::async_trait;
+use chimera_geodata::IpIndex;
 use chimera_traffic::{
     ClosedCursor, ClosedPage, Dimension, Metric, ReportRequest, TrafficFilter, TrafficQuery,
     TrafficRange, TrafficReport, TrafficSummary, UsageCursor, UsageGroup, UsagePage,
 };
+use tokio::sync::watch;
 
 use super::{ChimeraClient, application::ApplicationClient, profiles::ProfilesClient};
+use crate::client::core_lifecycle::CoreLifecyclePort;
+use crate::core::geo::GeodataMode;
 use crate::core::{
-    clash::ws::ClashConnectionsFrame,
+    clash::{api::ApiClient, ws::ClashConnectionsFrame},
+    geo::{CoreGeodataModeSource, GeoIndexClient},
     traffic::{
         Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
         TrafficClient,
@@ -43,6 +49,21 @@ impl LocalSourceLocation for NoLocalSource {
     }
 }
 
+pub(super) struct ActiveCoreGeodataMode(pub(super) Arc<dyn CoreLifecyclePort>);
+
+#[async_trait]
+impl CoreGeodataModeSource for ActiveCoreGeodataMode {
+    async fn mode(&self) -> anyhow::Result<GeodataMode> {
+        let info = self.0.active_clash_info().await?;
+        let config = ApiClient::new(info)?.get_configs().await?;
+        Ok(if config.geodata_mode == Some(true) {
+            GeodataMode::Dat
+        } else {
+            GeodataMode::Mmdb
+        })
+    }
+}
+
 struct SystemClock;
 
 impl Clock for SystemClock {
@@ -67,12 +88,27 @@ impl ChimeraClient {
             .profiles_client()
             .context("traffic recording needs committed profiles")?
             .clone();
+        let geo_index = self.inner.geo_index.read().clone();
+        let geo = geo_index
+            .as_ref()
+            .map(GeoIndexClient::subscribe)
+            .unwrap_or_else(|| {
+                let (_, receiver) = watch::channel(None::<Arc<IpIndex>>);
+                receiver
+            });
+        let geo_mode_source = geo_index.as_ref().map(|_| {
+            Arc::new(ActiveCoreGeodataMode(self.inner.core.clone()))
+                as Arc<dyn CoreGeodataModeSource>
+        });
         let args = TrafficArgs {
             store,
             profiles: Arc::new(SelectedProfile(profiles)),
             retention: Arc::new(SettingsRetention(self.inner.application.clone())),
             clock: Arc::new(SystemClock),
             frames,
+            geo,
+            geo_mode_source,
+            geo_mode_refresh: geo_index,
             local_source: Arc::new(NoLocalSource),
         };
         let traffic = tauri::async_runtime::block_on(TrafficClient::spawn(args))

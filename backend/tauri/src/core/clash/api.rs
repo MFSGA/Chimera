@@ -33,6 +33,8 @@ pub struct RuntimeTun {
 pub struct ClashRuntimeConfig {
     pub port: Option<u16>,
     pub mode: Option<String>,
+    #[serde(rename = "geodata-mode")]
+    pub geodata_mode: Option<bool>,
     pub ipv6: Option<bool>,
     #[serde(rename = "socket-port")]
     pub socket_port: Option<u16>,
@@ -430,6 +432,7 @@ mod tests {
     fn runtime_tun_deserializes_mihomo_kebab_case_fields() {
         let config: ClashRuntimeConfig = serde_json::from_value(serde_json::json!({
             "mode": "rule",
+            "geodata-mode": true,
             "tun": {
                 "enable": true,
                 "device": "Meta",
@@ -444,6 +447,7 @@ mod tests {
         }))
         .expect("runtime config should deserialize");
 
+        assert_eq!(config.geodata_mode, Some(true));
         let tun = config.tun.expect("TUN runtime projection");
         assert!(tun.enable);
         assert_eq!(tun.device, "Meta");

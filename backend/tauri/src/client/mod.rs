@@ -164,6 +164,7 @@ struct ChimeraClientInner {
     system_dns: Arc<dyn SystemDnsCache>,
     traffic_store: parking_lot::Mutex<Option<Arc<dyn chimera_traffic::TrafficStore>>>,
     traffic: parking_lot::RwLock<Option<crate::core::traffic::TrafficClient>>,
+    geo_index: parking_lot::RwLock<Option<crate::core::geo::GeoIndexClient>>,
     ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     effects: effects::actor::EffectsClient,
@@ -243,7 +244,7 @@ impl ChimeraClient {
                 profile_service.clone(),
                 profile_service.clone(),
                 profile_service.clone(),
-                shutdown,
+                shutdown.clone(),
                 &tasks,
             ))?;
         let core_lifecycle =
@@ -273,6 +274,27 @@ impl ChimeraClient {
             window,
         );
         *client.inner.traffic_store.lock() = traffic_store;
+        let has_traffic_store = client.inner.traffic_store.lock().is_some();
+        if has_traffic_store {
+            let geo_index =
+                tauri::async_runtime::block_on(crate::core::geo::GeoIndexClient::spawn(
+                    crate::core::geo::GeoIndexArgs {
+                        source: Arc::new(crate::core::geo::FsCountryIndexSource::new(
+                            paths.app_data_dir().to_path_buf(),
+                            paths.cache_dir().join("geodata-index"),
+                        )),
+                        mode_source: Arc::new(crate::client::traffic::ActiveCoreGeodataMode(
+                            client.inner.core.clone(),
+                        )),
+                    },
+                    shutdown,
+                    &tasks,
+                ));
+            match geo_index {
+                Ok(geo_index) => *client.inner.geo_index.write() = Some(geo_index),
+                Err(error) => tracing::warn!(%error, "traffic geography index is unavailable"),
+            }
+        }
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         tauri::async_runtime::block_on(client.reconcile_hotkeys());
         Ok(client)
@@ -375,6 +397,7 @@ impl ChimeraClient {
             system_dns,
             traffic_store: parking_lot::Mutex::new(None),
             traffic: parking_lot::RwLock::new(None),
+            geo_index: parking_lot::RwLock::new(None),
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,

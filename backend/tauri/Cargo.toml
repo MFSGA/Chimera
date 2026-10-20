@@ -57,6 +57,7 @@ thiserror = { workspace = true }
 chimera-macro = { path = "../chimera-macro" }
 chimera-core = { path = "../chimera-core" }
 chimera-config = { path = "../chimera-config" }
+chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }
 chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
 chimera-clash-api = { path = "../chimera-clash-api" }
@@ -117,6 +118,8 @@ auto-launch = { git = "https://github.com/libnyanpasu/auto-launch.git", version 
 
 fs-err = { version = "3.1.2", features = ["tokio"] }
 notify-debouncer-full = "0.7.0"
+memmap2 = "0.9"
+snafu = "0.9"
 
 convert_case = "0.12.0"
 
