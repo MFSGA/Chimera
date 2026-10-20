@@ -12,29 +12,29 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块           | 问题与证据                                                                                                      | 状态      |
-| ------------------- | ---------- | -------------- | --------------------------------------------------------------------------------------------------------------- | --------- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI      | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E  | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
-| LESSON-20261014-003 | 2026-10-14 | Profile / E2E  | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
-| LESSON-20261014-004 | 2026-10-14 | Development    | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
-| LESSON-20261015-001 | 2026-10-15 | E2E            | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
-| LESSON-20261015-002 | 2026-10-15 | E2E            | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
-| LESSON-20261015-003 | 2026-10-15 | Development    | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | Development    | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
-| LESSON-20261016-002 | 2026-10-16 | Frontend / CI  | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
-| LESSON-20261017-001 | 2026-10-17 | E2E / CI       | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Verified  |
-| LESSON-20261017-002 | 2026-10-17 | Profile / Rust | `start_producers()` 原先只投递 actor cast；await actor 回复后 Profile 测试 72/72、PR #485 CI/E2E 通过并已合入   | Verified  |
-| LESSON-20261017-003 | 2026-10-17 | E2E            | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
-| LESSON-20261017-004 | 2026-10-17 | CI / Linux     | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
-| LESSON-20261017-005 | 2026-10-17 | E2E / Windows  | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
-| LESSON-20261017-006 | 2026-10-17 | E2E / Windows  | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
-| LESSON-20261017-007 | 2026-10-17 | E2E / Windows  | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
-| LESSON-20261018-001 | 2026-10-18 | E2E / Windows  | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
-| LESSON-20261018-002 | 2026-10-18 | E2E / Windows  | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
-| LESSON-20261019-001 | 2026-10-19 | E2E / Windows  | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
-| LESSON-20261019-002 | 2026-10-19 | E2E / Windows  | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
-| LESSON-20261019-006 | 2026-10-19 | Rust / Windows | PR #494 取消刷新测试用 `notify_waiters` 可能丢失尚未登记的 waiter；修复待新 SHA CI 复验                         | Mitigated |
+| 编号                | 日期       | 模块               | 问题与证据                                                                                                      | 状态      |
+| ------------------- | ---------- | ------------------ | --------------------------------------------------------------------------------------------------------------- | --------- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI          | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E      | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
+| LESSON-20261014-003 | 2026-10-14 | Profile / E2E      | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
+| LESSON-20261014-004 | 2026-10-14 | Development        | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
+| LESSON-20261015-001 | 2026-10-15 | E2E                | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
+| LESSON-20261015-002 | 2026-10-15 | E2E                | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
+| LESSON-20261015-003 | 2026-10-15 | Development        | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Development        | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| LESSON-20261016-002 | 2026-10-16 | Frontend / CI      | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
+| LESSON-20261017-001 | 2026-10-17 | E2E / CI           | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Verified  |
+| LESSON-20261017-002 | 2026-10-17 | Profile / Rust     | `start_producers()` 原先只投递 actor cast；await actor 回复后 Profile 测试 72/72、PR #485 CI/E2E 通过并已合入   | Verified  |
+| LESSON-20261017-003 | 2026-10-17 | E2E                | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
+| LESSON-20261017-004 | 2026-10-17 | CI / Linux         | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
+| LESSON-20261017-005 | 2026-10-17 | E2E / Windows      | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
+| LESSON-20261017-006 | 2026-10-17 | E2E / Windows      | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
+| LESSON-20261017-007 | 2026-10-17 | E2E / Windows      | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
+| LESSON-20261018-001 | 2026-10-18 | E2E / Windows      | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
+| LESSON-20261018-002 | 2026-10-18 | E2E / Windows      | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
+| LESSON-20261019-001 | 2026-10-19 | E2E / Windows      | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
+| LESSON-20261019-002 | 2026-10-19 | E2E / Windows      | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
+| LESSON-20261019-005 | 2026-10-19 | E2E / Localization | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
 
 ## 单条模板
 
@@ -446,33 +446,16 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261019-005：语言切换须及时应用并按权威配置验证
 
 - 日期与时区：2026-10-19 UTC
-- 状态：Mitigated（修复后的 macOS WebKit 定向用例 1/1 通过；Windows 新 SHA 复验待执行）
+- 状态：Mitigated（当前分支 macOS WebKit 定向用例和桌面构建通过；Windows 新 SHA 复验待执行）
 - 严重度：Low
 - 模块：E2E / Localization
 - master commit / ref gitlink SHA / 平台与测试环境：此前失败 SHA `3f609dfa166c68c9009232ed912b615ca4a84e84`，当前失败候选 SHA `4697281c58429a98b17af85ca2ab1ce7a97bc615`；PR #494 将 ref 从 `53b004ccb3508d0673b6cb691be65e0e48bdd593` 更新到 `4eaf13b9c5dc468fdfc38272bf76b20a681d2e54`；Windows Edge 153 hermetic E2E 与 macOS WebKit 605.1.15 embedded E2E。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Tauri E2E run 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852)、[失败运行 39296100576](https://github.com/MFSGA/Chimera/actions/runs/39296100576)、[失败运行 39302840484](https://github.com/MFSGA/Chimera/actions/runs/39302840484) 和[失败运行 39314795712](https://github.com/MFSGA/Chimera/actions/runs/39314795712)。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[失败运行 39290359852](https://github.com/MFSGA/Chimera/actions/runs/39290359852)、[失败运行 39296100576](https://github.com/MFSGA/Chimera/actions/runs/39296100576)、[失败运行 39302840484](https://github.com/MFSGA/Chimera/actions/runs/39302840484)、[失败运行 39314795712](https://github.com/MFSGA/Chimera/actions/runs/39314795712) 和[PR #499 失败运行 39353234761](https://github.com/MFSGA/Chimera/actions/runs/39353234761)。
 - 预期行为：测试变更语言前保存稳定的各窗口初始状态，并在 afterAll 中恢复后端配置、缓存、DOM 语言、路由和窗口尺寸。
-- 真实异常、复现步骤与证据：run `39290359852` 的日语选择、配置落盘、主窗口刷新与 legacy 页面断言通过，但 afterAll 恢复时主窗口报告 `Could not restore main locale`。随后 `39296100576`、`39302840484` 暴露跨 spec 保留 WebView 的 locale 快照不一致。run `39314795712` 在等待日语 UI 连续稳定三次时失败；最后快照为 `document.lang=ja`、Paraglide cache=`ja`、选择器显示 `日本語`、document ready；失败发生在读取后端配置、磁盘持久化、重载和 legacy 断言之前。源码修复后第一次本机 WebKit 运行通过主 UI、后端配置、磁盘和刷新检查，但第二次 legacy 读取观察到 `title=null`、`document.lang=en`。随后将 legacy 页面状态采集合并为单次等待快照，并在同一状态中检查 URL、ready state、挂载节点、语言、缓存、标题及代理模式标签；最新两次 macOS WebKit 定向运行 session `ef9a5f9c-a4f5-4a20-8435-36ab47deea35` 和 `873a628f-b8f8-48fe-9821-c77af1bcb114` 均完整通过 1/1，主 UI、持久化、刷新及 legacy 检查均通过。
+- 真实异常、复现步骤与证据：旧 Windows runs `39290359852`、`39296100576`、`39302840484` 和 `39314795712` 暴露语言快照恢复、跨 spec locale 污染和 mutation 完成延迟。PR #499 的 Windows run `39353234761` 在刷新后等待主窗口重绘 30 秒失败，随后 cleanup 报告无法恢复 legacy locale；其余 52/53 个 spec 通过。失败发生在主界面渲染等待阶段，旧用例没有保存足够状态来区分窗口启动失败与语言状态未收敛。
 - 确认的根因与排除项：语言设置通过 `LanguageProvider.setLanguage` 等待 `useSettings().upsert.mutateAsync()` 后才调用 Paraglide `setLocale`。当前 `frontend/interface/src/ipc/use-settings.ts` 的 `onSuccess` 直接返回 `queryClient.invalidateQueries()` Promise，TanStack Query 会等待该 Promise；固定 ref `4eaf13b9c5dc468fdfc38272bf76b20a681d2e54` 的 `frontend/query/src/ipc/use-settings.ts::useTypedConfig` 则在 block body 中触发 invalidation、不返回 Promise。这个已确认的共享源码差异会把 UI 语言应用推迟到配置 refetch 完成，符合失败运行中 UI 同步超时、最终快照才显示日语的现象。E2E 的连续三次远程快照也对慢驱动较敏感；修复后以一次 UI/cache 同步观察确认即时更新，并继续独立验证 typed config、磁盘、刷新后 main UI 和 legacy 页面。此前的 WebView 快照污染是另一项真实测试隔离问题，不能解释或替代这次源码差异。
-- 修复提交、差异映射及保留的兼容性边界：将 Chimera `frontend/interface/src/ipc/use-settings.ts::useTypedConfig` 的成功回调改为 ref 对应的 block body，使 cache invalidation 继续运行但不延迟 mutation 完成；`LanguageProvider` 的配置调用和 UI 应用仍复用共享 `useSettings` API。`tauri-e2e/specs/user-interface-language.e2e.ts` 通过真实键盘菜单选日语，分别断言当前 UI/cache、typed app config、`application.yaml`、刷新后的 main UI 与导航后 legacy 代理页。保留跨 spec 快照前重载和 cleanup 恢复逻辑。无持久化格式或 IPC 接口变化。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：旧 Windows 失败见 runs `39290359852`、`39296100576`、`39302840484`、`39314795712`；修复后的 `user-interface-language.e2e.ts` 仍注册于现有 hermetic suite。当前源码和测试修复后的 macOS WebKit 定向 spec 1/1 通过；Windows hermetic E2E 仍待新 SHA 验证。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：源码与测试修复后，`pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、`pnpm --filter chimera-ui test:localization`（4/4）、`pnpm e2e:tauri:build`、`pnpm lint:frontend-boundaries`、Prettier 与 `git diff --check` 通过；两次 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 均在 macOS WebKit 完整通过 1/1，分别用 `/tmp/chimera-locale-e2e-20261019` 与 `/tmp/chimera-locale-e2e-20261019-rerun` 隔离产物。新 SHA 的 Windows hermetic E2E 尚未执行；不据此声称 Windows 或完整桌面矩阵通过。
+- 修复提交、差异映射及保留的兼容性边界：将 Chimera `frontend/interface/src/ipc/use-settings.ts::useTypedConfig` 的成功回调改为 pinned ref `d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3` 对应的 block body，使 cache invalidation 继续运行但不延迟 mutation 完成；`LanguageProvider` 的配置调用和 UI 应用仍复用共享 `useSettings` API。`tauri-e2e/specs/user-interface-language.e2e.ts` 通过真实键盘菜单选日语，分别断言当前 UI/cache、typed app config、`application.yaml`、刷新后的 main UI 与导航后 legacy 代理页。创建 main 窗口后先登记其 URL 与尺寸，再等待首屏，确保 setup 超时也进入 cleanup。保留跨 spec 快照前重载和 cleanup 恢复逻辑。无持久化格式或 IPC 接口变化。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：旧 Windows 失败见上述 runs；修复后的 `user-interface-language.e2e.ts` 仍注册于现有 hermetic suite。macOS WebKit 定向 spec 两次通过；同一源码与用例的 PR #494 head `c9228e99e53d46a48782660dd05a8818706b00aa` 的 [Windows Tauri E2E run 39352141194](https://github.com/MFSGA/Chimera/actions/runs/39352141194) 和[三平台 CI run 39352141200](https://github.com/MFSGA/Chimera/actions/runs/39352141200) 均通过。该通过结果来自 PR #494 的完整 diff，不代替本修复分支新 SHA 的复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支运行 `pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、`pnpm --filter chimera-ui test:localization`（4/4）、`pnpm lint:frontend-boundaries`、Prettier、`git diff --check`、`pnpm e2e:tauri:build` 均通过；当前本机 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 在 macOS WebKit 605.1.15 通过 1/1。此前两次定向运行亦通过 1/1。新 SHA 的 Windows hermetic E2E 尚未执行；不据此声称完整桌面矩阵通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：本修复只改变 shared settings mutation 的完成时序，使 UI 应用不等待查询 refetch；数据写入与 cache invalidation 仍执行，持久化格式和 IPC 不变。测试继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。若回滚，恢复 ref 更新前的 hook 和用例即可。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：共享设置 mutation 的 `onSuccess` 若只需触发后台 refetch，应使用不返回 invalidation Promise 的 block callback，并由 ref 对齐复核。跨用例重用 WebView 时重载并等待主 UI 的 typed 配置、DOM 和缓存收敛；先验证 UI 即时同步，再独立核验后端、磁盘、刷新和 legacy 路径。此 LESSON 更新已获维护者明确批准；未修改 CI 门禁。
-
-### LESSON-20261019-006：Notify 的广播唤醒不会保存尚未登记的通知
-
-- 日期与时区：2026-10-19 UTC
-- 状态：Mitigated（针对性用例重复通过、完整库测试通过；新 SHA CI 待完成）
-- 严重度：Low
-- 模块：Rust / Profile refresh tests
-- master commit / ref gitlink SHA / 平台与测试环境：PR #494 前一版 head `16b03b37c9a8c7021508ddecfb704fbc0dd68fae`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；GitHub Actions Windows。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Windows backend job 118216586922 in run 39296098353](https://github.com/MFSGA/Chimera/actions/runs/39296098353/job/118216586922)。Run 后来被新 SHA 取消；该 job 已结束并明确失败：`caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 在 2 秒期限内未结束，后端工作区 587 项通过、1 项失败、1 项忽略。
-- 预期行为：取消 refresh 的等待方后，后台 fetch 仍应结束，actor 清除 `pending_refresh`，后续 refresh 能成功。
-- 真实异常、复现步骤与证据：失败测试收到 fetcher 发送的 `started` oneshot 后立刻取消调用方，并调用 `release_fetch.notify_waiters()`；Windows CI 的第二次 refresh 轮询持续遇到进行中状态，最终触发 2 秒 timeout。Tokio 1.53.3 源码明确说明 `notify_waiters()` 不为未来的 `notified().await` 保存 permit。
-- 确认的根因与排除项：`started` 仅证明 fetcher 已发送通知，不能证明其任务已经轮询并登记 `self.release.notified()`。若 `notify_waiters()` 先于 waiter 登记，唤醒不会保留，fetcher 永远停住。该测试从 ref `backend/tauri/src/client/profiles.rs` 同步而来，ref commit `53b004ccb3508d0673b6cb691be65e0e48bdd593` 中有相同竞态；证据指向测试同步问题，不是生产 actor 路径。
-- 修复提交、差异映射及保留的兼容性边界：只在 Chimera `backend/tauri/src/client/profiles.rs::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 将 release 改为 `notify_one()`。锁定 Tokio 1.53.3 的实现会保存一个 permit，使后续 waiter 可消费；不改 refresh actor 或 production behavior。此处按 AGENTS.md 对已证实 ref 缺陷作最小偏离，下一次同步该测试时重查 ref 是否已修复。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败见 Windows run `39296098353`；修正后运行相同 Rust 单测并重复执行，以覆盖通知早于 waiter 登记的顺序。测试位于 `backend/tauri/src/client/profiles.rs` Rust 单元测试模块；新 SHA Windows CI 待复验。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：核对 Cargo.lock 锁定的 Tokio `1.53.3` 源码；定向 Rust 单测以 `--exact` 连续运行 10 次，10/10 通过；`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --all-features --quiet` 为 585 passed、0 failed、1 ignored。Windows 新 SHA workflow 待完成；这两项本地测试不能代替平台 CI。
-- 风险/回滚和清理证据（如涉及宿主状态）：测试同步调整，不改变应用运行或用户数据；回滚为恢复该用例中的 `notify_waiters()`。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：使用 Tokio Notify 作为一次性 release barrier 时，优先使用 `notify_one()`；只有需要广播给已登记的一组 waiters 时才使用 `notify_waiters()`。未改 CI 门禁。

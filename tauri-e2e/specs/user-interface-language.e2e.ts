@@ -248,6 +248,10 @@ describe('application language selection', () => {
 
     await openMainWindow();
     if (!localeSnapshots.has('main')) {
+      // Register the newly created window before waiting for its first render so
+      // after() can still restore it if startup times out.
+      originalWindowSizes.set('main', await browser.getWindowSize());
+      originalUrls.set('main', await browser.getUrl());
       await browser.waitUntil(
         async () =>
           browser.execute(
@@ -260,8 +264,6 @@ describe('application language selection', () => {
           timeoutMsg: 'The new main window did not finish its first render.',
         },
       );
-      originalWindowSizes.set('main', await browser.getWindowSize());
-      originalUrls.set('main', await browser.getUrl());
       await browser.refresh();
       await waitForLocaleSynchronization('main');
       localeSnapshots.set(
