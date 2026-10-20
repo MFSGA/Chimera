@@ -5,6 +5,7 @@ pub mod clash;
 /// 8
 pub mod connection_interruption;
 pub mod download;
+pub mod geo;
 /// 6
 pub mod handle;
 /// 5

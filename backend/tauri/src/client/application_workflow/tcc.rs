@@ -1017,6 +1017,7 @@ mod tests {
 
         async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot> {
             Ok(CoreStatusSnapshot {
+                instance_id: None,
                 state: chimera_ipc::api::status::CoreState::Running,
                 state_changed_at: 0,
                 run_type: RunType::Normal,
