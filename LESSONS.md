@@ -12,32 +12,33 @@
 
 ## 已确认条目索引
 
-| 编号                | 日期       | 模块               | 问题与证据                                                                                                      | 状态      |
-| ------------------- | ---------- | ------------------ | --------------------------------------------------------------------------------------------------------------- | --------- |
-| LESSON-20261014-001 | 2026-10-14 | Rust / CI          | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
-| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E      | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
-| LESSON-20261014-003 | 2026-10-14 | Profile / E2E      | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
-| LESSON-20261014-004 | 2026-10-14 | Development        | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
-| LESSON-20261015-001 | 2026-10-15 | E2E                | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
-| LESSON-20261015-002 | 2026-10-15 | E2E                | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
-| LESSON-20261015-003 | 2026-10-15 | Development        | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
-| LESSON-20261016-001 | 2026-10-16 | Development        | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
-| LESSON-20261016-002 | 2026-10-16 | Frontend / CI      | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
-| LESSON-20261017-001 | 2026-10-17 | E2E / CI           | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Verified  |
-| LESSON-20261017-002 | 2026-10-17 | Profile / Rust     | `start_producers()` 原先只投递 actor cast；await actor 回复后 Profile 测试 72/72、PR #485 CI/E2E 通过并已合入   | Verified  |
-| LESSON-20261017-003 | 2026-10-17 | E2E                | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
-| LESSON-20261017-004 | 2026-10-17 | CI / Linux         | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
-| LESSON-20261017-005 | 2026-10-17 | E2E / Windows      | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
-| LESSON-20261017-006 | 2026-10-17 | E2E / Windows      | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
-| LESSON-20261017-007 | 2026-10-17 | E2E / Windows      | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
-| LESSON-20261018-001 | 2026-10-18 | E2E / Windows      | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
-| LESSON-20261018-002 | 2026-10-18 | E2E / Windows      | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
-| LESSON-20261019-001 | 2026-10-19 | E2E / Windows      | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
-| LESSON-20261019-002 | 2026-10-19 | E2E / Windows      | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
-| LESSON-20261019-005 | 2026-10-19 | E2E / Localization | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
-| LESSON-20261020-001 | 2026-10-20 | E2E / Localization | PR #501 的前置条件受其他 spec 留下的 locale cache 影响；应先保存原值，再把每个 WebView 准备到一致的测试 locale  | Open      |
-| LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard    | PR #501 检查 Reset 时 popover 已关闭；用触发器 `aria-expanded` 状态确保打开并等待 Reset 可见                    | Open      |
-| LESSON-20261020-003 | 2026-10-20 | E2E / WebDriver    | PR #507 的 refresh 不等待新文档加载；分开等待导航完成和 React 根节点挂载                                        | Open      |
+| 编号                | 日期       | 模块                | 问题与证据                                                                                                      | 状态      |
+| ------------------- | ---------- | ------------------- | --------------------------------------------------------------------------------------------------------------- | --------- |
+| LESSON-20261014-001 | 2026-10-14 | Rust / CI           | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成        | Open      |
+| LESSON-20261014-002 | 2026-10-14 | Proxies / E2E       | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成 | Open      |
+| LESSON-20261014-003 | 2026-10-14 | Profile / E2E       | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                      | Open      |
+| LESSON-20261014-004 | 2026-10-14 | Development         | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                          | Mitigated |
+| LESSON-20261015-001 | 2026-10-15 | E2E                 | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正          | Verified  |
+| LESSON-20261015-002 | 2026-10-15 | E2E                 | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验           | Open      |
+| LESSON-20261015-003 | 2026-10-15 | Development         | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                         | Mitigated |
+| LESSON-20261016-001 | 2026-10-16 | Development         | 在未准备好的 worktree 调用 `pnpm exec` 触发依赖安装；已中断，须先核对依赖状态并用已安装工具运行检查             | Mitigated |
+| LESSON-20261016-002 | 2026-10-16 | Frontend / CI       | PR #484 transform-chain 行组件首次遗漏 `isLast` 解构，提交钩子的类型检查在提交前发现并阻止了错误                | Mitigated |
+| LESSON-20261017-001 | 2026-10-17 | E2E / CI            | Windows Edge 154 对 `data:` no-cors fetch 返回 `basic`；兼容 readable `basic` 与标准 `opaque` 响应              | Verified  |
+| LESSON-20261017-002 | 2026-10-17 | Profile / Rust      | `start_producers()` 原先只投递 actor cast；await actor 回复后 Profile 测试 72/72、PR #485 CI/E2E 通过并已合入   | Verified  |
+| LESSON-20261017-003 | 2026-10-17 | E2E                 | Traffic 路由 E2E 修正窗口准备及侧栏状态读取；精确 PR SHA 的 Windows hermetic 和隔离套件通过                     | Verified  |
+| LESSON-20261017-004 | 2026-10-17 | CI / Linux          | 前端-only job 误跑依赖 GTK/GLib 的 Rust 测试；已移入后端门禁，PR #489 的 Ubuntu 测试通过                        | Verified  |
+| LESSON-20261017-005 | 2026-10-17 | E2E / Windows       | PR #484 的平滑滚动在 Windows Edge 154 只到达 49/820px；改用即时定位并在清理时复位视口                           | Verified  |
+| LESSON-20261017-006 | 2026-10-17 | E2E / Windows       | PR #490 Dashboard 右键 E2E 漏发 `pointerdown`；驱动已补合成 PointerEvent，待 Windows 复验                       | Open      |
+| LESSON-20261017-007 | 2026-10-17 | E2E / Windows       | PR #490 的 invoke 属性不可改写且测试插件未获 capability；改为 E2E-only app IPC 故障注入，待 Windows 复验        | Open      |
+| LESSON-20261018-001 | 2026-10-18 | E2E / Windows       | PR #477 E2E 等待现逐轮重新查询元素；精确 SHA 的 Windows E2E 通过                                                | Verified  |
+| LESSON-20261018-002 | 2026-10-18 | E2E / Windows       | PR #490 Dashboard 用例假设中文 UI；当前英文菜单被误判为未打开并再次右键关闭，改用稳定选择器待新 SHA 复验        | Open      |
+| LESSON-20261019-001 | 2026-10-19 | E2E / Windows       | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
+| LESSON-20261019-002 | 2026-10-19 | E2E / Windows       | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
+| LESSON-20261019-005 | 2026-10-19 | E2E / Localization  | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
+| LESSON-20261020-001 | 2026-10-20 | E2E / Localization  | PR #501 的前置条件受其他 spec 留下的 locale cache 影响；应先保存原值，再把每个 WebView 准备到一致的测试 locale  | Open      |
+| LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard     | PR #501 检查 Reset 时 popover 已关闭；用触发器 `aria-expanded` 状态确保打开并等待 Reset 可见                    | Open      |
+| LESSON-20261020-003 | 2026-10-20 | E2E / WebDriver     | PR #507 的 refresh 不等待新文档加载；需验证文档身份变化、再等 React 挂载                                        | Open      |
+| LESSON-20261021-001 | 2026-10-21 | Governance / Review | 历史重写规则修改遗漏审查清单与 PR 模板中的旧禁令；须同步所有规范副本并交叉检查                                  | Mitigated |
 
 ## 单条模板
 
@@ -507,9 +508,26 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 关联 Issue / PR / CI / 运行日志（脱敏）：PR #507 的 [Windows hermetic run 39429486331](https://github.com/MFSGA/Chimera/actions/runs/39429486331)，artifact `application-typed-state`。
 - 预期行为：refresh 完成后先确认新文档导航完成，再在独立期限内等待 Chimera 的 React 根挂载，随后验证 typed 配置及 YAML。
 - 真实异常、复现步骤与证据：刷新调用后首个观察为 `readyState: loading`、root children 为 0；30 秒 render 等待以 root 为 0 失败。artifact 截图/HTML 随后显示 Dashboard 已渲染，失败清理成功且无前端错误捕获。
-- 确认的根因与排除项：vendored `navigation::refresh` 调用的 executor 只执行 `window.location.reload(); null;`，没有等待新文档 load。测试把导航与 React 根挂载放进一个 30 秒阶段；Windows WebDriver 在刷新过渡期的后续执行请求可跨越该阶段预算。证据没有显示配置 patch 或持久化丢失，也没有证明产品前端崩溃。
-- 修复提交、差异映射及保留的兼容性边界：在 refresh 后将最多 30 秒的 `document.readyState === "complete"` 阶段与最多 60 秒的应用 root render 阶段分开，并把单个用例的 Mocha 上限设为 180 秒以留出清理时间。原始状态在约 0.6 秒后已报告 document complete，但 root 仍为空；失败截图显示挂载最终完成。无产品代码或驱动兼容分支改动。
+- 确认的根因与排除项：vendored `navigation::refresh` 调用的 executor 只执行 `window.location.reload(); null;`，没有等待新文档 load。测试先把导航与 React 根挂载放进一个 30 秒阶段；Windows WebDriver 在刷新过渡期的后续执行请求可跨越该阶段预算。独立复核还发现仅看 `readyState === "complete"` 可能接受刷新前旧文档的状态。证据没有显示配置 patch 或持久化丢失，也没有证明产品前端崩溃。
+- 修复提交、差异映射及保留的兼容性边界：refresh 前记录 `performance.timeOrigin`，refresh 后要求 time origin 改变且 `document.readyState === "complete"`，证明进入新文档后再等待最多 60 秒应用 root 挂载。原始状态在约 0.6 秒后已报告 document complete，但 root 仍为空；失败截图显示挂载最终完成。将 Mocha 上限提高到 240 秒，以覆盖约 195 秒的阶段/诊断/清理预算并留出约 45 秒余量。无产品代码或驱动兼容分支改动。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：原失败见 run `39429486331`；spec 仍注册于 `settings` / Windows `hermetic`。新 SHA 结果待远端复验。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：旧 run 的 typed-state spec 失败，53 个 spec 中 52 个通过；`pnpm --filter @chimera/tauri-e2e typecheck`、25 项 harness 单测、Prettier、`pnpm prepare:check`、`pnpm e2e:tauri:build` 通过；当前构建的 macOS WebKit typed-state 用例 1/1 通过。新 SHA 的 Windows hermetic E2E 待复验，未验证应用冷启动。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：旧 run 的 typed-state spec 失败，53 个 spec 中 52 个通过；原本只检查 readyState 的 macOS WebKit typed-state 用例 1/1 通过，但该结果不能验证刷新文档身份。增加 time origin 检查后的新 SHA 用例及 Windows hermetic E2E 待复验；此前 `pnpm --filter @chimera/tauri-e2e typecheck`、25 项 harness 单测、Prettier、`pnpm prepare:check`、`pnpm e2e:tauri:build` 通过。未验证应用冷启动。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 等待阶段和其契约；原设置仍通过共享 API 恢复，持久化值仍被核验，无系统设置改动。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在使用 vendored Tauri driver 的 refresh 用例中，应先等待文档导航完成，再等待产品挂载标记；不以固定 sleep 替代分阶段条件，并按已观察到的慢阶段分别设定有界时间。工具行为已补充到 `docs/testing/upstream-evidence.md`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在使用 vendored Tauri driver 的 refresh 用例中，应先证明 document identity 已改变并等待导航完成，再等待产品挂载标记；不以旧文档的 readyState 或固定 sleep 代替身份/阶段条件，并让 Mocha 总限时覆盖所有分阶段上限、诊断和 cleanup。工具行为已补充到 `docs/testing/upstream-evidence.md`。
+
+### LESSON-20261021-001：治理规则修改须同步审查清单和 PR 模板
+
+- 日期与时区：2026-10-21 UTC
+- 状态：Mitigated（PR #515 合并前独立复核发现并修正）
+- 严重度：Low
+- 模块：Governance / Review
+- master commit / ref gitlink SHA / 平台与测试环境：PR #515 基线 `2dca108525d855d08479fa23db71d9533352e727`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；文档审查
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #515](https://github.com/MFSGA/Chimera/pull/515)，独立复核发现 `docs/ai-review-checklist.md` 和 `.github/pull_request_template.md` 仍保留保护分支历史改写的绝对禁令。矛盾在合并前发现；未改写 master、标签或其他 PR 分支。
+- 预期行为：治理规范、独立审查清单和 PR 模板对历史改写边界采用一致的精确授权规则。
+- 真实异常、复现步骤与证据：本任务将 `AGENTS.md` 与治理规范更新为允许维护者明确授权范围内的历史重写，但第一次提交遗漏了审查清单及 PR 模板中的旧禁令；独立复核在 PR 合并前指出该不一致。
+- 确认的根因与排除项：治理条款在多个文件重复维护，修改时未搜索所有受影响的规范文本；这是文档一致性流程遗漏，不涉及 Git 历史或代码安全问题。
+- 修复提交、差异映射及保留的兼容性边界：审查清单及 PR 模板改为引用 `docs/ai-development-governance.md` 的精确授权范围，并要求记录目标引用、提交范围、标签和开放 PR 分支处理。未授权的引用仍保持原样。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：规范文本通过全仓搜索复核，没有额外自动测试；`LESSONS.md` 记录这一流程遗漏及预防措施。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：执行规范文本全仓搜索、Prettier 与 `git diff --check`；PR #515 的 CI 对修正后的新 SHA 待重新运行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅修改治理说明；回滚为恢复相关文档。未变更分支保护、标签、远端历史或 CI 权限。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：修改治理规则前，搜索 `AGENTS.md`、`docs/ai-*`、`.github/**` 中重复规则，并核对 PR 模板与 review checklist；本次规则变更由维护者在会话中明确授权。

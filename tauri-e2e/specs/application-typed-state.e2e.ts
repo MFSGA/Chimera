@@ -13,6 +13,7 @@ interface FrontendState {
   href: string;
   title: string;
   readyState: DocumentReadyState;
+  timeOrigin: number;
   rootChildCount: number;
   hasTauriInternals: boolean;
   visibilityState: DocumentVisibilityState;
@@ -33,6 +34,7 @@ async function readFrontendState(): Promise<FrontendState> {
       href: window.location.href,
       title: document.title,
       readyState: document.readyState,
+      timeOrigin: performance.timeOrigin,
       rootChildCount: root?.childElementCount ?? 0,
       hasTauriInternals: '__TAURI_INTERNALS__' in window,
       visibilityState: document.visibilityState,
@@ -110,6 +112,7 @@ async function waitForApp(
 async function waitForDocumentComplete(
   phase: string,
   observations: FrontendObservation[],
+  previousTimeOrigin: number,
 ): Promise<void> {
   let lastState: FrontendState | null = null;
   let observedAt: string | null = null;
@@ -118,12 +121,15 @@ async function waitForDocumentComplete(
       async () => {
         lastState = await readFrontendState();
         observedAt = new Date().toISOString();
-        return lastState.readyState === 'complete';
+        return (
+          lastState.readyState === 'complete' &&
+          lastState.timeOrigin !== previousTimeOrigin
+        );
       },
       {
         timeout: 30_000,
         interval: 500,
-        timeoutMsg: `The Chimera document did not finish navigation during ${phase}.`,
+        timeoutMsg: `A new Chimera document did not finish navigation during ${phase}.`,
       },
     );
   } catch (cause) {
@@ -429,7 +435,7 @@ function recordCleanup(diagnosticsPath: string, error: unknown | null): void {
 // Contract: docs/testing/contracts/application-typed-state.md
 describe('typed application state ownership', () => {
   it('persists legacy IPC patches through application.yaml and mirrors them back', async function (this: Mocha.Context) {
-    this.timeout(180_000);
+    this.timeout(240_000);
     const observations: FrontendObservation[] = [];
     const test = this.test as unknown as { currentRetry?: () => number };
     const attempt = (test.currentRetry?.() ?? 0) + 1;
@@ -466,6 +472,9 @@ describe('typed application state ownership', () => {
 
       phase = 'before refresh';
       await observeFrontend(phase, observations);
+      const previousTimeOrigin = await browser.execute(
+        () => performance.timeOrigin,
+      );
       phase = 'refresh';
       try {
         await browser.refresh();
@@ -482,7 +491,7 @@ describe('typed application state ownership', () => {
       phase = 'refresh returned';
       await observeFrontend(phase, observations);
       phase = 'document load after refresh';
-      await waitForDocumentComplete(phase, observations);
+      await waitForDocumentComplete(phase, observations, previousTimeOrigin);
       phase = 'render after refresh';
       await waitForApp(phase, observations, 60_000);
 
