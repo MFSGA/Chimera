@@ -27,6 +27,33 @@ type LocaleSnapshot = {
   documentLanguage: string;
 };
 
+type RouteIdentity = {
+  routeId: string;
+  routeKey: string;
+  present: boolean;
+};
+
+type RouteMarker =
+  | { kind: 'main'; pathname: string; routes: RouteIdentity[] }
+  | {
+      kind: 'legacy';
+      pathname: string;
+      routes: RouteIdentity[];
+      heading: string | null;
+    };
+
+function routeMarkerSignature(marker: RouteMarker | null) {
+  if (!marker) return null;
+  const routes = marker.routes
+    .map(({ routeId, routeKey, present }) =>
+      [routeId, routeKey, present ? 'present' : 'exiting'].join(':'),
+    )
+    .join('|');
+  return marker.kind === 'legacy'
+    ? [marker.kind, marker.pathname, routes, marker.heading ?? ''].join('\n')
+    : [marker.kind, marker.pathname, routes].join('\n');
+}
+
 type WindowSize = {
   width: number;
   height: number;
@@ -80,6 +107,162 @@ async function readLocaleSnapshot(): Promise<LocaleSnapshot> {
     cache: localStorage.getItem(btoa('paraglide-language-cache')),
     documentLanguage: document.documentElement.lang,
   }));
+}
+
+async function waitForRouteMarker(
+  handle: string,
+  expected: RouteMarker | null,
+  requiredStableMs: number,
+): Promise<RouteMarker> {
+  const result = (await browser.executeAsync(
+    (expectedSignature, stableMs, timeoutMs, done) => {
+      let finished = false;
+      let previousSignature: string | null = null;
+      let stableSince = 0;
+      let marker: RouteMarker | null = null;
+      let observations = 0;
+      let missingMarkers = 0;
+      let exitingMarkers = 0;
+      const recentSignatures: string[] = [];
+      const startedAt = Date.now();
+
+      const signatureOf = (value: RouteMarker | null) => {
+        if (!value) return null;
+        const routes = value.routes
+          .map(({ routeId, routeKey, present }) =>
+            [routeId, routeKey, present ? 'present' : 'exiting'].join(':'),
+          )
+          .join('|');
+        return value.kind === 'legacy'
+          ? [value.kind, value.pathname, routes, value.heading ?? ''].join('\n')
+          : [value.kind, value.pathname, routes].join('\n');
+      };
+      const readMarker = (): RouteMarker | null => {
+        const isMain =
+          document.documentElement.classList.contains('chimera-main');
+        const selector = isMain
+          ? '[data-route-id][data-route-key]'
+          : '.page-transition[data-route-id][data-route-key]';
+        const routes = Array.from(
+          document.querySelectorAll<HTMLElement>(selector),
+        ).flatMap((element) => {
+          const routeId = element.getAttribute('data-route-id');
+          const routeKey = element.getAttribute('data-route-key');
+          const present = element.getAttribute('data-route-present') === 'true';
+          return routeId && routeKey ? [{ routeId, routeKey, present }] : [];
+        });
+        if (routes.length === 0) return null;
+        if (isMain) {
+          return { kind: 'main', pathname: location.pathname, routes };
+        }
+        const heading =
+          document.querySelector('h1')?.textContent?.trim() ?? null;
+        return heading
+          ? { kind: 'legacy', pathname: location.pathname, routes, heading }
+          : null;
+      };
+      const diagnostics = () => ({
+        pathname: location.pathname,
+        title: document.title,
+        headingCount: document.querySelectorAll('h1').length,
+        routeElements: Array.from(
+          document.querySelectorAll(
+            '.page-transition, [data-route-id][data-route-key]',
+          ),
+        ).map((element) => ({
+          tag: element.tagName,
+          className: element.getAttribute('class'),
+          slot: element.getAttribute('data-slot'),
+          routeId: element.getAttribute('data-route-id'),
+          routeKey: element.getAttribute('data-route-key'),
+          present: element.getAttribute('data-route-present'),
+          opacity: getComputedStyle(element).opacity,
+          children: element.children.length,
+        })),
+      });
+      const finish = (ok: boolean) => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timer);
+        done({
+          ok,
+          marker,
+          observations,
+          missingMarkers,
+          exitingMarkers,
+          recentSignatures,
+          stableForMs: previousSignature ? Date.now() - stableSince : 0,
+          diagnostics: ok ? undefined : diagnostics(),
+        });
+      };
+      const sample = () => {
+        observations += 1;
+        marker = readMarker();
+        const signature = signatureOf(marker);
+        const eligible =
+          signature !== null &&
+          !marker?.routes.some(({ present }) => !present) &&
+          (expectedSignature === null || signature === expectedSignature);
+        if (!eligible) {
+          if (marker === null) missingMarkers += 1;
+          else if (marker.routes.some(({ present }) => !present)) {
+            exitingMarkers += 1;
+          }
+          previousSignature = null;
+          stableSince = 0;
+        } else if (signature !== previousSignature) {
+          previousSignature = signature;
+          stableSince = Date.now();
+          recentSignatures.push(signature);
+          if (recentSignatures.length > 8) recentSignatures.shift();
+        } else if (Date.now() - stableSince >= stableMs) {
+          finish(true);
+          return;
+        }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          finish(false);
+          return;
+        }
+        window.setTimeout(sample, 100);
+      };
+      const timer = window.setTimeout(() => finish(false), timeoutMs);
+      sample();
+    },
+    routeMarkerSignature(expected),
+    requiredStableMs,
+    15_000,
+  )) as {
+    ok: boolean;
+    marker: RouteMarker | null;
+    observations: number;
+    missingMarkers: number;
+    exitingMarkers: number;
+    recentSignatures: string[];
+    stableForMs: number;
+    diagnostics?: unknown;
+  };
+
+  if (!result.ok || !result.marker) {
+    const target = expected
+      ? `expected ${routeMarkerSignature(expected)}`
+      : 'any non-exiting route';
+    throw new Error(
+      `${handle} did not render ${target} for ${requiredStableMs}ms: observed ${JSON.stringify(result.marker)}, stable for ${result.stableForMs}ms after ${result.observations} samples (${result.missingMarkers} missing, ${result.exitingMarkers} exiting), recent ${JSON.stringify(result.recentSignatures)}, DOM ${JSON.stringify(result.diagnostics)}.`,
+    );
+  }
+  return result.marker;
+}
+
+async function captureRouteMarker(handle: string): Promise<RouteMarker> {
+  try {
+    return await waitForRouteMarker(handle, null, 750);
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not render a stable route marker before setup.`,
+      { cause },
+    );
+  }
 }
 
 async function setLocaleCache(locale: string): Promise<void> {
@@ -203,32 +386,67 @@ async function waitForPreparedLocale(handle: string, locale: string) {
   }
 }
 
-async function restoreLocaleSnapshot(handle: string, snapshot: LocaleSnapshot) {
+async function restoreLocaleSnapshot(
+  handle: string,
+  snapshot: LocaleSnapshot,
+  originalLanguage: string | null,
+) {
   if (!(await browser.getWindowHandles()).includes(handle)) return;
+
+  const configuredLocale = normalizeLocale(originalLanguage);
+  const cachedLocale = normalizeLocale(snapshot.cache);
+  const expectedLocale =
+    configuredLocale ??
+    cachedLocale ??
+    normalizeLocale(snapshot.documentLanguage) ??
+    'en';
+  const expectedCachedLocale = configuredLocale ?? cachedLocale;
+  const cacheToRestore = configuredLocale ?? snapshot.cache;
 
   await browser.switchToWindow(handle);
   await browser.execute((cache) => {
     const key = btoa('paraglide-language-cache');
     if (cache === null) localStorage.removeItem(key);
     else localStorage.setItem(key, cache);
-  }, snapshot.cache);
+  }, cacheToRestore);
   await browser.refresh();
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        (language) => document.documentElement.lang === language,
-        snapshot.documentLanguage,
-      ),
-    {
-      timeout: 15_000,
-      timeoutMsg: `${handle} did not return to its original language.`,
-    },
-  );
-  await browser.execute((cache) => {
-    const key = btoa('paraglide-language-cache');
-    if (cache === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, cache);
-  }, snapshot.cache);
+  let lastState: unknown;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang,
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
+        lastState = {
+          handle,
+          expectedLocale,
+          expectedCachedLocale,
+          ...ui,
+        };
+        return (
+          ui.ready &&
+          normalizeLocale(ui.language) === expectedLocale &&
+          (expectedCachedLocale === null ||
+            normalizeLocale(ui.cachedLanguage) === expectedCachedLocale)
+        );
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `${handle} did not resolve the original configured locale.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not resolve its original locale: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
 }
 
 async function restoreWindowState(
@@ -242,7 +460,10 @@ async function restoreWindowState(
     await browser.switchToWindow(handle);
     await cleanup();
   } catch (cause) {
-    errors.push(new Error(`Could not restore ${handle} ${label}.`, { cause }));
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    errors.push(
+      new Error(`Could not restore ${handle} ${label}: ${reason}`, { cause }),
+    );
   }
 }
 
@@ -259,6 +480,7 @@ describe('application language selection', () => {
   let originalLanguage: string | null | undefined;
   const localeSnapshots = new Map<string, LocaleSnapshot>();
   const originalUrls = new Map<string, string>();
+  const originalRouteMarkers = new Map<string, RouteMarker>();
   const originalWindowSizes = new Map<string, WindowSize>();
 
   before(async () => {
@@ -279,8 +501,7 @@ describe('application language selection', () => {
       await browser.switchToWindow(handle);
       originalWindowSizes.set(handle, await browser.getWindowSize());
       originalUrls.set(handle, await browser.getUrl());
-      // Capture each WebView's actual prior state before normalizing its
-      // Paraglide cache for this test's controlled starting locale.
+      // Save each WebView's cache and document language before test setup.
       localeSnapshots.set(handle, await readLocaleSnapshot());
     }
 
@@ -304,8 +525,18 @@ describe('application language selection', () => {
       );
       localeSnapshots.set('main', await readLocaleSnapshot());
     }
+
+    // Resolve each window using the same config/cache precedence as cleanup
+    // before capturing its translated route marker. This keeps legacy heading
+    // markers valid when the user's configured locale is not English.
+    for (const [handle, snapshot] of localeSnapshots) {
+      await restoreLocaleSnapshot(handle, snapshot, originalLanguage ?? null);
+      originalRouteMarkers.set(handle, await captureRouteMarker(handle));
+      // Main-window startup can redirect /main to /main/dashboard. Save the
+      // settled URL so cleanup does not trigger that redirect a second time.
+      originalUrls.set(handle, await browser.getUrl());
+    }
     await browser.setWindowSize(1240, 638);
-    await openUserInterfaceSettings();
 
     await invoke('patch_app_config', { patch: { language: 'en' } });
     await browser.waitUntil(
@@ -387,7 +618,8 @@ describe('application language selection', () => {
         await restoreWindowState(
           handle,
           'locale',
-          () => restoreLocaleSnapshot(handle, snapshot),
+          () =>
+            restoreLocaleSnapshot(handle, snapshot, originalLanguage ?? null),
           cleanupErrors,
         );
       } else {
@@ -411,12 +643,24 @@ describe('application language selection', () => {
           const originalUrl = originalUrls.get(handle);
           if (originalUrl && (await browser.getUrl()) !== originalUrl) {
             await browser.url(originalUrl);
+            let lastObservedUrl: string | undefined;
             await browser.waitUntil(
-              async () => (await browser.getUrl()) === originalUrl,
+              async () => {
+                lastObservedUrl = await browser.getUrl();
+                return lastObservedUrl === originalUrl;
+              },
               {
                 timeout: 15_000,
-                timeoutMsg: `${handle} did not return to its original route.`,
+                timeoutMsg: `${handle} did not return to its original route: expected ${originalUrl}, last observed ${lastObservedUrl}.`,
               },
+            );
+          }
+          const originalRouteMarker = originalRouteMarkers.get(handle);
+          if (originalRouteMarker) {
+            await waitForRouteMarker(handle, originalRouteMarker, 0);
+          } else if (originalUrl && (await browser.getUrl()) !== originalUrl) {
+            throw new Error(
+              `No original route marker was captured for ${handle}.`,
             );
           }
         },
@@ -476,17 +720,86 @@ describe('application language selection', () => {
       '//*[@data-slot="language-selector-menu"]//*[@role="menuitemcheckbox" and normalize-space(.)="日本語"]',
     );
     await japaneseOption.waitForExist({ timeout: 10_000 });
+
+    let lastFocusState: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          lastFocusState = await browser.execute(() => {
+            const activeElement = document.activeElement;
+            return {
+              role: activeElement?.getAttribute('role'),
+              text: activeElement?.textContent?.trim(),
+              checked: activeElement?.getAttribute('aria-checked'),
+              menuOpen: document
+                .querySelector('[data-slot="language-selector-menu"]')
+                ?.getAttribute('data-state'),
+            };
+          });
+          const state = lastFocusState as {
+            role?: string | null;
+            checked?: string | null;
+            menuOpen?: string | null;
+          };
+          return (
+            state.menuOpen === 'open' &&
+            state.role === 'menuitemcheckbox' &&
+            state.checked === 'true'
+          );
+        },
+        {
+          timeout: 10_000,
+          timeoutMsg: 'The selected language item did not receive menu focus.',
+        },
+      );
+    } catch (cause) {
+      throw new Error(
+        `The selected language item did not receive menu focus: ${JSON.stringify(lastFocusState)}`,
+        { cause },
+      );
+    }
     await browser.keys('ArrowDown');
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          () => document.activeElement?.textContent?.trim() === '日本語',
-        ),
-      {
-        timeout: 10_000,
-        timeoutMsg: 'ArrowDown did not focus the Japanese language option.',
-      },
-    );
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(
+            () => document.activeElement?.textContent?.trim() === '日本語',
+          ),
+        {
+          timeout: 10_000,
+          timeoutMsg: 'ArrowDown did not focus the Japanese language option.',
+        },
+      );
+    } catch (cause) {
+      const focusState = await browser.execute(() => ({
+        activeRole: document.activeElement?.getAttribute('role'),
+        activeText: document.activeElement?.textContent?.trim(),
+        activeChecked: document.activeElement?.getAttribute('aria-checked'),
+        menuState: document
+          .querySelector('[data-slot="language-selector-menu"]')
+          ?.getAttribute('data-state'),
+        japaneseOption: (() => {
+          const option = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="language-selector-menu"] [role="menuitemcheckbox"]',
+            ),
+          ).find(
+            (item) =>
+              item.textContent?.replace(/\s+/g, ' ').trim() === '日本語',
+          );
+          return option
+            ? {
+                exists: true,
+                checked: option.getAttribute('aria-checked'),
+              }
+            : { exists: false, checked: null };
+        })(),
+      }));
+      throw new Error(
+        `ArrowDown did not focus the Japanese language option: ${JSON.stringify(focusState)}`,
+        { cause },
+      );
+    }
     await browser.keys('Enter');
 
     let lastLanguageState: unknown;

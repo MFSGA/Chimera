@@ -42,12 +42,16 @@ version, and saved bytes remain intact.
   against navigation. It reads the language
   through `get_app_config`, the typed configuration used by the main UI's
   settings provider; the separate typed-state contract covers the legacy
-  configuration mirror.
+  configuration mirror. Before capturing each window's route marker, resolve
+  that window using the same config/cache precedence as cleanup; this keeps a
+  translated legacy heading stable when setup later switches to English.
 - **Operation:** Focus the Language control, open its menu with Enter, move to
-  `日本語` with ArrowDown, and select it with Enter. The current desktop
-  driver's element click only synthesizes a DOM `click`, while the Radix menu
-  opens on `pointerdown`; this contract therefore checks keyboard activation
-  and makes no mouse-activation claim.
+  `日本語` with ArrowDown, and select it with Enter. After opening, wait for
+  the selected English menu item to receive focus before sending ArrowDown, so
+  the test observes the menu's initial focus state rather than racing it. The
+  current desktop driver's element click only synthesizes a DOM `click`, while
+  the Radix menu opens on `pointerdown`; this contract therefore checks
+  keyboard activation and makes no mouse-activation claim.
 - **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.
@@ -58,12 +62,32 @@ version, and saved bytes remain intact.
 - **Failure sensitivity:** The test fails if Japanese is absent from the
   selector, the selected value is not persisted, the document language does
   not become `ja`, or either UI lacks the expected translated strings.
-- **Cleanup:** Restore the original configured language, locale
-  cache/document language, URL, and window dimensions for each app window,
-  then return focus to the legacy window. The cache snapshot is taken before
-  English setup; cleanup therefore restores even a cache that differed from
-  the persisted setting. Cleanup errors are reported together with the original
-  failure.
+- **Cleanup:** Restore the original configured language and each window's
+  locale cache, URL, and dimensions, then return focus to the legacy window.
+  Capture the URL only after the original route has settled; the main window
+  can redirect `/main` to `/main/dashboard` during startup. After navigating
+  back to that effective URL, wait for the captured pathname and all rendered
+  animated-outlet markers. Each animated outlet reports the route ID and
+  selector key of its immediate child match, matching the key used by its
+  transition, plus Motion's `isPresent` state. Capture rejects any marker whose
+  transition child is exiting, then requires the full marker, including the
+  legacy heading, to remain identical for at least 750 ms, longer than the
+  350 ms outlet transition. The WebView samples every 100 ms and compares
+  explicit route fields, so WebDriver object property ordering cannot make an
+  unchanged route appear different. This distinguishes dynamic route matches
+  and waits for an exiting animated child to leave. Route identity is determined
+  from the rendered tree, independent of animation opacity. Raw route
+  parameters are not written to DOM attributes; the 32-bit selector hash is
+  deterministic and is not a cryptographic privacy boundary. Plain,
+  non-animated TanStack outlets are not represented by these markers.
+  Resolve the post-refresh language from the restored configuration first,
+  then the saved supported cache, and finally the captured document language
+  when neither setting selects a locale. If an explicit configured language
+  conflicts with a stale cache left by an earlier layout spec, restore the
+  cache to the configured language; that cache is derived E2E state, and the
+  stale cache/document pair cannot be reproduced after a reload. Cleanup
+  verifies the resolved document language and cache when configuration selects
+  it, and reports cleanup errors together with the original failure.
 
 ## Limits and rollback
 

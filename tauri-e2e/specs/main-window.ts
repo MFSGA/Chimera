@@ -76,44 +76,87 @@ const animatedOutletHosts = [
   '[data-slot="proxies-content"]',
 ] as const;
 
+async function readMainRouteSettledState(selectors: readonly string[]) {
+  return browser.execute(
+    (routeSelectors) => {
+      const groups = routeSelectors.map((selector) =>
+        Array.from(document.querySelectorAll<HTMLElement>(selector)),
+      );
+      const appContent = groups[0];
+      const currentRoute = appContent[0]?.firstElementChild;
+      const opacity = currentRoute
+        ? Number.parseFloat(getComputedStyle(currentRoute).opacity)
+        : null;
+      const nestedSettled = groups
+        .slice(1)
+        .every(
+          (hosts) =>
+            hosts.length <= 1 &&
+            (hosts.length === 0 || hosts[0].children.length === 1),
+        );
+      const activeAnimations = document
+        .getAnimations()
+        .filter((animation) => animation.playState !== 'finished')
+        .map((animation) => {
+          const target = (animation.effect as KeyframeEffect | null)?.target;
+          return {
+            playState: animation.playState,
+            currentTime: animation.currentTime,
+            duration: animation.effect?.getComputedTiming().duration,
+            targetTag: target instanceof Element ? target.tagName : null,
+          };
+        });
+
+      return {
+        settled:
+          appContent.length === 1 &&
+          appContent[0].children.length > 0 &&
+          opacity !== null &&
+          opacity >= 0.99 &&
+          nestedSettled,
+        pathname: location.pathname,
+        routeHosts: groups.map((hosts) =>
+          hosts.map((host) => ({
+            slot: host.getAttribute('data-slot'),
+            routeId: host.getAttribute('data-route-id'),
+            routeKey: host.getAttribute('data-route-key'),
+            opacity: Number.parseFloat(getComputedStyle(host).opacity),
+            childCount: host.children.length,
+          })),
+        ),
+        activeAnimations,
+      };
+    },
+    [...selectors],
+  );
+}
+
 async function waitForMainRouteSettled(
   timeout = 15_000,
   waitForNestedOutlets = true,
 ) {
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        (selectors) => {
-          const hostGroups = selectors.map((selector) =>
-            Array.from(document.querySelectorAll<HTMLElement>(selector)),
-          );
-          const appContent = hostGroups[0];
-          if (appContent.length !== 1 || appContent[0].children.length === 0) {
-            return false;
-          }
+  const selectors = waitForNestedOutlets
+    ? animatedOutletHosts
+    : animatedOutletHosts.slice(0, 1);
+  let lastState: unknown;
 
-          const currentRoute = appContent[0].firstElementChild;
-          if (
-            !currentRoute ||
-            Number.parseFloat(getComputedStyle(currentRoute).opacity) < 0.99
-          ) {
-            return false;
-          }
-
-          return hostGroups.slice(1).every((hosts) => {
-            if (hosts.length > 1) return false;
-            return hosts.length === 0 || hosts[0].children.length === 1;
-          });
-        },
-        waitForNestedOutlets
-          ? animatedOutletHosts
-          : animatedOutletHosts.slice(0, 1),
-      ),
-    {
-      timeout,
-      timeoutMsg: 'The Chimera main route animation did not settle.',
-    },
-  );
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await readMainRouteSettledState(selectors);
+        return (lastState as { settled: boolean }).settled;
+      },
+      {
+        timeout,
+        timeoutMsg: 'The Chimera main route animation did not settle.',
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `The Chimera main route animation did not settle. Last state: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
 }
 
 export async function ensureMainWindow() {

@@ -35,8 +35,8 @@
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows       | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 | LESSON-20261019-002 | 2026-10-19 | E2E / Windows       | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 | LESSON-20261019-005 | 2026-10-19 | E2E / Localization  | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
-| LESSON-20261020-001 | 2026-10-20 | E2E / Localization  | PR #501 的前置条件受其他 spec 留下的 locale cache 影响；应先保存原值，再把每个 WebView 准备到一致的测试 locale  | Open      |
-| LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard     | PR #501 检查 Reset 时 popover 已关闭；用触发器 `aria-expanded` 状态确保打开并等待 Reset 可见                    | Open      |
+| LESSON-20261020-001 | 2026-10-20 | E2E / Localization  | PR #501 locale cache 受前置 spec 影响；路由标记需比较每层 outlet 的 child match key，不依赖动画透明度           | Open      |
+| LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard     | PR #501 的 Popover 需等待打开状态与控件；本机 WebKit 路由动画前置偶发超时，Windows 新 SHA 待复验                | Open      |
 | LESSON-20261020-003 | 2026-10-20 | E2E / WebDriver     | PR #507 的 refresh 不等待新文档加载；需验证文档身份变化、再等 React 挂载                                        | Open      |
 | LESSON-20261021-001 | 2026-10-21 | Governance / Review | 历史重写规则修改遗漏审查清单与 PR 模板中的旧禁令；须同步所有规范副本并交叉检查                                  | Mitigated |
 
@@ -464,21 +464,21 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：本修复只改变 shared settings mutation 的完成时序，使 UI 应用不等待查询 refetch；数据写入与 cache invalidation 仍执行，持久化格式和 IPC 不变。测试继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。若回滚，恢复 ref 更新前的 hook 和用例即可。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：共享设置 mutation 的 `onSuccess` 若只需触发后台 refetch，应使用不返回 invalidation Promise 的 block callback，并由 ref 对齐复核。跨用例重用 WebView 时重载并等待主 UI 的 typed 配置、DOM 和缓存收敛；先验证 UI 即时同步，再独立核验后端、磁盘、刷新和 legacy 路径。此 LESSON 更新已获维护者明确批准；未修改 CI 门禁。
 
-### LESSON-20261020-001：语言 E2E 必须独立准备每个 WebView 的 locale cache
+### LESSON-20261020-001：语言 E2E 必须独立准备并一致地恢复每个 WebView 的 locale cache
 
 - 日期与时区：2026-10-20 UTC
-- 状态：Open（隔离修复已写入，Windows hermetic 新 SHA 复验待完成）
+- 状态：Open（语言用例本机复验通过；Windows hermetic 新 SHA 与 Dashboard recovery 仍待复验）
 - 严重度：Low
 - 模块：E2E / Localization
 - master commit / ref gitlink SHA / 平台与测试环境：master `d9624314486e45c905876242dee5d3aacd161cba`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`（本测试修复未修改或依赖 ref 业务实现）；GitHub Actions Windows Edge 155。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #501 的 [Windows hermetic run 39421543438](https://github.com/MFSGA/Chimera/actions/runs/39421543438)。
-- 预期行为：语言用例在主窗口和 legacy 窗口都以配置语言 `en` 及相同 locale cache 开始，并在测试结束后恢复每个窗口原来的 cache、document language、路由和尺寸。
-- 真实异常、复现步骤与证据：`user-interface-language.e2e.ts` 的 `before` 在 legacy 窗口等待语言同步 30 秒后失败，最后状态为 `configured: en`、`cachedLocale: zh-cn`、`cacheSynchronized: false`、`language: en`。失败发生在原 cache 快照之前，setup 清理只能走 fallback。2026-10-21 本机 WebKit 复验还记录到刷新后并行的 `get_app_config` WebDriver 脚本超时 30 秒，而同一轮 DOM 查询已返回英语；逐窗口 UI 收敛等待不需要重复读取共享配置。
-- 确认的根因与排除项：用例依赖此前用例留下的 Paraglide `localStorage` 值，并假设重载会自动将其改成 typed app config 语言。缓存和 typed config 是两个可观察状态；测试没有在设置前保存缓存，也没有为两个 WebView 准备统一初始值。这是测试隔离缺口，未证明产品语言选择逻辑损坏。
-- 修复提交、差异映射及保留的兼容性边界：先记录每个窗口的原 cache 与 document language；通过测试准备将 typed config 设为英语并读回后，明确为每个保留窗口写入英语 cache、重载并单独等待该窗口的 DOM/cache 收敛，避免刷新期间并行执行 Tauri 配置查询。测试操作仍使用主 UI 键盘选择日语，不将准备操作冒充被测交互。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原失败见 run `39421543438`；修复后的 `user-interface-language.e2e.ts` 仍注册于 `settings` / Windows `hermetic`。新 SHA 结果待远端复验。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck`、25 项 harness 单测、Prettier、`pnpm prepare:check` 和 `pnpm e2e:tauri:build` 均通过；当前构建的 macOS WebKit 定向语言用例 1/1 通过（约 62 秒，期间有两次可恢复的 WebDriver 脚本超时重试）。新 SHA 的 Windows hermetic E2E 待复验；未验证冷启动或实际 glyph 覆盖。
-- 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 准备与快照顺序；cleanup 使用准备前的快照恢复每个窗口，不改持久化格式或宿主设置。回滚为还原该 spec 和契约。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #501 的 [Windows hermetic run 39421543438](https://github.com/MFSGA/Chimera/actions/runs/39421543438)；PR #515 的 [Windows hermetic run 39574156754](https://github.com/MFSGA/Chimera/actions/runs/39574156754) 与 [run 39582677624](https://github.com/MFSGA/Chimera/actions/runs/39582677624)。
+- 预期行为：语言用例在主窗口和 legacy 窗口都以配置语言 `en` 及相同 locale cache 开始；结束时恢复原配置、缓存语义、有效页面语言、路由和尺寸。
+- 真实异常、复现步骤与证据：`user-interface-language.e2e.ts` 的 `before` 曾在 legacy 窗口等待语言同步 30 秒后失败，状态为 `configured: en`、`cachedLocale: zh-cn`、`cacheSynchronized: false`、`language: en`；setup 清理只能走 fallback。2026-10-21 WebKit 复验还记录到刷新期间 `get_app_config` 脚本超时，而 DOM 已返回英语。Windows runs `39574156754`、`39582677624` 分别暴露主窗口 locale 清理失败和 ArrowDown 焦点断言失败。曾尝试用页面槽位识别路由，但完整槽位会随 Dashboard/Profiles 异步数据变化而造成清理误报。setup 标记复验发现主窗口查询错误地搜索 `data-slot="app-content"` 的子节点；修正后 legacy 唯一 route ID `/(legacy)/proxies` 仍被透明度为 0 的容器过滤。一次 WebKit 语言断言通过，但清理因路由链不一致失败；随后定位到主窗口先以 `/main` 启动并重定向至 `/main/dashboard`，用例在重定向完成前保存了 URL，清理再次打开 `/main` 后观察到 350ms 转场中的旧、新路由同时存在。两次相同快照只相隔 WDIO 默认 100ms，也不足以排除转场中的路由树。独立复核还发现只看外层 outlet 的全局 leaf ID 会漏掉内层路由过渡及动态 UID。
+- 确认的根因与排除项：原 setup 缺少每个 WebView 的 locale cache 显式准备，是跨用例隔离缺口。菜单用例此前未等已选英文项获得焦点，也未报告日语项自己的状态。测试路由恢复曾用 `history.replaceState` 加 `popstate` 手动改 URL，导致地址栏与 TanStack Router 实际 outlet 树不能作为同一状态验证；清理改用完整导航后仍因保存了重定向前的 `/main` 而重复触发重定向。捕获只要求两次、100ms 间隔的相同结果，短于 350ms 转场，不能证明路由树已稳定。其他 marker 缺口包括错误的父子选择器、透明度门槛和只读外层全局 leaf ID。2026-10-21 复验还发现 WebDriver 会重排返回对象属性，直接序列化造成同一路由被误判为变化；另有同步脚本超时。标记现改为显式字段签名，并在 WebView 内部采样。Windows 上述失败都未证明语言切换逻辑损坏。
+- 修复提交、差异映射及保留的兼容性边界：逐窗口按原配置、支持的 cache、document language 的优先级解析有效 locale；设置英语后逐窗口写 cache、刷新并等待 DOM/cache 收敛。清理时恢复配置和 locale，再导航回路由稳定后的有效 URL 并比较所有动画 outlet 标记。每个动画 outlet 标记其 transition key 对应的直接子路由 ID、确定性 32 位 FNV-1a selector hash 和 Motion `isPresent` 状态；动态 route match 可区分，原始参数不写入 DOM（该 hash 不作为加密隐私边界）。捕获要求完整标记（含 legacy 标题）连续稳定至少 750ms，且不含 exiting child。普通非动画 TanStack Outlet 不在这些标记范围内，契约据此限定覆盖范围。菜单在 ArrowDown 前等待已选英文项获得焦点，失败诊断读取日语菜单项本身。未改产品 IPC、配置格式或宿主设置。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原 Windows 失败见 runs `39421543438`、`39574156754` 和 `39582677624`。当前语言 spec 仍注册于 `settings` / Windows `hermetic`；750ms 稳定等待和重定向后 URL 版本本机 WebKit 通过 1/1（35 秒，一次 WebDriver 超时恢复后通过），随后加入的 Motion `isPresent` 标记尚待本机复验；新 SHA 的 Windows 复验待完成。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：此前路由槽位版语言用例通过 1/1（32.8 秒）；route-ID 版曾因选择器、透明度、清理重定向及过短稳定窗口分别失败。加入 750ms 稳定窗口与有效 URL 后，本机语言用例曾通过 1/1（35 秒）；后续发现 WebDriver 属性顺序会造成伪变化，并出现同步脚本超时。改为显式字段签名和 WebView 内部 100ms 采样后，当前 macOS WebKit 版本通过 1/1（36.2 秒，期间一次可恢复 WebDriver 同步脚本超时重试）。当前 E2E typecheck、Chimera typecheck、Prettier、`git diff --check` 和 harness 单测 25/25 通过。Dashboard WebKit 定向用例最新运行在测试体前因 `waitForMainRouteSettled` 超时：诊断观察到 `/main/dashboard` 下两个 `app-content` 动画分支（`/(main)/main/` opacity 1、Dashboard opacity 0），以及一条 `currentTime=0`、时长 200ms 的活动动画；Popover recovery 断言未覆盖。Windows run `39582677624` 在这些修改前于焦点断言失败；新 SHA Windows hermetic E2E 待复验。`pnpm prepare:check` 与 `pnpm e2e:tauri:build` 曾通过；未验证冷启动或实际 glyph 覆盖。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改 E2E 准备、焦点/路由清理与错误诊断；cleanup 优先按恢复后的持久配置确定有效 locale，若保存 cache 与显式配置冲突，则归一化 E2E 派生 cache，而不是原样保留冲突值；不改持久化格式或宿主设置。回滚为还原该 spec 和契约。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：同一套件中各 spec 可写自己的 locale cache；共享 WebView 的后续测试须显式准备目标语言并验证恢复。无 CI 门禁改动。
 
 ### LESSON-20261020-002：Dashboard E2E 应按 Popover 实际打开状态操作
@@ -488,13 +488,13 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 严重度：Low
 - 模块：E2E / Dashboard
 - master commit / ref gitlink SHA / 平台与测试环境：master `d9624314486e45c905876242dee5d3aacd161cba`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`（本测试修复未修改或依赖 ref 业务实现）；GitHub Actions Windows Edge 155。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #501 的 [Windows hermetic run 39421543438](https://github.com/MFSGA/Chimera/actions/runs/39421543438)。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #501 的 [Windows hermetic run 39421543438](https://github.com/MFSGA/Chimera/actions/runs/39421543438)；PR #515 的[后续 Windows hermetic run 39574156754](https://github.com/MFSGA/Chimera/actions/runs/39574156754)。
 - 预期行为：在校验失败配置下，Traffic widget 的 Popover 已打开，unit 与 Reset 控件都已显示，并且二者按约定禁用。
-- 真实异常、复现步骤与证据：用例在调用 Reset 的 `isEnabled()` 时收到 selector not found。失败 HTML/截图显示 Dashboard 仍在编辑模式、header 保留 `load-error`，但 `Popover.Content` 与 Reset 控件不在 DOM 中。源代码只在 Popover 内容内渲染 `[data-slot="widget-config-reset"]`。
-- 确认的根因与排除项：用例直接点击会切换开/关的 widget trigger，随后只等待 unit 元素可见，未确认 trigger 的 `aria-expanded` 和 Reset 的挂载状态。断言时 Popover 已关闭；故障注入的真实 storage 错误仍已到达，不能据此认定配置恢复功能失败。
-- 修复提交、差异映射及保留的兼容性边界：将打开辅助函数改为检查对应 trigger 的 `aria-expanded`，只在未打开时点击，并等待 unit 与 Reset 同时可见；不再无条件切换 Popover。产品组件和持久化逻辑未改。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原失败见 run `39421543438`；修复仍在 `dashboard-main-layout.e2e.ts` 并注册到 `main` / Windows `hermetic`。PR #507 的 run `39429486331` 同一 spec 通过，但不能代替新 SHA 复验。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：原 run 的 53 个 spec 中该 recovery 用例失败；PR #507 run 对该 spec 通过。当前构建的 macOS WebKit 定向运行在进入此 recovery 断言前，失败于 `main-window.ts::waitForMainRouteSettled`；诊断观察到两个 `app-content` outlet，且一个 WebKit 动画停在 `currentTime=0`。该本机前置失败没有验证此修复；新 SHA 的 Windows hermetic E2E 待复验。
+- 真实异常、复现步骤与证据：run `39421543438` 中用例直接点击会切换开/关的 widget trigger，随后只等待 unit 元素可见，没有确认 trigger 的 `aria-expanded` 和 Reset 的挂载状态；截图显示 Popover 已关闭。run `39574156754` 中状态感知辅助函数仍在未知版本 storage error 后报告 unit 控件不可见；失败前采集的 HTML/截图显示 Dashboard 在编辑模式、header 保留 `load-error`，trigger 最终为 `aria-expanded="false"`，Popover 内容未挂载。run `39582677624` 的 before-cleanup artifact 同样显示编辑模式和 `load-error`，但 trigger 已为 `aria-expanded="false"`，speed-unit 与 Popover fields 均未挂载；`ensureTrafficConfigOpen` 的打开状态前置条件在失败前已满足，状态/portal 随后关闭或被重置，artifact 不含点击时序，尚不能区分产品状态变化与测试驱动交互。2026-10-21 本机 WebKit 复跑两次均在测试体开始前因 `main-window.ts::waitForMainRouteSettled` 超时，未到达 Popover 断言。新增诊断确认 `/main/dashboard` 下同时有 `/(main)/main/` 父路由与 Dashboard 动画分支，后者 opacity 为 0；一条 Web Animation 仍为 `running`、`currentTime=0`、时长 200ms。该观察记录了动画未推进，但尚未确定本机 WebKit 的原因。
+- 确认的根因与排除项：run `39421543438` 证明第一次失败由用例在状态未知时无条件切换 Popover 导致；run `39574156754` 证明初始状态检查并等待内容仍未消除该失败。故障注入的 storage 错误确实到达且 UI 保留 `load-error`，较新失败的触发原因仍待 expanded-state 诊断和 Windows 复验。本机路由等待失败发生在 Popover 用例之前，不能据此判断产品恢复功能通过或失败。
+- 修复提交、差异映射及保留的兼容性边界：打开辅助函数检查对应 trigger 的 `aria-expanded`，只在未打开时点击，随后先等待 `aria-expanded="true"`，再等待 unit 与 Reset 同时可见。此次仅提升测试状态证据，产品组件和持久化逻辑未改；若新 E2E 仍显示 trigger 未展开，再检查产品组件和用户交互，不以放宽后续断言处理。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：第一次状态感知修复在 `39574156754` 未通过；当前增加 expanded-state 等待的版本仍在 `dashboard-main-layout.e2e.ts` 并注册到 `main` / Windows `hermetic`。PR #507 的 run `39429486331` 对旧版同一 spec 通过，但不能代替当前改动的复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39574156754` 的 53 个 spec 中 recovery 用例失败；run `39582677624` 的旧版修复仍因 unit 控件不可见而失败。本机 WebKit 曾通过定向 Dashboard 2/2（33.8 秒）；2026-10-21 最近两次运行均在测试体前由 `main-window.ts::waitForMainRouteSettled` 超时，Popover recovery 断言未覆盖。Windows 新 SHA hermetic E2E 待复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅改测试交互状态检查；用例仍恢复原 widget storage 并确认读回，不操作宿主网络。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：切换 Popover、菜单或对话框后，先等稳定的展开状态和目标控件可见，再断言内部操作。无 CI 门禁改动。
 

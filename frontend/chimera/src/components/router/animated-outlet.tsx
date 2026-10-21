@@ -12,6 +12,16 @@ import { ComponentProps, useRef } from 'react';
 
 type TransitionDirection = 1 | -1;
 
+export function getRouteRenderKey(matchId: string | undefined) {
+  if (!matchId) return undefined;
+
+  let hash = 2166136261;
+  for (let index = 0; index < matchId.length; index += 1) {
+    hash = Math.imul(hash ^ matchId.charCodeAt(index), 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
 const directionalSlideVariants = {
   forward: {
     initial: {
@@ -155,7 +165,11 @@ export function AnimatedOutlet({
   }
 
   return (
-    <motion.div ref={ref} {...props}>
+    <motion.div
+      ref={ref}
+      {...props}
+      data-route-present={isPresent ? 'true' : 'false'}
+    >
       <RouterContextProvider router={renderedRouter}>
         <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
           <Outlet />
@@ -219,6 +233,8 @@ export function AnimatedOutletPreset(props: ComponentProps<typeof motion.div>) {
           duration: 0.35,
         }}
         {...props}
+        data-route-id={nextMatch?.routeId}
+        data-route-key={getRouteRenderKey(nextMatch?.id)}
       />
     </AnimatePresence>
   );
