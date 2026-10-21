@@ -459,3 +459,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支运行 `pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、`pnpm --filter chimera-ui test:localization`（4/4）、`pnpm lint:frontend-boundaries`、Prettier、`git diff --check`、`pnpm e2e:tauri:build` 均通过；当前本机 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 在 macOS WebKit 605.1.15 通过 1/1。此前两次定向运行亦通过 1/1。新 SHA 的 Windows hermetic E2E 尚未执行；不据此声称完整桌面矩阵通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：本修复只改变 shared settings mutation 的完成时序，使 UI 应用不等待查询 refetch；数据写入与 cache invalidation 仍执行，持久化格式和 IPC 不变。测试继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。若回滚，恢复 ref 更新前的 hook 和用例即可。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：共享设置 mutation 的 `onSuccess` 若只需触发后台 refetch，应使用不返回 invalidation Promise 的 block callback，并由 ref 对齐复核。跨用例重用 WebView 时重载并等待主 UI 的 typed 配置、DOM 和缓存收敛；先验证 UI 即时同步，再独立核验后端、磁盘、刷新和 legacy 路径。此 LESSON 更新已获维护者明确批准；未修改 CI 门禁。
+
+### LESSON-20261021-001：Linux ARM64 cross-build 必须使用带 GTK/GLib 的目标镜像
+
+- 日期与时区：2026-10-21 UTC
+- 状态：Open（配置已补齐；修复后 Linux ARM64 cross-build 尚待复验）
+- 严重度：Low
+- 模块：CI / Linux cross-build
+- master commit / ref gitlink SHA / 平台与测试环境：失败运行基线 `2dca108525d855d08479fa23db71d9533352e727`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；Ubuntu 26.04 aarch64 cross build。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[夜间构建失败 39545347771](https://github.com/MFSGA/Chimera/actions/runs/39545347771)，失败 Job 为 `Linux aarch64 Build / build`。
+- 预期行为：Linux ARM64 Tauri cross-build 应在目标环境中找到 Tauri 所需的 GLib/GTK 开发文件并完成编译。
+- 真实异常、复现步骤与证据：`glib-sys v0.18.1` 的 build script 在 `cross` 容器内运行 `pkg-config --libs --cflags glib-2.0 'glib-2.0 >= 2.70'` 失败；容器的 `/usr/lib/aarch64-linux-gnu/pkgconfig/` 中没有 `glib-2.0.pc`。同一 job 的 Ubuntu host 仅安装 GTK/WebKit host 包，无法提供给隔离的目标容器。
+- 确认的根因与排除项：仓库没有 `backend/Cross.toml`，因此 aarch64 构建落到 `cross` 默认镜像；该镜像不包含项目需要的 ARM64 GLib 开发包。不是 Rust 源码或依赖版本错误，也不是 runner host 缺少包。
+- 修复提交、差异映射及保留的兼容性边界：补回 pinned ref `backend/Cross.toml` 的 aarch64 target 镜像映射，使用 `ghcr.io/libnyanpasu/builder-debian-trixie-aarch64:latest`；其他 target 仍使用 cross 默认配置。没有修改应用代码或产物发布步骤。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败证据为 run `39545347771`。修复通过 TOML 解析及与 ref SHA `ae0db596e96ba09d7662cc7533a13ffe5b581bf7` 的文件比对；本机没有 Docker，无法在本地运行目标容器，需由后续 Linux ARM64 build 验证实际依赖可用。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`yq -p toml '.target."aarch64-unknown-linux-gnu".image' backend/Cross.toml` 输出预期镜像；将 pinned ref 的文件与 `backend/Cross.toml` 比对，`cmp` 通过；`pnpm exec prettier --check LESSONS.md` 和 `git diff --cached --check` 通过。PR 通用 CI 不包含此 cross build；修复后专用 Linux ARM64 构建仍待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响 ARM64 cross-build 的构建容器镜像选择；回滚方式为移除 `backend/Cross.toml`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：Linux cross-build 所需的 target 系统库必须安装在 cross 容器内，host 的 `apt-get install` 不能替代；优先保持与 pinned ref 的 `backend/Cross.toml` 对齐。此修复未改变 CI 门禁或发布/tag 流程。
