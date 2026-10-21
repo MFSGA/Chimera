@@ -33,6 +33,18 @@ type DelayTriggerState = {
   visibility: string;
   opacity: number;
 };
+type ProxyNodeRenderState = {
+  candidateCount: number;
+  scrollViewportFound: boolean;
+  nodeVisible: boolean;
+  chips: string[];
+  hasDelay: boolean;
+  nodeText: string;
+  buttonFound: boolean;
+  buttonHeight: number;
+  buttonWidth: number;
+  buttonInViewport: boolean;
+};
 const fixture = `mixed-port: 27892
 allow-lan: false
 mode: rule
@@ -162,6 +174,114 @@ async function readDelayTriggerState(): Promise<DelayTriggerState | null> {
   });
 }
 
+async function readProxyNodeRenderState(): Promise<ProxyNodeRenderState> {
+  return browser.execute((expectedName) => {
+    const getVisibleRect = (
+      element: HTMLElement,
+      scrollViewport: HTMLElement | null,
+    ) => {
+      const rect = element.getBoundingClientRect();
+      const viewportRect = scrollViewport?.getBoundingClientRect();
+      let left = Math.max(rect.left, 0, viewportRect?.left ?? 0);
+      let top = Math.max(rect.top, 0, viewportRect?.top ?? 0);
+      let right = Math.min(
+        rect.right,
+        window.innerWidth,
+        viewportRect?.right ?? window.innerWidth,
+      );
+      let bottom = Math.min(
+        rect.bottom,
+        window.innerHeight,
+        viewportRect?.bottom ?? window.innerHeight,
+      );
+
+      for (
+        let ancestor: HTMLElement | null = element;
+        ancestor;
+        ancestor = ancestor.parentElement
+      ) {
+        const style = window.getComputedStyle(ancestor);
+        if (
+          style.display === 'none' ||
+          style.visibility === 'hidden' ||
+          style.visibility === 'collapse' ||
+          Number(style.opacity) <= 0
+        ) {
+          return null;
+        }
+
+        const bounds = ancestor.getBoundingClientRect();
+        if (/^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowX)) {
+          left = Math.max(left, bounds.left);
+          right = Math.min(right, bounds.right);
+        }
+        if (/^(auto|scroll|hidden|clip|overlay)$/.test(style.overflowY)) {
+          top = Math.max(top, bounds.top);
+          bottom = Math.min(bottom, bounds.bottom);
+        }
+      }
+
+      return {
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top),
+      };
+    };
+    const scrollViewport = document.querySelector<HTMLElement>(
+      '[data-slot="proxies-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+    );
+    const candidates = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[data-slot="proxies-virtual-item"]',
+      ),
+    ).filter((element) => element.textContent?.includes(expectedName));
+    const node =
+      candidates.find((candidate) => {
+        const button = candidate.querySelector<HTMLElement>('button');
+        const rect = button?.getBoundingClientRect();
+        const visibleRect = button && getVisibleRect(button, scrollViewport);
+        return Boolean(
+          rect &&
+          visibleRect &&
+          Math.abs(visibleRect.width - rect.width) <= 1 &&
+          Math.abs(visibleRect.height - rect.height) <= 1,
+        );
+      }) ??
+      candidates[0] ??
+      null;
+    const chips = Array.from(
+      node?.querySelectorAll<HTMLElement>('[data-slot="proxy-node-feature"]') ??
+        [],
+    ).map((chip) => chip.innerText.trim());
+    const button = node?.querySelector<HTMLButtonElement>('button') ?? null;
+    const rect = button?.getBoundingClientRect();
+    const visibleRect = button ? getVisibleRect(button, scrollViewport) : null;
+
+    return {
+      candidateCount: candidates.length,
+      scrollViewportFound: Boolean(scrollViewport),
+      nodeVisible: Boolean(
+        node &&
+        button &&
+        visibleRect &&
+        visibleRect.width > 0 &&
+        visibleRect.height > 0,
+      ),
+      chips,
+      hasDelay: Boolean(node?.querySelector('[data-slot="proxy-node-delay"]')),
+      nodeText: node?.textContent ?? '',
+      buttonFound: Boolean(button),
+      buttonHeight: rect?.height ?? 0,
+      buttonWidth: rect?.width ?? 0,
+      buttonInViewport: Boolean(
+        rect &&
+        visibleRect &&
+        visibleRect.width === rect.width &&
+        visibleRect.height === rect.height,
+      ),
+    };
+  }, nodeName);
+}
+
 describe('main proxy node reference layout', () => {
   let profileUid: string | undefined;
   let previousCurrent: string | null = null;
@@ -263,38 +383,37 @@ describe('main proxy node reference layout', () => {
 
   // Contract: an active local Profile provides the SOCKS5 fixture. The proxy
   // index reloads after activation so its group query is populated before the
-  // detail route mounts the virtualized node list. Its type and UDP chips must
-  // render on the first viewport attachment, catching a virtualizer initialized
-  // while its parent viewport ref is still null.
+  // detail route mounts the virtualized node list. Poll the current visible
+  // DOM for a measured button fully inside the content scroll viewport, then
+  // verify its type and UDP chips; the bounded wait catches a virtualizer that
+  // never attaches to its viewport.
   it('shows ref-style type and UDP chips on proxy nodes', async () => {
-    const node = await $(`[data-slot="proxies-virtual-item"]*=${nodeName}`);
-    await node.waitForDisplayed({ timeout: 15_000 });
-
-    const state = (await node.execute((element) => {
-      const chips = Array.from(
-        element.querySelectorAll<HTMLElement>(
-          '[data-slot="proxy-node-feature"]',
-        ),
-      ).map((chip) => chip.innerText.trim());
-      const delay = element.querySelector<HTMLElement>(
-        '[data-slot="proxy-node-delay"]',
+    let lastState: ProxyNodeRenderState | null = null;
+    try {
+      await browser.waitUntil(
+        async () => {
+          lastState = await readProxyNodeRenderState();
+          return (
+            lastState.nodeVisible &&
+            lastState.scrollViewportFound &&
+            lastState.buttonFound &&
+            lastState.buttonHeight >= 48 &&
+            lastState.buttonWidth > 0 &&
+            lastState.buttonInViewport
+          );
+        },
+        {
+          timeout: 15_000,
+          timeoutMsg: 'The proxy node did not reach its visible layout.',
+        },
       );
-      const button = element.querySelector<HTMLElement>('button');
-
-      return {
-        chips,
-        hasDelay: Boolean(delay),
-        nodeText: element.textContent ?? '',
-        buttonHeight: button
-          ? Math.round(button.getBoundingClientRect().height)
-          : 0,
-      };
-    })) as {
-      chips: string[];
-      hasDelay: boolean;
-      nodeText: string;
-      buttonHeight: number;
-    };
+    } catch (cause) {
+      throw new Error(
+        `The proxy node did not reach its visible layout: ${JSON.stringify(lastState)}`,
+        { cause },
+      );
+    }
+    const state = await readProxyNodeRenderState();
 
     assert.ok(
       state.chips.some((chip) => chip.toLowerCase().includes('socks')),
@@ -302,6 +421,9 @@ describe('main proxy node reference layout', () => {
     );
     assert.ok(state.chips.includes('UDP'), JSON.stringify(state, null, 2));
     assert.equal(state.hasDelay, false, JSON.stringify(state, null, 2));
+    assert.ok(state.scrollViewportFound, JSON.stringify(state, null, 2));
+    assert.ok(state.nodeVisible, JSON.stringify(state, null, 2));
+    assert.ok(state.buttonInViewport, JSON.stringify(state, null, 2));
     assert.ok(state.buttonHeight >= 48, JSON.stringify(state, null, 2));
 
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;

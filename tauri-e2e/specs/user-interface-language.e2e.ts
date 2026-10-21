@@ -791,26 +791,30 @@ describe('application language selection', () => {
       await browser.waitUntil(
         async () => {
           lastFocusState = await browser.execute(() => {
+            const menu = document.querySelector(
+              '[data-slot="language-selector-menu"]',
+            );
             const activeElement = document.activeElement;
+
             return {
               role: activeElement?.getAttribute('role'),
               text: activeElement?.textContent?.trim(),
               checked: activeElement?.getAttribute('aria-checked'),
-              menuOpen: document
-                .querySelector('[data-slot="language-selector-menu"]')
-                ?.getAttribute('data-state'),
+              menuOpen: menu?.getAttribute('data-state'),
+              focusedCheckedOption: Boolean(
+                menu &&
+                activeElement &&
+                menu.contains(activeElement) &&
+                activeElement.getAttribute('role') === 'menuitemcheckbox' &&
+                activeElement.getAttribute('aria-checked') === 'true',
+              ),
             };
           });
           const state = lastFocusState as {
-            role?: string | null;
-            checked?: string | null;
+            focusedCheckedOption?: boolean;
             menuOpen?: string | null;
           };
-          return (
-            state.menuOpen === 'open' &&
-            state.role === 'menuitemcheckbox' &&
-            state.checked === 'true'
-          );
+          return state.menuOpen === 'open' && state.focusedCheckedOption;
         },
         {
           timeout: 10_000,

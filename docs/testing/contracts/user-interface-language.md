@@ -49,13 +49,12 @@ version, and saved bytes remain intact.
   route and verifies its route ID is stable even though the page has no `<h1>`.
   It snapshots the raw `memorizedRoutePathAtom` value and restores that exact
   value during cleanup.
-- **Operation:** Focus the Language control, open its menu with Enter, move to
-  `日本語` with ArrowDown, and select it with Enter. After opening, wait for
-  the selected English menu item to receive focus before sending ArrowDown, so
-  the test observes the menu's initial focus state rather than racing it. The
-  current desktop driver's element click only synthesizes a DOM `click`, while
-  the Radix menu opens on `pointerdown`; this contract therefore checks
-  keyboard activation and makes no mouse-activation claim.
+- **Operation:** Focus the Language control and open its menu with Enter. The
+  menu explicitly transfers focus to the checked language option when it opens;
+  the test verifies that focus transfer before sending ArrowDown and Enter.
+  The current desktop driver's element click only synthesizes a DOM `click`,
+  while the Radix menu opens on `pointerdown`; this contract therefore makes no
+  mouse-activation claim.
 - **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.

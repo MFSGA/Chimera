@@ -531,3 +531,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：执行规范文本全仓搜索、Prettier 与 `git diff --check`；PR #515 的 CI 对修正后的新 SHA 待重新运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅修改治理说明；回滚为恢复相关文档。未变更分支保护、标签、远端历史或 CI 权限。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：修改治理规则前，搜索 `AGENTS.md`、`docs/ai-*`、`.github/**` 中重复规则，并核对 PR 模板与 review checklist；本次规则变更由维护者在会话中明确授权。
+
+### LESSON-20261021-002：跨平台 E2E 不应把单次焦点或布局快照当成稳定结果
+
+- 日期与时区：2026-10-21 UTC
+- 状态：Open（PR #515 的新 Windows SHA 复验待完成）
+- 严重度：Low
+- 模块：E2E / WebDriver
+- master commit / ref gitlink SHA / 平台与测试环境：PR #515 基线 `2dca108525d855d08479fa23db71d9533352e727`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；GitHub Actions Windows Edge 155 与本机 macOS WebKit 605.1.15。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #515 的 [Windows hermetic run 39602392783](https://github.com/MFSGA/Chimera/actions/runs/39602392783)；失败 artifact 含语言菜单截图/HTML，以及 proxy node 截图/HTML。
+- 预期行为：语言菜单打开后可用键盘从已选语言导航并选择日语；代理节点的 SOCKS5/UDP 标记在首屏可见，节点按钮有至少 48 CSS px 的实际高度。
+- 真实异常、复现步骤与证据：Windows run 在语言菜单打开后观察到 `document.activeElement` 仍为 `role="menu"` 容器，未进入已选英文 checkbox，测试因前置焦点断言失败，尚未发送 ArrowDown。Proxy node 一次 element-scoped 读取返回 `buttonHeight: 0`；同一失败 artifact 的截图显示节点可见，HTML 中对应按钮有 `h-14` class。后置截图/HTML 不能单独证明失败时刻的实际尺寸，也不能确定是旧元素句柄、动画还是虚拟列表重排导致。
+- 确认的根因与排除项：Windows run 中菜单已打开，但 `document.activeElement` 仍是 `role="menu"` 容器，没有焦点移交到已选英语菜单项；失败发生在 ArrowDown 前。这确认了语言菜单的键盘打开路径存在可观察的焦点缺口，未指向日语持久化故障。Proxy 节点的一次按钮尺寸读取为 `0`，稍后采集的截图/HTML 显示按钮可见且带 `h-14`；这些延后证据不能确定失败瞬间的几何状态，也不能单独证明源码布局错误。
+- 修复提交、差异映射及保留的兼容性边界：ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7` 的 `frontend/nyanpasu/src/pages/(main)/main/settings/user-interface/_modules/language-selector.tsx` 使用相同的 `DropdownMenuContent` / `DropdownMenuCheckboxItem` 路径，但依赖 Radix 默认焦点行为。Chimera 在对应语言选择器的 `onFocusCapture` 中将焦点显式交给已选项，作为 Windows E2E 已揭示的窄范围交互修正；回归用例重新断言打开菜单后的焦点，再执行 ArrowDown 与 Enter。代理布局断言从当前 DOM 查找完全位于可见区域的 fixture 节点，并检查按钮与目标滚动 viewport、窗口边界及裁剪祖先的实际交集；保留 `>=48px` 尺寸要求。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原失败见 run `39602392783`；两 spec 仍注册在现有 `hermetic` 套件。此前语言 spec 的一次本机通过使用程序化 `.focus()`，未验证产品自动焦点，不能作为本次修复证据；需用新源码重跑。Proxy node spec 在本机三次均于 before hook 创建 fixture 时失败，未进入布局断言。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：当前修复通过 `pnpm typecheck:chimera`、`pnpm --filter @chimera/tauri-e2e typecheck`、Oxlint、Prettier、`git diff --check` 和 harness unit 25/25。本机 WebKit 语言定向 spec 通过 1/1（1m06.7s；WebDriver 曾报告一条可恢复脚本超时，测试最终通过）。Proxy 定向用例在本机之前三次均于 before hook 因隔离运行时默认端口 7890 不可用而失败，未覆盖本次几何断言；没有停止或更改正在运行的 Chimera 与 Clash Nyanpasu。新 SHA Windows hermetic E2E 尚待复验；未验证真实原生键盘输入。
+- 风险/回滚和清理证据（如涉及宿主状态）：产品改动仅在语言菜单打开时设置已选项焦点；代理节点只修改 E2E 观测逻辑。没有更改持久配置、核心、系统网络或 Service 行为。回滚可移除显式焦点处理并恢复旧断言及几何读取。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：菜单回归需验证产品实际焦点转移，不可在测试中程序化补焦点；布局回归需检查实际 scroll viewport 与裁剪后的尺寸，不以 CSS 类或延后的截图代替断言。新 SHA 的 Windows E2E 通过后再关闭本记录。
