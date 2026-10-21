@@ -480,6 +480,7 @@ describe('application language selection', () => {
   const originalUrls = new Map<string, string>();
   const originalRouteMarkers = new Map<string, RouteMarker>();
   const originalWindowSizes = new Map<string, WindowSize>();
+  let legacyMemorizedRoutePathSnapshot: string | null | undefined;
 
   before(async () => {
     await browser.waitUntil(
@@ -534,6 +535,41 @@ describe('application language selection', () => {
       // settled URL so cleanup does not trigger that redirect a second time.
       originalUrls.set(handle, await browser.getUrl());
     }
+
+    const legacyOriginalUrl = originalUrls.get('legacy');
+    const legacyOriginalMarker = originalRouteMarkers.get('legacy');
+    assert.ok(
+      legacyOriginalUrl && legacyOriginalMarker?.kind === 'legacy',
+      'The retained legacy window route was not captured.',
+    );
+    await browser.switchToWindow('legacy');
+    legacyMemorizedRoutePathSnapshot = await browser.execute(() =>
+      localStorage.getItem('memorizedRoutePathAtom'),
+    );
+    const legacyProvidersUrl = new URL(legacyOriginalUrl);
+    legacyProvidersUrl.pathname = '/providers';
+    legacyProvidersUrl.search = '';
+    legacyProvidersUrl.hash = '';
+    await browser.url(legacyProvidersUrl.toString());
+    const providerRouteMarker = await captureRouteMarker('legacy');
+    assert.equal(providerRouteMarker.kind, 'legacy');
+    assert.equal(providerRouteMarker.pathname, '/providers');
+    assert.ok(
+      providerRouteMarker.routes.some(
+        ({ routeId, present }) => routeId === '/(legacy)/providers' && present,
+      ),
+      'The no-heading marker should belong to the legacy Providers route.',
+    );
+    assert.equal(
+      providerRouteMarker.heading,
+      null,
+      'A legacy route without an h1 should still have a stable route marker.',
+    );
+    await browser.url(legacyOriginalUrl);
+    await waitForRouteMarker('legacy', legacyOriginalMarker, 0);
+    originalUrls.set('legacy', await browser.getUrl());
+    await browser.switchToWindow('main');
+
     await browser.setWindowSize(1240, 638);
 
     await invoke('patch_app_config', { patch: { language: 'en' } });
@@ -684,6 +720,28 @@ describe('application language selection', () => {
               originalSize.height,
             );
           }
+        },
+        cleanupErrors,
+      );
+    }
+
+    const legacyRouteSnapshot = legacyMemorizedRoutePathSnapshot;
+    if (legacyRouteSnapshot !== undefined) {
+      await restoreWindowState(
+        'legacy',
+        'memorized route storage',
+        async () => {
+          await browser.execute((value) => {
+            if (value === null) {
+              localStorage.removeItem('memorizedRoutePathAtom');
+            } else {
+              localStorage.setItem('memorizedRoutePathAtom', value);
+            }
+          }, legacyRouteSnapshot);
+          const restoredValue = await browser.execute(() =>
+            localStorage.getItem('memorizedRoutePathAtom'),
+          );
+          assert.equal(restoredValue, legacyRouteSnapshot);
         },
         cleanupErrors,
       );

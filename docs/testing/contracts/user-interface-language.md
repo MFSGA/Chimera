@@ -45,6 +45,10 @@ version, and saved bytes remain intact.
   configuration mirror. Before capturing each window's route marker, resolve
   that window using the same config/cache precedence as cleanup; this keeps a
   translated legacy heading stable when setup later switches to English.
+  Before changing locale, the test directly opens the legacy `/providers`
+  route and verifies its route ID is stable even though the page has no `<h1>`.
+  It snapshots the raw `memorizedRoutePathAtom` value and restores that exact
+  value during cleanup.
 - **Operation:** Focus the Language control, open its menu with Enter, move to
   `日本語` with ArrowDown, and select it with Enter. After opening, wait for
   the selected English menu item to receive focus before sending ArrowDown, so
