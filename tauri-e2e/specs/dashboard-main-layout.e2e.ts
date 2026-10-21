@@ -311,13 +311,13 @@ describe('main dashboard reference layout', () => {
 
     const isTrafficConfigOpen = async () =>
       browser.execute(() => {
-        const control = document.querySelector(
-          '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+        const trigger = document.querySelector(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
         );
-        return Boolean(control && control.getClientRects().length > 0);
+        return trigger?.getAttribute('aria-expanded') === 'true';
       });
 
-    const openTrafficConfig = async () => {
+    const ensureTrafficConfigOpen = async () => {
       if (!(await isTrafficConfigOpen())) {
         const trigger = await $(
           '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
@@ -332,6 +332,25 @@ describe('main dashboard reference layout', () => {
         'Traffic unit control visibility',
         () => unitToggle.isDisplayed(),
         Boolean,
+      );
+      await waitForObservedValue(
+        'Traffic widget reset control visibility',
+        () =>
+          browser.execute(() =>
+            Boolean(
+              document
+                .querySelector('[data-slot="widget-config-reset"]')
+                ?.getClientRects().length,
+            ),
+          ),
+        Boolean,
+      );
+    };
+
+    const openTrafficConfig = async () => {
+      await ensureTrafficConfigOpen();
+      const unitToggle = await $(
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
       );
       await waitForObservedValue(
         'Traffic widget settings loading',
@@ -700,11 +719,7 @@ describe('main dashboard reference layout', () => {
         (state) => state === 'load-error',
       );
       await enterEditMode();
-      await (
-        await $(
-          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
-        )
-      ).click();
+      await ensureTrafficConfigOpen();
       const futureVersionUnitToggle = await $(
         '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
       );

@@ -62,7 +62,11 @@ async function observeFrontend(
   }
 }
 
-async function waitForApp(phase: string, observations: FrontendObservation[]) {
+async function waitForApp(
+  phase: string,
+  observations: FrontendObservation[],
+  timeout = 30_000,
+) {
   let lastState: FrontendState | null = null;
   let observedAt: string | null = null;
   let readFailed = false;
@@ -79,7 +83,7 @@ async function waitForApp(phase: string, observations: FrontendObservation[]) {
         return lastState.rootChildCount > 0;
       },
       {
-        timeout: 30_000,
+        timeout,
         timeoutMsg: `The Chimera frontend did not render during ${phase}.`,
       },
     );
@@ -93,6 +97,44 @@ async function waitForApp(phase: string, observations: FrontendObservation[]) {
     });
     throw new Error(
       `The Chimera frontend did not render during ${phase}. Last observed state: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+  observations.push({
+    phase,
+    observedAt: observedAt ?? new Date().toISOString(),
+    state: lastState,
+  });
+}
+
+async function waitForDocumentComplete(
+  phase: string,
+  observations: FrontendObservation[],
+): Promise<void> {
+  let lastState: FrontendState | null = null;
+  let observedAt: string | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await readFrontendState();
+        observedAt = new Date().toISOString();
+        return lastState.readyState === 'complete';
+      },
+      {
+        timeout: 30_000,
+        interval: 500,
+        timeoutMsg: `The Chimera document did not finish navigation during ${phase}.`,
+      },
+    );
+  } catch (cause) {
+    observations.push({
+      phase,
+      observedAt: observedAt ?? new Date().toISOString(),
+      state: lastState,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+    throw new Error(
+      `The Chimera document did not finish navigation during ${phase}. Last observed state: ${JSON.stringify(lastState)}.`,
       { cause },
     );
   }
@@ -384,8 +426,10 @@ function recordCleanup(diagnosticsPath: string, error: unknown | null): void {
   }
 }
 
+// Contract: docs/testing/contracts/application-typed-state.md
 describe('typed application state ownership', () => {
   it('persists legacy IPC patches through application.yaml and mirrors them back', async function (this: Mocha.Context) {
+    this.timeout(180_000);
     const observations: FrontendObservation[] = [];
     const test = this.test as unknown as { currentRetry?: () => number };
     const attempt = (test.currentRetry?.() ?? 0) + 1;
@@ -437,8 +481,10 @@ describe('typed application state ownership', () => {
       }
       phase = 'refresh returned';
       await observeFrontend(phase, observations);
+      phase = 'document load after refresh';
+      await waitForDocumentComplete(phase, observations);
       phase = 'render after refresh';
-      await waitForApp(phase, observations);
+      await waitForApp(phase, observations, 60_000);
 
       actual = await readAutoUpdate();
       assert.equal(actual, changed);

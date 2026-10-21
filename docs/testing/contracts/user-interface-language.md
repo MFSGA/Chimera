@@ -31,13 +31,18 @@ version, and saved bytes remain intact.
 
 - **Suite:** `settings`, registered in `tauri-e2e/spec-suites.ts` and included
   in the existing hermetic PR suite.
-- **Initial state:** An isolated E2E runtime with the current language and both
-  WebView locale caches captured. The test starts from the harness legacy
-  window, opens the main window, and prepares the main UI in English through
-  test-only `patch_app_config` IPC before checking the initial state. It reads
-  the language through `get_app_config`, the typed configuration used by the
-  main UI's settings provider; the separate typed-state contract covers the
-  legacy configuration mirror.
+- **Initial state:** An isolated E2E runtime with the current language and each
+  retained WebView's original locale cache/document language captured before
+  setup changes. The test starts from the harness legacy window, opens the main
+  window, and prepares the typed app configuration in English through test-only
+  `patch_app_config` IPC, then reads it back before refreshing either WebView.
+  It seeds the English Paraglide cache in both retained WebViews, reloads each,
+  and checks that window's rendered language/cache state. This prevents earlier
+  layout specs from leaking a locale and avoids racing a Tauri config read
+  against navigation. It reads the language
+  through `get_app_config`, the typed configuration used by the main UI's
+  settings provider; the separate typed-state contract covers the legacy
+  configuration mirror.
 - **Operation:** Focus the Language control, open its menu with Enter, move to
   `日本語` with ArrowDown, and select it with Enter. The current desktop
   driver's element click only synthesizes a DOM `click`, while the Radix menu
@@ -55,8 +60,10 @@ version, and saved bytes remain intact.
   not become `ja`, or either UI lacks the expected translated strings.
 - **Cleanup:** Restore the original configured language, locale
   cache/document language, URL, and window dimensions for each app window,
-  then return focus to the legacy window. Cleanup errors are reported together
-  with the original failure.
+  then return focus to the legacy window. The cache snapshot is taken before
+  English setup; cleanup therefore restores even a cache that differed from
+  the persisted setting. Cleanup errors are reported together with the original
+  failure.
 
 ## Limits and rollback
 

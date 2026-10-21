@@ -75,6 +75,19 @@ async function openMainWindow() {
   await browser.switchToWindow('main');
 }
 
+async function readLocaleSnapshot(): Promise<LocaleSnapshot> {
+  return browser.execute(() => ({
+    cache: localStorage.getItem(btoa('paraglide-language-cache')),
+    documentLanguage: document.documentElement.lang,
+  }));
+}
+
+async function setLocaleCache(locale: string): Promise<void> {
+  await browser.execute((value) => {
+    localStorage.setItem(btoa('paraglide-language-cache'), value);
+  }, locale);
+}
+
 async function openUserInterfaceSettings() {
   await browser.waitUntil(
     async () =>
@@ -116,18 +129,16 @@ async function waitForLocaleSynchronization(handle: string) {
   try {
     await browser.waitUntil(
       async () => {
-        const [config, ui] = await Promise.all([
-          invoke<AppConfig>('get_app_config'),
-          browser.execute(() => ({
-            ready:
-              document.readyState === 'complete' &&
-              (document.getElementById('root')?.childElementCount ?? 0) > 0,
-            language: document.documentElement.lang.toLowerCase(),
-            cachedLanguage: localStorage.getItem(
-              btoa('paraglide-language-cache'),
-            ),
-          })),
-        ]);
+        const config = await invoke<AppConfig>('get_app_config');
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang.toLowerCase(),
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
         const configuredLocale = normalizeLocale(config.language);
         const cachedLocale = normalizeLocale(ui.cachedLanguage);
         const expectedLocale = configuredLocale ?? cachedLocale ?? 'en';
@@ -152,6 +163,41 @@ async function waitForLocaleSynchronization(handle: string) {
   } catch (cause) {
     throw new Error(
       `${handle} locale did not synchronize before its snapshot: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
+}
+
+async function waitForPreparedLocale(handle: string, locale: string) {
+  let lastState: unknown;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang.toLowerCase(),
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
+        lastState = { handle, expected: locale, ...ui };
+        return (
+          ui.ready &&
+          normalizeLocale(ui.language) === locale &&
+          normalizeLocale(ui.cachedLanguage) === locale
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 250,
+        timeoutMsg: `${handle} did not render the prepared ${locale} locale.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not render the prepared locale: ${JSON.stringify(lastState)}`,
       { cause },
     );
   }
@@ -233,17 +279,9 @@ describe('application language selection', () => {
       await browser.switchToWindow(handle);
       originalWindowSizes.set(handle, await browser.getWindowSize());
       originalUrls.set(handle, await browser.getUrl());
-      // Other layout specs seed the Paraglide cache directly. Reload retained
-      // windows so this test snapshots the locale resolved from app config.
-      await browser.refresh();
-      await waitForLocaleSynchronization(handle);
-      localeSnapshots.set(
-        handle,
-        await browser.execute(() => ({
-          cache: localStorage.getItem(btoa('paraglide-language-cache')),
-          documentLanguage: document.documentElement.lang,
-        })),
-      );
+      // Capture each WebView's actual prior state before normalizing its
+      // Paraglide cache for this test's controlled starting locale.
+      localeSnapshots.set(handle, await readLocaleSnapshot());
     }
 
     await openMainWindow();
@@ -264,15 +302,7 @@ describe('application language selection', () => {
           timeoutMsg: 'The new main window did not finish its first render.',
         },
       );
-      await browser.refresh();
-      await waitForLocaleSynchronization('main');
-      localeSnapshots.set(
-        'main',
-        await browser.execute(() => ({
-          cache: localStorage.getItem(btoa('paraglide-language-cache')),
-          documentLanguage: document.documentElement.lang,
-        })),
-      );
+      localeSnapshots.set('main', await readLocaleSnapshot());
     }
     await browser.setWindowSize(1240, 638);
     await openUserInterfaceSettings();
@@ -290,7 +320,16 @@ describe('application language selection', () => {
         timeoutMsg: 'Could not prepare the test runtime in English.',
       },
     );
-    await browser.refresh();
+    // Earlier layout specs intentionally seed their own locales. Prepare both
+    // retained WebViews from the same persisted English setting so this test
+    // does not depend on which spec ran before it.
+    for (const handle of localeSnapshots.keys()) {
+      await browser.switchToWindow(handle);
+      await setLocaleCache('en');
+      await browser.refresh();
+      await waitForPreparedLocale(handle, 'en');
+    }
+    await browser.switchToWindow('main');
     await openUserInterfaceSettings();
     await browser.waitUntil(
       async () =>
