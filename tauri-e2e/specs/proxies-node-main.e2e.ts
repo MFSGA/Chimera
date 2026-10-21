@@ -242,8 +242,10 @@ async function readProxyNodeRenderState(): Promise<ProxyNodeRenderState> {
         return Boolean(
           rect &&
           visibleRect &&
-          Math.abs(visibleRect.width - rect.width) <= 1 &&
-          Math.abs(visibleRect.height - rect.height) <= 1,
+          visibleRect.width > 0 &&
+          visibleRect.height > 0 &&
+          visibleRect.width === rect.width &&
+          visibleRect.height === rect.height,
         );
       }) ??
       candidates[0] ??
