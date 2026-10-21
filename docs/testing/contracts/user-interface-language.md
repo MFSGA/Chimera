@@ -71,7 +71,8 @@ version, and saved bytes remain intact.
   selector key of its immediate child match, matching the key used by its
   transition, plus Motion's `isPresent` state. Capture rejects any marker whose
   transition child is exiting, then requires the full marker, including the
-  legacy heading, to remain identical for at least 750 ms, longer than the
+  nullable legacy heading (some valid pages have no `<h1>`), to remain
+  identical for at least 750 ms, longer than the
   350 ms outlet transition. The WebView samples every 100 ms and compares
   explicit route fields, so WebDriver object property ordering cannot make an
   unchanged route appear different. This distinguishes dynamic route matches
@@ -80,6 +81,9 @@ version, and saved bytes remain intact.
   parameters are not written to DOM attributes; the 32-bit selector hash is
   deterministic and is not a cryptographic privacy boundary. Plain,
   non-animated TanStack outlets are not represented by these markers.
+  If setup cannot capture the original route marker, cleanup navigates to the
+  saved URL and captures a fresh stable marker instead of skipping route
+  verification.
   Resolve the post-refresh language from the restored configuration first,
   then the saved supported cache, and finally the captured document language
   when neither setting selects a locale. If an explicit configured language

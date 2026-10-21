@@ -44,14 +44,14 @@ type RouteMarker =
 
 function routeMarkerSignature(marker: RouteMarker | null) {
   if (!marker) return null;
-  const routes = marker.routes
-    .map(({ routeId, routeKey, present }) =>
-      [routeId, routeKey, present ? 'present' : 'exiting'].join(':'),
-    )
-    .join('|');
+  const routes = marker.routes.map(({ routeId, routeKey, present }) => [
+    routeId,
+    routeKey,
+    present,
+  ]);
   return marker.kind === 'legacy'
-    ? [marker.kind, marker.pathname, routes, marker.heading ?? ''].join('\n')
-    : [marker.kind, marker.pathname, routes].join('\n');
+    ? JSON.stringify([marker.kind, marker.pathname, routes, marker.heading])
+    : JSON.stringify([marker.kind, marker.pathname, routes]);
 }
 
 type WindowSize = {
@@ -128,14 +128,14 @@ async function waitForRouteMarker(
 
       const signatureOf = (value: RouteMarker | null) => {
         if (!value) return null;
-        const routes = value.routes
-          .map(({ routeId, routeKey, present }) =>
-            [routeId, routeKey, present ? 'present' : 'exiting'].join(':'),
-          )
-          .join('|');
+        const routes = value.routes.map(({ routeId, routeKey, present }) => [
+          routeId,
+          routeKey,
+          present,
+        ]);
         return value.kind === 'legacy'
-          ? [value.kind, value.pathname, routes, value.heading ?? ''].join('\n')
-          : [value.kind, value.pathname, routes].join('\n');
+          ? JSON.stringify([value.kind, value.pathname, routes, value.heading])
+          : JSON.stringify([value.kind, value.pathname, routes]);
       };
       const readMarker = (): RouteMarker | null => {
         const isMain =
@@ -157,9 +157,7 @@ async function waitForRouteMarker(
         }
         const heading =
           document.querySelector('h1')?.textContent?.trim() ?? null;
-        return heading
-          ? { kind: 'legacy', pathname: location.pathname, routes, heading }
-          : null;
+        return { kind: 'legacy', pathname: location.pathname, routes, heading };
       };
       const diagnostics = () => ({
         pathname: location.pathname,
@@ -641,26 +639,35 @@ describe('application language selection', () => {
         'route',
         async () => {
           const originalUrl = originalUrls.get(handle);
-          if (originalUrl && (await browser.getUrl()) !== originalUrl) {
-            await browser.url(originalUrl);
-            let lastObservedUrl: string | undefined;
-            await browser.waitUntil(
-              async () => {
-                lastObservedUrl = await browser.getUrl();
-                return lastObservedUrl === originalUrl;
-              },
-              {
-                timeout: 15_000,
-                timeoutMsg: `${handle} did not return to its original route: expected ${originalUrl}, last observed ${lastObservedUrl}.`,
-              },
-            );
-          }
           const originalRouteMarker = originalRouteMarkers.get(handle);
+          if (
+            originalUrl &&
+            (!originalRouteMarker || (await browser.getUrl()) !== originalUrl)
+          ) {
+            await browser.url(originalUrl);
+            if (originalRouteMarker) {
+              let lastObservedUrl: string | undefined;
+              await browser.waitUntil(
+                async () => {
+                  lastObservedUrl = await browser.getUrl();
+                  return lastObservedUrl === originalUrl;
+                },
+                {
+                  timeout: 15_000,
+                  timeoutMsg: `${handle} did not return to its original route: expected ${originalUrl}, last observed ${lastObservedUrl}.`,
+                },
+              );
+            }
+          }
           if (originalRouteMarker) {
             await waitForRouteMarker(handle, originalRouteMarker, 0);
-          } else if (originalUrl && (await browser.getUrl()) !== originalUrl) {
+          } else if (originalUrl) {
+            const recoveredMarker = await captureRouteMarker(handle);
+            originalRouteMarkers.set(handle, recoveredMarker);
+            originalUrls.set(handle, await browser.getUrl());
+          } else {
             throw new Error(
-              `No original route marker was captured for ${handle}.`,
+              `No original route URL or marker was captured for ${handle}.`,
             );
           }
         },
