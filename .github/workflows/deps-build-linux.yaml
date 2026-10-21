@@ -210,16 +210,23 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
           NIGHTLY: ${{ inputs.nightly == true && 'true' || 'false' }}
         run: |
+          target=""
           case "${{ inputs.arch }}" in
-            "i686")
-              ${{ inputs.nightly == true && 'pnpm build:nightly -r cross --target i686-unknown-linux-gnu -b "rpm,deb"' || 'pnpm build -r cross --target i686-unknown-linux-gnu -b "rpm,deb" -c "{ "bundle": { "createUpdaterArtifacts": false } }"' }} ;;
-            "aarch64")
-              ${{ inputs.nightly == true && 'pnpm build:nightly -r cross --target aarch64-unknown-linux-gnu -b "rpm,deb"' || 'pnpm build -r cross --target aarch64-unknown-linux-gnu -b "rpm,deb" -c "{ "bundle": { "createUpdaterArtifacts": false } }"' }} ;;
-            "armel")
-              ${{ inputs.nightly == true && 'pnpm build:nightly -r cross --target armv7-unknown-linux-gnueabi -b "rpm,deb"' || 'pnpm build -r cross --target armv7-unknown-linux-gnueabi -b "rpm,deb" -c "{ "bundle": { "createUpdaterArtifacts": false } }"' }} ;;
-            "armhf")
-              ${{ inputs.nightly == true && 'pnpm build:nightly -r cross --target armv7-unknown-linux-gnueabihf -b "rpm,deb"' || 'pnpm build -r cross --target armv7-unknown-linux-gnueabihf -b "rpm,deb" -c "{ "bundle": { "createUpdaterArtifacts": false } }"' }} ;;
+            "i686") target="i686-unknown-linux-gnu" ;;
+            "aarch64") target="aarch64-unknown-linux-gnu" ;;
+            "armel") target="armv7-unknown-linux-gnueabi" ;;
+            "armhf") target="armv7-unknown-linux-gnueabihf" ;;
+            *)
+              echo "Unsupported cross-build architecture: ${{ inputs.arch }}" >&2
+              exit 1
+              ;;
           esac
+
+          if [[ "${NIGHTLY}" == "true" ]]; then
+            pnpm build:nightly -r cross --target "${target}" -b "rpm,deb"
+          else
+            pnpm build -r cross --target "${target}" -b "rpm,deb" -c '{"bundle":{"createUpdaterArtifacts":false}}'
+          fi
 
       - name: Calc the archive signature
         run: |

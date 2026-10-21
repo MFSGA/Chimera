@@ -476,3 +476,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`yq -p toml '.target."aarch64-unknown-linux-gnu".image' backend/Cross.toml` 输出预期镜像；将 pinned ref 的文件与 `backend/Cross.toml` 比对，`cmp` 通过；`pnpm exec prettier --check LESSONS.md` 和 `git diff --cached --check` 通过。PR 通用 CI 不包含此 cross build；修复后专用 Linux ARM64 构建仍待复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：只影响 ARM64 cross-build 的构建容器镜像选择；回滚方式为移除 `backend/Cross.toml`。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：Linux cross-build 所需的 target 系统库必须安装在 cross 容器内，host 的 `apt-get install` 不能替代；优先保持与 pinned ref 的 `backend/Cross.toml` 对齐。此修复未改变 CI 门禁或发布/tag 流程。
+
+### LESSON-20261021-002：非夜间 cross 构建的 Tauri JSON 参数必须保留引号
+
+- 日期与时区：2026-10-21 UTC
+- 状态：Open（命令已改为 shell 分支与单引号 JSON；aarch64 定向构建复验待完成）
+- 严重度：Low
+- 模块：CI / Linux cross-build
+- master commit / ref gitlink SHA / 平台与测试环境：PR #518 基线 `de251518084d5bf2a6af9e1f437538f8ce41a4f7`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；GitHub Ubuntu 26.04 aarch64。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[定向构建 run 39621617941](https://github.com/MFSGA/Chimera/actions/runs/39621617941)。
+- 预期行为：`nightly=false` 的 Cross 构建应将 `{"bundle":{"createUpdaterArtifacts":false}}` 作为有效 JSON 传给 Tauri `--config`。
+- 真实异常、复现步骤与证据：run `39621617941` 在 `Tauri build and upload (cross)` 退出，Tauri 收到 `{ bundle: { createUpdaterArtifacts: false } }` 并报错 `key must be a string`；尚未进入 Rust cross 编译。
+- 确认的根因与排除项：GitHub expression 字符串里嵌套双引号和 shell 双引号，渲染后 shell 移除了 JSON key 引号；与 Cross 镜像或 Rust 依赖无关。
+- 修复提交、差异映射及保留的兼容性边界：在 `.github/workflows/deps-build-linux.yaml` 将目标三元组映射和 nightly 分支移到 Bash，并以单引号传入 compact JSON；夜间命令保持原构建模式。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败证据为 run `39621617941`。修复后需由同一工作流以 `nightly=false`、`arch=aarch64` 复验，并确认构建实际到达 Cross 容器。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：提取该步骤并以 `NIGHTLY=false`、aarch64 输入和 `pnpm` stub 执行，确认传入目标三元组及完整 JSON 参数；`bash -n` 和 `actionlint -ignore 'label "ubuntu-26.04" is unknown' -ignore 'SC2086' -ignore 'SC2162' .github/workflows/deps-build-linux.yaml` 通过。未忽略诊断的全量 actionlint 仍报告原有 ubuntu-26.04 runner label、两项 SC2086 和一项 SC2162，修改步骤本身无诊断。Prettier 与 `git diff --check` 通过；定向构建复验待执行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变单次 Linux cross 构建命令参数；回滚时恢复原来的 per-architecture expression 命令并移除此记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：避免在 GitHub expression 字符串中嵌套复杂 shell 引号；把条件分支放进 Bash，并让 JSON 参数在 shell 中使用单引号保持原样。
