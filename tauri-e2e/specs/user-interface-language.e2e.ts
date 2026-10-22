@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ChainablePromiseElement } from 'webdriverio';
 
 const mainSettingsPath = '/main/settings/user-interface';
 
@@ -71,6 +72,19 @@ function persistedLanguage(): string | null {
   const value =
     /^language:\s*["']?([^"'#\s]+)["']?\s*$/m.exec(text)?.[1] ?? null;
   return value === 'null' || value === '~' ? null : value;
+}
+
+async function clickWithMouse(
+  element: ChainablePromiseElement | WebdriverIO.Element,
+) {
+  const target = await element.getElement();
+  await browser
+    .action('pointer', { parameters: { pointerType: 'mouse' } })
+    .move({ origin: target })
+    .down()
+    .pause(10)
+    .up()
+    .perform();
 }
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
@@ -470,7 +484,7 @@ async function restoreWindowState(
 
 /**
  * Contract: Starting from the persisted English test setting, select Japanese
- * through the main UI keyboard menu. Verify immediate main UI/cache state,
+ * through the main UI with mouse clicks. Verify immediate main UI/cache state,
  * typed app config, application.yaml, the main UI after refresh, and Japanese
  * labels after navigating the retained legacy window to /proxies. This catches
  * locale changes delayed behind query refetch; it does not claim live sync in
@@ -769,17 +783,16 @@ describe('application language selection', () => {
     }
   });
 
-  it('loads the persisted Japanese locale in the legacy proxy page', async () => {
+  it('selects Japanese with mouse clicks and persists it across both UIs', async () => {
     const trigger = await $('[data-slot="language-selector-trigger"]');
     await trigger.waitForDisplayed();
-    await browser.execute((element) => element.focus(), trigger);
-    await browser.keys('Enter');
+    await clickWithMouse(trigger);
 
     await browser.waitUntil(
       async () => (await trigger.getAttribute('aria-expanded')) === 'true',
       {
         timeout: 10_000,
-        timeoutMsg: 'The language menu did not open from the keyboard.',
+        timeoutMsg: 'A mouse click did not open the language menu.',
       },
     );
     const menu = await $('[data-slot="language-selector-menu"]');
@@ -788,91 +801,8 @@ describe('application language selection', () => {
       '//*[@data-slot="language-selector-menu"]//*[@role="menuitemcheckbox" and normalize-space(.)="日本語"]',
     );
     await japaneseOption.waitForExist({ timeout: 10_000 });
-
-    let lastFocusState: unknown;
-    try {
-      await browser.waitUntil(
-        async () => {
-          lastFocusState = await browser.execute(() => {
-            const menu = document.querySelector(
-              '[data-slot="language-selector-menu"]',
-            );
-            const activeElement = document.activeElement;
-
-            return {
-              role: activeElement?.getAttribute('role'),
-              text: activeElement?.textContent?.trim(),
-              checked: activeElement?.getAttribute('aria-checked'),
-              menuOpen: menu?.getAttribute('data-state'),
-              focusedCheckedOption: Boolean(
-                menu &&
-                activeElement &&
-                menu.contains(activeElement) &&
-                activeElement.getAttribute('role') === 'menuitemcheckbox' &&
-                activeElement.getAttribute('aria-checked') === 'true',
-              ),
-            };
-          });
-          const state = lastFocusState as {
-            focusedCheckedOption?: boolean;
-            menuOpen?: string | null;
-          };
-          return state.menuOpen === 'open' && state.focusedCheckedOption;
-        },
-        {
-          timeout: 10_000,
-          timeoutMsg: 'The selected language item did not receive menu focus.',
-        },
-      );
-    } catch (cause) {
-      throw new Error(
-        `The selected language item did not receive menu focus: ${JSON.stringify(lastFocusState)}`,
-        { cause },
-      );
-    }
-    await browser.keys('ArrowDown');
-    try {
-      await browser.waitUntil(
-        async () =>
-          browser.execute(
-            () => document.activeElement?.textContent?.trim() === '日本語',
-          ),
-        {
-          timeout: 10_000,
-          timeoutMsg: 'ArrowDown did not focus the Japanese language option.',
-        },
-      );
-    } catch (cause) {
-      const focusState = await browser.execute(() => ({
-        activeRole: document.activeElement?.getAttribute('role'),
-        activeText: document.activeElement?.textContent?.trim(),
-        activeChecked: document.activeElement?.getAttribute('aria-checked'),
-        menuState: document
-          .querySelector('[data-slot="language-selector-menu"]')
-          ?.getAttribute('data-state'),
-        japaneseOption: (() => {
-          const option = Array.from(
-            document.querySelectorAll<HTMLElement>(
-              '[data-slot="language-selector-menu"] [role="menuitemcheckbox"]',
-            ),
-          ).find(
-            (item) =>
-              item.textContent?.replace(/\s+/g, ' ').trim() === '日本語',
-          );
-          return option
-            ? {
-                exists: true,
-                checked: option.getAttribute('aria-checked'),
-              }
-            : { exists: false, checked: null };
-        })(),
-      }));
-      throw new Error(
-        `ArrowDown did not focus the Japanese language option: ${JSON.stringify(focusState)}`,
-        { cause },
-      );
-    }
-    await browser.keys('Enter');
+    await japaneseOption.waitForDisplayed({ timeout: 10_000 });
+    await clickWithMouse(japaneseOption);
 
     let lastLanguageState: unknown;
     try {

@@ -10,9 +10,9 @@ catalog. The work follows
 
 This is a desktop UI E2E contract. It exercises the real Tauri frontend and
 configuration API. Reading the saved language uses IPC as an independent
-observation; the operation itself uses keyboard activation in the main UI. It
-does not verify a cold application restart or actual glyph rendering on every
-operating system.
+observation; the operation itself uses mouse clicks in the main UI. It does not
+verify a cold application restart or actual glyph rendering on every operating
+system.
 
 ## Unit coverage
 
@@ -49,12 +49,9 @@ version, and saved bytes remain intact.
   route and verifies its route ID is stable even though the page has no `<h1>`.
   It snapshots the raw `memorizedRoutePathAtom` value and restores that exact
   value during cleanup.
-- **Operation:** Focus the Language control and open its menu with Enter. The
-  menu explicitly transfers focus to the checked language option when it opens;
-  the test verifies that focus transfer before sending ArrowDown and Enter.
-  The current desktop driver's element click only synthesizes a DOM `click`,
-  while the Radix menu opens on `pointerdown`; this contract therefore makes no
-  mouse-activation claim.
+- **Operation:** Use WebDriver mouse pointer actions to press and release the
+  Language control, then press and release the Japanese option. This exercises
+  the same pointer events as a user clicking the menu and option.
 - **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.
@@ -104,10 +101,9 @@ version, and saved bytes remain intact.
 
 This test does not prove Japanese system-locale detection, the Windows installer
 language picker, cold-start persistence, live cross-window updates before a
-reload, mouse activation of the language menu, Tab focus order, menu animation,
-or platform font availability. WDIO sends Enter and ArrowDown to a
-programmatically focused control; this checks the application's keyboard
-handlers, not native keyboard input. Rust unit tests cover locale detection and
+reload, keyboard focus order, menu animation, or platform font availability.
+This test checks persisted selection through the pointer interface; it does not
+exercise native keyboard input. Rust unit tests cover locale detection and
 typed/legacy configuration conversion. Rust-native translations use the typed
 startup locale, including its system-locale default. The test does not change
 system proxy, TUN, Service, or other host settings. The installer language
