@@ -557,7 +557,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 状态：Open（修复已写入 PR #515；新 SHA 的 Windows hermetic E2E 待复验）
 - 严重度：Low
 - 模块：E2E / WebDriver
-- master commit / ref gitlink SHA / 平台与测试环境：PR #515 head `f159daf7eec8041edc3467c29af61785c95788d9`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；macOS WebKit 605.1.15 与 GitHub Actions Windows Edge。
+- PR head / ref gitlink SHA / 平台与测试环境：修复前 head `f159daf7eec8041edc3467c29af61785c95788d9`；master 同步到 `f5b2271b8ea177db285f8c97f9466896b4cc5bbf` 后的 timer 修复 head `3613059177571197e7fba2320129bfc033470bd5`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；macOS WebKit 605.1.15 与 GitHub Actions Windows Edge。
 - 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #515](https://github.com/MFSGA/Chimera/pull/515)；独立复核沿 `tauri-e2e/specs/user-interface-language.e2e.ts::waitForRouteMarker` 的 timeout 分支确认问题。旧 head 的 [Windows hermetic run 39616924154](https://github.com/MFSGA/Chimera/actions/runs/39616924154) 通过，但早于该修复。
 - 预期行为：稳定路由采样成功或超时时，等待函数结束后都不再执行页面 DOM 采样。
 - 真实异常、复现步骤与证据：原实现每次采样都用 `window.setTimeout(sample, 100)` 安排下一次读取；`finish(false)` 只清除截止 timer 并调用 WebDriver completion callback，未保存或清除 sample timer。若在稳定路由出现前超时，已有 sample timer 会在回调完成后继续重复读取 DOM。独立复核检查了仓库锁定版本的 WebKit `execute_async_script` 包装：完成 WebDriver callback 不会取消页面上下文 timer。
