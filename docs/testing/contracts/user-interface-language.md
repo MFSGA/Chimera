@@ -84,6 +84,10 @@ version, and saved bytes remain intact.
   parameters are not written to DOM attributes; the 32-bit selector hash is
   deterministic and is not a cryptographic privacy boundary. Plain,
   non-animated TanStack outlets are not represented by these markers.
+  The WebView poller owns both its deadline and pending sample timer. On either
+  success or timeout it cancels both; a queued sample also exits once the wait
+  is complete. Resolving the WebDriver async callback does not cancel page
+  timers by itself.
   If setup cannot capture the original route marker, cleanup navigates to the
   saved URL and captures a fresh stable marker instead of skipping route
   verification.

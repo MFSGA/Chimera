@@ -125,6 +125,7 @@ async function waitForRouteMarker(
       let exitingMarkers = 0;
       const recentSignatures: string[] = [];
       const startedAt = Date.now();
+      let sampleTimer: number | undefined;
 
       const signatureOf = (value: RouteMarker | null) => {
         if (!value) return null;
@@ -181,7 +182,8 @@ async function waitForRouteMarker(
       const finish = (ok: boolean) => {
         if (finished) return;
         finished = true;
-        window.clearTimeout(timer);
+        if (timer !== undefined) window.clearTimeout(timer);
+        if (sampleTimer !== undefined) window.clearTimeout(sampleTimer);
         done({
           ok,
           marker,
@@ -194,6 +196,7 @@ async function waitForRouteMarker(
         });
       };
       const sample = () => {
+        if (finished) return;
         observations += 1;
         marker = readMarker();
         const signature = signatureOf(marker);
@@ -222,7 +225,7 @@ async function waitForRouteMarker(
           finish(false);
           return;
         }
-        window.setTimeout(sample, 100);
+        sampleTimer = window.setTimeout(sample, 100);
       };
       const timer = window.setTimeout(() => finish(false), timeoutMs);
       sample();

@@ -39,6 +39,8 @@
 | LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard     | PR #501 的 Popover 需等待打开状态与控件；本机 WebKit 路由动画前置偶发超时，Windows 新 SHA 待复验                | Open      |
 | LESSON-20261020-003 | 2026-10-20 | E2E / WebDriver     | PR #507 的 refresh 不等待新文档加载；需验证文档身份变化、再等 React 挂载                                        | Open      |
 | LESSON-20261021-001 | 2026-10-21 | Governance / Review | 历史重写规则修改遗漏审查清单与 PR 模板中的旧禁令；须同步所有规范副本并交叉检查                                  | Mitigated |
+| LESSON-20261021-002 | 2026-10-21 | E2E / WebDriver     | 跨平台焦点/布局快照需对应真实状态；PR #515 新 SHA E2E 复验待完成                                                | Open      |
+| LESSON-20261022-001 | 2026-10-22 | E2E / WebDriver     | `executeAsync` 完成不会自动清除页面定时器；路由轮询须停止并清除所有待执行 timer，PR #515 新 SHA 待复验          | Open      |
 
 ## 单条模板
 
@@ -548,3 +550,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前修复通过 `pnpm typecheck:chimera`、`pnpm --filter @chimera/tauri-e2e typecheck`、Oxlint、Prettier、`git diff --check` 和 harness unit 25/25。本机 WebKit 语言定向 spec 通过 1/1（1m06.7s；WebDriver 曾报告一条可恢复脚本超时，测试最终通过）。Proxy 定向用例在本机之前三次均于 before hook 因隔离运行时默认端口 7890 不可用而失败，未覆盖本次几何断言；没有停止或更改正在运行的 Chimera 与 Clash Nyanpasu。新 SHA Windows hermetic E2E 尚待复验；未验证真实原生键盘输入。
 - 风险/回滚和清理证据（如涉及宿主状态）：产品改动仅在语言菜单打开时设置已选项焦点；代理节点只修改 E2E 观测逻辑。没有更改持久配置、核心、系统网络或 Service 行为。回滚可移除显式焦点处理并恢复旧断言及几何读取。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：菜单回归需验证产品实际焦点转移，不可在测试中程序化补焦点；布局回归需检查实际 scroll viewport 与裁剪后的尺寸，不以 CSS 类或延后的截图代替断言。新 SHA 的 Windows E2E 通过后再关闭本记录。
+
+### LESSON-20261022-001：executeAsync 超时后必须停止页面内轮询
+
+- 日期与时区：2026-10-22 UTC
+- 状态：Open（修复已写入 PR #515；新 SHA 的 Windows hermetic E2E 待复验）
+- 严重度：Low
+- 模块：E2E / WebDriver
+- master commit / ref gitlink SHA / 平台与测试环境：PR #515 head `f159daf7eec8041edc3467c29af61785c95788d9`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；macOS WebKit 605.1.15 与 GitHub Actions Windows Edge。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #515](https://github.com/MFSGA/Chimera/pull/515)；独立复核沿 `tauri-e2e/specs/user-interface-language.e2e.ts::waitForRouteMarker` 的 timeout 分支确认问题。旧 head 的 [Windows hermetic run 39616924154](https://github.com/MFSGA/Chimera/actions/runs/39616924154) 通过，但早于该修复。
+- 预期行为：稳定路由采样成功或超时时，等待函数结束后都不再执行页面 DOM 采样。
+- 真实异常、复现步骤与证据：原实现每次采样都用 `window.setTimeout(sample, 100)` 安排下一次读取；`finish(false)` 只清除截止 timer 并调用 WebDriver completion callback，未保存或清除 sample timer。若在稳定路由出现前超时，已有 sample timer 会在回调完成后继续重复读取 DOM。独立复核检查了仓库锁定版本的 WebKit `execute_async_script` 包装：完成 WebDriver callback 不会取消页面上下文 timer。
+- 确认的根因与排除项：页面 timer 的生命周期独立于 WebDriver async callback；轮询回调还缺少 `finished` 终止检查，因此 timeout 后会继续安排新的采样。不是主 UI 路由状态或产品运行时故障。
+- 修复提交、差异映射及保留的兼容性边界：`waitForRouteMarker` 保存 deadline 与 sample 两个 timer handle；`finish` 设置完成状态并清除两者，`sample` 入口在完成后立即返回。仅修改 E2E 辅助逻辑，不改产品 API、路由标记或持久化。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：该辅助逻辑供 `user-interface-language.e2e.ts` setup/cleanup 使用，并在现有 hermetic suite 注册。新 SHA Windows E2E 待复验；本机单独串行运行此 spec 通过 1/1，报告数条 WebDriver 可恢复脚本超时；此前与独立复核并行运行的本机尝试因共享桌面 session 冲突，在 before hook 失败，不作为验证证据。当前没有专门强制 timeout 分支的 E2E 断言。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；目标 spec `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 单独串行运行通过 1/1；Prettier 与 `git diff --check` 通过。一次 `pnpm prepare:check` 在资源缓存完成后无进度，手动中断，不能算通过。修复后的 Windows E2E 尚未运行。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅 E2E 等待器的 timer 清理；无产品配置、宿主网络或系统状态变化。回滚为恢复路由 helper 原有的 deadline-only 清理。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：使用页面轮询的 `executeAsync` helper 必须自行跟踪并清除 deadline 和循环 sample timer，且每个异步回调应检查完成状态；不能假定 WebDriver callback 完成会结束页面内 timer。无 CI 门禁变更。
