@@ -49,9 +49,11 @@ version, and saved bytes remain intact.
   route and verifies its route ID is stable even though the page has no `<h1>`.
   It snapshots the raw `memorizedRoutePathAtom` value and restores that exact
   value during cleanup.
-- **Operation:** Use WebDriver mouse pointer actions to press and release the
-  Language control, then press and release the Japanese option. This exercises
-  the same pointer events as a user clicking the menu and option.
+- **Operation:** Use WebDriver mouse-type pointer actions to press and release
+  the Language control, then press and release the Japanese option. This drives
+  the real UI controls through the desktop driver's pointer-action path. The
+  current driver synthesizes untrusted mouse events, so this does not prove
+  trusted native OS input or a complete browser PointerEvent sequence.
 - **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.

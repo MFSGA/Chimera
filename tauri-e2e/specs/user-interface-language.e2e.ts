@@ -783,7 +783,7 @@ describe('application language selection', () => {
     }
   });
 
-  it('selects Japanese with mouse clicks and persists it across both UIs', async () => {
+  it('selects Japanese with mouse pointer actions and persists it across both UIs', async () => {
     const trigger = await $('[data-slot="language-selector-trigger"]');
     await trigger.waitForDisplayed();
     await clickWithMouse(trigger);
