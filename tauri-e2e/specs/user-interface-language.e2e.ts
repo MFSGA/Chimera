@@ -286,6 +286,40 @@ async function setLocaleCache(locale: string): Promise<void> {
   }, locale);
 }
 
+async function refreshDocument(handle: string): Promise<void> {
+  const previousTimeOrigin = await browser.execute(
+    () => performance.timeOrigin,
+  );
+  await browser.refresh();
+
+  let lastState: { readyState: DocumentReadyState; timeOrigin: number } | null =
+    null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute(() => ({
+          readyState: document.readyState,
+          timeOrigin: performance.timeOrigin,
+        }));
+        return (
+          lastState.readyState === 'complete' &&
+          lastState.timeOrigin !== previousTimeOrigin
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 500,
+        timeoutMsg: `${handle} did not load a new document after refresh.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not load a new document after refresh: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+}
+
 async function openUserInterfaceSettings() {
   await browser.waitUntil(
     async () =>
@@ -424,7 +458,7 @@ async function restoreLocaleSnapshot(
     if (cache === null) localStorage.removeItem(key);
     else localStorage.setItem(key, cache);
   }, cacheToRestore);
-  await browser.refresh();
+  await refreshDocument(handle);
   let lastState: unknown;
   try {
     await browser.waitUntil(
@@ -608,7 +642,7 @@ describe('application language selection', () => {
     for (const handle of localeSnapshots.keys()) {
       await browser.switchToWindow(handle);
       await setLocaleCache('en');
-      await browser.refresh();
+      await refreshDocument(handle);
       await waitForPreparedLocale(handle, 'en');
     }
     await browser.switchToWindow('main');
@@ -681,7 +715,7 @@ describe('application language selection', () => {
           handle,
           'locale synchronization fallback',
           async () => {
-            await browser.refresh();
+            await refreshDocument(handle);
             await waitForLocaleSynchronization(handle);
           },
           cleanupErrors,
@@ -856,7 +890,7 @@ describe('application language selection', () => {
     assert.equal(currentMainState.language, 'ja');
     assert.match(currentMainState.selectedLanguage ?? '', /日本語/);
 
-    await browser.refresh();
+    await refreshDocument('main');
     await openUserInterfaceSettings();
 
     const mainState = await browser.execute(() => ({
