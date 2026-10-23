@@ -2,7 +2,7 @@ import { useSetting } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useMatch, useMatches } from '@tanstack/react-router';
 import { type Transition, type Variant } from 'motion/react';
-import { AnimatedOutlet } from '../router/animated-outlet';
+import { AnimatedOutlet, getRouteRenderKey } from '../router/animated-outlet';
 
 type PageVariantKey = 'initial' | 'visible' | 'hidden';
 
@@ -69,6 +69,8 @@ export default function PageTransition({ className }: { className?: string }) {
       variants={variants}
       initial="initial"
       animate="visible"
+      data-route-id={nextMatch?.routeId}
+      data-route-key={getRouteRenderKey(nextMatch?.id)}
     />
   );
 }
