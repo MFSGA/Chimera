@@ -35,6 +35,8 @@
 | LESSON-20261019-001 | 2026-10-19 | E2E / Windows       | PR #490 主题断言检查错 DOM 节点；主题类位于 `#root` 而非内部 app-root，已改用真实主题根节点待复验               | Open      |
 | LESSON-20261019-002 | 2026-10-19 | E2E / Windows       | PR #490 成功重试后配置弹层关闭；测试先重开弹层再核验控件状态                                                    | Open      |
 | LESSON-20261019-005 | 2026-10-19 | E2E / Localization  | 语言切换需先应用本地 locale，再独立验证 typed 配置、持久化与 legacy 页面；PR #499 的复现已修复，当前分支待验证  | Mitigated |
+| LESSON-20261019-006 | 2026-10-19 | Rust / Windows      | PR #494 取消刷新测试对 `Notify` 的时序未受控；新增确定性屏障覆盖通知先于 waiter 登记的情况，历史 CI 根因未证实  | Mitigated |
+| LESSON-20261019-007 | 2026-10-19 | Git / Delivery      | PR #494 首次 push 使用的 SSH 凭据无仓库写权限；改用活动 GitHub CLI 凭据的 HTTPS push 成功，提交 verified        | Mitigated |
 | LESSON-20261020-001 | 2026-10-20 | E2E / Localization  | PR #501 locale cache 受前置 spec 影响；路由标记需比较每层 outlet 的 child match key，不依赖动画透明度           | Open      |
 | LESSON-20261020-002 | 2026-10-20 | E2E / Dashboard     | PR #501 的 Popover 需等待打开状态与控件；本机 WebKit 路由动画前置偶发超时，Windows 新 SHA 待复验                | Open      |
 | LESSON-20261020-003 | 2026-10-20 | E2E / WebDriver     | PR #507 的 refresh 不等待新文档加载；需验证文档身份变化、再等 React 挂载                                        | Open      |
@@ -64,23 +66,6 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
-
-### LESSON-20261017-001：data URL E2E 应验证请求结果而非固定响应类型
-
-- 日期与时区：2026-10-17 UTC
-- 状态：Verified（PR #478 已合入；对应 CI 与 Tauri E2E 均通过）
-- 严重度：Low
-- 模块：E2E / CI / WebView CSP
-- master commit / ref gitlink SHA / 平台与测试环境：master `79c7cb8aa53686cd67effc3d021bd06aaad3e914`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Windows runner，Microsoft Edge 154。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #478](https://github.com/MFSGA/Chimera/pull/478)，[Tauri E2E run 39003668695](https://github.com/MFSGA/Chimera/actions/runs/39003668695)。Hermetic 53 个 spec 中 52 个通过；唯一失败来自新加 smoke 断言，实际 `Response.type` 为 `basic`，而测试预期 `opaque`。单独的 Profile auto-update E2E 通过。
-- 预期行为：两个桌面窗口均能成功读取 same-origin 页面，并通过 `connect-src data:` 完成 data URL 请求；no-cors 响应可以是标准 opaque 响应，也可以是 WebView 暴露的 readable basic 响应。
-- 真实异常、复现步骤与证据：Windows Edge 154 在 `fetch('data:text/plain,chimera-csp-probe', { mode: 'no-cors' })` 上返回 `type: 'basic'`，导致测试在类型断言处失败；此前同一窗口的请求已返回 HTTP 成功响应。失败不表示 CSP 拒绝请求。
-- 确认的根因与排除项：测试将 `no-cors` data URL 的响应类别误设为固定的 `opaque`。响应类型不是所测 CSP 功能的产品合同；工作流日志没有显示请求被阻止，也没有其他 smoke 或 hermetic spec 失败。
-- 修复提交、差异映射及保留的兼容性边界：`tauri-e2e/specs/smoke.e2e.ts::assertConnectSourcesAreAvailable` 接受 `opaque`（状态码 0、空 body）或 `basic`（状态码 200、完整 probe payload），其他响应类型失败。CSP 产品策略保持不变。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原断言在上述 Windows Edge run 失败；修正用例仍注册于默认 smoke 和 `hermetic`。PR #478 合并 SHA `b0c6beb65c3fc6099735c0b61cd913287b77964d` 的 CI 与 Tauri E2E 均通过。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：原 Windows Edge run 的 hermetic 套件为 52/53 通过；修正后 CI run [39005445410](https://github.com/MFSGA/Chimera/actions/runs/39005445410) 与 Tauri E2E run [39005445412](https://github.com/MFSGA/Chimera/actions/runs/39005445412) 均在 SHA `b0c6beb65c3fc6099735c0b61cd913287b77964d` 通过。此测试修复不声称证明 macOS WebKit 或其他 WebView 的响应类型。
-- 风险/回滚和清理证据（如涉及宿主状态）：只改测试断言和经验记录，不改变宿主代理/TUN、持久化或 CSP 策略；可回滚为恢复原 `type/status` 断言并移除此条记录。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：后续 `data:` no-cors 测试先断言 fetch 已 resolve；只有 WebView 返回 readable basic 响应时才断言 payload，标准 opaque 响应应检查其受限元数据。无 CI 门禁变更。
 
 ### LESSON-20261014-001：epoch PID 记录可能在检查后、读取前被并发清理
 
@@ -213,7 +198,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261016-001：未准备的 worktree 中 pnpm 命令会触发依赖安装
 
 - 日期与时区：2026-10-16 UTC
-- 状态：Mitigated（本次安装已中断；留下的虚拟 store 未清除，以免误删未知的预存依赖）
+- 状态：Mitigated（依赖校验/安装已完成；无跟踪文件改动，后续直接使用预装工具完成检查）
 - 严重度：Low
 - 模块：Development / E2E / CI
 - master commit / ref gitlink SHA / 平台与测试环境：PR #486 head `8d6a6dfb9e2d0ec19bde94f8dd77a2eeb6e9c78d`；ref gitlink `685042aaedaea26a591900be0b494dfe8efd79b0`；Apple Silicon macOS。
@@ -226,6 +211,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：中断后确认没有本次依赖安装或构建进程；直接 TypeScript harness 检查通过、unit tests 25/25、Prettier 与 `git diff --check` 通过。没有本机构建最新 E2E binary；该分支的 Windows CI 才能验证当前 app/test 组合。
 - 风险/回滚和清理证据（如涉及宿主状态）：未修改跟踪源码以外的配置；测试 runtime/artifacts 使用仓库 `cleanupRuntimeDirectory` 安全删除。依赖虚拟 store 保留在隔离 worktree 中，系统空间仍约 1.1 GiB 可用；未触及其他 worktree 或用户 app。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：此前另一 worktree 的 WDIO exec 已出现相同安装副作用，故记录为重复流程错误。开始运行 pnpm 检查前须确认工作树依赖已准备；否则从同一 checkout 的现成二进制运行单项检查，避免 `pnpm exec` 和并行安装。没有修改 CI 或治理门禁。
+- 复发记录（2026-10-23）：在未完成依赖准备的 PR worktree 中运行 `pnpm exec prettier --check LESSONS.md`，pnpm 执行 lockfile 校验并安装/替换依赖（显示 `+30 -50`）；跟踪文件没有变化。随后改用主 checkout 预装的 Prettier 二进制，格式检查通过。
 
 ### LESSON-20261016-002：行边界状态必须在渲染组件中完整解构
 
@@ -243,6 +229,40 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后 `pnpm typecheck`、`pnpm --filter=chimera-ui build`、E2E harness typecheck、harness 单测（25/25）、`pnpm lint:frontend-boundaries`、格式检查、`pnpm prepare:check` 和 `git diff --check` 通过。初始 SHA 的远端 Windows Edge profiles E2E 尚在排队；加入本经验记录会产生新提交 SHA，必须重新验证新 SHA，不复用旧 SHA 的结果。
 - 风险/回滚和清理证据（如涉及宿主状态）：L3 工程经验记录；不改产品运行行为、用户数据或宿主状态。回滚只需还原本条索引和记录。维护者已明确批准添加并推送该记录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：已有提交 hook 将 `pnpm typecheck:chimera` 作为 staged frontend 文件检查；继续保留该门禁，UI 边界状态变更需复核 prop 声明、传参和渲染解构三处。无 CI 门禁变化。
+
+### LESSON-20261017-001：data URL E2E 应验证请求结果而非固定响应类型
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Verified（PR #478 已合入；对应 CI 与 Tauri E2E 均通过）
+- 严重度：Low
+- 模块：E2E / CI / WebView CSP
+- master commit / ref gitlink SHA / 平台与测试环境：master `79c7cb8aa53686cd67effc3d021bd06aaad3e914`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Windows runner，Microsoft Edge 154。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #478](https://github.com/MFSGA/Chimera/pull/478)，[Tauri E2E run 39003668695](https://github.com/MFSGA/Chimera/actions/runs/39003668695)。Hermetic 53 个 spec 中 52 个通过；唯一失败来自新加 smoke 断言，实际 `Response.type` 为 `basic`，而测试预期 `opaque`。单独的 Profile auto-update E2E 通过。
+- 预期行为：两个桌面窗口均能成功读取 same-origin 页面，并通过 `connect-src data:` 完成 data URL 请求；no-cors 响应可以是标准 opaque 响应，也可以是 WebView 暴露的 readable basic 响应。
+- 真实异常、复现步骤与证据：Windows Edge 154 在 `fetch('data:text/plain,chimera-csp-probe', { mode: 'no-cors' })` 上返回 `type: 'basic'`，导致测试在类型断言处失败；此前同一窗口的请求已返回 HTTP 成功响应。失败不表示 CSP 拒绝请求。
+- 确认的根因与排除项：测试将 `no-cors` data URL 的响应类别误设为固定的 `opaque`。响应类型不是所测 CSP 功能的产品合同；工作流日志没有显示请求被阻止，也没有其他 smoke 或 hermetic spec 失败。
+- 修复提交、差异映射及保留的兼容性边界：`tauri-e2e/specs/smoke.e2e.ts::assertConnectSourcesAreAvailable` 接受 `opaque`（状态码 0、空 body）或 `basic`（状态码 200、完整 probe payload），其他响应类型失败。CSP 产品策略保持不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原断言在上述 Windows Edge run 失败；修正用例仍注册于默认 smoke 和 `hermetic`。PR #478 合并 SHA `b0c6beb65c3fc6099735c0b61cd913287b77964d` 的 CI 与 Tauri E2E 均通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：原 Windows Edge run 的 hermetic 套件为 52/53 通过；修正后 CI run [39005445410](https://github.com/MFSGA/Chimera/actions/runs/39005445410) 与 Tauri E2E run [39005445412](https://github.com/MFSGA/Chimera/actions/runs/39005445412) 均在 SHA `b0c6beb65c3fc6099735c0b61cd913287b77964d` 通过。此测试修复不声称证明 macOS WebKit 或其他 WebView 的响应类型。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改测试断言和经验记录，不改变宿主代理/TUN、持久化或 CSP 策略；可回滚为恢复原 `type/status` 断言并移除此条记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：后续 `data:` no-cors 测试先断言 fetch 已 resolve；只有 WebView 返回 readable basic 响应时才断言 payload，标准 opaque 响应应检查其受限元数据。无 CI 门禁变更。
+
+### LESSON-20261017-002：Profile producer 启动必须等待 actor 注册处理完成
+
+- 日期与时区：2026-10-17 UTC
+- 状态：Verified（PR #485 精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 CI/E2E 通过，且已合并）
+- 严重度：Low
+- 模块：Profile / Rust / Core startup / CI
+- master commit / ref gitlink SHA / 平台与测试环境：PR #485 修复提交 `d1c78138`、文档修正提交 `e0629eb9`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Apple Silicon macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #485](https://github.com/MFSGA/Chimera/pull/485)，精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 [CI run 39037029299](https://github.com/MFSGA/Chimera/actions/runs/39037029299) 与 [Desktop E2E run 39037029364](https://github.com/MFSGA/Chimera/actions/runs/39037029364) 均通过；合并提交 `5fc556b4dc1b4724c3486d537b3d239d89c97c5e` 与该已测 head 的 tree 相同。
+- 预期行为：核心启动协调确认终态后，Profiles actor 完成后台 jobs、外部文件 watcher 和 journal reconciliation 的启动尝试，再让调用方继续；测试推进虚拟时间或修改被监视文件时，actor 必须已处理 producer 启动消息。
+- 真实异常、复现步骤与证据：原 `ProfilesClient::start_producers()` 只向 actor cast `StartProducers` 后立即返回。新增 profile suite 中，`external_background_commit_does_not_bypass_the_mutation_participant` 在并行运行中出现竞态，定时刷新用例会等待超时；单独重跑外部文件用例可通过，而单独运行 `import_suggestion_is_committed_and_reschedules_the_timer` 会卡在虚拟时钟等待。测试在 actor 尚未处理 cast 前就推进 Tokio paused time 或写入文件，故本地结果取决于 actor 调度时序。
+- 确认的根因与排除项：cast 只保证消息排入 actor mailbox，不保证 handler 已运行；调用方把消息投递误当作 scheduler/watcher 已就绪。不是 ref 的预期功能差异或持久化问题。ref `31019da` 的 `ProfilesClient::start_producers` 也使用 cast；本 PR 增加 Chimera 内部 request/reply await 作为启动同步边界，差异已记录在 `docs/ref-alignment-profiles.md` DIFF-PROFILE-06。
+- 修复提交、差异映射及保留的兼容性边界：`d1c78138` 将 `StartProducers` 改为带 reply 的 actor call，`ProfilesClient::start_producers()` 等待回复，`ChimeraClient::init_core()` 在 lifecycle terminal reply 后等待该调用；重复 release 仍保持幂等。文档更正提交 `e0629eb9` 说明这是 best-effort 注册尝试完成，不保证各个 watcher/job 均成功注册。无公共 IPC、持久化格式或 agent contract 变化。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：cast-only 版本在本地 profile suite 中发生上述 scheduler/watcher 时序失败；await 回复后 `backend/tauri/src/client/profiles.rs` 的 Profile 测试全套通过。该修复没有新增独立测试入口，而是让现有生产者启动、定时刷新与外部 watcher 测试等待真实 actor 完成边界。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera startup_reconcile -- --nocapture` 通过 2/2；`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera client::profiles::tests:: -- --test-threads=4` 通过 72/72；`cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features`、包级 rustfmt、Prettier 与 `git diff --check` 通过。提交钩子的 rustfmt/Clippy 也通过。Reviewer 静态审查无 P0–P2；其独立测试复跑因主机卷空间不足无法完成。本机桌面 startup/UI E2E 未运行；远端 CI/E2E 已对合并所用的相同 tree 完成验证。
+- 风险/回滚和清理证据（如涉及宿主状态）：回滚为恢复原 cast-only 启动调用及无 reply 的 actor message；这会重新允许调用方早于 producer handler 完成而继续。未修改主机网络、持久化数据或用户 Profile。审查器新建的失败 Cargo target 已经 cargo clean 清理，未触碰其他构建缓存。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界；PR #485 的精确 head CI/E2E 已通过后更新本条状态；不修改治理门禁。
 
 ### LESSON-20261017-003：桌面 E2E 应以目标窗口和用户可见状态准备路由
 
@@ -294,23 +314,6 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：GitHub Windows Desktop E2E run 39018873894 对应精确实现 head `62e561fb149c675f1f39dc8e1ba4132d026de287`，结论 success。新增本条仅修改 LESSONS.md；该 lesson-only 提交的 CI/E2E 仍待新 SHA 运行，不能复用为新 SHA 的检查通过证据。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅新增工程经验记录，不改变产品状态、持久数据或宿主设置；回滚时移除本条及索引行即可。失败清理现在显式复位测试窗口滚动位置。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：为视口之外的元素设计桌面 E2E 时，断言目标可见状态与所需滚动距离；避免等待未经验证的平滑动画到达最终位置，并在失败清理中恢复测试拥有的滚动状态。维护者已批准此 L3 lesson；没有修改 CI 门禁。
-
-### LESSON-20261017-002：Profile producer 启动必须等待 actor 注册处理完成
-
-- 日期与时区：2026-10-17 UTC
-- 状态：Verified（PR #485 精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 CI/E2E 通过，且已合并）
-- 严重度：Low
-- 模块：Profile / Rust / Core startup / CI
-- master commit / ref gitlink SHA / 平台与测试环境：PR #485 修复提交 `d1c78138`、文档修正提交 `e0629eb9`；ref gitlink `31019da14006b384b3272c72b4088179a9e72c47`；Apple Silicon macOS。
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #485](https://github.com/MFSGA/Chimera/pull/485)，精确 head `c29185ad9b5d62cf6802db5ee0448cf85c309168` 的 [CI run 39037029299](https://github.com/MFSGA/Chimera/actions/runs/39037029299) 与 [Desktop E2E run 39037029364](https://github.com/MFSGA/Chimera/actions/runs/39037029364) 均通过；合并提交 `5fc556b4dc1b4724c3486d537b3d239d89c97c5e` 与该已测 head 的 tree 相同。
-- 预期行为：核心启动协调确认终态后，Profiles actor 完成后台 jobs、外部文件 watcher 和 journal reconciliation 的启动尝试，再让调用方继续；测试推进虚拟时间或修改被监视文件时，actor 必须已处理 producer 启动消息。
-- 真实异常、复现步骤与证据：原 `ProfilesClient::start_producers()` 只向 actor cast `StartProducers` 后立即返回。新增 profile suite 中，`external_background_commit_does_not_bypass_the_mutation_participant` 在并行运行中出现竞态，定时刷新用例会等待超时；单独重跑外部文件用例可通过，而单独运行 `import_suggestion_is_committed_and_reschedules_the_timer` 会卡在虚拟时钟等待。测试在 actor 尚未处理 cast 前就推进 Tokio paused time 或写入文件，故本地结果取决于 actor 调度时序。
-- 确认的根因与排除项：cast 只保证消息排入 actor mailbox，不保证 handler 已运行；调用方把消息投递误当作 scheduler/watcher 已就绪。不是 ref 的预期功能差异或持久化问题。ref `31019da` 的 `ProfilesClient::start_producers` 也使用 cast；本 PR 增加 Chimera 内部 request/reply await 作为启动同步边界，差异已记录在 `docs/ref-alignment-profiles.md` DIFF-PROFILE-06。
-- 修复提交、差异映射及保留的兼容性边界：`d1c78138` 将 `StartProducers` 改为带 reply 的 actor call，`ProfilesClient::start_producers()` 等待回复，`ChimeraClient::init_core()` 在 lifecycle terminal reply 后等待该调用；重复 release 仍保持幂等。文档更正提交 `e0629eb9` 说明这是 best-effort 注册尝试完成，不保证各个 watcher/job 均成功注册。无公共 IPC、持久化格式或 agent contract 变化。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：cast-only 版本在本地 profile suite 中发生上述 scheduler/watcher 时序失败；await 回复后 `backend/tauri/src/client/profiles.rs` 的 Profile 测试全套通过。该修复没有新增独立测试入口，而是让现有生产者启动、定时刷新与外部 watcher 测试等待真实 actor 完成边界。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera startup_reconcile -- --nocapture` 通过 2/2；`cargo +nightly test --manifest-path backend/Cargo.toml --locked -p chimera client::profiles::tests:: -- --test-threads=4` 通过 72/72；`cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features`、包级 rustfmt、Prettier 与 `git diff --check` 通过。提交钩子的 rustfmt/Clippy 也通过。Reviewer 静态审查无 P0–P2；其独立测试复跑因主机卷空间不足无法完成。本机桌面 startup/UI E2E 未运行；远端 CI/E2E 已对合并所用的相同 tree 完成验证。
-- 风险/回滚和清理证据（如涉及宿主状态）：回滚为恢复原 cast-only 启动调用及无 reply 的 actor message；这会重新允许调用方早于 producer handler 完成而继续。未修改主机网络、持久化数据或用户 Profile。审查器新建的失败 Cargo target 已经 cargo clean 清理，未触碰其他构建缓存。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：仓库维护者已批准将已确认的竞态写入 `LESSONS.md`。保留 producer startup 测试中的 await 边界；PR #485 的精确 head CI/E2E 已通过后更新本条状态；不修改治理门禁。
 
 ### LESSON-20261017-006：Dashboard 右键测试必须先发送 pointerdown
 
@@ -465,6 +468,40 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支运行 `pnpm typecheck`、`pnpm --filter @chimera/tauri-e2e test:unit`（25/25）、`pnpm --filter chimera-ui test:localization`（4/4）、`pnpm lint:frontend-boundaries`、Prettier、`git diff --check`、`pnpm e2e:tauri:build` 均通过；当前本机 `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 在 macOS WebKit 605.1.15 通过 1/1。此前两次定向运行亦通过 1/1。新 SHA 的 Windows hermetic E2E 尚未执行；不据此声称完整桌面矩阵通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：本修复只改变 shared settings mutation 的完成时序，使 UI 应用不等待查询 refetch；数据写入与 cache invalidation 仍执行，持久化格式和 IPC 不变。测试继续恢复持久语言、locale cache、DOM、路由与窗口尺寸。若回滚，恢复 ref 更新前的 hook 和用例即可。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：共享设置 mutation 的 `onSuccess` 若只需触发后台 refetch，应使用不返回 invalidation Promise 的 block callback，并由 ref 对齐复核。跨用例重用 WebView 时重载并等待主 UI 的 typed 配置、DOM 和缓存收敛；先验证 UI 即时同步，再独立核验后端、磁盘、刷新和 legacy 路径。此 LESSON 更新已获维护者明确批准；未修改 CI 门禁。
+
+### LESSON-20261019-006：取消刷新测试必须控制 Notify 的登记时序
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（旧通知实现由确定性回归用例稳定复现失败，修复版本及默认 Rust 库测试通过；新 SHA CI 待完成）
+- 严重度：Low
+- 模块：Rust / Profile refresh tests
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 前一版 head `16b03b37c9a8c7021508ddecfb704fbc0dd68fae`；ref gitlink `53b004ccb3508d0673b6cb691be65e0e48bdd593`；GitHub Actions Windows。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)，[Windows backend job 118216586922 in run 39296098353](https://github.com/MFSGA/Chimera/actions/runs/39296098353/job/118216586922)。Run 后来被新 SHA 取消；该 job 已结束并明确失败：`caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck` 在 2 秒期限内未结束，后端工作区 587 项通过、1 项失败、1 项忽略。
+- 预期行为：取消 refresh 的等待方后，后台 fetch 仍应结束，actor 清除 `pending_refresh`，后续 refresh 能成功。
+- 真实异常、复现步骤与证据：Windows job `118216586922` 的失败日志显示该用例在 2 秒期限内未完成。旧用例在收到 fetcher 的 `started` oneshot 后调用 `release_fetch.notify_waiters()`，但 `started` 只表示已发送信号，不能证明 waiter 已登记。因此历史 CI 超时与丢失通知相符，但没有证明它就是该次失败的实际根因。
+- 确认的根因与排除项：Tokio 1.53.3 的 `notify_waiters()` 不为未来的 `notified().await` 保存 permit；`notify_one()` 会保留一个 permit。旧测试没有控制通知与登记的先后顺序，无法稳定覆盖此语义。新测试增加独立的 `allow_wait` 屏障，明确先发出 release，再允许 fetcher 开始等待；这会确定性检查测试同步语义。该问题位于测试屏障，不涉及 production actor 路径。
+- 修复提交、差异映射及保留的兼容性边界：只调整 Chimera `backend/tauri/src/client/profiles.rs::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck`，增加登记前屏障并将 release 改为 `notify_one()`；不改 refresh actor 或 production behavior。ref `backend/tauri/src/client/profiles.rs` commit `53b004ccb3508d0673b6cb691be65e0e48bdd593` 采用旧测试顺序，后续同步时需重新检查该用例。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：在 `backend/tauri/src/client/profiles.rs` 的 Rust 单元测试中，用 `notify_waiters()` 临时替代 release 后，同一个 `--exact` 用例稳定在 2 秒期限失败；恢复 `notify_one()` 后同一用例 1/1 通过。通知和 waiter 注册顺序由 `allow_wait` oneshot 屏障控制。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：Cargo.lock 锁定 Tokio `1.53.3`。定向命令 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck -- --exact --nocapture` 在修复版本 1/1 通过；默认 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib --quiet` 为 577 passed、0 failed、1 ignored。尝试 `--all-features` 时因本机磁盘空间不足中断；Windows 新 SHA workflow 待完成，历史 CI 失败本身不能证明根因。
+- 风险/回滚和清理证据（如涉及宿主状态）：测试同步调整，不改变应用运行或用户数据；回滚为恢复该用例中的 `notify_waiters()`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：异步测试若依赖事件先后，使用独立屏障明确控制 waiter 注册前后的顺序；一次性 release 使用 `notify_one()`，广播给已登记的一组 waiters 才使用 `notify_waiters()`。未改 CI 门禁。
+
+### LESSON-20261019-007：推送前核对 Git 写入凭据
+
+- 日期与时区：2026-10-19 UTC
+- 状态：Mitigated（错误 SSH 通道被拒后，使用活动 GitHub CLI 凭据通过 HTTPS 推送成功）
+- 严重度：Low
+- 模块：Git / Delivery
+- master commit / ref gitlink SHA / 平台与测试环境：PR #494 head `74b6b31d0214bb111637ef1091b69c18a8621f62`；macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #494](https://github.com/MFSGA/Chimera/pull/494)。
+- 预期行为：远程写操作由当前已授权的维护者凭据执行，提交签名可由 GitHub 验证。
+- 真实异常、复现步骤与证据：首次通过配置的 SSH push URL 推送时，GitHub 拒绝当前 SSH key；同一时刻 GitHub CLI 的活动账号有该仓库权限。随后通过一次性 GitHub CLI credential helper 的 HTTPS push 成功将提交推送到 PR #494；未将令牌写入命令参数或修改全局 Git 配置。
+- 确认的根因与排除项：Git SSH 和 GitHub CLI 使用不同凭据来源；活动 CLI 会话正确，并不代表默认 SSH key 对目标仓库有写权限。
+- 修复提交、差异映射及保留的兼容性边界：没有产品代码变更。此环境后续远端写操作使用 GitHub CLI credential helper 的 HTTPS 通道，除非先确认 SSH 身份有正确仓库权限。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：不适用；这是 Git 凭据选择问题，没有产品测试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地签名校验通过；GitHub API 对提交 `74b6b31d0214bb111637ef1091b69c18a8621f62` 返回 `verified: true`、`reason: valid`；HTTPS push 成功并确认 PR head 与本地 SHA 一致。预防检查为写操作前确认活动 CLI 身份与目标仓库权限，并检查实际 push URL；没有自动化凭据测试。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响该次 Git push；没有修改凭据、系统网络或全局配置。推送结果可通过后续新提交撤销，不应重写共享历史。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行远端写操作前核对 push URL 与 `gh auth status`；若 SSH 身份无法确认，则显式使用活动 GitHub CLI credential helper。诊断记录不得保存或输出令牌与非必要账号信息。
 
 ### LESSON-20261020-001：语言 E2E 必须独立准备并一致地恢复每个 WebView 的 locale cache
 
