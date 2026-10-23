@@ -13,16 +13,17 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     31019da14006b384b3272c72b4088179a9e72c47
-verified:   2026-10-17; fetched origin/main and matched its advertised tip
-previous gitlink: 685042aaedaea26a591900be0b494dfe8efd79b0
-nested runtime: be2f561102fe898cb7a294ef14de3f4c65b68f81 (unchanged)
+commit:     ae0db596e96ba09d7662cc7533a13ffe5b581bf7
+verified:   2026-10-20; matched GitHub main tip and valid commit signature
+previous gitlink: d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3
+nested runtime: a130ca7b6015121d49e43ecd0d6af1862e60253e
 ```
 
-The target commit was fetched from `origin/main`; its root and recursive
-submodule worktrees are clean. This pin records the reference implementation
-only. It does not automatically apply upstream dependency changes or product
-code to Chimera; each shared feature still needs its own path and symbol review.
+The target SHA matched the upstream `main` tip at sync time, and GitHub reports
+its commit signature as valid. Its tree pins the runtime submodule at the SHA
+above. This pin records the reference implementation only. It does not
+automatically apply upstream dependency changes or product code to Chimera; each
+shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 

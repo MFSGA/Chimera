@@ -10,9 +10,9 @@ catalog. The work follows
 
 This is a desktop UI E2E contract. It exercises the real Tauri frontend and
 configuration API. Reading the saved language uses IPC as an independent
-observation; the operation itself uses keyboard activation in the main UI. It
-does not verify a cold application restart or actual glyph rendering on every
-operating system.
+observation; the operation itself uses mouse clicks in the main UI. It does not
+verify a cold application restart or actual glyph rendering on every operating
+system.
 
 ## Unit coverage
 
@@ -31,41 +31,85 @@ version, and saved bytes remain intact.
 
 - **Suite:** `settings`, registered in `tauri-e2e/spec-suites.ts` and included
   in the existing hermetic PR suite.
-- **Initial state:** An isolated E2E runtime with the current language and both
-  WebView locale caches captured. The test starts from the harness legacy
-  window, opens the main window, and prepares the main UI in English through
-  test-only `patch_app_config` IPC before checking the initial state. It reads
-  the language through `get_app_config`, the typed configuration used by the
-  main UI's settings provider; the separate typed-state contract covers the
-  legacy configuration mirror.
-- **Operation:** Focus the Language control, open its menu with Enter, move to
-  `日本語` with ArrowDown, and select it with Enter. The current desktop
-  driver's element click only synthesizes a DOM `click`, while the Radix menu
-  opens on `pointerdown`; this contract therefore checks keyboard activation
-  and makes no mouse-activation claim.
+- **Initial state:** An isolated E2E runtime with the current language and each
+  retained WebView's original locale cache/document language captured before
+  setup changes. The test starts from the harness legacy window, opens the main
+  window, and prepares the typed app configuration in English through test-only
+  `patch_app_config` IPC, then reads it back before refreshing either WebView.
+  It seeds the English Paraglide cache in both retained WebViews, reloads each,
+  and checks that window's rendered language/cache state. This prevents earlier
+  layout specs from leaking a locale and avoids racing a Tauri config read
+  against navigation. It reads the language
+  through `get_app_config`, the typed configuration used by the main UI's
+  settings provider; the separate typed-state contract covers the legacy
+  configuration mirror. Before capturing each window's route marker, resolve
+  that window using the same config/cache precedence as cleanup; this keeps a
+  translated legacy heading stable when setup later switches to English.
+  Before changing locale, the test directly opens the legacy `/providers`
+  route and verifies its route ID is stable even though the page has no `<h1>`.
+  It snapshots the raw `memorizedRoutePathAtom` value and restores that exact
+  value during cleanup.
+- **Operation:** Use WebDriver mouse-type pointer actions to press and release
+  the Language control, then press and release the Japanese option. This drives
+  the real UI controls through the desktop driver's pointer-action path. The
+  current driver synthesizes untrusted mouse events, so this does not prove
+  trusted native OS input or a complete browser PointerEvent sequence.
 - **Independent result:** `get_app_config` reports `language: "ja"`, the
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.
 - **Rendered result:** Before refresh, the main selector shows `日本語`; after
-  refreshing the same main window, it still shows `日本語`. The legacy proxy
+  refreshing the same main window, wait for `performance.timeOrigin` to change
+  and the new document to reach `complete` before checking that it still shows
+  `日本語`. The desktop driver's refresh command can return before navigation
+  finishes, so checking only the rendered selector could read the old document.
+  The legacy proxy
   page, after loading the same setting, shows the Japanese title and all three
   mode labels.
 - **Failure sensitivity:** The test fails if Japanese is absent from the
   selector, the selected value is not persisted, the document language does
   not become `ja`, or either UI lacks the expected translated strings.
-- **Cleanup:** Restore the original configured language, locale
-  cache/document language, URL, and window dimensions for each app window,
-  then return focus to the legacy window. Cleanup errors are reported together
-  with the original failure.
+- **Cleanup:** Restore the original configured language and each window's
+  locale cache, URL, and dimensions, then return focus to the legacy window.
+  Capture the URL only after the original route has settled; the main window
+  can redirect `/main` to `/main/dashboard` during startup. After navigating
+  back to that effective URL, wait for the captured pathname and all rendered
+  animated-outlet markers. Each animated outlet reports the route ID and
+  selector key of its immediate child match, matching the key used by its
+  transition, plus Motion's `isPresent` state. Capture rejects any marker whose
+  transition child is exiting, then requires the full marker, including the
+  nullable legacy heading (some valid pages have no `<h1>`), to remain
+  identical for at least 750 ms, longer than the
+  350 ms outlet transition. The WebView samples every 100 ms and compares
+  explicit route fields, so WebDriver object property ordering cannot make an
+  unchanged route appear different. This distinguishes dynamic route matches
+  and waits for an exiting animated child to leave. Route identity is determined
+  from the rendered tree, independent of animation opacity. Raw route
+  parameters are not written to DOM attributes; the 32-bit selector hash is
+  deterministic and is not a cryptographic privacy boundary. Plain,
+  non-animated TanStack outlets are not represented by these markers.
+  The WebView poller owns both its deadline and pending sample timer. On either
+  success or timeout it cancels both; a queued sample also exits once the wait
+  is complete. Resolving the WebDriver async callback does not cancel page
+  timers by itself.
+  If setup cannot capture the original route marker, cleanup navigates to the
+  saved URL and captures a fresh stable marker instead of skipping route
+  verification.
+  Resolve the post-refresh language from the restored configuration first,
+  then the saved supported cache, and finally the captured document language
+  when neither setting selects a locale. If an explicit configured language
+  conflicts with a stale cache left by an earlier layout spec, restore the
+  cache to the configured language; that cache is derived E2E state, and the
+  stale cache/document pair cannot be reproduced after a reload. Cleanup
+  verifies the resolved document language and cache when configuration selects
+  it, and reports cleanup errors together with the original failure.
 
 ## Limits and rollback
 
 This test does not prove Japanese system-locale detection, the Windows installer
 language picker, cold-start persistence, live cross-window updates before a
-reload, mouse activation of the language menu, Tab focus order, menu animation,
-or platform font availability. WDIO sends Enter and ArrowDown to a
-programmatically focused control; this checks the application's keyboard
-handlers, not native keyboard input. Rust unit tests cover locale detection and
+reload, keyboard focus order, menu animation, or platform font availability.
+This test checks persisted selection through the pointer interface; it does not
+exercise native keyboard input. Rust unit tests cover locale detection and
 typed/legacy configuration conversion. Rust-native translations use the typed
 startup locale, including its system-locale default. The test does not change
 system proxy, TUN, Service, or other host settings. The installer language

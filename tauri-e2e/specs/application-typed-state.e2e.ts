@@ -13,6 +13,7 @@ interface FrontendState {
   href: string;
   title: string;
   readyState: DocumentReadyState;
+  timeOrigin: number;
   rootChildCount: number;
   hasTauriInternals: boolean;
   visibilityState: DocumentVisibilityState;
@@ -33,6 +34,7 @@ async function readFrontendState(): Promise<FrontendState> {
       href: window.location.href,
       title: document.title,
       readyState: document.readyState,
+      timeOrigin: performance.timeOrigin,
       rootChildCount: root?.childElementCount ?? 0,
       hasTauriInternals: '__TAURI_INTERNALS__' in window,
       visibilityState: document.visibilityState,
@@ -62,7 +64,11 @@ async function observeFrontend(
   }
 }
 
-async function waitForApp(phase: string, observations: FrontendObservation[]) {
+async function waitForApp(
+  phase: string,
+  observations: FrontendObservation[],
+  timeout = 30_000,
+) {
   let lastState: FrontendState | null = null;
   let observedAt: string | null = null;
   let readFailed = false;
@@ -79,7 +85,7 @@ async function waitForApp(phase: string, observations: FrontendObservation[]) {
         return lastState.rootChildCount > 0;
       },
       {
-        timeout: 30_000,
+        timeout,
         timeoutMsg: `The Chimera frontend did not render during ${phase}.`,
       },
     );
@@ -93,6 +99,48 @@ async function waitForApp(phase: string, observations: FrontendObservation[]) {
     });
     throw new Error(
       `The Chimera frontend did not render during ${phase}. Last observed state: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
+  observations.push({
+    phase,
+    observedAt: observedAt ?? new Date().toISOString(),
+    state: lastState,
+  });
+}
+
+async function waitForDocumentComplete(
+  phase: string,
+  observations: FrontendObservation[],
+  previousTimeOrigin: number,
+): Promise<void> {
+  let lastState: FrontendState | null = null;
+  let observedAt: string | null = null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await readFrontendState();
+        observedAt = new Date().toISOString();
+        return (
+          lastState.readyState === 'complete' &&
+          lastState.timeOrigin !== previousTimeOrigin
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 500,
+        timeoutMsg: `A new Chimera document did not finish navigation during ${phase}.`,
+      },
+    );
+  } catch (cause) {
+    observations.push({
+      phase,
+      observedAt: observedAt ?? new Date().toISOString(),
+      state: lastState,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+    throw new Error(
+      `The Chimera document did not finish navigation during ${phase}. Last observed state: ${JSON.stringify(lastState)}.`,
       { cause },
     );
   }
@@ -384,8 +432,10 @@ function recordCleanup(diagnosticsPath: string, error: unknown | null): void {
   }
 }
 
+// Contract: docs/testing/contracts/application-typed-state.md
 describe('typed application state ownership', () => {
   it('persists legacy IPC patches through application.yaml and mirrors them back', async function (this: Mocha.Context) {
+    this.timeout(240_000);
     const observations: FrontendObservation[] = [];
     const test = this.test as unknown as { currentRetry?: () => number };
     const attempt = (test.currentRetry?.() ?? 0) + 1;
@@ -422,6 +472,9 @@ describe('typed application state ownership', () => {
 
       phase = 'before refresh';
       await observeFrontend(phase, observations);
+      const previousTimeOrigin = await browser.execute(
+        () => performance.timeOrigin,
+      );
       phase = 'refresh';
       try {
         await browser.refresh();
@@ -437,8 +490,10 @@ describe('typed application state ownership', () => {
       }
       phase = 'refresh returned';
       await observeFrontend(phase, observations);
+      phase = 'document load after refresh';
+      await waitForDocumentComplete(phase, observations, previousTimeOrigin);
       phase = 'render after refresh';
-      await waitForApp(phase, observations);
+      await waitForApp(phase, observations, 60_000);
 
       actual = await readAutoUpdate();
       assert.equal(actual, changed);

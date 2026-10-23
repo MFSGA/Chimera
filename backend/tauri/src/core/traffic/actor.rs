@@ -17,6 +17,7 @@ use super::{
     source::frame_from_snapshot,
 };
 use crate::core::clash::ws::ClashConnectionsFrame;
+use crate::core::geo::{CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(30);
 /// Dimension combinations that no usage row refers to are collected at most this often.
@@ -58,6 +59,12 @@ pub struct TrafficArgs {
     pub retention: Arc<dyn RetentionPolicy>,
     pub clock: Arc<dyn Clock>,
     pub frames: watch::Receiver<Option<Arc<ClashConnectionsFrame>>>,
+    /// The index and core instance it belongs to; `None` until it loads.
+    pub geo: watch::Receiver<Option<Arc<CountryIndexSnapshot>>>,
+    /// Reads the newly bound core's mode before mapping its first traffic frame.
+    pub geo_mode_source: Option<Arc<dyn CoreGeodataModeSource>>,
+    /// Publishes a reported mode and waits for its matching index to load.
+    pub geo_mode_refresh: Option<GeoIndexClient>,
     pub local_source: Arc<dyn LocalSourceLocation>,
 }
 
@@ -93,6 +100,9 @@ impl Actor for TrafficActor {
             retention,
             clock,
             frames,
+            geo,
+            geo_mode_source,
+            geo_mode_refresh,
             local_source,
         } = args;
         // An unreadable store must not start an empty session: the stored live connections would
@@ -108,7 +118,15 @@ impl Actor for TrafficActor {
             session,
             collected_at: None,
             collection_due: true,
-            pump: tokio::spawn(pump(myself, frames, local_source, clock.clone())),
+            pump: tokio::spawn(pump(
+                myself,
+                frames,
+                geo,
+                geo_mode_source,
+                geo_mode_refresh,
+                local_source,
+                clock.clone(),
+            )),
             clock,
         })
     }
@@ -348,12 +366,17 @@ async fn blocking<T: Send + 'static>(
 async fn pump(
     actor: ActorRef<Message>,
     mut frames: watch::Receiver<Option<Arc<ClashConnectionsFrame>>>,
+    geo: watch::Receiver<Option<Arc<CountryIndexSnapshot>>>,
+    geo_mode_source: Option<Arc<dyn CoreGeodataModeSource>>,
+    geo_mode_refresh: Option<GeoIndexClient>,
     local_source: Arc<dyn LocalSourceLocation>,
     clock: Arc<dyn Clock>,
 ) {
     let origin = tokio::time::Instant::now();
     let mut flush = tokio::time::interval_at(origin + FLUSH_INTERVAL, FLUSH_INTERVAL);
     flush.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut core_instance_id: Option<String> = None;
+    let mut last_mode_check: Option<tokio::time::Instant> = None;
     loop {
         let delivered = tokio::select! {
             changed = frames.changed() => {
@@ -363,15 +386,82 @@ async fn pump(
                 let latest = frames.borrow_and_update().clone();
                 match latest {
                     Some(raw) => {
+                        let frame_instance_changed = core_instance_id.as_deref()
+                            != Some(raw.core_instance_id.as_str());
+                        let mut mode_ready = true;
+                        if frame_instance_changed {
+                            if let (Some(source), Some(refresh)) =
+                                (&geo_mode_source, &geo_mode_refresh)
+                            {
+                                let retry_ready = last_mode_check.is_none_or(|last| {
+                                    last.elapsed() >= Duration::from_secs(1)
+                                });
+                                if retry_ready {
+                                    last_mode_check = Some(tokio::time::Instant::now());
+                                    let mode = tokio::time::timeout(
+                                        Duration::from_secs(3),
+                                        source.mode(),
+                                    )
+                                    .await;
+                                    match mode {
+                                        Ok(Ok(binding))
+                                            if binding.instance_id == raw.core_instance_id =>
+                                        {
+                                            match refresh.set_mode(binding).await {
+                                                Ok(()) => {
+                                                    core_instance_id =
+                                                        Some(raw.core_instance_id.clone());
+                                                    last_mode_check = None;
+                                                }
+                                                Err(error) => {
+                                                    tracing::debug!(%error, "waiting for the matching country index before recording traffic");
+                                                    mode_ready = false;
+                                                }
+                                            }
+                                        }
+                                        Ok(Ok(binding)) => {
+                                            tracing::debug!(
+                                                frame_core = %raw.core_instance_id,
+                                                active_core = %binding.instance_id,
+                                                "ignoring a stale traffic frame from a different core instance"
+                                            );
+                                            mode_ready = false;
+                                        }
+                                        Ok(Err(error)) => {
+                                            tracing::debug!(%error, "waiting for the new core's geodata mode before recording traffic");
+                                            mode_ready = false;
+                                        }
+                                        Err(error) => {
+                                            tracing::debug!(%error, "new core geodata mode query timed out");
+                                            mode_ready = false;
+                                        }
+                                    }
+                                } else {
+                                    mode_ready = false;
+                                }
+                            } else {
+                                core_instance_id = Some(raw.core_instance_id.clone());
+                            }
+                        }
+                        let index = mode_ready
+                            .then(|| geo.borrow().clone())
+                            .flatten()
+                            .filter(|index| index.instance_id == raw.core_instance_id)
+                            .map(|index| index.index.clone());
                         let frame = frame_from_snapshot(
                             &raw,
                             clock.now_ms(),
                             origin.elapsed(),
+                            index.as_deref().map(|index| index as &dyn super::geo::CountryLookup),
                             local_source.addresses(),
                         );
                         call(&actor, |reply| Message::Observe(frame, reply)).await
                     }
-                    None => call(&actor, Message::Disconnected).await,
+                    None => {
+                        core_instance_id = None;
+                        last_mode_check = None;
+                        call(&actor, Message::Disconnected).await
+                    }
                 }
             }
             _ = flush.tick() => call(&actor, Message::Flush).await,

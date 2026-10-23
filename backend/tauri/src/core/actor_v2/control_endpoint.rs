@@ -40,6 +40,8 @@ pub enum ExecutionHost {
 /// No field here is ever derived by the router itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreStatusSnapshot {
+    /// Stable identity of the running process when the host provides one.
+    pub instance_id: Option<String>,
     pub controller: Option<chimera_ipc::api::status::CoreControllerInfo>,
     /// `None` means the host published no state this router can trust — an
     /// unmapped future variant, or a daemon that answered without a detail.
@@ -386,6 +388,9 @@ fn map_local_status(status: &chimera_core_manager::CoreStatus) -> CoreStatusSnap
         }
     };
     CoreStatusSnapshot {
+        instance_id: status
+            .instance_id
+            .map(|instance_id| instance_id.to_string()),
         controller: status.controller.as_ref().and_then(map_controller),
         state,
         state_changed_at: status.changed_at,

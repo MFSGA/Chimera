@@ -1045,6 +1045,9 @@ impl LocalRuntimeHost {
             _ => chimera_ipc::api::status::CoreState::Stopped(None),
         };
         CoreStatusSnapshot {
+            instance_id: status
+                .instance_id
+                .map(|instance_id| instance_id.to_string()),
             state,
             state_changed_at: status.changed_at,
             run_type: *self.run_type.read(),
@@ -1421,6 +1424,7 @@ mod tests {
     fn recording_endpoint(apply_submission: bool) -> RecordingEndpoint {
         RecordingEndpoint {
             status: StdMutex::new(super::super::control_endpoint::CoreStatusSnapshot {
+                instance_id: None,
                 controller: None,
                 state: Some(CoreStateDetail::Running { epoch: 1, pid: 42 }),
                 state_changed_at: 1,

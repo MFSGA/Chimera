@@ -1210,6 +1210,7 @@ export type ClashInfo = {
 export type ClashRuntimeConfig = {
   port: number | null;
   mode: string | null;
+  'geodata-mode': boolean | null;
   ipv6: boolean | null;
   'socket-port': number | null;
   'allow-lan': boolean | null;

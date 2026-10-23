@@ -839,6 +839,20 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
 
 [[package]]
 name = "byteorder"
@@ -1059,6 +1073,7 @@ dependencies = [
  "chimera-config",
  "chimera-core",
  "chimera-core-manager",
+ "chimera-geodata",
  "chimera-ipc",
  "chimera-jobs",
  "chimera-macro",
@@ -1081,6 +1096,7 @@ dependencies = [
  "indexmap 2.14.2",
  "itertools 0.15.0",
  "log",
+ "memmap2",
  "mlua",
  "mockall",
  "nanoid",
@@ -1119,6 +1135,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.10.9",
  "smol-cancellation-token",
+ "snafu",
  "specta",
  "specta-typescript",
  "struct-patch",
@@ -1277,6 +1294,23 @@ dependencies = [
  "serde",
  "serde_json",
  "specta",
+]
+
+[[package]]
+name = "chimera-geodata"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "bytemuck",
+ "crc32fast",
+ "fst",
+ "maxminddb",
+ "memmap2",
+ "regex",
+ "regex-automata",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2682,6 +2716,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fst"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ab85b9b05e3978cc9a9cf8fea7f01b494e1a09ed3037e16ba39edc7a29eb61a"
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3866,6 +3906,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipnetwork"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf370abdafd54d13e54a620e8c3e1145f28e46cc9d704bc6d94414559df41763"
+
+[[package]]
 name = "iptools"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3962,9 +4008,9 @@ dependencies = [
 
 [[package]]
 name = "jiff"
-version = "0.2.37"
+version = "0.2.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ab1baf72f08796de0260609515130699b890ac25f30e610ad894bc5856cafdb"
+checksum = "b2b005715dcbeb0089a3c0dab99f2ff1cc3b2525323552703d648585d342a383"
 dependencies = [
  "defmt",
  "jiff-core",
@@ -4000,9 +4046,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.37"
+version = "0.2.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "378268a1116ad67ae6228701118ac9f491d78fda38a40a1f1a9e1348de6f7212"
+checksum = "2cc9817253cf7c7ee4684451bd327e88d6f3658014e54a29198625590650695c"
 dependencies = [
  "jiff-core",
  "proc-macro2",
@@ -4405,10 +4451,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "maxminddb"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b43d2458d977b610b04a3858e6504f06133663d303a1a0606601b530bfc9bc6"
+dependencies = [
+ "ipnetwork",
+ "memchr",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "memmap2"
+version = "0.9.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b0ca1155a9ecc25aa12e8313a119f32edf0255fea2f44839c4ac0a12b2ac157"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "memmem"

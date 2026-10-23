@@ -25,9 +25,14 @@ use tokio_tungstenite::{
     tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
 };
 
-pub(crate) type ClashEndpointResolver = Arc<
-    dyn Fn() -> BoxFuture<'static, anyhow::Result<crate::config::clash::ClashInfo>> + Send + Sync,
->;
+#[derive(Debug, Clone)]
+pub(crate) struct ClashWsEndpoint {
+    pub info: crate::config::clash::ClashInfo,
+    pub core_instance_id: String,
+}
+
+pub(crate) type ClashEndpointResolver =
+    Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<ClashWsEndpoint>> + Send + Sync>;
 
 const MAX_CONNECTIONS_HISTORY: usize = 32;
 const MAX_MEMORY_HISTORY: usize = 32;
@@ -193,7 +198,10 @@ fn derive_connection_details(
 /// rotates only when the connector is explicitly restarted with a new core lifecycle.
 #[derive(Debug, Clone)]
 pub struct ClashConnectionsFrame {
+    /// Connector generation, stable across transport reconnects.
     pub instance_id: String,
+    /// Core process identity that owned the controller when this stream connected.
+    pub core_instance_id: String,
     pub snapshot: ClashWsConnectionSnapshot,
 }
 
@@ -493,7 +501,7 @@ impl ClashConnectionsConnectorShared {
         let _ = self.ws_tx.send(ClashWsEvent::HistoryCleared(kind));
     }
 
-    fn update_connections(&self, raw: serde_json::Value) {
+    fn update_connections(&self, raw: serde_json::Value, core_instance_id: String) {
         let Ok(msg) = serde_json::from_value::<ClashConnectionsMessage>(raw.clone()) else {
             tracing::warn!("failed to parse clash connections message");
             return;
@@ -555,6 +563,7 @@ impl ClashConnectionsConnectorShared {
         self.frames
             .send_replace(Some(Arc::new(ClashConnectionsFrame {
                 instance_id: self.instance_id.lock().clone(),
+                core_instance_id,
                 snapshot: snapshot.clone(),
             })));
         let _ = self.ws_tx.send(ClashWsEvent::ConnectionsUpdated(snapshot));
@@ -607,9 +616,9 @@ impl ClashConnectionsConnectorShared {
         let _ = self.ws_tx.send(ClashWsEvent::MemoryUpdated(memory));
     }
 
-    fn update(&self, kind: ClashWsKind, raw: serde_json::Value) {
+    fn update(&self, kind: ClashWsKind, core_instance_id: String, raw: serde_json::Value) {
         match kind {
-            ClashWsKind::Connections => self.update_connections(raw),
+            ClashWsKind::Connections => self.update_connections(raw, core_instance_id),
             ClashWsKind::Logs => self.update_log(raw),
             ClashWsKind::Traffic => self.update_traffic(raw),
             ClashWsKind::Memory => self.update_memory(raw),
@@ -633,7 +642,7 @@ enum ClashConnectionsActorMessage {
     Restart(RpcReplyPort<anyhow::Result<()>>),
     Reconnect(ClashWsKind),
     StreamClosed(ClashWsKind),
-    Update(ClashWsKind, serde_json::Value),
+    Update(ClashWsKind, String, serde_json::Value),
 }
 
 struct ClashConnectionsActor;
@@ -691,10 +700,10 @@ impl ClashConnectionsActor {
                 .dispatch_state_changed(ClashConnectionsConnectorState::Connecting);
         }
 
-        let info = (state.endpoint)()
+        let binding = (state.endpoint)()
             .await
             .with_context(|| format!("{} API binding is unavailable", kind.path()))?;
-        let endpoint = ClashConnectionsConnector::endpoint(info, kind.path())
+        let endpoint = ClashConnectionsConnector::endpoint(binding.info, kind.path())
             .with_context(|| format!("failed to create {} endpoint", kind.path()))?;
         log::debug!(
             "connecting to clash {} ws server: {endpoint:?}",
@@ -708,13 +717,16 @@ impl ClashConnectionsActor {
                 .dispatch_state_changed(ClashConnectionsConnectorState::Connected);
         }
 
+        let core_instance_id = binding.core_instance_id;
         let handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Some(msg) => {
-                        if let Err(err) =
-                            myself.cast(ClashConnectionsActorMessage::Update(kind, msg))
-                        {
+                        if let Err(err) = myself.cast(ClashConnectionsActorMessage::Update(
+                            kind,
+                            core_instance_id.clone(),
+                            msg,
+                        )) {
                             tracing::error!("failed to forward clash ws update: {err}");
                             break;
                         }
@@ -833,8 +845,8 @@ impl Actor for ClashConnectionsActor {
                     });
                 }
             }
-            ClashConnectionsActorMessage::Update(kind, msg) => {
-                state.shared.update(kind, msg);
+            ClashConnectionsActorMessage::Update(kind, core_instance_id, msg) => {
+                state.shared.update(kind, core_instance_id, msg);
             }
         }
         Ok(())
@@ -1028,6 +1040,7 @@ mod tests {
 
         shared.update(
             ClashWsKind::Connections,
+            "test-core".into(),
             serde_json::json!({
                 "downloadTotal": 100,
                 "uploadTotal": 40,
@@ -1061,10 +1074,13 @@ mod tests {
         shared.dispatch_state_changed(ClashConnectionsConnectorState::Connected);
         let endpoint: ClashEndpointResolver = Arc::new(|| {
             Box::pin(async {
-                Ok(crate::config::clash::ClashInfo {
-                    port: 9090,
-                    server: "127.0.0.1:9090".into(),
-                    secret: None,
+                Ok(ClashWsEndpoint {
+                    info: crate::config::clash::ClashInfo {
+                        port: 9090,
+                        server: "127.0.0.1:9090".into(),
+                        secret: None,
+                    },
+                    core_instance_id: "test-core".into(),
                 })
             })
         });
@@ -1164,18 +1180,18 @@ mod connection_detail_tests {
                 } ],
             })
         };
-        shared.update_connections(update(1));
+        shared.update_connections(update(1), "test-core".into());
         assert_eq!(shared.snapshot().connections.len(), 0);
         assert_eq!(shared.details.receiver_count(), 0);
         let rx = shared.subscribe_connection_details();
-        shared.update_connections(update(2));
+        shared.update_connections(update(2), "test-core".into());
         assert_eq!(
             rx.borrow().as_ref().unwrap().connections[0].download_speed,
             0
         );
         assert_eq!(shared.snapshot().connections.len(), 0);
         drop(rx);
-        shared.update_connections(update(3));
+        shared.update_connections(update(3), "test-core".into());
         assert!(shared.details.borrow().is_none());
     }
 }

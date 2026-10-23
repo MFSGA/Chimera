@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import type { ChainablePromiseElement } from 'webdriverio';
 
 const mainSettingsPath = '/main/settings/user-interface';
 
@@ -27,6 +28,33 @@ type LocaleSnapshot = {
   documentLanguage: string;
 };
 
+type RouteIdentity = {
+  routeId: string;
+  routeKey: string;
+  present: boolean;
+};
+
+type RouteMarker =
+  | { kind: 'main'; pathname: string; routes: RouteIdentity[] }
+  | {
+      kind: 'legacy';
+      pathname: string;
+      routes: RouteIdentity[];
+      heading: string | null;
+    };
+
+function routeMarkerSignature(marker: RouteMarker | null) {
+  if (!marker) return null;
+  const routes = marker.routes.map(({ routeId, routeKey, present }) => [
+    routeId,
+    routeKey,
+    present,
+  ]);
+  return marker.kind === 'legacy'
+    ? JSON.stringify([marker.kind, marker.pathname, routes, marker.heading])
+    : JSON.stringify([marker.kind, marker.pathname, routes]);
+}
+
 type WindowSize = {
   width: number;
   height: number;
@@ -44,6 +72,19 @@ function persistedLanguage(): string | null {
   const value =
     /^language:\s*["']?([^"'#\s]+)["']?\s*$/m.exec(text)?.[1] ?? null;
   return value === 'null' || value === '~' ? null : value;
+}
+
+async function clickWithMouse(
+  element: ChainablePromiseElement | WebdriverIO.Element,
+) {
+  const target = await element.getElement();
+  await browser
+    .action('pointer', { parameters: { pointerType: 'mouse' } })
+    .move({ origin: target })
+    .down()
+    .pause(10)
+    .up()
+    .perform();
 }
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
@@ -73,6 +114,210 @@ async function openMainWindow() {
     { timeout: 15_000, timeoutMsg: 'The main window was not created.' },
   );
   await browser.switchToWindow('main');
+}
+
+async function readLocaleSnapshot(): Promise<LocaleSnapshot> {
+  return browser.execute(() => ({
+    cache: localStorage.getItem(btoa('paraglide-language-cache')),
+    documentLanguage: document.documentElement.lang,
+  }));
+}
+
+async function waitForRouteMarker(
+  handle: string,
+  expected: RouteMarker | null,
+  requiredStableMs: number,
+): Promise<RouteMarker> {
+  const result = (await browser.executeAsync(
+    (expectedSignature, stableMs, timeoutMs, done) => {
+      let finished = false;
+      let previousSignature: string | null = null;
+      let stableSince = 0;
+      let marker: RouteMarker | null = null;
+      let observations = 0;
+      let missingMarkers = 0;
+      let exitingMarkers = 0;
+      const recentSignatures: string[] = [];
+      const startedAt = Date.now();
+      let sampleTimer: number | undefined;
+
+      const signatureOf = (value: RouteMarker | null) => {
+        if (!value) return null;
+        const routes = value.routes.map(({ routeId, routeKey, present }) => [
+          routeId,
+          routeKey,
+          present,
+        ]);
+        return value.kind === 'legacy'
+          ? JSON.stringify([value.kind, value.pathname, routes, value.heading])
+          : JSON.stringify([value.kind, value.pathname, routes]);
+      };
+      const readMarker = (): RouteMarker | null => {
+        const isMain =
+          document.documentElement.classList.contains('chimera-main');
+        const selector = isMain
+          ? '[data-route-id][data-route-key]'
+          : '.page-transition[data-route-id][data-route-key]';
+        const routes = Array.from(
+          document.querySelectorAll<HTMLElement>(selector),
+        ).flatMap((element) => {
+          const routeId = element.getAttribute('data-route-id');
+          const routeKey = element.getAttribute('data-route-key');
+          const present = element.getAttribute('data-route-present') === 'true';
+          return routeId && routeKey ? [{ routeId, routeKey, present }] : [];
+        });
+        if (routes.length === 0) return null;
+        if (isMain) {
+          return { kind: 'main', pathname: location.pathname, routes };
+        }
+        const heading =
+          document.querySelector('h1')?.textContent?.trim() ?? null;
+        return { kind: 'legacy', pathname: location.pathname, routes, heading };
+      };
+      const diagnostics = () => ({
+        pathname: location.pathname,
+        title: document.title,
+        headingCount: document.querySelectorAll('h1').length,
+        routeElements: Array.from(
+          document.querySelectorAll(
+            '.page-transition, [data-route-id][data-route-key]',
+          ),
+        ).map((element) => ({
+          tag: element.tagName,
+          className: element.getAttribute('class'),
+          slot: element.getAttribute('data-slot'),
+          routeId: element.getAttribute('data-route-id'),
+          routeKey: element.getAttribute('data-route-key'),
+          present: element.getAttribute('data-route-present'),
+          opacity: getComputedStyle(element).opacity,
+          children: element.children.length,
+        })),
+      });
+      const finish = (ok: boolean) => {
+        if (finished) return;
+        finished = true;
+        if (timer !== undefined) window.clearTimeout(timer);
+        if (sampleTimer !== undefined) window.clearTimeout(sampleTimer);
+        done({
+          ok,
+          marker,
+          observations,
+          missingMarkers,
+          exitingMarkers,
+          recentSignatures,
+          stableForMs: previousSignature ? Date.now() - stableSince : 0,
+          diagnostics: ok ? undefined : diagnostics(),
+        });
+      };
+      const sample = () => {
+        if (finished) return;
+        observations += 1;
+        marker = readMarker();
+        const signature = signatureOf(marker);
+        const eligible =
+          signature !== null &&
+          !marker?.routes.some(({ present }) => !present) &&
+          (expectedSignature === null || signature === expectedSignature);
+        if (!eligible) {
+          if (marker === null) missingMarkers += 1;
+          else if (marker.routes.some(({ present }) => !present)) {
+            exitingMarkers += 1;
+          }
+          previousSignature = null;
+          stableSince = 0;
+        } else if (signature !== previousSignature) {
+          previousSignature = signature;
+          stableSince = Date.now();
+          recentSignatures.push(signature);
+          if (recentSignatures.length > 8) recentSignatures.shift();
+        } else if (Date.now() - stableSince >= stableMs) {
+          finish(true);
+          return;
+        }
+
+        if (Date.now() - startedAt >= timeoutMs) {
+          finish(false);
+          return;
+        }
+        sampleTimer = window.setTimeout(sample, 100);
+      };
+      const timer = window.setTimeout(() => finish(false), timeoutMs);
+      sample();
+    },
+    routeMarkerSignature(expected),
+    requiredStableMs,
+    15_000,
+  )) as {
+    ok: boolean;
+    marker: RouteMarker | null;
+    observations: number;
+    missingMarkers: number;
+    exitingMarkers: number;
+    recentSignatures: string[];
+    stableForMs: number;
+    diagnostics?: unknown;
+  };
+
+  if (!result.ok || !result.marker) {
+    const target = expected
+      ? `expected ${routeMarkerSignature(expected)}`
+      : 'any non-exiting route';
+    throw new Error(
+      `${handle} did not render ${target} for ${requiredStableMs}ms: observed ${JSON.stringify(result.marker)}, stable for ${result.stableForMs}ms after ${result.observations} samples (${result.missingMarkers} missing, ${result.exitingMarkers} exiting), recent ${JSON.stringify(result.recentSignatures)}, DOM ${JSON.stringify(result.diagnostics)}.`,
+    );
+  }
+  return result.marker;
+}
+
+async function captureRouteMarker(handle: string): Promise<RouteMarker> {
+  try {
+    return await waitForRouteMarker(handle, null, 750);
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not render a stable route marker before setup.`,
+      { cause },
+    );
+  }
+}
+
+async function setLocaleCache(locale: string): Promise<void> {
+  await browser.execute((value) => {
+    localStorage.setItem(btoa('paraglide-language-cache'), value);
+  }, locale);
+}
+
+async function refreshDocument(handle: string): Promise<void> {
+  const previousTimeOrigin = await browser.execute(
+    () => performance.timeOrigin,
+  );
+  await browser.refresh();
+
+  let lastState: { readyState: DocumentReadyState; timeOrigin: number } | null =
+    null;
+  try {
+    await browser.waitUntil(
+      async () => {
+        lastState = await browser.execute(() => ({
+          readyState: document.readyState,
+          timeOrigin: performance.timeOrigin,
+        }));
+        return (
+          lastState.readyState === 'complete' &&
+          lastState.timeOrigin !== previousTimeOrigin
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 500,
+        timeoutMsg: `${handle} did not load a new document after refresh.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not load a new document after refresh: ${JSON.stringify(lastState)}.`,
+      { cause },
+    );
+  }
 }
 
 async function openUserInterfaceSettings() {
@@ -116,18 +361,16 @@ async function waitForLocaleSynchronization(handle: string) {
   try {
     await browser.waitUntil(
       async () => {
-        const [config, ui] = await Promise.all([
-          invoke<AppConfig>('get_app_config'),
-          browser.execute(() => ({
-            ready:
-              document.readyState === 'complete' &&
-              (document.getElementById('root')?.childElementCount ?? 0) > 0,
-            language: document.documentElement.lang.toLowerCase(),
-            cachedLanguage: localStorage.getItem(
-              btoa('paraglide-language-cache'),
-            ),
-          })),
-        ]);
+        const config = await invoke<AppConfig>('get_app_config');
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang.toLowerCase(),
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
         const configuredLocale = normalizeLocale(config.language);
         const cachedLocale = normalizeLocale(ui.cachedLanguage);
         const expectedLocale = configuredLocale ?? cachedLocale ?? 'en';
@@ -157,32 +400,102 @@ async function waitForLocaleSynchronization(handle: string) {
   }
 }
 
-async function restoreLocaleSnapshot(handle: string, snapshot: LocaleSnapshot) {
+async function waitForPreparedLocale(handle: string, locale: string) {
+  let lastState: unknown;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang.toLowerCase(),
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
+        lastState = { handle, expected: locale, ...ui };
+        return (
+          ui.ready &&
+          normalizeLocale(ui.language) === locale &&
+          normalizeLocale(ui.cachedLanguage) === locale
+        );
+      },
+      {
+        timeout: 30_000,
+        interval: 250,
+        timeoutMsg: `${handle} did not render the prepared ${locale} locale.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not render the prepared locale: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
+}
+
+async function restoreLocaleSnapshot(
+  handle: string,
+  snapshot: LocaleSnapshot,
+  originalLanguage: string | null,
+) {
   if (!(await browser.getWindowHandles()).includes(handle)) return;
+
+  const configuredLocale = normalizeLocale(originalLanguage);
+  const cachedLocale = normalizeLocale(snapshot.cache);
+  const expectedLocale =
+    configuredLocale ??
+    cachedLocale ??
+    normalizeLocale(snapshot.documentLanguage) ??
+    'en';
+  const expectedCachedLocale = configuredLocale ?? cachedLocale;
+  const cacheToRestore = configuredLocale ?? snapshot.cache;
 
   await browser.switchToWindow(handle);
   await browser.execute((cache) => {
     const key = btoa('paraglide-language-cache');
     if (cache === null) localStorage.removeItem(key);
     else localStorage.setItem(key, cache);
-  }, snapshot.cache);
-  await browser.refresh();
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        (language) => document.documentElement.lang === language,
-        snapshot.documentLanguage,
-      ),
-    {
-      timeout: 15_000,
-      timeoutMsg: `${handle} did not return to its original language.`,
-    },
-  );
-  await browser.execute((cache) => {
-    const key = btoa('paraglide-language-cache');
-    if (cache === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, cache);
-  }, snapshot.cache);
+  }, cacheToRestore);
+  await refreshDocument(handle);
+  let lastState: unknown;
+  try {
+    await browser.waitUntil(
+      async () => {
+        const ui = await browser.execute(() => ({
+          ready:
+            document.readyState === 'complete' &&
+            (document.getElementById('root')?.childElementCount ?? 0) > 0,
+          language: document.documentElement.lang,
+          cachedLanguage: localStorage.getItem(
+            btoa('paraglide-language-cache'),
+          ),
+        }));
+        lastState = {
+          handle,
+          expectedLocale,
+          expectedCachedLocale,
+          ...ui,
+        };
+        return (
+          ui.ready &&
+          normalizeLocale(ui.language) === expectedLocale &&
+          (expectedCachedLocale === null ||
+            normalizeLocale(ui.cachedLanguage) === expectedCachedLocale)
+        );
+      },
+      {
+        timeout: 15_000,
+        timeoutMsg: `${handle} did not resolve the original configured locale.`,
+      },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${handle} did not resolve its original locale: ${JSON.stringify(lastState)}`,
+      { cause },
+    );
+  }
 }
 
 async function restoreWindowState(
@@ -196,13 +509,16 @@ async function restoreWindowState(
     await browser.switchToWindow(handle);
     await cleanup();
   } catch (cause) {
-    errors.push(new Error(`Could not restore ${handle} ${label}.`, { cause }));
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    errors.push(
+      new Error(`Could not restore ${handle} ${label}: ${reason}`, { cause }),
+    );
   }
 }
 
 /**
  * Contract: Starting from the persisted English test setting, select Japanese
- * through the main UI keyboard menu. Verify immediate main UI/cache state,
+ * through the main UI with mouse clicks. Verify immediate main UI/cache state,
  * typed app config, application.yaml, the main UI after refresh, and Japanese
  * labels after navigating the retained legacy window to /proxies. This catches
  * locale changes delayed behind query refetch; it does not claim live sync in
@@ -213,7 +529,9 @@ describe('application language selection', () => {
   let originalLanguage: string | null | undefined;
   const localeSnapshots = new Map<string, LocaleSnapshot>();
   const originalUrls = new Map<string, string>();
+  const originalRouteMarkers = new Map<string, RouteMarker>();
   const originalWindowSizes = new Map<string, WindowSize>();
+  let legacyMemorizedRoutePathSnapshot: string | null | undefined;
 
   before(async () => {
     await browser.waitUntil(
@@ -233,17 +551,8 @@ describe('application language selection', () => {
       await browser.switchToWindow(handle);
       originalWindowSizes.set(handle, await browser.getWindowSize());
       originalUrls.set(handle, await browser.getUrl());
-      // Other layout specs seed the Paraglide cache directly. Reload retained
-      // windows so this test snapshots the locale resolved from app config.
-      await browser.refresh();
-      await waitForLocaleSynchronization(handle);
-      localeSnapshots.set(
-        handle,
-        await browser.execute(() => ({
-          cache: localStorage.getItem(btoa('paraglide-language-cache')),
-          documentLanguage: document.documentElement.lang,
-        })),
-      );
+      // Save each WebView's cache and document language before test setup.
+      localeSnapshots.set(handle, await readLocaleSnapshot());
     }
 
     await openMainWindow();
@@ -264,18 +573,55 @@ describe('application language selection', () => {
           timeoutMsg: 'The new main window did not finish its first render.',
         },
       );
-      await browser.refresh();
-      await waitForLocaleSynchronization('main');
-      localeSnapshots.set(
-        'main',
-        await browser.execute(() => ({
-          cache: localStorage.getItem(btoa('paraglide-language-cache')),
-          documentLanguage: document.documentElement.lang,
-        })),
-      );
+      localeSnapshots.set('main', await readLocaleSnapshot());
     }
+
+    // Resolve each window using the same config/cache precedence as cleanup
+    // before capturing its translated route marker. This keeps legacy heading
+    // markers valid when the user's configured locale is not English.
+    for (const [handle, snapshot] of localeSnapshots) {
+      await restoreLocaleSnapshot(handle, snapshot, originalLanguage ?? null);
+      originalRouteMarkers.set(handle, await captureRouteMarker(handle));
+      // Main-window startup can redirect /main to /main/dashboard. Save the
+      // settled URL so cleanup does not trigger that redirect a second time.
+      originalUrls.set(handle, await browser.getUrl());
+    }
+
+    const legacyOriginalUrl = originalUrls.get('legacy');
+    const legacyOriginalMarker = originalRouteMarkers.get('legacy');
+    assert.ok(
+      legacyOriginalUrl && legacyOriginalMarker?.kind === 'legacy',
+      'The retained legacy window route was not captured.',
+    );
+    await browser.switchToWindow('legacy');
+    legacyMemorizedRoutePathSnapshot = await browser.execute(() =>
+      localStorage.getItem('memorizedRoutePathAtom'),
+    );
+    const legacyProvidersUrl = new URL(legacyOriginalUrl);
+    legacyProvidersUrl.pathname = '/providers';
+    legacyProvidersUrl.search = '';
+    legacyProvidersUrl.hash = '';
+    await browser.url(legacyProvidersUrl.toString());
+    const providerRouteMarker = await captureRouteMarker('legacy');
+    assert.equal(providerRouteMarker.kind, 'legacy');
+    assert.equal(providerRouteMarker.pathname, '/providers');
+    assert.ok(
+      providerRouteMarker.routes.some(
+        ({ routeId, present }) => routeId === '/(legacy)/providers' && present,
+      ),
+      'The no-heading marker should belong to the legacy Providers route.',
+    );
+    assert.equal(
+      providerRouteMarker.heading,
+      null,
+      'A legacy route without an h1 should still have a stable route marker.',
+    );
+    await browser.url(legacyOriginalUrl);
+    await waitForRouteMarker('legacy', legacyOriginalMarker, 0);
+    originalUrls.set('legacy', await browser.getUrl());
+    await browser.switchToWindow('main');
+
     await browser.setWindowSize(1240, 638);
-    await openUserInterfaceSettings();
 
     await invoke('patch_app_config', { patch: { language: 'en' } });
     await browser.waitUntil(
@@ -290,7 +636,16 @@ describe('application language selection', () => {
         timeoutMsg: 'Could not prepare the test runtime in English.',
       },
     );
-    await browser.refresh();
+    // Earlier layout specs intentionally seed their own locales. Prepare both
+    // retained WebViews from the same persisted English setting so this test
+    // does not depend on which spec ran before it.
+    for (const handle of localeSnapshots.keys()) {
+      await browser.switchToWindow(handle);
+      await setLocaleCache('en');
+      await refreshDocument(handle);
+      await waitForPreparedLocale(handle, 'en');
+    }
+    await browser.switchToWindow('main');
     await openUserInterfaceSettings();
     await browser.waitUntil(
       async () =>
@@ -348,7 +703,8 @@ describe('application language selection', () => {
         await restoreWindowState(
           handle,
           'locale',
-          () => restoreLocaleSnapshot(handle, snapshot),
+          () =>
+            restoreLocaleSnapshot(handle, snapshot, originalLanguage ?? null),
           cleanupErrors,
         );
       } else {
@@ -359,7 +715,7 @@ describe('application language selection', () => {
           handle,
           'locale synchronization fallback',
           async () => {
-            await browser.refresh();
+            await refreshDocument(handle);
             await waitForLocaleSynchronization(handle);
           },
           cleanupErrors,
@@ -370,14 +726,35 @@ describe('application language selection', () => {
         'route',
         async () => {
           const originalUrl = originalUrls.get(handle);
-          if (originalUrl && (await browser.getUrl()) !== originalUrl) {
+          const originalRouteMarker = originalRouteMarkers.get(handle);
+          if (
+            originalUrl &&
+            (!originalRouteMarker || (await browser.getUrl()) !== originalUrl)
+          ) {
             await browser.url(originalUrl);
-            await browser.waitUntil(
-              async () => (await browser.getUrl()) === originalUrl,
-              {
-                timeout: 15_000,
-                timeoutMsg: `${handle} did not return to its original route.`,
-              },
+            if (originalRouteMarker) {
+              let lastObservedUrl: string | undefined;
+              await browser.waitUntil(
+                async () => {
+                  lastObservedUrl = await browser.getUrl();
+                  return lastObservedUrl === originalUrl;
+                },
+                {
+                  timeout: 15_000,
+                  timeoutMsg: `${handle} did not return to its original route: expected ${originalUrl}, last observed ${lastObservedUrl}.`,
+                },
+              );
+            }
+          }
+          if (originalRouteMarker) {
+            await waitForRouteMarker(handle, originalRouteMarker, 0);
+          } else if (originalUrl) {
+            const recoveredMarker = await captureRouteMarker(handle);
+            originalRouteMarkers.set(handle, recoveredMarker);
+            originalUrls.set(handle, await browser.getUrl());
+          } else {
+            throw new Error(
+              `No original route URL or marker was captured for ${handle}.`,
             );
           }
         },
@@ -394,6 +771,28 @@ describe('application language selection', () => {
               originalSize.height,
             );
           }
+        },
+        cleanupErrors,
+      );
+    }
+
+    const legacyRouteSnapshot = legacyMemorizedRoutePathSnapshot;
+    if (legacyRouteSnapshot !== undefined) {
+      await restoreWindowState(
+        'legacy',
+        'memorized route storage',
+        async () => {
+          await browser.execute((value) => {
+            if (value === null) {
+              localStorage.removeItem('memorizedRoutePathAtom');
+            } else {
+              localStorage.setItem('memorizedRoutePathAtom', value);
+            }
+          }, legacyRouteSnapshot);
+          const restoredValue = await browser.execute(() =>
+            localStorage.getItem('memorizedRoutePathAtom'),
+          );
+          assert.equal(restoredValue, legacyRouteSnapshot);
         },
         cleanupErrors,
       );
@@ -418,17 +817,16 @@ describe('application language selection', () => {
     }
   });
 
-  it('loads the persisted Japanese locale in the legacy proxy page', async () => {
+  it('selects Japanese with mouse pointer actions and persists it across both UIs', async () => {
     const trigger = await $('[data-slot="language-selector-trigger"]');
     await trigger.waitForDisplayed();
-    await browser.execute((element) => element.focus(), trigger);
-    await browser.keys('Enter');
+    await clickWithMouse(trigger);
 
     await browser.waitUntil(
       async () => (await trigger.getAttribute('aria-expanded')) === 'true',
       {
         timeout: 10_000,
-        timeoutMsg: 'The language menu did not open from the keyboard.',
+        timeoutMsg: 'A mouse click did not open the language menu.',
       },
     );
     const menu = await $('[data-slot="language-selector-menu"]');
@@ -437,18 +835,8 @@ describe('application language selection', () => {
       '//*[@data-slot="language-selector-menu"]//*[@role="menuitemcheckbox" and normalize-space(.)="日本語"]',
     );
     await japaneseOption.waitForExist({ timeout: 10_000 });
-    await browser.keys('ArrowDown');
-    await browser.waitUntil(
-      async () =>
-        browser.execute(
-          () => document.activeElement?.textContent?.trim() === '日本語',
-        ),
-      {
-        timeout: 10_000,
-        timeoutMsg: 'ArrowDown did not focus the Japanese language option.',
-      },
-    );
-    await browser.keys('Enter');
+    await japaneseOption.waitForDisplayed({ timeout: 10_000 });
+    await clickWithMouse(japaneseOption);
 
     let lastLanguageState: unknown;
     try {
@@ -502,7 +890,7 @@ describe('application language selection', () => {
     assert.equal(currentMainState.language, 'ja');
     assert.match(currentMainState.selectedLanguage ?? '', /日本語/);
 
-    await browser.refresh();
+    await refreshDocument('main');
     await openUserInterfaceSettings();
 
     const mainState = await browser.execute(() => ({

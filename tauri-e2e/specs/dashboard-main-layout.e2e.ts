@@ -311,27 +311,92 @@ describe('main dashboard reference layout', () => {
 
     const isTrafficConfigOpen = async () =>
       browser.execute(() => {
-        const control = document.querySelector(
-          '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+        const trigger = document.querySelector(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
         );
-        return Boolean(control && control.getClientRects().length > 0);
+        return trigger?.getAttribute('aria-expanded') === 'true';
       });
 
-    const openTrafficConfig = async () => {
+    const readTrafficConfigState = async () =>
+      browser.execute(() => {
+        const trigger = document.querySelector(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
+        );
+        const unit = document.querySelector(
+          '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+        );
+        const reset = document.querySelector(
+          '[data-slot="widget-config-reset"]',
+        );
+        const fields = document.querySelector(
+          '[data-slot="widget-config-fields"]',
+        );
+        const isVisible = (element: Element | null) =>
+          Boolean(
+            element?.getClientRects().length &&
+            getComputedStyle(element).visibility !== 'hidden',
+          );
+
+        return {
+          pathname: location.pathname,
+          editMode: Boolean(
+            document.querySelector('[data-slot="widget-config-trigger"]'),
+          ),
+          triggerExpanded: trigger?.getAttribute('aria-expanded') ?? null,
+          triggerState: trigger?.getAttribute('data-state') ?? null,
+          fieldsMounted: fields !== null,
+          unitVisible: isVisible(unit),
+          unitDisabled: (unit as HTMLButtonElement | null)?.disabled ?? null,
+          resetVisible: isVisible(reset),
+          resetDisabled: (reset as HTMLButtonElement | null)?.disabled ?? null,
+          saveState:
+            document
+              .querySelector('[data-slot="widget-config-save-status"]')
+              ?.getAttribute('data-save-state') ?? null,
+        };
+      });
+
+    const observeTrafficConfigState = async () => {
+      const state = await readTrafficConfigState();
+      const unitToggle = await $(
+        '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
+      );
+      const resetButton = await $('[data-slot="widget-config-reset"]');
+      return {
+        ...state,
+        unitDisplayed: await unitToggle.isDisplayed(),
+        resetDisplayed: await resetButton.isDisplayed(),
+      };
+    };
+
+    const ensureTrafficConfigOpen = async () => {
       if (!(await isTrafficConfigOpen())) {
         const trigger = await $(
           '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
         );
         await trigger.waitForDisplayed({ timeout: 5_000 });
         await trigger.click();
+        await waitForObservedValue(
+          'Traffic widget config Popover expansion',
+          isTrafficConfigOpen,
+          Boolean,
+        );
       }
+      await waitForObservedValue(
+        'Traffic widget controls and Popover state',
+        observeTrafficConfigState,
+        (state) =>
+          state.triggerExpanded === 'true' &&
+          state.fieldsMounted &&
+          state.unitDisplayed &&
+          state.resetDisplayed,
+      );
+    };
+
+    const openTrafficConfig = async () => {
+      await ensureTrafficConfigOpen();
       const unitToggle = await $(
         '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
-      );
-      await waitForObservedValue(
-        'Traffic unit control visibility',
-        () => unitToggle.isDisplayed(),
-        Boolean,
       );
       await waitForObservedValue(
         'Traffic widget settings loading',
@@ -700,11 +765,7 @@ describe('main dashboard reference layout', () => {
         (state) => state === 'load-error',
       );
       await enterEditMode();
-      await (
-        await $(
-          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
-        )
-      ).click();
+      await ensureTrafficConfigOpen();
       const futureVersionUnitToggle = await $(
         '[data-slot="widget-config-choice"][data-config-field="speed-unit"]',
       );

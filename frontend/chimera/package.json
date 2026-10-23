@@ -1,7 +1,7 @@
 {
   "name": "chimera-ui",
   "private": true,
-  "version": "0.26.0",
+  "version": "0.26.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -61,7 +61,7 @@
   },
   "devDependencies": {
     "@emotion/react": "11.14.0",
-    "@iconify/json": "2.2.539",
+    "@iconify/json": "2.2.546",
     "@monaco-editor/react": "4.7.0",
     "@svgr/core": "8.1.0",
     "@svgr/plugin-jsx": "8.1.0",
@@ -81,10 +81,10 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "filesize": "11.0.25",
-    "meta-json-schema": "1.19.31",
+    "meta-json-schema": "1.19.32",
     "monaco-yaml": "5.5.1",
     "nanoid": "6.0.2",
-    "postcss": "8.5.28",
+    "postcss": "8.5.31",
     "sass-embedded": "1.105.1",
     "shiki": "4.5.0",
     "tailwindcss": "4.3.3",
