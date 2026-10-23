@@ -43,6 +43,8 @@
 | LESSON-20261021-001 | 2026-10-21 | Governance / Review | 历史重写规则修改遗漏审查清单与 PR 模板中的旧禁令；须同步所有规范副本并交叉检查                                  | Mitigated |
 | LESSON-20261021-002 | 2026-10-21 | E2E / WebDriver     | 跨平台焦点/布局快照需对应真实状态；PR #515 新 SHA E2E 复验待完成                                                | Open      |
 | LESSON-20261022-001 | 2026-10-22 | E2E / WebDriver     | `executeAsync` 完成不会自动清除页面定时器；路由轮询须停止并清除所有待执行 timer，PR #515 新 SHA 待复验          | Open      |
+| LESSON-20261023-001 | 2026-10-23 | CI / Linux          | PR #518 ARM64 target image fix; dedicated cross-build run 39623084868 passed                                    | Verified  |
+| LESSON-20261023-002 | 2026-10-23 | CI / Linux          | PR #518 preserves JSON quoting in non-nightly cross builds; dedicated ARM64 run 39623084868 passed              | Verified  |
 
 ## 单条模板
 
@@ -604,3 +606,37 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter @chimera/tauri-e2e typecheck` 通过；`pnpm --filter @chimera/tauri-e2e test:unit` 25/25 通过；目标 spec `pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/user-interface-language.e2e.ts --logLevel warn` 单独串行运行通过 1/1；Prettier 与 `git diff --check` 通过。一次 `pnpm prepare:check` 在资源缓存完成后无进度，手动中断，不能算通过。修复后的 Windows E2E 尚未运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅 E2E 等待器的 timer 清理；无产品配置、宿主网络或系统状态变化。回滚为恢复路由 helper 原有的 deadline-only 清理。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：使用页面轮询的 `executeAsync` helper 必须自行跟踪并清除 deadline 和循环 sample timer，且每个异步回调应检查完成状态；不能假定 WebDriver callback 完成会结束页面内 timer。无 CI 门禁变更。
+
+### LESSON-20261023-001：Linux ARM64 cross-build 必须使用带 GTK/GLib 的目标镜像
+
+- 日期与时区：2026-10-23 UTC
+- 状态：Verified（修复后的专用 Linux ARM64 cross-build 已通过；通用 PR CI 在同步后的新 SHA 上复验中）
+- 严重度：Low
+- 模块：CI / Linux cross-build
+- master commit / ref gitlink SHA / 平台与测试环境：失败运行基线 `2dca108525d855d08479fa23db71d9533352e727`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；Ubuntu 26.04 aarch64 cross build。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[夜间构建失败 39545347771](https://github.com/MFSGA/Chimera/actions/runs/39545347771)，失败 Job 为 `Linux aarch64 Build / build`；修复后的[专用 Linux ARM64 构建 run 39623084868](https://github.com/MFSGA/Chimera/actions/runs/39623084868)成功。
+- 预期行为：Linux ARM64 Tauri cross-build 应在目标环境中找到 Tauri 所需的 GLib/GTK 开发文件并完成编译。
+- 真实异常、复现步骤与证据：`glib-sys v0.18.1` 的 build script 在 `cross` 容器内运行 `pkg-config --libs --cflags glib-2.0 'glib-2.0 >= 2.70'` 失败；容器的 `/usr/lib/aarch64-linux-gnu/pkgconfig/` 中没有 `glib-2.0.pc`。同一 job 的 Ubuntu host 仅安装 GTK/WebKit host 包，无法提供给隔离的目标容器。
+- 确认的根因与排除项：仓库没有 `backend/Cross.toml`，因此 aarch64 构建落到 `cross` 默认镜像；该镜像不包含项目需要的 ARM64 GLib 开发包。不是 Rust 源码或依赖版本错误，也不是 runner host 缺少包。
+- 修复提交、差异映射及保留的兼容性边界：补回 pinned ref `backend/Cross.toml` 的 aarch64 target 镜像映射，使用 `ghcr.io/libnyanpasu/builder-debian-trixie-aarch64:latest`；其他 target 仍使用 cross 默认配置。没有修改应用代码或产物发布步骤。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败证据为 run `39545347771`。修复后的专用 run `39623084868` 在 `aarch64` 目标完成 Tauri cross build，并成功生成 deb/rpm；容器中的 GLib 开发依赖因此得到实际构建验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`yq -p toml '.target."aarch64-unknown-linux-gnu".image' backend/Cross.toml` 输出预期镜像；将 pinned ref 的文件与 `backend/Cross.toml` 比对，`cmp` 通过；专用 Linux ARM64 run `39623084868` 成功完成 `Tauri build and upload (cross)` 并生成 deb/rpm。本机没有 Docker，目标容器验证由该 GitHub Actions run 完成；同步后新 SHA 的通用 CI 仍待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响 ARM64 cross-build 的构建容器镜像选择；回滚方式为移除 `backend/Cross.toml`。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：Linux cross-build 所需的 target 系统库必须安装在 cross 容器内，host 的 `apt-get install` 不能替代；优先保持与 pinned ref 的 `backend/Cross.toml` 对齐。此修复未改变 CI 门禁或发布/tag 流程。
+
+### LESSON-20261023-002：非夜间 cross 构建的 Tauri JSON 参数必须保留引号
+
+- 日期与时区：2026-10-23 UTC
+- 状态：Verified（专用 Linux ARM64 构建已在 nightly=false 下通过；同步后的通用 PR CI 仍待完成）
+- 严重度：Low
+- 模块：CI / Linux cross-build
+- master commit / ref gitlink SHA / 平台与测试环境：PR #518 基线 `de251518084d5bf2a6af9e1f437538f8ce41a4f7`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；GitHub Ubuntu 26.04 aarch64。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[定向构建失败 run 39621617941](https://github.com/MFSGA/Chimera/actions/runs/39621617941)；修复后的[定向构建 run 39623084868](https://github.com/MFSGA/Chimera/actions/runs/39623084868)成功。
+- 预期行为：`nightly=false` 的 Cross 构建应将 `{"bundle":{"createUpdaterArtifacts":false}}` 作为有效 JSON 传给 Tauri `--config`。
+- 真实异常、复现步骤与证据：run `39621617941` 在 `Tauri build and upload (cross)` 退出，Tauri 收到 `{ bundle: { createUpdaterArtifacts: false } }` 并报错 `key must be a string`；尚未进入 Rust cross 编译。
+- 确认的根因与排除项：GitHub expression 字符串里嵌套双引号和 shell 双引号，渲染后 shell 移除了 JSON key 引号；与 Cross 镜像或 Rust 依赖无关。
+- 修复提交、差异映射及保留的兼容性边界：在 `.github/workflows/deps-build-linux.yaml` 将目标三元组映射和 nightly 分支移到 Bash，并以单引号传入 compact JSON；夜间命令保持原构建模式。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：原实现失败证据为 run `39621617941`。修复后的 run `39623084868` 以 `nightly=false`、`arch=aarch64` 成功完成 `Tauri build and upload (cross)`，确认有效 JSON 参数并实际进入 Cross 容器。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：提取该步骤并以 `NIGHTLY=false`、aarch64 输入和 `pnpm` stub 执行，确认传入目标三元组及完整 JSON 参数；四架构 × 两种 nightly 模式参数矩阵 8/8 通过；`bash -n` 和 `actionlint -ignore 'label "ubuntu-26.04" is unknown' -ignore 'SC2086' -ignore 'SC2162' .github/workflows/deps-build-linux.yaml` 通过。未忽略诊断的全量 actionlint 仍报告原有 ubuntu-26.04 runner label、两项 SC2086 和一项 SC2162，修改步骤本身无诊断。Prettier 与 `git diff --check` 通过；专用 ARM64 run `39623084868` 通过。同步后新 SHA 的通用 PR CI 仍待完成。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变单次 Linux cross 构建命令参数；回滚时恢复原来的 per-architecture expression 命令并移除此记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：避免在 GitHub expression 字符串中嵌套复杂 shell 引号；把条件分支放进 Bash，并让 JSON 参数在 shell 中使用单引号保持原样。
