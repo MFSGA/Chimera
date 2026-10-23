@@ -2533,10 +2533,12 @@ mod tests {
     #[tokio::test]
     async fn caller_aborted_refresh_eventually_settles_and_does_not_leave_pending_stuck() {
         let (started, started_rx) = tokio::sync::oneshot::channel();
+        let (allow_wait, allow_wait_rx) = tokio::sync::oneshot::channel();
         let release_fetch = Arc::new(tokio::sync::Notify::new());
         let holds_remaining = Arc::new(std::sync::atomic::AtomicUsize::new(1));
         struct FirstHoldFetcher {
             started: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+            allow_wait: std::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
             release: Arc<tokio::sync::Notify>,
             holds_remaining: Arc<std::sync::atomic::AtomicUsize>,
         }
@@ -2560,6 +2562,10 @@ mod tests {
                     if let Some(started) = self.started.lock().unwrap().take() {
                         let _ = started.send(());
                     }
+                    let allow_wait = self.allow_wait.lock().unwrap().take();
+                    if let Some(allow_wait) = allow_wait {
+                        let _ = allow_wait.await;
+                    }
                     self.release.notified().await;
                 }
                 Ok(FetchedSubscription {
@@ -2575,6 +2581,7 @@ mod tests {
         }
         let fetcher = FirstHoldFetcher {
             started: std::sync::Mutex::new(Some(started)),
+            allow_wait: std::sync::Mutex::new(Some(allow_wait_rx)),
             release: Arc::clone(&release_fetch),
             holds_remaining,
         };
@@ -2592,7 +2599,9 @@ mod tests {
             "caller-aborted refresh must cancel the waiting call future"
         );
 
-        release_fetch.notify_waiters();
+        // Release before allowing fetch to register, proving the one-shot permit is retained.
+        release_fetch.notify_one();
+        allow_wait.send(()).unwrap();
 
         // CommitRefreshed removes pending_refresh even when the reply port is gone.
         // Bound the poll so a stuck pending_refresh fails the test instead of hanging CI.

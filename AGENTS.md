@@ -47,17 +47,23 @@ they do not replace them. GitHub workflow realities are summarized in
   CI pending is **not** success: do not merge/release before required checks and
   approvals, do not promise background monitoring, and treat a discovered CI
   failure as a blocker requiring diagnosis before delivery/merge.
-- **Consolidate fixup history only after the issue is confirmed resolved.**
-  If one issue required multiple task-branch commits (implementation, CI fixes,
-  test corrections), keep them while investigating. Once the final behavior and
-  required checks are verified, squash/fixup only those related commits locally
-  into a coherent commit (or logically independent commits) before final merge.
-  Preserve the complete final diff, test evidence, authorship and review trail.
-  Never rewrite `master`, protected/shared history, tags or other people's commits.
-  A history rewrite on an owned feature branch requires explicit permission and
-  coordination; if updating its remote, use `--force-with-lease`, never plain
-  `--force`. Re-run required CI/review against the new commit SHA: results from
-  replaced SHAs do not authorize merging the rewritten commit.
+- **History rewriting is allowed only inside an explicitly authorized scope.**
+  Keep fixup commits while a defect is under investigation; after the final
+  behavior is confirmed, related commits may be squashed or reorganized into a
+  clear, verified history. A maintainer may explicitly authorize rewriting
+  `master` or another protected/shared branch, but the authorization must name
+  the target branch, commit range, treatment of tags, and whether open PR
+  branches are included. Authorization for one ref never extends to another.
+  Do not rewrite another person's or shared feature branch without the owners'
+  coordination. Before rewriting, inspect the latest remote state and preserve
+  the complete final diff, authorship, signatures, test evidence and review
+  trail. Keep tags unchanged unless their exact names and intended action are
+  explicitly authorized. Create a local recovery reference unless the
+  maintainer explicitly declines a backup. Sign rewritten commits with a key
+  GitHub recognizes as verified, update an owned remote branch with
+  `--force-with-lease` (never plain `--force`), and rerun required CI and review
+  against every replacement SHA. Results from replaced SHAs do not authorize
+  merging the rewritten history.
 - Risk levels determine the required evidence and review, not a routine approval
   pause. The user's standing instruction authorizes ordinary, scoped code
   iterations—including L2 implementation, fixes, tests, independent review, and
