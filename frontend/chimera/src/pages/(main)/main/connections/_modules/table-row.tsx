@@ -362,21 +362,35 @@ export default function TableRow({
   onDoubleClick,
   onViewDetails,
   onCloseConnection,
+  openDetailsOnClick = false,
   ...props
 }: ComponentProps<'tr'> & {
   onViewDetails: () => void;
   // Absent for a connection that is already closed
   onCloseConnection?: () => void;
+  openDetailsOnClick?: boolean;
 }) {
   return (
     <RegisterContextMenu>
       <RegisterContextMenuTrigger asChild>
         <tr
+          {...props}
+          className={cn(
+            props.className,
+            openDetailsOnClick && 'cursor-pointer',
+          )}
+          onClick={
+            openDetailsOnClick
+              ? (event) => {
+                  props.onClick?.(event);
+                  if (!event.defaultPrevented) onViewDetails();
+                }
+              : props.onClick
+          }
           onDoubleClick={(e) => {
             onDoubleClick?.(e);
             onViewDetails();
           }}
-          {...props}
         />
       </RegisterContextMenuTrigger>
 

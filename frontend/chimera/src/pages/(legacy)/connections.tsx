@@ -35,6 +35,7 @@ function Connections() {
               value={value}
               onChange={onChange}
               onLocateRule={onLocateRule}
+              openDetailsOnClick
             />
           </BasePage>
         </div>

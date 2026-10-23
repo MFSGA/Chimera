@@ -42,6 +42,7 @@ const ClosedViewer = memo(function ClosedViewer({
   onLocateRule,
   onViewRuleUsage,
   focusRowId,
+  openDetailsOnClick,
 }: {
   search: string;
   proxy?: string | null;
@@ -52,6 +53,7 @@ const ClosedViewer = memo(function ClosedViewer({
   onViewRuleUsage?: (detail: ConnectionDetail) => void;
   // The row to scroll to and highlight once it appears.
   focusRowId?: string;
+  openDetailsOnClick?: boolean;
 }) {
   const { rows, error, hasNextPage, onEndReached } = useClosedConnectionRows({
     search,
@@ -74,9 +76,13 @@ const ClosedViewer = memo(function ClosedViewer({
 
   const renderRow = useCallback(
     (row: ClosedConnection, props: RowProps) => (
-      <TableRow {...props} onViewDetails={() => setDetailRow(row)} />
+      <TableRow
+        {...props}
+        onViewDetails={() => setDetailRow(row)}
+        openDetailsOnClick={openDetailsOnClick}
+      />
     ),
-    [],
+    [openDetailsOnClick],
   );
 
   const columns = useMemo(

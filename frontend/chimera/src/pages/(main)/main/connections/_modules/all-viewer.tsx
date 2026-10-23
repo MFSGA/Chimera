@@ -156,6 +156,7 @@ const AllViewer = memo(function AllViewer({
   onLocateRule,
   onViewRuleUsage,
   focusRowId,
+  openDetailsOnClick,
 }: {
   search: string;
   proxy?: string | null;
@@ -166,6 +167,7 @@ const AllViewer = memo(function AllViewer({
   onViewRuleUsage?: (detail: ConnectionDetail) => void;
   // The row to scroll to and highlight once it appears.
   focusRowId?: string;
+  openDetailsOnClick?: boolean;
 }) {
   const { connections, rows: activeRows } = useActiveConnectionRows({
     search,
@@ -233,6 +235,7 @@ const AllViewer = memo(function AllViewer({
             })
           }
           onCloseConnection={() => deleteConnectionsRef.current(row.active.id)}
+          openDetailsOnClick={openDetailsOnClick}
         />
       ) : (
         <TableRow
@@ -240,9 +243,10 @@ const AllViewer = memo(function AllViewer({
           onViewDetails={() =>
             setDetailTarget({ kind: 'closed', key: row.key, row: row.closed })
           }
+          openDetailsOnClick={openDetailsOnClick}
         />
       ),
-    [],
+    [openDetailsOnClick],
   );
 
   const columns = useMemo(

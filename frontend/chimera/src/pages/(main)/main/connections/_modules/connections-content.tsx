@@ -46,6 +46,7 @@ export default function ConnectionsContent({
   onLocateRule,
   onViewRuleUsage,
   entryFocus,
+  openDetailsOnClick = false,
 }: {
   value: ConnectionsViewState;
   onChange: (patch: Partial<ConnectionsViewState>) => void;
@@ -53,6 +54,8 @@ export default function ConnectionsContent({
   onLocateRule?: (detail: ConnectionDetail) => void;
   onViewRuleUsage?: (detail: ConnectionDetail) => void;
   entryFocus?: string;
+  /** Legacy presentation can open the shared detail modal with one click. */
+  openDetailsOnClick?: boolean;
 }) {
   const { proxy, scope, range, filters, q } = value;
   const selection = useMemo<ConnectionsSelection>(
@@ -92,6 +95,7 @@ export default function ConnectionsContent({
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
+            openDetailsOnClick={openDetailsOnClick}
           />
         ) : scope === 'closed' ? (
           <ClosedViewer
@@ -103,6 +107,7 @@ export default function ConnectionsContent({
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
+            openDetailsOnClick={openDetailsOnClick}
           />
         ) : (
           <ActiveViewer
@@ -114,6 +119,7 @@ export default function ConnectionsContent({
             onLocateRule={onLocateRule}
             onViewRuleUsage={onViewRuleUsage}
             focusRowId={focusRowId}
+            openDetailsOnClick={openDetailsOnClick}
           />
         ))}
     </ScrollArea>
