@@ -58,7 +58,11 @@ version, and saved bytes remain intact.
   isolated `application.yaml` contains `language: ja`, and the main document
   root reports `lang="ja"`.
 - **Rendered result:** Before refresh, the main selector shows `日本語`; after
-  refreshing the same main window, it still shows `日本語`. The legacy proxy
+  refreshing the same main window, wait for `performance.timeOrigin` to change
+  and the new document to reach `complete` before checking that it still shows
+  `日本語`. The desktop driver's refresh command can return before navigation
+  finishes, so checking only the rendered selector could read the old document.
+  The legacy proxy
   page, after loading the same setting, shows the Japanese title and all three
   mode labels.
 - **Failure sensitivity:** The test fails if Japanese is absent from the
