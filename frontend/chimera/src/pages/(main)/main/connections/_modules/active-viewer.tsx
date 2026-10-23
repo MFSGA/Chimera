@@ -41,6 +41,7 @@ const ActiveViewer = memo(function ActiveViewer({
   onLocateRule,
   onViewRuleUsage,
   focusRowId,
+  openDetailsOnClick,
 }: {
   search: string;
   proxy?: string | null;
@@ -51,6 +52,7 @@ const ActiveViewer = memo(function ActiveViewer({
   onViewRuleUsage?: (detail: ConnectionDetail) => void;
   // The row to scroll to and highlight once it appears.
   focusRowId?: string;
+  openDetailsOnClick?: boolean;
 }) {
   const { connections, rows, loading, unavailable } = useActiveConnectionRows({
     search,
@@ -73,9 +75,10 @@ const ActiveViewer = memo(function ActiveViewer({
         {...props}
         onViewDetails={() => setDetailId(row.id)}
         onCloseConnection={() => deleteConnectionsRef.current(row.id)}
+        openDetailsOnClick={openDetailsOnClick}
       />
     ),
-    [],
+    [openDetailsOnClick],
   );
 
   const detail = useActiveConnectionDetail(connections, detailId);
