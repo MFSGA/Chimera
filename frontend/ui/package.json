@@ -45,6 +45,6 @@
     "@emotion/react": "11.14.0",
     "@types/d3": "7.4.3",
     "@types/lodash-es": "4.17.12",
-    "vite": "8.3.3"
+    "vite": "8.3.5"
   }
 }
