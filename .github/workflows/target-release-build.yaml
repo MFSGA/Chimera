@@ -29,7 +29,8 @@ jobs:
     name: Validate draft release
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitHub only exposes draft releases to identities with push access.
+      contents: write
     steps:
       - uses: actions/checkout@v7
 

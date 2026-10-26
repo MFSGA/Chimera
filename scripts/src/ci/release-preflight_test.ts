@@ -4,6 +4,10 @@ import { dirname, fromFileUrl, join } from '@std/path';
 const workspaceRoot = dirname(
   dirname(dirname(dirname(fromFileUrl(import.meta.url)))),
 );
+const releaseWorkflow = join(
+  workspaceRoot,
+  '.github/workflows/target-release-build.yaml',
+);
 const validator = join(workspaceRoot, 'scripts/ci/validate-release-draft.sh');
 
 interface RunOptions {
@@ -109,3 +113,19 @@ Deno.test('rejects an invalid tag without querying GitHub', async () => {
   assert.equal(result.count, 0);
   assert.match(result.stderr, /Invalid release tag/);
 });
+
+Deno.test(
+  'release preflight has permission to inspect draft releases',
+  async () => {
+    const workflow = await Deno.readTextFile(releaseWorkflow);
+    const preflightJob = workflow.match(
+      /^  release_preflight:\n([\s\S]*?)(?=^  [a-z0-9_]+:\n)/m,
+    )?.[1];
+
+    assert.ok(preflightJob, 'release_preflight job is present');
+    assert.match(
+      preflightJob,
+      /^    permissions:\r?\n(?:      #[^\r\n]*\r?\n)*      contents: write\r?$/m,
+    );
+  },
+);

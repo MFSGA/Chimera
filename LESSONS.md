@@ -46,7 +46,7 @@
 | LESSON-20261023-001 | 2026-10-23 | CI / Linux          | PR #518 ARM64 target image fix; dedicated cross-build run 39623084868 passed                                           | Verified  |
 | LESSON-20261023-002 | 2026-10-23 | CI / Linux          | PR #518 preserves JSON quoting in non-nightly cross builds; dedicated ARM64 run 39623084868 passed                     | Verified  |
 | LESSON-20261023-003 | 2026-10-23 | E2E / macOS         | Legacy Connections UI run stopped before assertions because embedded WebKit remained hidden; UI interaction unverified | Open      |
-| LESSON-20261025-001 | 2026-10-25 | CI / Release        | Release preflight queried a newly created draft once; three recent release builds failed before asset jobs started     | Open      |
+| LESSON-20261025-001 | 2026-10-26 | CI / Release        | Read-only preflight token could not see draft Releases; v0.27.1 returned 404 for all 12 retries in run 40313224403     | Open      |
 
 ## 单条模板
 
@@ -660,19 +660,19 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：E2E binary 使用隔离 runtime；本次只读 UI 流程未修改用户配置或宿主网络。无需产品回滚。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：docs/ref-alignment-connections.md 已记录此前相同的隐藏 WebView 限制；运行前台桌面 E2E 前继续保留 fail-closed 可见性检查，只有当检查通过并实际执行目标交互后才报告交互已验证。无 CI 门禁调整。
 
-### LESSON-20261025-001：Release 草稿短暂不可见时预检不应立即失败
+### LESSON-20261025-001：Release 预检必须有权限查看草稿
 
-- 日期与时区：2026-10-25 UTC
-- 状态：Open（修复已本地验证；推送后的 CI 待新 SHA 运行，未触发真实发行）
+- 日期与时区：首次发现 2026-10-25 UTC；根因复核 2026-10-26 UTC
+- 状态：Open（权限修复与回归断言待推送后的 CI 及 v0.27.1 发布构建验证）
 - 严重度：Medium（会阻断全部发行构建，但不会错误发布草稿）
 - 模块：CI / Release
-- master commit / ref gitlink SHA / 平台与测试环境：master 修复基线 `710e6ff12b038efd5c983098dffe321bcc8f7c8d`；ref gitlink `ae0db596e96ba09d7662cc7533a13ffe5b581bf7`；GitHub Actions Ubuntu 发布预检
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[v0.26.1 构建 run 39798665764](https://github.com/MFSGA/Chimera/actions/runs/39798665764)、[v0.26.2 构建 run 40270731966](https://github.com/MFSGA/Chimera/actions/runs/40270731966)、[v0.27.0 构建 run 40273089080](https://github.com/MFSGA/Chimera/actions/runs/40273089080)；对应的 [Publish runs](https://github.com/MFSGA/Chimera/actions/runs/39798535435)、[Publish run](https://github.com/MFSGA/Chimera/actions/runs/40270457397)、[Publish run](https://github.com/MFSGA/Chimera/actions/runs/40273023592)。日志显示 release action 提醒草稿暂时无法按 tag 查询，紧接着的预检收到 `release not found`；v0.27.0 草稿最终没有发行资产。
-- 预期行为：版本 tag 有效且关联 Release 仍为 draft 时，构建应等待 GitHub 短暂的一致性延迟后继续；已发布 Release、权限/API 错误和超时仍应阻止构建。
-- 真实异常、复现步骤与证据：publish 流程创建 draft 后立即派发目标构建。目标工作流只查询一次 `gh release view <tag>`；三次目标构建均在 preflight 失败，所有平台资产 job 因依赖失败而跳过。更早的 v0.26.0 发布在加入 preflight 前完成了 13 个资产及 updater job。这个故障发生在构建前，不是 Rust/前端构建失败。
-- 确认的根因与排除项：GitHub Release/tag 查询在 draft 创建后短暂不可见，而预检假设查询立即可见。错误发生在所有平台构建启动前，因此不是打包、签名、上传或 updater 生成导致。
-- 修复提交、差异映射及保留的兼容性边界：`.github/workflows/target-release-build.yaml` 先 checkout 受控仓库代码，再调用 `scripts/ci/validate-release-draft.sh`。helper 最多查询 12 次、间隔 10 秒，仅对明确的 `release not found` / `HTTP 404` 重试；找到 Release 后仍要求 `isDraft=true`，权限、网络/API 错误立即失败，持续 404 在约 110 秒等待后失败。`.github/workflows/ci.yaml` 注册 shell helper 的 Deno 回归测试；路径分类将目标发布工作流映射到 scripts 测试，避免仅改 workflow 时漏跑。
-- 原实现失败、新实现通过的回归测试，及测试注册位置：原单次查询在上述三个 GitHub Actions run 中失败。`scripts/src/ci/release-preflight_test.ts` 通过临时 `gh`/`sleep` stub 覆盖延迟后可见、已发布、权限错误、持续 404 和无效 tag；通过 `pnpm test:release-preflight` 注册到 Ubuntu scripts CI job。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm test:release-preflight` 5/5 通过；`pnpm test:changed-parts` 3/3 通过；`actionlint -ignore 'SC2086' .github/workflows/target-release-build.yaml .github/workflows/ci.yaml`、`shellcheck scripts/ci/validate-release-draft.sh`、Prettier 和 `git diff --check` 在提交前执行。真实 GitHub Release 的 eventual-consistency 行为和发行资产构建不会由 stub 测试覆盖；没有运行发布 workflow、创建 tag、签名产物或触发真实发行。
-- 风险/回滚和清理证据（如涉及宿主状态）：预检仍 fail closed；最坏情况会额外等待约 110 秒再失败。回滚为恢复目标工作流原单次查询并移除 helper 与注册的回归测试；无用户数据或宿主状态影响。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：release draft 查询应容忍有上限的 404 可见性延迟，同时保持对权限/API 错误、已发布 Release 和超时的拒绝；发布工作流和共享 helper 的测试应在目标 workflow 或脚本变更时进入 CI。此项由维护者在本会话明确要求修复并推送。
+- master commit / ref gitlink SHA / 平台与测试环境：根因复核基线 `00036e8ffba70977a5d9dcce5cd0e0be4de1f23c`；GitHub Actions Ubuntu 发布预检
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[v0.26.1 构建 run 39798665764](https://github.com/MFSGA/Chimera/actions/runs/39798665764)、[v0.26.2 构建 run 40270731966](https://github.com/MFSGA/Chimera/actions/runs/40270731966)、[v0.27.0 构建 run 40273089080](https://github.com/MFSGA/Chimera/actions/runs/40273089080)、[v0.27.1 构建 run 40313224403](https://github.com/MFSGA/Chimera/actions/runs/40313224403)。v0.27.1 的草稿已创建，但预检连续 12 次收到 `release not found`；所有平台构建未启动。
+- 预期行为：预检 token 能读取并确认指定 tag 对应的 Release 仍为 draft；已发布 Release、权限/API 错误和超时仍阻止构建。
+- 真实异常、复现步骤与证据：Publish run 40313124461 创建 v0.27.1 草稿并派发目标构建。目标 run 40313224403 在 110 秒内连续 12 次调用 `gh release view v0.27.1` 均收到 404，随后失败。用维护者 CLI 查询同一草稿可见，说明延长等待本身不足以修复 Actions 预检。
+- 确认的根因与排除项：`.github/workflows/target-release-build.yaml` 为 `release_preflight` 设置了 `contents: read`。GitHub 文档说明 draft releases 只会列给有推送权限的身份；只读 `GITHUB_TOKEN` 无法发现该 draft，API 以 404 隐藏资源。此前仅按一致性延迟解释 404 的结论不完整。故障发生在所有平台构建启动前，不是打包、签名、上传或 updater 生成导致。
+- 修复提交、差异映射及保留的兼容性边界：将 `release_preflight` 的 job 级权限提升为 `contents: write`，使该 job 有权查看草稿；其他构建 job 仍沿用各自的权限。保留 helper 的有界 404 重试及“必须仍为 draft”的 fail-closed 检查。新增 Deno 合约断言，确保预检权限不会退回只读。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：真实旧行为在 v0.27.1 run 40313224403 中失败；`scripts/src/ci/release-preflight_test.ts` 覆盖延迟可见、已发布、其他 API 错误、持续 404、无效 tag，并断言发布工作流给 preflight 授予 `contents: write`。测试通过现有 `pnpm test:release-preflight` 注册在 Ubuntu scripts CI job。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:release-preflight` 6/6 通过；`actionlint .github/workflows/target-release-build.yaml`、对三个改动文件运行的 Prettier 检查及 `git diff --check` 通过。GitHub CI 和 v0.27.1 真实发布构建待新提交验证；stub 测试本身不证明 `GITHUB_TOKEN` 权限可见性。
+- 风险/回滚和清理证据（如涉及宿主状态）：只扩大预检 job 的 repository contents 权限，以便读取 draft；不改变 tag、草稿 Release、资产或其他 job 的权限。回滚为恢复旧 job 权限并保留 v0.27.1 草稿/tag，之后需重新修正预检再运行构建。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在 workflow permission 修改及其 Deno 合约断言中共同锁定“preflight 可见 draft”的要求；该 L3 修复由维护者在本会话授权，并在完成后由独立审查复核。v0.27.1 标签仍指向旧权限工作流，因此复跑目标工作流时使用修复后的 `master` ref；可复用构建默认检出调用 ref，但修复提交仅改工作流、测试和文档，应用与子模块源码和标签保持一致。
