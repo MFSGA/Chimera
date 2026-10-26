@@ -11,7 +11,7 @@ Deno.test(
         return {
           object: {
             type: 'commit',
-            sha: '414335830e8d1ebb3a1b612a8702b83c51b40000',
+            sha: '2c354de1e626310de937a32bdfb8297ca548f634',
           },
         } as T;
       }
@@ -28,7 +28,7 @@ Deno.test(
 
     const result = await resolveChimeraClientAlphaFromGithub(request);
 
-    assertEquals(result.version, '0.28.0-alpha+sha.4143358');
+    assertEquals(result.version, '0.28.0-alpha+sha.2c354de');
     assertEquals(
       result.archMapping['darwin-arm64'],
       'chimera-client-{}-aarch64-apple-darwin.tar.gz',
