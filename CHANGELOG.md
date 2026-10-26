@@ -1,3 +1,243 @@
+## [0.27.0] - 2026-10-26 10:11:36
+
+### ✅ Testing
+
+- **ci:** Include Windows suffix in Alpha fixture by @MFSGA
+
+- **core:** Avoid fixed port collisions in resolver tests by @MFSGA
+
+- **e2e:** Wait for refreshed language document by @MFSGA
+
+- **e2e:** Describe pointer input coverage accurately by @MFSGA
+
+- **e2e:** Select fully visible proxy node by @MFSGA
+
+- **e2e:** Cover legacy routes without headings by @MFSGA
+
+- **e2e:** Stabilize locale and app-state checks by @MFSGA
+
+- **e2e:** Clean up locale setup failures by @MFSGA
+
+- **e2e:** Stabilize language locale synchronization by @MFSGA
+
+- **e2e:** Use typed app config for language sync by @MFSGA
+
+- **e2e:** Wait for locale sync before snapshot by @MFSGA
+
+- **e2e:** Diagnose legacy profile edit failures by @MFSGA
+
+- **e2e:** Stabilize settings navigation and native window behavior by @MFSGA
+
+- **e2e:** Stabilize main layout checks across platforms by @MFSGA
+
+- **e2e:** Preserve onboarding setup during cleanup by @MFSGA
+
+- **e2e:** Stabilize initial window restoration by @MFSGA
+
+- **e2e:** Port guarded Windows service TUN lifecycle suite by @MFSGA
+
+- **e2e:** Wait for stable legacy connections layout by @MFSGA
+
+- **hotkeys:** Cover parser and actor reconciliation by @MFSGA
+
+- **profiles:** Make aborted refresh notification deterministic by @MFSGA
+
+- **settings:** Verify typed state and service flows by @MFSGA
+
+- **utils:** Keep supervisor output streaming by @MFSGA
+
+### ✨ Features
+
+- **agent:** Add privacy-safe audit and diagnostic history by @MFSGA
+
+- **agent:** Execute proposals through verified diagnosis by @MFSGA
+
+- **connections:** Open legacy details on click by @MFSGA
+
+- **connections:** Align shared connection views with ref by @MFSGA
+
+- **connections:** Add route-aware persistent traffic history by @MFSGA
+
+- **core:** Support Chimera Client Alpha in Service mode by @MFSGA
+
+- **dashboard:** Configure widgets per instance (#490) by @MFSGA
+
+- **dashboard:** Align widget library with ref by @MFSGA
+
+- **effects:** Execute application effects and publish committed slices by @MFSGA
+
+- **i18n:** Add Japanese language support by @MFSGA
+
+- **macos:** Add DNS proxy lifecycle with TUN authorization by @MFSGA
+
+- **profiles:** Add durable sync history (#485) by @MFSGA
+
+- **profiles:** Align transform-chain editor with ref (#484) by @MFSGA
+
+- **profiles:** Allow disabling remote auto sync (#482) by @MFSGA
+
+- **scripts:** Align core sidecar preparation with ref (#480) by @MFSGA
+
+- **settings:** Add typed application and clash APIs by @MFSGA
+
+- **traffic:** Resolve geography from core GeoIP index (#505) by @MFSGA in [#505](https://github.com/MFSGA/Chimera/pull/505)
+
+- **traffic:** Align report query lifecycle with ref (#489) by @MFSGA
+
+- **traffic:** Add ref-aligned traffic analysis (#481) by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **agent:** Recognize bracketed IPv6 loopback proxy hosts by @MFSGA
+
+- **ci:** Sync Linux cross-build with master by @MFSGA
+
+- **ci:** Preserve cross build config JSON by @MFSGA
+
+- **ci:** Configure Linux ARM64 cross image by @MFSGA
+
+- **ci:** Use default CRT for Windows doctests by @MFSGA
+
+- **ci:** Stabilize backend checks across platforms by @MFSGA
+
+- **ci:** Stabilize manifest and scheduled e2e workflows by @MFSGA
+
+- **ci:** Align Windows E2E WebView2 bindings by @MFSGA
+
+- **e2e:** Stop route marker polling after timeout by @MFSGA
+
+- **e2e:** Verify keyboard focus and proxy visibility by @MFSGA
+
+- **e2e:** Recover unsnapshotted legacy routes by @MFSGA
+
+- **e2e:** Stabilize route and recovery checks by @MFSGA
+
+- **i18n:** Apply locale changes without waiting for refetch by @MFSGA
+
+- **i18n:** Sync document language with locale by @MFSGA
+
+- **i18n:** Rename experimental UI switch to new page by @MFSGA
+
+- **i18n:** Localize legacy proxy empty states by @MFSGA
+
+- **language:** Verify selection with mouse input by @MFSGA
+
+- **lint:** Exclude ref submodule from quality checks by @MFSGA
+
+- **macos:** Restore TUN core authorization by @MFSGA
+
+- **macos:** Align window header and traffic lights by @MFSGA
+
+- **macos:** Simplify TUN DNS flow by @MFSGA
+
+- **macos:** Include DNS proxy extension resources by @MFSGA
+
+- **macos:** Authorize core and system DNS before TUN by @MFSGA
+
+- **macos:** Prepare Chimera Client sidecar by @MFSGA
+
+- **profiles:** Anchor initial refresh deadline by @MFSGA
+
+- **profiles:** Align missing file diagnostics with ref by @MFSGA
+
+- **proxy-mode:** Align interruption behavior and legacy controls by @MFSGA
+
+- **query:** Invalidate proxy snapshots on profile changes by @MFSGA
+
+- **review:** Close E2E and governance gaps by @MFSGA
+
+- **runtime:** Preserve configuration and recovery state by @MFSGA
+
+- **runtime:** Reject failed profile transform candidates (#427) by @MFSGA
+
+- **runtime:** Pin DNS guard service revision by @MFSGA
+
+- **scripts:** Refresh Chimera Client alpha assets (#479) by @MFSGA
+
+- **security:** Allow WebView connect sources (#478) by @MFSGA
+
+- **settings:** Restore clash runtime after save failure by @MFSGA
+
+- **settings:** Reconcile runtime-affecting app patches by @MFSGA
+
+- **ui:** Attach virtualizers to scroll viewports by @MFSGA
+
+- **ui:** Refresh proxy queries after runtime updates by @MFSGA
+
+### 📚 Documentation
+
+- **governance:** Define authorized history rewrites by @MFSGA
+
+- **governance:** Streamline routine code approvals by @MFSGA
+
+- **governance:** Define verified AI development workflow by @MFSGA
+
+- **readme:** Clarify agent-first product vision by @MFSGA
+
+- **testing:** Record language refresh identity check by @MFSGA
+
+- **testing:** Correct route timer evidence head by @MFSGA
+
+- Record typed clash rollback lesson by @MFSGA
+
+### 🔨 Refactor
+
+- **profiles:** Align content queries with reference by @MFSGA
+
+- **settings:** Migrate consumers to typed hooks by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Update some deps by @MFSGA
+
+- **deps:** Update dependency @iconify/json to v2.2.546 (#519) by @MFSGA in [#519](https://github.com/MFSGA/Chimera/pull/519)
+
+- **deps:** Update rust crate memmap2 to v0.9.12 (#520) by @MFSGA in [#520](https://github.com/MFSGA/Chimera/pull/520)
+
+- **deps:** Update dependency stylelint-config-recess-order to v7.8.2 (#511) by @MFSGA in [#511](https://github.com/MFSGA/Chimera/pull/511)
+
+- **deps:** Update postcss to 8.5.31 by @MFSGA
+
+- **deps:** Update rust crate jiff to v0.2.38 (#510) by @MFSGA in [#510](https://github.com/MFSGA/Chimera/pull/510)
+
+- **deps:** Update dependency meta-json-schema to v1.19.32 (#498) by @MFSGA in [#498](https://github.com/MFSGA/Chimera/pull/498)
+
+- **deps:** Update dependency @iconify/json to v2.2.545 (#497) by @MFSGA in [#497](https://github.com/MFSGA/Chimera/pull/497)
+
+- **deps:** Update lint packages (#503) by @MFSGA in [#503](https://github.com/MFSGA/Chimera/pull/503)
+
+- **deps:** Update rust crate arc-swap to v1.9.3 (#504) by @MFSGA in [#504](https://github.com/MFSGA/Chimera/pull/504)
+
+- **deps:** Align Tokio with updated ref (#477) by @MFSGA
+
+- **deps:** Consolidate October dependency updates by @MFSGA
+
+- **deps:** Align dependency versions and tooling with ref by @MFSGA
+
+- **deps:** Align frontend and Rust workspaces with ref by @MFSGA
+
+- **merge:** Sync master before e2e verification by @MFSGA
+
+- **ref:** Sync upstream reference baseline (#506) by @MFSGA in [#506](https://github.com/MFSGA/Chimera/pull/506)
+
+- **ref:** Sync baseline to d43819fb (#488) by @MFSGA
+
+- **ref:** Sync baseline to 31019da1 by @MFSGA
+
+- **ref:** Record updated alignment baseline by @MFSGA
+
+- **ref:** Track reference submodule by @MFSGA
+
+- **renovate:** Automerge green patch and minor updates by @MFSGA
+
+- **renovate:** Protect reference and bound PR churn by @MFSGA
+
+- Sync master into profile refresh test PR by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.26.0...v0.27.0
+
 ## [0.26.1] - 2026-10-22 14:46:24
 
 ### ✅ Testing
