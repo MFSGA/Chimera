@@ -47,6 +47,7 @@
 | LESSON-20261023-002 | 2026-10-23 | CI / Linux          | PR #518 preserves JSON quoting in non-nightly cross builds; dedicated ARM64 run 39623084868 passed                     | Verified  |
 | LESSON-20261023-003 | 2026-10-23 | E2E / macOS         | Legacy Connections UI run stopped before assertions because embedded WebKit remained hidden; UI interaction unverified | Open      |
 | LESSON-20261025-001 | 2026-10-26 | CI / Release        | Read-only preflight token could not see draft Releases; v0.27.1 returned 404 for all 12 retries in run 40313224403     | Open      |
+| LESSON-20261026-001 | 2026-10-26 | CI / Dependencies   | Alpha stable version outran rolling assets; macOS prepare 404 in run 40315139018                                       | Open      |
 
 ## 单条模板
 
@@ -673,6 +674,23 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 确认的根因与排除项：`.github/workflows/target-release-build.yaml` 为 `release_preflight` 设置了 `contents: read`。GitHub 文档说明 draft releases 只会列给有推送权限的身份；只读 `GITHUB_TOKEN` 无法发现该 draft，API 以 404 隐藏资源。此前仅按一致性延迟解释 404 的结论不完整。故障发生在所有平台构建启动前，不是打包、签名、上传或 updater 生成导致。
 - 修复提交、差异映射及保留的兼容性边界：将 `release_preflight` 的 job 级权限提升为 `contents: write`，使该 job 有权查看草稿；其他构建 job 仍沿用各自的权限。保留 helper 的有界 404 重试及“必须仍为 draft”的 fail-closed 检查。新增 Deno 合约断言，确保预检权限不会退回只读。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：真实旧行为在 v0.27.1 run 40313224403 中失败；`scripts/src/ci/release-preflight_test.ts` 覆盖延迟可见、已发布、其他 API 错误、持续 404、无效 tag，并断言发布工作流给 preflight 授予 `contents: write`。测试通过现有 `pnpm test:release-preflight` 注册在 Ubuntu scripts CI job。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:release-preflight` 6/6 通过；`actionlint .github/workflows/target-release-build.yaml`、对三个改动文件运行的 Prettier 检查及 `git diff --check` 通过。GitHub CI 和 v0.27.1 真实发布构建待新提交验证；stub 测试本身不证明 `GITHUB_TOKEN` 权限可见性。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:release-preflight` 6/6 通过；`actionlint .github/workflows/target-release-build.yaml`、对三个改动文件运行的 Prettier 检查及 `git diff --check` 通过。GitHub CI run 40315139018 中 Ubuntu 的 release preflight 通过，Ubuntu/Windows Tauri 构建通过；macOS 因独立的 Chimera Client Alpha 资产版本不一致在资源准备阶段失败，见 LESSON-20261026-001。修复提交的新 CI 与 v0.27.1 真实发布构建待验证；stub 测试本身不证明 `GITHUB_TOKEN` 权限可见性。
 - 风险/回滚和清理证据（如涉及宿主状态）：只扩大预检 job 的 repository contents 权限，以便读取 draft；不改变 tag、草稿 Release、资产或其他 job 的权限。回滚为恢复旧 job 权限并保留 v0.27.1 草稿/tag，之后需重新修正预检再运行构建。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在 workflow permission 修改及其 Deno 合约断言中共同锁定“preflight 可见 draft”的要求；该 L3 修复由维护者在本会话授权，并在完成后由独立审查复核。v0.27.1 标签仍指向旧权限工作流，因此复跑目标工作流时使用修复后的 `master` ref；可复用构建默认检出调用 ref，但修复提交仅改工作流、测试和文档，应用与子模块源码和标签保持一致。
+
+### LESSON-20261026-001：Alpha 版本必须从 rolling 发布资产解析
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Open（解析修复已本地验证；新 SHA 的 CI 和 v0.27.1 发布构建待验证）
+- 严重度：Medium（macOS 资源准备失败会阻断整轮 CI 与发布）
+- 模块：CI / 依赖资源 / Chimera Client Alpha
+- master commit / ref gitlink SHA / 平台与测试环境：基线 `96e89e9325aedea16df3ea7b26f2205367e8f5eb`；GitHub Actions macOS 26 arm64 runner
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[CI run 40315139018](https://github.com/MFSGA/Chimera/actions/runs/40315139018) 在 macOS `Prepare sidecar and resources` 失败；上游 [Chimera Client Alpha Release run 40311215709](https://github.com/MFSGA/Chimera_Client/actions/runs/40311215709) 已成功完成。
+- 预期行为：Alpha 版本号与 `latest` rolling Release 实际提供的资产版本一致；稳定版可独立前进，不能据此构造 rolling 资产文件名。
+- 真实异常、复现步骤与证据：`resolveChimeraClientAlpha()` 将 `latest` tag 的 commit `414335830e8d1ebb3a1b612a8702b83c51b40000` 与 `releases/latest` 的稳定版本 `v0.28.1` 拼成 `0.28.1-alpha+sha.4143358`，随后 macOS 解析器在 rolling `latest` URL 请求 `chimera-client-0.28.1-aarch64-apple-darwin.tar.gz` 并收到 404。上游 `latest` Alpha Release 的实际 macOS 资产仍为 `0.28.0`；稳定版 `v0.28.1` 的独立资产存在，但其 commit 为 `745094dd9baf13ba5c921d534df8cdb0fe97619a`，不能拿来冒充 Alpha commit 的构建。
+- 确认的根因与排除项：Alpha manifest 从当前稳定 Release 推导 macOS 资产版本，却从 rolling `latest` tag 推导 Alpha SHA；两个发布流推进不同步，产生不存在的资产 URL。下载重试多次刷新到同一个 Alpha Release，无法修复版本来源不匹配。
+- 修复提交、差异映射及保留的兼容性边界：改为查询 `releases/tags/latest` 的实际资产列表，从 versioned macOS archive 文件名解析基础版本，再与 `latest` tag commit SHA 组合 Alpha 版本。仍从 `latest` 下载 Alpha 资产，不回退到不同 commit 的稳定版二进制。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`scripts/src/prepare/versions_test.ts` 覆盖资产版本解析；`chimera-client-alpha_test.ts` 通过注入 GitHub 请求断言调用 `git/ref/tags/latest` 与 `releases/tags/latest`，拒绝意外的 `/releases/latest` 请求，并确认 Alpha 版本取自 rolling 资产。两者通过现有 `pnpm test:manifest` 注册执行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、Deno 类型检查、Prettier、`actionlint .github/workflows/target-release-build.yaml` 和 `git diff --check` 通过。真实 GitHub API 解析为 `0.28.0-alpha+sha.4143358`；rolling URL 的 0.28.0 arm64 archive 返回 HTTP 200，错误的 0.28.1 URL 返回 HTTP 404。尚未在 macOS runner 上重跑真实 `pnpm prepare:check`；新 SHA CI 与 v0.27.1 发布构建待验证。
+- 风险/回滚和清理证据（如涉及宿主状态）：只调整 Alpha 版本元数据的来源；若 rolling Release 没有可解析的 versioned macOS archive，解析明确失败，不下载错误版本。回滚为恢复稳定版版本推导，但会重新引入该 404。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：保持版本字符串与实际 rolling 资产联动，并用资产清单回归测试覆盖稳定版和 Alpha 资产异步发布；本次 L2 sidecar 修复由维护者在当前“发布并修复至成功”任务中授权。

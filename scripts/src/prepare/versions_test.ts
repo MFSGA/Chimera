@@ -4,6 +4,7 @@ import {
   fetchText,
   isValidVersion,
   normalizeVersion,
+  resolveAlphaVersionFromAssets,
 } from './versions.ts';
 
 Deno.test('normalizes and validates versions', () => {
@@ -33,6 +34,31 @@ Deno.test('extracts a version matching an asset template', () => {
     extractVersionFromAssetList(
       'mihomo-linux-amd64-bad/version.gz',
       'mihomo-linux-amd64-{}.gz',
+    ),
+    undefined,
+  );
+});
+
+Deno.test('resolves Alpha version from rolling release assets', () => {
+  const latestAlphaAssets = [
+    'chimera-client-0.28.0-aarch64-apple-darwin.tar.gz',
+    'chimera-client-0.28.0-x86_64-apple-darwin.tar.gz',
+    'clash_chimera-x86_64-unknown-linux-gnu',
+  ];
+
+  assertEquals(
+    resolveAlphaVersionFromAssets(
+      latestAlphaAssets,
+      'chimera-client-{}-aarch64-apple-darwin.tar.gz',
+      '414335830e8d1ebb3a1b612a8702b83c51b40000',
+    ),
+    '0.28.0-alpha+sha.4143358',
+  );
+  assertEquals(
+    resolveAlphaVersionFromAssets(
+      ['clash_chimera-x86_64-unknown-linux-gnu'],
+      'chimera-client-{}-aarch64-apple-darwin.tar.gz',
+      '414335830e8d1ebb3a1b612a8702b83c51b40000',
     ),
     undefined,
   );

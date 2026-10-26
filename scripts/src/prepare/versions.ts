@@ -25,6 +25,20 @@ export function extractVersionFromAssetList(
   return isValidVersion(matched) ? matched : undefined;
 }
 
+export function resolveAlphaVersionFromAssets(
+  assetNames: readonly string[],
+  assetTemplate: string,
+  commitSha: string,
+): string | undefined {
+  const baseVersion = extractVersionFromAssetList(
+    assetNames.join('\n'),
+    assetTemplate,
+  );
+  return baseVersion
+    ? `${baseVersion}-alpha+sha.${commitSha.substring(0, 7)}`
+    : undefined;
+}
+
 export async function fetchText(
   url: string,
   options?: { headers?: HeadersInit },
