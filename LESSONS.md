@@ -694,3 +694,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、Deno 类型检查、Prettier、`actionlint .github/workflows/target-release-build.yaml` 和 `git diff --check` 通过。真实 GitHub API 解析为 `0.28.0-alpha+sha.4143358`；rolling URL 的 0.28.0 arm64 archive 返回 HTTP 200，错误的 0.28.1 URL 返回 HTTP 404。尚未在 macOS runner 上重跑真实 `pnpm prepare:check`；新 SHA CI 与 v0.27.1 发布构建待验证。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 Alpha 版本元数据的来源；若 rolling Release 没有可解析的 versioned macOS archive，解析明确失败，不下载错误版本。回滚为恢复稳定版版本推导，但会重新引入该 404。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：保持版本字符串与实际 rolling 资产联动，并用资产清单回归测试覆盖稳定版和 Alpha 资产异步发布；本次 L2 sidecar 修复由维护者在当前“发布并修复至成功”任务中授权。
+
+### LESSON-20261026-002：Alpha 更新器必须从 Alpha 版本生成资产名
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Open（Rust 回归测试已添加；新 SHA 的远程 CI、E2E 与发布构建待验证）
+- 严重度：Medium（Alpha 更新请求错误资产名时会返回 404）
+- 模块：应用更新器 / Chimera Client Alpha
+- master commit / ref gitlink SHA / 平台与测试环境：发现基线 `a8ebde3d2f29abdc8f9bfed5097e4cbda56b9429`；ref `4eaf13b9c5dc468fdfc38272bf76b20a681d2e54`；GitHub Linux、Windows、macOS 及 Windows WebView runner。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[master CI 40322409759](https://github.com/MFSGA/Chimera/actions/runs/40322409759) 与[最终 SHA E2E 40326080750](https://github.com/MFSGA/Chimera/actions/runs/40326080750)在代码修复前通过；Client rolling tag 当前为 `2c354de1e626310de937a32bdfb8297ca548f634`。
+- 预期行为：更新 Alpha 内核时，资产文件名版本应从 `latest.chimera_client_alpha` 解析；稳定版与 Alpha 可独立前进，下载渠道继续使用 rolling `latest`。
+- 真实异常、复现步骤与证据：版本清单记录稳定版 `v0.27.3`、Alpha `0.28.0-alpha+sha.2c354de`，实际 rolling 资产为 `chimera-client-0.28.0-{aarch64,x86_64}-apple-darwin.tar.gz`。更新器却用稳定版字段生成 `chimera-client-0.27.3-...`，因此无法取得当前 Alpha 资产。
+- 确认的根因与排除项：Alpha 分支在 `ManifestVersion::get_matches` 复用了稳定 Client 版本；既有测试给稳定版与 Alpha 设置相同基础版本 `0.26.3`，未覆盖两条版本线分叉。ref 没有 Chimera Client Alpha 扩展；其 `MeowAlpha` 路径会从 Alpha 字段自身验证并构造资产名。
+- 修复提交、差异映射及保留的兼容性边界：改为验证 Alpha 版本格式并从中提取 `0.28.0`；不合法的非空 Alpha 版本不生成下载项。旧版 manifest 缺少 Alpha 字段时保留稳定版本回退，下载 URL 和 `CoreTypeMeta::ChimeraClientAlpha` 不变。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`backend/tauri/src/core/updater/mod.rs` 新增分叉版本、旧清单回退及坏版本测试，随 `pnpm test:backend` 运行；manifest resolver fixture 更新到当前 rolling tag SHA，随 `pnpm test:manifest` 运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、目标包 `cargo fmt --check`、Prettier 和 `git diff --check` 通过。第一次 `pnpm lint:clippy` 暴露测试模块未导入新增辅助函数，已补上导入；本机 Rust updater 测试重编 AWS-LC 时空间降至 118 MiB，未到达断言；随后清理生成的 `backend/target`（3.3 GiB）。真实 `pnpm prepare:check` 识别出 `0.28.0-alpha+sha.2c354de`，但归档下载多次重试，因空间压力中断。新 SHA 远程 CI、E2E 和发布构建待运行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变 Alpha 资产文件名的版本来源；不改用户配置或更新协议。回滚方式为恢复稳定版字段映射。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：用稳定版 `0.27.3` 与 Alpha `0.28.0` 的明确分叉锁定资产版本来源；维持与 ref 的 Alpha 元信息解析模式一致，同时保留旧 manifest 的窄回退。
