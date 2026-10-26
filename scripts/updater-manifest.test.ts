@@ -3,8 +3,30 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   matchStableUpdaterAsset,
+  releaseAssetDownloadUrl,
   requiredStableUpdaterTargets,
 } from './updater-manifest.ts';
+
+test('builds stable release URLs from the tag instead of draft asset metadata', () => {
+  assert.equal(
+    releaseAssetDownloadUrl(
+      'MFSGA',
+      'Chimera',
+      'v0.27.1',
+      'Chimera_0.27.1_amd64.AppImage',
+    ),
+    'https://github.com/MFSGA/Chimera/releases/download/v0.27.1/Chimera_0.27.1_amd64.AppImage',
+  );
+  assert.equal(
+    releaseAssetDownloadUrl(
+      'MFSGA',
+      'Chimera',
+      'v0.27.1+meta',
+      'asset one.zip',
+    ),
+    'https://github.com/MFSGA/Chimera/releases/download/v0.27.1%2Bmeta/asset%20one.zip',
+  );
+});
 
 test('requires all release targets for standard updates', () => {
   assert.deepEqual(requiredStableUpdaterTargets(), [

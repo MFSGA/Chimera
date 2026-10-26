@@ -10,6 +10,7 @@ import {
 import {
   assertUpdaterManifest,
   matchStableUpdaterAsset,
+  releaseAssetDownloadUrl,
   requiredStableUpdaterTargets,
 } from './updater-manifest.ts';
 import { colorize, consola } from './utils/logger';
@@ -102,15 +103,21 @@ async function resolveUpdater() {
   };
 
   const promises = latestRelease.assets.map(async (asset) => {
-    const { name, browser_download_url: browserDownloadUrl } = asset;
+    const { name } = asset;
     const match = matchStableUpdaterAsset(name, argv.fixedWebview);
     if (!match) {
       return;
     }
 
     if (match.kind === 'url') {
+      const downloadUrl = releaseAssetDownloadUrl(
+        options.owner,
+        options.repo,
+        tag,
+        name,
+      );
       for (const target of match.targets) {
-        updateData.platforms[target].url = browserDownloadUrl;
+        updateData.platforms[target].url = downloadUrl;
       }
       return;
     }

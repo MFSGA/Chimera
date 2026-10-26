@@ -26,6 +26,19 @@ export type StableUpdaterAssetMatch = {
   targets: readonly StableUpdaterTarget[];
 };
 
+export function releaseAssetDownloadUrl(
+  owner: string,
+  repo: string,
+  tag: string,
+  assetName: string,
+): string {
+  const releaseBase = `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/releases/download/`;
+  return new URL(
+    `${encodeURIComponent(tag)}/${encodeURIComponent(assetName)}`,
+    releaseBase,
+  ).toString();
+}
+
 export function requiredStableUpdaterTargets(
   fixedWebview = false,
 ): readonly StableUpdaterTarget[] {
