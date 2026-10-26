@@ -193,6 +193,10 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
         run: pnpm test:changed-parts
 
+      - name: Test release draft preflight
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
+        run: pnpm test:release-preflight
+
       - name: Test updater manifest asset mapping
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
         run: pnpm test:updater-manifest

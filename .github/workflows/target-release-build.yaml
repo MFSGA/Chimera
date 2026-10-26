@@ -31,20 +31,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v7
+
       - name: Validate release tag and draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: |
-          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: $RELEASE_TAG" >&2
-            exit 1
-          fi
-          is_draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
-          if [[ "$is_draft" != 'true' ]]; then
-            echo "Release $RELEASE_TAG must still be a draft before its assets are built" >&2
-            exit 1
-          fi
+        run: bash scripts/ci/validate-release-draft.sh
 
   macos_x86_64_build:
     name: macOS x86_64 Build

@@ -19,6 +19,7 @@ Deno.test('files map to the parts that check them', () => {
     ['rust-toolchain.toml', ['backend']],
     ['scripts/src/ci/changed-parts.ts', ['scripts']],
     ['scripts/deno.lock', ['scripts']],
+    ['.github/workflows/target-release-build.yaml', ['scripts']],
   ];
 
   for (const [file, parts] of cases) {

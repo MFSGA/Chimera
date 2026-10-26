@@ -57,7 +57,7 @@ export const CHANGE_RULES: readonly ChangeRule[] = [
     parts: ['backend'],
   },
   {
-    patterns: ['scripts/**'],
+    patterns: ['scripts/**', '.github/workflows/target-release-build.yaml'],
     parts: ['scripts'],
   },
 ];
