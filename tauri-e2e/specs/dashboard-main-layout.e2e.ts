@@ -461,9 +461,21 @@ describe('main dashboard reference layout', () => {
       }
 
       if (primaryError || cleanupErrors.length > 0) {
+        const failures = [
+          ...(primaryError
+            ? [`Primary failure:\n${formatErrorDetails(primaryError)}`]
+            : []),
+          ...cleanupErrors.map(
+            (error, index) =>
+              `Cleanup failure ${index + 1}:\n${formatErrorDetails(error)}`,
+          ),
+        ];
         throw new AggregateError(
           [...(primaryError ? [primaryError] : []), ...cleanupErrors],
-          'Dashboard responsive resize failed or its cleanup was incomplete.',
+          [
+            'Dashboard responsive resize failed or its cleanup was incomplete.',
+            ...failures,
+          ].join('\n\n'),
         );
       }
     }
