@@ -52,22 +52,22 @@ export function matchStableUpdaterAsset(
     return null;
   }
 
-  if (name.endsWith('.nsis.zip') && name.includes('x64')) {
+  if (name.endsWith('-setup.exe') && name.includes('x64')) {
     return { kind: 'url', targets: ['win64', 'windows-x86_64'] };
   }
-  if (name.endsWith('.nsis.zip.sig') && name.includes('x64')) {
+  if (name.endsWith('-setup.exe.sig') && name.includes('x64')) {
     return { kind: 'signature', targets: ['win64', 'windows-x86_64'] };
   }
-  if (name.endsWith('.nsis.zip') && name.includes('arm64')) {
+  if (name.endsWith('-setup.exe') && name.includes('arm64')) {
     return { kind: 'url', targets: ['windows-aarch64'] };
   }
-  if (name.endsWith('.nsis.zip.sig') && name.includes('arm64')) {
+  if (name.endsWith('-setup.exe.sig') && name.includes('arm64')) {
     return { kind: 'signature', targets: ['windows-aarch64'] };
   }
-  if (name.endsWith('.AppImage.tar.gz')) {
+  if (name.endsWith('.AppImage')) {
     return { kind: 'url', targets: ['linux', 'linux-x86_64'] };
   }
-  if (name.endsWith('.AppImage.tar.gz.sig')) {
+  if (name.endsWith('.AppImage.sig')) {
     return { kind: 'signature', targets: ['linux', 'linux-x86_64'] };
   }
   if (name.endsWith('aarch64.app.tar.gz')) {

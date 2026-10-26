@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   matchStableUpdaterAsset,
@@ -19,16 +20,13 @@ test('requires only Windows x64 for fixed WebView updates', () => {
   assert.deepEqual(requiredStableUpdaterTargets(true), ['windows-x86_64']);
 });
 
-test('maps current stable Windows updater assets', () => {
+test('maps current stable Windows x64 updater assets', () => {
+  assert.deepEqual(matchStableUpdaterAsset('Chimera_0.27.1_x64-setup.exe'), {
+    kind: 'url',
+    targets: ['win64', 'windows-x86_64'],
+  });
   assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_x64-setup.nsis.zip'),
-    {
-      kind: 'url',
-      targets: ['win64', 'windows-x86_64'],
-    },
-  );
-  assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_x64-setup.nsis.zip.sig'),
+    matchStableUpdaterAsset('Chimera_0.27.1_x64-setup.exe.sig'),
     {
       kind: 'signature',
       targets: ['win64', 'windows-x86_64'],
@@ -37,15 +35,12 @@ test('maps current stable Windows updater assets', () => {
 });
 
 test('maps Windows arm64 updater assets', () => {
+  assert.deepEqual(matchStableUpdaterAsset('Chimera_0.27.1_arm64-setup.exe'), {
+    kind: 'url',
+    targets: ['windows-aarch64'],
+  });
   assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_arm64-setup.nsis.zip'),
-    {
-      kind: 'url',
-      targets: ['windows-aarch64'],
-    },
-  );
-  assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_arm64-setup.nsis.zip.sig'),
+    matchStableUpdaterAsset('Chimera_0.27.1_arm64-setup.exe.sig'),
     {
       kind: 'signature',
       targets: ['windows-aarch64'],
@@ -53,10 +48,13 @@ test('maps Windows arm64 updater assets', () => {
   );
 });
 
-test('ignores Windows installer executables as updater assets', () => {
-  assert.equal(matchStableUpdaterAsset('Chimera_0.23.1_x64-setup.exe'), null);
+test('ignores legacy NSIS archives for the current Tauri updater format', () => {
   assert.equal(
-    matchStableUpdaterAsset('Chimera_0.23.1_arm64-setup.exe.sig'),
+    matchStableUpdaterAsset('Chimera_0.27.1_x64-setup.nsis.zip'),
+    null,
+  );
+  assert.equal(
+    matchStableUpdaterAsset('Chimera_0.27.1_arm64-setup.nsis.zip.sig'),
     null,
   );
 });
@@ -83,16 +81,13 @@ test('maps intel macOS updater assets to Tauri compatibility targets', () => {
   });
 });
 
-test('maps Linux AppImage updater archives', () => {
+test('maps current stable Linux AppImage updater assets', () => {
+  assert.deepEqual(matchStableUpdaterAsset('Chimera_0.27.1_amd64.AppImage'), {
+    kind: 'url',
+    targets: ['linux', 'linux-x86_64'],
+  });
   assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_amd64.AppImage.tar.gz'),
-    {
-      kind: 'url',
-      targets: ['linux', 'linux-x86_64'],
-    },
-  );
-  assert.deepEqual(
-    matchStableUpdaterAsset('Chimera_0.23.1_amd64.AppImage.tar.gz.sig'),
+    matchStableUpdaterAsset('Chimera_0.27.1_amd64.AppImage.sig'),
     {
       kind: 'signature',
       targets: ['linux', 'linux-x86_64'],
@@ -100,11 +95,21 @@ test('maps Linux AppImage updater archives', () => {
   );
 });
 
+test('ignores legacy AppImage archives for the current Tauri updater format', () => {
+  assert.equal(
+    matchStableUpdaterAsset('Chimera_0.27.1_amd64.AppImage.tar.gz'),
+    null,
+  );
+  assert.equal(
+    matchStableUpdaterAsset('Chimera_0.27.1_amd64.AppImage.tar.gz.sig'),
+    null,
+  );
+});
+
 test('ignores release assets that are not updater payloads', () => {
   for (const name of [
     'Chimera_0.23.1_aarch64.dmg',
-    'Chimera_0.23.1_x64-setup.exe',
-    'Chimera_0.23.1_amd64.AppImage',
+    'Chimera_0.23.1_x64.msi',
     'Chimera_0.23.1_amd64.deb',
     'Chimera-0.23.1-1.x86_64.rpm',
   ]) {
@@ -112,16 +117,22 @@ test('ignores release assets that are not updater payloads', () => {
   }
 });
 
+test('uploads the Tauri v2 Linux updater signature with the AppImage', () => {
+  const workflow = readFileSync(
+    new URL('../.github/workflows/deps-build-linux.yaml', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(workflow, /\.\/backend\/target\/\*\*\/\*\.AppImage\.sig/);
+});
+
 test('respects fixed-webview asset filtering', () => {
   assert.equal(
-    matchStableUpdaterAsset('Chimera_0.23.1_x64-fixed-webview-setup.nsis.zip'),
+    matchStableUpdaterAsset('Chimera_0.27.1_x64-fixed-webview-setup.exe'),
     null,
   );
   assert.deepEqual(
-    matchStableUpdaterAsset(
-      'Chimera_0.23.1_x64-fixed-webview-setup.nsis.zip',
-      true,
-    ),
+    matchStableUpdaterAsset('Chimera_0.27.1_x64-fixed-webview-setup.exe', true),
     {
       kind: 'url',
       targets: ['win64', 'windows-x86_64'],

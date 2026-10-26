@@ -253,6 +253,7 @@ jobs:
           name: Clash.Nyanpasu-linux-${{ inputs.arch }}-appimage
           path: |
             ./backend/target/**/*.AppImage
+            ./backend/target/**/*.AppImage.sig
             ./backend/target/**/*.AppImage.tar.gz
             ./backend/target/**/*.AppImage.tar.gz.sig
 

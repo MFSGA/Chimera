@@ -3,6 +3,7 @@ import path from 'path';
 import { context, getOctokit } from '@actions/github';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { resolveReleaseByTag } from './github-release.ts';
 import {
   assertUpdaterManifest,
   matchStableUpdaterAsset,
@@ -56,10 +57,21 @@ async function resolveUpdater() {
   }
   consola.debug(colorize`latest tag: {gray.bold ${tag}}`);
 
-  const { data: latestRelease } = await github.rest.repos.getReleaseByTag({
-    ...options,
+  const latestRelease = await resolveReleaseByTag(
     tag,
-  });
+    async () =>
+      (
+        await github.rest.repos.getReleaseByTag({
+          ...options,
+          tag,
+        })
+      ).data,
+    async () =>
+      github.paginate(github.rest.repos.listReleases, {
+        ...options,
+        per_page: 100,
+      }),
+  );
 
   let updateLog: string | null = null;
   try {
