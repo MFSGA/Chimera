@@ -9,7 +9,7 @@
     "test:profile-sync-history": "tsx --test tests/profile-sync-history.test.ts",
     "test:connections": "tsx --test tests/connections-model.test.ts",
     "test:localization": "tsx --test tests/localization.test.ts",
-    "test:traffic": "tsx --test tests/traffic-search.test.ts ../interface/tests/traffic-report-query.test.ts",
+    "test:traffic": "tsx --test tests/traffic-search.test.ts tests/traffic-sankey-layout.test.ts tests/traffic-view-settings.test.ts ../interface/tests/traffic-report-query.test.ts",
     "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",
     "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts ../interface/tests/kv-storage-write-echoes.test.ts"
   },
@@ -55,6 +55,7 @@
     "react-dom": "19.3.0",
     "react-hook-form": "7.89.0",
     "react-markdown": "10.1.0",
+    "react-use": "17.6.1",
     "vaul": "1.1.2",
     "virtua": "0.53.3",
     "zod": "4.6.5"
@@ -70,10 +71,10 @@
     "@tanstack/react-router-devtools": "1.167.2",
     "@tanstack/router-plugin": "1.168.42",
     "@tauri-apps/plugin-clipboard-manager": "2.4.1",
+    "@types/d3": "7.4.3",
     "@types/d3-array": "3.2.2",
     "@types/d3-scale": "4.0.9",
     "@types/d3-shape": "3.1.8",
-    "@types/d3": "7.4.3",
     "@types/json-schema": "7.0.15",
     "@types/less": "3.0.8",
     "@types/lodash-es": "4.17.12",
