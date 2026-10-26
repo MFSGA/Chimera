@@ -200,6 +200,41 @@ impl StorageInner {
         })
     }
 
+    /// Removes a namespaced key and its legacy fallback in one database commit.
+    /// Only the namespaced key is published because it is the canonical frontend key.
+    pub fn remove_item_with_fallback(
+        &self,
+        key: impl AsRef<str>,
+        fallback_key: impl AsRef<str>,
+    ) -> Result<StorageRevision> {
+        let key = key.as_ref();
+        let fallback_key = fallback_key.as_ref();
+        if key == fallback_key {
+            return self.commit(key, None);
+        }
+
+        let mut revision = self.revision.lock();
+        let write_txn = self.instance.begin_write()?;
+        {
+            let mut table = write_txn.open_table(NYANPASU_TABLE)?;
+            table.remove(key.as_bytes())?;
+            table.remove(fallback_key.as_bytes())?;
+        }
+        write_txn.commit()?;
+        *revision = revision.next();
+        #[cfg(test)]
+        if let Some(before_publish) = &self.before_publish {
+            before_publish(key);
+        }
+        let change = StorageChange {
+            key: key.to_owned(),
+            value: None,
+            revision: *revision,
+        };
+        let _ = self.tx.send(change);
+        Ok(*revision)
+    }
+
     pub fn subscribe(&self) -> Receiver<StorageChange> {
         self.tx.subscribe()
     }
@@ -576,5 +611,29 @@ mod tests {
             .unwrap();
         assert_eq!(current.value.as_deref(), Some("current"));
         assert!(current.revision > legacy.revision);
+    }
+
+    #[test]
+    fn removing_a_namespaced_value_also_removes_its_legacy_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = open(&dir);
+        storage.set_item("layout", &"legacy").unwrap();
+        storage.set_item("web:layout", &"current").unwrap();
+        let mut rx = storage.subscribe();
+
+        let revision = storage
+            .remove_item_with_fallback("web:layout", "layout")
+            .unwrap();
+
+        let removed = storage
+            .get_item_with_fallback::<String>("web:layout", "layout")
+            .unwrap();
+        assert_eq!(removed.value, None);
+        assert_eq!(removed.revision, revision);
+        let change = rx.try_recv().unwrap();
+        assert_eq!(change.key, "web:layout");
+        assert_eq!(change.value, None);
+        assert_eq!(change.revision, revision);
+        assert!(rx.try_recv().is_err());
     }
 }

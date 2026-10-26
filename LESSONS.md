@@ -52,6 +52,7 @@
 | LESSON-20261026-003 | 2026-10-26 | Updater / Release   | Draft asset URLs contained temporary `untagged-*` paths; stable tag URLs and downloads verified after regeneration     | Verified  |
 | LESSON-20261026-004 | 2026-10-26 | Rust / Storage      | TaskTracker spawned storage event bridge outside Tokio runtime; use Tauri handle                                       | Mitigated |
 | LESSON-20261026-005 | 2026-10-26 | Frontend / Storage  | KV migration errors could let a stale queued write overwrite an unknown version; preserve errors and compare revisions | Mitigated |
+| LESSON-20261026-006 | 2026-10-26 | KV / Legacy UI      | Namespaced storage must adapt legacy event keys and remove known unprefixed fallbacks without clearing internal data   | Mitigated |
 
 ## 单条模板
 
@@ -749,6 +750,22 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 21/21；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、storage 测试 8/8、IPC marker 测试 1/1、生成 bindings freshness 1/1、目标 Rust 格式检查、改动文件 Prettier/Oxlint 和 `git diff --check` 通过。Rust 编译使用外接盘 `CARGO_TARGET_DIR`，没有留下项目 target。修复 SHA 的 GitHub CI、桌面 E2E 尚未运行；纯状态/IPC 存储测试不证明真实 Dashboard UI 展示或用户交互。
 - 风险/回滚和清理证据（如涉及宿主状态）：conditional write 只拒绝基于过期全局 revision 的 KV 写入；写入冲突后触发读取以恢复权威状态。旧调用以 `null` 继续使用原无条件写语义。回滚时须同时撤回 IPC 参数、后端比较、前端 revision guard 与测试。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：所有 revision-aware KV 写入都须携带读取时观察到的 revision；未知版本必须 fail closed。维护者已授权记录确认的回归；此条不调整 CI 或治理门禁。
+
+### LESSON-20261026-006：KV 命名空间迁移必须保留 legacy 事件与删除语义
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（独立复核定位的两处 P2 已修；本机前端回归通过，后端与 PR 新 SHA CI/E2E 待验证）
+- 严重度：Medium（legacy UI 跨窗口状态不更新；删除或清空后旧配置会再次读出）
+- 模块：Backend / shared KV storage / legacy UI adapter
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `d79e6818f8fb0c8f5a8ed956b6e8c16579404002`；PR #532 原 head `278a5dae307ff69ffb887571ca8a35af8d76d73c`；ref `03ab6e5824cb44e527bde7cca28b699e8bf3a766`；macOS、Node 24。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#532](https://github.com/MFSGA/Chimera/pull/532)；独立审查指出 legacy event 的 `web:` 前缀与 Jotai 订阅键不一致，且未限定的 fallback key 在 remove/clear 后仍会重新读出。
+- 触发条件及最小复现：窗口 A 对 `connections_table_columns` 写入 `web:connections_table_columns` 后，窗口 B 的 legacy 订阅按原始 key 查找而收不到更新；旧版写入的原始键在 namespaced key 被删除后被 `get_storage_item` fallback 再次返回。
+- 确认根因及分类：本地兼容适配缺陷。后端 tuple event 原样发送存储键，旧 Jotai listener 以不带 `web:` 的 key 建立 subscriber；读路径支持旧 raw key，但 remove/clear 只删除 namespaced 值。
+- 修复提交、差异映射及保留的兼容性边界：legacy UI adapter 在派发前把 `web:` 事件键还原为原始逻辑键；后端只对历史 frontend key allowlist 读取 fallback，并原子删除 namespaced 与对应旧键。调试列表可显示旧版 frontend 值；clear 只清 namespaced 与已知旧 frontend 键，其他内部键保持不动。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/chimera/tests/legacy-storage-events.test.ts` 验证旧订阅收到 namespaced event，加入现有 CI 执行的 `test:dashboard-widget-config`；`backend/tauri/src/ipc.rs` 覆盖旧 key allowlist、列表优先级、remove/clear 与 internal key 保留；`backend/tauri/src/core/storage.rs` 覆盖 fallback 原子删除及 revision event。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 22/22；`pnpm typecheck:chimera`、E2E typecheck、frontend boundary 和目标 Rust 格式检查通过。外接构建目录的 Rust 定向测试 `removing_a_namespaced_value_also_removes_its_legacy_fallback` 1/1、`ipc::tests` 16/16 通过；PR 新 SHA 的多平台 CI 与 Desktop E2E 尚待结果。
+- 风险/回滚和清理证据（如涉及宿主状态）：限于持久化 KV 和 legacy UI 事件边界；fallback 只匹配已知旧前端键，避免触碰未命名空间的内部键。回滚此修复会重新引入旧配置复活和 legacy UI 事件断连。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：改动持久化键前同时检查读取、写入、事件订阅、单项删除、调试枚举与全量清理；任何兼容 fallback 都须配对删除测试并明确允许的旧键集合。
 
 ### LESSON-20261026-003：Updater manifest 必须使用已发布 tag 的稳定资产 URL
 

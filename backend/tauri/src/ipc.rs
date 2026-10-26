@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, result::Result as StdResult};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    path::PathBuf,
+    result::Result as StdResult,
+};
 
 use anyhow::{Context, anyhow};
 use specta_typescript::Any;
@@ -672,8 +676,41 @@ pub async fn cleanup_processes(app_handle: AppHandle) -> Result {
 }
 
 const WEB_STORAGE_KEY_PREFIX: &str = "web:";
+
+/// Keys written by frontend releases before web storage was namespaced.
+/// Keep this list narrow so storage commands never treat internal keys as UI data.
+const LEGACY_WEB_STORAGE_KEYS: &[&str] = &["connections_table_columns", "dashboard-widget-configs"];
+
 fn web_key(key: &str) -> String {
     format!("{WEB_STORAGE_KEY_PREFIX}{key}")
+}
+
+fn is_legacy_web_storage_key(key: &str) -> bool {
+    LEGACY_WEB_STORAGE_KEYS.contains(&key)
+}
+
+fn get_web_storage_item(
+    storage: &Storage,
+    key: &str,
+) -> Result<crate::core::storage::StorageItem<String>> {
+    let namespaced_key = web_key(key);
+    if is_legacy_web_storage_key(key) {
+        Ok(storage.get_item_with_fallback(&namespaced_key, key)?)
+    } else {
+        Ok(storage.get_item(namespaced_key)?)
+    }
+}
+
+fn remove_web_storage_item(
+    storage: &Storage,
+    key: &str,
+) -> Result<crate::core::storage::StorageRevision> {
+    let namespaced_key = web_key(key);
+    if is_legacy_web_storage_key(key) {
+        Ok(storage.remove_item_with_fallback(namespaced_key, key)?)
+    } else {
+        Ok(storage.remove_item(namespaced_key)?)
+    }
 }
 
 pub mod service {
@@ -1140,8 +1177,7 @@ pub fn get_storage_item(
     crate::e2e_test::fail_storage_operation("get_storage_item", &key)?;
 
     let storage = app_handle.state::<Storage>();
-    let namespaced_key = web_key(&key);
-    Ok(storage.get_item_with_fallback(&namespaced_key, &key)?)
+    get_web_storage_item(&storage, &key)
 }
 
 #[tauri::command]
@@ -1169,7 +1205,8 @@ pub fn remove_storage_item(
     app_handle: AppHandle,
     key: String,
 ) -> Result<crate::core::storage::StorageRevision> {
-    Ok(app_handle.state::<Storage>().remove_item(web_key(&key))?)
+    let storage = app_handle.state::<Storage>();
+    remove_web_storage_item(&storage, &key)
 }
 
 #[tauri::command]
@@ -1299,42 +1336,67 @@ pub struct StorageEntry {
     pub value: String,
 }
 
-/// Debug: returns all frontend KV entries (keys with the `web:` prefix).
+fn frontend_storage_entries(items: &[(String, String)]) -> Vec<StorageEntry> {
+    let mut entries = BTreeMap::new();
+    for (raw_key, value) in items {
+        if let Some(key) = raw_key.strip_prefix(WEB_STORAGE_KEY_PREFIX) {
+            entries.insert(key.to_owned(), value.clone());
+        }
+    }
+    for key in LEGACY_WEB_STORAGE_KEYS {
+        if !entries.contains_key(*key) {
+            if let Some((_, value)) = items.iter().find(|(raw_key, _)| raw_key.as_str() == *key) {
+                entries.insert((*key).to_owned(), value.clone());
+            }
+        }
+    }
+    entries
+        .into_iter()
+        .map(|(key, value)| StorageEntry { key, value })
+        .collect()
+}
+
+fn frontend_storage_keys(items: &[(String, String)]) -> Vec<String> {
+    let mut keys: BTreeSet<String> = items
+        .iter()
+        .filter_map(|(raw_key, _)| {
+            raw_key
+                .strip_prefix(WEB_STORAGE_KEY_PREFIX)
+                .map(str::to_owned)
+        })
+        .collect();
+    for key in LEGACY_WEB_STORAGE_KEYS {
+        if items.iter().any(|(raw_key, _)| raw_key.as_str() == *key) {
+            keys.insert((*key).to_owned());
+        }
+    }
+    keys.into_iter().collect()
+}
+
+fn clear_frontend_storage(storage: &Storage) -> Result {
+    for key in frontend_storage_keys(&storage.get_all()?) {
+        remove_web_storage_item(storage, &key)?;
+    }
+    Ok(())
+}
+
+/// Debug: returns namespaced frontend KV entries and the known pre-namespace UI keys.
 /// Internal storage entries used by other subsystems are excluded.
 #[tauri::command]
 #[specta::specta]
 pub fn get_all_storage_items(app_handle: AppHandle) -> Result<Vec<StorageEntry>> {
     let storage = app_handle.state::<Storage>();
     let items = storage.get_all()?;
-    Ok(items
-        .into_iter()
-        .filter_map(|(raw_key, value)| {
-            raw_key
-                .strip_prefix(WEB_STORAGE_KEY_PREFIX)
-                .map(|key| StorageEntry {
-                    key: key.to_string(),
-                    value,
-                })
-        })
-        .collect())
+    Ok(frontend_storage_entries(&items))
 }
 
-/// Debug: clears all frontend KV entries (keys with the `web:` prefix).
+/// Debug: clears namespaced frontend KV entries and known pre-namespace UI keys.
 /// Internal storage entries used by other subsystems are left intact.
 #[tauri::command]
 #[specta::specta]
 pub fn clear_storage(app_handle: AppHandle) -> Result {
     let storage = app_handle.state::<Storage>();
-    let web_keys: Vec<String> = storage
-        .get_all()?
-        .into_iter()
-        .filter(|(k, _)| k.starts_with(WEB_STORAGE_KEY_PREFIX))
-        .map(|(k, _)| k)
-        .collect();
-    for key in web_keys {
-        storage.remove_item(&key)?;
-    }
-    Ok(())
+    clear_frontend_storage(&storage)
 }
 
 #[tauri::command]
@@ -1534,8 +1596,11 @@ pub async fn query_traffic_active_connection_ids(
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use super::{IpcError, PendingDeepLink, ensure_viewable_profile_file};
-    use crate::core::storage::{StorageOperationError, StorageRevision};
+    use super::{
+        IpcError, PendingDeepLink, clear_frontend_storage, ensure_viewable_profile_file,
+        frontend_storage_entries, get_web_storage_item, remove_web_storage_item,
+    };
+    use crate::core::storage::{Storage, StorageOperationError, StorageRevision, WebStorage};
 
     #[test]
     fn storage_revision_conflicts_keep_a_stable_ipc_marker() {
@@ -1548,6 +1613,89 @@ mod tests {
         let wire = serde_json::to_value(error).unwrap();
         let wire = wire.as_str().expect("IPC errors serialize as strings");
         assert!(wire.contains("RevisionConflict"), "{wire}");
+    }
+
+    #[test]
+    fn legacy_storage_reads_are_limited_to_known_frontend_keys() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::try_new(&temp.path().join("storage.redb")).unwrap();
+        storage
+            .set_item("connections_table_columns", &"legacy")
+            .unwrap();
+        storage.set_item("internal", &"preserved").unwrap();
+
+        let legacy = get_web_storage_item(&storage, "connections_table_columns").unwrap();
+        assert_eq!(legacy.value.as_deref(), Some("legacy"));
+        let internal = get_web_storage_item(&storage, "internal").unwrap();
+        assert_eq!(internal.value, None);
+    }
+
+    #[test]
+    fn frontend_storage_listing_prefers_namespaced_values_and_includes_known_legacy_values() {
+        let items = vec![
+            ("connections_table_columns".to_owned(), "legacy".to_owned()),
+            (
+                "web:connections_table_columns".to_owned(),
+                "current".to_owned(),
+            ),
+            ("dashboard-widget-configs".to_owned(), "widgets".to_owned()),
+            ("internal".to_owned(), "preserved".to_owned()),
+        ];
+
+        let entries = frontend_storage_entries(&items);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].key, "connections_table_columns");
+        assert_eq!(entries[0].value, "current");
+        assert_eq!(entries[1].key, "dashboard-widget-configs");
+        assert_eq!(entries[1].value, "widgets");
+    }
+
+    #[test]
+    fn remove_and_clear_delete_legacy_frontend_values_but_preserve_internal_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = Storage::try_new(&temp.path().join("storage.redb")).unwrap();
+        storage
+            .set_item("connections_table_columns", &"legacy")
+            .unwrap();
+        storage
+            .set_item("web:connections_table_columns", &"current")
+            .unwrap();
+        storage
+            .set_item("dashboard-widget-configs", &"legacy widgets")
+            .unwrap();
+        storage.set_item("internal", &"preserved").unwrap();
+
+        remove_web_storage_item(&storage, "connections_table_columns").unwrap();
+        assert_eq!(
+            storage
+                .get_item::<String>("connections_table_columns")
+                .unwrap()
+                .value,
+            None
+        );
+        assert_eq!(
+            get_web_storage_item(&storage, "connections_table_columns")
+                .unwrap()
+                .value,
+            None
+        );
+
+        clear_frontend_storage(&storage).unwrap();
+        assert_eq!(
+            storage
+                .get_item::<String>("dashboard-widget-configs")
+                .unwrap()
+                .value,
+            None
+        );
+        assert_eq!(
+            storage
+                .get_item::<String>("internal")
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("preserved")
+        );
     }
 
     #[test]

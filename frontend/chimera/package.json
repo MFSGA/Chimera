@@ -11,7 +11,7 @@
     "test:localization": "tsx --test tests/localization.test.ts",
     "test:traffic": "tsx --test tests/traffic-search.test.ts ../interface/tests/traffic-report-query.test.ts",
     "test:dashboard-widget-placement": "tsx --test tests/dashboard-widget-placement.test.ts",
-    "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts ../interface/tests/kv-storage-write-echoes.test.ts ../interface/tests/kv-storage-state.test.ts ../interface/tests/kv-storage-provider.test.ts"
+    "test:dashboard-widget-config": "tsx --test tests/dashboard-widget-config.test.ts tests/legacy-storage-events.test.ts ../interface/tests/kv-storage-write-echoes.test.ts ../interface/tests/kv-storage-state.test.ts ../interface/tests/kv-storage-provider.test.ts"
   },
   "dependencies": {
     "@chimera/interface": "workspace:^",
