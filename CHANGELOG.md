@@ -1,3 +1,13 @@
+## [0.27.1] - 2026-10-26 11:11:26
+
+### 🐛 Bug Fixes
+
+- **ci:** Retry release draft preflight lookup by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.27.0...v0.27.1
+
 ## [0.27.0] - 2026-10-26 10:11:36
 
 ### ✅ Testing
