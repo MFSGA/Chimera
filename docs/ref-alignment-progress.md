@@ -1676,7 +1676,7 @@ DIFF-001 至 DIFF-012 是此前基于
 
 - 目标：将 ref 的 Flow 页面 Sankey 可视化、卡片图备选、排名选择和持久化视图设置迁入 Chimera；Flow 与地图共用一份排名偏好，并继续经现有 traffic 页面状态与查询 API 工作。
 - 非目标：不改变 traffic 查询、IPC、后端数据模型、legacy UI 路由、agent API、核心生命周期或网络/TUN 行为；不新增桌面 E2E 用例。
-- 基线：只读 `ref/` 与远端 `origin/main` 均为 `eb81fda5dbbe6382c31875fc2d5709429056c279`，ref 工作树干净。Sankey/Flow 设置实现来自 ref 提交 `1990171f1`；本批不修改或移动 `ref/`。
+- 基线：只读 `ref/` 与远端 `origin/main` 均为 `03ab6e5824cb44e527bde7cca28b699e8bf3a766`，ref 工作树干净。Sankey/Flow 设置实现来自 ref 提交 `1990171f1`；本次同步新增的上游提交只更新 `manifest/version.json`，没有改变本批映射的 Flow/Sankey 文件。上游 Alpha 版本值与 Chimera manifest 的差异作为独立依赖批次评估，不在此 UI 批次中混改。
 - ref 到 Chimera 路径和符号映射：`ref/frontend/nyanpasu/src/pages/(main)/main/topology/flow/index.tsx` → `frontend/chimera/src/pages/(main)/main/topology/flow/index.tsx`；`flow/_modules/{sankey-layout.ts,sankey.tsx,card-graph.tsx}` → 同名 Chimera 模块；`topology/_modules/{view-settings.tsx,view-rankings.tsx}` → 同名 Chimera 模块。保留 `TrafficViewSettingsProvider`、`useTrafficViewSettings`、`toTrafficViewSettings`、`ViewRankings`、`Sankey`、`layoutSankey`、`CardGraph` 的上游分解和符号；`traffic-context.tsx::RANKINGS` 改为 ref 顺序 `process,target,exit,source,inbound`。设置通过共享 `useKvStorage` 保存在 `traffic-view`，默认选择 ref 的前三个排名和 Sankey 图；地图和 Flow 排名使用同一设置，Flow 菜单还可切换 Sankey/卡片图。
 - 保留差异：Chimera 现有 ranking card 不接收 ref 的 `dimension` 属性，因此调用保持本地组件合同；保留 Chimera 已有的 process/target/exit/source/inbound 独立排名页面，不因 ref 统一入口而删除。Sankey 布局用普通 `Map` 分组及复制后排序，替代 ref 的 `Map.groupBy`/`toSorted`，计算顺序与结果不变，避免增加运行时 API 要求。当前仓库没有设置显式 Vite 浏览器 target 或 Tauri macOS minimumSystemVersion；若将来统一提高运行时最低版本，可重新评估这项差异。
 - 影响范围与接口：新增只影响 Main traffic topology 页面内部组件、一个 KV 键和 5 种现有 UI 语言的消息；无 Rust/IPC、数据 schema 或 agent contract 变化。检索确认 legacy 页面没有对应 topology/Flow 路由，本批没有改其交互；agent 不使用该 presentation 设置。
