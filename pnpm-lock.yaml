@@ -375,6 +375,9 @@ importers:
       react-markdown:
         specifier: 10.1.0
         version: 10.1.0(@types/react@19.3.0)(react@19.3.0)(supports-color@10.2.2)
+      react-use:
+        specifier: 17.6.1
+        version: 17.6.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       vaul:
         specifier: 1.1.2
         version: 1.1.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
