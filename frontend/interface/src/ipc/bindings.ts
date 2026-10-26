@@ -403,15 +403,17 @@ export const commands = {
       __TAURI_INVOKE('inspect_updater', { updaterId }),
     ),
   getStorageItem: (key: string) =>
-    typedError<string | null, string>(
+    typedError<StorageItem<string>, string>(
       __TAURI_INVOKE('get_storage_item', { key }),
     ),
   setStorageItem: (key: string, value: string) =>
-    typedError<null, string>(
+    typedError<StorageRevision, string>(
       __TAURI_INVOKE('set_storage_item', { key, value }),
     ),
   removeStorageItem: (key: string) =>
-    typedError<null, string>(__TAURI_INVOKE('remove_storage_item', { key })),
+    typedError<StorageRevision, string>(
+      __TAURI_INVOKE('remove_storage_item', { key }),
+    ),
   /**
    *  Debug: returns all frontend KV entries (keys with the `web:` prefix).
    *  Internal storage entries used by other subsystems are excluded.
@@ -501,6 +503,7 @@ export const events = {
     'clash-connections-event',
   ),
   clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
+  storageResyncEvent: makeEvent<StorageResyncEvent>('storage-resync-event'),
   storageValueChangedEvent: makeEvent<StorageValueChangedEvent>(
     'storage-value-changed-event',
   ),
@@ -2820,6 +2823,24 @@ export type StorageEntry = {
   value: string;
 };
 
+/**  A stored value, or `None` when its key is absent, as of `revision`. */
+export type StorageItem<T> = {
+  value: T | null;
+  revision: StorageRevision;
+};
+
+/**
+ *  Emitted after the change stream falls behind. Consumers should reread keys.
+ *  Event name: `storage-resync-event`.
+ */
+export type StorageResyncEvent = Record<string, never>;
+
+/**
+ *  Orders every commit made while this application process has the store open.
+ *  Revisions restart at zero when the store is reopened.
+ */
+export type StorageRevision = number;
+
 /**
  *  Event emitted to all windows when a storage value changes.
  *  Event name: `storage-value-changed-event`
@@ -2828,6 +2849,7 @@ export type StorageValueChangedEvent = {
   key: string;
   /**  The new JSON-encoded value, or `None` if the key was removed. */
   value: string | null;
+  revision: StorageRevision;
 };
 
 export type ThemeMode = 'light' | 'dark' | 'system';

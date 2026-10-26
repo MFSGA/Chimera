@@ -17,7 +17,7 @@
 | LESSON-20261014-001 | 2026-10-14 | Rust / CI           | macOS epoch PID 集成用例第二次 spawn 收到 `NotFound`；PID 文件读取竞态是候选根因，PR #479 远端复验待完成               | Open      |
 | LESSON-20261014-002 | 2026-10-14 | Proxies / E2E       | Windows 桌面 E2E 激活配置后仍显示旧代理组图标；后端缓存未随 profile 刷新事件失效，PR #479 新 SHA 远端复验待完成        | Open      |
 | LESSON-20261014-003 | 2026-10-14 | Profile / E2E       | PR #481 的 Linux 定时刷新测试和 Windows 流量菜单 E2E 未等待异步状态收敛；修复待新 SHA 复验                             | Open      |
-| LESSON-20261014-004 | 2026-10-14 | Development         | PR #481 首次提交钩子未使用外接盘 Cargo target，写满主卷；显式传入 target 后 hooks 通过                                 | Mitigated |
+| LESSON-20261014-004 | 2026-10-14 | Development         | PR #481 与 10-26 提交 hook 均将 Clippy 写入本机 target；提交命令须继承外接盘路径，并处理 CRLF 检查                     | Mitigated |
 | LESSON-20261015-001 | 2026-10-15 | E2E                 | main-first 套件误用仅存在于 main UI 的 `app-root` 作为 legacy 就绪标记；本地隔离 WebKit 运行复现并修正                 | Verified  |
 | LESSON-20261015-002 | 2026-10-15 | E2E                 | PR #481 Windows 规则图标用例的路由就绪等待超时，具体条件未定位；目标用例已缩小等待范围，待新 SHA 复验                  | Open      |
 | LESSON-20261015-003 | 2026-10-15 | Development         | PR #481 本地验证误用了 PR #482 Cargo target，混入另一分支类型产物；已确认并隔离构建目录                                | Mitigated |
@@ -48,6 +48,8 @@
 | LESSON-20261023-003 | 2026-10-23 | E2E / macOS         | Legacy Connections UI run stopped before assertions because embedded WebKit remained hidden; UI interaction unverified | Open      |
 | LESSON-20261025-001 | 2026-10-26 | CI / Release        | Read-only preflight token could not see draft Releases; v0.27.1 returned 404 for all 12 retries in run 40313224403     | Open      |
 | LESSON-20261026-001 | 2026-10-26 | CI / Dependencies   | Alpha stable version outran rolling assets; macOS prepare 404 in run 40315139018                                       | Open      |
+| LESSON-20261026-002 | 2026-10-26 | CI / Dependencies   | Alpha updater used stable version for rolling asset names; resolver tests added                                        | Open      |
+| LESSON-20261026-003 | 2026-10-26 | Rust / Storage      | TaskTracker spawned storage event bridge outside Tokio runtime; use Tauri handle                                       | Mitigated |
 
 ## 单条模板
 
@@ -139,15 +141,15 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 严重度：Low
 - 模块：Development / CI / Rust
 - PR head commit / 平台与测试环境：PR #481 `51aa4b2d733733ecdd8a89e00f451dfa1e7d9209`；Apple Silicon macOS，隔离 worktree
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #481](https://github.com/MFSGA/Chimera/pull/481)；首次 `git commit` 的 `lint-staged` 在 `pnpm lint:clippy` 子步骤因 `No space left on device` 失败。失败前主卷剩余 116 MiB；清理该 worktree `backend/target` 后释放 701.5 MiB。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[PR #481](https://github.com/MFSGA/Chimera/pull/481)；首次 `git commit` 的 `lint-staged` 在 `pnpm lint:clippy` 子步骤因 `No space left on device` 失败。2026-10-26 本批的提交 hook 未继承 `CARGO_TARGET_DIR`，使 `backend/target` 增长 2.7 GiB，主卷可用空间从 3.4 GiB 降至 1.2 GiB；Clippy 通过后，提交因 CRLF 文件被默认 `git diff --check` 判为尾随空格而失败。
 - 预期行为：在本机磁盘紧张时，commit hook 的 Clippy 构建应复用调用者指定的外接盘 Cargo target，不在默认 worktree target 重建完整依赖。
-- 真实异常、复现步骤与证据：先前 Rust/E2E 构建以 `CARGO_TARGET_DIR=/Volumes/ChimeraBuild/codex-pr481-ci-fix.CC4isH` 执行；首次 `git commit` 未在该进程环境中传入此变量。lint-staged 因而创建 `backend/target`，空间耗尽后 Clang 和 rustc 报错。Git 钩子留下自动备份 stash，但已暂存的四个目标文件仍完整；专用 target 清理后主卷空间恢复。
-- 确认的根因与排除项：`CARGO_TARGET_DIR=... cargo test` 只为那次 Cargo 子进程设置环境，变量没有自动成为交互 shell 的导出变量，所以后续独立的 `git commit` 钩子使用 Cargo 默认路径。证据是失败产物位于该 worktree 的 `backend/target`，清理后释放 701.5 MiB；未发现产品代码或 CI 构建失败。
-- 修复提交、差异映射及保留的兼容性边界：失败后使用 `cargo clean --manifest-path backend/Cargo.toml` 清理本次专用 worktree target，再以 `CARGO_TARGET_DIR=/Volumes/ChimeraBuild/codex-pr481-ci-fix.CC4isH CARGO_INCREMENTAL=0 AWS_LC_SYS_PREBUILT_NASM=1 git commit ...` 重跑 hooks。代码未修改 hook 或其门禁，也未改动主工作区 target。
+- 真实异常、复现步骤与证据：先前 Rust/E2E 构建以 `CARGO_TARGET_DIR=/Volumes/ChimeraBuild/codex-pr481-ci-fix.CC4isH` 执行；首次 `git commit` 未在该进程环境中传入此变量。lint-staged 因而创建 `backend/target`，空间耗尽后 Clang 和 rustc 报错。2026-10-26 本批提交再次未传该变量，hook 完成 Clippy 后目标目录达到 2.7 GiB；随后 plain `git diff --check` 把本来使用 CRLF 的 `storage.rs` 新增行误判为尾随空格。Git 钩子留下自动备份 stash，但暂存内容完整。
+- 确认的根因与排除项：`CARGO_TARGET_DIR=... cargo test` 只为那次 Cargo 子进程设置环境，变量不会自动成为后续 `git commit` 进程的导出变量，所以 hook 使用 Cargo 默认路径。Git 的 `core.whitespace` 未设 `cr-at-eol`，导致默认 diff 检查将 CRLF 行尾当作空格。未发现产品代码或 CI 构建失败。
+- 修复提交、差异映射及保留的兼容性边界：原故障通过 `cargo clean --manifest-path backend/Cargo.toml` 清理生成 target，并以显式外接盘路径重跑 hooks。2026-10-26 本批再次清理 hook 新建的 `backend/target`，`cargo clean --manifest-path backend/Cargo.toml` 报告移除 8281 个文件 / 2.7 GiB；后续提交须在完整 `git commit` 命令环境中导出外接盘 `CARGO_TARGET_DIR`，并为该 CRLF 文件配置 `core.whitespace=cr-at-eol`。没有修改 hook 或其门禁。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：没有新增产品回归测试；hook 的 `pnpm lint:clippy` 在修正环境变量后实际执行并通过。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：首次提交 hook 失败；第二次提交 hook 的 oxlint、Prettier、`pnpm typecheck:e2e`、rustfmt、`pnpm lint:clippy` 全部通过。验证前后分别观察到主卷仅剩 116 MiB，以及清理后 792 MiB；未清理主工作区或其大型 Cargo target。
-- 风险/回滚和清理证据（如涉及宿主状态）：清理只针对本任务 worktree 中由失败 hook 新建的 Cargo 构建目录，`cargo clean` 报告移除 3614 文件 / 701.5 MiB；无宿主网络、Service 或 TUN 操作。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行 Rust 构建后若 hook 也需编译，`git commit` 命令必须显式继承 `CARGO_TARGET_DIR`；无治理门禁调整。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：首次提交 hook 失败；2026-10-26 两次 hook 的 oxlint、Prettier、`pnpm typecheck:interface`、`pnpm typecheck:e2e`、rustfmt 和 `pnpm lint:clippy` 均通过，但第二次提交仍在 diff 检查阶段失败。已清理此次 hook 新建的 2.7 GiB 生成 target，主卷可用空间恢复到 3.4 GiB；修正本地环境后的完整提交 hook 尚待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：清理仅针对本批 hook 新建的 Cargo 构建缓存，`cargo clean` 报告移除 8281 文件 / 2.7 GiB；无宿主网络、Service 或 TUN 操作。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：执行 Rust 构建后若 hook 也需编译，完整 `git commit` 进程必须显式继承 `CARGO_TARGET_DIR`；仓库该文件使用 CRLF，本机还须设置 `core.whitespace=cr-at-eol` 使默认 hook 检查正确识别行尾。未更改 CI 或门禁。
 
 ### LESSON-20261015-001：跨窗口 E2E 就绪检查必须使用窗口对应的 UI 标记
 
@@ -538,7 +540,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 确认的根因与排除项：run `39421543438` 证明第一次失败由用例在状态未知时无条件切换 Popover 导致；run `39574156754` 证明初始状态检查并等待内容仍未消除该失败。故障注入的 storage 错误确实到达且 UI 保留 `load-error`，较新失败的触发原因仍待 expanded-state 诊断和 Windows 复验。本机路由等待失败发生在 Popover 用例之前，不能据此判断产品恢复功能通过或失败。
 - 修复提交、差异映射及保留的兼容性边界：打开辅助函数检查对应 trigger 的 `aria-expanded`，只在未打开时点击，随后先等待 `aria-expanded="true"`，再等待 unit 与 Reset 同时可见。此次仅提升测试状态证据，产品组件和持久化逻辑未改；若新 E2E 仍显示 trigger 未展开，再检查产品组件和用户交互，不以放宽后续断言处理。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：第一次状态感知修复在 `39574156754` 未通过；当前增加 expanded-state 等待的版本仍在 `dashboard-main-layout.e2e.ts` 并注册到 `main` / Windows `hermetic`。PR #507 的 run `39429486331` 对旧版同一 spec 通过，但不能代替当前改动的复验。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39574156754` 的 53 个 spec 中 recovery 用例失败；run `39582677624` 的旧版修复仍因 unit 控件不可见而失败。本机 WebKit 曾通过定向 Dashboard 2/2（33.8 秒）；2026-10-21 最近两次运行均在测试体前由 `main-window.ts::waitForMainRouteSettled` 超时，Popover recovery 断言未覆盖。Windows 新 SHA hermetic E2E 待复验。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：run `39574156754` 的 53 个 spec 中 recovery 用例失败；run `39582677624` 的旧版修复仍因 unit 控件不可见而失败。本机 WebKit 曾通过定向 Dashboard 2/2（33.8 秒）；2026-10-21 两次运行及 2026-10-26 再次运行均在测试体前由 `main-window.ts::waitForMainRouteSettled` 超时。最近一次诊断为 Dashboard opacity 0、Web Animation `currentTime=0` 且 15 秒等待到期，Popover recovery 断言未覆盖；不得据此判断产品恢复功能通过或失败。Windows 新 SHA hermetic E2E 待复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅改测试交互状态检查；用例仍恢复原 widget storage 并确认读回，不操作宿主网络。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：切换 Popover、菜单或对话框后，先等稳定的展开状态和目标控件可见，再断言内部操作。无 CI 门禁改动。
 
@@ -711,3 +713,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、目标包 `cargo fmt --check`、Prettier 和 `git diff --check` 通过。第一次 `pnpm lint:clippy` 暴露测试模块未导入新增辅助函数，已补上导入；本机 Rust updater 测试重编 AWS-LC 时空间降至 118 MiB，未到达断言；随后清理生成的 `backend/target`（3.3 GiB）。真实 `pnpm prepare:check` 识别出 `0.28.0-alpha+sha.2c354de`，但归档下载多次重试，因空间压力中断。新 SHA 远程 CI、E2E 和发布构建待运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改变 Alpha 资产文件名的版本来源；不改用户配置或更新协议。回滚方式为恢复稳定版字段映射。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：用稳定版 `0.27.3` 与 Alpha `0.28.0` 的明确分叉锁定资产版本来源；维持与 ref 的 Alpha 元信息解析模式一致，同时保留旧 manifest 的窄回退。
+
+### LESSON-20261026-003：Tauri setup 中的任务必须使用已运行的异步 runtime
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（本机 Rust 与 macOS WebKit 回归通过；当前分支的远程 CI/E2E 待验证）
+- 严重度：Medium（启动阶段 panic 会阻止应用窗口就绪）
+- 模块：Rust / Storage event bridge / Tauri setup
+- master commit / ref gitlink SHA / 平台与测试环境：修复前基线 `c057b479136e5fc1c655627758f23ce9efd196d9`；ref `eb81fda5dbbe6382c31875fc2d5709429056c279`；macOS WebKit 605.1.15。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地首次 `storage-event-resync.e2e.ts` 启动日志在 `backend/tauri/src/core/storage.rs` 的 storage listener 注册处记录 `there is no reactor running`；修复后重建当前 E2E binary，macOS WebKit 定向桌面用例 session `ad0aa229-19df-4cdb-a6fa-ffacde62350d` 通过。
+- 预期行为：启动时将 storage event forwarder 注册到 Tauri 管理的 Tokio runtime，受 app shutdown token 取消并纳入 `TaskTracker` 生命周期；不能因 setup 所在线程没有 runtime 而 panic。
+- 真实异常、复现步骤与证据：从 Tauri setup 主线程调用 `TaskTracker::spawn` 会在 Tokio 尝试创建任务时 panic；E2E 应用在页面断言开始前退出，因此这不是存储 UI 断言失败。
+- 确认的根因与排除项：`TaskTracker::spawn` 依赖当前线程已进入 Tokio runtime，而 Tauri setup 回调没有该 runtime context。根因由启动 panic 定位；storage IPC、数据库打开和前端页面不是触发点。
+- 修复提交、差异映射及保留的兼容性边界：对齐 ref `backend/tauri/src/setup.rs` 中受 shutdown/TaskTracker 管理的事件桥接生命周期，在 Chimera `resolve_setup` 取 `tauri::async_runtime::handle()` 并以 `tasks.spawn_on(..., runtime_handle.inner())` 显式指定运行时；继续使用 Chimera 的 `AppShutdown` child token，保留 typed storage event 与 legacy `storage_value_changed` / `storage_resync_required` 事件。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：Rust `core::storage::tests` 覆盖 event lag、恢复转发、提交/通知顺序、revision 和 fallback；`tauri-e2e/specs/storage-event-resync.e2e.ts` 在 `runtime` suite 验证真实桌面启动、legacy UI CSS 更新、缓存与 revisioned IPC snapshot。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支 Rust storage 定向测试 7/7；macOS WebKit 定向 E2E 1/1。完整跨平台 CI/E2E 尚未运行；Dashboard 单独用例在测试体开始前遇到已记录的路由动画 `currentTime=0` 超时（见 LESSON-20261020-002），不能算本功能失败，也不能算其主界面覆盖通过。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅改变 storage event forwarder 的任务调度入口，不触碰系统网络、用户配置或持久化格式；回滚需恢复使用 Tokio 线程本地 `spawn` 的实现，但会重现 setup panic。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在非 Tokio setup/hook 回调中创建异步任务时，必须显式取得并传入所属 runtime handle；启动阶段回归应至少实际启动当前 E2E binary。

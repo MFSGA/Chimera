@@ -420,9 +420,11 @@ describe('main dashboard reference layout', () => {
         if (!internals) {
           throw new Error('Tauri page internals are unavailable.');
         }
-        return internals.invoke<string | null>('get_storage_item', {
-          key: 'dashboard-widget-configs',
-        });
+        const item = await internals.invoke<{
+          value: string | null;
+          revision: number;
+        }>('get_storage_item', { key: 'dashboard-widget-configs' });
+        return item.value;
       });
 
     const writeStoredValue = async (value: string | null) =>

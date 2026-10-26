@@ -130,6 +130,7 @@ macro_rules! build_builder {
             ])
             .events(collect_events![
                 crate::core::storage::StorageValueChangedEvent,
+                crate::core::storage::StorageResyncEvent,
                 crate::core::clash::ClashConnectionsEvent,
                 crate::core::clash::ws::ClashWsEvent,
             ])
