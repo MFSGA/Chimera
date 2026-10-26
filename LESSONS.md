@@ -46,8 +46,10 @@
 | LESSON-20261023-001 | 2026-10-23 | CI / Linux          | PR #518 ARM64 target image fix; dedicated cross-build run 39623084868 passed                                           | Verified  |
 | LESSON-20261023-002 | 2026-10-23 | CI / Linux          | PR #518 preserves JSON quoting in non-nightly cross builds; dedicated ARM64 run 39623084868 passed                     | Verified  |
 | LESSON-20261023-003 | 2026-10-23 | E2E / macOS         | Legacy Connections UI run stopped before assertions because embedded WebKit remained hidden; UI interaction unverified | Open      |
-| LESSON-20261025-001 | 2026-10-26 | CI / Release        | Read-only preflight token could not see draft Releases; v0.27.1 returned 404 for all 12 retries in run 40313224403     | Open      |
-| LESSON-20261026-001 | 2026-10-26 | CI / Dependencies   | Alpha stable version outran rolling assets; macOS prepare 404 in run 40315139018                                       | Open      |
+| LESSON-20261025-001 | 2026-10-26 | CI / Release        | Draft Release visibility and updater signature resolution fixed; v0.27.1 build and manifest regeneration verified      | Verified  |
+| LESSON-20261026-001 | 2026-10-26 | CI / Dependencies   | Alpha stable version outran rolling assets; macOS prepare 404 in run 40315139018; v0.27.1 build passed                 | Verified  |
+| LESSON-20261026-002 | 2026-10-26 | Updater / Alpha     | Alpha updater asset-version regression; source fix present but Rust assertions still need a recorded run               | Open      |
+| LESSON-20261026-003 | 2026-10-26 | Updater / Release   | Draft asset URLs contained temporary `untagged-*` paths; stable tag URLs and downloads verified after regeneration     | Verified  |
 
 ## 单条模板
 
@@ -664,24 +666,24 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 ### LESSON-20261025-001：Release 预检必须有权限查看草稿
 
 - 日期与时区：首次发现 2026-10-25 UTC；根因复核 2026-10-26 UTC
-- 状态：Open（权限修复与回归断言待推送后的 CI 及 v0.27.1 发布构建验证）
+- 状态：Verified（master 全平台 CI、v0.27.1 发布构建及 updater manifest 重生成均通过）
 - 严重度：Medium（会阻断全部发行构建，但不会错误发布草稿）
 - 模块：CI / Release
-- master commit / ref gitlink SHA / 平台与测试环境：根因复核基线 `00036e8ffba70977a5d9dcce5cd0e0be4de1f23c`；GitHub Actions Ubuntu 发布预检
-- 关联 Issue / PR / CI / 运行日志（脱敏）：[v0.26.1 构建 run 39798665764](https://github.com/MFSGA/Chimera/actions/runs/39798665764)、[v0.26.2 构建 run 40270731966](https://github.com/MFSGA/Chimera/actions/runs/40270731966)、[v0.27.0 构建 run 40273089080](https://github.com/MFSGA/Chimera/actions/runs/40273089080)、[v0.27.1 构建 run 40313224403](https://github.com/MFSGA/Chimera/actions/runs/40313224403)。v0.27.1 的草稿已创建，但预检连续 12 次收到 `release not found`；所有平台构建未启动。
+- master CI 验证基线 / 发布源 SHA / ref gitlink SHA / 平台：`c057b479136e5fc1c655627758f23ce9efd196d9` / `82892bb62598a342628bb0c492abecb7aaa4b3e6` / `eb81fda5dbbe6382c31875fc2d5709429056c279`；GitHub Actions Ubuntu、Windows、macOS runners
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[初始失败 run 40313224403（tag SHA `00036e8`）](https://github.com/MFSGA/Chimera/actions/runs/40313224403)、[master CI run 40386437907](https://github.com/MFSGA/Chimera/actions/runs/40386437907)、[v0.27.1 发布 run 40371994350（tag SHA `82892bb`）](https://github.com/MFSGA/Chimera/actions/runs/40371994350)、[updater manifest 重生成 run 40407974104](https://github.com/MFSGA/Chimera/actions/runs/40407974104)。初始 12 次 404 导致发布未启动；修复后发布已成功。草稿标签在发布前从 `00036e8` 移至 `82892bb`。
 - 预期行为：预检 token 能读取并确认指定 tag 对应的 Release 仍为 draft；已发布 Release、权限/API 错误和超时仍阻止构建。
 - 真实异常、复现步骤与证据：Publish run 40313124461 创建 v0.27.1 草稿并派发目标构建。目标 run 40313224403 在 110 秒内连续 12 次调用 `gh release view v0.27.1` 均收到 404，随后失败。用维护者 CLI 查询同一草稿可见，说明延长等待本身不足以修复 Actions 预检。
 - 确认的根因与排除项：`.github/workflows/target-release-build.yaml` 为 `release_preflight` 设置了 `contents: read`。GitHub 文档说明 draft releases 只会列给有推送权限的身份；只读 `GITHUB_TOKEN` 无法发现该 draft，API 以 404 隐藏资源。此前仅按一致性延迟解释 404 的结论不完整。故障发生在所有平台构建启动前，不是打包、签名、上传或 updater 生成导致。
-- 修复提交、差异映射及保留的兼容性边界：将 `release_preflight` 的 job 级权限提升为 `contents: write`，使该 job 有权查看草稿；其他构建 job 仍沿用各自的权限。保留 helper 的有界 404 重试及“必须仍为 draft”的 fail-closed 检查。新增 Deno 合约断言，确保预检权限不会退回只读。
+- 修复提交、差异映射及保留的兼容性边界：`96e89e93` 让 `release_preflight` 能读取草稿；其他构建 job 保持各自权限。保留 helper 的有界 404 重试及“必须仍为 draft”的 fail-closed 检查。随后 `bbb009d9` 增加按精确 tag 查找 Release 的列表回退，`82892bb6` 通过认证的 Release Asset API 取草稿签名。新增 Deno 合约断言，防止预检权限回退为只读。经维护者批准，发布前将草稿 tag 从旧源提交移动到最终修复提交；发布成功后不再重标 tag。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：真实旧行为在 v0.27.1 run 40313224403 中失败；`scripts/src/ci/release-preflight_test.ts` 覆盖延迟可见、已发布、其他 API 错误、持续 404、无效 tag，并断言发布工作流给 preflight 授予 `contents: write`。测试通过现有 `pnpm test:release-preflight` 注册在 Ubuntu scripts CI job。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:release-preflight` 6/6 通过；`actionlint .github/workflows/target-release-build.yaml`、对三个改动文件运行的 Prettier 检查及 `git diff --check` 通过。GitHub CI run 40315139018 中 Ubuntu 的 release preflight 通过，Ubuntu/Windows Tauri 构建通过；macOS 因独立的 Chimera Client Alpha 资产版本不一致在资源准备阶段失败，见 LESSON-20261026-001。修复提交的新 CI 与 v0.27.1 真实发布构建待验证；stub 测试本身不证明 `GITHUB_TOKEN` 权限可见性。
-- 风险/回滚和清理证据（如涉及宿主状态）：只扩大预检 job 的 repository contents 权限，以便读取 draft；不改变 tag、草稿 Release、资产或其他 job 的权限。回滚为恢复旧 job 权限并保留 v0.27.1 草稿/tag，之后需重新修正预检再运行构建。
-- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在 workflow permission 修改及其 Deno 合约断言中共同锁定“preflight 可见 draft”的要求；该 L3 修复由维护者在本会话授权，并在完成后由独立审查复核。v0.27.1 标签仍指向旧权限工作流，因此复跑目标工作流时使用修复后的 `master` ref；可复用构建默认检出调用 ref，但修复提交仅改工作流、测试和文档，应用与子模块源码和标签保持一致。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:release-preflight` 6/6 通过；`pnpm test:updater-manifest` 19/19 通过；`actionlint`、Prettier 和 `git diff --check` 通过。GitHub master CI `40386437907` 的 Changes、三平台 lint 与三平台 Tauri 构建全通过；发布 run `40371994350` 成功发布 v0.27.1；updater run `40407974104` 成功重生成清单。草稿可见性、签名解析和发布构建均在真实 GitHub 运行中验证。
+- 风险/回滚和清理证据（如涉及宿主状态）：只扩大预检 job 的 repository contents 权限，以便读取 draft；不改变其他 job 的权限。发布前经授权移动草稿 tag；发布后不再重标 tag。回滚代码会重新引入草稿不可见或 updater 取不到签名的问题，不应回滚已发布 tag。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：workflow permission 与 Deno 合约测试共同锁定“preflight 可见 draft”；该 L3 修复由维护者授权。v0.27.1 发布运行使用已修复的 master 源码，后续 updater manifest 单独重生成并核验。
 
 ### LESSON-20261026-001：Alpha 版本必须从 rolling 发布资产解析
 
 - 日期与时区：2026-10-26 UTC
-- 状态：Open（解析修复已本地验证；新 SHA 的 CI 和 v0.27.1 发布构建待验证）
+- 状态：Verified（master 全平台 CI 与 v0.27.1 发布构建通过）
 - 严重度：Medium（macOS 资源准备失败会阻断整轮 CI 与发布）
 - 模块：CI / 依赖资源 / Chimera Client Alpha
 - master commit / ref gitlink SHA / 平台与测试环境：基线 `96e89e9325aedea16df3ea7b26f2205367e8f5eb`；GitHub Actions macOS 26 arm64 runner
@@ -691,7 +693,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 确认的根因与排除项：Alpha manifest 从当前稳定 Release 推导 macOS 资产版本，却从 rolling `latest` tag 推导 Alpha SHA；两个发布流推进不同步，产生不存在的资产 URL。下载重试多次刷新到同一个 Alpha Release，无法修复版本来源不匹配。
 - 修复提交、差异映射及保留的兼容性边界：改为查询 `releases/tags/latest` 的实际资产列表，从 versioned macOS archive 文件名解析基础版本，再与 `latest` tag commit SHA 组合 Alpha 版本。仍从 `latest` 下载 Alpha 资产，不回退到不同 commit 的稳定版二进制。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：`scripts/src/prepare/versions_test.ts` 覆盖资产版本解析；`chimera-client-alpha_test.ts` 通过注入 GitHub 请求断言调用 `git/ref/tags/latest` 与 `releases/tags/latest`，拒绝意外的 `/releases/latest` 请求，并确认 Alpha 版本取自 rolling 资产。两者通过现有 `pnpm test:manifest` 注册执行。
-- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、Deno 类型检查、Prettier、`actionlint .github/workflows/target-release-build.yaml` 和 `git diff --check` 通过。真实 GitHub API 解析为 `0.28.0-alpha+sha.4143358`；rolling URL 的 0.28.0 arm64 archive 返回 HTTP 200，错误的 0.28.1 URL 返回 HTTP 404。尚未在 macOS runner 上重跑真实 `pnpm prepare:check`；新 SHA CI 与 v0.27.1 发布构建待验证。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 `pnpm test:manifest` 30/30、Deno 类型检查、Prettier、`actionlint` 和 `git diff --check` 通过。master CI run `40386437907` 的三平台 Tauri 构建通过，v0.27.1 发布 run `40371994350` 成功，验证修复后的 Alpha 资源解析可用于真实打包。此前 rolling URL 的 0.28.0 arm64 archive 返回 HTTP 200，错误的 0.28.1 URL 返回 HTTP 404。
 - 风险/回滚和清理证据（如涉及宿主状态）：只调整 Alpha 版本元数据的来源；若 rolling Release 没有可解析的 versioned macOS archive，解析明确失败，不下载错误版本。回滚为恢复稳定版版本推导，但会重新引入该 404。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：保持版本字符串与实际 rolling 资产联动，并用资产清单回归测试覆盖稳定版和 Alpha 资产异步发布；本次 L2 sidecar 修复由维护者在当前“发布并修复至成功”任务中授权。
 
@@ -711,3 +713,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm test:manifest` 30/30、`pnpm test:release-preflight` 6/6、`pnpm test:updater-manifest` 10/10、目标包 `cargo fmt --check`、Prettier 和 `git diff --check` 通过。第一次 `pnpm lint:clippy` 暴露测试模块未导入新增辅助函数，已补上导入；本机 Rust updater 测试重编 AWS-LC 时空间降至 118 MiB，未到达断言；随后清理生成的 `backend/target`（3.3 GiB）。真实 `pnpm prepare:check` 识别出 `0.28.0-alpha+sha.2c354de`，但归档下载多次重试，因空间压力中断。新 SHA 远程 CI、E2E 和发布构建待运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改变 Alpha 资产文件名的版本来源；不改用户配置或更新协议。回滚方式为恢复稳定版字段映射。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：用稳定版 `0.27.3` 与 Alpha `0.28.0` 的明确分叉锁定资产版本来源；维持与 ref 的 Alpha 元信息解析模式一致，同时保留旧 manifest 的窄回退。
+
+### LESSON-20261026-003：Updater manifest 必须使用已发布 tag 的稳定资产 URL
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Verified（v0.27.1 manifest 已重生成；版本、签名、稳定 URL 和下载均核验通过）
+- 严重度：Medium（更新器会请求不存在的临时草稿资产 URL，导致升级下载失败）
+- 模块：Updater / Release
+- master commit / ref gitlink SHA / 平台与测试环境：修复提交 `d0029954bc2ced5cb40d039072619143101ecb80`；验证 master `c057b479136e5fc1c655627758f23ce9efd196d9`；ref `eb81fda5dbbe6382c31875fc2d5709429056c279`。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：[首次发布 run 40371994350](https://github.com/MFSGA/Chimera/actions/runs/40371994350)、[修复后 master CI run 40386437907](https://github.com/MFSGA/Chimera/actions/runs/40386437907)、[updater manifest 生成 run 40407974104](https://github.com/MFSGA/Chimera/actions/runs/40407974104)。
+- 预期行为：发布草稿时更新清单可以读取签名；发布后每个更新 URL 均指向 `/releases/download/<tag>/<asset>`，可从公开发行页下载。
+- 真实异常、复现步骤与证据：首次发布后检查 updater Release 中的 `update.json`，发现下载路径为临时 `/releases/download/untagged-.../`，对应请求返回 404；同一资产的正式 `v0.27.1` tag URL 返回 200。
+- 确认的根因与排除项：草稿 Release 的 `browser_download_url` 使用临时 `untagged-*` 路径；将该值直接写入 updater manifest，发布后路径不会自动改成正式 tag URL。不是应用打包或签名生成失败。
+- 修复提交、差异映射及保留的兼容性边界：`d0029954` 根据 repo、tag 和 asset name 构建正式下载 URL，并用 updater manifest 单测锁定 URL 生成；签名仍通过 Release Asset API 读取。v0.27.1 已发布后，仅重生成 updater Release 的 manifest；未再次移动已发布 tag 或重新构建发布。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`scripts/updater-manifest.test.ts` 覆盖稳定 tag URL 与资产映射，并由 `pnpm test:updater-manifest` 运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：本地 updater 测试 19/19、oxlint、Prettier 与 `git diff --check` 通过；master CI run `40386437907` 的三平台 lint/build 全通过；updater run `40407974104` 成功。重新下载的 `update.json` 版本为 `v0.27.1`，所有平台条目均有非空签名，URL 均使用正式 tag 路径；5 个唯一下载 URL 的最终 HTTP 状态均为 200。
+- 风险/回滚和清理证据（如涉及宿主状态）：此修复只更新 updater Release 的 manifest 资产，不修改已发布版本 tag、应用数据或已发布二进制；若再次使用草稿 `browser_download_url`，相同错误会复现。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在 `updater-manifest.test.ts` 中覆盖 canonical URL 生成，并在 manifest 发布后检查版本、签名与资产可达性；本条记录已获维护者批准。
