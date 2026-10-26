@@ -406,9 +406,13 @@ export const commands = {
     typedError<StorageItem<string>, string>(
       __TAURI_INVOKE('get_storage_item', { key }),
     ),
-  setStorageItem: (key: string, value: string) =>
+  setStorageItem: (
+    key: string,
+    value: string,
+    expectedRevision: number | null,
+  ) =>
     typedError<StorageRevision, string>(
-      __TAURI_INVOKE('set_storage_item', { key, value }),
+      __TAURI_INVOKE('set_storage_item', { key, value, expectedRevision }),
     ),
   removeStorageItem: (key: string) =>
     typedError<StorageRevision, string>(

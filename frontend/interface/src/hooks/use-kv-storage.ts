@@ -10,7 +10,11 @@ import {
   readKvStorageLocalCache,
   useKvStorageStore,
 } from '../provider/kv-storage-provider';
-import type { KvStorageEntry } from '../provider/kv-storage-state';
+import {
+  canWriteKvStorageValue,
+  decodeKvStorageValue,
+  type KvStorageEntry,
+} from '../provider/kv-storage-state';
 
 export interface UseKvStorageOptions<T> {
   /**
@@ -97,18 +101,15 @@ export function useKvStorage<T>(
     return next;
   });
 
-  const decode = useCallback((raw: string | null): T => {
-    if (raw === null) return defaultValueRef.current;
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      return migrateRef.current ? migrateRef.current(parsed) : (parsed as T);
-    } catch {
-      return defaultValueRef.current;
-    }
-  }, []);
+  const decode = useCallback(
+    (raw: string | null) =>
+      decodeKvStorageValue(raw, defaultValueRef.current, migrateRef.current),
+    [],
+  );
   // Unchanged text keeps its value, so a confirmation of the shown value
   // spares every reader a render. Another key decodes with its own migration.
-  const value = useMemo(() => decode(view.raw), [decode, key, view.raw]);
+  const decoded = useMemo(() => decode(view.raw), [decode, key, view.raw]);
+  const value = decoded.value;
 
   useEffect(() => {
     store.ensureRead(key);
@@ -117,13 +118,24 @@ export function useKvStorage<T>(
   const setValue = useCallback(
     (next: T | ((prev: T) => T)) => {
       // Read the shared value, which may already hold another hook's write.
+      const currentView = viewOf(store.peek(key), cached);
+      const currentValue = decode(currentView.raw);
+      const expectedRevision = () => {
+        const entry = store.peek(key);
+        if (!entry || entry.value === undefined) return null;
+        if (!canWriteKvStorageValue(entry, decode(entry.value).error)) {
+          return null;
+        }
+        return store.currentRevision();
+      };
+      if (expectedRevision() === null) {
+        return Promise.resolve(false);
+      }
       const resolved =
         typeof next === 'function'
-          ? (next as (prev: T) => T)(
-              decode(viewOf(store.peek(key), cached).raw),
-            )
+          ? (next as (prev: T) => T)(currentValue.value)
           : next;
-      return store.write(key, JSON.stringify(resolved));
+      return store.write(key, JSON.stringify(resolved), expectedRevision);
     },
     [store, key, cached, decode],
   );
@@ -133,7 +145,11 @@ export function useKvStorage<T>(
   return [
     value,
     setValue,
-    { isLoading: view.isLoading, readError: view.readError, refresh },
+    {
+      isLoading: view.isLoading,
+      readError: view.readError ?? decoded.error,
+      refresh,
+    },
   ] as const;
 }
 

@@ -1150,13 +1150,17 @@ pub fn set_storage_item(
     app_handle: AppHandle,
     key: String,
     value: String,
+    expected_revision: Option<crate::core::storage::StorageRevision>,
 ) -> Result<crate::core::storage::StorageRevision> {
     #[cfg(feature = "e2e")]
     crate::e2e_test::fail_storage_operation("set_storage_item", &key)?;
 
-    Ok(app_handle
-        .state::<Storage>()
-        .set_item(web_key(&key), &value)?)
+    let storage = app_handle.state::<Storage>();
+    let key = web_key(&key);
+    match expected_revision {
+        Some(expected) => Ok(storage.set_item_if_revision(key, &value, expected)?),
+        None => Ok(storage.set_item(key, &value)?),
+    }
 }
 
 #[tauri::command]
@@ -1531,6 +1535,20 @@ mod tests {
     use std::sync::{Arc, Barrier};
 
     use super::{IpcError, PendingDeepLink, ensure_viewable_profile_file};
+    use crate::core::storage::{StorageOperationError, StorageRevision};
+
+    #[test]
+    fn storage_revision_conflicts_keep_a_stable_ipc_marker() {
+        let revision: StorageRevision = serde_json::from_str("1").unwrap();
+        let error = IpcError::from(StorageOperationError::RevisionConflict {
+            expected: revision,
+            current: revision,
+        });
+
+        let wire = serde_json::to_value(error).unwrap();
+        let wire = wire.as_str().expect("IPC errors serialize as strings");
+        assert!(wire.contains("RevisionConflict"), "{wire}");
+    }
 
     #[test]
     fn missing_profile_view_reports_profile_identity_and_path() {

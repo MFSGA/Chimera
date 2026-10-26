@@ -19,6 +19,7 @@ import {
 } from '../ipc/bindings';
 import {
   EMPTY_KV_STORAGE_ENTRY,
+  isKvStorageRevisionConflict,
   kvStorageEventSnapshot,
   kvStorageQueryKey,
   mergeKvStorageSnapshot,
@@ -85,7 +86,13 @@ export function createKvStorageStore(
   });
   const reads = new Map<string, Promise<void>>();
   const writeTails = new Map<string, Promise<boolean>>();
+  const writeEpochs = new Map<string, number>();
+  const activeWrites = new Map<
+    string,
+    { value: string; expectedRevision: number | null }
+  >();
   let draftSequence = 0;
+  let observedRevision = 0;
 
   const peek = (key: string) =>
     queryClient.getQueryData<KvStorageEntry>(kvStorageQueryKey(key));
@@ -101,6 +108,42 @@ export function createKvStorageStore(
     if (entry) mirrorKvStorageLocalCache(key, entry);
   };
 
+  const isActiveWriteEcho = (
+    key: string,
+    snapshot: { value: string | null; revision: number },
+  ) => {
+    const active = activeWrites.get(key);
+    if (
+      active &&
+      active.value === snapshot.value &&
+      snapshot.revision > (active.expectedRevision ?? -1)
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const applySnapshot = (
+    key: string,
+    snapshot: { value: string | null; revision: number },
+  ) => {
+    const current = peek(key) ?? EMPTY_KV_STORAGE_ENTRY;
+    const replacesValue =
+      current.revision !== null &&
+      snapshot.revision > current.revision &&
+      snapshot.value !== current.value;
+    const localEcho = isActiveWriteEcho(key, snapshot);
+    if (replacesValue && !localEcho) {
+      writeEpochs.set(key, (writeEpochs.get(key) ?? 0) + 1);
+      update(key, (entry) => ({
+        ...mergeKvStorageSnapshot(entry, snapshot),
+        draft: null,
+      }));
+      return;
+    }
+    update(key, (entry) => mergeKvStorageSnapshot(entry, snapshot));
+  };
+
   // `isCurrent` turns false once a newer read of the key has started, which
   // then settles the key instead.
   const settleRead = async (key: string, isCurrent: () => boolean) => {
@@ -109,6 +152,7 @@ export function createKvStorageStore(
       const result = await api.getStorageItem(key);
       if (!isCurrent()) return;
       if (result.status === 'error') throw result.error;
+      observedRevision = Math.max(observedRevision, result.data.revision);
       const entry = peek(key) ?? EMPTY_KV_STORAGE_ENTRY;
       const merged = mergeKvStorageSnapshot(entry, {
         value: result.data.value,
@@ -116,7 +160,14 @@ export function createKvStorageStore(
       });
       // Unreadable stored JSON is a failed read, not a default to save over.
       if (merged !== entry && merged.value != null) JSON.parse(merged.value);
-      update(key, () => ({ ...merged, read: { status: 'done', error: null } }));
+      applySnapshot(key, {
+        value: result.data.value,
+        revision: result.data.revision,
+      });
+      update(key, (current) => ({
+        ...current,
+        read: { status: 'done', error: null },
+      }));
     } catch (error) {
       if (!isCurrent()) return;
       console.error('[useKvStorage] read failed:', error);
@@ -149,6 +200,7 @@ export function createKvStorageStore(
 
   return {
     peek,
+    currentRevision: () => observedRevision,
 
     /** Calls `onChange`, in the same task, whenever the entry of `key` changes. */
     subscribe: (key: string, onChange: () => void) => {
@@ -167,10 +219,18 @@ export function createKvStorageStore(
 
     /**
      * Shows `value` at once and stores it after the earlier writes of `key`.
-     * Resolves to whether the backend confirmed it; a failed value stays
-     * shown until a newer value is committed.
+     * An optional revision callback is checked when a queued write reaches
+     * the backend, so stale drafts cannot overwrite a newer committed value.
+     * A revision conflict invalidates the drafts already queued for this key.
+     * A backend failure keeps its draft shown; a rejected guard removes it so
+     * the committed value becomes visible again.
      */
-    write: (key: string, value: string): Promise<boolean> => {
+    write: (
+      key: string,
+      value: string,
+      expectedRevision?: () => number | null,
+    ): Promise<boolean> => {
+      const epoch = writeEpochs.get(key) ?? 0;
       draftSequence += 1;
       const id = draftSequence;
       update(key, (entry) => ({
@@ -180,9 +240,29 @@ export function createKvStorageStore(
 
       const operation = (writeTails.get(key) ?? Promise.resolve(true)).then(
         async () => {
+          if (epoch !== (writeEpochs.get(key) ?? 0)) {
+            update(key, (entry) =>
+              entry.draft?.id === id ? { ...entry, draft: null } : entry,
+            );
+            return false;
+          }
+          const revision = expectedRevision?.() ?? null;
+          if (expectedRevision && revision === null) {
+            update(key, (entry) =>
+              entry.draft?.id === id ? { ...entry, draft: null } : entry,
+            );
+            return false;
+          }
+          const activeWrite = {
+            value,
+            expectedRevision: revision,
+          };
+          activeWrites.set(key, activeWrite);
           try {
-            const result = await api.setStorageItem(key, value);
+            const result = await api.setStorageItem(key, value, revision);
             if (result.status === 'error') throw result.error;
+            if (activeWrites.get(key) === activeWrite) activeWrites.delete(key);
+            observedRevision = Math.max(observedRevision, result.data);
             update(key, (entry) => {
               const merged = mergeKvStorageSnapshot(entry, {
                 value,
@@ -194,12 +274,20 @@ export function createKvStorageStore(
             });
             return true;
           } catch (error) {
+            if (activeWrites.get(key) === activeWrite) activeWrites.delete(key);
             console.error('[useKvStorage] setStorageItem failed:', error);
+            if (expectedRevision && isKvStorageRevisionConflict(error)) {
+              writeEpochs.set(key, (writeEpochs.get(key) ?? 0) + 1);
+              update(key, (entry) => ({ ...entry, draft: null }));
+              void read(key);
+              return false;
+            }
             update(key, (entry) =>
               entry.draft?.id === id
                 ? { ...entry, draft: { ...entry.draft, failed: true } }
                 : entry,
             );
+            if (expectedRevision) void read(key);
             return false;
           }
         },
@@ -219,11 +307,10 @@ export function createKvStorageStore(
         api.listenStorageValueChanged(({ payload }) => {
           if (disposed) return;
           const change = kvStorageEventSnapshot(payload);
+          observedRevision = Math.max(observedRevision, payload.revision);
           // A key this client never read is read when it is first used.
           if (!change || !peek(change.key)) return;
-          update(change.key, (entry) =>
-            mergeKvStorageSnapshot(entry, change.snapshot),
-          );
+          applySnapshot(change.key, change.snapshot);
         }),
         api.listenStorageResync(onResync),
       ];

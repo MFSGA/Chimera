@@ -50,6 +50,7 @@
 | LESSON-20261026-001 | 2026-10-26 | CI / Dependencies   | Alpha stable version outran rolling assets; macOS prepare 404 in run 40315139018                                       | Open      |
 | LESSON-20261026-002 | 2026-10-26 | CI / Dependencies   | Alpha updater used stable version for rolling asset names; resolver tests added                                        | Open      |
 | LESSON-20261026-003 | 2026-10-26 | Rust / Storage      | TaskTracker spawned storage event bridge outside Tokio runtime; use Tauri handle                                       | Mitigated |
+| LESSON-20261026-004 | 2026-10-26 | Frontend / Storage  | KV migration errors could let a stale queued write overwrite an unknown version; preserve errors and compare revisions | Mitigated |
 
 ## 单条模板
 
@@ -730,3 +731,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支 Rust storage 定向测试 7/7；macOS WebKit 定向 E2E 1/1。完整跨平台 CI/E2E 尚未运行；Dashboard 单独用例在测试体开始前遇到已记录的路由动画 `currentTime=0` 超时（见 LESSON-20261020-002），不能算本功能失败，也不能算其主界面覆盖通过。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅改变 storage event forwarder 的任务调度入口，不触碰系统网络、用户配置或持久化格式；回滚需恢复使用 Tokio 线程本地 `spawn` 的实现，但会重现 setup panic。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在非 Tokio setup/hook 回调中创建异步任务时，必须显式取得并传入所属 runtime handle；启动阶段回归应至少实际启动当前 E2E binary。
+
+### LESSON-20261026-004：KV 迁移失败必须阻止默认值覆盖持久化数据
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（本地存储回归测试、类型检查和静态检查通过；PR #532 修复提交的 CI/E2E 待验证）
+- 严重度：Medium（旧版本无法读取新格式时，用户编辑可能覆盖持久化配置）
+- 模块：Frontend / shared KV storage / Dashboard widget configuration
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `c057b479136e5fc1c655627758f23ce9efd196d9`；PR #532 原提交 `a12988c9c5039bb2343d46fa8e94d6d903a5afb8`；ref `eb81fda5dbbe6382c31875fc2d5709429056c279`；本地 Node 24 / macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #532（`https://github.com/MFSGA/Chimera/pull/532`）；独立审查定位原提交的 P2；原提交 CI `40396415742`、E2E `40396415794` 不作为修复 SHA 的验证证据。
+- 预期行为：若 JSON 解析或迁移器拒绝已存值，hook 应显示读取错误并拒绝写入；排队期间如存储 revision 已变化，后端必须拒绝旧 revision 的写入，避免覆盖未知数据。
+- 真实异常、复现步骤与证据：独立审查沿 `dashboard-widget-configs` 路径确认：存储值为合法 JSON 且版本为 2 时，v1 的 `normalizeWidgetConfigStorage` 抛错；原 hook 把异常静默变成默认值，provider 只验证 JSON 语法并报告读取成功，Dashboard 保存门禁因此放行 v1 写入。审查还确认 pending draft 会遮住新 revision、CAS 冲突后残留失败 draft 会影响后续编辑；最后补充复现“本窗口 W1 已提交、外窗随后提交更新值、外窗事件先于 W1 确认到达、排队的 W2 因此基于旧草稿覆盖新值”的竞态。以上由代码路径和延迟 IPC/外部事件回归用例证实，未用真实桌面持久化数据复现。
+- 确认的根因与排除项：新 hook 的 `decode` 同时捕获 JSON 解析和迁移异常并返回默认值；KV provider 不持有调用方迁移器，且排队 API 原先不在实际发 IPC 时复核状态。根因不是 Dashboard 控件或 ref 的持久化实现。
+- 修复提交、差异映射及保留的兼容性边界：在 Chimera `useKvStorage` 中保留 decode/migration 错误并拒绝写入；队列启动时重新校验最新已提交值；新增 expected-revision 条件写 IPC，由 `StorageInner` 在同一 revision 锁内执行比较并提交。未改变数据格式或默认迁移策略；旧的 service/Jotai 调用以无条件参数保留既有接口行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/interface/tests/kv-storage-state.test.ts` 覆盖未知版本迁移错误和写入守门；`kv-storage-provider.test.ts` 覆盖延迟写确认期间的新未知版本事件、条件写 revision 推进、事件先到后的 draft 清理、冲突取消已排队旧写、外窗更新先于较早本地写确认时取消旧队列写，以及本地写回声不误取消其后续写；`backend/tauri/src/core/storage.rs` 覆盖 stale expected revision 不落盘、不发布事件以及当前 revision 成功提交；`backend/tauri/src/ipc.rs` 锁定前端冲突识别所依赖的 IPC marker。前端测试通过 `pnpm --filter chimera-ui test:dashboard-widget-config` 注册。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 21/21；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、storage 测试 8/8、IPC marker 测试 1/1、生成 bindings freshness 1/1、目标 Rust 格式检查、改动文件 Prettier/Oxlint 和 `git diff --check` 通过。Rust 编译使用外接盘 `CARGO_TARGET_DIR`，没有留下项目 target。修复 SHA 的 GitHub CI、桌面 E2E 尚未运行；纯状态/IPC 存储测试不证明真实 Dashboard UI 展示或用户交互。
+- 风险/回滚和清理证据（如涉及宿主状态）：conditional write 只拒绝基于过期全局 revision 的 KV 写入；写入冲突后触发读取以恢复权威状态。旧调用以 `null` 继续使用原无条件写语义。回滚时须同时撤回 IPC 参数、后端比较、前端 revision guard 与测试。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：所有 revision-aware KV 写入都须携带读取时观察到的 revision；未知版本必须 fail closed。维护者已授权记录确认的回归；此条不调整 CI 或治理门禁。

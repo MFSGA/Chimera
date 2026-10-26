@@ -26,6 +26,50 @@ export const EMPTY_KV_STORAGE_ENTRY: KvStorageEntry = {
 
 export const kvStorageQueryKey = (key: string) => ['kvStorage', key] as const;
 
+export type KvStorageDecodeResult<T> = {
+  value: T;
+  error: unknown | null;
+};
+
+/** Decode a stored JSON value and retain parse or migration failures. */
+export function decodeKvStorageValue<T>(
+  raw: string | null,
+  defaultValue: T,
+  migrate?: (value: unknown) => T,
+): KvStorageDecodeResult<T> {
+  if (raw === null) return { value: defaultValue, error: null };
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return {
+      value: migrate ? migrate(parsed) : (parsed as T),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      value: defaultValue,
+      error: error ?? new Error('Failed to decode stored KV value'),
+    };
+  }
+}
+
+export function canWriteKvStorageValue(
+  entry: KvStorageEntry | undefined,
+  decodeError: unknown | null,
+): boolean {
+  return (
+    entry?.read.status === 'done' &&
+    entry.read.error === null &&
+    entry.value !== undefined &&
+    entry.revision !== null &&
+    decodeError === null
+  );
+}
+
+/** Matches the Rust IpcError debug name for StorageOperationError::RevisionConflict. */
+export function isKvStorageRevisionConflict(error: unknown): boolean {
+  return typeof error === 'string' && error.includes('RevisionConflict');
+}
+
 // Reads, events and write acknowledgements all pass through here, so an older
 // snapshot never replaces a newer one whatever order they arrive in. A failed
 // draft gives way to a newer commit; a pending one waits for its own answer.

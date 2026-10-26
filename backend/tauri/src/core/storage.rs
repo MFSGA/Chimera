@@ -27,6 +27,11 @@ pub enum StorageOperationError {
     RedbCommit(#[from] redb::CommitError),
     #[error("failed to serialize or deserialize data: {0}")]
     Serialize(#[from] serde_json::Error),
+    #[error("storage revision conflict: expected {expected:?}, current {current:?}")]
+    RevisionConflict {
+        expected: StorageRevision,
+        current: StorageRevision,
+    },
 }
 
 pub const NYANPASU_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("clash-nyanpasu");
@@ -199,10 +204,45 @@ impl StorageInner {
         self.tx.subscribe()
     }
 
+    pub fn set_item_if_revision<T: Serialize>(
+        &self,
+        key: impl AsRef<str>,
+        value: &T,
+        expected: StorageRevision,
+    ) -> Result<StorageRevision> {
+        let key = key.as_ref();
+        self.commit_if_revision(key, Some(serde_json::to_vec(value)?), expected)
+    }
+
     /// Writes a value or removes its key, then publishes the committed change
     /// before releasing the lock that orders revisions.
     fn commit(&self, key: &str, value: Option<Vec<u8>>) -> Result<StorageRevision> {
         let mut revision = self.revision.lock();
+        self.commit_locked(key, value, &mut revision)
+    }
+
+    fn commit_if_revision(
+        &self,
+        key: &str,
+        value: Option<Vec<u8>>,
+        expected: StorageRevision,
+    ) -> Result<StorageRevision> {
+        let mut revision = self.revision.lock();
+        if *revision != expected {
+            return Err(StorageOperationError::RevisionConflict {
+                expected,
+                current: *revision,
+            });
+        }
+        self.commit_locked(key, value, &mut revision)
+    }
+
+    fn commit_locked(
+        &self,
+        key: &str,
+        value: Option<Vec<u8>>,
+        revision: &mut StorageRevision,
+    ) -> Result<StorageRevision> {
         let write_txn = self.instance.begin_write()?;
         {
             let mut table = write_txn.open_table(NYANPASU_TABLE)?;
@@ -397,6 +437,32 @@ mod tests {
         assert_eq!(removed.revision, removal);
         assert_eq!(removed.key, "web:key");
         assert_eq!(removed.value, None);
+    }
+
+    #[test]
+    fn a_stale_conditional_write_cannot_replace_a_newer_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = open(&dir);
+        let committed = storage.set_item("web:key", &"current").unwrap();
+        let mut rx = storage.subscribe();
+
+        assert!(matches!(
+            storage.set_item_if_revision("web:key", &"stale", StorageRevision(0)),
+            Err(StorageOperationError::RevisionConflict {
+                expected: StorageRevision(0),
+                current
+            }) if current == committed
+        ));
+        assert!(rx.try_recv().is_err());
+        let current = storage.get_item::<String>("web:key").unwrap();
+        assert_eq!(current.value.as_deref(), Some("current"));
+        assert_eq!(current.revision, committed);
+
+        let next = storage
+            .set_item_if_revision("web:key", &"next", committed)
+            .unwrap();
+        assert!(next > committed);
+        assert_eq!(rx.try_recv().unwrap().revision, next);
     }
 
     #[test]

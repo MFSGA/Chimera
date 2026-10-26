@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  canWriteKvStorageValue,
+  decodeKvStorageValue,
   EMPTY_KV_STORAGE_ENTRY,
   kvStorageEventSnapshot,
   mergeKvStorageSnapshot,
@@ -10,6 +12,70 @@ import {
 const entry = (patch: Partial<KvStorageEntry>): KvStorageEntry => ({
   ...EMPTY_KV_STORAGE_ENTRY,
   ...patch,
+});
+
+test('migration errors remain visible and block writes instead of replacing data', () => {
+  const defaultValue = { version: 1, byInstance: {} };
+  const migrationError = new Error('unsupported storage version');
+  const decoded = decodeKvStorageValue(
+    '{"version":2,"byInstance":{}}',
+    defaultValue,
+    (value) => {
+      if ((value as { version?: number }).version !== 1) {
+        throw migrationError;
+      }
+      return value as typeof defaultValue;
+    },
+  );
+
+  assert.deepEqual(decoded.value, defaultValue);
+  assert.equal(decoded.error, migrationError);
+  const stored = {
+    ...EMPTY_KV_STORAGE_ENTRY,
+    value: '{"version":2,"byInstance":{}}',
+    revision: 1,
+    read: { status: 'done' as const, error: null },
+  };
+  assert.equal(canWriteKvStorageValue(stored, decoded.error), false);
+  assert.equal(
+    canWriteKvStorageValue(
+      { ...stored, read: { status: 'done', error: migrationError } },
+      null,
+    ),
+    false,
+  );
+  assert.equal(
+    canWriteKvStorageValue(
+      { ...stored, read: { status: 'reading', error: null } },
+      null,
+    ),
+    false,
+  );
+});
+
+test('valid migrations keep storage writable and missing values use defaults', () => {
+  const defaultValue = { version: 1 };
+  const decoded = decodeKvStorageValue('{"version":0}', defaultValue, () => ({
+    version: 1,
+  }));
+
+  assert.deepEqual(decoded, { value: { version: 1 }, error: null });
+  assert.equal(
+    canWriteKvStorageValue(
+      {
+        ...EMPTY_KV_STORAGE_ENTRY,
+        value: '{"version":1}',
+        revision: 1,
+        read: { status: 'done', error: null },
+      },
+      decoded.error,
+    ),
+    true,
+  );
+  assert.deepEqual(decodeKvStorageValue(null, defaultValue), {
+    value: defaultValue,
+    error: null,
+  });
 });
 
 test('only a newer revision replaces the committed value', () => {
