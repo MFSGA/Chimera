@@ -243,6 +243,76 @@ describe('main dashboard reference layout', () => {
     }
   });
 
+  // Contract: docs/testing/contracts/dashboard-layout-resize.md
+  it('settles responsive layout changes without persisting a resize projection', async () => {
+    const originalWindowSize = await browser.getWindowSize();
+    const storedLayouts = await invoke<string | null>('get_storage_item', {
+      key: 'dashboard-widgets',
+    });
+    const readVisibleWidgets = () =>
+      browser.execute(() => ({
+        sparklineIds: Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-slot="widget-sparkline-card"]',
+          ),
+          (widget) => widget.dataset.widgetId,
+        ).sort(),
+        hasProxyShortcuts: Boolean(
+          document.querySelector('[data-slot="proxy-shortcut-buttons"]'),
+        ),
+        hasCoreShortcuts: Boolean(
+          document.querySelector('[data-slot="current-core-card"]'),
+        ),
+      }));
+
+    try {
+      const initialWidgets = await readVisibleWidgets();
+
+      await browser.setWindowSize(900, originalWindowSize.height);
+      await browser.waitUntil(
+        async () => browser.execute(() => window.innerWidth < 1_000),
+        {
+          timeout: 5_000,
+          timeoutMsg: 'Dashboard window did not enter the narrow layout.',
+        },
+      );
+
+      await browser.setWindowSize(
+        originalWindowSize.width,
+        originalWindowSize.height,
+      );
+      await browser.waitUntil(
+        async () => browser.execute(() => window.innerWidth >= 1_000),
+        {
+          timeout: 5_000,
+          timeoutMsg: 'Dashboard window did not return to its wide layout.',
+        },
+      );
+      await browser.waitUntil(
+        async () =>
+          JSON.stringify(await readVisibleWidgets()) ===
+          JSON.stringify(initialWidgets),
+        {
+          timeout: 5_000,
+          timeoutMsg: 'Dashboard widgets did not return to their wide layout.',
+        },
+      );
+
+      assert.equal(
+        await invoke<string | null>('get_storage_item', {
+          key: 'dashboard-widgets',
+        }),
+        storedLayouts,
+        'A responsive layout projection must not overwrite saved layouts.',
+      );
+    } finally {
+      await browser.setWindowSize(
+        originalWindowSize.width,
+        originalWindowSize.height,
+      );
+    }
+  });
+
   // Contract: docs/testing/contracts/dashboard-widget-config-retry.md
   it('recovers from failed widget storage and persists the retry', async () => {
     await openMainRoute(targetPath);
