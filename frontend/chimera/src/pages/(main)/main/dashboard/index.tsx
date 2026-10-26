@@ -194,12 +194,27 @@ const WidgetRender = () => {
   const layoutStorageRef = useRef(layoutStorage);
   layoutStorageRef.current = layoutStorage;
 
+  const root = useDndGridRoot();
+  const rootRef = useRef(root);
+  rootRef.current = root;
+
   const displayItemsRef = useRef(displayItems);
   displayItemsRef.current = displayItems;
 
   const gridSizeRef = useRef<GridSize>({ cols: 1, rows: 1 });
   const activeLayoutRef = useRef<DashboardItem[] | null>(null);
   const settledTimerRef = useRef<number | undefined>(undefined);
+  const pendingResizeRef = useRef<{
+    size: GridSize;
+    constraintsMap: Record<string, GridItemConstraints>;
+  } | null>(null);
+  const [isGridInteractionActive, setIsGridInteractionActive] = useState(false);
+  const isGridInteractionActiveRef = useRef(false);
+
+  const handleGridInteractionChange = useCallback((active: boolean) => {
+    isGridInteractionActiveRef.current = active;
+    setIsGridInteractionActive(active);
+  }, []);
 
   useEffect(() => () => window.clearTimeout(settledTimerRef.current), []);
 
@@ -216,6 +231,7 @@ const WidgetRender = () => {
       newSize: GridSize,
       constraintsMap: Record<string, GridItemConstraints>,
     ) => {
+      pendingResizeRef.current = null;
       // 尝试找到完全匹配的预设布局
       const bestLayout = findBestLayout(layoutStorageRef.current, newSize);
       const base =
@@ -241,12 +257,23 @@ const WidgetRender = () => {
     [],
   );
 
+  useEffect(() => {
+    if (isGridInteractionActive || root?.activeDrag) return;
+
+    const pendingResize = pendingResizeRef.current;
+    if (!pendingResize || settledTimerRef.current !== undefined) return;
+
+    pendingResizeRef.current = null;
+    selectForSize(pendingResize.size, pendingResize.constraintsMap);
+  }, [isGridInteractionActive, root?.activeDrag, selectForSize]);
+
   const handleSizeChange = useCallback(
     (
       newSize: GridSize,
       constraintsMap: Record<string, GridItemConstraints>,
     ) => {
       gridSizeRef.current = newSize;
+      pendingResizeRef.current = { size: newSize, constraintsMap };
 
       window.clearTimeout(settledTimerRef.current);
       if (activeLayoutRef.current === null) {
@@ -261,10 +288,18 @@ const WidgetRender = () => {
       );
       displayItemsRef.current = currentItems;
       setDisplayItems(currentItems);
-      settledTimerRef.current = window.setTimeout(
-        () => selectForSize(newSize, constraintsMap),
-        SETTLED_RESIZE_MS,
-      );
+      settledTimerRef.current = window.setTimeout(() => {
+        settledTimerRef.current = undefined;
+        if (isGridInteractionActiveRef.current || rootRef.current?.activeDrag) {
+          return;
+        }
+
+        const pendingResize = pendingResizeRef.current;
+        if (!pendingResize) return;
+
+        pendingResizeRef.current = null;
+        selectForSize(pendingResize.size, pendingResize.constraintsMap);
+      }, SETTLED_RESIZE_MS);
     },
     [selectForSize],
   );
@@ -335,6 +370,7 @@ const WidgetRender = () => {
           }
           minCellSize={64}
           onSizeChange={handleSizeChange}
+          onInteractionChange={handleGridInteractionChange}
           gap={16}
           disabled={!isEditing}
         >

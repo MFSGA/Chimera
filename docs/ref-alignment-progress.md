@@ -1,15 +1,15 @@
 # ref 对齐进度
 
-## Dashboard resize settle 对齐（实现中）
+## Dashboard resize settle 对齐（PR #534，修复复核发现后重新验证中）
 
-- 目标：对齐 Clash Nyanpasu `97e43308edabc95677c65741c81db1eeeb51689a` 的 Dashboard resize settling：窗口连续变化期间维持当前布局来源，尺寸稳定 200 ms 后才选择新预设布局；首次测得网格尺寸仍立即初始化。
+- 目标：对齐 Clash Nyanpasu `97e43308edabc95677c65741c81db1eeeb51689a` 的 Dashboard resize settling：窗口连续变化期间维持当前布局来源，尺寸稳定 200 ms 后才选择新预设布局；首次测得网格尺寸仍立即初始化。布局选择延迟撞上拖拽/调整大小时，等当前交互结束再应用。
 - 非目标：本批不迁移 Dashboard 布局存储 schema、preferred layout id、其他 widget、DnD Grid API、legacy UI 或 agent；不写入 resize 产生的自适应投影。
 - 参考映射：`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/index.tsx::{SETTLED_RESIZE_MS,selectForSize,settledTimerRef,handleSizeChange}` → `frontend/chimera/src/pages/(main)/main/dashboard/index.tsx` 中的相同常量/职责；保留 Chimera 当前 `findBestLayout`、`findClosestStoredLayout`、`adaptLayout` 与 keyed `LayoutStorage`。
-- 接口与风险：无 IPC、持久化格式或公开 API 变化；L1 Dashboard 窗口交互变化。首次尺寸选择立即应用；后续 resize 投影只更新显示态，settled selection 不写存储。
-- 验收：桌面 E2E 实际窄屏/宽屏 resize 后 widget 集合回到初始状态、`dashboard-widgets` 原始存储值不变；typecheck、格式/静态检查和目标桌面 E2E 通过。
+- 接口与风险：新增 `DndGrid.onInteractionChange` 可选回调，报告网格拖拽/resize 的开始与结束，由 Dashboard 作为本地 UI 状态消费；无 IPC 或持久化格式变化。L1 局部 UI 交互。resize 投影只更新显示态，settled selection 不写存储。
+- 验收：桌面 E2E 用快照/恢复的确定布局验证宽屏与窄屏选择、宽屏恢复及 `dashboard-widgets` 不变；timer 在网格交互活跃时不得切换布局。typecheck、格式/静态检查与目标桌面 E2E 通过。
 - 回滚：撤销 Dashboard resize timer 与对应 E2E/contract/progress 记录，不改用户数据。
 - 审批触发：不涉及架构或数据迁移；按用户对日常迭代的持续授权推进，不需要额外审批。
-- 实际验证：`pnpm typecheck:chimera`、`pnpm typecheck:e2e`、改动文件 Oxlint、Prettier 和 `git diff --check` 通过。桌面 E2E 尚未本机运行：构建卷仅剩约 2 GiB 可用空间，未启动可能耗尽磁盘的 Tauri 构建；推送后由 Windows `hermetic` PR suite 验证。当前实现与测试已登记，远端检查待触发。
+- 实际验证：初版 `9827e35f` 的 `pnpm typecheck:chimera`、`pnpm typecheck:e2e`、改动文件 Oxlint、Prettier 和 `git diff --check` 通过；独立复核发现交互期间布局切换竞态，以及首版 E2E 未断言窄屏实际布局。两项已修复，后续 SHA 的定向检查和 Windows hermetic E2E 待完成。本机桌面构建未运行：构建卷仅剩约 2 GiB 可用空间。
 
 ## App/Clash typed settings 接入（独立复核完成，Windows 桌面 E2E 待运行）
 

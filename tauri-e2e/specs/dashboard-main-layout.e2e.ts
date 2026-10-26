@@ -246,9 +246,87 @@ describe('main dashboard reference layout', () => {
   // Contract: docs/testing/contracts/dashboard-layout-resize.md
   it('settles responsive layout changes without persisting a resize projection', async () => {
     const originalWindowSize = await browser.getWindowSize();
-    const storedLayouts = await invoke<string | null>('get_storage_item', {
-      key: 'dashboard-widgets',
+    const storageKey = 'dashboard-widgets';
+    const originalStorage = await invoke<string | null>('get_storage_item', {
+      key: storageKey,
     });
+    const testStorage = JSON.stringify({
+      '4x5': [
+        {
+          id: 'traffic-down-narrow',
+          type: 'traffic-down',
+          x: 0,
+          y: 0,
+          w: 2,
+          h: 2,
+        },
+      ],
+      '8x6': [
+        {
+          id: 'traffic-down',
+          type: 'traffic-down',
+          x: 0,
+          y: 0,
+          w: 2,
+          h: 2,
+        },
+        {
+          id: 'traffic-up',
+          type: 'traffic-up',
+          x: 2,
+          y: 0,
+          w: 2,
+          h: 2,
+        },
+        {
+          id: 'memory-resize',
+          type: 'memory',
+          x: 4,
+          y: 0,
+          w: 2,
+          h: 2,
+        },
+        {
+          id: 'connections-resize',
+          type: 'connections',
+          x: 6,
+          y: 0,
+          w: 2,
+          h: 2,
+        },
+        {
+          id: 'proxy-shortcuts-resize',
+          type: 'proxy-shortcuts',
+          x: 0,
+          y: 2,
+          w: 3,
+          h: 2,
+        },
+        {
+          id: 'core-shortcuts-resize',
+          type: 'core-shortcuts',
+          x: 3,
+          y: 2,
+          w: 5,
+          h: 2,
+        },
+      ],
+    });
+    const wideWidgets = {
+      sparklineIds: [
+        'connections-resize',
+        'memory-resize',
+        'traffic-down',
+        'traffic-up',
+      ],
+      hasProxyShortcuts: true,
+      hasCoreShortcuts: true,
+    };
+    const narrowWidgets = {
+      sparklineIds: ['traffic-down-narrow'],
+      hasProxyShortcuts: false,
+      hasCoreShortcuts: false,
+    };
     const readVisibleWidgets = () =>
       browser.execute(() => ({
         sparklineIds: Array.from(
@@ -256,7 +334,9 @@ describe('main dashboard reference layout', () => {
             '[data-slot="widget-sparkline-card"]',
           ),
           (widget) => widget.dataset.widgetId,
-        ).sort(),
+        )
+          .filter((id): id is string => id !== undefined)
+          .sort(),
         hasProxyShortcuts: Boolean(
           document.querySelector('[data-slot="proxy-shortcut-buttons"]'),
         ),
@@ -264,18 +344,63 @@ describe('main dashboard reference layout', () => {
           document.querySelector('[data-slot="current-core-card"]'),
         ),
       }));
+    const waitForWidgets = async (
+      description: string,
+      expected: typeof wideWidgets,
+    ) => {
+      let lastObserved = 'not observed';
+      try {
+        await browser.waitUntil(
+          async () => {
+            lastObserved = JSON.stringify(await readVisibleWidgets());
+            return lastObserved === JSON.stringify(expected);
+          },
+          {
+            timeout: 10_000,
+            timeoutMsg: `${description} did not settle to the expected widgets.`,
+          },
+        );
+      } catch (error) {
+        throw new Error(`${description}; last state: ${lastObserved}.`, {
+          cause: error,
+        });
+      }
+    };
 
+    let primaryError: unknown;
     try {
-      const initialWidgets = await readVisibleWidgets();
-
-      await browser.setWindowSize(900, originalWindowSize.height);
+      await invoke('set_storage_item', {
+        key: storageKey,
+        value: testStorage,
+      });
       await browser.waitUntil(
-        async () => browser.execute(() => window.innerWidth < 1_000),
+        async () =>
+          browser.execute(
+            (key, expected) => {
+              const cached = localStorage.getItem(`nyanpasu-kv-:${btoa(key)}`);
+              return cached === expected;
+            },
+            storageKey,
+            testStorage,
+          ),
+        {
+          timeout: 5_000,
+          timeoutMsg: 'Dashboard test fixture did not reach the local cache.',
+        },
+      );
+      await browser.refresh();
+      await openMainRoute(targetPath);
+      await waitForWidgets('Wide Dashboard layout', wideWidgets);
+
+      await browser.setWindowSize(680, originalWindowSize.height);
+      await browser.waitUntil(
+        async () => browser.execute(() => window.innerWidth < 800),
         {
           timeout: 5_000,
           timeoutMsg: 'Dashboard window did not enter the narrow layout.',
         },
       );
+      await waitForWidgets('Narrow Dashboard layout', narrowWidgets);
 
       await browser.setWindowSize(
         originalWindowSize.width,
@@ -288,28 +413,59 @@ describe('main dashboard reference layout', () => {
           timeoutMsg: 'Dashboard window did not return to its wide layout.',
         },
       );
-      await browser.waitUntil(
-        async () =>
-          JSON.stringify(await readVisibleWidgets()) ===
-          JSON.stringify(initialWidgets),
-        {
-          timeout: 5_000,
-          timeoutMsg: 'Dashboard widgets did not return to their wide layout.',
-        },
-      );
+      await waitForWidgets('Restored wide Dashboard layout', wideWidgets);
 
       assert.equal(
         await invoke<string | null>('get_storage_item', {
-          key: 'dashboard-widgets',
+          key: storageKey,
         }),
-        storedLayouts,
+        testStorage,
         'A responsive layout projection must not overwrite saved layouts.',
       );
+    } catch (error) {
+      primaryError = error;
     } finally {
-      await browser.setWindowSize(
-        originalWindowSize.width,
-        originalWindowSize.height,
-      );
+      const cleanupErrors: unknown[] = [];
+      try {
+        if (originalStorage === null) {
+          await invoke('remove_storage_item', { key: storageKey });
+        } else {
+          await invoke('set_storage_item', {
+            key: storageKey,
+            value: originalStorage,
+          });
+        }
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await browser.setWindowSize(
+          originalWindowSize.width,
+          originalWindowSize.height,
+        );
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+      try {
+        await browser.refresh();
+        await openMainRoute(targetPath);
+        assert.equal(
+          await invoke<string | null>('get_storage_item', {
+            key: storageKey,
+          }),
+          originalStorage,
+          'Dashboard test storage was not restored.',
+        );
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+
+      if (primaryError || cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [...(primaryError ? [primaryError] : []), ...cleanupErrors],
+          'Dashboard responsive resize failed or its cleanup was incomplete.',
+        );
+      }
     }
   });
 
