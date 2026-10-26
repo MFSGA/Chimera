@@ -1,6 +1,40 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { resolveReleaseByTag } from './github-release.ts';
+import {
+  fetchReleaseAssetSignature,
+  resolveReleaseByTag,
+} from './github-release.ts';
+
+test('downloads draft asset signatures through the authenticated API URL', async () => {
+  const apiUrl =
+    'https://api.github.com/repos/MFSGA/Chimera/releases/assets/123';
+  const signature = await fetchReleaseAssetSignature(
+    apiUrl,
+    'test-token',
+    async (input, init) => {
+      assert.equal(input, apiUrl);
+      assert.equal(init?.method, 'GET');
+      assert.deepEqual(init?.headers, {
+        Accept: 'application/octet-stream',
+        Authorization: 'Bearer test-token',
+      });
+      return new Response('signature-content', { status: 200 });
+    },
+  );
+
+  assert.equal(signature, 'signature-content');
+});
+
+test('reports unsuccessful draft asset signature responses', async () => {
+  await assert.rejects(
+    fetchReleaseAssetSignature(
+      'https://api.github.com/repos/MFSGA/Chimera/releases/assets/123',
+      'test-token',
+      async () => new Response(null, { status: 404 }),
+    ),
+    /failed to fetch signature: 404/,
+  );
+});
 
 test('uses the direct release lookup when the tag is indexed', async () => {
   const release = { tag_name: 'v0.27.1', id: 1 };

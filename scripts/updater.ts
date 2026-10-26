@@ -3,7 +3,10 @@ import path from 'path';
 import { context, getOctokit } from '@actions/github';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
-import { resolveReleaseByTag } from './github-release.ts';
+import {
+  fetchReleaseAssetSignature,
+  resolveReleaseByTag,
+} from './github-release.ts';
 import {
   assertUpdaterManifest,
   matchStableUpdaterAsset,
@@ -36,12 +39,13 @@ const argv = yargs(hideBin(process.argv))
 /// generate update.json
 /// upload to update tag's release asset
 async function resolveUpdater() {
-  if (process.env.GITHUB_TOKEN === undefined) {
+  const token = process.env.GITHUB_TOKEN;
+  if (token === undefined) {
     throw new Error('GITHUB_TOKEN is required');
   }
 
   const options = { owner: context.repo.owner, repo: context.repo.repo };
-  const github = getOctokit(process.env.GITHUB_TOKEN);
+  const github = getOctokit(token);
 
   let tag = argv.tag;
   if (!tag) {
@@ -111,7 +115,8 @@ async function resolveUpdater() {
       return;
     }
 
-    const signature = await getSignature(browserDownloadUrl);
+    // Draft release download URLs are private until publication.
+    const signature = await fetchReleaseAssetSignature(asset.url, token);
     for (const target of match.targets) {
       updateData.platforms[target].signature = signature;
     }
@@ -218,20 +223,6 @@ async function saveToCache(fileName: string, content: string) {
   } catch (err) {
     consola.error(`Failed to save cache file: ${err}`);
   }
-}
-
-// get the signature file content
-async function getSignature(url: string) {
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
-
-  if (!response.ok) {
-    throw new Error(`failed to fetch signature: ${response.status} ${url}`);
-  }
-
-  return response.text();
 }
 
 resolveUpdater().catch((err) => {

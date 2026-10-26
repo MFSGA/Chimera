@@ -1,5 +1,25 @@
 type TaggedRelease = { tag_name: string };
 
+export async function fetchReleaseAssetSignature(
+  apiUrl: string,
+  token: string,
+  request: typeof fetch = fetch,
+): Promise<string> {
+  const response = await request(apiUrl, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/octet-stream',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`failed to fetch signature: ${response.status} ${apiUrl}`);
+  }
+
+  return response.text();
+}
+
 function isNotFoundError(error: unknown): boolean {
   return (
     typeof error === 'object' &&
