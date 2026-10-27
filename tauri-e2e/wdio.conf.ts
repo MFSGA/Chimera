@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WDIO_LOG_MASKING_PATTERNS } from './privacy-safe-error.js';
 import {
   captureWindowsProxySettings,
   cleanupE2eProcesses,
@@ -345,6 +346,7 @@ export const config: WebdriverIO.Config = {
   ),
   maxInstances: 1,
   logLevel: process.env.CI ? 'warn' : 'info',
+  maskingPatterns: WDIO_LOG_MASKING_PATTERNS,
   bail: 0,
   waitforTimeout: 30_000,
   connectionRetryTimeout: 120_000,

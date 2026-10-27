@@ -31,6 +31,16 @@ export const FRONTEND_ERROR_REDACTION_RULES = [
   },
 ] as const;
 
+export const WDIO_LOG_MASKING_PATTERNS = [
+  String.raw`/(?:Bearer\s+)(\S+)/gi`,
+  String.raw`/[?&][\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session|code|state|verifier|assertion|nonce|sid)=([^&\s]+)/gi`,
+  String.raw`/:\/\/([^/@\s]+)@/gi`,
+  String.raw`/(?:["']?[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt|code|state|verifier|assertion|nonce|sid)\b["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]+)/gi`,
+  String.raw`/\beyJ[\w-]+\.[\w-]+\.[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+  String.raw`/\beyJ[\w-]+\.\.[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+  String.raw`/\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+].join(',');
+
 export function sanitizeFrontendErrorMessage(message: string): string {
   return FRONTEND_ERROR_REDACTION_RULES.reduce(
     (sanitized, { pattern, flags, replacement }) =>
