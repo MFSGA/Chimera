@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { mergeWdioLogMaskingPatterns } from './privacy-safe-error.js';
 import {
   captureWindowsProxySettings,
   cleanupE2eProcesses,
@@ -17,6 +18,10 @@ import { e2eSuites } from './spec-suites.js';
 import { assertSystemLifecyclePreflight } from './system-lifecycle-preflight.js';
 
 const configDirectory = path.dirname(fileURLToPath(import.meta.url));
+const webdriverLogMaskingPatterns = mergeWdioLogMaskingPatterns(
+  process.env.WDIO_LOG_MASKING_PATTERNS,
+);
+process.env.WDIO_LOG_MASKING_PATTERNS = webdriverLogMaskingPatterns;
 const selectedSuiteIndex = process.argv.indexOf('--suite');
 const selectedSuite =
   selectedSuiteIndex >= 0 ? process.argv[selectedSuiteIndex + 1] : undefined;
@@ -345,6 +350,7 @@ export const config: WebdriverIO.Config = {
   ),
   maxInstances: 1,
   logLevel: process.env.CI ? 'warn' : 'info',
+  maskingPatterns: webdriverLogMaskingPatterns,
   bail: 0,
   waitforTimeout: 30_000,
   connectionRetryTimeout: 120_000,

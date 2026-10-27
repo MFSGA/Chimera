@@ -44,7 +44,7 @@ import { DragOverlay } from '@dnd-kit/core';
 import { createFileRoute } from '@tanstack/react-router';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import EditRounded from '~icons/material-symbols/edit-rounded';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -71,6 +71,8 @@ import {
 } from './_modules/layout-adapt';
 import { placeWidget } from './_modules/widget-placement';
 import { WidgetSheet } from './_modules/widget-sheet';
+
+const SETTLED_RESIZE_MS = 200;
 
 /**
  * 注册 TanStack Router 文件路由
@@ -192,10 +194,29 @@ const WidgetRender = () => {
   const layoutStorageRef = useRef(layoutStorage);
   layoutStorageRef.current = layoutStorage;
 
+  const root = useDndGridRoot();
+  const rootRef = useRef(root);
+  rootRef.current = root;
+
   const displayItemsRef = useRef(displayItems);
   displayItemsRef.current = displayItems;
 
   const gridSizeRef = useRef<GridSize>({ cols: 1, rows: 1 });
+  const activeLayoutRef = useRef<DashboardItem[] | null>(null);
+  const settledTimerRef = useRef<number | undefined>(undefined);
+  const pendingResizeRef = useRef<{
+    size: GridSize;
+    constraintsMap: Record<string, GridItemConstraints>;
+  } | null>(null);
+  const [isGridInteractionActive, setIsGridInteractionActive] = useState(false);
+  const isGridInteractionActiveRef = useRef(false);
+
+  const handleGridInteractionChange = useCallback((active: boolean) => {
+    isGridInteractionActiveRef.current = active;
+    setIsGridInteractionActive(active);
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(settledTimerRef.current), []);
 
   /**
    * 网格尺寸变化处理
@@ -205,35 +226,82 @@ const WidgetRender = () => {
    * 2. 如果有，直接使用
    * 3. 如果没有，查找最接近的预设布局 + adaptLayout 自适应
    */
+  const selectForSize = useCallback(
+    (
+      newSize: GridSize,
+      constraintsMap: Record<string, GridItemConstraints>,
+    ) => {
+      pendingResizeRef.current = null;
+      // 尝试找到完全匹配的预设布局
+      const bestLayout = findBestLayout(layoutStorageRef.current, newSize);
+      const base =
+        bestLayout ??
+        findClosestStoredLayout(layoutStorageRef.current, newSize) ??
+        DEFAULT_ITEMS;
+      const normalizedBase = normalizeItems(base);
+      activeLayoutRef.current = normalizedBase;
+
+      if (bestLayout) {
+        displayItemsRef.current = normalizedBase;
+        setDisplayItems(normalizedBase);
+        return;
+      }
+
+      // 无完全匹配 → 找最接近的 + 自适应
+      const nextItems = normalizeItems(
+        adaptLayout(normalizedBase, newSize, constraintsMap),
+      );
+      displayItemsRef.current = nextItems;
+      setDisplayItems(nextItems);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (isGridInteractionActive || root?.activeDrag) return;
+
+    const pendingResize = pendingResizeRef.current;
+    if (!pendingResize || settledTimerRef.current !== undefined) return;
+
+    pendingResizeRef.current = null;
+    selectForSize(pendingResize.size, pendingResize.constraintsMap);
+  }, [isGridInteractionActive, root?.activeDrag, selectForSize]);
+
   const handleSizeChange = useCallback(
     (
       newSize: GridSize,
       constraintsMap: Record<string, GridItemConstraints>,
     ) => {
       gridSizeRef.current = newSize;
+      pendingResizeRef.current = { size: newSize, constraintsMap };
 
-      // 尝试找到完全匹配的预设布局
-      const bestLayout = findBestLayout(layoutStorageRef.current, newSize);
-
-      if (bestLayout) {
-        const normalized = normalizeItems(bestLayout);
-        displayItemsRef.current = normalized;
-        setDisplayItems(normalized);
+      window.clearTimeout(settledTimerRef.current);
+      if (activeLayoutRef.current === null) {
+        selectForSize(newSize, constraintsMap);
         return;
       }
 
-      // 无完全匹配 → 找最接近的 + 自适应
-      const base =
-        findClosestStoredLayout(layoutStorageRef.current, newSize) ??
-        DEFAULT_ITEMS;
-
-      const nextItems = normalizeItems(
-        adaptLayout(base, newSize, constraintsMap),
+      // Keep adapting the current layout during a resize; select a new source
+      // layout only after the window size has settled.
+      const currentItems = normalizeItems(
+        adaptLayout(activeLayoutRef.current, newSize, constraintsMap),
       );
-      displayItemsRef.current = nextItems;
-      setDisplayItems(nextItems);
+      displayItemsRef.current = currentItems;
+      setDisplayItems(currentItems);
+      settledTimerRef.current = window.setTimeout(() => {
+        settledTimerRef.current = undefined;
+        if (isGridInteractionActiveRef.current || rootRef.current?.activeDrag) {
+          return;
+        }
+
+        const pendingResize = pendingResizeRef.current;
+        if (!pendingResize) return;
+
+        pendingResizeRef.current = null;
+        selectForSize(pendingResize.size, pendingResize.constraintsMap);
+      }, SETTLED_RESIZE_MS);
     },
-    [],
+    [selectForSize],
   );
 
   /**
@@ -245,6 +313,7 @@ const WidgetRender = () => {
       const key = sizeKey(gridSizeRef.current);
       displayItemsRef.current = newItems;
       setDisplayItems(newItems);
+      activeLayoutRef.current = newItems;
 
       // 更新并持久化布局
       layoutStorageRef.current = {
@@ -301,6 +370,7 @@ const WidgetRender = () => {
           }
           minCellSize={64}
           onSizeChange={handleSizeChange}
+          onInteractionChange={handleGridInteractionChange}
           gap={16}
           disabled={!isEditing}
         >

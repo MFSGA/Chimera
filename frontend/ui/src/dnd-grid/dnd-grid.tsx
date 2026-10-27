@@ -41,6 +41,7 @@ export interface DndGridProps<T extends string = string> {
     size: GridSize,
     constraintsMap: Record<string, GridItemConstraints>,
   ) => void;
+  onInteractionChange?: (active: boolean) => void;
   children: (item: DndGridItemType<T>) => React.ReactNode;
   className?: string;
   disabled?: boolean;
@@ -58,6 +59,7 @@ export function DndGrid<T extends string = string>({
   gap = 8,
   size,
   onSizeChange,
+  onInteractionChange,
   children,
   className,
   disabled = true,
@@ -133,8 +135,9 @@ export function DndGrid<T extends string = string>({
       setActiveItem(item);
       setPreviewItem(item);
       setFrozenItems(items);
+      onInteractionChange?.(true);
     },
-    [items],
+    [items, onInteractionChange],
   );
 
   const handleDragMove = useCallback(
@@ -184,8 +187,16 @@ export function DndGrid<T extends string = string>({
         [id]: { left: dropLeft, top: dropTop },
       }));
       onLayoutChange?.(newItems);
+      onInteractionChange?.(false);
     },
-    [activeItem, items, snapToGrid, getItemRect, onLayoutChange],
+    [
+      activeItem,
+      items,
+      snapToGrid,
+      getItemRect,
+      onLayoutChange,
+      onInteractionChange,
+    ],
   );
 
   const handleDragCancel = useCallback(() => {
@@ -193,7 +204,8 @@ export function DndGrid<T extends string = string>({
     setActiveItem(null);
     setPreviewItem(null);
     setFrozenItems(null);
-  }, []);
+    onInteractionChange?.(false);
+  }, [onInteractionChange]);
 
   const onResizeStart = useCallback(
     (id: string, handle: ResizeHandle, startX: number, startY: number) => {
@@ -212,8 +224,9 @@ export function DndGrid<T extends string = string>({
 
       setResizingItemId(id);
       setFrozenItems(items);
+      onInteractionChange?.(true);
     },
-    [items, disabled],
+    [items, disabled, onInteractionChange],
   );
 
   const onResizeMove = useCallback(
@@ -259,7 +272,8 @@ export function DndGrid<T extends string = string>({
       const newItems = items.map((i) => (i.id === preview.id ? preview : i));
       onLayoutChange?.(newItems);
     }
-  }, [items, onLayoutChange]);
+    onInteractionChange?.(false);
+  }, [items, onLayoutChange, onInteractionChange]);
 
   const rootCtx = useDndGridRoot();
 

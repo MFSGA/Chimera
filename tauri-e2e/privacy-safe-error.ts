@@ -1,0 +1,72 @@
+export type FrontendErrorCapture = {
+  status: 'captured' | 'not-installed' | 'session-unavailable';
+  events: Array<{ type: string; message: string; at: number }>;
+};
+
+export const FRONTEND_ERROR_REDACTION_RULES = [
+  {
+    pattern: String.raw`([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@`,
+    flags: 'gi',
+    replacement: '$1[redacted]@',
+  },
+  {
+    pattern: String.raw`([?&](?:[\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session|code|state|verifier|assertion|nonce|sid))=)[^&#\s"',;}\]]*`,
+    flags: 'gi',
+    replacement: '$1[redacted]',
+  },
+  {
+    pattern: String.raw`\bBearer\s+[^\s,;}\]]+`,
+    flags: 'gi',
+    replacement: 'Bearer [redacted]',
+  },
+  {
+    pattern: String.raw`(["'\\]*[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt|code|state|verifier|assertion|nonce|sid)\b["'\\]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;}\]]+)`,
+    flags: 'gi',
+    replacement: '$1[redacted]',
+  },
+  {
+    pattern: String.raw`\beyJ[a-z\d_-]{5,}(?:\.(?:[a-z\d_-]{8,})?\.[a-z\d_-]{8,}\.[a-z\d_-]{8,}\.[a-z\d_-]{8,}|\.[a-z\d_-]{8,}\.[a-z\d_-]{8,})\b`,
+    flags: 'gi',
+    replacement: '[redacted-jwt]',
+  },
+] as const;
+
+export const WDIO_LOG_MASKING_PATTERNS = [
+  String.raw`/(?:Bearer\s+)(\S+)/gi`,
+  String.raw`/[?&][\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session|code|state|verifier|assertion|nonce|sid)=([^&\s]+)/gi`,
+  String.raw`/:\/\/([^/@\s]+)@/gi`,
+  String.raw`/(?:["']?[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt|code|state|verifier|assertion|nonce|sid)\b["']?\s*[:=]\s*)("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\r\n]+)/gi`,
+  String.raw`/\beyJ[\w-]+\.[\w-]+\.[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+  String.raw`/\beyJ[\w-]+\.\.[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+  String.raw`/\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
+].join(',');
+
+export function mergeWdioLogMaskingPatterns(
+  existingPatterns: string | undefined,
+): string {
+  const configuredPatterns = existingPatterns?.trim();
+  return configuredPatterns
+    ? `${WDIO_LOG_MASKING_PATTERNS},${configuredPatterns}`
+    : WDIO_LOG_MASKING_PATTERNS;
+}
+
+export function sanitizeFrontendErrorMessage(message: string): string {
+  return FRONTEND_ERROR_REDACTION_RULES.reduce(
+    (sanitized, { pattern, flags, replacement }) =>
+      sanitized.replace(new RegExp(pattern, flags), replacement),
+    message,
+  ).slice(0, 2_000);
+}
+
+export function sanitizeFrontendErrorCapture(
+  capture: FrontendErrorCapture,
+): FrontendErrorCapture {
+  return {
+    status: capture.status,
+    events: capture.events.slice(0, 25).map((event) => ({
+      type: event.type.slice(0, 64),
+      message: sanitizeFrontendErrorMessage(event.message),
+      at: Number.isFinite(event.at) ? event.at : 0,
+    })),
+  };
+}
