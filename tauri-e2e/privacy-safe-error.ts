@@ -3,23 +3,40 @@ export type FrontendErrorCapture = {
   events: Array<{ type: string; message: string; at: number }>;
 };
 
-const sensitiveFieldPattern =
-  /(["'\\]*\b(?:access[_-]?token|refresh[_-]?token|token|secret|password|authorization|api[_-]?key|cookie|set-cookie)\b["'\\]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;}\]]+)/gi;
+export const FRONTEND_ERROR_REDACTION_RULES = [
+  {
+    pattern: String.raw`([a-z][a-z\d+.-]*:\/\/)[^/@\s]+:[^/@\s]+@`,
+    flags: 'gi',
+    replacement: '$1[redacted]@',
+  },
+  {
+    pattern: String.raw`([?&](?:[\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session))=)[^&#\s"',;}\]]*`,
+    flags: 'gi',
+    replacement: '$1[redacted]',
+  },
+  {
+    pattern: String.raw`\bBearer\s+[^\s,;}\]]+`,
+    flags: 'gi',
+    replacement: 'Bearer [redacted]',
+  },
+  {
+    pattern: String.raw`(["'\\]*[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt)\b["'\\]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;}\]]+)`,
+    flags: 'gi',
+    replacement: '$1[redacted]',
+  },
+  {
+    pattern: String.raw`\beyJ[a-z\d_-]{5,}(?:\.[a-z\d_-]{8,}){2}(?:\.[a-z\d_-]{8,}\.[a-z\d_-]{8,})?\b`,
+    flags: 'gi',
+    replacement: '[redacted-jwt]',
+  },
+] as const;
 
 export function sanitizeFrontendErrorMessage(message: string): string {
-  return message
-    .replace(/([a-z][a-z\d+.-]*:\/\/)[^/@\s]+:[^/@\s]+@/gi, '$1[redacted]@')
-    .replace(
-      /([?&](?:access[_-]?token|refresh[_-]?token|token|key|secret|password|auth|api[_-]?key)=)[^&#\s]*/gi,
-      '$1[redacted]',
-    )
-    .replace(/\bBearer\s+[^\s,;}\]]+/gi, 'Bearer [redacted]')
-    .replace(sensitiveFieldPattern, '$1[redacted]')
-    .replace(
-      /\beyJ[a-z\d_-]{5,}\.[a-z\d_-]{5,}\.[a-z\d_-]{5,}\b/gi,
-      '[redacted-jwt]',
-    )
-    .slice(0, 2_000);
+  return FRONTEND_ERROR_REDACTION_RULES.reduce(
+    (sanitized, { pattern, flags, replacement }) =>
+      sanitized.replace(new RegExp(pattern, flags), replacement),
+    message,
+  ).slice(0, 2_000);
 }
 
 export function sanitizeFrontendErrorCapture(

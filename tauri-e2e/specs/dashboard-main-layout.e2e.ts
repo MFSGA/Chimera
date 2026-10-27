@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import {
+  FRONTEND_ERROR_REDACTION_RULES,
   sanitizeFrontendErrorCapture,
   type FrontendErrorCapture,
 } from '../privacy-safe-error.js';
@@ -77,7 +78,7 @@ type ResizeFailureEvidence = {
 };
 
 async function installDashboardFrontendErrorCapture(): Promise<void> {
-  await browser.execute(() => {
+  await browser.execute((redactionRules) => {
     type CapturedError = { type: string; message: string; at: number };
     type CaptureState = {
       events: CapturedError[];
@@ -90,6 +91,17 @@ async function installDashboardFrontendErrorCapture(): Promise<void> {
     const target = window as WindowWithCapture;
     target.__CHIMERA_DASHBOARD_E2E_ERRORS__?.cleanup();
     const events: CapturedError[] = [];
+    const sanitize = (message: string): string =>
+      redactionRules
+        .reduce(
+          (sanitized, rule) =>
+            sanitized.replace(
+              new RegExp(rule.pattern, rule.flags),
+              rule.replacement,
+            ),
+          message,
+        )
+        .slice(0, 2_000);
     const format = (value: unknown): string => {
       if (value instanceof Error) {
         return `${value.name}: ${value.message}\n${value.stack ?? ''}`;
@@ -106,16 +118,21 @@ async function installDashboardFrontendErrorCapture(): Promise<void> {
     };
     const record = (type: string, value: unknown) => {
       if (events.length >= 25) return;
-      events.push({ type, message: format(value), at: Date.now() });
+      events.push({ type, message: sanitize(format(value)), at: Date.now() });
     };
-    const onError = (event: ErrorEvent) =>
+    const onError = (event: ErrorEvent) => {
+      event.preventDefault();
       record('error', event.error ?? event.message);
-    const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+    };
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      event.preventDefault();
       record('unhandledrejection', event.reason);
+    };
     const originalConsoleError = console.error;
     const wrappedConsoleError: Console['error'] = (...args) => {
-      record('console.error', args.map(format).join(' '));
-      originalConsoleError.apply(console, args);
+      const sanitized = sanitize(args.map(format).join(' '));
+      record('console.error', sanitized);
+      originalConsoleError.call(console, sanitized);
     };
 
     window.addEventListener('error', onError);
@@ -131,7 +148,7 @@ async function installDashboardFrontendErrorCapture(): Promise<void> {
         }
       },
     };
-  });
+  }, FRONTEND_ERROR_REDACTION_RULES);
 }
 
 async function removeDashboardFrontendErrorCapture(): Promise<void> {

@@ -28,6 +28,26 @@ test('frontend error sanitization removes URL credentials, query secrets, and JW
   assert.match(sanitized, /\[redacted-jwt\]/);
 });
 
+test('frontend error sanitization handles compound credential names and JWE', () => {
+  const message = JSON.stringify({
+    client_secret: 's3cr3t',
+    id_token: 'id-secret',
+    sessionToken: 'session-secret',
+    url: 'https://example.test/?client_secret=query-secret',
+    jwe:
+      'eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMTI4R0NNIn0.' +
+      'encrypted-key-value.encrypted-payload-value.initialization-vector.authentication-tag',
+  });
+
+  const sanitized = sanitizeFrontendErrorMessage(message);
+
+  assert.doesNotMatch(
+    sanitized,
+    /s3cr3t|id-secret|session-secret|query-secret|encrypted-key-value|encrypted-payload-value|initialization-vector|authentication-tag/,
+  );
+  assert.equal((sanitized.match(/\[redacted-jwt\]/g) ?? []).length, 1);
+});
+
 test('frontend error capture is bounded and sanitizes each recorded message', () => {
   const capture = sanitizeFrontendErrorCapture({
     status: 'captured',
