@@ -41,6 +41,15 @@ export const WDIO_LOG_MASKING_PATTERNS = [
   String.raw`/\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/gi`,
 ].join(',');
 
+export function mergeWdioLogMaskingPatterns(
+  existingPatterns: string | undefined,
+): string {
+  const configuredPatterns = existingPatterns?.trim();
+  return configuredPatterns
+    ? `${WDIO_LOG_MASKING_PATTERNS},${configuredPatterns}`
+    : WDIO_LOG_MASKING_PATTERNS;
+}
+
 export function sanitizeFrontendErrorMessage(message: string): string {
   return FRONTEND_ERROR_REDACTION_RULES.reduce(
     (sanitized, { pattern, flags, replacement }) =>

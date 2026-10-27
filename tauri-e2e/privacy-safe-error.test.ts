@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  mergeWdioLogMaskingPatterns,
   sanitizeFrontendErrorCapture,
   sanitizeFrontendErrorMessage,
+  WDIO_LOG_MASKING_PATTERNS,
 } from './privacy-safe-error.ts';
 
 test('frontend error sanitization redacts bearer headers and serialized secrets', () => {
@@ -67,4 +69,17 @@ test('frontend error capture is bounded and sanitizes each recorded message', ()
 
   assert.equal(capture.events.length, 25);
   assert.equal(capture.events[0].message, 'token=[redacted]');
+});
+
+test('WDIO log redaction applies project rules before environment rules', () => {
+  const existingPattern = '/("client_secret")/i';
+
+  assert.equal(
+    mergeWdioLogMaskingPatterns(undefined),
+    WDIO_LOG_MASKING_PATTERNS,
+  );
+  assert.equal(
+    mergeWdioLogMaskingPatterns(existingPattern),
+    `${WDIO_LOG_MASKING_PATTERNS},${existingPattern}`,
+  );
 });
