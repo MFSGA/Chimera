@@ -129,6 +129,7 @@ macro_rules! build_builder {
                 $($command_root $(::$command_path)*),*
             ])
             .events(collect_events![
+                crate::client::event_sink::StateChangedEvent,
                 crate::core::storage::StorageValueChangedEvent,
                 crate::core::clash::ClashConnectionsEvent,
                 crate::core::clash::ws::ClashWsEvent,

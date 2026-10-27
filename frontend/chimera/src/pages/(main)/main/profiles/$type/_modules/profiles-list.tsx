@@ -12,6 +12,7 @@ import { categoryProfiles } from './utils';
 
 const EmptyList = ({ children }: { children?: React.ReactNode }) => (
   <div
+    data-slot="profiles-empty-list"
     className={cn(
       'flex min-h-full flex-1 items-center justify-center text-center text-sm',
       'text-on-surface-variant dark:text-on-surface-variant-dark',

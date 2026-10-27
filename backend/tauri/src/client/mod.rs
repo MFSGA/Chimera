@@ -10,7 +10,7 @@ mod clash_config;
 pub mod convergence;
 pub(crate) mod core_lifecycle;
 pub(crate) mod effects;
-mod event_sink;
+pub(crate) mod event_sink;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub(crate) mod hotkey;
 pub(crate) mod jobs;
@@ -227,13 +227,15 @@ impl ChimeraClient {
             );
             effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
                 port: effects_port,
-                ui: ui_sink.clone(),
                 initial,
             })
             .await
         })?;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        let mutations = MutationCoordinator::pending_with_notifications(Arc::new(effects.clone()));
+        let mutations = MutationCoordinator::pending_with_notifications(Arc::new((
+            effects.clone(),
+            event_sink::UiCommitNotifications(ui_sink.clone()),
+        )));
         #[cfg(any(target_os = "android", target_os = "ios"))]
         let mutations = MutationCoordinator::pending();
         let typed_profiles =
@@ -343,7 +345,6 @@ impl ChimeraClient {
             );
             effects::actor::EffectsClient::spawn(effects::actor::EffectsArgs {
                 port: Arc::new(effects::ports::NoopApplicationEffects),
-                ui: ui_sink.clone(),
                 initial,
             })
             .await

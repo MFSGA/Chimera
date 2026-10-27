@@ -9,8 +9,8 @@ use tauri::Manager;
 use crate::{
     bridge::{clash::LegacyClashBridge, verge::LegacyVergeBridge, window::LegacyWindowBridge},
     client::{
-        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, LegacyUiEventSink, OsSystemDnsCache,
-        RuntimePaths,
+        ChimeraClient, ClientSetupArgs, LegacyBridgeSet, OsSystemDnsCache, RuntimePaths,
+        TauriUiEventSink,
     },
     utils::path::PathResolver,
 };
@@ -120,7 +120,7 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         jobs,
         shutdown: app.state::<AppShutdown>().shutdown.child_token(),
         tasks: app.state::<AppShutdown>().tasks.clone(),
-        ui_sink: Arc::new(LegacyUiEventSink),
+        ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
