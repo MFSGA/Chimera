@@ -130,7 +130,9 @@ describe('Chimera desktop smoke test', () => {
     await browser.switchToWindow('legacy');
     await assertConnectSourcesAreAvailable('Legacy');
 
-    await openMainRoute('/main/dashboard');
+    // This contract checks fetch access, not rendered layout; WebKit may pause
+    // route animations while the test-created main window is hidden.
+    await openMainRoute('/main/dashboard', { waitForRouteAnimation: false });
     await assertConnectSourcesAreAvailable('Main');
   });
 });

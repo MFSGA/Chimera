@@ -77,6 +77,17 @@
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
 
+### LESSON-20261027-003：非视觉 smoke 不应等待隐藏 WebKit 窗口的路由动画
+
+- 日期：2026-10-27
+- 状态：Mitigated（CSP smoke 已单独通过；默认 smoke 仍有其他两个 macOS WebKit 用例失败）
+- 模块：桌面 E2E
+- 证据：macOS WebKit 的 `smoke.e2e.ts` 在访问 main 窗口 fetch policy 前等待路由动画；诊断显示文档为 hidden，动画 `currentTime` 持续为 0，超时 15 秒。该契约只检查两个窗口中的 fetch 能力，不检查布局或动画。
+- 修复：`openMainRoute` 允许调用者明确跳过路由动画等待；仅非视觉 fetch smoke 使用此选项，主 UI 布局测试保留默认动画等待。
+- 回归测试：`pnpm --filter @chimera/tauri-e2e typecheck`；`CHIMERA_E2E_ARTIFACT_DIR=/tmp/chimera-e2e-artifacts pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/smoke.e2e.ts`，1 个 spec 中 5/5 用例通过。
+- 验证限制：完整 `pnpm --filter @chimera/tauri-e2e test:smoke` 仍为 2 个 spec 通过、2 个失败；proxy localization 的新增配置按钮 30 秒不可点击，legacy connections 页面在 hidden 文档下动画停在 0。它们尚未在隔离的可见 macOS runner 上复现；不能把整个 smoke suite 报告为通过。
+- 后续：在允许真实桌面窗口前台运行的 macOS runner 上重跑完整 smoke；只有当用例不验证视觉布局/动画时，才可跳过动画稳定等待。
+
 ### LESSON-20261027-002：代理动作回滚与 stale-proxy 修复要串行化
 
 - 日期：2026-10-27
