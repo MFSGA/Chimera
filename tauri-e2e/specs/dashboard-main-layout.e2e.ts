@@ -9,6 +9,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   FRONTEND_ERROR_REDACTION_RULES,
   sanitizeFrontendErrorCapture,
+  sanitizeFrontendErrorMessage,
   type FrontendErrorCapture,
 } from '../privacy-safe-error.js';
 import { openMainRoute } from './main-window.js';
@@ -60,6 +61,14 @@ function formatErrorDetails(error: unknown, seen = new Set<unknown>()): string {
     details.push(`Caused by: ${formatErrorDetails(error.cause, seen)}`);
   }
   return details.join('\n');
+}
+
+function formatSafeErrorDetails(error: unknown): string {
+  return sanitizeFrontendErrorMessage(formatErrorDetails(error));
+}
+
+function toSafeError(error: unknown): Error {
+  return new Error(formatSafeErrorDetails(error));
 }
 
 type MutableWebDriverOptions = {
@@ -210,7 +219,7 @@ async function captureWebDriverValue<T>(
       value: await withBoundedWebDriverRequest(operation),
     };
   } catch (error) {
-    errors.push(`${label}: ${formatErrorDetails(error)}`);
+    errors.push(`${label}: ${formatSafeErrorDetails(error)}`);
     return {
       ok: false,
       error,
@@ -295,7 +304,7 @@ async function getApplicationBuildIdentity(): Promise<Record<string, unknown>> {
     try {
       binarySha256 = await getBinarySha256(binaryPath);
     } catch (error) {
-      binaryHashUnavailable = String(error);
+      binaryHashUnavailable = formatSafeErrorDetails(error);
     }
     return {
       sourceCommit,
@@ -309,7 +318,7 @@ async function getApplicationBuildIdentity(): Promise<Record<string, unknown>> {
     return {
       sourceCommit,
       binary: path.basename(binaryPath),
-      binaryUnavailable: String(error),
+      binaryUnavailable: formatSafeErrorDetails(error),
     };
   }
 }
@@ -345,7 +354,7 @@ async function captureResizeFailureEvidence(
     fs.mkdirSync(directory, { recursive: true });
   } catch (captureError) {
     errors.push(
-      `Could not create dashboard failure evidence: ${String(captureError)}`,
+      `Could not create dashboard failure evidence: ${formatSafeErrorDetails(captureError)}`,
     );
   }
 
@@ -447,7 +456,9 @@ async function captureResizeFailureEvidence(
             pageSource.value,
           );
         } catch (captureError) {
-          errors.push(`page source file: ${String(captureError)}`);
+          errors.push(
+            `page source file: ${formatSafeErrorDetails(captureError)}`,
+          );
         }
       }
     }
@@ -481,7 +492,7 @@ async function captureResizeFailureEvidence(
         ui: observedUi,
         storage: summarizeDashboardStorage(observedStorage),
       },
-      error: formatErrorDetails(error),
+      error: formatSafeErrorDetails(error),
       platform: process.platform,
       nodeVersion: process.version,
       runId,
@@ -515,7 +526,9 @@ function finalizeResizeFailureEvidence(
       JSON.stringify(evidence.metadata, null, 2),
     );
   } catch (error) {
-    evidence.errors.push(`Diagnostic metadata: ${String(error)}`);
+    evidence.errors.push(
+      `Diagnostic metadata: ${formatSafeErrorDetails(error)}`,
+    );
   }
   if (evidence.errors.length > 0) {
     process.stderr.write(
@@ -1004,7 +1017,7 @@ describe('main dashboard reference layout', () => {
           .frontendErrors as FrontendErrorCapture;
       } catch (captureError) {
         evidenceErrors.push(
-          `Evidence capture threw: ${formatErrorDetails(captureError)}`,
+          `Evidence capture threw: ${formatSafeErrorDetails(captureError)}`,
         );
       }
     } finally {
@@ -1040,7 +1053,7 @@ describe('main dashboard reference layout', () => {
               );
             } catch (captureError) {
               evidenceErrors.push(
-                `Evidence capture threw: ${formatErrorDetails(captureError)}`,
+                `Evidence capture threw: ${formatSafeErrorDetails(captureError)}`,
               );
             }
           }
@@ -1093,7 +1106,7 @@ describe('main dashboard reference layout', () => {
           cleanupResults,
           cleanupErrors.map(
             ({ phase: cleanupPhase, error }) =>
-              `${cleanupPhase}: ${formatErrorDetails(error)}`,
+              `${cleanupPhase}: ${formatSafeErrorDetails(error)}`,
           ),
         ),
       );
@@ -1101,18 +1114,18 @@ describe('main dashboard reference layout', () => {
     if (primaryError || cleanupErrors.length > 0) {
       const failures = [
         ...(primaryError
-          ? [`Primary failure:\n${formatErrorDetails(primaryError)}`]
+          ? [`Primary failure:\n${formatSafeErrorDetails(primaryError)}`]
           : []),
         ...cleanupErrors.map(
           ({ phase: cleanupPhase, error }, index) =>
-            `Cleanup failure ${index + 1} (${cleanupPhase}):\n${formatErrorDetails(error)}`,
+            `Cleanup failure ${index + 1} (${cleanupPhase}):\n${formatSafeErrorDetails(error)}`,
         ),
         ...evidenceErrors.map((error) => `Evidence capture issue:\n${error}`),
       ];
       throw new AggregateError(
         [
-          ...(primaryError ? [primaryError] : []),
-          ...cleanupErrors.map(({ error }) => error),
+          ...(primaryError ? [toSafeError(primaryError)] : []),
+          ...cleanupErrors.map(({ error }) => toSafeError(error)),
         ],
         [
           'Dashboard responsive resize failed or its cleanup was incomplete.',
@@ -1348,27 +1361,31 @@ describe('main dashboard reference layout', () => {
         fs.mkdirSync(artifactDirectory, { recursive: true });
       } catch (captureError) {
         process.stderr.write(
-          `Could not create dashboard failure evidence: ${String(captureError)}\n`,
+          `Could not create dashboard failure evidence: ${formatSafeErrorDetails(captureError)}\n`,
         );
         return;
       }
 
       await browser
         .saveScreenshot(`${artifactBase}.before-cleanup.png`)
-        .catch((captureError) => captureErrors.push(String(captureError)));
+        .catch((captureError) =>
+          captureErrors.push(formatSafeErrorDetails(captureError)),
+        );
       await browser
         .getPageSource()
         .then((source) =>
           fs.writeFileSync(`${artifactBase}.before-cleanup.html`, source),
         )
-        .catch((captureError) => captureErrors.push(String(captureError)));
+        .catch((captureError) =>
+          captureErrors.push(formatSafeErrorDetails(captureError)),
+        );
       try {
         fs.writeFileSync(
           `${artifactBase}.before-cleanup.error.txt`,
-          error instanceof Error ? formatErrorDetails(error) : String(error),
+          formatSafeErrorDetails(error),
         );
       } catch (captureError) {
-        captureErrors.push(String(captureError));
+        captureErrors.push(formatSafeErrorDetails(captureError));
       }
       if (captureErrors.length > 0) {
         process.stderr.write(
@@ -1433,10 +1450,10 @@ describe('main dashboard reference layout', () => {
           'the original widget configuration must remain after cleanup refresh',
         ),
       );
-      if (cleanupErrors.length === 1) throw cleanupErrors[0];
+      if (cleanupErrors.length === 1) throw toSafeError(cleanupErrors[0]);
       if (cleanupErrors.length > 1) {
         throw new AggregateError(
-          cleanupErrors,
+          cleanupErrors.map(toSafeError),
           'Dashboard widget configuration cleanup had multiple failures.',
         );
       }
@@ -1524,14 +1541,14 @@ describe('main dashboard reference layout', () => {
       } catch (cleanupError) {
         if (operationFailed) {
           throw new AggregateError(
-            [operationError, cleanupError],
-            `Widget storage operation and failure cleanup both failed.\nOperation error:\n${formatErrorDetails(operationError)}\nCleanup error:\n${formatErrorDetails(cleanupError)}`,
+            [toSafeError(operationError), toSafeError(cleanupError)],
+            `Widget storage operation and failure cleanup both failed.\nOperation error:\n${formatSafeErrorDetails(operationError)}\nCleanup error:\n${formatSafeErrorDetails(cleanupError)}`,
           );
         }
-        throw cleanupError;
+        throw toSafeError(cleanupError);
       }
 
-      if (operationFailed) throw operationError;
+      if (operationFailed) throw toSafeError(operationError);
     };
 
     const waitForRateUnit = async (suffix: 'B/s' | 'bit/s') => {
@@ -1771,12 +1788,12 @@ describe('main dashboard reference layout', () => {
     } catch (cleanupError) {
       if (testFailed) {
         throw new AggregateError(
-          [testError, cleanupError],
-          `Dashboard widget configuration test and cleanup both failed.\nTest error:\n${formatErrorDetails(testError)}\nCleanup error:\n${formatErrorDetails(cleanupError)}`,
+          [toSafeError(testError), toSafeError(cleanupError)],
+          `Dashboard widget configuration test and cleanup both failed.\nTest error:\n${formatSafeErrorDetails(testError)}\nCleanup error:\n${formatSafeErrorDetails(cleanupError)}`,
         );
       }
-      throw cleanupError;
+      throw toSafeError(cleanupError);
     }
-    if (testFailed) throw testError;
+    if (testFailed) throw toSafeError(testError);
   });
 });

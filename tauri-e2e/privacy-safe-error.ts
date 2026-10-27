@@ -5,12 +5,12 @@ export type FrontendErrorCapture = {
 
 export const FRONTEND_ERROR_REDACTION_RULES = [
   {
-    pattern: String.raw`([a-z][a-z\d+.-]*:\/\/)[^/@\s]+:[^/@\s]+@`,
+    pattern: String.raw`([a-z][a-z\d+.-]*:\/\/)[^/@\s]+@`,
     flags: 'gi',
     replacement: '$1[redacted]@',
   },
   {
-    pattern: String.raw`([?&](?:[\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session))=)[^&#\s"',;}\]]*`,
+    pattern: String.raw`([?&](?:[\w.-]*(?:token|secret|password|passwd|auth|key|cookie|credential|signature|sig|jwt|session|code|state|verifier|assertion|nonce|sid))=)[^&#\s"',;}\]]*`,
     flags: 'gi',
     replacement: '$1[redacted]',
   },
@@ -20,12 +20,12 @@ export const FRONTEND_ERROR_REDACTION_RULES = [
     replacement: 'Bearer [redacted]',
   },
   {
-    pattern: String.raw`(["'\\]*[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt)\b["'\\]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;}\]]+)`,
+    pattern: String.raw`(["'\\]*[\w.-]*(?:access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|client[_-]?secret|token|secret|password|passwd|authorization|auth|api[_-]?key|key|cookie|set-cookie|credential|private[_-]?key|signature|sig|jwt|code|state|verifier|assertion|nonce|sid)\b["'\\]*\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,;}\]]+)`,
     flags: 'gi',
     replacement: '$1[redacted]',
   },
   {
-    pattern: String.raw`\beyJ[a-z\d_-]{5,}(?:\.[a-z\d_-]{8,}){2}(?:\.[a-z\d_-]{8,}\.[a-z\d_-]{8,})?\b`,
+    pattern: String.raw`\beyJ[a-z\d_-]{5,}(?:\.(?:[a-z\d_-]{8,})?\.[a-z\d_-]{8,}\.[a-z\d_-]{8,}\.[a-z\d_-]{8,}|\.[a-z\d_-]{8,}\.[a-z\d_-]{8,})\b`,
     flags: 'gi',
     replacement: '[redacted-jwt]',
   },

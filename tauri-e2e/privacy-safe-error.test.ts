@@ -34,18 +34,25 @@ test('frontend error sanitization handles compound credential names and JWE', ()
     id_token: 'id-secret',
     sessionToken: 'session-secret',
     url: 'https://example.test/?client_secret=query-secret',
+    urlWithTokenUser: 'https://api-token@example.test/resource',
+    oauthUrl:
+      'https://auth.example/callback?code=one-time-code&state=csrf-state',
+    authorization_code: 'authorization-code-value',
     jwe:
       'eyJhbGciOiJBMjU2S1ciLCJlbmMiOiJBMTI4R0NNIn0.' +
       'encrypted-key-value.encrypted-payload-value.initialization-vector.authentication-tag',
+    directJwe:
+      'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4R0NNIn0..AAAAAAAAAAAAAAAA.' +
+      'AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAA',
   });
 
   const sanitized = sanitizeFrontendErrorMessage(message);
 
   assert.doesNotMatch(
     sanitized,
-    /s3cr3t|id-secret|session-secret|query-secret|encrypted-key-value|encrypted-payload-value|initialization-vector|authentication-tag/,
+    /s3cr3t|id-secret|session-secret|query-secret|api-token|one-time-code|csrf-state|authorization-code-value|encrypted-key-value|encrypted-payload-value|initialization-vector|authentication-tag|AAAAAAAAAAAAAAAA/,
   );
-  assert.equal((sanitized.match(/\[redacted-jwt\]/g) ?? []).length, 1);
+  assert.equal((sanitized.match(/\[redacted-jwt\]/g) ?? []).length, 2);
 });
 
 test('frontend error capture is bounded and sanitizes each recorded message', () => {
