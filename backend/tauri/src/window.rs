@@ -3,6 +3,8 @@ use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 use crate::config::{Config, chimera::WindowState};
 
+mod engine;
+
 #[cfg(windows)]
 const WEBVIEW2_BROWSER_ARGS: &str = "--enable-features=msWebView2EnableDraggableRegions --disable-features=OverscrollHistoryNavigation,msExperimentalScrolling";
 const RESTORE_PLACEHOLDER_SIZE: (f64, f64) = (800.0, 800.0);
@@ -79,6 +81,7 @@ fn focus_existing_window(app_handle: &AppHandle, label: &str) -> bool {
         return false;
     };
 
+    engine::set_in_sight(&window, true);
     crate::trace_err!(window.unminimize(), "set win unminimize");
     crate::trace_err!(window.show(), "set win visible");
     crate::trace_err!(window.set_focus(), "set win focus");
@@ -380,6 +383,13 @@ pub trait AppWindow {
             }
         };
 
+        let visibility_window = window.clone();
+        window.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Resized(_)) {
+                follow_minimized(&visibility_window);
+            }
+        });
+
         restore_window_state(&window, window_state.as_ref(), config.min_size);
 
         #[cfg(windows)]
@@ -396,6 +406,15 @@ pub trait AppWindow {
         }
 
         Ok(())
+    }
+}
+
+/// Keeps WebView2 visibility aligned with native minimize and restore events.
+fn follow_minimized(window: &WebviewWindow) {
+    if window.is_minimized().unwrap_or(false) {
+        engine::set_in_sight(window, false);
+    } else if window.is_visible().unwrap_or(false) {
+        engine::set_in_sight(window, true);
     }
 }
 

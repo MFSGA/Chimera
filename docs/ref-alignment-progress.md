@@ -1701,3 +1701,15 @@ DIFF-001 至 DIFF-012 是此前基于
 - 基线与更新：从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 拉取上游 `main` 后，快进到 `9f72efe292975b13b5d9018a9f5641ffbb071c27`。新增上游提交为 `1f59b4fa8`（更新 `postcss` 至 8.5.32）和 `9f72efe29`（更新 `@inlang/paraglide-js` 至 2.29.2）；改动仅涉及 ref 的两个 package manifest 和 `pnpm-lock.yaml`，未改 Dashboard 实现。
 - 验证：fetch 后 `ref/HEAD` 与 `ref/origin/main` 均为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`，`git -C ref status --short` 为空；新 SHA 可由旧 SHA 快进到达。该批只同步参考子模块，不运行产品构建或测试。
 - 影响与回滚：父仓库 `ref` gitlink 从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 改为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`；回滚仅需恢复原 gitlink。此更新作为单独提交推送，避免与 Dashboard 功能和 E2E 修复混在一起。
+
+## Windows WebView2 随最小化/恢复同步可见性（实现完成，等待 Windows CI/E2E）
+
+- 目标：对齐固定 ref `9f72efe292975b13b5d9018a9f5641ffbb071c27` 中 `window/engine.rs::set_in_sight` 与 `window/manager.rs::follow_minimized`。最小化窗口时隐藏 WebView2 controller 并请求低内存目标；恢复或重新聚焦时先恢复 WebView 可见性和正常内存目标，再显示/聚焦原生窗口。
+- 非目标：不迁移整个上游 `WindowManager`，不改变窗口创建/销毁/尺寸恢复/关闭行为，不新增托盘隐藏逻辑，不改权限或持久配置，不影响 Chimera Client/Service、legacy UI 和 Agent。
+- 参考映射：`ref/backend/tauri/src/window/engine.rs::set_in_sight` → 新增 `backend/tauri/src/window/engine.rs::set_in_sight`；`ref/backend/tauri/src/window/manager.rs::{watch,follow_minimized,focus_existing_window}` → `backend/tauri/src/window.rs::{AppWindow::create,follow_minimized,focus_existing_window}`。保持上游的 `IsVisible` 幂等检查、`SetIsVisible`、`ICoreWebView2_19::SetMemoryUsageTargetLevel` 及先恢复 WebView 再显示窗口的顺序。COM 依赖与锁定 Tauri/Wry 版本匹配：`webview2-com 0.39` / `windows-core 0.62`。
+- 接口与风险：新增仅内部可见的 `window::engine::set_in_sight`，并在原生窗口 resize/minimize/restore 事件接线；没有 IPC、前端公开 API、存储 schema 或网络行为变化。L1 Windows 窗口生命周期与资源使用。
+- 验收：真实点击 main 窗口最小化控件后，Windows WebView 的 `document.visibilityState` 变为 `hidden`；恢复窗口后回到 `visible`。定向 hermetic desktop E2E 在 PR CI 执行。Rust 格式、编译、单测、E2E 类型检查和该用例均需覆盖；Mac 本地结果只证明跨平台 no-op 与工具链可运行，不替代 Windows WebView2 验证。
+- 本机验证：macOS `cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --manifest-path backend/Cargo.toml -p chimera --lib window::tests -- --test-threads=1` 6/6；`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、E2E TypeScript 检查、harness 单测 30/30、E2E 桌面构建、Prettier 与 `git diff --check` 通过。定向 WebDriver spec 在 macOS 按设计跳过，不能作为 Windows 行为验证。尝试 Windows GNU 交叉编译未完成：环境没有 `x86_64-w64-mingw32-gcc`；Windows COM 分支须由 PR Windows CI/E2E 编译和执行。
+- 独立复核：无 P0–P2 阻塞项；确认 ref 映射、依赖版本、事件时序与测试清理符合目标。明确未覆盖内存 target 的实际效果和 COM HRESULT 失败恢复；PR Windows 构建和 E2E 是剩余证据。
+- 回滚：回退 WebView2 helper、窗口事件接线和定向 E2E；不涉及用户数据或系统设置迁移。
+- 审批触发：不改变架构所有权、权限模型或持久数据，无需额外审批。

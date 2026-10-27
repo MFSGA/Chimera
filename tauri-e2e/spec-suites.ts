@@ -1,6 +1,7 @@
 export const baseE2eSuites = {
   smoke: [
     './specs/smoke.e2e.ts',
+    './specs/window-visibility.e2e.ts',
     './specs/proxy-localization.e2e.ts',
     './specs/connections-legacy-layout.e2e.ts',
     './specs/connections-detail-subscription.e2e.ts',
