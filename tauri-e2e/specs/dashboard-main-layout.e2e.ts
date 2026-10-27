@@ -424,6 +424,11 @@ async function captureResizeFailureEvidence(
                 width: window.innerWidth,
                 height: window.innerHeight,
               },
+              grid: describeElement(
+                document.querySelector<HTMLElement>(
+                  '[data-slot="dnd-grid-container"]',
+                ),
+              ),
               widgets,
               proxyShortcuts: describeElement(
                 document.querySelector<HTMLElement>(
@@ -931,7 +936,7 @@ describe('main dashboard reference layout', () => {
 
       phase = 'resize the window to the narrow layout';
       await withBoundedWebDriverRequest(() =>
-        browser.setWindowSize(680, originalWindowSize.height),
+        browser.setWindowSize(400, originalWindowSize.height),
       );
       let narrowViewportWidth: number | null = null;
       try {
@@ -941,17 +946,18 @@ describe('main dashboard reference layout', () => {
               narrowViewportWidth = await browser.execute(
                 () => window.innerWidth,
               );
-              return narrowViewportWidth < 800;
+              return narrowViewportWidth <= 400;
             },
             {
               timeout: 5_000,
-              timeoutMsg: 'Dashboard window did not enter the narrow layout.',
+              timeoutMsg:
+                'Dashboard viewport did not reach the narrow grid width.',
             },
           ),
         );
       } catch (error) {
         throw new Error(
-          `Dashboard window did not enter the narrow layout; last viewport width=${narrowViewportWidth}.`,
+          `Dashboard viewport did not reach the narrow grid width; last viewport width=${narrowViewportWidth}.`,
           { cause: error },
         );
       }
