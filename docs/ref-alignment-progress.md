@@ -1,5 +1,16 @@
 # ref 对齐进度
 
+## Dashboard resize settle 对齐（PR #534，修复复核发现后重新验证中）
+
+- 目标：对齐 Clash Nyanpasu `97e43308edabc95677c65741c81db1eeeb51689a` 的 Dashboard resize settling：窗口连续变化期间维持当前布局来源，尺寸稳定 200 ms 后才选择新预设布局；首次测得网格尺寸仍立即初始化。布局选择延迟撞上拖拽/调整大小时，等当前交互结束再应用。
+- 非目标：本批不迁移 Dashboard 布局存储 schema、preferred layout id、其他 widget、DnD Grid API、legacy UI 或 agent；不写入 resize 产生的自适应投影。
+- 参考映射：`ref/frontend/nyanpasu/src/pages/(main)/main/dashboard/index.tsx::{SETTLED_RESIZE_MS,selectForSize,settledTimerRef,handleSizeChange}` → `frontend/chimera/src/pages/(main)/main/dashboard/index.tsx` 中的相同常量/职责；保留 Chimera 当前 `findBestLayout`、`findClosestStoredLayout`、`adaptLayout` 与 keyed `LayoutStorage`。
+- 接口与风险：新增 `DndGrid.onInteractionChange` 可选回调，报告网格拖拽/resize 的开始与结束，由 Dashboard 作为本地 UI 状态消费；无 IPC 或持久化格式变化。L1 局部 UI 交互。resize 投影只更新显示态，settled selection 不写存储。
+- 验收：桌面 E2E 用快照/恢复的确定布局验证宽屏与窄屏选择、宽屏恢复及 `dashboard-widgets` 不变；timer 在网格交互活跃时不得切换布局。typecheck、格式/静态检查与目标桌面 E2E 通过。
+- 回滚：撤销 Dashboard resize timer 与对应 E2E/contract/progress 记录，不改用户数据。
+- 审批触发：不涉及架构或数据迁移；按用户对日常迭代的持续授权推进，不需要额外审批。
+- 实际验证：初版 `9827e35f` 的 `pnpm typecheck:chimera`、`pnpm typecheck:e2e`、改动文件 Oxlint、Prettier 和 `git diff --check` 通过；独立复核发现交互期间布局切换竞态，以及首版 E2E 未断言窄屏实际布局。两项已修复，后续 SHA 的定向检查和 Windows hermetic E2E 待完成。本机桌面构建未运行：构建卷仅剩约 2 GiB 可用空间。
+
 ## App/Clash typed settings 接入（独立复核完成，Windows 桌面 E2E 待运行）
 
 - 目标：按固定 ref 的 typed settings hooks 和 IPC 合同，让主界面、legacy UI 及共享组件通过同一组 typed application API 读取和修改应用设置、Clash 持久设置；runtime-only 的 Clash 覆盖仍通过独立 runtime API 应用。
@@ -1683,3 +1694,10 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验收与验证计划：排名顺序/未知值清理、存储迁移和非法图类型回退由纯函数测试覆盖；Sankey 位置、边宽、过滤及最小高度由布局测试覆盖；运行 `pnpm --filter chimera-ui test:traffic`、`test:localization`、`pnpm typecheck`、Main UI production build、受影响文件 Prettier、`pnpm lint:frontend-boundaries` 与 `git diff --check`。不运行桌面 E2E；这些纯测试和构建不代表真实桌面点击验证。
 - 风险与回滚：L2（新增持久化 UI 偏好及主界面图形交互）。恢复方式是回退本批 Flow/排名/设置组件、上下文顺序、消息、单测、依赖入口和本条记录；`traffic-view` KV 值可保留，不影响旧代码读取的配置。
 - 当前本地验证：`pnpm --filter chimera-ui test:traffic` 16/16、`pnpm --filter chimera-ui test:localization` 4/4、`pnpm typecheck`、`pnpm lint:oxlint`、`pnpm lint:frontend-boundaries`、`pnpm --filter chimera-ui build`、受影响文件与本记录的 Prettier 检查、`git diff --check` 均通过。构建只报告 Vite 既有的大 chunk 与 ripple 动态导入警告。Main/legacy 桌面 E2E 未运行，真实 WebView 和 persisted cold-start 行为未在桌面进程中验证。
+
+## DIFF-061：同步最新 ref 子模块快照
+
+- 目标与范围：把 Chimera 工作区使用的只读 `ref/` 快照同步到 Clash Nyanpasu 上游最新 `main`；不改变 Chimera 的产品依赖、功能代码或用户数据。
+- 基线与更新：从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 拉取上游 `main` 后，快进到 `9f72efe292975b13b5d9018a9f5641ffbb071c27`。新增上游提交为 `1f59b4fa8`（更新 `postcss` 至 8.5.32）和 `9f72efe29`（更新 `@inlang/paraglide-js` 至 2.29.2）；改动仅涉及 ref 的两个 package manifest 和 `pnpm-lock.yaml`，未改 Dashboard 实现。
+- 验证：fetch 后 `ref/HEAD` 与 `ref/origin/main` 均为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`，`git -C ref status --short` 为空；新 SHA 可由旧 SHA 快进到达。该批只同步参考子模块，不运行产品构建或测试。
+- 影响与回滚：父仓库 `ref` gitlink 从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 改为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`；回滚仅需恢复原 gitlink。此更新作为单独提交推送，避免与 Dashboard 功能和 E2E 修复混在一起。
