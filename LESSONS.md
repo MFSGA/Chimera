@@ -51,7 +51,7 @@
 | LESSON-20261026-002 | 2026-10-26 | Updater / Alpha     | Alpha updater asset-version regression; source fix present but Rust assertions still need a recorded run                       | Open      |
 | LESSON-20261026-003 | 2026-10-26 | Updater / Release   | Draft asset URLs contained temporary `untagged-*` paths; stable tag URLs and downloads verified after regeneration             | Verified  |
 | LESSON-20261026-007 | 2026-10-26 | E2E / Dashboard     | Resize E2E hid a JSON key-order assertion defect behind cleanup; capture pre-cleanup evidence and compare objects structurally | Mitigated |
-| LESSON-20261027-001 | 2026-10-27 | E2E / Dashboard     | Resize E2E requested 680px but kept an 8-column grid; assert a measured viewport that can select the narrow fixture            | Open      |
+| LESSON-20261027-001 | 2026-10-27 | E2E / Dashboard     | Resize E2E requested 680px but kept an 8-column grid; assert the measured four-column grid interval                            | Open      |
 
 ## 单条模板
 
@@ -761,7 +761,7 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 预期行为：响应式用例根据真实窗口尺寸触发 `DndGrid` 网格尺寸变化，并选择与窄布局对应的保存预设。
 - 真实异常、复现步骤与证据：测试请求窗口宽度 680px 后，Windows WebView 实际 viewport 是 664px；grid 容器宽度为 632px，当前 `minCellSize=64`、`gap=16`，因而实际为 8 列。用例只断言 viewport `<800`，就开始等待单项 `4x5` fixture；页面正确继续显示 `8x6` 中的宽布局 widgets。失败元数据和截图均来自 run `40442050131`。
 - 确认的根因与排除项：测试将通用的 `<800` viewport 判断误当成 4 列网格条件；按与 ref 相同的公式 `floor((width + gap) / (minCellSize + gap))`，632px 容器明确得到 8 列。这次失败不是 Dashboard 产品布局逻辑偏离 ref 的证据。Chimera 与 ref 的首次主窗口尺寸也相同，均为 800×636，最小尺寸 400×600；保存的窗口几何可以覆盖首次启动默认值。
-- 修复提交、差异映射及保留的兼容性边界：把 Dashboard 测试目标宽度改为 400px，并要求真实 `window.innerWidth <= 400` 后再断言窄布局；失败证据新增 DndGrid 容器边界。生产窗口默认值与布局算法保持不变。
+- 修复提交、差异映射及保留的兼容性边界：把 Dashboard 测试目标宽度改为 400px，并要求真实 `window.innerWidth <= 400` 且 DndGrid 容器宽度位于 304–384px 半开区间后再断言窄布局；该区间证明 64px 网格单元与 16px 间距可容纳四列，避免 4x5 fixture 在更窄网格中仍作为“最近布局”被选中。失败证据新增 DndGrid 容器边界。生产窗口默认值与布局算法保持不变。
 - 原实现失败、新实现通过的回归测试，及测试注册位置：同一 `dashboard-main-layout.e2e.ts` 用例注册在 Windows `hermetic` suite；新 head 的 Windows 复验待执行。
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：失败 head 的 Windows hermetic run 中 52/53 specs 通过，Dashboard resize 用例因尺寸条件失败；本条针对修正后的新 head 验证尚未运行。本地提交钩子将执行 E2E 类型检查、Oxlint 和 Prettier，不能替代真实桌面复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅调整隔离 E2E 用例的窗口尺寸断言和失败元数据，不改变应用窗口尺寸、用户设置或网格业务逻辑；回滚为恢复 680px 请求和 `<800` 判断，但会重新引入无效窄布局断言。

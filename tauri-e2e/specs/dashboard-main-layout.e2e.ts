@@ -15,6 +15,11 @@ import {
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/dashboard';
+// Four 64px cells with 16px gaps fit in this half-open grid-width interval.
+const fourColumnGridWidth = {
+  minimum: 4 * 64 + 3 * 16,
+  maximumExclusive: 5 * 64 + 4 * 16,
+};
 
 type AppAppearance = {
   theme_mode?: string | null;
@@ -939,25 +944,38 @@ describe('main dashboard reference layout', () => {
         browser.setWindowSize(400, originalWindowSize.height),
       );
       let narrowViewportWidth: number | null = null;
+      let narrowGridWidth: number | null = null;
       try {
         await withBoundedWebDriverRequest(() =>
           browser.waitUntil(
             async () => {
-              narrowViewportWidth = await browser.execute(
-                () => window.innerWidth,
+              const dimensions = await browser.execute(() => {
+                const grid = document.querySelector<HTMLElement>(
+                  '[data-slot="dnd-grid-container"]',
+                );
+                return {
+                  viewportWidth: window.innerWidth,
+                  gridWidth: grid?.getBoundingClientRect().width ?? null,
+                };
+              });
+              narrowViewportWidth = dimensions.viewportWidth;
+              narrowGridWidth = dimensions.gridWidth;
+              return (
+                narrowViewportWidth <= 400 &&
+                narrowGridWidth !== null &&
+                narrowGridWidth >= fourColumnGridWidth.minimum &&
+                narrowGridWidth < fourColumnGridWidth.maximumExclusive
               );
-              return narrowViewportWidth <= 400;
             },
             {
               timeout: 5_000,
-              timeoutMsg:
-                'Dashboard viewport did not reach the narrow grid width.',
+              timeoutMsg: 'Dashboard did not reach a four-column grid width.',
             },
           ),
         );
       } catch (error) {
         throw new Error(
-          `Dashboard viewport did not reach the narrow grid width; last viewport width=${narrowViewportWidth}.`,
+          `Dashboard did not reach a four-column grid width; last viewport width=${narrowViewportWidth}, last grid width=${narrowGridWidth}.`,
           { cause: error },
         );
       }
