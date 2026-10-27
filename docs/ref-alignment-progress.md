@@ -1694,3 +1694,10 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验收与验证计划：排名顺序/未知值清理、存储迁移和非法图类型回退由纯函数测试覆盖；Sankey 位置、边宽、过滤及最小高度由布局测试覆盖；运行 `pnpm --filter chimera-ui test:traffic`、`test:localization`、`pnpm typecheck`、Main UI production build、受影响文件 Prettier、`pnpm lint:frontend-boundaries` 与 `git diff --check`。不运行桌面 E2E；这些纯测试和构建不代表真实桌面点击验证。
 - 风险与回滚：L2（新增持久化 UI 偏好及主界面图形交互）。恢复方式是回退本批 Flow/排名/设置组件、上下文顺序、消息、单测、依赖入口和本条记录；`traffic-view` KV 值可保留，不影响旧代码读取的配置。
 - 当前本地验证：`pnpm --filter chimera-ui test:traffic` 16/16、`pnpm --filter chimera-ui test:localization` 4/4、`pnpm typecheck`、`pnpm lint:oxlint`、`pnpm lint:frontend-boundaries`、`pnpm --filter chimera-ui build`、受影响文件与本记录的 Prettier 检查、`git diff --check` 均通过。构建只报告 Vite 既有的大 chunk 与 ripple 动态导入警告。Main/legacy 桌面 E2E 未运行，真实 WebView 和 persisted cold-start 行为未在桌面进程中验证。
+
+## DIFF-061：同步最新 ref 子模块快照
+
+- 目标与范围：把 Chimera 工作区使用的只读 `ref/` 快照同步到 Clash Nyanpasu 上游最新 `main`；不改变 Chimera 的产品依赖、功能代码或用户数据。
+- 基线与更新：从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 拉取上游 `main` 后，快进到 `9f72efe292975b13b5d9018a9f5641ffbb071c27`。新增上游提交为 `1f59b4fa8`（更新 `postcss` 至 8.5.32）和 `9f72efe29`（更新 `@inlang/paraglide-js` 至 2.29.2）；改动仅涉及 ref 的两个 package manifest 和 `pnpm-lock.yaml`，未改 Dashboard 实现。
+- 验证：fetch 后 `ref/HEAD` 与 `ref/origin/main` 均为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`，`git -C ref status --short` 为空；新 SHA 可由旧 SHA 快进到达。该批只同步参考子模块，不运行产品构建或测试。
+- 影响与回滚：父仓库 `ref` gitlink 从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 改为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`；回滚仅需恢复原 gitlink。此更新作为单独提交推送，避免与 Dashboard 功能和 E2E 修复混在一起。
