@@ -47,7 +47,10 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         &tasks,
     ))
     .context("failed to start the jobs owner")?;
-    app.manage(AppShutdown { shutdown, tasks });
+    app.manage(AppShutdown {
+        shutdown: shutdown.clone(),
+        tasks: tasks.clone(),
+    });
     let traffic_store = open_traffic_store(&paths);
     let profile_service = Arc::new(crate::service::profile_file::ProfileFileService::new(
         paths.clone(),
@@ -90,12 +93,51 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let accelerators = Arc::new(PlatformAcceleratorValidator);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let appimage = {
+        #[cfg(target_os = "linux")]
+        {
+            app.handle()
+                .env()
+                .appimage
+                .and_then(|path| path.into_string().ok())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    };
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let auto_launch = crate::client::system_proxy::adapters::AutoLaunchConfig::resolve(appimage)
+        .and_then(crate::client::system_proxy::adapters::AutoLaunchBackend::new)
+        .context("failed to resolve the auto-launch registration")?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let pac = {
+        let cache_path = camino::Utf8PathBuf::from_path_buf(paths.cache_dir().join("pac.js"))
+            .map_err(|path| anyhow::anyhow!("PAC cache path is not UTF-8: {}", path.display()))?;
+        crate::client::system_proxy::adapters::HttpPacBackend::new(cache_path)
+            .context("failed to build the PAC backend")?
+    };
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let system_proxy =
+        tauri::async_runtime::block_on(crate::client::system_proxy::SystemProxyClient::spawn(
+            crate::client::system_proxy::SystemProxyArgs {
+                os: Arc::new(crate::client::system_proxy::adapters::SysproxyOsProxy),
+                auto_launch: Arc::new(auto_launch),
+                pac: Arc::new(pac),
+                schedule_guard_ticks: true,
+                shutdown: shutdown.child_token(),
+            },
+            &tasks,
+        ))
+        .context("failed to start the system proxy owner")?;
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let effect_adapters = Arc::new(
         crate::client::effects::adapters::TauriApplicationEffectAdapters::new(app.handle().clone()),
     );
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let effects = Arc::new(
         crate::client::effects::executor::ApplicationEffectExecutor::new(
+            system_proxy.clone(),
             hotkeys,
             accelerators.clone(),
             effect_adapters,
@@ -123,6 +165,8 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
         ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        system_proxy,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         accelerators,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]

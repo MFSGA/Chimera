@@ -775,6 +775,12 @@ impl Actor for ApplicationWorkflowActor {
                 reconciled,
             } => {
                 if state.active.as_ref().map(|operation| operation.response.id) == Some(id) {
+                    let refresh_runtime_binding = reconciled || service_probe.is_some() || shutdown;
+                    let runtime_binding = if refresh_runtime_binding {
+                        Some(workflow.effect_port_binding().await)
+                    } else {
+                        None
+                    };
                     let active = state
                         .active
                         .take()
@@ -784,6 +790,11 @@ impl Actor for ApplicationWorkflowActor {
                     state.workflow = Some(workflow);
                     if application_workflow.is_some() {
                         state.application_workflow = application_workflow;
+                    }
+                    if let Some(ports) = runtime_binding
+                        && let Some(application_workflow) = state.application_workflow.as_ref()
+                    {
+                        application_workflow.runtime_bound(ports);
                     }
                     state.uncertain |= workflow_panicked || lower_outcome_uncertain;
 
@@ -1217,6 +1228,36 @@ impl CoreLifecycleClient {
         self.execute_with_timeout(command, CALL_WAIT).await
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn disable_stale_system_proxy(
+        &self,
+        system_proxy: crate::client::system_proxy::SystemProxyClient,
+        expected_port: u16,
+        expected_core_state_changed_at: i64,
+        desired_before: bool,
+        original: crate::client::system_proxy::ports::OsProxyConfig,
+        notifications: Arc<dyn crate::client::effects::ports::CommitNotifications>,
+        persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync>,
+    ) -> Result<(), crate::client::system_proxy::SystemProxyActionError> {
+        self.execute(Command::DisableStaleSystemProxy {
+            system_proxy,
+            expected_port,
+            expected_core_state_changed_at,
+            desired_before,
+            original,
+            notifications,
+            persist_legacy_mirror,
+        })
+        .await
+        .map_err(|error| {
+            error
+                .downcast::<crate::client::system_proxy::SystemProxyActionError>()
+                .unwrap_or_else(|error| {
+                    crate::client::system_proxy::SystemProxyActionError::Failed(error.to_string())
+                })
+        })
+    }
+
     async fn execute_with_timeout(
         &self,
         command: Command,
@@ -1545,6 +1586,9 @@ impl ChimeraClient {
             None => Ok(()),
         };
 
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        self.publish_full_effects().await;
+
         match (startup, producers) {
             (Err(startup), Err(producers)) => {
                 tracing::warn!(%producers, "profile producers could not be released after startup failure");
@@ -1666,7 +1710,7 @@ impl ChimeraClient {
 mod tests {
     use std::{
         sync::{
-            Arc, Mutex,
+            Arc, Condvar, Mutex,
             atomic::{AtomicBool, AtomicU8, Ordering as AtomicOrdering},
         },
         time::Duration,
@@ -1676,7 +1720,8 @@ mod tests {
     use chimera_config::application::ChimeraAppConfigPatch;
     use chimera_config::clash::config::ClashConfig;
     use chimera_ipc::api::status::CoreState;
-    use tokio::sync::Notify;
+    use tokio::sync::{Notify, oneshot};
+    use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
     use super::*;
     use crate::{config::chimera::ClashCore, core::RunType};
@@ -1696,6 +1741,42 @@ mod tests {
     struct LowerUncertainCore {
         events: Arc<Mutex<Vec<&'static str>>>,
         uncertain: AtomicBool,
+    }
+
+    struct BindingCore {
+        running: AtomicBool,
+    }
+
+    #[derive(Default)]
+    struct RecordingRuntimeBindings {
+        ports: Mutex<Vec<Option<u16>>>,
+    }
+
+    impl crate::client::effects::ports::CommitNotifications for RecordingRuntimeBindings {
+        fn application_committed(
+            &self,
+            _: crate::client::effects::plan::ApplicationEffectFields,
+            _: Vec<crate::client::effects::plan::EffectKind>,
+        ) {
+        }
+
+        fn clash_committed(&self, _: crate::client::effects::plan::ClashEffectFields) {}
+
+        fn profiles_committed(&self, _: Vec<chimera_config::profile::ProfileId>) {}
+
+        fn runtime_bound(
+            &self,
+            ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+            _: bool,
+        ) {
+            self.ports
+                .lock()
+                .unwrap()
+                .push(ports.map(|binding| binding.mixed_port));
+        }
+
+        fn publish_full(&self, _: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {
+        }
     }
 
     struct RecordingInstaller {
@@ -1746,6 +1827,496 @@ mod tests {
         fn snapshot_legacy(&self) -> anyhow::Result<chimera_config::application::ChimeraAppConfig> {
             Ok(chimera_config::application::ChimeraAppConfig::default())
         }
+    }
+
+    struct LifecycleTestProxy {
+        state: Mutex<crate::client::system_proxy::ports::OsProxyConfig>,
+        writes: Mutex<Vec<crate::client::system_proxy::ports::OsProxyConfig>>,
+        pause_disable: bool,
+        started: Mutex<Option<oneshot::Sender<()>>>,
+        released: Mutex<bool>,
+        release: Condvar,
+    }
+
+    impl LifecycleTestProxy {
+        fn new(state: crate::client::system_proxy::ports::OsProxyConfig) -> Arc<Self> {
+            Arc::new(Self {
+                state: Mutex::new(state),
+                writes: Mutex::new(Vec::new()),
+                pause_disable: false,
+                started: Mutex::new(None),
+                released: Mutex::new(true),
+                release: Condvar::new(),
+            })
+        }
+
+        fn pause_first_disable(
+            state: crate::client::system_proxy::ports::OsProxyConfig,
+        ) -> (Arc<Self>, oneshot::Receiver<()>) {
+            let (started_tx, started_rx) = oneshot::channel();
+            (
+                Arc::new(Self {
+                    state: Mutex::new(state),
+                    writes: Mutex::new(Vec::new()),
+                    pause_disable: true,
+                    started: Mutex::new(Some(started_tx)),
+                    released: Mutex::new(false),
+                    release: Condvar::new(),
+                }),
+                started_rx,
+            )
+        }
+
+        fn release_disable(&self) {
+            *self.released.lock().unwrap() = true;
+            self.release.notify_all();
+        }
+
+        fn current(&self) -> crate::client::system_proxy::ports::OsProxyConfig {
+            self.state.lock().unwrap().clone()
+        }
+
+        fn writes(&self) -> Vec<crate::client::system_proxy::ports::OsProxyConfig> {
+            self.writes.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::client::system_proxy::ports::OsProxyPort for LifecycleTestProxy {
+        fn get(
+            &self,
+        ) -> Result<
+            crate::client::system_proxy::ports::OsProxyConfig,
+            crate::client::system_proxy::ports::OsProxyError,
+        > {
+            Ok(self.current())
+        }
+
+        fn set(
+            &self,
+            config: &crate::client::system_proxy::ports::OsProxyConfig,
+        ) -> Result<(), crate::client::system_proxy::ports::OsProxyError> {
+            if self.pause_disable
+                && !config.enable
+                && let Some(started) = self.started.lock().unwrap().take()
+            {
+                let _ = started.send(());
+                let mut released = self.released.lock().unwrap();
+                while !*released {
+                    released = self.release.wait(released).unwrap();
+                }
+            }
+            self.writes.lock().unwrap().push(config.clone());
+            *self.state.lock().unwrap() = config.clone();
+            Ok(())
+        }
+
+        fn default_bypass(&self) -> &'static str {
+            "localhost"
+        }
+    }
+
+    struct LifecycleTestAutoLaunch;
+
+    impl crate::client::system_proxy::ports::AutoLaunchPort for LifecycleTestAutoLaunch {
+        fn is_enabled(&self) -> Result<bool, crate::client::system_proxy::ports::AutoLaunchError> {
+            Ok(false)
+        }
+
+        fn set_enabled(
+            &self,
+            _enabled: bool,
+        ) -> Result<(), crate::client::system_proxy::ports::AutoLaunchError> {
+            Ok(())
+        }
+    }
+
+    struct LifecycleTestPac;
+
+    #[async_trait]
+    impl crate::client::system_proxy::ports::PacPort for LifecycleTestPac {
+        fn is_supported(&self) -> bool {
+            false
+        }
+
+        async fn apply(
+            &self,
+            _url: &url::Url,
+            _cancel: CancellationToken,
+        ) -> Result<(), crate::client::system_proxy::ports::PacError> {
+            Err(crate::client::system_proxy::ports::PacError::DownloadCancelled)
+        }
+
+        fn disable(&self) -> Result<(), crate::client::system_proxy::ports::PacError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingProxyActionNotifications {
+        applications: Mutex<Vec<(bool, Vec<crate::client::effects::plan::EffectKind>)>>,
+        ports: Mutex<Vec<Option<u16>>>,
+    }
+
+    impl crate::client::effects::ports::CommitNotifications for RecordingProxyActionNotifications {
+        fn application_committed(
+            &self,
+            fields: crate::client::effects::plan::ApplicationEffectFields,
+            kinds: Vec<crate::client::effects::plan::EffectKind>,
+        ) {
+            self.applications
+                .lock()
+                .unwrap()
+                .push((fields.enable_system_proxy, kinds));
+        }
+
+        fn clash_committed(&self, _: crate::client::effects::plan::ClashEffectFields) {}
+
+        fn profiles_committed(&self, _: Vec<chimera_config::profile::ProfileId>) {}
+
+        fn runtime_bound(
+            &self,
+            ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+            _: bool,
+        ) {
+            self.ports
+                .lock()
+                .unwrap()
+                .push(ports.map(|binding| binding.mixed_port));
+        }
+
+        fn publish_full(&self, _: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {
+        }
+    }
+
+    async fn spawn_lifecycle_system_proxy(
+        os: Arc<dyn crate::client::system_proxy::ports::OsProxyPort>,
+    ) -> (
+        crate::client::system_proxy::SystemProxyClient,
+        CancellationToken,
+        TaskTracker,
+    ) {
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let client = crate::client::system_proxy::SystemProxyClient::spawn(
+            crate::client::system_proxy::SystemProxyArgs {
+                os,
+                auto_launch: Arc::new(LifecycleTestAutoLaunch),
+                pac: Arc::new(LifecycleTestPac),
+                schedule_guard_ticks: false,
+                shutdown: shutdown.child_token(),
+            },
+            &tasks,
+        )
+        .await
+        .unwrap();
+        (client, shutdown, tasks)
+    }
+
+    fn stale_proxy_config() -> crate::client::system_proxy::ports::OsProxyConfig {
+        crate::client::system_proxy::ports::OsProxyConfig {
+            enable: true,
+            host: "127.0.0.1".into(),
+            port: 7890,
+            bypass: "localhost".into(),
+        }
+    }
+
+    async fn application_with_system_proxy(
+        enabled: bool,
+    ) -> (tempfile::TempDir, ApplicationClient) {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path =
+            camino::Utf8PathBuf::from_path_buf(directory.path().join("application.yaml")).unwrap();
+        let application = ApplicationClient::new(
+            config_path,
+            chimera_config::application::ChimeraAppConfig {
+                enable_system_proxy: enabled,
+                ..Default::default()
+            },
+            Arc::new(TestApplicationBridge),
+        )
+        .await
+        .unwrap();
+        (directory, application)
+    }
+
+    fn direct_lifecycle_client(
+        application: ApplicationClient,
+        core: Arc<dyn CoreLifecyclePort>,
+    ) -> CoreLifecycleClient {
+        direct_lifecycle_client_with_mixed_port(application, core, 7890)
+    }
+
+    fn direct_lifecycle_client_with_mixed_port(
+        application: ApplicationClient,
+        core: Arc<dyn CoreLifecyclePort>,
+        mixed_port: u16,
+    ) -> CoreLifecycleClient {
+        CoreLifecycleClient::direct(
+            core,
+            application,
+            ClashConfigClient::legacy_with(ClashConfig {
+                mixed_port: chimera_config::clash::config::clash_strategy::PortStrategy {
+                    kind: chimera_config::clash::config::clash_strategy::PortStrategyKind::Fixed,
+                    start_port: mixed_port,
+                },
+                ..Default::default()
+            })
+            .unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+    }
+
+    fn counted_mirror_persistence(
+        calls: Arc<AtomicU8>,
+    ) -> Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync> {
+        Arc::new(move || {
+            calls.fetch_add(1, AtomicOrdering::AcqRel);
+            Ok(())
+        })
+    }
+
+    #[tokio::test]
+    async fn stale_proxy_lifecycle_rejects_changed_core_without_host_or_mirror_writes() {
+        use crate::client::system_proxy::SystemProxyActionError;
+
+        let (_directory, application) = application_with_system_proxy(true).await;
+        let os = LifecycleTestProxy::new(stale_proxy_config());
+        let (system_proxy, shutdown, tasks) = spawn_lifecycle_system_proxy(os.clone()).await;
+        let core = Arc::new(BindingCore {
+            running: AtomicBool::new(false),
+        });
+        let lifecycle = direct_lifecycle_client(application, core.clone());
+        let persist_calls = Arc::new(AtomicU8::new(0));
+        let notifications = Arc::new(RecordingProxyActionNotifications::default());
+
+        let error = lifecycle
+            .disable_stale_system_proxy(
+                system_proxy.clone(),
+                7890,
+                2,
+                true,
+                stale_proxy_config(),
+                notifications.clone(),
+                counted_mirror_persistence(persist_calls.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SystemProxyActionError::StateChanged));
+
+        core.running.store(true, AtomicOrdering::Release);
+        let error = lifecycle
+            .disable_stale_system_proxy(
+                system_proxy,
+                7890,
+                1,
+                true,
+                stale_proxy_config(),
+                notifications,
+                counted_mirror_persistence(persist_calls.clone()),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, SystemProxyActionError::StateChanged));
+        assert!(os.writes().is_empty());
+        assert_eq!(persist_calls.load(AtomicOrdering::Acquire), 0);
+
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stale_proxy_lifecycle_rejects_changed_mixed_port_without_host_or_mirror_writes() {
+        use crate::client::system_proxy::SystemProxyActionError;
+
+        let (_directory, application) = application_with_system_proxy(true).await;
+        let os = LifecycleTestProxy::new(stale_proxy_config());
+        let (system_proxy, shutdown, tasks) = spawn_lifecycle_system_proxy(os.clone()).await;
+        let lifecycle = direct_lifecycle_client_with_mixed_port(
+            application,
+            Arc::new(BindingCore {
+                running: AtomicBool::new(false),
+            }),
+            7891,
+        );
+        let persist_calls = Arc::new(AtomicU8::new(0));
+
+        let error = lifecycle
+            .disable_stale_system_proxy(
+                system_proxy,
+                7890,
+                1,
+                true,
+                stale_proxy_config(),
+                Arc::new(RecordingProxyActionNotifications::default()),
+                counted_mirror_persistence(persist_calls.clone()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, SystemProxyActionError::StateChanged));
+        assert!(os.writes().is_empty());
+        assert_eq!(persist_calls.load(AtomicOrdering::Acquire), 0);
+
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stale_proxy_lifecycle_commits_and_persists_preference_after_host_disable() {
+        let (_directory, application) = application_with_system_proxy(true).await;
+        let os = LifecycleTestProxy::new(stale_proxy_config());
+        let (system_proxy, shutdown, tasks) = spawn_lifecycle_system_proxy(os.clone()).await;
+        let lifecycle = direct_lifecycle_client(
+            application.clone(),
+            Arc::new(BindingCore {
+                running: AtomicBool::new(false),
+            }),
+        );
+        let persist_calls = Arc::new(AtomicU8::new(0));
+        let notifications = Arc::new(RecordingProxyActionNotifications::default());
+
+        lifecycle
+            .disable_stale_system_proxy(
+                system_proxy,
+                7890,
+                1,
+                true,
+                stale_proxy_config(),
+                notifications.clone(),
+                counted_mirror_persistence(persist_calls.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert!(!application.get_typed().enable_system_proxy);
+        assert!(!os.current().enable);
+        assert_eq!(os.writes().len(), 1);
+        assert_eq!(persist_calls.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(
+            notifications.applications.lock().unwrap().as_slice(),
+            [(
+                false,
+                vec![crate::client::effects::plan::EffectKind::SystemProxy]
+            )]
+        );
+        assert_eq!(notifications.ports.lock().unwrap().as_slice(), [None]);
+
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stale_proxy_lifecycle_reports_mirror_failure_without_reenabling_proxy() {
+        use crate::client::system_proxy::SystemProxyActionError;
+
+        let (_directory, application) = application_with_system_proxy(true).await;
+        let os = LifecycleTestProxy::new(stale_proxy_config());
+        let (system_proxy, shutdown, tasks) = spawn_lifecycle_system_proxy(os.clone()).await;
+        let lifecycle = direct_lifecycle_client(
+            application.clone(),
+            Arc::new(BindingCore {
+                running: AtomicBool::new(false),
+            }),
+        );
+        let notifications = Arc::new(RecordingProxyActionNotifications::default());
+        let persist_calls = Arc::new(AtomicU8::new(0));
+        let persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync> = {
+            let persist_calls = persist_calls.clone();
+            Arc::new(move || {
+                persist_calls.fetch_add(1, AtomicOrdering::AcqRel);
+                anyhow::bail!("injected mirror failure")
+            })
+        };
+
+        let error = lifecycle
+            .disable_stale_system_proxy(
+                system_proxy,
+                7890,
+                1,
+                true,
+                stale_proxy_config(),
+                notifications.clone(),
+                persist_legacy_mirror,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, SystemProxyActionError::PartialApply(_)));
+        assert!(!application.get_typed().enable_system_proxy);
+        assert!(!os.current().enable);
+        assert_eq!(os.writes().len(), 1);
+        assert_eq!(persist_calls.load(AtomicOrdering::Acquire), 1);
+        assert_eq!(notifications.applications.lock().unwrap().len(), 1);
+
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stale_proxy_lifecycle_conflict_keeps_latest_preference_without_stale_rollback() {
+        use crate::client::system_proxy::SystemProxyActionError;
+
+        let (_directory, application) = application_with_system_proxy(true).await;
+        let (os, disable_started) = LifecycleTestProxy::pause_first_disable(stale_proxy_config());
+        let (system_proxy, shutdown, tasks) = spawn_lifecycle_system_proxy(os.clone()).await;
+        let lifecycle = direct_lifecycle_client(
+            application.clone(),
+            Arc::new(BindingCore {
+                running: AtomicBool::new(false),
+            }),
+        );
+        let notifications = Arc::new(RecordingProxyActionNotifications::default());
+        let persist_calls = Arc::new(AtomicU8::new(0));
+        let action = {
+            let lifecycle = lifecycle.clone();
+            let system_proxy = system_proxy.clone();
+            let notifications = notifications.clone();
+            let persist_calls = persist_calls.clone();
+            tokio::spawn(async move {
+                lifecycle
+                    .disable_stale_system_proxy(
+                        system_proxy,
+                        7890,
+                        1,
+                        true,
+                        stale_proxy_config(),
+                        notifications,
+                        counted_mirror_persistence(persist_calls),
+                    )
+                    .await
+            })
+        };
+        disable_started.await.unwrap();
+
+        application
+            .patch_typed(ChimeraAppConfigPatch {
+                enable_system_proxy: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        os.release_disable();
+
+        let error = action.await.unwrap().unwrap_err();
+        assert!(matches!(error, SystemProxyActionError::StateChanged));
+        assert!(!application.get_typed().enable_system_proxy);
+        assert!(!os.current().enable);
+        assert_eq!(os.writes().len(), 1, "stale recovery must not re-enable");
+        assert_eq!(persist_calls.load(AtomicOrdering::Acquire), 0);
+        assert_eq!(
+            notifications.applications.lock().unwrap().last().unwrap().0,
+            false
+        );
+        assert_eq!(notifications.ports.lock().unwrap().as_slice(), [None]);
+
+        shutdown.cancel();
+        tasks.close();
+        tasks.wait().await;
     }
 
     #[async_trait]
@@ -1926,6 +2497,61 @@ mod tests {
         }
 
         async fn on_profile_change(&self, _break_when: bool) {}
+    }
+
+    #[async_trait]
+    impl CoreLifecyclePort for BindingCore {
+        async fn reconcile(&self, _: ClashConfig, _: ClashCore, _: RunType) -> anyhow::Result<()> {
+            self.running.store(true, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn stop(&self) -> anyhow::Result<()> {
+            self.running.store(false, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn change_core(&self, _: ClashCore) -> anyhow::Result<()> {
+            self.running.store(true, AtomicOrdering::Release);
+            Ok(())
+        }
+
+        async fn status(&self) -> anyhow::Result<CoreStatusSnapshot> {
+            Ok(CoreStatusSnapshot {
+                instance_id: None,
+                state: if self.running.load(AtomicOrdering::Acquire) {
+                    CoreState::Running
+                } else {
+                    CoreState::Stopped(None)
+                },
+                state_changed_at: 1,
+                run_type: RunType::Normal,
+            })
+        }
+
+        async fn active_runtime_receipt(
+            &self,
+        ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+            Ok(self.running.load(AtomicOrdering::Acquire).then(|| {
+                Arc::new(crate::client::ports::test_runtime_receipt_with_mixed_port(
+                    7892,
+                ))
+            }))
+        }
+
+        fn effective_clash_info(&self) -> crate::config::clash::ClashInfo {
+            crate::config::clash::ClashInfo {
+                port: 7892,
+                server: "127.0.0.1".into(),
+                secret: None,
+            }
+        }
+
+        fn recovery_notify(&self) -> Option<Arc<Notify>> {
+            None
+        }
+
+        async fn on_profile_change(&self, _: bool) {}
     }
 
     #[async_trait]
@@ -2444,6 +3070,36 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["stop-start", "stop-end", "select"]
+        );
+    }
+
+    #[tokio::test]
+    async fn lifecycle_reconcile_and_shutdown_publish_active_runtime_binding() {
+        let runtime_bindings = Arc::new(RecordingRuntimeBindings::default());
+        let core = Arc::new(BindingCore {
+            running: AtomicBool::new(false),
+        });
+        let client = CoreLifecycleClient::spawn(
+            core,
+            ApplicationClient::legacy().unwrap(),
+            ClashConfigClient::legacy().unwrap(),
+            RuntimePaths::from_config_root(std::path::PathBuf::from("test-runtime-root")),
+        )
+        .await
+        .unwrap();
+        let mutations = crate::state::mutation::MutationCoordinator::pending_with_notifications(
+            runtime_bindings.clone(),
+        );
+        mutations.connect(client.clone()).await.unwrap();
+
+        client.select_core(ClashCore::Mihomo).await.unwrap();
+        assert_eq!(*runtime_bindings.ports.lock().unwrap(), [Some(7892)]);
+
+        client.shutdown().await.unwrap();
+        assert_eq!(
+            *runtime_bindings.ports.lock().unwrap(),
+            [Some(7892), None],
+            "stopping the active core must clear its published port"
         );
     }
 

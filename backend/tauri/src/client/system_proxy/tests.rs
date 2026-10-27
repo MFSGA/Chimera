@@ -1,0 +1,1569 @@
+//! Actor tests against fake ports: no OS call, no network, no sleep.
+//!
+//! The guard timer is not scheduled (`schedule_guard_ticks: false`); a test
+//! delivers `GuardTick` itself, so every guard assertion is deterministic.
+
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+use super::{
+    SystemProxyArgs, SystemProxyClient,
+    ports::{
+        AutoLaunchError, AutoLaunchPort, MockAutoLaunchPort, MockOsProxyPort, MockPacPort,
+        OsProxyConfig, OsProxyError, OsProxyPort, PacError, PacPort,
+    },
+};
+use crate::client::effects::{
+    plan::{EffectKind, ProxyGuardDesired, SystemProxyDesired},
+    status::{EffectHealth, EffectRevision, EffectStatus},
+};
+
+const BYPASS: &str = "localhost";
+const DEFAULT_BYPASS: &str = "platform-default";
+
+/// Records every write so a test can assert on the sequence instead of on a
+/// single expectation, and reports whatever failure the test installed.
+#[derive(Default)]
+struct RecordingOsProxy {
+    writes: Mutex<Vec<OsProxyConfig>>,
+    original: Mutex<Option<OsProxyConfig>>,
+    current: Mutex<Option<OsProxyConfig>>,
+    fail_set: Mutex<bool>,
+    fail_next_sets: Mutex<usize>,
+    change_after_disable: Mutex<Option<OsProxyConfig>>,
+}
+
+struct BlockingReadOsProxy {
+    current: Mutex<OsProxyConfig>,
+    started: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    released: Mutex<bool>,
+    release: std::sync::Condvar,
+    writes: Mutex<Vec<OsProxyConfig>>,
+}
+
+impl BlockingReadOsProxy {
+    fn new(current: OsProxyConfig, started: tokio::sync::oneshot::Sender<()>) -> Arc<Self> {
+        Arc::new(Self {
+            current: Mutex::new(current),
+            started: Mutex::new(Some(started)),
+            released: Mutex::new(false),
+            release: std::sync::Condvar::new(),
+            writes: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn release_read(&self) {
+        *self.released.lock().expect("release state") = true;
+        self.release.notify_all();
+    }
+}
+
+impl OsProxyPort for BlockingReadOsProxy {
+    fn get(&self) -> Result<OsProxyConfig, OsProxyError> {
+        if let Some(started) = self.started.lock().expect("started signal").take() {
+            let _ = started.send(());
+        }
+        let mut released = self.released.lock().expect("release state");
+        while !*released {
+            released = self.release.wait(released).expect("release wait");
+        }
+        Ok(self.current.lock().expect("current proxy").clone())
+    }
+
+    fn set(&self, config: &OsProxyConfig) -> Result<(), OsProxyError> {
+        self.writes.lock().expect("write log").push(config.clone());
+        *self.current.lock().expect("current proxy") = config.clone();
+        Ok(())
+    }
+
+    fn default_bypass(&self) -> &'static str {
+        DEFAULT_BYPASS
+    }
+}
+
+impl RecordingOsProxy {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn with_original(original: OsProxyConfig) -> Arc<Self> {
+        Arc::new(Self {
+            original: Mutex::new(Some(original)),
+            ..Self::default()
+        })
+    }
+
+    fn writes(&self) -> Vec<OsProxyConfig> {
+        self.writes.lock().expect("write log").clone()
+    }
+
+    fn last_write(&self) -> OsProxyConfig {
+        self.writes().pop().expect("at least one os write")
+    }
+
+    fn fail_set(&self, fail: bool) {
+        *self.fail_set.lock().expect("failure switch") = fail;
+    }
+
+    fn fail_next_sets(&self, count: usize) {
+        *self.fail_next_sets.lock().expect("failure count") = count;
+    }
+
+    fn change_after_disable(&self, config: OsProxyConfig) {
+        *self.change_after_disable.lock().expect("external change") = Some(config);
+    }
+}
+
+impl OsProxyPort for RecordingOsProxy {
+    fn get(&self) -> Result<OsProxyConfig, OsProxyError> {
+        self.current
+            .lock()
+            .expect("current")
+            .clone()
+            .or_else(|| self.original.lock().expect("original").clone())
+            .ok_or_else(|| OsProxyError::unreadable("no system proxy is set"))
+    }
+
+    fn set(&self, config: &OsProxyConfig) -> Result<(), OsProxyError> {
+        let fail_next = {
+            let mut remaining = self.fail_next_sets.lock().expect("failure count");
+            let fail = *remaining > 0;
+            *remaining = remaining.saturating_sub(1);
+            fail
+        };
+        if *self.fail_set.lock().expect("failure switch") || fail_next {
+            return Err(OsProxyError::refused(
+                config,
+                "the os refused the proxy settings",
+            ));
+        }
+        self.writes.lock().expect("write log").push(config.clone());
+        *self.current.lock().expect("current") = Some(config.clone());
+        if !config.enable
+            && let Some(external) = self
+                .change_after_disable
+                .lock()
+                .expect("external change")
+                .take()
+        {
+            *self.current.lock().expect("current") = Some(external);
+        }
+        Ok(())
+    }
+
+    fn default_bypass(&self) -> &'static str {
+        DEFAULT_BYPASS
+    }
+}
+
+/// Holds the mailbox inside `apply` until the shutdown token fires, the way a
+/// real PAC download does while it waits on a url that will not answer.
+struct BlockingPac {
+    started: tokio::sync::Notify,
+}
+
+impl BlockingPac {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            started: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Resolves once `apply` is on the mailbox, so the test never sleeps to
+    /// know the actor is busy.
+    async fn started(&self) {
+        self.started.notified().await;
+    }
+}
+
+#[async_trait::async_trait]
+impl PacPort for BlockingPac {
+    fn is_supported(&self) -> bool {
+        true
+    }
+
+    async fn apply(&self, _url: &url::Url, cancel: CancellationToken) -> Result<(), PacError> {
+        self.started.notify_one();
+        cancel.cancelled().await;
+        Err(PacError::DownloadCancelled)
+    }
+
+    fn disable(&self) -> Result<(), PacError> {
+        Ok(())
+    }
+}
+
+/// Parks inside `get` until the test releases it, the way a platform read can
+/// still be running when the shutdown begins, while the reconcile behind it is
+/// holding a value it is about to write.
+struct GatedOsProxy {
+    os: Arc<RecordingOsProxy>,
+    reading: tokio::sync::Notify,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl GatedOsProxy {
+    fn new(os: Arc<RecordingOsProxy>) -> (Arc<Self>, std::sync::mpsc::Sender<()>) {
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let gate = Arc::new(Self {
+            os,
+            reading: tokio::sync::Notify::new(),
+            release: Mutex::new(Some(release_rx)),
+        });
+        (gate, release_tx)
+    }
+
+    /// Resolves once `get` is parked, so the test never sleeps to know the
+    /// reconcile reached the capture.
+    async fn reading(&self) {
+        self.reading.notified().await;
+    }
+}
+
+impl OsProxyPort for GatedOsProxy {
+    fn get(&self) -> Result<OsProxyConfig, OsProxyError> {
+        self.reading.notify_one();
+        // Taken out of the lock first: the wait below is the whole point, and
+        // holding the mutex across it would serialise nothing useful.
+        let release = self.release.lock().expect("release gate").take();
+        if let Some(release) = release {
+            let _ = release.recv();
+        }
+        self.os.get()
+    }
+
+    fn set(&self, config: &OsProxyConfig) -> Result<(), OsProxyError> {
+        self.os.set(config)
+    }
+
+    fn default_bypass(&self) -> &'static str {
+        DEFAULT_BYPASS
+    }
+}
+
+fn silent_auto_launch() -> Arc<dyn AutoLaunchPort> {
+    let mut port = MockAutoLaunchPort::new();
+    port.expect_is_enabled().returning(|| Ok(false));
+    port.expect_set_enabled().returning(|_| Ok(()));
+    Arc::new(port)
+}
+
+fn unsupported_pac() -> Arc<dyn PacPort> {
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| false);
+    Arc::new(pac)
+}
+
+/// The root shutdown the actor's token hangs off.
+struct Shutdown {
+    token: CancellationToken,
+    tasks: TaskTracker,
+}
+
+impl Shutdown {
+    fn new() -> Self {
+        Self {
+            token: CancellationToken::new(),
+            tasks: TaskTracker::new(),
+        }
+    }
+
+    /// Cancels the token without waiting. A message sent before the test
+    /// next yields is still queued ahead of the drain, so it meets the
+    /// cancelled token rather than a closed mailbox.
+    fn cancel(&self) {
+        self.token.cancel();
+        self.tasks.close();
+    }
+
+    /// The exit path: cancels the token and waits for the restore to finish.
+    async fn exit(&self) {
+        self.cancel();
+        self.tasks.wait().await;
+    }
+}
+
+async fn spawn(
+    os: Arc<dyn OsProxyPort>,
+    auto_launch: Arc<dyn AutoLaunchPort>,
+    pac: Arc<dyn PacPort>,
+) -> SystemProxyClient {
+    spawn_owned(os, auto_launch, pac, &Shutdown::new()).await
+}
+
+async fn spawn_owned(
+    os: Arc<dyn OsProxyPort>,
+    auto_launch: Arc<dyn AutoLaunchPort>,
+    pac: Arc<dyn PacPort>,
+    shutdown: &Shutdown,
+) -> SystemProxyClient {
+    SystemProxyClient::spawn(
+        SystemProxyArgs {
+            os,
+            auto_launch,
+            pac,
+            schedule_guard_ticks: false,
+            shutdown: shutdown.token.child_token(),
+        },
+        &shutdown.tasks,
+    )
+    .await
+    .expect("the system proxy actor should spawn")
+}
+
+async fn spawn_with_os(os: Arc<dyn OsProxyPort>) -> SystemProxyClient {
+    spawn(os, silent_auto_launch(), unsupported_pac()).await
+}
+
+async fn spawn_owned_with_os(os: Arc<dyn OsProxyPort>, shutdown: &Shutdown) -> SystemProxyClient {
+    spawn_owned(os, silent_auto_launch(), unsupported_pac(), shutdown).await
+}
+
+fn proxy(enabled: bool, port: Option<u16>) -> SystemProxyDesired {
+    SystemProxyDesired {
+        enabled,
+        bypass: BYPASS.to_owned(),
+        port,
+        pac_url: None,
+    }
+}
+
+fn pac_proxy(url: &str) -> SystemProxyDesired {
+    SystemProxyDesired {
+        enabled: true,
+        bypass: BYPASS.to_owned(),
+        port: Some(7890),
+        pac_url: Some(url.parse().expect("a valid pac url")),
+    }
+}
+
+fn guard(enabled: bool, interval: Duration) -> ProxyGuardDesired {
+    ProxyGuardDesired { enabled, interval }
+}
+
+fn rev(value: u64) -> EffectRevision {
+    EffectRevision::new(value)
+}
+
+fn health_of(statuses: &[EffectStatus], kind: EffectKind) -> EffectHealth {
+    statuses
+        .iter()
+        .find(|status| status.kind == kind)
+        .unwrap_or_else(|| panic!("{kind:?} should be reported"))
+        .health
+        .clone()
+}
+
+fn code_of(statuses: &[EffectStatus], kind: EffectKind) -> &'static str {
+    match health_of(statuses, kind) {
+        EffectHealth::Degraded { code, .. } => code,
+        other => panic!("{kind:?} should be degraded, was {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn enabling_sets_os_proxy_with_resolved_port() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+    assert_eq!(
+        os.last_write(),
+        OsProxyConfig {
+            enable: true,
+            host: "127.0.0.1".to_owned(),
+            port: 7890,
+            bypass: BYPASS.to_owned(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn stale_proxy_repair_is_owned_and_verified_by_the_actor() {
+    let stale = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 7890,
+        bypass: BYPASS.to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(stale);
+    let client = spawn_with_os(os.clone()).await;
+
+    client
+        .disable_stale_proxy(7890)
+        .await
+        .expect("the actor should disable the confirmed stale endpoint");
+
+    assert!(!os.get().expect("proxy read should succeed").enable);
+    assert!(!os.last_write().enable);
+}
+
+#[tokio::test]
+async fn stale_proxy_repair_can_then_persist_the_disabled_preference() {
+    let stale = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 7890,
+        bypass: BYPASS.to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(stale);
+    let client = spawn_with_os(os.clone()).await;
+
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    client
+        .disable_stale_proxy(7890)
+        .await
+        .expect("the owner should disable the confirmed stale endpoint");
+    let statuses = client
+        .reconcile(rev(2), Some(proxy(false, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+    assert!(!os.get().expect("proxy read should succeed").enable);
+}
+
+#[tokio::test]
+async fn stale_proxy_repair_refuses_a_changed_endpoint_without_writing() {
+    let os = RecordingOsProxy::with_original(OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 7890,
+        bypass: BYPASS.to_owned(),
+    });
+    let client = spawn_with_os(os.clone()).await;
+
+    assert!(matches!(
+        client.disable_stale_proxy(7891).await,
+        Err(super::SystemProxyActionError::StateChanged)
+    ));
+    assert!(os.writes().is_empty());
+}
+
+#[tokio::test]
+async fn stale_proxy_rollback_does_not_overwrite_a_concurrent_host_change() {
+    let stale = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 7890,
+        bypass: BYPASS.to_owned(),
+    };
+    let external = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 7891,
+        bypass: "localhost,example.test".to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(stale);
+    os.change_after_disable(external.clone());
+    let client = spawn_with_os(os.clone()).await;
+
+    assert!(matches!(
+        client.disable_stale_proxy(7890).await,
+        Err(super::SystemProxyActionError::StateChanged)
+    ));
+    assert_eq!(
+        os.writes().len(),
+        1,
+        "only the attempted disable is written"
+    );
+    assert_eq!(os.get().unwrap(), external);
+}
+
+#[tokio::test]
+async fn failed_agent_action_restores_proxy_through_the_owner() {
+    let original = OsProxyConfig {
+        enable: true,
+        host: "proxy.example.test".to_owned(),
+        port: 8080,
+        bypass: "localhost".to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(original.clone());
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    client
+        .restore_after_failed_action(original.clone())
+        .await
+        .expect("the owner should restore the host state captured by the action");
+
+    assert_eq!(os.get().expect("proxy read should succeed"), original);
+    assert!(client.status().await.applied_os_proxy.is_none());
+    shutdown.exit().await;
+    assert_eq!(
+        os.get().expect("proxy read should survive app shutdown"),
+        original,
+        "shutdown must not disable a user's proxy restored by Agent rollback"
+    );
+}
+
+#[tokio::test]
+async fn failed_action_rollback_does_not_write_after_shutdown_cancels_during_read() {
+    let original = OsProxyConfig {
+        enable: true,
+        host: "proxy.example.test".to_owned(),
+        port: 8080,
+        bypass: BYPASS.to_owned(),
+    };
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let os = BlockingReadOsProxy::new(original.clone(), started_tx);
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(
+        os.clone(),
+        silent_auto_launch(),
+        unsupported_pac(),
+        &shutdown,
+    )
+    .await;
+    let action = tokio::spawn(async move { client.restore_after_failed_action(original).await });
+    started_rx.await.expect("the rollback read should begin");
+
+    shutdown.cancel();
+    os.release_read();
+
+    assert!(action.await.expect("rollback task should finish").is_err());
+    shutdown.tasks.wait().await;
+    assert!(
+        os.writes.lock().expect("write log").is_empty(),
+        "the cancelled rollback must leave all writes to the shutdown restore"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_retries_proxy_restore_after_transient_os_failures() {
+    let original = OsProxyConfig {
+        enable: true,
+        host: "proxy.example.test".to_owned(),
+        port: 8080,
+        bypass: "localhost".to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(original.clone());
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    os.fail_next_sets(2);
+
+    shutdown.exit().await;
+
+    assert_eq!(
+        os.get().expect("the user's proxy should be restored"),
+        original
+    );
+    assert_eq!(os.last_write(), original);
+}
+
+#[tokio::test]
+async fn empty_bypass_falls_back_to_the_platform_default() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    let desired = SystemProxyDesired {
+        bypass: String::new(),
+        ..proxy(true, Some(7890))
+    };
+    client.reconcile(rev(1), Some(desired), None, None).await;
+
+    assert_eq!(os.last_write().bypass, DEFAULT_BYPASS);
+}
+
+#[tokio::test]
+async fn startup_with_proxy_disabled_leaves_os_untouched() {
+    // A full plan is reconciled on every launch. Writing a disabled value here
+    // would clear whatever proxy the user or another tool had configured.
+    let mut os = MockOsProxyPort::new();
+    os.expect_set().never();
+    os.expect_get().never();
+    os.expect_default_bypass().return_const(DEFAULT_BYPASS);
+    let client = spawn_with_os(Arc::new(os)).await;
+
+    let statuses = client
+        .reconcile(
+            rev(1),
+            Some(proxy(false, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+}
+
+#[tokio::test]
+async fn enable_without_resolved_port_degrades_without_os_write() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, None)), None, None)
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_port_unresolved"
+    );
+    assert!(
+        os.writes().is_empty(),
+        "a proxy on port zero refuses every request"
+    );
+    assert_eq!(client.status().await.desired, Some(proxy(true, None)));
+
+    // The desired state is kept, so the next reconcile that carries a port
+    // installs it without the user touching the setting again.
+    client
+        .reconcile(rev(2), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    assert_eq!(os.last_write().port, 7890);
+}
+
+#[tokio::test]
+async fn disabling_restores_and_stops_guard() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    assert!(client.status().await.guard_active);
+
+    client
+        .reconcile(rev(2), Some(proxy(false, Some(7890))), None, None)
+        .await;
+
+    assert!(!os.last_write().enable);
+    let status = client.status().await;
+    assert!(
+        !status.guard_active,
+        "a guard with no proxy to re-apply must not keep a timer"
+    );
+    assert_eq!(status.guard_interval, None);
+}
+
+#[tokio::test]
+async fn disabling_guard_refuses_an_already_queued_tick() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    client
+        .reconcile(
+            rev(2),
+            None,
+            Some(guard(false, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    let writes = os.writes().len();
+    client.tick_guard().await;
+    assert!(!client.status().await.guard_active);
+    assert_eq!(os.writes().len(), writes);
+}
+
+#[tokio::test]
+async fn port_change_reapplies_system_proxy() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    client
+        .reconcile(rev(2), Some(proxy(true, Some(7891))), None, None)
+        .await;
+
+    let writes = os.writes();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[1].port, 7891);
+}
+
+#[tokio::test]
+async fn pac_enabled_takes_over_and_skips_plain_proxy() {
+    let os = RecordingOsProxy::new();
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| true);
+    pac.expect_apply().times(1).returning(|_, _| Ok(()));
+    let client = spawn(os.clone(), silent_auto_launch(), Arc::new(pac)).await;
+
+    let statuses = client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/proxy.pac")),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+    assert!(
+        os.writes().is_empty(),
+        "PAC and the plain proxy are the same setting; writing both makes them fight"
+    );
+    assert!(client.status().await.pac_active);
+}
+
+#[tokio::test]
+async fn pac_failure_falls_back_to_direct_and_degrades() {
+    let os = RecordingOsProxy::new();
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| true);
+    pac.expect_apply()
+        .returning(|_, _| Err(PacError::unreachable("the pac url is unreachable")));
+    let client = spawn(os.clone(), silent_auto_launch(), Arc::new(pac)).await;
+
+    let statuses = client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/proxy.pac")),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "pac_apply_failed"
+    );
+    assert_eq!(os.last_write().port, 7890);
+    assert!(!client.status().await.pac_active);
+}
+
+#[tokio::test]
+async fn failed_pac_switch_disables_the_previous_pac_before_falling_back() {
+    // The OS resolves the auto-config url ahead of any proxy endpoint, so the
+    // fallback below is dead weight while the first url is still installed.
+    let os = RecordingOsProxy::new();
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| true);
+    pac.expect_apply().times(1).returning(|_, _| Ok(()));
+    pac.expect_apply()
+        .times(1)
+        .returning(|_, _| Err(PacError::unreachable("the new pac url is unreachable")));
+    pac.expect_disable().times(1).returning(|| Ok(()));
+    let client = spawn(os.clone(), silent_auto_launch(), Arc::new(pac)).await;
+
+    client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/first.pac")),
+            None,
+            None,
+        )
+        .await;
+    let statuses = client
+        .reconcile(
+            rev(2),
+            Some(pac_proxy("http://example.test/second.pac")),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "pac_apply_failed"
+    );
+    assert!(
+        !client.status().await.pac_active,
+        "the OS confirmed the disable, so PAC really is off"
+    );
+    assert!(
+        os.last_write().enable,
+        "a failed PAC switch must still leave the user proxied"
+    );
+}
+
+#[tokio::test]
+async fn pac_disable_failure_keeps_pac_active_and_degrades() {
+    let os = RecordingOsProxy::new();
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| true);
+    pac.expect_apply().times(1).returning(|_, _| Ok(()));
+    pac.expect_apply()
+        .times(1)
+        .returning(|_, _| Err(PacError::unreachable("the new pac url is unreachable")));
+    pac.expect_disable()
+        .times(1)
+        .returning(|| Err(PacError::kept("the os kept the auto-config url")));
+    pac.expect_disable().times(1).returning(|| Ok(()));
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(os.clone(), silent_auto_launch(), Arc::new(pac), &shutdown).await;
+
+    client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/first.pac")),
+            None,
+            None,
+        )
+        .await;
+    let statuses = client
+        .reconcile(
+            rev(2),
+            Some(pac_proxy("http://example.test/second.pac")),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "pac_disable_failed"
+    );
+    assert!(
+        client.status().await.pac_active,
+        "an unconfirmed disable must not clear the flag; the url is still installed"
+    );
+    assert!(
+        os.last_write().enable,
+        "the fallback is still written so the user has a proxy"
+    );
+
+    // Still active means the exit path still has PAC to clean up, which is the
+    // whole point of not clearing the flag: the second disable is the exit's,
+    // and the fallback it wrote is turned off after it.
+    shutdown.exit().await;
+    assert!(!os.last_write().enable);
+}
+
+#[tokio::test]
+async fn pac_unsupported_platform_reports_unsupported() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    let statuses = client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/proxy.pac")),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Unsupported {
+            code: "pac_unsupported"
+        }
+    );
+    // Still proxied: an unsupported PAC must not leave the user with nothing.
+    assert!(os.last_write().enable);
+}
+
+#[tokio::test]
+async fn guard_interval_change_rebuilds_timer() {
+    let client = spawn_with_os(RecordingOsProxy::new()).await;
+
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    let first = client.status().await;
+
+    client
+        .reconcile(
+            rev(2),
+            None,
+            Some(guard(true, Duration::from_secs(30))),
+            None,
+        )
+        .await;
+    let second = client.status().await;
+
+    assert_eq!(first.guard_interval, Some(Duration::from_secs(10)));
+    assert_eq!(second.guard_interval, Some(Duration::from_secs(30)));
+    assert!(first.guard_active && second.guard_active);
+}
+
+#[tokio::test]
+async fn guard_tick_reapplies_last_desired() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+
+    client.tick_guard().await;
+
+    let writes = os.writes();
+    assert_eq!(writes.len(), 2);
+    assert_eq!(writes[0], writes[1]);
+}
+
+#[tokio::test]
+async fn guard_tick_does_not_bypass_the_failed_target_retry_budget() {
+    // EffectsActor owns convergence; a guard tick cannot retry an unaccepted target.
+    let os = RecordingOsProxy::new();
+    os.fail_set(true);
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    assert!(os.writes().is_empty());
+    assert_eq!(client.status().await.applied_os_proxy, None);
+
+    os.fail_set(false);
+    client.tick_guard().await;
+
+    assert!(os.writes().is_empty());
+    assert_eq!(client.status().await.applied_os_proxy, None);
+}
+
+#[tokio::test]
+async fn guard_tick_waits_for_a_changed_port_to_be_confirmed() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    os.fail_set(true);
+    client
+        .reconcile(rev(2), Some(proxy(true, Some(7891))), None, None)
+        .await;
+    os.fail_set(false);
+
+    client.tick_guard().await;
+
+    assert_eq!(
+        os.writes().len(),
+        1,
+        "guard cannot install either the rejected target or a stale port"
+    );
+    assert!(!client.status().await.guard_active);
+}
+
+#[tokio::test]
+async fn guard_tick_is_suppressed_while_pac_active() {
+    let os = RecordingOsProxy::new();
+    let mut pac = MockPacPort::new();
+    pac.expect_is_supported().returning(|| true);
+    pac.expect_apply().returning(|_, _| Ok(()));
+    let client = spawn(os.clone(), silent_auto_launch(), Arc::new(pac)).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(pac_proxy("http://example.test/proxy.pac")),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+
+    client.tick_guard().await;
+
+    assert!(os.writes().is_empty());
+}
+
+#[tokio::test]
+async fn exit_restores_captured_original() {
+    let original = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 1080,
+        bypass: "corp".to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(original.clone());
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    shutdown.exit().await;
+
+    assert_eq!(os.last_write(), original);
+}
+
+#[tokio::test]
+async fn exit_disables_when_nothing_was_captured() {
+    let os = RecordingOsProxy::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    shutdown.exit().await;
+
+    let last = os.last_write();
+    assert!(!last.enable);
+    assert_eq!(last.port, 7890);
+}
+
+#[tokio::test]
+async fn set_failure_degrades_and_keeps_desired() {
+    let os = RecordingOsProxy::new();
+    os.fail_set(true);
+    let client = spawn_with_os(os.clone()).await;
+
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_apply_failed"
+    );
+    let status = client.status().await;
+    assert_eq!(status.desired, Some(proxy(true, Some(7890))));
+    assert_eq!(
+        status.health,
+        EffectHealth::Degraded {
+            code: "system_proxy_apply_failed",
+            message: "the system proxy was not applied: could not write the system proxy 127.0.0.1:7890 (enabled: true): the os refused the proxy settings".to_owned(),
+            retryable: true,
+        }
+    );
+}
+
+#[tokio::test]
+async fn stale_revision_is_superseded() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(rev(5), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    let statuses = client
+        .reconcile(rev(3), Some(proxy(false, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Superseded
+    );
+    assert_eq!(
+        os.writes().len(),
+        1,
+        "an older desired state must not be written back"
+    );
+    assert_eq!(client.status().await.applied_revision, rev(5));
+}
+
+#[tokio::test]
+async fn stale_proxy_revision_is_still_applied_when_newer_revision_touched_only_auto_launch() {
+    // A plan carries only what changed, and the facade releases its gate before
+    // dispatch, so a later auto-launch-only reconcile can overtake an earlier
+    // one that carries the proxy. One revision for the whole actor would drop
+    // that proxy value for good.
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+
+    client.reconcile(rev(2), None, None, Some(true)).await;
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+    assert_eq!(os.last_write().port, 7890);
+
+    // The proxy capability now holds revision 1, so the same one again is the
+    // stale reconcile it always was.
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(false, Some(7890))), None, None)
+        .await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Superseded
+    );
+    assert_eq!(os.writes().len(), 1);
+}
+
+#[tokio::test]
+async fn auto_launch_failure_degrades_independently() {
+    let os = RecordingOsProxy::new();
+    let mut auto_launch = MockAutoLaunchPort::new();
+    auto_launch.expect_is_enabled().returning(|| Ok(false));
+    auto_launch
+        .expect_set_enabled()
+        .returning(|_| Err(AutoLaunchError::refused("the login item is locked")));
+    let client = spawn(os.clone(), Arc::new(auto_launch), unsupported_pac()).await;
+
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, Some(true))
+        .await;
+
+    assert_eq!(
+        code_of(&statuses, EffectKind::AutoLaunch),
+        "auto_launch_failed"
+    );
+    assert_eq!(
+        health_of(&statuses, EffectKind::SystemProxy),
+        EffectHealth::Healthy
+    );
+    assert!(os.last_write().enable);
+}
+
+#[tokio::test]
+async fn auto_launch_already_in_the_desired_state_is_not_rewritten() {
+    let mut auto_launch = MockAutoLaunchPort::new();
+    auto_launch.expect_is_enabled().returning(|| Ok(true));
+    auto_launch.expect_set_enabled().never();
+    let client = spawn(
+        RecordingOsProxy::new(),
+        Arc::new(auto_launch),
+        unsupported_pac(),
+    )
+    .await;
+
+    let statuses = client.reconcile(rev(1), None, None, Some(true)).await;
+
+    assert_eq!(
+        health_of(&statuses, EffectKind::AutoLaunch),
+        EffectHealth::Healthy
+    );
+}
+
+#[tokio::test]
+async fn the_exit_cancels_an_in_flight_pac_download() {
+    // A PAC download owns the mailbox for as long as it lasts: without
+    // cancellation the restore behind it waits on a url that never answers.
+    let os = RecordingOsProxy::new();
+    let pac = BlockingPac::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(os.clone(), silent_auto_launch(), pac.clone(), &shutdown).await;
+    let reconciling = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .reconcile(
+                    rev(1),
+                    Some(pac_proxy("http://example.test/proxy.pac")),
+                    None,
+                    None,
+                )
+                .await
+        })
+    };
+    pac.started().await;
+
+    shutdown.exit().await;
+
+    let statuses = reconciling.await.expect("the reconcile task should finish");
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_shutdown",
+        "the abandoned download is the shutdown, not PAC refusing the url"
+    );
+    assert!(
+        os.writes().is_empty(),
+        "an exiting app must not install a proxy on its way out: {:?}",
+        os.writes()
+    );
+}
+
+/// The token alone releases a download in flight, before the restore runs,
+/// and the reconcile it cut short writes nothing.
+#[tokio::test]
+async fn the_token_releases_a_pac_download_before_the_restore() {
+    let os = RecordingOsProxy::new();
+    let pac = BlockingPac::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(os.clone(), silent_auto_launch(), pac.clone(), &shutdown).await;
+    let reconciling = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .reconcile(
+                    rev(1),
+                    Some(pac_proxy("http://example.test/proxy.pac")),
+                    None,
+                    None,
+                )
+                .await
+        })
+    };
+    pac.started().await;
+
+    shutdown.cancel();
+
+    let statuses = reconciling.await.expect("the reconcile task should finish");
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_shutdown"
+    );
+    assert!(os.writes().is_empty(), "{:?}", os.writes());
+    shutdown.exit().await;
+    assert!(os.writes().is_empty(), "{:?}", os.writes());
+}
+
+#[tokio::test]
+async fn cancelled_pac_apply_does_not_write_a_fallback_proxy() {
+    // A cancelled download used to look exactly like PAC refusing the url, so
+    // the fallback branch installed the plain proxy during teardown — blocking
+    // OS work that can also push the restore past its own bound.
+    let os = RecordingOsProxy::new();
+    let pac = BlockingPac::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(os.clone(), silent_auto_launch(), pac.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    let enabled = os.writes().len();
+
+    let reconciling = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .reconcile(
+                    rev(2),
+                    Some(pac_proxy("http://example.test/proxy.pac")),
+                    None,
+                    None,
+                )
+                .await
+        })
+    };
+    pac.started().await;
+
+    shutdown.exit().await;
+
+    let statuses = reconciling.await.expect("the reconcile task should finish");
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_shutdown"
+    );
+    assert_eq!(
+        os.writes().len(),
+        enabled + 1,
+        "only the restore may write the OS once the shutdown began: {:?}",
+        os.writes()
+    );
+    assert!(
+        !os.last_write().enable,
+        "the restore still turns off what this process installed"
+    );
+}
+
+#[tokio::test]
+async fn a_reconcile_queued_behind_the_cancel_is_rejected() {
+    // A reconcile can reach the actor after the token fired, while the
+    // interrupted PAC apply is still unwinding and before the restore runs.
+    // It must write nothing either.
+    let os = RecordingOsProxy::new();
+    let pac = BlockingPac::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned(os.clone(), silent_auto_launch(), pac.clone(), &shutdown).await;
+    let reconciling = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .reconcile(
+                    rev(1),
+                    Some(pac_proxy("http://example.test/proxy.pac")),
+                    None,
+                    None,
+                )
+                .await
+        })
+    };
+    pac.started().await;
+
+    shutdown.cancel();
+    let statuses = client
+        .reconcile(
+            rev(2),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            Some(true),
+        )
+        .await;
+
+    for kind in [
+        EffectKind::AutoLaunch,
+        EffectKind::SystemProxy,
+        EffectKind::ProxyGuard,
+    ] {
+        assert_eq!(
+            code_of(&statuses, kind),
+            "system_proxy_shutdown",
+            "{kind:?}"
+        );
+    }
+    assert!(
+        os.writes().is_empty(),
+        "nothing may reach the OS after the shutdown began: {:?}",
+        os.writes()
+    );
+    let _ = reconciling.await.expect("the reconcile task should finish");
+    shutdown.exit().await;
+}
+
+#[tokio::test]
+async fn a_reconcile_after_the_cancel_is_rejected() {
+    let os = RecordingOsProxy::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    let written = os.writes().len();
+    shutdown.cancel();
+
+    let statuses = client
+        .reconcile(
+            rev(2),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            Some(true),
+        )
+        .await;
+
+    for kind in [
+        EffectKind::AutoLaunch,
+        EffectKind::SystemProxy,
+        EffectKind::ProxyGuard,
+    ] {
+        assert_eq!(
+            health_of(&statuses, kind),
+            EffectHealth::Degraded {
+                code: "system_proxy_shutdown",
+                message: "the system proxy owner is shutting down and stopped accepting changes"
+                    .to_owned(),
+                retryable: false,
+            },
+            "{kind:?}"
+        );
+    }
+
+    // Nothing re-installed the proxy the restore then removed: its disable is
+    // the only write after the cancel.
+    shutdown.exit().await;
+    assert_eq!(os.writes().len(), written + 1, "{:?}", os.writes());
+    assert!(!os.last_write().enable);
+}
+
+#[tokio::test]
+async fn write_after_cancellation_during_original_capture_is_skipped() {
+    // The capture reads the OS before the first enable, and that read can
+    // return after the restore already gave up waiting for the mailbox. The
+    // write behind it would then install a proxy nothing is left to remove.
+    let os = RecordingOsProxy::with_original(OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 1080,
+        bypass: BYPASS.to_owned(),
+    });
+    let (gate, release) = GatedOsProxy::new(os.clone());
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(gate.clone(), &shutdown).await;
+    let reconciling = {
+        let client = client.clone();
+        tokio::spawn(async move {
+            client
+                .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+                .await
+        })
+    };
+    gate.reading().await;
+
+    shutdown.cancel();
+    release
+        .send(())
+        .expect("the capture should still be parked");
+
+    let statuses = reconciling.await.expect("the reconcile task should finish");
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_shutdown",
+        "a write that resumes after the shutdown belongs to the restore"
+    );
+    assert!(
+        os.writes().is_empty(),
+        "nothing may reach the OS once the shutdown began: {:?}",
+        os.writes()
+    );
+
+    // The enabled proxy the capture read belongs to whoever set it, and this
+    // process never replaced it. The restore has nothing of its own to undo.
+    shutdown.exit().await;
+    assert!(
+        os.writes().is_empty(),
+        "a proxy this process never installed must survive the exit: {:?}",
+        os.writes()
+    );
+}
+
+#[tokio::test]
+async fn failed_first_install_does_not_record_original() {
+    // The capture succeeds and the install right behind it does not. Treating
+    // the read value as "what we replaced" would have the exit path disable a
+    // proxy this process only ever failed to overwrite.
+    let os = RecordingOsProxy::with_original(OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 1080,
+        bypass: BYPASS.to_owned(),
+    });
+    os.fail_set(true);
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+
+    let statuses = client
+        .reconcile(rev(1), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    assert_eq!(
+        code_of(&statuses, EffectKind::SystemProxy),
+        "system_proxy_apply_failed"
+    );
+
+    // Lifted so the restore would record a write if it attempted one.
+    os.fail_set(false);
+    shutdown.exit().await;
+
+    assert!(
+        os.writes().is_empty(),
+        "a failed first install leaves nothing to restore: {:?}",
+        os.writes()
+    );
+}
+
+#[tokio::test]
+async fn explicit_retry_after_a_failed_first_install_keeps_the_original() {
+    // The first install is refused, so nothing is committed; the explicit retry then
+    // performs the first successful install and must capture what it replaced,
+    // otherwise the exit path disables our proxy instead of restoring the
+    // user's.
+    let original = OsProxyConfig {
+        enable: true,
+        host: "127.0.0.1".to_owned(),
+        port: 1080,
+        bypass: BYPASS.to_owned(),
+    };
+    let os = RecordingOsProxy::with_original(original.clone());
+    os.fail_set(true);
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    assert!(os.writes().is_empty());
+
+    os.fail_set(false);
+    client
+        .reconcile(rev(2), Some(proxy(true, Some(7890))), None, None)
+        .await;
+    assert_eq!(os.last_write().port, 7890);
+
+    shutdown.exit().await;
+
+    assert_eq!(
+        os.last_write(),
+        original,
+        "restore must put back the proxy the retry replaced: {:?}",
+        os.writes()
+    );
+}
+
+#[tokio::test]
+async fn guard_tick_after_cancellation_does_not_write() {
+    // A tick queued behind the cancel runs ahead of the restore, with
+    // `closed` still unset.
+    let os = RecordingOsProxy::new();
+    let shutdown = Shutdown::new();
+    let client = spawn_owned_with_os(os.clone(), &shutdown).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    let written = os.writes().len();
+
+    shutdown.cancel();
+    client.tick_guard().await;
+    shutdown.exit().await;
+
+    // The restore's disable is the only write after the cancel.
+    assert_eq!(
+        os.writes().len(),
+        written + 1,
+        "a tick that beat the restore must not re-apply the proxy: {:?}",
+        os.writes()
+    );
+    assert!(!os.last_write().enable);
+}
+
+#[tokio::test]
+async fn losing_confirmed_binding_stops_guard_without_reinstalling_old_port() {
+    let os = RecordingOsProxy::new();
+    let client = spawn_with_os(os.clone()).await;
+    client
+        .reconcile(
+            rev(1),
+            Some(proxy(true, Some(7890))),
+            Some(guard(true, Duration::from_secs(10))),
+            None,
+        )
+        .await;
+    let before = os.writes().len();
+    client
+        .reconcile(rev(2), Some(proxy(true, None)), None, None)
+        .await;
+    client.tick_guard().await;
+    assert_eq!(os.writes().len(), before);
+    assert!(!client.status().await.guard_active);
+}

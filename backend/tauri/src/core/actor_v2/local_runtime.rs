@@ -218,6 +218,10 @@ impl LocalRuntimeHost {
         self.lifecycle.confirmed_receipt()
     }
 
+    pub(crate) fn accepted_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        self.lifecycle.accepted_confirmed_receipt()
+    }
+
     pub(crate) fn invalidate_ports(&self) {
         self.ports.invalidate();
     }

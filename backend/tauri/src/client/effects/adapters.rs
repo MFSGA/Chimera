@@ -1,12 +1,12 @@
 //! Platform adapters used by the application effect dispatcher.
 //!
-//! These implementations bridge the typed effect plan to the existing
-//! Chimera sysopt, logger and tray boundaries. System proxy ownership remains
-//! transitional until the reference `SystemProxyClient` is migrated.
+//! These implementations bridge the typed effect plan to the remaining
+//! Chimera locale, logger, widget and tray boundaries. System proxy, PAC and
+//! auto-launch are owned by the reference-aligned `SystemProxyClient`.
 
 use chimera_config::application::{I18nLanguage, NetworkStatisticWidgetConfig};
 
-use super::plan::{ProxyGuardDesired, SystemProxyDesired, TrayRefresh};
+use super::plan::TrayRefresh;
 
 #[derive(Debug)]
 pub(crate) enum EffectAdapterError {
@@ -37,19 +37,11 @@ pub(crate) trait ApplicationEffectAdapters: Send + Sync + 'static {
         &self,
         desired: &super::plan::LoggerDesired,
     ) -> Result<(), EffectAdapterError>;
-    async fn set_auto_launch(&self, enabled: bool) -> Result<(), EffectAdapterError>;
-    async fn set_system_proxy(
-        &self,
-        desired: &SystemProxyDesired,
-    ) -> Result<(), EffectAdapterError>;
-    fn set_proxy_guard(&self, desired: ProxyGuardDesired) -> Result<(), EffectAdapterError>;
     fn set_widget(&self, config: NetworkStatisticWidgetConfig) -> Result<(), EffectAdapterError>;
     async fn refresh_tray(&self, refresh: TrayRefresh) -> Result<(), EffectAdapterError>;
-    async fn restore_system_proxy(&self) -> Result<(), EffectAdapterError>;
 }
 
-/// Tauri and legacy sysopt adapters for the effects that do not have a
-/// dedicated Chimera actor yet.
+/// Tauri adapters for the effects that do not have a dedicated owner yet.
 pub(crate) struct TauriApplicationEffectAdapters {
     app_handle: tauri::AppHandle<tauri::Wry>,
 }
@@ -75,41 +67,6 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
             .map_err(|error| EffectAdapterError::failed("logger_refresh_failed", error))
     }
 
-    async fn set_auto_launch(&self, enabled: bool) -> Result<(), EffectAdapterError> {
-        tokio::task::spawn_blocking(move || {
-            crate::core::sysopt::Sysopt::global().update_launch_to(enabled)
-        })
-        .await
-        .map_err(|error| EffectAdapterError::failed("auto_launch_failed", error))?
-        .map_err(|error| EffectAdapterError::failed("auto_launch_failed", error))
-    }
-
-    async fn set_system_proxy(
-        &self,
-        desired: &SystemProxyDesired,
-    ) -> Result<(), EffectAdapterError> {
-        let desired = desired.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::core::sysopt::Sysopt::global().reconcile_system_proxy(
-                desired.enabled,
-                desired.port,
-                &desired.bypass,
-            )
-        })
-        .await
-        .map_err(|error| EffectAdapterError::failed("system_proxy_apply_failed", error))?
-        .map_err(|error| EffectAdapterError::failed("system_proxy_apply_failed", error))
-    }
-
-    fn set_proxy_guard(&self, desired: ProxyGuardDesired) -> Result<(), EffectAdapterError> {
-        if desired.enabled {
-            // Sysopt's compatibility loop reads the committed typed mirror,
-            // including the interval, and checks that system proxy remains on.
-            crate::core::sysopt::Sysopt::global().guard_proxy();
-        }
-        Ok(())
-    }
-
     fn set_widget(&self, config: NetworkStatisticWidgetConfig) -> Result<(), EffectAdapterError> {
         match config {
             NetworkStatisticWidgetConfig::Disabled => Ok(()),
@@ -132,12 +89,5 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
                 }
             })
             .map_err(|error| EffectAdapterError::failed("tray_refresh_failed", error))
-    }
-
-    async fn restore_system_proxy(&self) -> Result<(), EffectAdapterError> {
-        tokio::task::spawn_blocking(|| crate::core::sysopt::Sysopt::global().reset_sysproxy())
-            .await
-            .map_err(|error| EffectAdapterError::failed("system_proxy_restore_failed", error))?
-            .map_err(|error| EffectAdapterError::failed("system_proxy_restore_failed", error))
     }
 }

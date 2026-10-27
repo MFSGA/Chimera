@@ -128,7 +128,13 @@ impl ApplicationWorkflow {
                         .confirm_profile_runtime(&operation_id, candidate.clone())
                         .await
                     {
-                        Ok(()) => Ok(()),
+                        Ok(()) => {
+                            if let Some(notifications) = &self.notifications {
+                                notifications
+                                    .runtime_bound(core.effect_port_binding().await, false);
+                            }
+                            Ok(())
+                        }
                         Err(error) => {
                             let message = format!(
                                 "Profile source committed, but runtime confirmation failed: {error}"
@@ -1024,6 +1030,12 @@ mod tests {
             })
         }
 
+        async fn effect_port_binding(
+            &self,
+        ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
+            None
+        }
+
         async fn capture_profile_inputs(
             &self,
             profiles: Arc<Profiles>,
@@ -1230,6 +1242,12 @@ mod tests {
     #[derive(Default)]
     struct RecordingCommitNotifications {
         profiles: AtomicUsize,
+        runtime_bindings: StdMutex<
+            Vec<(
+                Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+                bool,
+            )>,
+        >,
     }
 
     impl crate::client::effects::ports::CommitNotifications for RecordingCommitNotifications {
@@ -1251,10 +1269,10 @@ mod tests {
 
         fn runtime_bound(
             &self,
-            _: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
-            _: bool,
+            ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+            refresh: bool,
         ) {
-            unreachable!("profile mutation does not publish runtime ports")
+            self.runtime_bindings.lock().unwrap().push((ports, refresh));
         }
 
         fn publish_full(&self, _: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {
@@ -1439,6 +1457,11 @@ mod tests {
             CheckRecord::Passed
         );
         assert_eq!(notifications.profiles.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            notifications.runtime_bindings.lock().unwrap().as_slice(),
+            [(None, false)],
+            "a confirmed profile runtime publishes its active core port binding"
+        );
     }
 
     #[tokio::test]
