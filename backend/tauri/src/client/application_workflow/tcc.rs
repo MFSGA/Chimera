@@ -110,7 +110,7 @@ impl ApplicationWorkflow {
         if matches!(&decision, DecisionOutcome::Committed)
             && let Some(notifications) = &self.notifications
         {
-            notifications.profiles_committed();
+            notifications.profiles_committed(Vec::new());
         }
 
         let request_runtime_rebuild = matches!(
@@ -1245,7 +1245,7 @@ mod tests {
             unreachable!("profile mutation does not publish Clash fields")
         }
 
-        fn profiles_committed(&self) {
+        fn profiles_committed(&self, _: Vec<chimera_config::profile::ProfileId>) {
             self.profiles.fetch_add(1, Ordering::SeqCst);
         }
 

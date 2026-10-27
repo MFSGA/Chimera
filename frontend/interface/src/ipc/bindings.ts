@@ -501,6 +501,7 @@ export const events = {
     'clash-connections-event',
   ),
   clashWsEvent: makeEvent<ClashWsEvent>('clash-ws-event'),
+  stateChangedEvent: makeEvent<StateChangedEvent>('state-changed-event'),
   storageValueChangedEvent: makeEvent<StorageValueChangedEvent>(
     'storage-value-changed-event',
   ),
@@ -2785,6 +2786,16 @@ export type SnapshotDiffHunk = {
   /**  Unified diff lines, including their space, plus, or minus prefix. */
   lines: string[];
 };
+
+export type StateChanged =
+  | { kind: 'nyanpasu_config' }
+  | { kind: 'clash_config' }
+  | { kind: 'profiles'; files: ProfileId[] }
+  | { kind: 'proxies' }
+  | { kind: 'runtime_transform_diagnostics' };
+
+/**  The backend's authoritative state-change event, delivered to every window. */
+export type StateChangedEvent = StateChanged;
 
 /**
  *  Network statistic widget size. Kept in the config crate so the setting's

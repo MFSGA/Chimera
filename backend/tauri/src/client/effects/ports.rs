@@ -4,6 +4,8 @@
 //! fan-out to actor clients and adapters stays inside the executor. There is no
 //! lookup API here, so this is not a service locator.
 
+use chimera_config::profile::ProfileId;
+
 #[cfg(test)]
 use super::status::EffectHealth;
 use super::{
@@ -107,7 +109,7 @@ pub(crate) trait CommitNotifications: Send + Sync + 'static {
 
     fn clash_committed(&self, fields: super::plan::ClashEffectFields);
 
-    fn profiles_committed(&self);
+    fn profiles_committed(&self, files: Vec<ProfileId>);
 
     fn runtime_bound(
         &self,
@@ -116,6 +118,43 @@ pub(crate) trait CommitNotifications: Send + Sync + 'static {
     );
 
     fn publish_full(&self, ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>);
+}
+
+/// The same post-commit notification reaches the effects owner and the UI.
+impl<A: CommitNotifications, B: CommitNotifications> CommitNotifications for (A, B) {
+    fn application_committed(
+        &self,
+        fields: super::plan::ApplicationEffectFields,
+        requested: Vec<super::plan::EffectKind>,
+    ) {
+        self.0
+            .application_committed(fields.clone(), requested.clone());
+        self.1.application_committed(fields, requested);
+    }
+
+    fn clash_committed(&self, fields: super::plan::ClashEffectFields) {
+        self.0.clash_committed(fields.clone());
+        self.1.clash_committed(fields);
+    }
+
+    fn profiles_committed(&self, files: Vec<ProfileId>) {
+        self.0.profiles_committed(files.clone());
+        self.1.profiles_committed(files);
+    }
+
+    fn runtime_bound(
+        &self,
+        ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+        refresh: bool,
+    ) {
+        self.0.runtime_bound(ports.clone(), refresh);
+        self.1.runtime_bound(ports, refresh);
+    }
+
+    fn publish_full(&self, ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>) {
+        self.0.publish_full(ports.clone());
+        self.1.publish_full(ports);
+    }
 }
 
 #[cfg(test)]
@@ -131,7 +170,7 @@ impl CommitNotifications for NoopCommitNotifications {
 
     fn clash_committed(&self, _: super::plan::ClashEffectFields) {}
 
-    fn profiles_committed(&self) {}
+    fn profiles_committed(&self, _: Vec<ProfileId>) {}
 
     fn runtime_bound(
         &self,

@@ -1,7 +1,7 @@
 /**
  * Chimera backend event name, use tauri event api to listen this event
  */
-export const CHIMERA_BACKEND_EVENT_NAME = 'nyanpasu://mutation';
+export const CHIMERA_BACKEND_EVENT_NAME = 'state-changed-event';
 
 /** Profile query key shared by Profile reads and mutation events. */
 export const PROFILES_QUERY_KEY = 'getProfiles';

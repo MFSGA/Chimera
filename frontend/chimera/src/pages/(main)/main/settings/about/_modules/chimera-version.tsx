@@ -44,6 +44,7 @@ const AutoCheckUpdate = () => {
 
   return (
     <SwitchItem
+      data-slot="auto-check-updates-switch"
       className="rounded-[20px]"
       checked={value ?? true}
       onCheckedChange={(checked) => upsert(checked)}

@@ -17,6 +17,7 @@ export const baseE2eSuites = {
     './specs/storage-event-resync.e2e.ts',
   ],
   profiles: [
+    './specs/state-change-profiles-main.e2e.ts',
     './specs/deep-link-main.e2e.ts',
     './specs/profile-local-draft.e2e.ts',
     './specs/profile-remote-validation.e2e.ts',
@@ -26,6 +27,7 @@ export const baseE2eSuites = {
     './specs/profiles-main-layout.e2e.ts',
   ],
   settings: [
+    './specs/state-change-main.e2e.ts',
     './specs/application-typed-state.e2e.ts',
     './specs/clash-typed-state.e2e.ts',
     './specs/session-typed-state.e2e.ts',

@@ -5,6 +5,10 @@ use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tauri_specta::Event as _;
+
+pub use crate::client::event_sink::StateChanged;
+use crate::client::event_sink::StateChangedEvent;
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow, Wry};
 
 #[derive(Debug, Default, Clone)]
@@ -14,22 +18,11 @@ pub struct Handle {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum StateChanged {
-    NyanpasuConfig,
-    ClashConfig,
-    RuntimeTransformDiagnostics,
-    Profiles,
-    Proxies,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Message {
     SetConfig(Result<(), String>),
 }
 
 // todo
-const STATE_CHANGED_URI: &str = "nyanpasu://mutation";
 const NOTIFY_MESSAGE_URI: &str = "nyanpasu://notice-message";
 
 impl Handle {
@@ -61,26 +54,27 @@ impl Handle {
     }
 
     pub fn refresh_clash() {
-        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::ClashConfig));
+        log_err!(Self::emit_state_changed(StateChanged::ClashConfig));
     }
 
     pub fn refresh_runtime_transform_diagnostics() {
-        log_err!(Self::emit(
-            STATE_CHANGED_URI,
+        log_err!(Self::emit_state_changed(
             StateChanged::RuntimeTransformDiagnostics
         ));
     }
 
     pub fn refresh_verge() {
-        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::NyanpasuConfig));
+        log_err!(Self::emit_state_changed(StateChanged::NyanpasuConfig));
     }
 
     pub fn refresh_profiles() {
-        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::Profiles));
+        log_err!(Self::emit_state_changed(StateChanged::Profiles {
+            files: Vec::new()
+        }));
     }
 
     pub fn mutate_proxies() {
-        log_err!(Self::emit(STATE_CHANGED_URI, StateChanged::Proxies));
+        log_err!(Self::emit_state_changed(StateChanged::Proxies));
     }
 
     pub fn update_systray() -> Result<()> {
@@ -94,6 +88,12 @@ impl Handle {
             bail!("update_systray unhandled error");
         }
         Tray::update_part(app_handle.as_ref().unwrap())?;
+        Ok(())
+    }
+
+    pub fn emit_state_changed(state: StateChanged) -> Result<()> {
+        let app = Self::app_handle().ok_or_else(|| anyhow::anyhow!("app_handle is not exist"))?;
+        StateChangedEvent(state).emit(&app)?;
         Ok(())
     }
 
