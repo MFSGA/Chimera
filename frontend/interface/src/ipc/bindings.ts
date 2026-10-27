@@ -419,7 +419,7 @@ export const commands = {
       __TAURI_INVOKE('remove_storage_item', { key }),
     ),
   /**
-   *  Debug: returns all frontend KV entries (keys with the `web:` prefix).
+   *  Debug: returns namespaced frontend KV entries and the known pre-namespace UI keys.
    *  Internal storage entries used by other subsystems are excluded.
    */
   getAllStorageItems: () =>
@@ -430,7 +430,7 @@ export const commands = {
       __TAURI_INVOKE('set_hotkeys', { hotkeys }),
     ),
   /**
-   *  Debug: clears all frontend KV entries (keys with the `web:` prefix).
+   *  Debug: clears namespaced frontend KV entries and known pre-namespace UI keys.
    *  Internal storage entries used by other subsystems are left intact.
    */
   clearStorage: () => typedError<null, string>(__TAURI_INVOKE('clear_storage')),

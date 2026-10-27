@@ -53,6 +53,7 @@
 | LESSON-20261026-004 | 2026-10-26 | Rust / Storage      | TaskTracker spawned storage event bridge outside Tokio runtime; use Tauri handle                                       | Mitigated |
 | LESSON-20261026-005 | 2026-10-26 | Frontend / Storage  | KV migration errors could let a stale queued write overwrite an unknown version; preserve errors and compare revisions | Mitigated |
 | LESSON-20261026-006 | 2026-10-26 | KV / Legacy UI      | Namespaced storage must adapt legacy event keys and remove known unprefixed fallbacks without clearing internal data   | Mitigated |
+| LESSON-20261026-008 | 2026-10-26 | Rust / IPC bindings | Specta freshness checks include command docs; regenerate bindings after changing exported IPC documentation            | Mitigated |
 
 ## 单条模板
 
@@ -766,6 +767,23 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 22/22；`pnpm typecheck:chimera`、E2E typecheck、frontend boundary 和目标 Rust 格式检查通过。外接构建目录的 Rust 定向测试 `removing_a_namespaced_value_also_removes_its_legacy_fallback` 1/1、`ipc::tests` 16/16 通过；PR 新 SHA 的多平台 CI 与 Desktop E2E 尚待结果。
 - 风险/回滚和清理证据（如涉及宿主状态）：限于持久化 KV 和 legacy UI 事件边界；fallback 只匹配已知旧前端键，避免触碰未命名空间的内部键。回滚此修复会重新引入旧配置复活和 legacy UI 事件断连。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：改动持久化键前同时检查读取、写入、事件订阅、单项删除、调试枚举与全量清理；任何兼容 fallback 都须配对删除测试并明确允许的旧键集合。
+
+### LESSON-20261026-008：修改导出 IPC 文档后要重新生成绑定
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（生成器和 freshness 单测本地通过；修复 SHA 的远端 CI/E2E 待验证）
+- 严重度：Low
+- 模块：Rust / IPC / Specta bindings
+- master commit / ref gitlink SHA / 平台与测试环境：PR #532 原 head `944b24f21751c664bf50e645bbf754c8ca2909c3`；ref 分支 gitlink `03ab6e5824cb44e527bde7cca28b699e8bf3a766`；macOS，Rust target 在外接构建盘。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#532](https://github.com/MFSGA/Chimera/pull/532)；[失败 CI run 40422919747](https://github.com/MFSGA/Chimera/actions/runs/40422919747)；同一原 SHA 的 Desktop E2E run 40422919746 通过。
+- 预期行为：任何 Rust IPC command 的 `specta` 导出文档或类型变化，都应与检入的 `frontend/interface/src/ipc/bindings.ts` 一致。
+- 真实异常、复现步骤与证据：原 SHA 的全平台 backend workspace test 均在 `specta_export::tests::typescript_bindings_are_fresh` 失败，提示运行被忽略的 `update_typescript_bindings` 测试；生成结果显示只有 `get_all_storage_items` 与 `clear_storage` 的 Rust 文档注释还保持旧描述。
+- 确认的根因与排除项：PR 更新了 IPC 命令文档，但没有更新 Specta 生成的 bindings 文件。此失败不是 KV 逻辑或目标平台特定问题。
+- 修复提交、差异映射及保留的兼容性边界：在 PR #532 运行既有 ignored generator 更新 `bindings.ts` 中两条导出命令文档；不改 Rust 命令合同或运行行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`specta_export::tests::typescript_bindings_are_fresh` 在 backend workspace `cargo test` 中执行，检查生成后 bindings 与检入文件逐字一致。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib specta_export::tests::update_typescript_bindings -- --ignored` 1/1、对应 `typescript_bindings_are_fresh` 1/1、包级 `cargo fmt --check`、bindings Prettier 和 `git diff --check` 通过。Rust 生成器使用既有外接 target cache；跨平台 CI 仍以修复后 SHA 为准。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变生成绑定中的 IPC 文档注释；不会触及用户配置、存储数据或运行时协议。可通过重新运行生成器复原。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：修改带 `#[specta::specta]` 的 IPC 时，应运行生成器并执行 freshness 测试；CI 已有该检查，无需新增工作流。
 
 ### LESSON-20261026-003：Updater manifest 必须使用已发布 tag 的稳定资产 URL
 
