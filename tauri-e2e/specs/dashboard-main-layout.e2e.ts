@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
+import {
+  sanitizeFrontendErrorCapture,
+  type FrontendErrorCapture,
+} from '../privacy-safe-error.js';
 import { openMainRoute } from './main-window.js';
 
 const targetPath = '/main/dashboard';
@@ -13,22 +21,24 @@ type AppAppearance = {
 let originalThemeMode: string | null | undefined;
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
-  return browser.execute(
-    async (name, parameters) => {
-      const internals = (
-        window as typeof window & {
-          __TAURI_INTERNALS__: {
-            invoke: <R>(
-              command: string,
-              args?: Record<string, unknown>,
-            ) => Promise<R>;
-          };
-        }
-      ).__TAURI_INTERNALS__;
-      return internals.invoke<T>(name, parameters);
-    },
-    command,
-    args,
+  return withBoundedWebDriverRequest(() =>
+    browser.execute(
+      async (name, parameters) => {
+        const internals = (
+          window as typeof window & {
+            __TAURI_INTERNALS__: {
+              invoke: <R>(
+                command: string,
+                args?: Record<string, unknown>,
+              ) => Promise<R>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        return internals.invoke<T>(name, parameters);
+      },
+      command,
+      args,
+    ),
   );
 }
 
@@ -50,6 +60,478 @@ function formatErrorDetails(error: unknown, seen = new Set<unknown>()): string {
   }
   return details.join('\n');
 }
+
+type MutableWebDriverOptions = {
+  connectionRetryCount?: number;
+  connectionRetryTimeout?: number;
+};
+
+type CaptureResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown; sessionUnavailable: boolean };
+
+type ResizeFailureEvidence = {
+  metadataPath: string;
+  metadata: Record<string, unknown>;
+  errors: string[];
+};
+
+async function installDashboardFrontendErrorCapture(): Promise<void> {
+  await browser.execute(() => {
+    type CapturedError = { type: string; message: string; at: number };
+    type CaptureState = {
+      events: CapturedError[];
+      cleanup: () => void;
+    };
+    type WindowWithCapture = typeof window & {
+      __CHIMERA_DASHBOARD_E2E_ERRORS__?: CaptureState;
+    };
+
+    const target = window as WindowWithCapture;
+    target.__CHIMERA_DASHBOARD_E2E_ERRORS__?.cleanup();
+    const events: CapturedError[] = [];
+    const format = (value: unknown): string => {
+      if (value instanceof Error) {
+        return `${value.name}: ${value.message}\n${value.stack ?? ''}`;
+      }
+      if (typeof value === 'string') return value;
+      if (
+        value === null ||
+        typeof value === 'number' ||
+        typeof value === 'boolean'
+      ) {
+        return String(value);
+      }
+      return '[non-string diagnostic value omitted]';
+    };
+    const record = (type: string, value: unknown) => {
+      if (events.length >= 25) return;
+      events.push({ type, message: format(value), at: Date.now() });
+    };
+    const onError = (event: ErrorEvent) =>
+      record('error', event.error ?? event.message);
+    const onUnhandledRejection = (event: PromiseRejectionEvent) =>
+      record('unhandledrejection', event.reason);
+    const originalConsoleError = console.error;
+    const wrappedConsoleError: Console['error'] = (...args) => {
+      record('console.error', args.map(format).join(' '));
+      originalConsoleError.apply(console, args);
+    };
+
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    console.error = wrappedConsoleError;
+    target.__CHIMERA_DASHBOARD_E2E_ERRORS__ = {
+      events,
+      cleanup: () => {
+        window.removeEventListener('error', onError);
+        window.removeEventListener('unhandledrejection', onUnhandledRejection);
+        if (console.error === wrappedConsoleError) {
+          console.error = originalConsoleError;
+        }
+      },
+    };
+  });
+}
+
+async function removeDashboardFrontendErrorCapture(): Promise<void> {
+  await browser.execute(() => {
+    const target = window as typeof window & {
+      __CHIMERA_DASHBOARD_E2E_ERRORS__?: { cleanup: () => void };
+    };
+    target.__CHIMERA_DASHBOARD_E2E_ERRORS__?.cleanup();
+    delete target.__CHIMERA_DASHBOARD_E2E_ERRORS__;
+  });
+}
+
+async function readDashboardFrontendErrorCapture(): Promise<FrontendErrorCapture> {
+  return browser.execute(() => {
+    const target = window as typeof window & {
+      __CHIMERA_DASHBOARD_E2E_ERRORS__?: {
+        events: Array<{ type: string; message: string; at: number }>;
+      };
+    };
+    const capture = target.__CHIMERA_DASHBOARD_E2E_ERRORS__;
+    return capture
+      ? { status: 'captured' as const, events: [...capture.events] }
+      : { status: 'not-installed' as const, events: [] };
+  });
+}
+
+async function withBoundedWebDriverRequest<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  const options = browser.options as MutableWebDriverOptions;
+  const previousTimeout = options.connectionRetryTimeout;
+  const previousRetryCount = options.connectionRetryCount;
+  options.connectionRetryTimeout = 5_000;
+  options.connectionRetryCount = 0;
+  try {
+    return await operation();
+  } finally {
+    if (previousTimeout === undefined) {
+      delete options.connectionRetryTimeout;
+    } else {
+      options.connectionRetryTimeout = previousTimeout;
+    }
+    if (previousRetryCount === undefined) {
+      delete options.connectionRetryCount;
+    } else {
+      options.connectionRetryCount = previousRetryCount;
+    }
+  }
+}
+
+async function captureWebDriverValue<T>(
+  label: string,
+  operation: () => Promise<T>,
+  errors: string[],
+): Promise<CaptureResult<T>> {
+  try {
+    return {
+      ok: true,
+      value: await withBoundedWebDriverRequest(operation),
+    };
+  } catch (error) {
+    errors.push(`${label}: ${formatErrorDetails(error)}`);
+    return {
+      ok: false,
+      error,
+      sessionUnavailable:
+        /invalid session id|no such session|session is not active/i.test(
+          formatErrorDetails(error),
+        ),
+    };
+  }
+}
+
+function summarizeDashboardStorage(value: string | null): unknown {
+  if (value === null) return null;
+  try {
+    const layouts = JSON.parse(value) as Record<string, unknown>;
+    return {
+      present: true,
+      byteLength: Buffer.byteLength(value),
+      layouts: Object.entries(layouts).map(([breakpoint, widgets]) => ({
+        breakpoint,
+        widgets: Array.isArray(widgets)
+          ? widgets.map((widget) => {
+              const entry = widget as Record<string, unknown>;
+              return {
+                type: typeof entry.type === 'string' ? entry.type : null,
+                x: typeof entry.x === 'number' ? entry.x : null,
+                y: typeof entry.y === 'number' ? entry.y : null,
+                w: typeof entry.w === 'number' ? entry.w : null,
+                h: typeof entry.h === 'number' ? entry.h : null,
+              };
+            })
+          : null,
+      })),
+    };
+  } catch {
+    return {
+      present: true,
+      byteLength: Buffer.byteLength(value),
+      parseable: false,
+    };
+  }
+}
+
+function getBinarySha256(binaryPath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const binary = fs.createReadStream(binaryPath, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    binary.on('data', (chunk) => hash.update(chunk));
+    binary.on('error', reject);
+    binary.on('end', () => resolve(hash.digest('hex')));
+  });
+}
+
+async function getApplicationBuildIdentity(): Promise<Record<string, unknown>> {
+  const repositoryRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../..',
+  );
+  const binaryName = process.platform === 'win32' ? 'chimera.exe' : 'chimera';
+  const binaryPath =
+    process.env.CHIMERA_E2E_BINARY ??
+    path.resolve(repositoryRoot, 'backend/target/e2e/debug', binaryName);
+  let sourceCommit = process.env.GITHUB_SHA ?? null;
+  if (!sourceCommit) {
+    try {
+      sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: repositoryRoot,
+        encoding: 'utf8',
+        timeout: 1_000,
+      }).trim();
+    } catch {
+      sourceCommit = null;
+    }
+  }
+
+  try {
+    const binary = fs.statSync(binaryPath);
+    let binarySha256: string | null = null;
+    let binaryHashUnavailable: string | null = null;
+    try {
+      binarySha256 = await getBinarySha256(binaryPath);
+    } catch (error) {
+      binaryHashUnavailable = String(error);
+    }
+    return {
+      sourceCommit,
+      binary: path.basename(binaryPath),
+      binarySha256,
+      binaryHashUnavailable,
+      binarySizeBytes: binary.size,
+      binaryModifiedAt: binary.mtime.toISOString(),
+    };
+  } catch (error) {
+    return {
+      sourceCommit,
+      binary: path.basename(binaryPath),
+      binaryUnavailable: String(error),
+    };
+  }
+}
+
+async function captureResizeFailureEvidence(
+  attempt: number,
+  phase: string,
+  error: unknown,
+  expected: unknown,
+  expectedStorage: string | null,
+  frontendErrorSnapshot?: FrontendErrorCapture,
+): Promise<ResizeFailureEvidence> {
+  const runtime = process.env.CHIMERA_E2E_RUNTIME_DIR;
+  const runId = (
+    runtime ? path.basename(runtime) : `local-${process.pid}`
+  ).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const directory =
+    process.env.CHIMERA_E2E_ARTIFACT_DIR ??
+    path.join(tmpdir(), 'chimera-e2e-artifacts');
+  const artifactBase = path.join(
+    directory,
+    `${runId}-dashboard-main-layout-settles-responsive-layout-changes-without-persisting-a-resize-projection-attempt-${attempt}-${process.pid}-${Date.now()}`,
+  );
+  const metadataPath = `${artifactBase}.json`;
+  const errors: string[] = [];
+  let observedUi: unknown = null;
+  let observedStorage: string | null = null;
+  let frontendErrors: FrontendErrorCapture = frontendErrorSnapshot ?? {
+    status: browser.sessionId ? 'not-installed' : 'session-unavailable',
+    events: [],
+  };
+  try {
+    fs.mkdirSync(directory, { recursive: true });
+  } catch (captureError) {
+    errors.push(
+      `Could not create dashboard failure evidence: ${String(captureError)}`,
+    );
+  }
+
+  const capabilities = browser.capabilities as {
+    browserName?: string;
+    browserVersion?: string;
+    platformName?: string;
+  };
+  if (!browser.sessionId) {
+    errors.push('WebDriver session unavailable; skipped UI evidence.');
+  } else {
+    let sessionUnavailable = false;
+    if (!frontendErrorSnapshot) {
+      const capturedFrontendErrors = await captureWebDriverValue(
+        'frontend errors',
+        readDashboardFrontendErrorCapture,
+        errors,
+      );
+      if (capturedFrontendErrors.ok) {
+        frontendErrors = sanitizeFrontendErrorCapture(
+          capturedFrontendErrors.value,
+        );
+      }
+    }
+    const screenshot = await captureWebDriverValue(
+      'screenshot',
+      () => browser.saveScreenshot(`${artifactBase}.before-cleanup.png`),
+      errors,
+    );
+    sessionUnavailable = !screenshot.ok && screenshot.sessionUnavailable;
+    if (!sessionUnavailable) {
+      const snapshot = await captureWebDriverValue(
+        'window and widget state',
+        () =>
+          browser.execute(() => {
+            const describeElement = (element: HTMLElement | null) => {
+              if (!element) return null;
+              const bounds = element.getBoundingClientRect();
+              const style = getComputedStyle(element);
+              return {
+                slot: element.dataset.slot ?? null,
+                widgetId: element.dataset.widgetId ?? null,
+                bounds: {
+                  x: bounds.x,
+                  y: bounds.y,
+                  width: bounds.width,
+                  height: bounds.height,
+                },
+                display: style.display,
+                visibility: style.visibility,
+              };
+            };
+            const widgets = Array.from(
+              document.querySelectorAll<HTMLElement>(
+                '[data-slot="widget-sparkline-card"]',
+              ),
+              (widget) => ({
+                ...describeElement(widget),
+                widgetId: widget.dataset.widgetId ?? null,
+              }),
+            ).sort((left, right) =>
+              String(left.widgetId).localeCompare(String(right.widgetId)),
+            );
+            return {
+              route: window.location.pathname,
+              viewport: {
+                width: window.innerWidth,
+                height: window.innerHeight,
+              },
+              widgets,
+              proxyShortcuts: describeElement(
+                document.querySelector<HTMLElement>(
+                  '[data-slot="proxy-shortcut-buttons"]',
+                ),
+              ),
+              coreShortcuts: describeElement(
+                document.querySelector<HTMLElement>(
+                  '[data-slot="current-core-card"]',
+                ),
+              ),
+            };
+          }),
+        errors,
+      );
+      sessionUnavailable = !snapshot.ok && snapshot.sessionUnavailable;
+      if (snapshot.ok) observedUi = snapshot.value;
+    }
+    if (!sessionUnavailable) {
+      const pageSource = await captureWebDriverValue(
+        'page source',
+        () => browser.getPageSource(),
+        errors,
+      );
+      sessionUnavailable = !pageSource.ok && pageSource.sessionUnavailable;
+      if (pageSource.ok) {
+        try {
+          fs.writeFileSync(
+            `${artifactBase}.before-cleanup.html`,
+            pageSource.value,
+          );
+        } catch (captureError) {
+          errors.push(`page source file: ${String(captureError)}`);
+        }
+      }
+    }
+    if (!sessionUnavailable) {
+      const storage = await captureWebDriverValue(
+        'persisted Dashboard storage',
+        () =>
+          invoke<string | null>('get_storage_item', {
+            key: 'dashboard-widgets',
+          }),
+        errors,
+      );
+      if (storage.ok) observedStorage = storage.value;
+    } else {
+      errors.push(
+        'Skipped remaining UI evidence after the WebDriver session became unavailable.',
+      );
+    }
+  }
+
+  return {
+    metadataPath,
+    metadata: {
+      spec: 'dashboard-main-layout.e2e.ts',
+      test: 'settles responsive layout changes without persisting a resize projection',
+      attempt,
+      phase,
+      expected,
+      expectedStorage: summarizeDashboardStorage(expectedStorage),
+      observed: {
+        ui: observedUi,
+        storage: summarizeDashboardStorage(observedStorage),
+      },
+      error: formatErrorDetails(error),
+      platform: process.platform,
+      nodeVersion: process.version,
+      runId,
+      driver: {
+        browserName: capabilities.browserName ?? null,
+        browserVersion: capabilities.browserVersion ?? null,
+        platformName: capabilities.platformName ?? process.platform,
+      },
+      application: await getApplicationBuildIdentity(),
+      frontendErrors,
+      kernel: 'not applicable to the Dashboard resize contract',
+      cleanupResults: [],
+      cleanupErrors: [],
+      captureErrors: errors,
+      capturedAt: new Date().toISOString(),
+    },
+    errors,
+  };
+}
+
+function finalizeResizeFailureEvidence(
+  evidence: ResizeFailureEvidence,
+  cleanupResults: Array<{ phase: string; succeeded: boolean }>,
+  cleanupErrors: string[],
+): string[] {
+  evidence.metadata.cleanupResults = cleanupResults;
+  evidence.metadata.cleanupErrors = cleanupErrors;
+  try {
+    fs.writeFileSync(
+      evidence.metadataPath,
+      JSON.stringify(evidence.metadata, null, 2),
+    );
+  } catch (error) {
+    evidence.errors.push(`Diagnostic metadata: ${String(error)}`);
+  }
+  if (evidence.errors.length > 0) {
+    process.stderr.write(
+      `Dashboard failure evidence incomplete: ${evidence.errors.join('; ')}\n`,
+    );
+  }
+  return evidence.errors;
+}
+
+async function refreshDashboardRouteForCleanup(): Promise<void> {
+  await browser.execute((pathname) => {
+    if (window.location.pathname !== pathname) {
+      window.history.pushState({}, '', pathname);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  }, targetPath);
+  await browser.refresh();
+  await browser.waitUntil(
+    async () =>
+      browser.execute(
+        (pathname) =>
+          window.location.pathname === pathname &&
+          document.querySelector('[data-slot="app-root"]') !== null,
+        targetPath,
+      ),
+    {
+      timeout: 5_000,
+      timeoutMsg: 'Dashboard route did not recover during test cleanup.',
+    },
+  );
+}
+
+let dashboardResizeAttempt = 0;
 
 describe('main dashboard reference layout', () => {
   before(async () => {
@@ -245,7 +727,10 @@ describe('main dashboard reference layout', () => {
 
   // Contract: docs/testing/contracts/dashboard-layout-resize.md
   it('settles responsive layout changes without persisting a resize projection', async () => {
-    const originalWindowSize = await browser.getWindowSize();
+    const attempt = ++dashboardResizeAttempt;
+    const originalWindowSize = await withBoundedWebDriverRequest(() =>
+      browser.getWindowSize(),
+    );
     const storageKey = 'dashboard-widgets';
     const originalStorage = await invoke<string | null>('get_storage_item', {
       key: storageKey,
@@ -328,105 +813,227 @@ describe('main dashboard reference layout', () => {
       hasCoreShortcuts: false,
     };
     const readVisibleWidgets = () =>
-      browser.execute(() => ({
-        sparklineIds: Array.from(
-          document.querySelectorAll<HTMLElement>(
-            '[data-slot="widget-sparkline-card"]',
+      withBoundedWebDriverRequest(() =>
+        browser.execute(() => ({
+          sparklineIds: Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[data-slot="widget-sparkline-card"]',
+            ),
+            (widget) => widget.dataset.widgetId,
+          )
+            .filter((id): id is string => id !== undefined)
+            .sort(),
+          hasProxyShortcuts: Boolean(
+            document.querySelector('[data-slot="proxy-shortcut-buttons"]'),
           ),
-          (widget) => widget.dataset.widgetId,
-        )
-          .filter((id): id is string => id !== undefined)
-          .sort(),
-        hasProxyShortcuts: Boolean(
-          document.querySelector('[data-slot="proxy-shortcut-buttons"]'),
-        ),
-        hasCoreShortcuts: Boolean(
-          document.querySelector('[data-slot="current-core-card"]'),
-        ),
-      }));
+          hasCoreShortcuts: Boolean(
+            document.querySelector('[data-slot="current-core-card"]'),
+          ),
+        })),
+      );
     const waitForWidgets = async (
       description: string,
       expected: typeof wideWidgets,
     ) => {
-      let lastObserved = 'not observed';
+      let lastObserved: typeof wideWidgets | null = null;
       try {
-        await browser.waitUntil(
-          async () => {
-            lastObserved = JSON.stringify(await readVisibleWidgets());
-            return lastObserved === JSON.stringify(expected);
-          },
-          {
-            timeout: 10_000,
-            timeoutMsg: `${description} did not settle to the expected widgets.`,
-          },
+        await withBoundedWebDriverRequest(() =>
+          browser.waitUntil(
+            async () => {
+              lastObserved = await readVisibleWidgets();
+              return isDeepStrictEqual(lastObserved, expected);
+            },
+            {
+              timeout: 10_000,
+              timeoutMsg: `${description} did not settle to the expected widgets.`,
+            },
+          ),
         );
       } catch (error) {
-        throw new Error(`${description}; last state: ${lastObserved}.`, {
-          cause: error,
-        });
+        throw new Error(
+          `${description}; last state: ${JSON.stringify(lastObserved ?? 'not observed')}.`,
+          {
+            cause: error,
+          },
+        );
       }
     };
 
     let primaryError: unknown;
+    let phase = 'write deterministic dashboard layout fixture';
+    let evidence: ResizeFailureEvidence | null = null;
+    let frontendErrorSnapshot: FrontendErrorCapture | null = null;
+    const evidenceErrors: string[] = [];
+    const cleanupResults: Array<{ phase: string; succeeded: boolean }> = [];
+    const cleanupErrors: Array<{ phase: string; error: unknown }> = [];
     try {
       await invoke('set_storage_item', {
         key: storageKey,
         value: testStorage,
       });
-      await browser.waitUntil(
-        async () =>
-          browser.execute(
-            (key, expected) => {
-              const cached = localStorage.getItem(`nyanpasu-kv-:${btoa(key)}`);
-              return cached === expected;
-            },
-            storageKey,
-            testStorage,
-          ),
-        {
-          timeout: 5_000,
-          timeoutMsg: 'Dashboard test fixture did not reach the local cache.',
-        },
+      phase = 'wait for the fixture in the local KV cache';
+      await withBoundedWebDriverRequest(() =>
+        browser.waitUntil(
+          async () =>
+            browser.execute(
+              (key, expected) => {
+                const cached = localStorage.getItem(
+                  `nyanpasu-kv-:${btoa(key)}`,
+                );
+                return cached === expected;
+              },
+              storageKey,
+              testStorage,
+            ),
+          {
+            timeout: 5_000,
+            timeoutMsg: 'Dashboard test fixture did not reach the local cache.',
+          },
+        ),
       );
-      await browser.refresh();
-      await openMainRoute(targetPath);
+      phase = 'refresh and open the Dashboard route';
+      await withBoundedWebDriverRequest(() => browser.refresh());
+      await withBoundedWebDriverRequest(() => openMainRoute(targetPath));
+      phase = 'install frontend error capture';
+      await withBoundedWebDriverRequest(installDashboardFrontendErrorCapture);
+      phase = 'wait for the initial wide layout';
       await waitForWidgets('Wide Dashboard layout', wideWidgets);
 
-      await browser.setWindowSize(680, originalWindowSize.height);
-      await browser.waitUntil(
-        async () => browser.execute(() => window.innerWidth < 800),
-        {
-          timeout: 5_000,
-          timeoutMsg: 'Dashboard window did not enter the narrow layout.',
-        },
+      phase = 'resize the window to the narrow layout';
+      await withBoundedWebDriverRequest(() =>
+        browser.setWindowSize(680, originalWindowSize.height),
       );
+      let narrowViewportWidth: number | null = null;
+      try {
+        await withBoundedWebDriverRequest(() =>
+          browser.waitUntil(
+            async () => {
+              narrowViewportWidth = await browser.execute(
+                () => window.innerWidth,
+              );
+              return narrowViewportWidth < 800;
+            },
+            {
+              timeout: 5_000,
+              timeoutMsg: 'Dashboard window did not enter the narrow layout.',
+            },
+          ),
+        );
+      } catch (error) {
+        throw new Error(
+          `Dashboard window did not enter the narrow layout; last viewport width=${narrowViewportWidth}.`,
+          { cause: error },
+        );
+      }
+      phase = 'wait for the narrow Dashboard layout';
       await waitForWidgets('Narrow Dashboard layout', narrowWidgets);
 
-      await browser.setWindowSize(
-        originalWindowSize.width,
-        originalWindowSize.height,
+      phase = 'restore the original wide window size';
+      await withBoundedWebDriverRequest(() =>
+        browser.setWindowSize(
+          originalWindowSize.width,
+          originalWindowSize.height,
+        ),
       );
-      await browser.waitUntil(
-        async () => browser.execute(() => window.innerWidth >= 1_000),
-        {
-          timeout: 5_000,
-          timeoutMsg: 'Dashboard window did not return to its wide layout.',
-        },
-      );
+      let restoredViewportWidth: number | null = null;
+      try {
+        await withBoundedWebDriverRequest(() =>
+          browser.waitUntil(
+            async () => {
+              restoredViewportWidth = await browser.execute(
+                () => window.innerWidth,
+              );
+              return restoredViewportWidth >= 1_000;
+            },
+            {
+              timeout: 5_000,
+              timeoutMsg: 'Dashboard window did not return to its wide layout.',
+            },
+          ),
+        );
+      } catch (error) {
+        throw new Error(
+          `Dashboard window did not return to its wide layout; last viewport width=${restoredViewportWidth}.`,
+          { cause: error },
+        );
+      }
+      phase = 'wait for the restored wide Dashboard layout';
       await waitForWidgets('Restored wide Dashboard layout', wideWidgets);
 
-      assert.equal(
-        await invoke<string | null>('get_storage_item', {
-          key: storageKey,
+      phase = 'verify responsive projection did not change persisted storage';
+      const actualStorage = await invoke<string | null>('get_storage_item', {
+        key: storageKey,
+      });
+      assert.ok(
+        actualStorage === testStorage,
+        JSON.stringify({
+          message:
+            'A responsive layout projection must not overwrite saved layouts.',
+          expected: summarizeDashboardStorage(testStorage),
+          actual: summarizeDashboardStorage(actualStorage),
         }),
-        testStorage,
-        'A responsive layout projection must not overwrite saved layouts.',
       );
     } catch (error) {
       primaryError = error;
-    } finally {
-      const cleanupErrors: unknown[] = [];
       try {
+        evidence = await captureResizeFailureEvidence(
+          attempt,
+          phase,
+          error,
+          { wideWidgets, narrowWidgets, storageUnchanged: true },
+          testStorage,
+        );
+        frontendErrorSnapshot = evidence.metadata
+          .frontendErrors as FrontendErrorCapture;
+      } catch (captureError) {
+        evidenceErrors.push(
+          `Evidence capture threw: ${formatErrorDetails(captureError)}`,
+        );
+      }
+    } finally {
+      if (!frontendErrorSnapshot) {
+        const frontendErrors = await captureWebDriverValue(
+          'frontend errors before cleanup',
+          readDashboardFrontendErrorCapture,
+          evidenceErrors,
+        );
+        frontendErrorSnapshot = frontendErrors.ok
+          ? sanitizeFrontendErrorCapture(frontendErrors.value)
+          : { status: 'session-unavailable', events: [] };
+      }
+      const runCleanupStep = async (
+        cleanupPhase: string,
+        operation: () => Promise<unknown>,
+      ) => {
+        try {
+          await withBoundedWebDriverRequest(operation);
+          cleanupResults.push({ phase: cleanupPhase, succeeded: true });
+        } catch (error) {
+          cleanupResults.push({ phase: cleanupPhase, succeeded: false });
+          cleanupErrors.push({ phase: cleanupPhase, error });
+          if (!evidence) {
+            try {
+              evidence = await captureResizeFailureEvidence(
+                attempt,
+                cleanupPhase,
+                error,
+                { route: targetPath, viewport: originalWindowSize },
+                originalStorage,
+                frontendErrorSnapshot ?? undefined,
+              );
+            } catch (captureError) {
+              evidenceErrors.push(
+                `Evidence capture threw: ${formatErrorDetails(captureError)}`,
+              );
+            }
+          }
+        }
+      };
+      await runCleanupStep(
+        'remove frontend error capture',
+        removeDashboardFrontendErrorCapture,
+      );
+      await runCleanupStep('restore Dashboard storage', async () => {
         if (originalStorage === null) {
           await invoke('remove_storage_item', { key: storageKey });
         } else {
@@ -435,49 +1042,66 @@ describe('main dashboard reference layout', () => {
             value: originalStorage,
           });
         }
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        await browser.setWindowSize(
+      });
+      await runCleanupStep('restore the original window size', () =>
+        browser.setWindowSize(
           originalWindowSize.width,
           originalWindowSize.height,
-        );
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-      try {
-        await browser.refresh();
-        await openMainRoute(targetPath);
-        assert.equal(
-          await invoke<string | null>('get_storage_item', {
-            key: storageKey,
-          }),
-          originalStorage,
-          'Dashboard test storage was not restored.',
-        );
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
+        ),
+      );
+      await runCleanupStep(
+        'refresh and verify the restored Dashboard',
+        async () => {
+          await refreshDashboardRouteForCleanup();
+          const restoredStorage = await invoke<string | null>(
+            'get_storage_item',
+            { key: storageKey },
+          );
+          assert.ok(
+            restoredStorage === originalStorage,
+            JSON.stringify({
+              message: 'Dashboard test storage was not restored.',
+              expected: summarizeDashboardStorage(originalStorage),
+              actual: summarizeDashboardStorage(restoredStorage),
+            }),
+          );
+        },
+      );
+    }
 
-      if (primaryError || cleanupErrors.length > 0) {
-        const failures = [
-          ...(primaryError
-            ? [`Primary failure:\n${formatErrorDetails(primaryError)}`]
-            : []),
-          ...cleanupErrors.map(
-            (error, index) =>
-              `Cleanup failure ${index + 1}:\n${formatErrorDetails(error)}`,
+    if (evidence) {
+      evidenceErrors.push(
+        ...finalizeResizeFailureEvidence(
+          evidence,
+          cleanupResults,
+          cleanupErrors.map(
+            ({ phase: cleanupPhase, error }) =>
+              `${cleanupPhase}: ${formatErrorDetails(error)}`,
           ),
-        ];
-        throw new AggregateError(
-          [...(primaryError ? [primaryError] : []), ...cleanupErrors],
-          [
-            'Dashboard responsive resize failed or its cleanup was incomplete.',
-            ...failures,
-          ].join('\n\n'),
-        );
-      }
+        ),
+      );
+    }
+    if (primaryError || cleanupErrors.length > 0) {
+      const failures = [
+        ...(primaryError
+          ? [`Primary failure:\n${formatErrorDetails(primaryError)}`]
+          : []),
+        ...cleanupErrors.map(
+          ({ phase: cleanupPhase, error }, index) =>
+            `Cleanup failure ${index + 1} (${cleanupPhase}):\n${formatErrorDetails(error)}`,
+        ),
+        ...evidenceErrors.map((error) => `Evidence capture issue:\n${error}`),
+      ];
+      throw new AggregateError(
+        [
+          ...(primaryError ? [primaryError] : []),
+          ...cleanupErrors.map(({ error }) => error),
+        ],
+        [
+          'Dashboard responsive resize failed or its cleanup was incomplete.',
+          ...failures,
+        ].join('\n\n'),
+      );
     }
   });
 
