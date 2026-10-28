@@ -15,7 +15,7 @@ use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_shell::ShellExt;
 use tracing::{debug, instrument};
 
-use crate::{client::ChimeraClient, utils::resolve};
+use crate::client::ChimeraClient;
 
 const ALPHABET: [char; 62] = [
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
@@ -169,7 +169,6 @@ pub fn read_merge_mapping(path: &PathBuf) -> Result<Mapping> {
 pub async fn cleanup_processes_async(app_handle: &AppHandle) -> anyhow::Result<()> {
     debug!(target: "app", "cleanup processes");
     // let _ = super::resolve::save_window_state(app_handle, true);
-    resolve::resolve_reset();
     /* let widget_manager = app_handle.state::<crate::widget::WidgetManager>(); */
     let connector = app_handle
         .try_state::<crate::core::clash::ws::ClashConnectionsConnector>()

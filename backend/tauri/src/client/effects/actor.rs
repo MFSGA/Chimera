@@ -96,6 +96,10 @@ enum Message {
         inputs: Box<ApplicationEffectInputs>,
         reply: RpcReplyPort<EffectStatus>,
     },
+    ReconcileEffect {
+        kind: EffectKind,
+        reply: RpcReplyPort<EffectStatus>,
+    },
     Completed {
         group: usize,
         revision: EffectRevision,
@@ -186,6 +190,30 @@ impl State {
         }
         self.revision += 1;
         let revision = EffectRevision::new(self.revision);
+        let superseded: Vec<_> = self
+            .waiters
+            .keys()
+            .filter(|(kind, previous)| changed.contains(kind) && *previous < revision)
+            .copied()
+            .collect();
+        for key in superseded {
+            if let Some(replies) = self.waiters.remove(&key) {
+                let applied_revision = self
+                    .entries
+                    .get(&key.0)
+                    .map(|entry| entry.status.applied_revision)
+                    .unwrap_or_default();
+                let status = EffectStatus {
+                    kind: key.0,
+                    desired_revision: key.1,
+                    applied_revision,
+                    health: EffectHealth::Superseded,
+                };
+                for reply in replies {
+                    let _ = reply.send(status.clone());
+                }
+            }
+        }
         for mut effect in effects {
             let kind = effect.kind();
             if matches!(
@@ -412,6 +440,52 @@ impl Actor for EffectsActor {
                     },
                 });
             }
+            Message::ReconcileEffect { kind, reply } if !state.closed => {
+                if !state.entries.contains_key(&kind) {
+                    let _ = reply.send(EffectStatus {
+                        kind,
+                        desired_revision: EffectRevision::default(),
+                        applied_revision: EffectRevision::default(),
+                        health: EffectHealth::Degraded {
+                            code: "effect_not_initialized",
+                            message: format!("the {kind:?} effect has not been initialized"),
+                            retryable: true,
+                        },
+                    });
+                } else {
+                    let settled = state
+                        .entries
+                        .get(&kind)
+                        .is_some_and(|entry| entry.status.health != EffectHealth::Pending);
+                    if settled && state.entries[&kind].status.health != EffectHealth::Healthy {
+                        state.retry(kind, false);
+                    }
+                    let entry = &state.entries[&kind];
+                    let revision = entry.status.desired_revision;
+                    if entry.status.health != EffectHealth::Pending {
+                        let _ = reply.send(entry.status.clone());
+                    } else {
+                        state
+                            .waiters
+                            .entry((kind, revision))
+                            .or_default()
+                            .push(reply);
+                        state.drive(&myself);
+                    }
+                }
+            }
+            Message::ReconcileEffect { kind, reply } => {
+                let _ = reply.send(EffectStatus {
+                    kind,
+                    desired_revision: EffectRevision::default(),
+                    applied_revision: EffectRevision::default(),
+                    health: EffectHealth::Degraded {
+                        code: "effects_shut_down",
+                        message: "the application effect actor is shutting down".into(),
+                        retryable: false,
+                    },
+                });
+            }
             Message::Completed {
                 group: completed_group,
                 revision,
@@ -613,6 +687,32 @@ impl EffectsClient {
             },
         }
     }
+
+    /// Reconciles one already-published effect and waits for its owner. This
+    /// is used by confirmed agent actions that must verify host state before
+    /// reporting completion; ordinary UI mutations remain asynchronous.
+    pub async fn reconcile_effect(&self, kind: EffectKind) -> EffectStatus {
+        match self
+            .actor
+            .call(
+                |reply| Message::ReconcileEffect { kind, reply },
+                Some(Duration::from_secs(20)),
+            )
+            .await
+        {
+            Ok(CallResult::Success(status)) => status,
+            other => EffectStatus {
+                kind,
+                desired_revision: EffectRevision::default(),
+                applied_revision: EffectRevision::default(),
+                health: EffectHealth::Degraded {
+                    code: "effect_wait_failed",
+                    message: format!("the shared effect owner did not settle: {other:?}"),
+                    retryable: true,
+                },
+            },
+        }
+    }
     pub fn snapshot(&self) -> EffectsSnapshot {
         self.status.borrow().clone()
     }
@@ -781,6 +881,30 @@ mod tests {
             plan.effects(),
             [ApplicationEffect::SystemProxy(desired)] if desired.port == Some(17890)
         ));
+        let _ = effects.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn confirmed_action_can_wait_for_the_shared_system_proxy_owner() {
+        let (sender, _receiver) = mpsc::unbounded_channel();
+        let mut desired = inputs();
+        desired.app.enable_system_proxy = true;
+        desired.ports = Some(ResolvedPortBindings {
+            mixed_port: 17890,
+            ..Default::default()
+        });
+        let effects = EffectsClient::spawn(EffectsArgs {
+            port: Arc::new(RecordingEffectsPort { plans: sender }),
+            initial: inputs(),
+        })
+        .await
+        .expect("effects actor");
+
+        effects.reconcile(desired);
+        let status = effects.reconcile_effect(EffectKind::SystemProxy).await;
+
+        assert_eq!(status.health, EffectHealth::Healthy);
+        assert!(status.applied_revision >= status.desired_revision);
         let _ = effects.shutdown().await;
     }
 }
