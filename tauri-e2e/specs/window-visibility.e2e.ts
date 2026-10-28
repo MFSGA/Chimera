@@ -65,7 +65,7 @@ describe('Windows WebView visibility follows its native window', () => {
       this.skip();
     }
 
-    await openMainRoute('/dashboard');
+    await openMainRoute('/main/dashboard');
     const initialVisibility = await browser.execute(
       () => document.visibilityState,
     );
