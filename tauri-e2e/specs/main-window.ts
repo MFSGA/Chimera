@@ -171,7 +171,10 @@ export async function ensureMainWindow() {
 
 export async function openMainRoute(
   pathname: string,
-  options: { waitForNestedOutlets?: boolean } = {},
+  options: {
+    waitForNestedOutlets?: boolean;
+    waitForRouteAnimation?: boolean;
+  } = {},
 ) {
   await ensureMainWindow();
 
@@ -202,5 +205,7 @@ export async function openMainRoute(
       ),
     { timeout: 30_000, timeoutMsg: `${pathname} did not render.` },
   );
-  await waitForMainRouteSettled(15_000, options.waitForNestedOutlets ?? true);
+  if (options.waitForRouteAnimation !== false) {
+    await waitForMainRouteSettled(15_000, options.waitForNestedOutlets ?? true);
+  }
 }

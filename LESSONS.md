@@ -52,6 +52,7 @@
 | LESSON-20261026-003 | 2026-10-26 | Updater / Release   | Draft asset URLs contained temporary `untagged-*` paths; stable tag URLs and downloads verified after regeneration             | Verified  |
 | LESSON-20261026-007 | 2026-10-26 | E2E / Dashboard     | Resize E2E hid a JSON key-order assertion defect behind cleanup; capture pre-cleanup evidence and compare objects structurally | Mitigated |
 | LESSON-20261027-001 | 2026-10-27 | E2E / Dashboard     | Resize E2E requested 680px but kept an 8-column grid; assert the measured four-column grid interval                            | Open      |
+| LESSON-20261027-002 | 2026-10-27 | Rust / concurrency  | Agent proxy rollback and stale-port repair must serialize with newer user settings                                             | Verified  |
 
 ## 单条模板
 
@@ -75,6 +76,29 @@
 ```
 
 _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断事实。_
+
+### LESSON-20261027-003：非视觉 smoke 不应等待隐藏 WebKit 窗口的路由动画
+
+- 日期：2026-10-27
+- 状态：Mitigated（CSP smoke 已单独通过；默认 smoke 仍有其他两个 macOS WebKit 用例失败）
+- 模块：桌面 E2E
+- 证据：macOS WebKit 的 `smoke.e2e.ts` 在访问 main 窗口 fetch policy 前等待路由动画；诊断显示文档为 hidden，动画 `currentTime` 持续为 0，超时 15 秒。该契约只检查两个窗口中的 fetch 能力，不检查布局或动画。
+- 修复：`openMainRoute` 允许调用者明确跳过路由动画等待；仅非视觉 fetch smoke 使用此选项，主 UI 布局测试保留默认动画等待。
+- 回归测试：`pnpm --filter @chimera/tauri-e2e typecheck`；`CHIMERA_E2E_ARTIFACT_DIR=/tmp/chimera-e2e-artifacts pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/smoke.e2e.ts`，1 个 spec 中 5/5 用例通过。
+- 验证限制：完整 `pnpm --filter @chimera/tauri-e2e test:smoke` 仍为 2 个 spec 通过、2 个失败；proxy localization 的新增配置按钮 30 秒不可点击，legacy connections 页面在 hidden 文档下动画停在 0。它们尚未在隔离的可见 macOS runner 上复现；不能把整个 smoke suite 报告为通过。
+- 后续：在允许真实桌面窗口前台运行的 macOS runner 上重跑完整 smoke；只有当用例不验证视觉布局/动画时，才可跳过动画稳定等待。
+
+### LESSON-20261027-002：代理动作回滚与 stale-proxy 修复要串行化
+
+- 日期：2026-10-27
+- 状态：Verified（本地定向及全量 Rust lib 测试通过；远程 CI 尚待本批提交后验证）
+- 模块：系统代理 / Agent / 生命周期
+- 证据：独立复核发现 stale 修复遇到偏好 CAS 冲突时可能恢复过期 OS 配置；Agent 回滚在保存旧偏好与恢复 OS 之间可能被新用户偏好穿插；mixed-port 更新在 stale 修复期间也未受同一互斥保护。后续复核发现随机端口把 fallback 误当作运行端口、stale 修复失败回滚可能覆盖外部宿主改动、Agent 在 Android/iOS 引用被 cfg 排除的类型，以及 effects 将 `ClashInfo::port`（controller）误当成 mixed listener。最新复核发现核心在 Agent 快照校验后停止时，启用代理动作仍可能仅凭最后一次 receipt 端口报告成功；AllowFallback 也可能选择不同于 start port 的备用端口。
+- 修复：typed/legacy 代理偏好、mixed-port 更新和 Agent 设置/验证/回滚共用 client 级互斥；legacy `patch_clash_core_config` 经 `feat::patch_clash` 到达带锁的 client mapping writer；stale 生命周期在 OS 写入前复核有效 mixed-port；effects 只使用与当前 host 状态匹配的 `RuntimeApplyReceipt.ports.bindings.mixed_port`。Agent 启用要求活动 runtime receipt，effect 后和最终快照都确认核心仍运行；Agent 和停止后 stale 修复优先使用当前 host 最近一次 receipt。Random/AllowFallback 策略无 receipt 时端口不可知，Agent 不提供依赖该端口的开关或 stale 修复；不使用可能在启动时被覆盖的 Verge 镜像猜测旧运行端口。只有 Fixed 策略缺少 receipt 时才以配置端口作为确定值。stale 回滚重新读取 OS，仅在代理仍等于本次禁用写入时恢复，并在状态未知/已变化时清除旧所有权；移动平台不暴露不支持的 Agent 系统代理提案和执行。CAS 冲突时发布最新偏好，不恢复过期 OS 状态。普通设置与 stale 修复共用 legacy Verge 镜像持久化入口。
+- 回归测试：五个 `client::core_lifecycle::tests::stale_proxy_lifecycle_*` 用例覆盖核心状态/端口拒绝、成功提交与镜像持久化、镜像失败、偏好版本冲突不重新启用旧代理；`client::tests::system_proxy_mutation_guard_serializes_competing_transactions` 验证同一 client 的代理事务互斥；raw mapping guard 判定测试、`client::ports::tests::effective_random_mixed_port_prefers_the_confirmed_runtime_binding`（含 Random、AllowFallback 无回执和 Fixed fallback）、`client::application::tests::effects_receive_the_confirmed_mixed_port_not_the_controller_port`、`features::agent::actions::tests::new_action_verification_requires_desired_and_observed_state` 和 `client::system_proxy::tests::stale_proxy_rollback_does_not_overwrite_a_concurrent_host_change` 覆盖旧 IPC 锁入口、runtime receipt、controller/mixed 区分、未知端口拒绝、核心停止后的最终验证与宿主并发修改。
+- 验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=1` 为 659 passed、0 failed、1 ignored。测试使用 fake OS port，不证明真实桌面代理设置行为；本机未运行生产 adapter 或代理/TUN/Service 宿主副作用 E2E。Android target 下载停滞后中止，移动 cfg 尚未交叉编译验证。当前最终 SHA 的远程 CI 待本批提交后验证。
+- 覆盖缺口：单测确认最终快照在核心停止时拒绝将启用代理报告为成功；没有确定性动作级测试在同一次执行中断言核心停止后 OS 代理和偏好均已恢复。
+- 后续：远程 CI 需在本批提交 SHA 上验证。若移除 CAS/互斥或改变 legacy 镜像所有权，应重审这些冲突与持久化断言。
 
 ### LESSON-20261014-001：epoch PID 记录可能在检查后、读取前被并发清理
 

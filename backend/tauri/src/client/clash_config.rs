@@ -24,7 +24,7 @@ use crate::{
     config::{clash::ClashInfo, core::Config, runtime::ClashConfigOverrides},
     core::{
         clash::transaction::{RuntimePatchCoordinator, TransactionOutcome},
-        handle, sysopt,
+        handle,
     },
     log_err,
     state::{
@@ -86,9 +86,14 @@ struct ClashPatchPlan {
 impl ClashConfigClient {
     #[cfg(test)]
     pub(crate) fn legacy() -> anyhow::Result<Self> {
+        Self::legacy_with(ClashConfig::default())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn legacy_with(config: ClashConfig) -> anyhow::Result<Self> {
         Ok(Self::with_state_and_running_config(
             ClashConfigStateBackend::Static {
-                state: parking_lot::RwLock::new(ClashConfig::default()),
+                state: parking_lot::RwLock::new(config),
             },
             Arc::new(TestRunningConfigBridge),
         ))
@@ -576,6 +581,12 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn patch_clash(&self, patch: Mapping) -> Result<()> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let _system_proxy_mutation = if patch_changes_mixed_port(&patch) {
+            Some(self.lock_system_proxy_mutation().await)
+        } else {
+            None
+        };
         self.inner.clash_config.patch(self, patch).await
     }
 
@@ -652,6 +663,10 @@ fn apply_mapping_to_typed_clash(current: &ClashConfig, patch: &Mapping) -> Resul
 
 fn get_non_null_patch_value<'a>(patch: &'a Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
     patch.get(key).filter(|value| !value.is_null())
+}
+
+fn patch_changes_mixed_port(patch: &Mapping) -> bool {
+    get_non_null_patch_value(patch, "mixed-port").is_some()
 }
 
 fn plan_clash_patch(patch: &Mapping, current: &ClashConfig) -> Result<ClashPatchPlan> {
@@ -790,14 +805,9 @@ fn should_reconcile_clash_patch(
 }
 
 fn run_clash_patch_side_effects(client: &ChimeraClient, plan: &ClashPatchPlan) {
-    if plan.mixed_port.is_some() {
-        log_err!(sysopt::Sysopt::global().init_sysproxy());
-    }
-
     if plan.mode_changed {
         crate::feat::update_proxies_buff(client.clone(), None);
         log::debug!("systray mode changed, update proxies buff");
-        log_err!(handle::Handle::update_systray_part());
     }
 }
 
@@ -881,6 +891,18 @@ mod tests {
         assert_eq!(ipv6, Some(true));
         assert_eq!(next.mixed_port.start_port, 17890);
         assert_eq!(next.external_controller.port.start_port, 19090);
+    }
+
+    #[test]
+    fn raw_mixed_port_patch_is_guarded_but_absent_or_null_is_not() {
+        let mut patch = Mapping::new();
+        assert!(!patch_changes_mixed_port(&patch));
+
+        patch.insert("mixed-port".into(), Value::Null);
+        assert!(!patch_changes_mixed_port(&patch));
+
+        patch.insert("mixed-port".into(), 17890.into());
+        assert!(patch_changes_mixed_port(&patch));
     }
 
     #[test]

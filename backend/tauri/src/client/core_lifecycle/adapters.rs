@@ -274,6 +274,18 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         Ok(self.facade().status().await)
     }
 
+    async fn active_runtime_receipt(
+        &self,
+    ) -> anyhow::Result<Option<Arc<crate::client::runtime::RuntimeApplyReceipt>>> {
+        self.facade().active_runtime_receipt().await
+    }
+
+    fn last_confirmed_runtime_receipt(
+        &self,
+    ) -> Option<Arc<crate::client::runtime::RuntimeApplyReceipt>> {
+        self.facade().last_confirmed_runtime_receipt()
+    }
+
     async fn observe_runtime_baseline(
         &self,
     ) -> anyhow::Result<crate::client::application_workflow::mutation::KnownRuntimeState> {

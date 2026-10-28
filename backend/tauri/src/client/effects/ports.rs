@@ -28,8 +28,9 @@ pub trait ApplicationEffectsPort: Send + Sync + 'static {
         plan: ApplicationEffectPlan,
     ) -> Vec<EffectStatus>;
 
-    /// Shutdown path: restores the system state the app found and drops its OS
-    /// registrations. Never fails.
+    /// Shutdown path for owners that still need an explicit request, such as
+    /// releasing registered shortcuts. The system proxy actor restores itself
+    /// when the app shutdown token is cancelled, before the task tracker drains.
     async fn shutdown(&self) -> Vec<EffectStatus>;
 }
 

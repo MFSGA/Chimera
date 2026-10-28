@@ -20,6 +20,8 @@ pub mod runtime;
 pub(crate) mod runtime_inspection;
 mod session_state;
 mod system_dns;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) mod system_proxy;
 pub(crate) mod traffic;
 
 use std::sync::Arc;
@@ -31,6 +33,8 @@ use chimera_config::profile::{
 };
 use struct_patch::Patch as _;
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) use self::application::SystemProxyMutation;
 #[allow(unused_imports)]
 pub(crate) use self::core_lifecycle::LegacyCoreBridge;
 pub use self::runtime::{Degradation, DegradationPhase, MutationOutcome};
@@ -85,6 +89,8 @@ pub(crate) struct ClientSetupArgs {
     pub(crate) ui_sink: Arc<dyn UiEventSink>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) effects: Arc<dyn effects::ports::ApplicationEffectsPort>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) system_proxy: system_proxy::SystemProxyClient,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     pub(crate) accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -169,7 +175,13 @@ struct ChimeraClientInner {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     effects: effects::actor::EffectsClient,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    system_proxy: Option<system_proxy::SystemProxyClient>,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     hotkey_mutation: tokio::sync::Mutex<()>,
+    /// Serializes proxy host changes with every typed and legacy proxy
+    /// preference write, including Agent's confirmed stale-proxy repair.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    system_proxy_mutation: tokio::sync::Mutex<()>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     accelerators: Arc<dyn hotkey::ports::AcceleratorValidator>,
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -205,6 +217,8 @@ impl ChimeraClient {
             ui_sink,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 effects: effects_port,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            system_proxy,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             accelerators,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -272,6 +286,8 @@ impl ChimeraClient {
             None,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            Some(system_proxy),
             accelerators,
             window,
         );
@@ -363,6 +379,8 @@ impl ChimeraClient {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            None,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             Arc::new(hotkey::adapters::PlatformAcceleratorValidator),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             Arc::new(hotkey::ports::MockWindowControl::new()),
@@ -380,6 +398,9 @@ impl ChimeraClient {
         #[cfg(test)] _test_profile_dir: Option<Arc<tempfile::TempDir>>,
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         effects: effects::actor::EffectsClient,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))] system_proxy: Option<
+            system_proxy::SystemProxyClient,
+        >,
         #[cfg(not(any(target_os = "android", target_os = "ios")))] accelerators: Arc<
             dyn hotkey::ports::AcceleratorValidator,
         >,
@@ -403,7 +424,11 @@ impl ChimeraClient {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             effects,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            system_proxy,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             hotkey_mutation: tokio::sync::Mutex::new(()),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            system_proxy_mutation: tokio::sync::Mutex::new(()),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             accelerators,
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -810,7 +835,10 @@ fn profile_file_text_for_editor(raw: String, is_config: bool) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
 
     #[test]
     fn transform_profile_file_read_preserves_non_yaml_source_exactly() {
@@ -940,6 +968,27 @@ mod tests {
         )
         .await;
         (client, events)
+    }
+
+    #[tokio::test]
+    async fn system_proxy_mutation_guard_serializes_competing_transactions() {
+        let (client, _) = recording_client(false).await;
+        let guard = client.lock_system_proxy_mutation().await;
+        let acquired = Arc::new(AtomicBool::new(false));
+        let waiter = {
+            let client = client.clone();
+            let acquired = acquired.clone();
+            tokio::spawn(async move {
+                let _guard = client.lock_system_proxy_mutation().await;
+                acquired.store(true, Ordering::Release);
+            })
+        };
+
+        tokio::task::yield_now().await;
+        assert!(!acquired.load(Ordering::Acquire));
+        drop(guard);
+        waiter.await.unwrap();
+        assert!(acquired.load(Ordering::Acquire));
     }
 
     #[tokio::test]

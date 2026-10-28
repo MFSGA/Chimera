@@ -179,6 +179,12 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
     async fn confirmed_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
         Ok(None)
     }
+    async fn active_runtime_receipt(&self) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        Ok(None)
+    }
+    fn last_confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        None
+    }
     async fn observe_runtime_baseline(&self) -> anyhow::Result<KnownRuntimeState> {
         anyhow::bail!(
             "this core lifecycle adapter does not expose authoritative runtime baseline evidence"
