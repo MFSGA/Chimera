@@ -56,6 +56,7 @@
 | LESSON-20261028-001 | 2026-10-28 | CI / Linux          | Ubuntu runner image dropped `webkit2gtk-driver`; choose the available WebKit driver package and verify against fresh CI        | Mitigated |
 
 | LESSON-20261029-001 | 2026-10-29 | Shared KV / IPC | ref 在事件监听注册失败后仍开放读取；Chimera 增加重试与就绪门控，并用 23 项前端测试覆盖 | Mitigated |
+| LESSON-20261029-002 | 2026-10-29 | E2E / Storage | PR #548 新 IPC 返回 value/revision；Dashboard 用例仍按旧字符串合同读写，Windows hermetic 失败 | Mitigated |
 
 ## 单条模板
 
@@ -890,3 +891,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 23/23；包括错误注入用例。本地 Node 测试不证明 Windows/macOS WebView 的实际跨窗口事件传输；新提交的 CI 与 runtime Desktop E2E 待运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：只影响窗口内监听恢复和首次读取时序，不更改 redb 格式、键、用户配置或系统网络。回滚会恢复 ref 当前无重试的行为，并重新允许监听失败后读取开启。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：改动 ref provider 事件注册时，必须保留“注册拒绝后不读取、恢复后读取最新值”测试；未修改 L3 治理或工作流。
+
+### LESSON-20261029-002：E2E 存储辅助函数须跟进 IPC 返回类型
+
+- 日期与时区：2026-10-29 UTC
+- 状态：Mitigated（测试辅助函数已改为读取 revisioned snapshot；PR 新 SHA 的 Windows E2E 待复验）
+- 严重度：Low（桌面回归测试失败，未发现产品存储行为错误）
+- 模块：E2E / Dashboard / KV storage IPC
+- master commit / ref gitlink SHA / 平台与测试环境：PR #548 失败 SHA `84eb3f0d3e5b86169465a61462718844f78cc4ba`；ref `8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8`；GitHub Windows / Edge 155。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#548](https://github.com/MFSGA/Chimera/pull/548)；[Windows Tauri E2E run 40864250817](https://github.com/MFSGA/Chimera/actions/runs/40864250817)。Hermetic suite 56 个 spec 中 55 通过，Dashboard resize spec 失败。
+- 预期行为：Dashboard E2E 对 `get_storage_item` 只读快照的 `.value`，并将原字符串恢复；fixture 写入显式使用无条件 `expectedRevision: null`。诊断与清理路径也必须使用同一 IPC 合同。
+- 真实异常、复现步骤与证据：Windows E2E 的 `summarizeDashboardStorage` 将 `{ value, revision }` 对象传给 `Buffer.byteLength`，触发 `ERR_INVALID_ARG_TYPE`；随后清理将对象当字符串传给 `set_storage_item`，Tauri 拒绝 `value` 的 map 类型。失败在 Dashboard 响应式布局断言期间进入证据/恢复代码，未显示持久化业务逻辑失败。
+- 确认的根因与排除项：新增 revisioned IPC 后，`tauri-e2e/specs/dashboard-main-layout.e2e.ts` 的主要读路径之外仍保留旧 `string | null` 假设；证据采集、断言与清理都调用同一个已变更的 command。根因是 E2E 调用点未随接口迁移，不是存储事件、布局或 CAS 实现错误。
+- 修复提交、差异映射及保留的兼容性边界：所有 Dashboard layout E2E 读取现将 `StorageItem<String>` 解包为 `.value`；fixture 初始化与恢复明确传 `expectedRevision: null`，保留此测试的强制准备/清理语义。生产合同保持 revision-aware。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：失败由 run `40864250817` 的 Dashboard resize 用例及清理日志复现。修复后同一 spec 注册于 Windows PR `hermetic` suite；新 SHA 桌面复验尚待运行。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后 E2E TypeScript typecheck、针对 spec 的 Prettier 与 `git diff --check` 通过；本机重建 E2E binary 成功，但 macOS WebKit 在 before hook 的主路由动画停在 `currentTime=0`，未进入该 spec 断言（同类已知环境问题见 LESSON-20261023-003），不作为修复通过证据。Windows 新 SHA 的 CI/E2E 待复验。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变测试读值解包、fixture 参数及诊断/清理代码；不写入真实用户目录或主机网络。失败运行的初始 E2E runtime 为隔离目录，清理错误已记录。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：变更 IPC 返回值结构时，搜索所有 E2E 调用点，包括失败证据、断言和 `finally` 清理；用实际结构化绑定类型，不能只更新主要测试路径。未修改 CI 门禁。
