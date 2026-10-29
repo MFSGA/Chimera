@@ -2,7 +2,7 @@ import { useSetting } from '@chimera/interface';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useAtom } from 'jotai';
 import { useEffect } from 'react';
-import { dispatchStorageValueChanged } from '@/services/storage';
+import { dispatchLegacyStorageValueChanged } from '@/services/storage';
 import { coreTypeAtom } from '@/store/clash';
 
 export function useCoreType() {
@@ -22,10 +22,7 @@ export function useChimeraStorageSubscribers() {
     let unlisten: UnlistenFn | null = null;
     listen<[string, string | null]>('storage_value_changed', (event) => {
       const [key, value] = event.payload;
-      dispatchStorageValueChanged(
-        key,
-        typeof value === 'string' ? JSON.parse(value) : value,
-      );
+      dispatchLegacyStorageValueChanged(key, value);
     }).then((fn) => {
       unlisten = fn;
     });

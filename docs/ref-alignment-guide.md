@@ -13,17 +13,20 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     ae0db596e96ba09d7662cc7533a13ffe5b581bf7
-verified:   2026-10-20; matched GitHub main tip and valid commit signature
-previous gitlink: d43819fbb24ecf05f0ef7cad8fbaf87d6d0072a3
-nested runtime: a130ca7b6015121d49e43ecd0d6af1862e60253e
+commit:     2fadf212f161417dcdf2f37d81a305a37ff918a4
+verified:   2026-10-29; fetched upstream main via SSH; parent matched prior gitlink
+previous gitlink: 8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8
+nested runtime: e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34
 ```
 
-The target SHA matched the upstream `main` tip at sync time, and GitHub reports
-its commit signature as valid. Its tree pins the runtime submodule at the SHA
-above. This pin records the reference implementation only. It does not
-automatically apply upstream dependency changes or product code to Chimera; each
-shared feature still needs its own path and symbol review.
+The target SHA was fetched from upstream `main` and is one commit after the
+previously pinned gitlink. The top-level reference and its checked-out nested
+submodules were clean after the update. The new upstream commit updates only
+`@tanstack/react-virtual` and its lockfile entry. The local GPG keyring does
+not contain the upstream signing key, so this record does not claim local
+signature verification. The pin records the reference implementation only; it
+does not automatically apply upstream dependency changes or product code to
+Chimera. Each shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 
