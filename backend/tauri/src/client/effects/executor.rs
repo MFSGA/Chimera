@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use super::{
     adapters::ApplicationEffectAdapters,
-    plan::{ApplicationEffect, ApplicationEffectPlan, EffectKind, LoggerDesired, TrayRefresh},
+    plan::{
+        ApplicationEffect, ApplicationEffectPlan, EffectKind, LoggerDesired, ProxyGuardDesired,
+        SystemProxyDesired, TrayRefresh,
+    },
     ports::ApplicationEffectsPort,
     status::{EffectHealth, EffectRevision, EffectStatus},
 };
@@ -17,8 +20,10 @@ use crate::client::hotkey::{
     HotkeyClient,
     ports::{AcceleratorValidator, HotkeyBindings},
 };
+use crate::client::system_proxy::SystemProxyClient;
 
 pub(crate) struct ApplicationEffectExecutor {
+    system_proxy: SystemProxyClient,
     hotkeys: HotkeyClient,
     accelerators: Arc<dyn AcceleratorValidator>,
     adapters: Arc<dyn ApplicationEffectAdapters>,
@@ -26,11 +31,13 @@ pub(crate) struct ApplicationEffectExecutor {
 
 impl ApplicationEffectExecutor {
     pub(crate) fn new(
+        system_proxy: SystemProxyClient,
         hotkeys: HotkeyClient,
         accelerators: Arc<dyn AcceleratorValidator>,
         adapters: Arc<dyn ApplicationEffectAdapters>,
     ) -> Self {
         Self {
+            system_proxy,
             hotkeys,
             accelerators,
             adapters,
@@ -66,6 +73,27 @@ impl ApplicationEffectExecutor {
         )
     }
 
+    fn system_proxy_desires(
+        plan: &ApplicationEffectPlan,
+    ) -> (
+        Option<SystemProxyDesired>,
+        Option<ProxyGuardDesired>,
+        Option<bool>,
+    ) {
+        let mut proxy = None;
+        let mut guard = None;
+        let mut auto_launch = None;
+        for effect in plan.effects() {
+            match effect {
+                ApplicationEffect::SystemProxy(desired) => proxy = Some(desired.clone()),
+                ApplicationEffect::ProxyGuard(desired) => guard = Some(*desired),
+                ApplicationEffect::AutoLaunch(enabled) => auto_launch = Some(*enabled),
+                _ => {}
+            }
+        }
+        (proxy, guard, auto_launch)
+    }
+
     fn status_from_result(
         &self,
         revision: EffectRevision,
@@ -96,6 +124,8 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
         revision: EffectRevision,
         plan: ApplicationEffectPlan,
     ) -> Vec<EffectStatus> {
+        let (proxy, guard, auto_launch) = Self::system_proxy_desires(&plan);
+        let mut system_proxy_statuses: Option<Vec<EffectStatus>> = None;
         let mut statuses = Vec::with_capacity(plan.effects().len());
         for effect in plan.effects() {
             let status = match effect {
@@ -105,44 +135,32 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                     self.adapters.set_locale(*language),
                 ),
                 ApplicationEffect::Logger(desired) => self.apply_logger(revision, desired),
-                ApplicationEffect::AutoLaunch(enabled) => self.status_from_result(
-                    revision,
-                    EffectKind::AutoLaunch,
-                    self.adapters.set_auto_launch(*enabled).await,
-                ),
-                ApplicationEffect::SystemProxy(desired) => {
-                    // The first startup plan can arrive before the session has
-                    // resolved the mixed port. Keep it pending for the actor's
-                    // retry instead of installing a stale endpoint.
-                    if desired.enabled && desired.port.is_none() {
-                        degraded(
-                            EffectKind::SystemProxy,
-                            revision,
-                            "system_proxy_port_unresolved",
-                            "the session has not resolved a mixed port yet".into(),
-                            true,
-                        )
-                    } else if desired.enabled && desired.pac_url.is_some() {
-                        self.status_from_result(
-                            revision,
-                            EffectKind::SystemProxy,
-                            Err(super::adapters::EffectAdapterError::Unsupported {
-                                code: "pac_proxy_unsupported",
-                            }),
-                        )
-                    } else {
-                        self.status_from_result(
-                            revision,
-                            EffectKind::SystemProxy,
-                            self.adapters.set_system_proxy(desired).await,
-                        )
-                    }
+                ApplicationEffect::AutoLaunch(_)
+                | ApplicationEffect::SystemProxy(_)
+                | ApplicationEffect::ProxyGuard(_) => {
+                    let owned = match system_proxy_statuses {
+                        Some(ref owned) => owned,
+                        None => system_proxy_statuses.insert(
+                            self.system_proxy
+                                .reconcile(revision, proxy.clone(), guard, auto_launch)
+                                .await,
+                        ),
+                    };
+                    let kind = effect.kind();
+                    owned
+                        .iter()
+                        .find(|status| status.kind == kind)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            degraded(
+                                kind,
+                                revision,
+                                "effect_owner_silent",
+                                format!("the owner of {kind:?} reported no status"),
+                                true,
+                            )
+                        })
                 }
-                ApplicationEffect::ProxyGuard(desired) => self.status_from_result(
-                    revision,
-                    EffectKind::ProxyGuard,
-                    self.adapters.set_proxy_guard(*desired),
-                ),
                 ApplicationEffect::Hotkeys(raw) => self.apply_hotkeys(revision, raw).await,
                 ApplicationEffect::Widget(config) => self.status_from_result(
                     revision,
@@ -157,14 +175,8 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
     }
 
     async fn shutdown(&self) -> Vec<EffectStatus> {
-        let revision = EffectRevision::default();
-        let proxy = self.status_from_result(
-            revision,
-            EffectKind::SystemProxy,
-            self.adapters.restore_system_proxy().await,
-        );
         let hotkeys = self.hotkeys.unregister_all().await;
-        vec![proxy, hotkeys]
+        vec![hotkeys]
     }
 }
 
@@ -216,7 +228,12 @@ mod tests {
             adapters::PlatformAcceleratorValidator,
             ports::{HotkeyAction, HotkeyActionSink, ShortcutRegistrar},
         },
+        system_proxy::{
+            SystemProxyArgs, SystemProxyClient,
+            ports::{MockAutoLaunchPort, MockOsProxyPort, MockPacPort, OsProxyConfig},
+        },
     };
+    use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
     #[derive(Default)]
     struct RecordingAdapters {
@@ -239,27 +256,6 @@ mod tests {
             Ok(())
         }
 
-        async fn set_auto_launch(&self, _enabled: bool) -> Result<(), EffectAdapterError> {
-            self.effects.lock().unwrap().push(EffectKind::AutoLaunch);
-            Ok(())
-        }
-
-        async fn set_system_proxy(
-            &self,
-            _desired: &super::super::plan::SystemProxyDesired,
-        ) -> Result<(), EffectAdapterError> {
-            self.effects.lock().unwrap().push(EffectKind::SystemProxy);
-            Ok(())
-        }
-
-        fn set_proxy_guard(
-            &self,
-            _desired: super::super::plan::ProxyGuardDesired,
-        ) -> Result<(), EffectAdapterError> {
-            self.effects.lock().unwrap().push(EffectKind::ProxyGuard);
-            Ok(())
-        }
-
         fn set_widget(
             &self,
             _config: chimera_config::application::NetworkStatisticWidgetConfig,
@@ -279,10 +275,58 @@ mod tests {
             self.effects.lock().unwrap().push(EffectKind::Tray);
             Ok(())
         }
+    }
 
-        async fn restore_system_proxy(&self) -> Result<(), EffectAdapterError> {
-            Ok(())
-        }
+    async fn new_executor(
+        adapters: Arc<dyn ApplicationEffectAdapters>,
+    ) -> ApplicationEffectExecutor {
+        let mut os = MockOsProxyPort::new();
+        os.expect_get().returning(|| {
+            Ok(OsProxyConfig {
+                enable: false,
+                host: "127.0.0.1".to_owned(),
+                port: 7890,
+                bypass: "localhost".to_owned(),
+            })
+        });
+        os.expect_set().returning(|_| Ok(()));
+        os.expect_default_bypass().return_const("localhost");
+
+        let mut auto_launch = MockAutoLaunchPort::new();
+        auto_launch.expect_is_enabled().returning(|| Ok(false));
+        auto_launch.expect_set_enabled().returning(|_| Ok(()));
+
+        let mut pac = MockPacPort::new();
+        pac.expect_is_supported().returning(|| true);
+        pac.expect_apply().returning(|_, _| Ok(()));
+        pac.expect_disable().returning(|| Ok(()));
+
+        let shutdown = CancellationToken::new();
+        let tasks = TaskTracker::new();
+        let system_proxy = SystemProxyClient::spawn(
+            SystemProxyArgs {
+                os: Arc::new(os),
+                auto_launch: Arc::new(auto_launch),
+                pac: Arc::new(pac),
+                schedule_guard_ticks: false,
+                shutdown,
+            },
+            &tasks,
+        )
+        .await
+        .unwrap();
+        let hotkeys = HotkeyClient::spawn(HotkeyArgs {
+            registrar: Arc::new(NoopRegistrar),
+            sink: Arc::new(NoopSink),
+        })
+        .await
+        .unwrap();
+        ApplicationEffectExecutor::new(
+            system_proxy,
+            hotkeys,
+            Arc::new(PlatformAcceleratorValidator),
+            adapters,
+        )
     }
 
     struct NoopRegistrar;
@@ -320,18 +364,8 @@ mod tests {
 
     #[tokio::test]
     async fn full_plan_dispatches_each_effect_in_reference_order() {
-        let hotkeys = HotkeyClient::spawn(HotkeyArgs {
-            registrar: Arc::new(NoopRegistrar),
-            sink: Arc::new(NoopSink),
-        })
-        .await
-        .unwrap();
         let adapters = Arc::new(RecordingAdapters::default());
-        let executor = ApplicationEffectExecutor::new(
-            hotkeys,
-            Arc::new(PlatformAcceleratorValidator),
-            adapters.clone(),
-        );
+        let executor = new_executor(adapters.clone()).await;
         let mut app = ChimeraAppConfig::default();
         app.app_log_level = LoggingLevel::Debug;
         let inputs = ApplicationEffectInputs::project(&app, &ClashConfig::default(), None);
@@ -350,9 +384,6 @@ mod tests {
             [
                 EffectKind::Locale,
                 EffectKind::Logger,
-                EffectKind::AutoLaunch,
-                EffectKind::SystemProxy,
-                EffectKind::ProxyGuard,
                 EffectKind::Widget,
                 EffectKind::Tray,
             ]
@@ -362,18 +393,8 @@ mod tests {
 
     #[tokio::test]
     async fn missing_proxy_port_is_reported_as_retryable_without_calling_adapter() {
-        let hotkeys = HotkeyClient::spawn(HotkeyArgs {
-            registrar: Arc::new(NoopRegistrar),
-            sink: Arc::new(NoopSink),
-        })
-        .await
-        .unwrap();
         let adapters = Arc::new(RecordingAdapters::default());
-        let executor = ApplicationEffectExecutor::new(
-            hotkeys,
-            Arc::new(PlatformAcceleratorValidator),
-            adapters.clone(),
-        );
+        let executor = new_executor(adapters.clone()).await;
         let mut app = ChimeraAppConfig::default();
         app.enable_system_proxy = true;
         let inputs = ApplicationEffectInputs::project(&app, &ClashConfig::default(), None);
@@ -404,21 +425,11 @@ mod tests {
 
     #[tokio::test]
     async fn enabled_widget_is_reported_unsupported_by_the_current_runtime() {
-        let hotkeys = HotkeyClient::spawn(HotkeyArgs {
-            registrar: Arc::new(NoopRegistrar),
-            sink: Arc::new(NoopSink),
-        })
-        .await
-        .unwrap();
         let adapters = Arc::new(RecordingAdapters {
             widget_unsupported: true,
             ..Default::default()
         });
-        let executor = ApplicationEffectExecutor::new(
-            hotkeys,
-            Arc::new(PlatformAcceleratorValidator),
-            adapters,
-        );
+        let executor = new_executor(adapters).await;
         let mut app = ChimeraAppConfig::default();
         app.network_statistic_widget =
             NetworkStatisticWidgetConfig::Enabled(StatisticWidgetVariant::Small);
@@ -447,18 +458,8 @@ mod tests {
 
     #[tokio::test]
     async fn pac_does_not_block_disabling_the_plain_system_proxy() {
-        let hotkeys = HotkeyClient::spawn(HotkeyArgs {
-            registrar: Arc::new(NoopRegistrar),
-            sink: Arc::new(NoopSink),
-        })
-        .await
-        .unwrap();
         let adapters = Arc::new(RecordingAdapters::default());
-        let executor = ApplicationEffectExecutor::new(
-            hotkeys,
-            Arc::new(PlatformAcceleratorValidator),
-            adapters.clone(),
-        );
+        let executor = new_executor(adapters.clone()).await;
         let mut app = ChimeraAppConfig::default();
         app.pac_url = Some("http://pac.test/proxy.pac".parse().unwrap());
         let ports = ResolvedPortBindings {
@@ -483,9 +484,6 @@ mod tests {
         .await;
 
         assert_eq!(statuses[0].health, EffectHealth::Healthy);
-        assert_eq!(
-            adapters.effects.lock().unwrap().as_slice(),
-            [EffectKind::SystemProxy]
-        );
+        assert!(adapters.effects.lock().unwrap().is_empty());
     }
 }

@@ -41,9 +41,15 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
     let verge = Config::verge().latest().clone();
     let clash = Config::clash().latest().clone();
     let runtime = Config::runtime().latest().clone();
-    let expected_mixed_port = verge
-        .verge_mixed_port
-        .unwrap_or_else(|| clash.get_mixed_port());
+    let client = app.state::<ChimeraClient>();
+    let expected_mixed_port = match client.expected_system_proxy_port().await {
+        Ok(Some(port)) => port,
+        Ok(None) => 0,
+        Err(error) => {
+            tracing::warn!(%error, "failed to read the confirmed mixed port for agent diagnostics");
+            0
+        }
+    };
     let selected_core = verge.clash_core.unwrap_or_default().to_string();
     let runtime_config_present = runtime.config.is_some();
     let routing_mode = runtime
@@ -60,7 +66,6 @@ pub(crate) async fn collect_network_snapshot(app: &AppHandle) -> AgentNetworkSna
         .map(|secret| secret.trim().is_empty() || secret == "chimera")
         .unwrap_or(true);
 
-    let client = app.state::<ChimeraClient>();
     let service_status = client.service_status();
     let core_status = client.core_status();
     let system_proxy = tokio::task::spawn_blocking(Sysproxy::get_system_proxy);
@@ -306,7 +311,7 @@ fn summarize_system_proxy(
                 observed_host_scope: scope,
                 observed_port: Some(proxy.port),
                 expected_mixed_port,
-                matches_expected_endpoint: Some(
+                matches_expected_endpoint: (expected_mixed_port != 0).then_some(
                     scope == AgentHostScope::Loopback && proxy.port == expected_mixed_port,
                 ),
             }

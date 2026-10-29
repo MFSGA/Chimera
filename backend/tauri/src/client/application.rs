@@ -21,7 +21,7 @@ use super::ChimeraClient;
 use crate::{
     bridge::{split_legacy_verge_patch, verge::application_from_legacy},
     config::{chimera::IVerge, core::Config},
-    core::{handle, sysopt},
+    core::handle,
     state::{
         ConditionalReplaceResult,
         application::{
@@ -29,7 +29,6 @@ use crate::{
         },
         mirror::{PreparedTypedReplace, VergeLegacyBridge},
     },
-    utils,
 };
 
 const APPLICATION_READ_TIMEOUT: Duration = Duration::from_secs(5);
@@ -278,6 +277,11 @@ impl Drop for ApplicationClientInner {
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) struct SystemProxyMutation<'a> {
+    _guard: tokio::sync::MutexGuard<'a, ()>,
+}
+
 impl ChimeraClient {
     pub(crate) fn get_app_config(&self) -> anyhow::Result<ChimeraAppConfig> {
         Ok(self.inner.application.get_typed())
@@ -287,11 +291,132 @@ impl ChimeraClient {
         self.inner.application.get_legacy()
     }
 
+    pub(crate) async fn expected_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
+        let clash = self.inner.clash_config.get()?;
+        let receipt = match self.inner.core.observe_runtime_baseline().await? {
+            super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => {
+                Some(receipt)
+            }
+            super::application_workflow::mutation::KnownRuntimeState::Stopped => {
+                self.inner.core.last_confirmed_runtime_receipt()
+            }
+            super::application_workflow::mutation::KnownRuntimeState::NeverApplied => None,
+        };
+        Ok(super::ports::effective_mixed_port(
+            receipt.as_deref(),
+            &clash,
+        ))
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn active_system_proxy_port(&self) -> anyhow::Result<Option<u16>> {
+        let receipt = match self.inner.core.observe_runtime_baseline().await? {
+            super::application_workflow::mutation::KnownRuntimeState::Applied(receipt) => receipt,
+            super::application_workflow::mutation::KnownRuntimeState::Stopped
+            | super::application_workflow::mutation::KnownRuntimeState::NeverApplied => {
+                return Ok(None);
+            }
+        };
+        Ok(super::ports::confirmed_mixed_port(Some(&receipt)))
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn reconcile_system_proxy_effect(
+        &self,
+    ) -> super::effects::status::EffectStatus {
+        self.inner
+            .effects
+            .reconcile_effect(super::effects::plan::EffectKind::SystemProxy)
+            .await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn lock_system_proxy_mutation(&self) -> SystemProxyMutation<'_> {
+        SystemProxyMutation {
+            _guard: self.inner.system_proxy_mutation.lock().await,
+        }
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn patch_app_config_under_system_proxy_mutation(
+        &self,
+        _mutation: &SystemProxyMutation<'_>,
+        patch: ChimeraAppConfigPatch,
+    ) -> anyhow::Result<super::MutationOutcome<()>> {
+        self.patch_app_config_inner(patch).await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn reconcile_system_proxy_effect_under_mutation(
+        &self,
+        _mutation: &SystemProxyMutation<'_>,
+    ) -> super::effects::status::EffectStatus {
+        self.reconcile_system_proxy_effect().await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn disable_stale_system_proxy(
+        &self,
+        expected_core_state_changed_at: i64,
+        expected_port: u16,
+        desired_before: bool,
+        original: super::system_proxy::ports::OsProxyConfig,
+    ) -> Result<(), super::system_proxy::SystemProxyActionError> {
+        let _mutation = self.inner.system_proxy_mutation.lock().await;
+        let Some(system_proxy) = &self.inner.system_proxy else {
+            return Err(super::system_proxy::SystemProxyActionError::Stopped);
+        };
+        let notifications: Arc<dyn super::effects::ports::CommitNotifications> = Arc::new((
+            self.inner.effects.clone(),
+            super::event_sink::UiCommitNotifications(self.inner.ui_sink.clone()),
+        ));
+        let persist_legacy_mirror: Arc<dyn Fn() -> anyhow::Result<()> + Send + Sync> =
+            Arc::new(persist_legacy_application_mirror);
+        self.inner
+            .core_lifecycle
+            .disable_stale_system_proxy(
+                system_proxy.clone(),
+                expected_port,
+                expected_core_state_changed_at,
+                desired_before,
+                original,
+                notifications,
+                persist_legacy_mirror,
+            )
+            .await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn restore_system_proxy_after_failed_action(
+        &self,
+        _mutation: &SystemProxyMutation<'_>,
+        original: super::system_proxy::ports::OsProxyConfig,
+    ) -> Result<(), super::system_proxy::SystemProxyActionError> {
+        let Some(system_proxy) = &self.inner.system_proxy else {
+            return Err(super::system_proxy::SystemProxyActionError::Stopped);
+        };
+        system_proxy.restore_after_failed_action(original).await
+    }
+
     pub(crate) async fn patch_verge(&self, patch: IVerge) -> anyhow::Result<()> {
         self.inner.application.patch_legacy(self, patch).await
     }
 
     pub(crate) async fn patch_app_config(
+        &self,
+        patch: ChimeraAppConfigPatch,
+    ) -> anyhow::Result<super::MutationOutcome<()>> {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let _system_proxy_mutation = if application_patch_touches_system_proxy(&patch) {
+            Some(self.lock_system_proxy_mutation().await)
+        } else {
+            None
+        };
+
+        self.patch_app_config_inner(patch).await
+    }
+
+    async fn patch_app_config_inner(
         &self,
         patch: ChimeraAppConfigPatch,
     ) -> anyhow::Result<super::MutationOutcome<()>> {
@@ -327,7 +452,7 @@ impl ChimeraClient {
         // Keep the legacy Verge file current while existing service and agent
         // entry points still read it. The typed application.yaml is already
         // committed, so a mirror write failure is reported as degraded.
-        if let Err(error) = Config::verge().data().save_file() {
+        if let Err(error) = persist_legacy_application_mirror() {
             degradations.push(super::Degradation {
                 phase: super::runtime::DegradationPhase::LegacyMirror,
                 code: "legacy_application_mirror_write_failed".into(),
@@ -344,7 +469,7 @@ impl ChimeraClient {
                 &clash,
                 None,
             );
-            self.publish_runtime_port_binding();
+            self.publish_runtime_port_binding().await;
             super::effects::ports::CommitNotifications::application_committed(
                 &self.inner.effects,
                 inputs.app,
@@ -398,6 +523,16 @@ impl ChimeraClient {
                 .context("Windows TUN service preflight failed")?;
         }
 
+        // Complete permission prompts before taking the proxy transaction lock;
+        // the lock only needs to cover the settings write and its effect publish.
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let _system_proxy_mutation =
+            if patch.mixed_port.kind.is_some() || patch.mixed_port.start_port.is_some() {
+                Some(self.lock_system_proxy_mutation().await)
+            } else {
+                None
+            };
+
         let snapshot = self
             .inner
             .clash_config
@@ -408,7 +543,7 @@ impl ChimeraClient {
             let app = self.get_app_config()?;
             let clash = self.get_clash_config()?;
             let inputs = super::effects::plan::ApplicationEffectInputs::project(&app, &clash, None);
-            self.publish_runtime_port_binding();
+            self.publish_runtime_port_binding().await;
             super::effects::ports::CommitNotifications::clash_committed(
                 &self.inner.effects,
                 inputs.clash,
@@ -429,17 +564,57 @@ impl ChimeraClient {
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    fn publish_runtime_port_binding(&self) {
-        let ports = chimera_config::runtime::executor::ResolvedPortBindings {
-            mixed_port: self.clash_info().port,
-            ..Default::default()
-        };
+    pub(crate) async fn publish_runtime_port_binding(&self) {
+        let ports = self.confirmed_effect_port_binding().await;
         super::effects::ports::CommitNotifications::runtime_bound(
             &self.inner.effects,
-            Some(ports),
+            ports,
             false,
         );
     }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    pub(crate) async fn publish_full_effects(&self) {
+        let ports = self.confirmed_effect_port_binding().await;
+        super::effects::ports::CommitNotifications::publish_full(&self.inner.effects, ports);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    async fn confirmed_effect_port_binding(
+        &self,
+    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
+        let receipt = match self.inner.core.active_runtime_receipt().await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                tracing::debug!(%error, "no active runtime receipt is available for application effects");
+                return None;
+            }
+        };
+        match resolved_effect_port_binding(receipt.as_deref()) {
+            Some(binding) => Some(binding),
+            None => {
+                tracing::warn!(
+                    "the active core has no confirmed mixed port for application effects"
+                );
+                None
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(super) fn resolved_effect_port_binding(
+    receipt: Option<&super::runtime::RuntimeApplyReceipt>,
+) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
+    receipt
+        .map(|receipt| receipt.ports.bindings().mixed_port)
+        .filter(|port| *port != 0)
+        .map(
+            |mixed_port| chimera_config::runtime::executor::ResolvedPortBindings {
+                mixed_port,
+                ..Default::default()
+            },
+        )
 }
 
 enum PreparedLegacyDomain {
@@ -480,7 +655,7 @@ struct VergePatchPlan {
     auto_launch_changed: bool,
     system_proxy_changed: bool,
     proxy_bypass_changed: bool,
-    enable_proxy_guard: bool,
+    proxy_guard_changed: bool,
     log_level_changed: bool,
     log_max_files_changed: bool,
     language_changed: bool,
@@ -504,7 +679,7 @@ fn plan_verge_patch(
         auto_launch_changed: patch.enable_auto_launch.is_some(),
         system_proxy_changed: patch.enable_system_proxy.is_some(),
         proxy_bypass_changed: patch.system_proxy_bypass.is_some(),
-        enable_proxy_guard: patch.enable_proxy_guard == Some(true),
+        proxy_guard_changed: patch.enable_proxy_guard.is_some(),
         log_level_changed: patch.app_log_level.is_some(),
         log_max_files_changed: patch.max_log_files.is_some(),
         language_changed: patch.language.is_some(),
@@ -539,78 +714,37 @@ async fn apply_verge_runtime_change(client: &ChimeraClient, plan: &VergePatchPla
     Ok(())
 }
 
-fn run_verge_patch_side_effects(plan: &VergePatchPlan, patch: &IVerge) -> Result<()> {
+fn requested_effects(plan: &VergePatchPlan) -> Vec<super::effects::plan::EffectKind> {
+    use super::effects::plan::EffectKind;
+
+    let mut requested = Vec::new();
     if plan.auto_launch_changed {
-        sysopt::Sysopt::global().update_launch()?;
+        requested.push(EffectKind::AutoLaunch);
     }
-
     if plan.system_proxy_changed || plan.proxy_bypass_changed {
-        sysopt::Sysopt::global().update_sysproxy()?;
-        sysopt::Sysopt::global().guard_proxy();
+        requested.push(EffectKind::SystemProxy);
     }
-
-    if plan.enable_proxy_guard {
-        sysopt::Sysopt::global().guard_proxy();
+    if plan.proxy_guard_changed {
+        requested.push(EffectKind::ProxyGuard);
     }
-
     if plan.log_level_changed || plan.log_max_files_changed {
-        utils::init::refresh_logger((patch.app_log_level.clone(), patch.max_log_files))?;
+        requested.push(EffectKind::Logger);
     }
-
-    if plan.refresh_systray {
-        if !plan.language_changed {
-            handle::Handle::update_systray()?;
-        }
-    } else if plan.refresh_systray_part {
-        handle::Handle::update_systray_part()?;
+    if plan.language_changed {
+        requested.push(EffectKind::Locale);
     }
-
-    log::debug!("todo: handle other fields");
-    Ok(())
+    if plan.refresh_systray || plan.refresh_systray_part {
+        requested.push(EffectKind::Tray);
+    }
+    requested.sort_unstable();
+    requested.dedup();
+    requested
 }
 
 fn legacy_finalize_error(error: anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
         "legacy mutation may have non-reversible runtime or OS side effects and requires reconciliation: {error:#}"
     )
-}
-
-fn persist_then_apply_legacy_language(
-    language: Option<&str>,
-    persist: impl FnOnce() -> Result<()>,
-    apply_locale: impl FnOnce(&str) -> Result<()>,
-) -> Result<()> {
-    // Keep the process-global locale and tray unchanged when a legacy write fails.
-    persist()?;
-
-    if let Some(language) = language {
-        let locale = crate::bridge::verge::locale_key_from_legacy(language)
-            .map(str::to_owned)
-            .unwrap_or_else(|| language.to_ascii_lowercase());
-        apply_locale(&locale)?;
-    }
-
-    Ok(())
-}
-
-fn apply_legacy_locale(
-    locale: &str,
-    previous_locale: &str,
-    mut set_locale: impl FnMut(&str),
-    mut refresh_tray: impl FnMut() -> Result<()>,
-) -> Result<()> {
-    set_locale(locale);
-    if let Err(error) = refresh_tray() {
-        set_locale(previous_locale);
-        return match refresh_tray() {
-            Ok(()) => Err(error
-                .context("failed to refresh the language tray; the previous locale was restored")),
-            Err(restore_error) => Err(anyhow::anyhow!(
-                "failed to refresh the language tray: {error:#}; the previous locale was restored, but refreshing its tray also failed: {restore_error:#}"
-            )),
-        };
-    }
-    Ok(())
 }
 
 async fn rollback_legacy_domains(
@@ -699,8 +833,14 @@ async fn rollback_legacy_domains(
 }
 
 async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Result<()> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let _system_proxy_mutation = if legacy_patch_touches_system_proxy(&patch) {
+        Some(client.inner.system_proxy_mutation.lock().await)
+    } else {
+        None
+    };
+
     let base = Config::verge().latest().clone();
-    let previous_language = client.get_app_config()?.language;
     let legacy_clash = Config::clash().latest().clone();
     let mut split = split_legacy_verge_patch(&base, &patch, &legacy_clash)?;
     let application_patch = split.application.clone().unwrap_or_default();
@@ -898,27 +1038,10 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
                 .apply_legacy_patch_runtime(client, clash_patch)
                 .await?;
         }
-        run_verge_patch_side_effects(&plan, &application_patch)?;
-        persist_then_apply_legacy_language(
-            plan.language_changed
-                .then(|| application_patch.language.as_deref())
-                .flatten(),
-            || {
-                Config::verge().data().save_file()?;
-                if split.clash_config.is_some() {
-                    Config::clash().data().save_config()?;
-                }
-                Ok(())
-            },
-            |locale| {
-                apply_legacy_locale(
-                    locale,
-                    previous_language.as_str(),
-                    rust_i18n::set_locale,
-                    handle::Handle::update_systray,
-                )
-            },
-        )?;
+        Config::verge().data().save_file()?;
+        if split.clash_config.is_some() {
+            Config::clash().data().save_config()?;
+        }
         handle::Handle::refresh_verge();
         Ok::<_, anyhow::Error>(())
     }
@@ -933,7 +1056,57 @@ async fn patch_legacy_uncoordinated(client: &ChimeraClient, patch: IVerge) -> Re
         .await);
     }
 
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        if split.application.is_some() {
+            let app = client.get_app_config()?;
+            let clash = client.get_clash_config()?;
+            let inputs = super::effects::plan::ApplicationEffectInputs::project(&app, &clash, None);
+            super::effects::ports::CommitNotifications::application_committed(
+                &client.inner.effects,
+                inputs.app,
+                requested_effects(&plan),
+            );
+        }
+        if split.clash_config.is_some() {
+            client.publish_runtime_port_binding().await;
+            let app = client.get_app_config()?;
+            let clash = client.get_clash_config()?;
+            let inputs = super::effects::plan::ApplicationEffectInputs::project(&app, &clash, None);
+            super::effects::ports::CommitNotifications::clash_committed(
+                &client.inner.effects,
+                inputs.clash,
+            );
+        }
+    }
+
     Ok(())
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn application_patch_touches_system_proxy(patch: &ChimeraAppConfigPatch) -> bool {
+    patch.enable_system_proxy.is_some()
+        || patch.enable_proxy_guard.is_some()
+        || patch.system_proxy_bypass.is_some()
+        || patch.proxy_guard_interval.is_some()
+        || patch.pac_url.is_some()
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn legacy_patch_touches_system_proxy(patch: &IVerge) -> bool {
+    patch.enable_system_proxy.is_some()
+        || patch.enable_proxy_guard.is_some()
+        || patch.system_proxy_bypass.is_some()
+        || patch.proxy_guard_interval.is_some()
+        || patch.enable_random_port.is_some()
+        || patch.verge_mixed_port.is_some()
+}
+
+pub(crate) fn persist_legacy_application_mirror() -> anyhow::Result<()> {
+    Config::verge()
+        .data()
+        .save_file()
+        .context("failed to persist legacy application mirror")
 }
 
 #[cfg(target_os = "macos")]
@@ -1043,91 +1216,89 @@ mod tests {
     }
 
     #[test]
-    fn legacy_language_is_not_applied_when_persistence_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let persist_events = events.clone();
-        let locale_events = events.clone();
+    fn legacy_application_changes_request_shared_effects_after_commit() {
+        use super::super::effects::plan::EffectKind;
 
-        let result = persist_then_apply_legacy_language(
-            Some("ja-JP"),
-            move || {
-                persist_events.lock().unwrap().push("persist".to_owned());
-                Err(anyhow::anyhow!("legacy save failed"))
+        let plan = plan_verge_patch(
+            &IVerge {
+                enable_auto_launch: Some(true),
+                enable_system_proxy: Some(true),
+                enable_proxy_guard: Some(true),
+                language: Some("ja-JP".into()),
+                ..IVerge::default()
             },
-            move |locale| {
-                locale_events.lock().unwrap().push(locale.to_owned());
-                Ok(())
-            },
-        );
-
-        assert!(result.is_err());
-        assert_eq!(*events.lock().unwrap(), vec!["persist"]);
-    }
-
-    #[test]
-    fn legacy_language_applies_the_canonical_locale_after_persistence() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let persist_events = events.clone();
-        let locale_events = events.clone();
-
-        persist_then_apply_legacy_language(
-            Some("ja-JP"),
-            move || {
-                persist_events.lock().unwrap().push("persist".to_owned());
-                Ok(())
-            },
-            move |locale| {
-                locale_events
-                    .lock()
-                    .unwrap()
-                    .push(format!("locale:{locale}"));
-                Ok(())
-            },
+            None,
         )
         .unwrap();
 
         assert_eq!(
-            *events.lock().unwrap(),
-            vec!["persist".to_owned(), "locale:ja".to_owned()]
+            requested_effects(&plan),
+            [
+                EffectKind::Locale,
+                EffectKind::AutoLaunch,
+                EffectKind::SystemProxy,
+                EffectKind::ProxyGuard,
+                EffectKind::Tray,
+            ]
         );
     }
 
     #[test]
-    fn legacy_locale_restores_previous_value_when_tray_refresh_fails() {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let locale_events = events.clone();
-        let refresh_events = events.clone();
-        let refresh_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let refresh_attempts = refresh_count.clone();
+    fn legacy_patch_without_effect_fields_does_not_request_effect_retries() {
+        assert!(requested_effects(&plan_verge_patch(&IVerge::default(), None).unwrap()).is_empty());
+    }
 
-        let result = apply_legacy_locale(
-            "ja",
-            "en",
-            move |locale| {
-                locale_events
-                    .lock()
-                    .unwrap()
-                    .push(format!("locale:{locale}"));
-            },
-            move || {
-                refresh_events.lock().unwrap().push("refresh".to_owned());
-                if refresh_attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
-                    Err(anyhow::anyhow!("tray refresh failed"))
-                } else {
-                    Ok(())
-                }
-            },
-        );
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn effects_receive_the_confirmed_mixed_port_not_the_controller_port() {
+        use std::net::TcpListener;
 
-        assert!(result.is_err());
+        use crate::client::ports::{
+            CandidatePortBindings, SessionPortResolver, test_runtime_receipt,
+        };
+
+        assert!(resolved_effect_port_binding(None).is_none());
+        let empty_receipt = test_runtime_receipt(CandidatePortBindings::default());
+        assert!(resolved_effect_port_binding(Some(&empty_receipt)).is_none());
+        let mixed_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mixed_port = mixed_probe.local_addr().unwrap().port();
+        let controller_probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let controller_port = controller_probe.local_addr().unwrap().port();
+        drop((mixed_probe, controller_probe));
+
+        let mut clash = ClashConfig::default();
+        clash.mixed_port = chimera_config::clash::config::clash_strategy::PortStrategy {
+            kind: chimera_config::clash::config::clash_strategy::PortStrategyKind::Fixed,
+            start_port: mixed_port,
+        };
+        clash.external_controller.port =
+            chimera_config::clash::config::clash_strategy::PortStrategy {
+                kind: chimera_config::clash::config::clash_strategy::PortStrategyKind::Fixed,
+                start_port: controller_port,
+            };
+        let candidate = SessionPortResolver::default()
+            .resolve_candidate(&clash)
+            .unwrap();
+        let receipt = test_runtime_receipt(candidate);
         assert_eq!(
-            *events.lock().unwrap(),
-            vec![
-                "locale:ja".to_owned(),
-                "refresh".to_owned(),
-                "locale:en".to_owned(),
-                "refresh".to_owned(),
-            ]
+            receipt
+                .ports
+                .bindings()
+                .external_controller
+                .as_deref()
+                .unwrap()
+                .rsplit(':')
+                .next()
+                .unwrap()
+                .parse::<u16>()
+                .unwrap(),
+            controller_port
+        );
+        assert_eq!(
+            resolved_effect_port_binding(Some(&receipt))
+                .expect("confirmed runtime port should be published")
+                .mixed_port,
+            mixed_port
         );
     }
 

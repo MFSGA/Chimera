@@ -15,7 +15,7 @@ use crate::{
         chimera::{ClashCore, WindowState, WindowType},
         core::Config,
     },
-    core::{handle, sysopt, tray},
+    core::{handle, tray},
     log_err,
     utils::init,
     window::{AppWindow, WindowConfig},
@@ -268,9 +268,6 @@ pub fn resolve_setup(app: &mut App) {
         log_err!(crate::core::tasks::setup(app, storage));
     } */
 
-    log_err!(sysopt::Sysopt::global().init_launch());
-    log_err!(sysopt::Sysopt::global().init_sysproxy());
-
     #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
     {
         let app_handle = app.app_handle().clone();
@@ -295,11 +292,6 @@ pub fn resolve_setup(app: &mut App) {
     }
 
     crate::core::storage::register_web_storage_listener(app.app_handle());
-}
-
-/// reset runtime side effects before shutdown
-pub fn resolve_reset() {
-    log_err!(sysopt::Sysopt::global().reset_sysproxy());
 }
 
 /// resolve core version

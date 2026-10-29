@@ -211,7 +211,9 @@ impl Default for SessionPortResolver {
 }
 
 #[cfg(test)]
-fn test_runtime_receipt(ports: CandidatePortBindings) -> super::runtime::RuntimeApplyReceipt {
+pub(crate) fn test_runtime_receipt(
+    ports: CandidatePortBindings,
+) -> super::runtime::RuntimeApplyReceipt {
     use crate::{
         client::application_workflow::policy::CoreRunIntent, config::chimera::ClashCore,
         core::actor_v2::control_endpoint::ExecutionHost,
@@ -247,6 +249,15 @@ fn test_runtime_receipt(ports: CandidatePortBindings) -> super::runtime::Runtime
     }
 }
 
+#[cfg(test)]
+pub(crate) fn test_runtime_receipt_with_mixed_port(
+    mixed_port: u16,
+) -> super::runtime::RuntimeApplyReceipt {
+    let mut ports = CandidatePortBindings::default();
+    ports.bindings.mixed_port = mixed_port;
+    test_runtime_receipt(ports)
+}
+
 fn find_unused_port(fallback_port: u16) -> Result<u16> {
     match TcpListener::bind("127.0.0.1:0") {
         Ok(listener) => Ok(listener.local_addr()?.port()),
@@ -278,6 +289,27 @@ pub(crate) fn resolve_random_mixed_port(client: &ChimeraClient) -> Result<()> {
     let _ = Config::clash().latest().prepare_external_controller_port();
     let _ = Config::clash().data().save_config();
     Ok(())
+}
+
+/// Returns a confirmed runtime listener, or the configured fixed port when
+/// that value is deterministic. Random and AllowFallback strategies without
+/// a receipt have no trustworthy port after restart and must remain unresolved.
+pub(crate) fn effective_mixed_port(
+    receipt: Option<&super::runtime::RuntimeApplyReceipt>,
+    clash: &ClashConfig,
+) -> Option<u16> {
+    let confirmed = confirmed_mixed_port(receipt);
+    confirmed.or_else(|| {
+        (clash.mixed_port.kind == PortStrategyKind::Fixed).then_some(clash.mixed_port.start_port)
+    })
+}
+
+pub(crate) fn confirmed_mixed_port(
+    receipt: Option<&super::runtime::RuntimeApplyReceipt>,
+) -> Option<u16> {
+    receipt
+        .map(|receipt| receipt.ports.bindings().mixed_port)
+        .filter(|port| *port != 0)
 }
 
 pub(crate) fn get_clash_external_port(
@@ -387,6 +419,35 @@ mod tests {
             Some(first.bindings().clone()),
             "an unconfirmed candidate must not replace the last applied binding"
         );
+    }
+
+    #[test]
+    fn effective_random_mixed_port_prefers_the_confirmed_runtime_binding() {
+        let mut clash = ClashConfig::default();
+        clash.mixed_port = PortStrategy {
+            kind: PortStrategyKind::Random,
+            start_port: 17890,
+        };
+        let resolver = SessionPortResolver::default();
+        let candidate = resolver.resolve_candidate(&clash).unwrap();
+        let actual_port = candidate.bindings().mixed_port;
+        let receipt = test_runtime_receipt(candidate);
+
+        assert_eq!(
+            effective_mixed_port(Some(&receipt), &clash),
+            Some(actual_port)
+        );
+        assert_eq!(confirmed_mixed_port(None), None);
+        assert_eq!(confirmed_mixed_port(Some(&receipt)), Some(actual_port));
+        assert_eq!(effective_mixed_port(None, &clash), None);
+
+        let mut fixed_clash = clash.clone();
+        fixed_clash.mixed_port.kind = PortStrategyKind::Fixed;
+        assert_eq!(effective_mixed_port(None, &fixed_clash), Some(17890));
+
+        let mut fallback_clash = clash;
+        fallback_clash.mixed_port.kind = PortStrategyKind::AllowFallback;
+        assert_eq!(effective_mixed_port(None, &fallback_clash), None);
     }
 
     #[test]

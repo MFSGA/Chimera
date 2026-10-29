@@ -36,6 +36,11 @@ pub(crate) struct RecoveryContext {
 pub(crate) trait ProfileRuntime: Send + Sync + 'static {
     fn status(&self) -> CoreLifecycleStatus;
     async fn core_status(&self) -> anyhow::Result<CoreStatusSnapshot>;
+    async fn effect_port_binding(
+        &self,
+    ) -> Option<chimera_config::runtime::executor::ResolvedPortBindings> {
+        None
+    }
     async fn capture_profile_inputs(
         &self,
         profiles: Arc<Profiles>,
@@ -90,6 +95,15 @@ impl ApplicationWorkflow {
                 .next_attempt
                 .map(|next_attempt| (deferred.digest.clone(), next_attempt))
         })
+    }
+
+    pub(in crate::client) fn runtime_bound(
+        &self,
+        ports: Option<chimera_config::runtime::executor::ResolvedPortBindings>,
+    ) {
+        if let Some(notifications) = &self.notifications {
+            notifications.runtime_bound(ports, false);
+        }
     }
 
     pub(in crate::client) fn begin_deferred_retry(&mut self, digest: &str) -> bool {

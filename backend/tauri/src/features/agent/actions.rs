@@ -5,6 +5,7 @@ use std::{
 
 use chimera_config::{application::ChimeraAppConfigPatch, clash::config::ClashConfigPatch};
 use sha2::Digest;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use sysproxy::Sysproxy;
 use tauri::{AppHandle, WebviewWindow};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -16,9 +17,7 @@ use crate::{
 };
 
 use super::{
-    collect_network_snapshot, core_probe,
-    diagnostics::host_scope,
-    history,
+    collect_network_snapshot, core_probe, history,
     model::{
         AgentActionRequest, AgentActionResult, AgentActionRisk, AgentAppliedState,
         AgentCommandError, AgentCoreState, AgentHostScope, AgentImpact, AgentNetworkSnapshot,
@@ -26,6 +25,11 @@ use super::{
         AgentStateChange,
     },
 };
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use super::diagnostics::host_scope;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::client::system_proxy::{SystemProxyActionError, ports::OsProxyConfig};
 
 const PROPOSAL_TTL: Duration = Duration::from_secs(60);
 const MIN_PROPOSAL_INTERVAL: Duration = Duration::from_millis(500);
@@ -281,8 +285,18 @@ async fn execute_pending(
     }
     let current = collect_network_snapshot(app).await;
     validate_preconditions(&current, &pending.preconditions)?;
-    execute_action(client, &current, &proposal.action, &pending.preconditions).await?;
-    let snapshot = collect_network_snapshot(app).await;
+    let verified_snapshot = execute_action(
+        client,
+        app,
+        &current,
+        &proposal.action,
+        &pending.preconditions,
+    )
+    .await?;
+    let snapshot = match verified_snapshot {
+        Some(snapshot) => snapshot,
+        None => collect_network_snapshot(app).await,
+    };
     if !verify_action(&snapshot, &proposal.action) {
         return Err(AgentCommandError::VerificationFailed);
     }
@@ -320,10 +334,15 @@ fn plan_action(
     match action {
         AgentActionRequest::SetRoutingMode { mode } => plan_routing_mode(snapshot, *mode),
         AgentActionRequest::SetTunEnabled { enabled } => plan_tun_enabled(snapshot, *enabled),
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         AgentActionRequest::SetSystemProxyEnabled { enabled } => {
             plan_system_proxy_enabled(snapshot, *enabled)
         }
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         AgentActionRequest::DisableStaleSystemProxy => plan_stale_proxy(snapshot),
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        AgentActionRequest::SetSystemProxyEnabled { .. }
+        | AgentActionRequest::DisableStaleSystemProxy => Err(AgentCommandError::ActionNotAvailable),
     }
 }
 
@@ -437,6 +456,9 @@ fn plan_system_proxy_enabled(
     if target && snapshot.core.state != AgentCoreState::Running {
         return Err(AgentCommandError::ActionNotAvailable);
     }
+    if proxy.expected_mixed_port == 0 {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
     if observed_before && proxy.matches_expected_endpoint != Some(true) {
         return Err(AgentCommandError::ActionNotAvailable);
     }
@@ -488,6 +510,7 @@ fn plan_stale_proxy(snapshot: &AgentNetworkSnapshot) -> AgentResult<ActionPlan> 
     if snapshot.core.state != AgentCoreState::Stopped
         || proxy.observed_enabled != Some(true)
         || proxy.matches_expected_endpoint != Some(true)
+        || proxy.expected_mixed_port == 0
     {
         return Err(AgentCommandError::ActionNotAvailable);
     }
@@ -591,19 +614,25 @@ fn applied_state_label(state: AgentAppliedState) -> &'static str {
 
 async fn execute_action(
     client: &ChimeraClient,
+    app: &AppHandle,
     snapshot: &AgentNetworkSnapshot,
     action: &AgentActionRequest,
     preconditions: &ActionPreconditions,
-) -> AgentResult<()> {
+) -> AgentResult<Option<AgentNetworkSnapshot>> {
     match (action, preconditions) {
         (
             AgentActionRequest::SetRoutingMode { mode },
             ActionPreconditions::SetRoutingMode { before, .. },
-        ) => set_routing_mode(client, *before, *mode).await,
+        ) => set_routing_mode(client, *before, *mode)
+            .await
+            .map(|()| None),
         (
             AgentActionRequest::SetTunEnabled { enabled },
             ActionPreconditions::SetTunEnabled { desired_before, .. },
-        ) => set_tun_enabled(client, *desired_before, *enabled).await,
+        ) => set_tun_enabled(client, *desired_before, *enabled)
+            .await
+            .map(|()| None),
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         (
             AgentActionRequest::SetSystemProxyEnabled { enabled },
             ActionPreconditions::SetSystemProxyEnabled {
@@ -611,7 +640,8 @@ async fn execute_action(
                 expected_port,
                 ..
             },
-        ) => set_system_proxy_enabled(client, *desired_before, *expected_port, *enabled).await,
+        ) => set_system_proxy_enabled(app, client, *desired_before, *expected_port, *enabled).await,
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
         (
             AgentActionRequest::DisableStaleSystemProxy,
             ActionPreconditions::DisableStaleSystemProxy {
@@ -619,7 +649,14 @@ async fn execute_action(
                 desired_before,
                 ..
             },
-        ) => disable_stale_system_proxy(client, snapshot, *expected_port, *desired_before).await,
+        ) => disable_stale_system_proxy(client, snapshot, *expected_port, *desired_before)
+            .await
+            .map(|()| None),
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        (AgentActionRequest::SetSystemProxyEnabled { .. }, _)
+        | (AgentActionRequest::DisableStaleSystemProxy, _) => {
+            Err(AgentCommandError::ActionNotAvailable)
+        }
         _ => Err(AgentCommandError::NetworkStateChanged),
     }
 }
@@ -773,36 +810,73 @@ fn generated_tun_enabled() -> Option<bool> {
         .and_then(serde_yaml::Value::as_bool)
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn set_system_proxy_enabled(
+    app: &AppHandle,
     client: &ChimeraClient,
     desired_before: bool,
     expected_port: u16,
     target: bool,
-) -> AgentResult<()> {
+) -> AgentResult<Option<AgentNetworkSnapshot>> {
     #[cfg(feature = "e2e")]
     if super::e2e::fixture_enabled() {
         super::e2e::set_system_proxy_enabled(target);
-        return Ok(());
+        return Ok(None);
+    }
+
+    let mutation = client.lock_system_proxy_mutation().await;
+    let current = client
+        .get_app_config()
+        .map_err(|_| AgentCommandError::ActionFailed)?;
+    let current_port = if target {
+        client.active_system_proxy_port().await
+    } else {
+        client.expected_system_proxy_port().await
+    };
+    let Some(current_mixed_port) = current_port.map_err(|_| AgentCommandError::ActionFailed)?
+    else {
+        return Err(AgentCommandError::ActionNotAvailable);
+    };
+    if expected_port == 0 {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+    if current.enable_system_proxy != desired_before || current_mixed_port != expected_port {
+        return Err(AgentCommandError::NetworkStateChanged);
     }
 
     let original = read_system_proxy().await?;
-    if persist_system_proxy_desired(client, target).await.is_err() {
-        return if rollback_system_proxy(client, original, desired_before).await {
+    if persist_system_proxy_desired(client, &mutation, target)
+        .await
+        .is_err()
+    {
+        return if rollback_system_proxy(client, &mutation, original, desired_before).await {
             Err(AgentCommandError::ActionFailed)
         } else {
             Err(AgentCommandError::PartialApply)
         };
     }
     if system_proxy_is_applied(client, target, expected_port).await {
-        return Ok(());
+        if target {
+            let snapshot = collect_network_snapshot(app).await;
+            let action = AgentActionRequest::SetSystemProxyEnabled { enabled: true };
+            if verify_action(&snapshot, &action) {
+                return Ok(Some(snapshot));
+            }
+            if rollback_system_proxy(client, &mutation, original, desired_before).await {
+                return Err(AgentCommandError::VerificationFailed);
+            }
+            return Err(AgentCommandError::PartialApply);
+        }
+        return Ok(None);
     }
-    if rollback_system_proxy(client, original, desired_before).await {
+    if rollback_system_proxy(client, &mutation, original, desired_before).await {
         Err(AgentCommandError::VerificationFailed)
     } else {
         Err(AgentCommandError::PartialApply)
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn system_proxy_is_applied(
     client: &ChimeraClient,
     enabled: bool,
@@ -813,13 +887,23 @@ async fn system_proxy_is_applied(
         .map(|config| config.enable_system_proxy)
         .ok();
     let observed = read_system_proxy().await.ok();
+    let runtime_matches = if enabled {
+        client
+            .active_system_proxy_port()
+            .await
+            .is_ok_and(|port| port == Some(expected_port))
+    } else {
+        true
+    };
     desired == Some(enabled)
+        && runtime_matches
         && observed.is_some_and(|proxy| {
             proxy.enable == enabled
                 && (!enabled || is_expected_enabled_proxy(&proxy, expected_port))
         })
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn disable_stale_system_proxy(
     client: &ChimeraClient,
     snapshot: &AgentNetworkSnapshot,
@@ -835,69 +919,97 @@ async fn disable_stale_system_proxy(
     if snapshot.core.state != AgentCoreState::Stopped {
         return Err(AgentCommandError::NetworkStateChanged);
     }
+    let Some(current_mixed_port) = client
+        .expected_system_proxy_port()
+        .await
+        .map_err(|_| AgentCommandError::ActionFailed)?
+    else {
+        return Err(AgentCommandError::ActionNotAvailable);
+    };
+    if expected_port == 0 {
+        return Err(AgentCommandError::ActionNotAvailable);
+    }
+    if current_mixed_port != expected_port {
+        return Err(AgentCommandError::NetworkStateChanged);
+    }
     let original = read_system_proxy().await?;
     if !is_expected_enabled_proxy(&original, expected_port) {
         return Err(AgentCommandError::NetworkStateChanged);
     }
-    if persist_system_proxy_desired(client, false).await.is_err() {
-        return if rollback_system_proxy(client, original, desired_before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    let mut disabled = original.clone();
-    disabled.enable = false;
-    if write_system_proxy(disabled).await.is_err() {
-        return if rollback_system_proxy(client, original, desired_before).await {
-            Err(AgentCommandError::ActionFailed)
-        } else {
-            Err(AgentCommandError::PartialApply)
-        };
-    }
-    let observed = match read_system_proxy().await {
-        Ok(observed) => observed,
-        Err(_) => {
-            return if rollback_system_proxy(client, original, desired_before).await {
-                Err(AgentCommandError::VerificationFailed)
-            } else {
-                Err(AgentCommandError::PartialApply)
-            };
-        }
-    };
-    if !observed.enable {
-        return Ok(());
-    }
-    if rollback_system_proxy(client, original, desired_before).await {
-        Err(AgentCommandError::VerificationFailed)
-    } else {
-        Err(AgentCommandError::PartialApply)
-    }
-}
-
-async fn persist_system_proxy_desired(client: &ChimeraClient, enabled: bool) -> AgentResult<()> {
-    client
-        .patch_app_config(ChimeraAppConfigPatch {
-            enable_system_proxy: Some(enabled),
-            ..Default::default()
-        })
+    match client
+        .disable_stale_system_proxy(
+            snapshot.core.state_changed_at,
+            expected_port,
+            desired_before,
+            os_proxy_config(original),
+        )
         .await
-        .map(|_| ())
-        .map_err(|_| AgentCommandError::ActionFailed)
+    {
+        Ok(()) => Ok(()),
+        Err(error) => Err(match error {
+            SystemProxyActionError::StateChanged => AgentCommandError::NetworkStateChanged,
+            SystemProxyActionError::PartialApply(_) => AgentCommandError::PartialApply,
+            SystemProxyActionError::Failed(_) | SystemProxyActionError::Stopped => {
+                AgentCommandError::ActionFailed
+            }
+        }),
+    }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn persist_system_proxy_desired(
+    client: &ChimeraClient,
+    mutation: &crate::client::SystemProxyMutation<'_>,
+    enabled: bool,
+) -> AgentResult<()> {
+    client
+        .patch_app_config_under_system_proxy_mutation(
+            mutation,
+            ChimeraAppConfigPatch {
+                enable_system_proxy: Some(enabled),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|_| AgentCommandError::ActionFailed)?;
+    match client
+        .reconcile_system_proxy_effect_under_mutation(mutation)
+        .await
+        .health
+    {
+        crate::client::effects::status::EffectHealth::Healthy => Ok(()),
+        _ => Err(AgentCommandError::ActionFailed),
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn rollback_system_proxy(
     client: &ChimeraClient,
+    mutation: &crate::client::SystemProxyMutation<'_>,
     original: Sysproxy,
     desired_before: bool,
 ) -> bool {
-    let persisted = persist_system_proxy_desired(client, desired_before)
+    let persisted = persist_system_proxy_desired(client, mutation, desired_before)
         .await
         .is_ok();
-    let restored = write_system_proxy(original).await.is_ok();
+    let restored = client
+        .restore_system_proxy_after_failed_action(mutation, os_proxy_config(original))
+        .await
+        .is_ok();
     persisted && restored
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn os_proxy_config(proxy: Sysproxy) -> OsProxyConfig {
+    OsProxyConfig {
+        enable: proxy.enable,
+        host: proxy.host,
+        port: proxy.port,
+        bypass: proxy.bypass,
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn read_system_proxy() -> AgentResult<Sysproxy> {
     tokio::task::spawn_blocking(Sysproxy::get_system_proxy)
         .await
@@ -905,13 +1017,7 @@ async fn read_system_proxy() -> AgentResult<Sysproxy> {
         .map_err(|_| AgentCommandError::ActionFailed)
 }
 
-async fn write_system_proxy(proxy: Sysproxy) -> AgentResult<()> {
-    tokio::task::spawn_blocking(move || proxy.set_system_proxy())
-        .await
-        .map_err(|_| AgentCommandError::ActionFailed)?
-        .map_err(|_| AgentCommandError::ActionFailed)
-}
-
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn is_expected_enabled_proxy(proxy: &Sysproxy, expected_port: u16) -> bool {
     proxy.enable
         && proxy.port == expected_port
@@ -933,7 +1039,9 @@ fn verify_action(snapshot: &AgentNetworkSnapshot, action: &AgentActionRequest) -
         AgentActionRequest::SetSystemProxyEnabled { enabled } => {
             snapshot.system_proxy.desired_enabled == *enabled
                 && snapshot.system_proxy.observed_enabled == Some(*enabled)
-                && (!*enabled || snapshot.system_proxy.matches_expected_endpoint == Some(true))
+                && (!*enabled
+                    || (snapshot.core.state == AgentCoreState::Running
+                        && snapshot.system_proxy.matches_expected_endpoint == Some(true)))
         }
         AgentActionRequest::DisableStaleSystemProxy => {
             snapshot.system_proxy.observed_enabled == Some(false)
@@ -1044,8 +1152,8 @@ mod tests {
 
     use super::{
         ActionPreconditions, AgentAuditOutcome, PendingProposal, ProposalStore, cleanup_store,
-        enforce_store_limits, plan_routing_mode, plan_system_proxy_enabled, plan_tun_enabled,
-        proposal_audit_reference, proposal_confirmation_message, proposal_digest,
+        enforce_store_limits, plan_routing_mode, plan_stale_proxy, plan_system_proxy_enabled,
+        plan_tun_enabled, proposal_audit_reference, proposal_confirmation_message, proposal_digest,
         routing_transaction_error, verify_action,
     };
     use crate::core::clash::transaction::TransactionOutcome;
@@ -1246,6 +1354,19 @@ mod tests {
     }
 
     #[test]
+    fn system_proxy_actions_require_a_known_runtime_port() {
+        let mut snapshot = snapshot();
+        snapshot.system_proxy.expected_mixed_port = 0;
+        snapshot.system_proxy.matches_expected_endpoint = None;
+        assert!(plan_system_proxy_enabled(&snapshot, true).is_err());
+        assert!(plan_system_proxy_enabled(&snapshot, false).is_err());
+
+        snapshot.core.state = AgentCoreState::Stopped;
+        snapshot.system_proxy.observed_enabled = Some(true);
+        assert!(plan_stale_proxy(&snapshot).is_err());
+    }
+
+    #[test]
     fn new_action_verification_requires_desired_and_observed_state() {
         let mut snapshot = snapshot();
         let tun_action = AgentActionRequest::SetTunEnabled { enabled: true };
@@ -1264,6 +1385,8 @@ mod tests {
         assert!(!verify_action(&snapshot, &proxy_action));
         snapshot.system_proxy.matches_expected_endpoint = Some(true);
         assert!(verify_action(&snapshot, &proxy_action));
+        snapshot.core.state = AgentCoreState::Stopped;
+        assert!(!verify_action(&snapshot, &proxy_action));
     }
 
     #[test]

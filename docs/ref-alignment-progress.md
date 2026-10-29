@@ -1,5 +1,13 @@
 # ref 对齐进度
 
+## 当前迭代目标（2026-10-27）
+
+- 按固定本地 `ref/` 逐批将 Chimera 共享实现对齐上游。每批开始先同步远端 `master`、记录基线和符号映射；优先整段复制完整、相互依赖的上游模块，再做必要且可审查的品牌/平台适配，避免为缩小 diff 拆散迁移。
+- 先编译并运行目标模块的定向单测；修复编译/测试问题后，再补适用的主 UI、legacy UI、Agent 覆盖和简单的隔离桌面 E2E（优先用真实控件点击验证）。明确区分编译、模拟边界测试、桌面 E2E 与真实宿主副作用验证，不把前几者说成后者。
+- 直接沿当前本地分支逐批推进，除非存在并行冲突或明确隔离要求，不随意创建 worktree。每个提交保持单一清晰目的，签名并推送任务分支；只按最新提交 SHA 查看 CI/E2E，不空等远端检查，期间继续独立且已授权的工作。
+- 需要集成时，先完成独立复核并核对该 SHA 的必需门禁；未满足时保留在任务分支并明确待办。同步/迭代至用户停止，不擅自改动 `ref/`、用户数据或 host networking。
+- Codex 当前 Goal 接口只提供读取与状态更新，不提供编辑目标描述；本节作为该持续迭代任务的可维护目标说明，不能替代或谎称已修改原 Goal 对象。
+
 ## Dashboard resize settle 对齐（PR #534，修复复核发现后重新验证中）
 
 - 目标：对齐 Clash Nyanpasu `97e43308edabc95677c65741c81db1eeeb51689a` 的 Dashboard resize settling：窗口连续变化期间维持当前布局来源，尺寸稳定 200 ms 后才选择新预设布局；首次测得网格尺寸仍立即初始化。布局选择延迟撞上拖拽/调整大小时，等当前交互结束再应用。
@@ -1702,7 +1710,7 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验证：fetch 后 `ref/HEAD` 与 `ref/origin/main` 均为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`，`git -C ref status --short` 为空；新 SHA 可由旧 SHA 快进到达。该批只同步参考子模块，不运行产品构建或测试。
 - 影响与回滚：父仓库 `ref` gitlink 从 `03ab6e5824cb44e527bde7cca28b699e8bf3a766` 改为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`；回滚仅需恢复原 gitlink。此更新作为单独提交推送，避免与 Dashboard 功能和 E2E 修复混在一起。
 
-## Windows WebView2 随最小化/恢复同步可见性（实现完成，等待 Windows CI/E2E）
+## Windows WebView2 随最小化/恢复同步可见性（Windows E2E 已通过；CI 依赖修复待新 SHA 验证）
 
 - 目标：对齐固定 ref `9f72efe292975b13b5d9018a9f5641ffbb071c27` 中 `window/engine.rs::set_in_sight` 与 `window/manager.rs::follow_minimized`。最小化窗口时隐藏 WebView2 controller 并请求低内存目标；恢复或重新聚焦时先恢复 WebView 可见性和正常内存目标，再显示/聚焦原生窗口。
 - 非目标：不迁移整个上游 `WindowManager`，不改变窗口创建/销毁/尺寸恢复/关闭行为，不新增托盘隐藏逻辑，不改权限或持久配置，不影响 Chimera Client/Service、legacy UI 和 Agent。
@@ -1711,5 +1719,21 @@ DIFF-001 至 DIFF-012 是此前基于
 - 验收：真实点击 main 窗口最小化控件后，Windows WebView 的 `document.visibilityState` 变为 `hidden`；恢复窗口后回到 `visible`。定向 hermetic desktop E2E 在 PR CI 执行。Rust 格式、编译、单测、E2E 类型检查和该用例均需覆盖；Mac 本地结果只证明跨平台 no-op 与工具链可运行，不替代 Windows WebView2 验证。
 - 本机验证：macOS `cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --manifest-path backend/Cargo.toml -p chimera --lib window::tests -- --test-threads=1` 6/6；`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、E2E TypeScript 检查、harness 单测 30/30、E2E 桌面构建、Prettier 与 `git diff --check` 通过。定向 WebDriver spec 在 macOS 按设计跳过，不能作为 Windows 行为验证。尝试 Windows GNU 交叉编译未完成：环境没有 `x86_64-w64-mingw32-gcc`；Windows COM 分支须由 PR Windows CI/E2E 编译和执行。
 - 独立复核：无 P0–P2 阻塞项；确认 ref 映射、依赖版本、事件时序与测试清理符合目标。明确未覆盖内存 target 的实际效果和 COM HRESULT 失败恢复；PR Windows 构建和 E2E 是剩余证据。
+- 远程结果与 CI 修复：PR #540 原 SHA `c1f8a498ab5781285295c25daa2b67f9e1e5aba0` 的 Windows Desktop E2E run `40632079689` 通过；CI run `40632079560` 的 Linux `Lint` job `122631703884` 在 Ubuntu 26.04 runner 安装已不存在的 `webkit2gtk-driver` 时失败，源码检查未开始。`.github/workflows/ci.yaml` 已改为根据 apt 候选包在 `webkit2gtk-driver` 与 `webkitgtk-webdriver` 间选择；本地 shell/格式检查通过。该修复与同步最新 master 后的新 SHA 远程 CI/E2E 仍待复验。
 - 回滚：回退 WebView2 helper、窗口事件接线和定向 E2E；不涉及用户数据或系统设置迁移。
 - 审批触发：不改变架构所有权、权限模型或持久数据，无需额外审批。
+
+## DIFF-062：把系统代理与自启动交给共享 effects owner（覆盖 legacy 与 Agent）
+
+- 目标：按当前只读 `ref/` 将 system-proxy/PAC/autostart actor 接入 Chimera 的共享 effects executor；typed API、legacy UI、Agent 确认后的网络动作与启动恢复都复用同一 owner，退出时由 actor 恢复启动前的代理状态。
+- 非目标：不修改 TUN/Service 权限与生命周期、代理规则或配置格式；不移除 legacy UI、Chimera Client/Service 或公开的 `core::sysopt` 模块；不在日常开发主机实际开启/关闭系统代理、PAC 或登录项。
+- 基线：父仓库分支从远程 `master` `5c491b2` 快进同步至 `25d1829a4816a99b402a1a655ca80654e526c2c6`；运行时 submodule 为 `ceee7f7df1d01b421fc75409ec667852b7cc7cda`。本批实际只读 `ref/` 为 `9f72efe292975b13b5d9018a9f5641ffbb071c27`，`git -C ref status --short` 为空；本批没有改动或更新 ref。
+- 路径与符号映射：完整复制 `ref/backend/tauri/src/client/system_proxy/{actor.rs,adapters.rs,error.rs,mod.rs,ports.rs,tests.rs}` 到 Chimera 同路径；`SystemProxyActor`、`SystemProxyClient::{spawn,reconcile,status}`、`OsProxyPort`、`AutoLaunchPort`、`PacPort` 与 ref 对齐。`ref/backend/tauri/src/utils/blocking.rs::join` 复制到同路径，供阻塞系统 API 运行。`ApplicationEffectExecutor::system_proxy_desires` 与 `apply` 按 plan 顺序把 AutoLaunch/SystemProxy/ProxyGuard 合为一次 actor reconcile；本地保留既有 `ApplicationEffectAdapters`，继续承担 Locale/Logger/Widget/Tray 等 Chimera 适配。
+- 生产接线：`setup.rs` 创建 actor 和真实平台 adapter；`ApplicationEffectExecutor` 与 `ChimeraClient` 注入同一个 `SystemProxyClient`。移除 `resolve_setup`、legacy Verge patch 与 Clash patch 中并行的 `Sysopt::init/update/reset_sysproxy` 业务调用；legacy commit 在成功持久化后向共享 effects actor 发布所变更 domain。Agent 普通开关通过 typed app patch 触发共享 effects，并等待 owner 状态后核验实际 OS 状态；Agent 的遗留代理修复通过同一 actor 做带预期端口与 loopback 检查的串行写入、读回验证和失败恢复，不再直接写 `Sysproxy`。启动完成时发布完整效果。effects 只从与当前 host 状态匹配的 `RuntimeApplyReceipt.ports.bindings.mixed_port` 取得活动端口；`ClashInfo::port` 是 controller 端口，不用于设置系统代理。Agent 与停止后 stale-proxy 校验优先使用当前 host 最近一次已确认的运行时 receipt。随机端口没有 receipt 时端口视为未知，Agent 不提供依赖该端口的开关或 stale 修复；不使用启动时可能被覆盖的 Verge 镜像猜测旧运行端口。固定端口没有 receipt 时仍可由固定配置确定。未确认活动 receipt 时 effects 发送 `None`，actor 按其 retryable unresolved-port 状态等待后续绑定。退出请求取消同一个 shutdown token，`TaskTracker` 等待代理 actor drain 与恢复完成。
+- 保留差异与边界：Chimera 的 `EffectHealth` 错误码是 `&'static str`，所以将 ref 的 `EffectFailureCode` 映射为稳定 snake_case 字符串；其他本地 effects 错误模型和持久配置合同不变。`core::sysopt` 公开模块暂时保留以避免无必要的兼容性删除，但本仓生产代码不再从它应用自启动/系统代理。Widget runtime 和 ref 的 `TrayView` 缓存所有权不属于本批，PAC/system proxy host 写入仍仅由新 actor 执行。主 UI、legacy UI 和 agent 继续共享相同 Application API 与 effects actor；本批无 UI 操作变更。
+- 接口变化：`ApplicationEffectExecutor::new` 增加必需的 `SystemProxyClient`；`ChimeraClient` 为经确认的 Agent 动作持有同一 actor client；`EffectsClient::reconcile_effect` 提供等待并取得最新 owner 状态的入口；system-proxy actor 增加带端点校验的 stale-proxy 修复和失败动作恢复命令。setup 为代理 owner 创建独立 PAC cache 路径；启动与 legacy commit 的 runtime binding 通知现在是异步只读活动 core 查询。未改变 IPC、持久化 wire format、TUN 或 Service API。
+- 风险与回滚：L2（系统代理、PAC、登录项和退出恢复均可产生宿主副作用）。回滚需恢复原 `Sysopt` 接线、effects executor/adapters 契约、setup 注入和本条记录；无用户配置迁移。当前未执行真实 OS adapter 写入。
+- 独立复核：fresh-context review 指出 stale Agent 修复与系统代理偏好并发时可能恢复过期 OS 状态、配置 CAS 更新漏写 legacy Verge 镜像、缺少生命周期命令级断言、Agent 回滚未串行化，以及混合端口变更后未重新核对旧端点；另一处旧 IPC raw mapping 也可绕过 typed guard。复核还发现 Android/iOS 下 Agent 引用被 cfg 排除的系统代理类型、随机 mixed-port 将 fallback start port 误当作活动端口，以及 stale 回滚在验证失败时会覆盖后来由宿主外部设置的新代理。当前 diff 让 typed/legacy 代理偏好、typed/raw/legacy mixed-port 更新和 Agent 设置、验证、回滚及 stale 修复共享 client 互斥；生命周期命令在 OS 写入前核对 receipt 端口；CAS 冲突时发布最新偏好并清除旧运行端口，不恢复过期 OS 配置；stale 回滚先重新读取 OS 状态，只在状态仍为本次写入值时恢复；移动平台不提供不支持的 Agent 系统代理提案与执行；普通配置与 Agent 修复共用 legacy mirror 持久化函数。第二轮复核又发现 effects 将 controller 端口误当 mixed port，Agent 对 Random 策略仅读 Verge fallback；现改用 host 状态核对过的 runtime receipt，并增加 controller/mixed 与随机端口回归断言。最终复核另发现 Random 模式重启后没有可信历史端口，现将未知端口 fail-closed，不再拿易变的 Verge 镜像认领旧系统代理。另新增 stale-proxy 生命周期、互斥串行、raw mixed-port 判定及宿主并发变更回滚覆盖。第三轮 fresh-context 复核无 P0-P2 阻塞，并指出启用期间核心停止后的 OS 与偏好恢复尚无动作级回归断言。
+- 最新复核补充：Random 与 AllowFallback 策略在无 receipt 时都不能确定重启后的监听端口，当前只对 Fixed 策略回退到配置端口；启用代理动作要求活动 receipt，并在 effect 后和最终快照确认核心仍运行。旧 `patch_clash_core_config` IPC 经过 `feat::patch_clash` 调用持有 mixed-port 互斥的 client writer，raw mapping guard 有回归断言。
+- 验收计划与限制：fake OS proxy/autostart/PAC ports 覆盖 owner 的 proxy/PAC/guard/revision/shutdown、stale endpoint CAS 与恢复；executor 与 lifecycle 分别验证效果分发、活动端口绑定以及 Agent stale-proxy 生命周期。Agent action tests 覆盖 proposal/planning、最终状态校验和错误映射，但不执行完整动作编排，也没有可确定重现“启用期间核心停止并回滚 OS 与偏好”的动作级测试；不会把这些测试描述为真实 owner rollback 测试。真实主机代理恢复/登录项、UI 操作和 Service/TUN 需隔离 runner 验证；本机不通过生产 adapter 修改系统设置。移动平台交叉编译会尝试使用 Android target 验证 cfg 分支。
+- 当前本地证据：最新后端 SHA 执行 `cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、`pnpm exec prettier --check docs/ref-alignment-progress.md docs/testing/contracts/application-effects-executor.md LESSONS.md`、`git diff --check`、`cargo check --locked --manifest-path backend/Cargo.toml -p chimera --lib`、`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=1`（659 passed、0 failed、1 ignored）、`cargo clippy --locked --manifest-path backend/Cargo.toml --all-targets --all-features` 和 `pnpm e2e:tauri:build` 均通过。E2E 测试 follow-up 让非视觉 fetch smoke 选择不等待动画；`pnpm --filter @chimera/tauri-e2e typecheck` 和 macOS WebKit 定向 smoke（5/5）通过。完整 `pnpm --filter @chimera/tauri-e2e test:smoke` 为 2 个 spec 通过、2 个失败：proxy-localization 的 Add Profile 按钮 30 秒不可点击；legacy connections 诊断显示文档 hidden、页面动画 `currentTime=0`。这两个未在可见隔离 runner 复现，所以不称完整 E2E 通过。未实测真实系统代理、PAC、自启动或 Service/TUN；Android target 下载停滞后中止，移动 cfg 交叉编译未验证。

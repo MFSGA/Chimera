@@ -829,6 +829,47 @@ impl CoreFacade {
         self.manager.active_clash_info().await
     }
 
+    /// Returns only the runtime port receipt that still matches the selected
+    /// host's live status. `ClashInfo::port` is the controller port and is not
+    /// evidence for the mixed-proxy listener.
+    pub(crate) async fn active_runtime_receipt(
+        &self,
+    ) -> anyhow::Result<Option<Arc<RuntimeApplyReceipt>>> {
+        let Some(local_runtime) = self.local_runtime.as_ref() else {
+            return Ok(None);
+        };
+        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+        };
+        let status = endpoint.status().await?;
+        if !matches!(
+            status.state.as_ref(),
+            Some(chimera_ipc::api::status::CoreStateDetail::Running { .. })
+        ) {
+            return Ok(None);
+        }
+        Ok(local_runtime
+            .accepted_runtime_receipt()
+            .filter(|receipt| receipt.confirms(endpoint.host(), &status)))
+    }
+
+    /// Last confirmed receipt for the currently selected host. It is useful
+    /// after a clean stop when recovering a stale host proxy, but does not
+    /// prove that the core is currently running.
+    pub(crate) fn last_confirmed_runtime_receipt(&self) -> Option<Arc<RuntimeApplyReceipt>> {
+        let local_runtime = self.local_runtime.as_ref()?;
+        let expected_host = match local_runtime.run_type() {
+            RunType::Normal => super::control_endpoint::ExecutionHost::Local,
+            RunType::Service => super::control_endpoint::ExecutionHost::Service,
+            RunType::Elevated => return None,
+        };
+        local_runtime
+            .confirmed_runtime_receipt()
+            .filter(|receipt| receipt.host == expected_host)
+    }
+
     pub(crate) fn start_service_api_monitor(self: &Arc<Self>) {
         if self.local_runtime.is_none() {
             return;
