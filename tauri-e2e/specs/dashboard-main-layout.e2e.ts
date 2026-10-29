@@ -476,9 +476,12 @@ async function captureResizeFailureEvidence(
       const storage = await captureWebDriverValue(
         'persisted Dashboard storage',
         () =>
-          invoke<string | null>('get_storage_item', {
-            key: 'dashboard-widgets',
-          }),
+          invoke<{ value: string | null; revision: number }>(
+            'get_storage_item',
+            {
+              key: 'dashboard-widgets',
+            },
+          ).then((item) => item.value),
         errors,
       );
       if (storage.ok) observedStorage = storage.value;
@@ -772,9 +775,11 @@ describe('main dashboard reference layout', () => {
       browser.getWindowSize(),
     );
     const storageKey = 'dashboard-widgets';
-    const originalStorage = await invoke<string | null>('get_storage_item', {
-      key: storageKey,
-    });
+    const originalStorageItem = await invoke<{
+      value: string | null;
+      revision: number;
+    }>('get_storage_item', { key: storageKey });
+    const originalStorage = originalStorageItem.value;
     const testStorage = JSON.stringify({
       '4x5': [
         {
@@ -910,6 +915,7 @@ describe('main dashboard reference layout', () => {
       await invoke('set_storage_item', {
         key: storageKey,
         value: testStorage,
+        expectedRevision: null,
       });
       phase = 'wait for the fixture in the local KV cache';
       await withBoundedWebDriverRequest(() =>
@@ -1015,9 +1021,11 @@ describe('main dashboard reference layout', () => {
       await waitForWidgets('Restored wide Dashboard layout', wideWidgets);
 
       phase = 'verify responsive projection did not change persisted storage';
-      const actualStorage = await invoke<string | null>('get_storage_item', {
-        key: storageKey,
-      });
+      const actualStorageItem = await invoke<{
+        value: string | null;
+        revision: number;
+      }>('get_storage_item', { key: storageKey });
+      const actualStorage = actualStorageItem.value;
       assert.ok(
         actualStorage === testStorage,
         JSON.stringify({
@@ -1094,6 +1102,7 @@ describe('main dashboard reference layout', () => {
           await invoke('set_storage_item', {
             key: storageKey,
             value: originalStorage,
+            expectedRevision: null,
           });
         }
       });
@@ -1107,10 +1116,11 @@ describe('main dashboard reference layout', () => {
         'refresh and verify the restored Dashboard',
         async () => {
           await refreshDashboardRouteForCleanup();
-          const restoredStorage = await invoke<string | null>(
-            'get_storage_item',
-            { key: storageKey },
-          );
+          const restoredStorageItem = await invoke<{
+            value: string | null;
+            revision: number;
+          }>('get_storage_item', { key: storageKey });
+          const restoredStorage = restoredStorageItem.value;
           assert.ok(
             restoredStorage === originalStorage,
             JSON.stringify({
@@ -1336,9 +1346,11 @@ describe('main dashboard reference layout', () => {
         if (!internals) {
           throw new Error('Tauri page internals are unavailable.');
         }
-        return internals.invoke<string | null>('get_storage_item', {
-          key: 'dashboard-widget-configs',
-        });
+        const item = await internals.invoke<{
+          value: string | null;
+          revision: number;
+        }>('get_storage_item', { key: 'dashboard-widget-configs' });
+        return item.value;
       });
 
     const writeStoredValue = async (value: string | null) =>
@@ -1364,6 +1376,7 @@ describe('main dashboard reference layout', () => {
           await internals.invoke('set_storage_item', {
             key: 'dashboard-widget-configs',
             value: serializedValue,
+            expectedRevision: null,
           });
         }
       }, value);

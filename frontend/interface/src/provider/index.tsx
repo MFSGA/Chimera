@@ -15,6 +15,7 @@ import {
   useClashConnectionDetails,
 } from './clash-connection-details-provider';
 import { ClashWSProvider, useClashWSContext } from './clash-ws-provider';
+import { KvStorageProvider } from './kv-storage-provider';
 import { MutationProvider } from './mutation-provider';
 
 export { ClashConnectionDetailsFreezeBoundary } from './clash-connection-details-provider';
@@ -83,13 +84,15 @@ const SettingSyncProvider = ({ children }: PropsWithChildren) => {
 export const RootProvider: any = ({ children }: PropsWithChildren) => {
   return (
     <QueryClientProvider client={queryClient}>
-      <SettingSyncProvider>
-        <MutationProvider>
-          <ClashWSProvider>
-            <ConnectionDetailsBridge>{children}</ConnectionDetailsBridge>
-          </ClashWSProvider>
-        </MutationProvider>
-      </SettingSyncProvider>
+      <KvStorageProvider>
+        <SettingSyncProvider>
+          <MutationProvider>
+            <ClashWSProvider>
+              <ConnectionDetailsBridge>{children}</ConnectionDetailsBridge>
+            </ClashWSProvider>
+          </MutationProvider>
+        </SettingSyncProvider>
+      </KvStorageProvider>
     </QueryClientProvider>
   );
 };
