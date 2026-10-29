@@ -4,8 +4,8 @@
 
 - 按固定本地 `ref/` 逐批将 Chimera 共享实现对齐上游。每批开始先同步远端 `master`、记录基线和符号映射；优先整段复制完整、相互依赖的上游模块，再做必要且可审查的品牌/平台适配，避免为缩小 diff 拆散迁移。
 - 先编译并运行目标模块的定向单测；修复编译/测试问题后，再补适用的主 UI、legacy UI、Agent 覆盖和简单的隔离桌面 E2E（优先用真实控件点击验证）。明确区分编译、模拟边界测试、桌面 E2E 与真实宿主副作用验证，不把前几者说成后者。
-- 直接沿当前本地分支逐批推进，除非存在并行冲突或明确隔离要求，不随意创建 worktree。每个提交保持单一清晰目的，签名并推送任务分支；只按最新提交 SHA 查看 CI/E2E，不空等远端检查，期间继续独立且已授权的工作。
-- 需要集成时，先完成独立复核并核对该 SHA 的必需门禁；未满足时保留在任务分支并明确待办。同步/迭代至用户停止，不擅自改动 `ref/`、用户数据或 host networking。
+- 按用户本轮明确要求直接在当前本地 `master` 逐批推进，不新建功能分支或 worktree。每个提交保持单一清晰目的并签名；本地目标检查通过后推送 `master`，再按准确 SHA 查看 CI/E2E。远端检查 pending 时继续其他独立且已授权的工作，不将 pending 当作成功；发现失败就在 `master` 修复并重新验证。
+- 对用户指定合并的旧分支，先独立复核其独有差异；若源码已在 `master`、其余改动会回退较新依赖或基线，则只记录分支已包含，不重复覆盖。不得借此处理无关分支或改动用户数据、`ref/` 与 host networking。
 - Codex 当前 Goal 接口只提供读取与状态更新，不提供编辑目标描述；本节作为该持续迭代任务的可维护目标说明，不能替代或谎称已修改原 Goal 对象。
 
 ## 参考基线同步（2026-10-29）
@@ -14,6 +14,19 @@
 - 更新后的 ref 根工作区干净；递归子模块分别为 `backend/enable-loopback` (`f1b9f8693a328ca0a6094951035b81fe302b0848`)、`vendor/windows-rs` (`d1574fd27371a9b08bc5508f70c43ccb4f84c543`)、`backend/nyanpasu-runtime` (`e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34`)、`nyanpasu-utils` (`2706c1b69a3b5e4f0367fb54b4a87e67769c19f8`)，均已检出。上游签名在本机无法核验：本地 GPG keyring 缺少签名者公钥；因此不声称其签名已验证。
 - 本批只更新 `ref` gitlink 和本指南的基线记录，不移植依赖或产品代码；不涉及运行时行为、IPC、持久化或主机网络。检查：SSH fetch 成功、ref HEAD 与目标 SHA 相同、ref 状态干净、`git diff --check` 通过。产品构建与桌面 E2E 不适用。
 - 风险：L2（参考基线变化，影响后续对齐来源）。回滚时将 gitlink 恢复到 `8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8` 并还原本节和指南基线。
+
+## 参考基线同步（2026-10-29，后续提交）
+
+- 上游：Clash Nyanpasu `main` 更新到 `2c017d63bfec720017a9b57db629eeddd2c9cd3d`，其 parent 是原基线 `2fadf212f161417dcdf2f37d81a305a37ff918a4`。GitHub API 确认该提交为 `main` 当前 tip 且签名有效；本地通过 `origin/main` fetch 得到相同 SHA。父仓库 `ref` gitlink 从 `2fadf212` 更新到该提交。
+- 上游变化：只更新 `meta-json-schema` 1.19.32→1.19.33 及锁文件；`backend/nyanpasu-geodata`、`backend/tauri/src/core/geo` 和 `backend/tauri/src/core/traffic/geo.rs` 均未改变。`backend/nyanpasu-runtime` 仍为 `e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34`。
+- 验证：fetch 成功；ref 根目录和两个已检出的子模块均干净；GitHub API 签名状态为 valid；`git diff --check` 与文档格式检查待提交前执行。本批只更新参考基线记录和 gitlink，不改变 Chimera 运行时代码、持久化、IPC 或主机网络行为。
+- 风险：L2（参考基线变化，影响后续对齐来源）。回滚时将 gitlink 恢复到 `2fadf212f161417dcdf2f37d81a305a37ff918a4`，并撤回本节和指南元数据更新。
+
+## GeoIP/traffic 候选分支复核（2026-10-29）
+
+- 候选：`codex/geodata-traffic-20261020`，tip `fec56bff4eb98b880282f94713cd763c230282a4`。独立复核确认该分支的 GeoIP crate、traffic/core 接入和测试代码已与 master 中的 `d9624314486e45c905876242dee5d3aacd161cba`（PR #505）相同；该提交已是 master 的祖先。
+- 其余差异只有参考对齐文档、旧依赖版本及 `ref` gitlink。分支的依赖比当前 master 低，文档回退到更旧基线，gitlink 也比 master 旧；不将这些过时内容覆盖到 master。GeoIP 功能没有待补的独有源码改动。
+- 独立复核未发现 GeoIP 实现 P0–P2 阻塞；记录的保留差异是 ref 未启用本机公网 IP 探测，因此本地/私有源地址可显示为 unknown。该功能的必要源码和测试已由 #505 集成；本次只处理候选分支历史归属，不再重复应用代码。
 
 ## Dashboard resize settle 对齐（PR #534，修复复核发现后重新验证中）
 
