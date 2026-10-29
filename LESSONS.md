@@ -57,6 +57,7 @@
 
 | LESSON-20261029-001 | 2026-10-29 | Shared KV / IPC | ref 在事件监听注册失败后仍开放读取；Chimera 增加重试与就绪门控，并用 23 项前端测试覆盖 | Mitigated |
 | LESSON-20261029-002 | 2026-10-29 | E2E / Storage | PR #548 新 IPC 返回 value/revision；Dashboard 用例仍按旧字符串合同读写，Windows hermetic 失败 | Mitigated |
+| LESSON-20261029-003 | 2026-10-29 | CI / Dependencies | PR #550 首次选中的 TanStack 版本仍在 24 小时 release-age 窗口；本地复用旧 pnpm store 未能替代新鲜验证，调整版本后精确 SHA CI/E2E 通过 | Verified |
 
 ## 单条模板
 
@@ -908,3 +909,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：修复后 E2E TypeScript typecheck、针对 spec 的 Prettier 与 `git diff --check` 通过；本机重建 E2E binary 成功，但 macOS WebKit 在 before hook 的主路由动画停在 `currentTime=0`，未进入该 spec 断言（同类已知环境问题见 LESSON-20261023-003），不作为修复通过证据。Windows 新 SHA 的 CI/E2E 待复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：只改变测试读值解包、fixture 参数及诊断/清理代码；不写入真实用户目录或主机网络。失败运行的初始 E2E runtime 为隔离目录，清理错误已记录。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：变更 IPC 返回值结构时，搜索所有 E2E 调用点，包括失败证据、断言和 `finally` 清理；用实际结构化绑定类型，不能只更新主要测试路径。未修改 CI 门禁。
+
+### LESSON-20261029-003：依赖冷却窗口内的版本必须用新鲜安装验证
+
+- 日期与时区：2026-10-29 UTC
+- 状态：Verified（候选依赖已调整；PR #550 精确合并 SHA 的 CI 与 Desktop E2E 通过）
+- 严重度：Low（依赖更新在安装阶段被拒绝；未发现运行时产品回归）
+- 模块：CI / dependency updates / pnpm
+- master commit / ref gitlink SHA / 平台与测试环境：失败候选 `c6c8afde1d358c65217333bd96ffa8c4dd8a618d`；合并 SHA `5da98853bb06f6c730ae765c6ca03fa31afb747e`；ref `2fadf212f161417dcdf2f37d81a305a37ff918a4`；macOS、Ubuntu、Windows CI 与本机 macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#550](https://github.com/MFSGA/Chimera/pull/550)；[失败 CI run 40890916088](https://github.com/MFSGA/Chimera/actions/runs/40890916088)；[失败 Desktop run 40890916064](https://github.com/MFSGA/Chimera/actions/runs/40890916064)；[修复后 CI run 40895270778](https://github.com/MFSGA/Chimera/actions/runs/40895270778)；[修复后 Desktop run 40895271111](https://github.com/MFSGA/Chimera/actions/runs/40895271111)。
+- 预期行为：依赖更新必须服从 pnpm 的 24 小时 minimum-release-age 检查。未达到冷却时间的版本应保持在上一个符合策略的版本，不能为了对齐上游而添加临时例外。
+- 真实异常、复现步骤与证据：首次候选使用 `@tanstack/react-virtual@3.14.24` 和 `@tanstack/virtual-core@3.19.9`；CI 安装步骤报告 `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`，记录的发布时间分别为 2026-10-29 10:54:29 UTC 和 10:54:27 UTC，均落在运行时的 minimum-release-age cutoff 内。macOS 首次 run 的 Install dependencies 失败；Linux 和 Windows 对同一候选也未通过依赖安装。早期本地验证复用了既有 pnpm store，因此没有可靠复现干净 CI 的年龄检查。
+- 确认的根因与排除项：版本发布后尚未满足 24 小时冷却期，是 CI 失败的直接原因；复用旧本地 store 是验证流程不足，可能隐藏候选版本仍不可安装的事实。失败不表示 TanStack 功能或 Chimera 运行时不兼容，也不应以关闭年龄检查或加入 exclude 规避。
+- 修复提交、差异映射及保留的兼容性边界：PR #550 将 `@tanstack/react-virtual` 调整为 3.14.23、`@tanstack/virtual-core` 调整为 3.19.8，暂时比 ref 的 3.14.24 / 3.19.9 落后一组 patch；其余集合 UI 依赖按 PR 说明更新。pnpm workspace 策略和例外清单未修改，冷却期结束后可再正常对齐。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：依赖安装阶段本身检测了年龄策略，不需新增产品单测或 CI 门禁。合并 SHA 的 Dashboard placement 3/3、Dashboard configuration 23/23，以及全平台 lint/build 和 Desktop E2E 均通过。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：PR #550 记录了对 1,641 个锁定条目的 fresh frozen-lockfile release-age 检查、`pnpm typecheck`、Chimera frontend build、Prettier、Oxlint 与 `git diff --check` 通过。精确合并 SHA 的[三平台 CI](https://github.com/MFSGA/Chimera/actions/runs/40895270778)和[Desktop E2E](https://github.com/MFSGA/Chimera/actions/runs/40895271111)通过。依赖更新不直接断言虚拟滚动行为。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅更改依赖清单与 lockfile；若后续运行时回归，回退这两处依赖固定即可。没有触碰用户数据、主机设置或服务状态。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次依赖更新都先核对发布年龄，再使用新鲜 pnpm store 执行 frozen-lockfile 安装/年龄检查；锁定结果与 manifest 一致后再运行相关测试。此次未更改治理规则、工作流或 minimum-release-age 配置。
