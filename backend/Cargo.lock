@@ -1172,6 +1172,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "urlencoding",
+ "webview2-com",
  "which 8.0.6",
  "whoami",
  "windows-core 0.62.2",
