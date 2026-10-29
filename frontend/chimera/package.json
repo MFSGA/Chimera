@@ -57,7 +57,7 @@
     "react-markdown": "10.1.0",
     "react-use": "17.6.1",
     "vaul": "1.1.2",
-    "virtua": "0.53.3",
+    "virtua": "0.54.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
