@@ -55,6 +55,8 @@
 | LESSON-20261027-002 | 2026-10-27 | Rust / concurrency  | Agent proxy rollback and stale-port repair must serialize with newer user settings                                             | Verified  |
 | LESSON-20261028-001 | 2026-10-28 | CI / Linux          | Ubuntu runner image dropped `webkit2gtk-driver`; choose the available WebKit driver package and verify against fresh CI        | Mitigated |
 
+| LESSON-20261029-001 | 2026-10-29 | Shared KV / IPC | ref 在事件监听注册失败后仍开放读取；Chimera 增加重试与就绪门控，并用 23 项前端测试覆盖 | Mitigated |
+
 ## 单条模板
 
 ```markdown
@@ -771,6 +773,73 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 风险/回滚和清理证据（如涉及宿主状态）：此修复只更新 updater Release 的 manifest 资产，不修改已发布版本 tag、应用数据或已发布二进制；若再次使用草稿 `browser_download_url`，相同错误会复现。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在 `updater-manifest.test.ts` 中覆盖 canonical URL 生成，并在 manifest 发布后检查版本、签名与资产可达性；本条记录已获维护者批准。
 
+### LESSON-20261026-004：Tauri setup 中的任务必须使用已运行的异步 runtime
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（历史启动回归通过；当前集成 SHA 的 CI/E2E 待验证）
+- 严重度：Medium（启动阶段 panic 会阻止应用窗口就绪）
+- 模块：Rust / Storage event bridge / Tauri setup
+- master commit / ref gitlink SHA / 平台与测试环境：修复前基线 `c057b479136e5fc1c655627758f23ce9efd196d9`；ref `eb81fda5dbbe6382c31875fc2d5709429056c279`；macOS WebKit 605.1.15。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地首次 `storage-event-resync.e2e.ts` 启动日志在 `backend/tauri/src/core/storage.rs` 的 storage listener 注册处记录 `there is no reactor running`；修复后重建当前 E2E binary，macOS WebKit 定向桌面用例 session `ad0aa229-19df-4cdb-a6fa-ffacde62350d` 通过。
+- 预期行为：启动时将 storage event forwarder 注册到 Tauri 管理的 Tokio runtime，受 app shutdown token 取消并纳入 `TaskTracker` 生命周期；不能因 setup 所在线程没有 runtime 而 panic。
+- 真实异常、复现步骤与证据：从 Tauri setup 主线程调用 `TaskTracker::spawn` 会在 Tokio 尝试创建任务时 panic；E2E 应用在页面断言开始前退出，因此这不是存储 UI 断言失败。
+- 确认的根因与排除项：`TaskTracker::spawn` 依赖当前线程已进入 Tokio runtime，而 Tauri setup 回调没有该 runtime context。根因由启动 panic 定位；storage IPC、数据库打开和前端页面不是触发点。
+- 修复提交、差异映射及保留的兼容性边界：对齐 ref `backend/tauri/src/setup.rs` 中受 shutdown/TaskTracker 管理的事件桥接生命周期，在 Chimera `resolve_setup` 取 `tauri::async_runtime::handle()` 并以 `tasks.spawn_on(..., runtime_handle.inner())` 显式指定运行时；继续使用 Chimera 的 `AppShutdown` child token，保留 typed storage event 与 legacy `storage_value_changed` / `storage_resync_required` 事件。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：Rust `core::storage::tests` 覆盖 event lag、恢复转发、提交/通知顺序、revision 和 fallback；`tauri-e2e/specs/storage-event-resync.e2e.ts` 在 `runtime` suite 验证真实桌面启动、legacy UI CSS 更新、缓存与 revisioned IPC snapshot。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：当前分支 Rust storage 定向测试 7/7；macOS WebKit 定向 E2E 1/1。完整跨平台 CI/E2E 尚未运行；Dashboard 单独用例在测试体开始前遇到已记录的路由动画 `currentTime=0` 超时（见 LESSON-20261020-002），不能算本功能失败，也不能算其主界面覆盖通过。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅改变 storage event forwarder 的任务调度入口，不触碰系统网络、用户配置或持久化格式；回滚需恢复使用 Tokio 线程本地 `spawn` 的实现，但会重现 setup panic。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：在非 Tokio setup/hook 回调中创建异步任务时，必须显式取得并传入所属 runtime handle；启动阶段回归应至少实际启动当前 E2E binary。
+
+### LESSON-20261026-005：KV 迁移失败必须阻止默认值覆盖持久化数据
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（当前工作树定向回归、类型检查和静态检查通过；集成 SHA 的 CI/E2E 待验证）
+- 严重度：Medium（旧版本无法读取新格式时，用户编辑可能覆盖持久化配置）
+- 模块：Frontend / shared KV storage / Dashboard widget configuration
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `c057b479136e5fc1c655627758f23ce9efd196d9`；PR #532 原提交 `a12988c9c5039bb2343d46fa8e94d6d903a5afb8`；ref `eb81fda5dbbe6382c31875fc2d5709429056c279`；本地 Node 24 / macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR #532（`https://github.com/MFSGA/Chimera/pull/532`）；独立审查定位原提交的 P2；原提交 CI `40396415742`、E2E `40396415794` 不作为修复 SHA 的验证证据。
+- 预期行为：若 JSON 解析或迁移器拒绝已存值，hook 应显示读取错误并拒绝写入；排队期间如存储 revision 已变化，后端必须拒绝旧 revision 的写入，避免覆盖未知数据。
+- 真实异常、复现步骤与证据：独立审查沿 `dashboard-widget-configs` 路径确认：存储值为合法 JSON 且版本为 2 时，v1 的 `normalizeWidgetConfigStorage` 抛错；原 hook 把异常静默变成默认值，provider 只验证 JSON 语法并报告读取成功，Dashboard 保存门禁因此放行 v1 写入。审查还确认 pending draft 会遮住新 revision、CAS 冲突后残留失败 draft 会影响后续编辑；最后补充复现“本窗口 W1 已提交、外窗随后提交更新值、外窗事件先于 W1 确认到达、排队的 W2 因此基于旧草稿覆盖新值”的竞态。以上由代码路径和延迟 IPC/外部事件回归用例证实，未用真实桌面持久化数据复现。
+- 确认的根因与排除项：新 hook 的 `decode` 同时捕获 JSON 解析和迁移异常并返回默认值；KV provider 不持有调用方迁移器，且排队 API 原先不在实际发 IPC 时复核状态。根因不是 Dashboard 控件或 ref 的持久化实现。
+- 修复提交、差异映射及保留的兼容性边界：在 Chimera `useKvStorage` 中保留 decode/migration 错误并拒绝写入；队列启动时重新校验最新已提交值；新增 expected-revision 条件写 IPC，由 `StorageInner` 在同一 revision 锁内执行比较并提交。未改变数据格式或默认迁移策略；旧的 service/Jotai 调用以无条件参数保留既有接口行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/interface/tests/kv-storage-state.test.ts` 覆盖未知版本迁移错误和写入守门；`kv-storage-provider.test.ts` 覆盖延迟写确认期间的新未知版本事件、条件写 revision 推进、事件先到后的 draft 清理、冲突取消已排队旧写、外窗更新先于较早本地写确认时取消旧队列写、本地写回声不误取消后续写，以及监听注册失败后重试、就绪前不启动读取；`backend/tauri/src/core/storage.rs` 覆盖 stale expected revision 不落盘、不发布事件以及当前 revision 成功提交；`backend/tauri/src/ipc.rs` 锁定前端冲突识别所依赖的 IPC marker。前端测试通过 `pnpm --filter chimera-ui test:dashboard-widget-config` 注册。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 23/23；`pnpm typecheck`、`pnpm lint:frontend-boundaries`、`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::storage::tests` 9/9、`ipc::tests` 16/16、生成 bindings freshness 1/1、目标 Rust 格式检查、改动文件 Prettier/Oxlint 和 `git diff --check` 通过。当前集成 SHA 的 GitHub CI、桌面 E2E 尚未运行；Node 状态/IPC 存储测试不证明真实 Dashboard UI 展示或用户交互。
+- 风险/回滚和清理证据（如涉及宿主状态）：conditional write 只拒绝基于过期全局 revision 的 KV 写入；写入冲突后触发读取以恢复权威状态。旧调用以 `null` 继续使用原无条件写语义。回滚时须同时撤回 IPC 参数、后端比较、前端 revision guard 与测试。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：所有 revision-aware KV 写入都须携带读取时观察到的 revision；未知版本必须 fail closed。维护者已授权记录确认的回归；此条不调整 CI 或治理门禁。
+
+### LESSON-20261026-006：KV 命名空间迁移必须保留 legacy 事件与删除语义
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（两处兼容回归已修并通过本机定向测试；集成 SHA 的 CI/E2E 待验证）
+- 严重度：Medium（legacy UI 跨窗口状态不更新；删除或清空后旧配置会再次读出）
+- 模块：Backend / shared KV storage / legacy UI adapter
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `d79e6818f8fb0c8f5a8ed956b6e8c16579404002`；PR #532 原 head `278a5dae307ff69ffb887571ca8a35af8d76d73c`；ref `03ab6e5824cb44e527bde7cca28b699e8bf3a766`；macOS、Node 24。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#532](https://github.com/MFSGA/Chimera/pull/532)；独立审查指出 legacy event 的 `web:` 前缀与 Jotai 订阅键不一致，且未限定的 fallback key 在 remove/clear 后仍会重新读出。
+- 触发条件及最小复现：窗口 A 对 `connections_table_columns` 写入 `web:connections_table_columns` 后，窗口 B 的 legacy 订阅按原始 key 查找而收不到更新；旧版写入的原始键在 namespaced key 被删除后被 `get_storage_item` fallback 再次返回。
+- 确认根因及分类：本地兼容适配缺陷。后端 tuple event 原样发送存储键，旧 Jotai listener 以不带 `web:` 的 key 建立 subscriber；读路径支持旧 raw key，但 remove/clear 只删除 namespaced 值。
+- 修复提交、差异映射及保留的兼容性边界：legacy UI adapter 在派发前把 `web:` 事件键还原为原始逻辑键；后端只对历史 frontend key allowlist 读取 fallback，并原子删除 namespaced 与对应旧键。调试列表可显示旧版 frontend 值；clear 只清 namespaced 与已知旧 frontend 键，其他内部键保持不动。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/chimera/tests/legacy-storage-events.test.ts` 验证旧订阅收到 namespaced event，加入现有 CI 执行的 `test:dashboard-widget-config`；`backend/tauri/src/ipc.rs` 覆盖旧 key allowlist、列表优先级、remove/clear 与 internal key 保留；`backend/tauri/src/core/storage.rs` 覆盖 fallback 原子删除及 revision event。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 23/23；`pnpm typecheck`（含 Chimera 与 E2E TypeScript）、`pnpm lint:frontend-boundaries`、Rust storage tests 9/9、`ipc::tests` 16/16、目标 Rust 格式检查、改动文件 Prettier/Oxlint 与 `git diff --check` 通过。集成 SHA 的多平台 CI 与 Desktop E2E 尚待结果。
+- 风险/回滚和清理证据（如涉及宿主状态）：限于持久化 KV 和 legacy UI 事件边界；fallback 只匹配已知旧前端键，避免触碰未命名空间的内部键。回滚此修复会重新引入旧配置复活和 legacy UI 事件断连。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：改动持久化键前同时检查读取、写入、事件订阅、单项删除、调试枚举与全量清理；任何兼容 fallback 都须配对删除测试并明确允许的旧键集合。
+
+### LESSON-20261026-008：修改导出 IPC 文档后要重新生成绑定
+
+- 日期与时区：2026-10-26 UTC
+- 状态：Mitigated（生成器和 freshness 测试通过；集成 SHA 的 CI/E2E 待验证）
+- 严重度：Low
+- 模块：Rust / IPC / Specta bindings
+- master commit / ref gitlink SHA / 平台与测试环境：PR #532 原 head `944b24f21751c664bf50e645bbf754c8ca2909c3`；ref 分支 gitlink `03ab6e5824cb44e527bde7cca28b699e8bf3a766`；macOS，Rust target 在外接构建盘。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#532](https://github.com/MFSGA/Chimera/pull/532)；[失败 CI run 40422919747](https://github.com/MFSGA/Chimera/actions/runs/40422919747)；同一原 SHA 的 Desktop E2E run 40422919746 通过。
+- 预期行为：任何 Rust IPC command 的 `specta` 导出文档或类型变化，都应与检入的 `frontend/interface/src/ipc/bindings.ts` 一致。
+- 真实异常、复现步骤与证据：原 SHA 的全平台 backend workspace test 均在 `specta_export::tests::typescript_bindings_are_fresh` 失败，提示运行被忽略的 `update_typescript_bindings` 测试；生成结果显示只有 `get_all_storage_items` 与 `clear_storage` 的 Rust 文档注释还保持旧描述。
+- 确认的根因与排除项：PR 更新了 IPC 命令文档，但没有更新 Specta 生成的 bindings 文件。此失败不是 KV 逻辑或目标平台特定问题。
+- 修复提交、差异映射及保留的兼容性边界：在 PR #532 运行既有 ignored generator 更新 `bindings.ts` 中两条导出命令文档；不改 Rust 命令合同或运行行为。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`specta_export::tests::typescript_bindings_are_fresh` 在 backend workspace `cargo test` 中执行，检查生成后 bindings 与检入文件逐字一致。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib specta_export::tests::update_typescript_bindings -- --ignored` 1/1、对应 `typescript_bindings_are_fresh` 1/1、bindings Prettier 与 `git diff --check` 通过。当前集成 SHA 的跨平台 CI 仍待结果。
+- 风险/回滚和清理证据（如涉及宿主状态）：只改变生成绑定中的 IPC 文档注释；不会触及用户配置、存储数据或运行时协议。可通过重新运行生成器复原。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：修改带 `#[specta::specta]` 的 IPC 时，应运行生成器并执行 freshness 测试；CI 已有该检查，无需新增工作流。
+
 ### LESSON-20261026-007：Dashboard resize E2E 必须在清理前保留原始失败证据
 
 - 日期与时区：2026-10-26 UTC
@@ -804,3 +873,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：失败 head 的 Windows hermetic run 中 52/53 specs 通过，Dashboard resize 用例因尺寸条件失败；本条针对修正后的新 head 验证尚未运行。本地提交钩子将执行 E2E 类型检查、Oxlint 和 Prettier，不能替代真实桌面复验。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅调整隔离 E2E 用例的窗口尺寸断言和失败元数据，不改变应用窗口尺寸、用户设置或网格业务逻辑；回滚为恢复 680px 请求和 `<800` 判断，但会重新引入无效窄布局断言。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：后续布局用例以实际 viewport 和目标网格容器尺寸作为条件，不把通用响应式断点等同于 `DndGrid` 列数；本条新增 Windows E2E 复验后再更新状态。
+
+### LESSON-20261029-001：存储读取必须等跨窗口事件监听成功
+
+- 日期与时区：2026-10-29 UTC
+- 状态：Mitigated（监听注册失败恢复用例通过；集成提交的 CI 与桌面 E2E 待运行）
+- 严重度：Medium（初始化缺少事件监听时，窗口间更新可能长期不反映在当前 UI）
+- 模块：Shared KV storage / frontend provider / IPC
+- master commit / ref gitlink SHA / 平台与测试环境：master 基线 `adef2f7eaa63bc19071f126c61217bd01d0acd12`；ref `8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8`；macOS Apple Silicon、Node 24。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：PR [#532](https://github.com/MFSGA/Chimera/pull/532) 的 stale-head 供参考；新集成提交尚未推送，远端 CI/E2E 无可用结论。
+- 预期行为：窗口首次读取 KV 之前，value-changed 与 resync 监听器都应注册成功；暂时注册失败时应恢复监听，并在恢复后读取存储的最新值。
+- 真实异常、复现步骤与证据：ref `frontend/query/src/provider/kv-storage-provider.tsx::connect` 对两个注册 Promise 使用 `Promise.allSettled`，即使其中一个拒绝仍调用 `markReady`，且没有再次注册。新回归用例注入首次 value-changed 注册失败，并在监听中断期间更新后端值；旧逻辑会在监听缺失时启动读取且永远不重试，错误路径由测试断言捕获。Chimera 初版重试在监听恢复时又启动重复读取，导致前端套件 23 项中 3 项因旧 `refresh` Promise 被新读取替代而失败；修正后用例重新执行 23/23 通过。
+- 确认的根因与排除项：这是 ref provider 的事件注册错误恢复缺口，不是 redb 数据丢失。初始 reads 已等待 readiness，因此首次注册恢复后不需要再触发一次重复 resync；注册后的正常 resync event 仍会重读已用 keys。
+- 修复提交、差异映射及保留的兼容性边界：Chimera 保留 ref 的 `KvStorageProvider`/store/readiness 分层；对缺失监听器单独指数退避重试，最大间隔 30 秒，只有两类监听均注册后才释放首次读取。对监听注册失败采用 fail-closed 行为；ref 增加等价恢复后复核是否可删除 Chimera 专属重试。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`frontend/interface/tests/kv-storage-provider.test.ts::listener registration retries before authoritative reads resume` 验证首次注册失败时后端读取数为零、后端值在恢复期间发生改变、监听恢复后首次读取返回最新值，并断言两类事件监听已存在。该用例随 `pnpm --filter chimera-ui test:dashboard-widget-config` 注册。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`pnpm --filter chimera-ui test:dashboard-widget-config` 23/23；包括错误注入用例。本地 Node 测试不证明 Windows/macOS WebView 的实际跨窗口事件传输；新提交的 CI 与 runtime Desktop E2E 待运行。
+- 风险/回滚和清理证据（如涉及宿主状态）：只影响窗口内监听恢复和首次读取时序，不更改 redb 格式、键、用户配置或系统网络。回滚会恢复 ref 当前无重试的行为，并重新允许监听失败后读取开启。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：改动 ref provider 事件注册时，必须保留“注册拒绝后不读取、恢复后读取最新值”测试；未修改 L3 治理或工作流。

@@ -11,6 +11,8 @@ const subscribers: Map<
   Set<(newValue: string | null) => void>
 > = new Map();
 
+const WEB_STORAGE_KEY_PREFIX = 'web:';
+
 export function dispatchStorageValueChanged(
   key: string,
   newValue: string | null,
@@ -21,6 +23,19 @@ export function dispatchStorageValueChanged(
       callback(newValue);
     });
   }
+}
+
+export function dispatchLegacyStorageValueChanged(
+  key: string,
+  newValue: string | null,
+) {
+  const legacyKey = key.startsWith(WEB_STORAGE_KEY_PREFIX)
+    ? key.slice(WEB_STORAGE_KEY_PREFIX.length)
+    : key;
+  dispatchStorageValueChanged(
+    legacyKey,
+    typeof newValue === 'string' ? JSON.parse(newValue) : newValue,
+  );
 }
 
 export const ChimeraStorage = {
