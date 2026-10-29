@@ -126,8 +126,7 @@ impl<R: Runtime> UiEventSink for TauriUiEventSink<R> {
     }
 
     fn update_systray_part(&self) -> Result<()> {
-        crate::core::tray::Tray::update_part(&self.app_handle)?;
-        Ok(())
+        Handle::update_systray_part()
     }
 }
 

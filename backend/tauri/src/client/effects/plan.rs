@@ -5,12 +5,13 @@ use std::{collections::BTreeSet, time::Duration};
 
 use chimera_config::{
     application::{
-        ChimeraAppConfig, I18nLanguage, LoggingLevel, NetworkStatisticWidgetConfig,
+        ChimeraAppConfig, ClashCore, I18nLanguage, LoggingLevel, NetworkStatisticWidgetConfig,
         ProxiesSelectorMode, TrayMenuMode,
     },
     clash::config::{
         ClashConfig, ClashControlChannel,
         clash_strategy::port::{ExternalControllerStrategy, PortStrategy},
+        overrides::Mode,
         tun_stack::TunStack,
     },
     runtime::executor::ResolvedPortBindings,
@@ -44,6 +45,7 @@ pub struct ApplicationEffectFields {
     pub max_log_files: usize,
     pub tray_selector_mode: ProxiesSelectorMode,
     pub tray_menu_mode: TrayMenuMode,
+    pub core: ClashCore,
     pub enable_tray_text: bool,
     pub enable_tray_traffic: bool,
     pub network_statistic_widget: NetworkStatisticWidgetConfig,
@@ -51,6 +53,7 @@ pub struct ApplicationEffectFields {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClashEffectFields {
+    pub mode: Mode,
     pub enable_tun_mode: bool,
     pub tun_stack: TunStack,
     pub mixed_port: PortStrategy,
@@ -84,11 +87,13 @@ impl ApplicationEffectInputs {
                 max_log_files: app.max_log_files,
                 tray_selector_mode: app.tray_selector_mode,
                 tray_menu_mode: app.tray_menu_mode,
+                core: app.core,
                 enable_tray_text: app.enable_tray_text,
                 enable_tray_traffic: app.enable_tray_traffic,
                 network_statistic_widget: app.network_statistic_widget,
             },
             clash: ClashEffectFields {
+                mode: clash.overrides.mode(),
                 enable_tun_mode: clash.enable_tun_mode,
                 tun_stack: clash.tun_stack,
                 mixed_port: clash.mixed_port.clone(),
@@ -130,14 +135,21 @@ impl ApplicationEffectInputs {
             tray_menu: TrayMenuDesired {
                 menu_mode: app.tray_menu_mode,
                 selector_mode: app.tray_selector_mode,
+                core: app.core,
             },
             tray_part: TrayPartDesired {
+                mode: self.clash.mode,
                 system_proxy: app.enable_system_proxy,
                 tun: self.clash.enable_tun_mode,
                 text: app.enable_tray_text,
                 traffic: app.enable_tray_traffic,
             },
         }
+    }
+
+    /// The tray view rendered by the latest committed configuration snapshot.
+    pub fn tray_view(&self) -> TrayView {
+        self.desired().tray_view()
     }
 }
 
@@ -198,18 +210,28 @@ pub struct LoggerDesired {
 
 /// What a [`TrayRefresh::Full`] rebuild renders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TrayMenuDesired {
-    menu_mode: TrayMenuMode,
-    selector_mode: ProxiesSelectorMode,
+pub struct TrayMenuDesired {
+    pub menu_mode: TrayMenuMode,
+    pub selector_mode: ProxiesSelectorMode,
+    /// Only a Premium core offers the script mode item.
+    pub core: ClashCore,
 }
 
 /// What a [`TrayRefresh::Part`] redraw reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct TrayPartDesired {
-    system_proxy: bool,
-    tun: bool,
-    text: bool,
-    traffic: bool,
+pub struct TrayPartDesired {
+    pub mode: Mode,
+    pub system_proxy: bool,
+    pub tun: bool,
+    pub text: bool,
+    pub traffic: bool,
+}
+
+/// Everything the tray renders, whichever refresh was requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrayView {
+    pub menu: TrayMenuDesired,
+    pub part: TrayPartDesired,
 }
 
 /// One field per trigger group: a group whose inputs changed produces the one
@@ -241,6 +263,15 @@ struct ApplicationDesired {
     tray_part: TrayPartDesired,
 }
 
+impl ApplicationDesired {
+    fn tray_view(&self) -> TrayView {
+        TrayView {
+            menu: self.tray_menu,
+            part: self.tray_part,
+        }
+    }
+}
+
 /// Every variant carries the full desired value, never a delta. Stale-effect
 /// protection depends on it: a newer revision may overwrite an older one
 /// wholesale, and a dropped effect loses nothing permanently.
@@ -253,7 +284,7 @@ pub enum ApplicationEffect {
     ProxyGuard(ProxyGuardDesired),
     Hotkeys(Vec<String>),
     Widget(NetworkStatisticWidgetConfig),
-    Tray(TrayRefresh),
+    Tray(TrayRefresh, TrayView),
 }
 
 impl ApplicationEffect {
@@ -266,7 +297,7 @@ impl ApplicationEffect {
             Self::ProxyGuard(_) => EffectKind::ProxyGuard,
             Self::Hotkeys(_) => EffectKind::Hotkeys,
             Self::Widget(_) => EffectKind::Widget,
-            Self::Tray(_) => EffectKind::Tray,
+            Self::Tray(..) => EffectKind::Tray,
         }
     }
 }
@@ -284,13 +315,17 @@ impl ApplicationEffectPlan {
 
     /// Incremental: fields that are equal in both snapshots produce nothing.
     pub fn diff(before: &ApplicationEffectInputs, after: &ApplicationEffectInputs) -> Self {
-        after.desired().into_patch_by_diff(before.desired()).into()
+        let desired = after.desired();
+        let tray = desired.tray_view();
+        Self::from_changes(desired.into_patch_by_diff(before.desired()), tray)
     }
 
     /// Full reconcile: the desired value of every effect, used at startup where
     /// no trustworthy "before" snapshot exists.
     pub fn full(after: &ApplicationEffectInputs) -> Self {
-        after.desired().into_patch().into()
+        let desired = after.desired();
+        let tray = desired.tray_view();
+        Self::from_changes(desired.into_patch(), tray)
     }
 
     /// Adds the desired value of every kind in `kinds` to this plan, taken from
@@ -333,8 +368,8 @@ impl ApplicationEffectPlan {
     }
 }
 
-impl From<ApplicationDesiredChanges> for ApplicationEffectPlan {
-    fn from(changes: ApplicationDesiredChanges) -> Self {
+impl ApplicationEffectPlan {
+    fn from_changes(changes: ApplicationDesiredChanges, view: TrayView) -> Self {
         // Destructured without `..` on purpose: a new effect cannot be added to
         // `ApplicationDesired` without being mapped here.
         let ApplicationDesiredChanges {
@@ -366,7 +401,7 @@ impl From<ApplicationDesiredChanges> for ApplicationEffectPlan {
             (false, true) => Some(TrayRefresh::Part),
             (false, false) => None,
         };
-        effects.extend(tray.map(ApplicationEffect::Tray));
+        effects.extend(tray.map(|refresh| ApplicationEffect::Tray(refresh, view)));
 
         Self { effects }
     }
@@ -487,11 +522,13 @@ mod tests {
                 max_log_files: 7,
                 tray_selector_mode: ProxiesSelectorMode::Normal,
                 tray_menu_mode: TrayMenuMode::Native,
+                core: ClashCore::default(),
                 enable_tray_text: false,
                 enable_tray_traffic: false,
                 network_statistic_widget: NetworkStatisticWidgetConfig::Disabled,
             },
             clash: ClashEffectFields {
+                mode: Mode::Rule,
                 enable_tun_mode: false,
                 tun_stack: TunStack::default(),
                 mixed_port: PortStrategy::new_allow_fallback(7890),
@@ -511,6 +548,10 @@ mod tests {
 
     fn kinds(plan: &ApplicationEffectPlan) -> Vec<EffectKind> {
         plan.effects().iter().map(ApplicationEffect::kind).collect()
+    }
+
+    fn tray_effect(refresh: TrayRefresh, inputs: &ApplicationEffectInputs) -> ApplicationEffect {
+        ApplicationEffect::Tray(refresh, inputs.tray_view())
     }
 
     #[test]
@@ -660,10 +701,7 @@ mod tests {
             plan.effects()[0],
             ApplicationEffect::Locale(I18nLanguage::SimplifiedChinese)
         );
-        assert_eq!(
-            plan.effects()[1],
-            ApplicationEffect::Tray(TrayRefresh::Full)
-        );
+        assert_eq!(plan.effects()[1], tray_effect(TrayRefresh::Full, &after));
     }
 
     #[test]
@@ -678,10 +716,7 @@ mod tests {
             kinds(&plan),
             vec![EffectKind::SystemProxy, EffectKind::Tray]
         );
-        assert_eq!(
-            plan.effects()[1],
-            ApplicationEffect::Tray(TrayRefresh::Part)
-        );
+        assert_eq!(plan.effects()[1], tray_effect(TrayRefresh::Part, &after));
     }
 
     #[test]
@@ -698,7 +733,7 @@ mod tests {
             .iter()
             .filter(|effect| effect.kind() == EffectKind::Tray)
             .collect();
-        assert_eq!(tray, vec![&ApplicationEffect::Tray(TrayRefresh::Full)]);
+        assert_eq!(tray, vec![&tray_effect(TrayRefresh::Full, &after)]);
     }
 
     #[test]
@@ -788,7 +823,8 @@ mod tests {
 
     #[test]
     fn full_plan_contains_every_kind_with_full_tray() {
-        let plan = ApplicationEffectPlan::full(&inputs());
+        let inputs = inputs();
+        let plan = ApplicationEffectPlan::full(&inputs);
 
         assert_eq!(
             kinds(&plan),
@@ -805,7 +841,7 @@ mod tests {
         );
         assert_eq!(
             plan.effects().last(),
-            Some(&ApplicationEffect::Tray(TrayRefresh::Full))
+            Some(&tray_effect(TrayRefresh::Full, &inputs))
         );
     }
 
@@ -824,6 +860,13 @@ mod tests {
             mutate(&mut after);
 
             let plan = ApplicationEffectPlan::diff(&before, &after);
+            let expected: Vec<_> = expected
+                .iter()
+                .map(|effect| match effect {
+                    ApplicationEffect::Tray(refresh, _) => tray_effect(*refresh, &after),
+                    effect => effect.clone(),
+                })
+                .collect();
 
             assert_eq!(
                 plan.effects(),
@@ -843,17 +886,34 @@ mod tests {
         assert_case(
             "tray_selector_mode",
             |after| after.app.tray_selector_mode = ProxiesSelectorMode::Submenu,
-            &[ApplicationEffect::Tray(TrayRefresh::Full)],
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Full,
+                inputs().tray_view(),
+            )],
+        );
+        assert_case(
+            "tray_core",
+            |after| after.app.core = ClashCore::ClashRs,
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Full,
+                inputs().tray_view(),
+            )],
         );
         assert_case(
             "enable_tray_text",
             |after| after.app.enable_tray_text = true,
-            &[ApplicationEffect::Tray(TrayRefresh::Part)],
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                inputs().tray_view(),
+            )],
         );
         assert_case(
             "enable_tray_traffic",
             |after| after.app.enable_tray_traffic = true,
-            &[ApplicationEffect::Tray(TrayRefresh::Part)],
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                inputs().tray_view(),
+            )],
         );
         assert_case(
             "enable_proxy_guard",
@@ -929,9 +989,34 @@ mod tests {
         let plan = ApplicationEffectPlan::diff(&before, &after);
 
         assert_eq!(kinds(&plan), vec![EffectKind::Tray]);
+        assert_eq!(plan.effects()[0], tray_effect(TrayRefresh::Full, &after));
+    }
+
+    #[test]
+    fn mode_change_produces_part_tray_with_the_new_view() {
+        let before = inputs();
+        let mut after = inputs();
+        after.clash.mode = Mode::Global;
+
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+
+        assert_eq!(plan.effects(), [tray_effect(TrayRefresh::Part, &after)]);
+    }
+
+    #[test]
+    fn full_tray_effect_carries_the_complete_current_snapshot() {
+        let before = inputs();
+        let mut after = inputs();
+        after.app.core = ClashCore::ClashPremium;
+        after.app.tray_selector_mode = ProxiesSelectorMode::Submenu;
+        after.clash.mode = Mode::Script;
+        after.clash.enable_tun_mode = true;
+
+        let plan = ApplicationEffectPlan::diff(&before, &after);
+
         assert_eq!(
-            plan.effects()[0],
-            ApplicationEffect::Tray(TrayRefresh::Full)
+            plan.effects().last(),
+            Some(&tray_effect(TrayRefresh::Full, &after))
         );
     }
 
@@ -944,10 +1029,7 @@ mod tests {
         let plan = ApplicationEffectPlan::diff(&before, &after);
 
         assert_eq!(kinds(&plan), vec![EffectKind::Tray]);
-        assert_eq!(
-            plan.effects()[0],
-            ApplicationEffect::Tray(TrayRefresh::Part)
-        );
+        assert_eq!(plan.effects()[0], tray_effect(TrayRefresh::Part, &after));
         assert_eq!(
             runtime_apply_kind(&before, &after),
             RuntimeApplyKind::Rebuild
@@ -1017,7 +1099,7 @@ mod tests {
 
         assert_eq!(
             plan.effects().last(),
-            Some(&ApplicationEffect::Tray(TrayRefresh::Part))
+            Some(&tray_effect(TrayRefresh::Part, &after))
         );
 
         let merged = plan.with_retries(&full, &BTreeSet::from([EffectKind::Tray]));
@@ -1028,7 +1110,7 @@ mod tests {
         );
         assert_eq!(
             merged.effects().last(),
-            Some(&ApplicationEffect::Tray(TrayRefresh::Full))
+            Some(&tray_effect(TrayRefresh::Full, &after))
         );
     }
 
@@ -1100,9 +1182,13 @@ mod tests {
         let before = ApplicationEffectInputs::project(&app, &clash, None);
         let after = ApplicationEffectInputs::project(&switched, &clash, None);
 
-        assert_eq!(before, after, "neither field may enter the effect inputs");
+        assert_ne!(before, after, "the selected core is a tray view input");
         assert_eq!(runtime_apply_kind(&before, &after), RuntimeApplyKind::None);
-        assert!(ApplicationEffectPlan::diff(&before, &after).is_empty());
+        assert_eq!(
+            ApplicationEffectPlan::diff(&before, &after).effects(),
+            [tray_effect(TrayRefresh::Full, &after)],
+            "the tray menu must receive the new core while service mode stays out"
+        );
     }
 }
 

@@ -11,7 +11,7 @@ use super::{
     adapters::ApplicationEffectAdapters,
     plan::{
         ApplicationEffect, ApplicationEffectPlan, EffectKind, LoggerDesired, ProxyGuardDesired,
-        SystemProxyDesired, TrayRefresh,
+        SystemProxyDesired, TrayRefresh, TrayView,
     },
     ports::ApplicationEffectsPort,
     status::{EffectHealth, EffectRevision, EffectStatus},
@@ -65,11 +65,16 @@ impl ApplicationEffectExecutor {
         )
     }
 
-    async fn apply_tray(&self, revision: EffectRevision, refresh: TrayRefresh) -> EffectStatus {
+    async fn apply_tray(
+        &self,
+        revision: EffectRevision,
+        refresh: TrayRefresh,
+        view: TrayView,
+    ) -> EffectStatus {
         self.status_from_result(
             revision,
             EffectKind::Tray,
-            self.adapters.refresh_tray(refresh).await,
+            self.adapters.refresh_tray(refresh, view).await,
         )
     }
 
@@ -167,7 +172,9 @@ impl ApplicationEffectsPort for ApplicationEffectExecutor {
                     EffectKind::Widget,
                     self.adapters.set_widget(*config),
                 ),
-                ApplicationEffect::Tray(refresh) => self.apply_tray(revision, *refresh).await,
+                ApplicationEffect::Tray(refresh, view) => {
+                    self.apply_tray(revision, *refresh, *view).await
+                }
             };
             statuses.push(status);
         }
@@ -238,6 +245,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingAdapters {
         effects: Mutex<Vec<EffectKind>>,
+        tray_refreshes: Mutex<Vec<(TrayRefresh, TrayView)>>,
         widget_unsupported: bool,
     }
 
@@ -271,8 +279,13 @@ mod tests {
             Ok(())
         }
 
-        async fn refresh_tray(&self, _refresh: TrayRefresh) -> Result<(), EffectAdapterError> {
+        async fn refresh_tray(
+            &self,
+            refresh: TrayRefresh,
+            view: TrayView,
+        ) -> Result<(), EffectAdapterError> {
             self.effects.lock().unwrap().push(EffectKind::Tray);
+            self.tray_refreshes.lock().unwrap().push((refresh, view));
             Ok(())
         }
     }
@@ -387,6 +400,10 @@ mod tests {
                 EffectKind::Widget,
                 EffectKind::Tray,
             ]
+        );
+        assert_eq!(
+            adapters.tray_refreshes.lock().unwrap().as_slice(),
+            [(TrayRefresh::Full, inputs.tray_view())]
         );
         assert_eq!(statuses[5].kind, EffectKind::Hotkeys);
     }
