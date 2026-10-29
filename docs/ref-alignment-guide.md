@@ -13,20 +13,19 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     2fadf212f161417dcdf2f37d81a305a37ff918a4
-verified:   2026-10-29; fetched upstream main via SSH; parent matched prior gitlink
-previous gitlink: 8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8
+commit:     2c017d63bfec720017a9b57db629eeddd2c9cd3d
+verified:   2026-10-29; fetched origin/main and matched GitHub API; signature valid
+previous gitlink: 2fadf212f161417dcdf2f37d81a305a37ff918a4
 nested runtime: e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34
 ```
 
-The target SHA was fetched from upstream `main` and is one commit after the
-previously pinned gitlink. The top-level reference and its checked-out nested
-submodules were clean after the update. The new upstream commit updates only
-`@tanstack/react-virtual` and its lockfile entry. The local GPG keyring does
-not contain the upstream signing key, so this record does not claim local
-signature verification. The pin records the reference implementation only; it
-does not automatically apply upstream dependency changes or product code to
-Chimera. Each shared feature still needs its own path and symbol review.
+The target SHA is a direct child of the previous gitlink and was fetched from
+`origin/main`; GitHub's API confirmed the commit signature as valid. The
+reference root and checked-out nested submodules are clean. This upstream
+commit updates `meta-json-schema` from 1.19.32 to 1.19.33 and its lockfile
+entry. The pin records the reference implementation only; it does not
+automatically apply upstream dependency changes or product code to Chimera.
+Each shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 
