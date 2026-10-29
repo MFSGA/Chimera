@@ -8,6 +8,13 @@
 - 需要集成时，先完成独立复核并核对该 SHA 的必需门禁；未满足时保留在任务分支并明确待办。同步/迭代至用户停止，不擅自改动 `ref/`、用户数据或 host networking。
 - Codex 当前 Goal 接口只提供读取与状态更新，不提供编辑目标描述；本节作为该持续迭代任务的可维护目标说明，不能替代或谎称已修改原 Goal 对象。
 
+## 参考基线同步（2026-10-29）
+
+- 上游：`https://github.com/libnyanpasu/clash-nyanpasu` 的 `main`，本次通过 SSH 获取并检出 `2fadf212f161417dcdf2f37d81a305a37ff918a4`。旧 Chimera gitlink 为 `8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8`，新提交的 parent 与旧 gitlink 一致。上游提交仅更新 `@tanstack/react-virtual` 3.14.23→3.14.24 及锁文件中的 `@tanstack/virtual-core` 3.19.8→3.19.9。
+- 更新后的 ref 根工作区干净；递归子模块分别为 `backend/enable-loopback` (`f1b9f8693a328ca0a6094951035b81fe302b0848`)、`vendor/windows-rs` (`d1574fd27371a9b08bc5508f70c43ccb4f84c543`)、`backend/nyanpasu-runtime` (`e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34`)、`nyanpasu-utils` (`2706c1b69a3b5e4f0367fb54b4a87e67769c19f8`)，均已检出。上游签名在本机无法核验：本地 GPG keyring 缺少签名者公钥；因此不声称其签名已验证。
+- 本批只更新 `ref` gitlink 和本指南的基线记录，不移植依赖或产品代码；不涉及运行时行为、IPC、持久化或主机网络。检查：SSH fetch 成功、ref HEAD 与目标 SHA 相同、ref 状态干净、`git diff --check` 通过。产品构建与桌面 E2E 不适用。
+- 风险：L2（参考基线变化，影响后续对齐来源）。回滚时将 gitlink 恢复到 `8e1084e4e7c50531a5d16ca9a6c9dd2bb2f0f8e8` 并还原本节和指南基线。
+
 ## Dashboard resize settle 对齐（PR #534，修复复核发现后重新验证中）
 
 - 目标：对齐 Clash Nyanpasu `97e43308edabc95677c65741c81db1eeeb51689a` 的 Dashboard resize settling：窗口连续变化期间维持当前布局来源，尺寸稳定 200 ms 后才选择新预设布局；首次测得网格尺寸仍立即初始化。布局选择延迟撞上拖拽/调整大小时，等当前交互结束再应用。
