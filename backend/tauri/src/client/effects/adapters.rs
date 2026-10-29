@@ -6,7 +6,7 @@
 
 use chimera_config::application::{I18nLanguage, NetworkStatisticWidgetConfig};
 
-use super::plan::TrayRefresh;
+use super::plan::{TrayRefresh, TrayView};
 
 #[derive(Debug)]
 pub(crate) enum EffectAdapterError {
@@ -38,7 +38,11 @@ pub(crate) trait ApplicationEffectAdapters: Send + Sync + 'static {
         desired: &super::plan::LoggerDesired,
     ) -> Result<(), EffectAdapterError>;
     fn set_widget(&self, config: NetworkStatisticWidgetConfig) -> Result<(), EffectAdapterError>;
-    async fn refresh_tray(&self, refresh: TrayRefresh) -> Result<(), EffectAdapterError>;
+    async fn refresh_tray(
+        &self,
+        refresh: TrayRefresh,
+        view: TrayView,
+    ) -> Result<(), EffectAdapterError>;
 }
 
 /// Tauri adapters for the effects that do not have a dedicated owner yet.
@@ -76,18 +80,13 @@ impl ApplicationEffectAdapters for TauriApplicationEffectAdapters {
         }
     }
 
-    async fn refresh_tray(&self, refresh: TrayRefresh) -> Result<(), EffectAdapterError> {
-        let app_handle = self.app_handle.clone();
-        self.app_handle
-            .run_on_main_thread(move || {
-                let result = match refresh {
-                    TrayRefresh::Full => crate::core::tray::Tray::update_systray(&app_handle),
-                    TrayRefresh::Part => crate::core::tray::Tray::update_part(&app_handle),
-                };
-                if let Err(error) = result {
-                    tracing::warn!(%error, ?refresh, "failed to refresh the system tray");
-                }
-            })
+    async fn refresh_tray(
+        &self,
+        refresh: TrayRefresh,
+        view: TrayView,
+    ) -> Result<(), EffectAdapterError> {
+        crate::core::tray::Tray::store_view(&self.app_handle, view);
+        crate::core::tray::Tray::request_refresh(&self.app_handle, refresh)
             .map_err(|error| EffectAdapterError::failed("tray_refresh_failed", error))
     }
 }

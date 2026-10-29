@@ -83,6 +83,20 @@ impl Default for ClashGuardOverrides {
     }
 }
 
+impl ClashGuardOverrides {
+    pub fn secret(&self) -> &str {
+        &self.secret
+    }
+
+    pub fn log_level(&self) -> LogLevel {
+        self.log_level
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+}
+
 #[cfg(test)]
 mod patch_tests {
     use super::*;
@@ -104,6 +118,17 @@ mod patch_tests {
         assert_eq!(overrides.log_level, LogLevel::Debug);
         assert_eq!(overrides.mode, Mode::Rule, "absent field unchanged");
         assert_eq!(overrides.secret, kept_secret, "absent secret unchanged");
+    }
+
+    #[test]
+    fn mode_accessor_returns_the_typed_override() {
+        let mut patch = ClashGuardOverrides::new_empty_patch();
+        patch.mode = Some(Mode::Script);
+        let mut overrides = ClashGuardOverrides::default();
+
+        overrides.apply(patch);
+
+        assert_eq!(overrides.mode(), Mode::Script);
     }
 
     /// A serialized patch keeps the `kebab-case` keys and skips absent fields.

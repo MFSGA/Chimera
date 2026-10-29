@@ -7,9 +7,13 @@ use tauri::{
     tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 
+use chimera_config::clash::config::overrides::Mode;
+
 use crate::{
-    client::ChimeraClient,
-    config::core::Config,
+    client::{
+        ChimeraClient,
+        effects::plan::{ApplicationEffectInputs, TrayRefresh, TrayView},
+    },
     feat, ipc,
     utils::{help, resolve},
 };
@@ -18,6 +22,80 @@ const TRAY_ID: &str = "main-tray";
 
 struct TrayState<R: Runtime> {
     menu: Mutex<Menu<R>>,
+}
+
+#[derive(Default)]
+struct PendingTrayRefresh {
+    full: bool,
+    part: bool,
+}
+
+impl PendingTrayRefresh {
+    fn merge(&mut self, refresh: TrayRefresh) {
+        match refresh {
+            TrayRefresh::Full => self.full = true,
+            TrayRefresh::Part => self.part = true,
+        }
+    }
+
+    fn take(&mut self) -> Option<TrayRefresh> {
+        if std::mem::take(&mut self.full) {
+            self.part = false;
+            Some(TrayRefresh::Full)
+        } else if std::mem::take(&mut self.part) {
+            Some(TrayRefresh::Part)
+        } else {
+            None
+        }
+    }
+}
+
+struct TrayViewQueue {
+    view: TrayView,
+    pending: PendingTrayRefresh,
+    /// A drain is scheduled or running. New requests merge until it finishes.
+    scheduled: bool,
+}
+
+struct TrayViewState {
+    queue: Mutex<TrayViewQueue>,
+}
+
+impl TrayViewState {
+    fn new(view: TrayView) -> Self {
+        Self {
+            queue: Mutex::new(TrayViewQueue {
+                view,
+                pending: PendingTrayRefresh::default(),
+                scheduled: false,
+            }),
+        }
+    }
+
+    fn store(&self, view: TrayView) {
+        self.queue.lock().view = view;
+    }
+
+    /// Merges work and returns whether this caller must schedule the drain.
+    fn request(&self, refresh: TrayRefresh) -> bool {
+        let mut queue = self.queue.lock();
+        queue.pending.merge(refresh);
+        !std::mem::replace(&mut queue.scheduled, true)
+    }
+
+    /// Returns pending work with the latest snapshot, or marks the drain idle.
+    fn take(&self) -> Option<(TrayRefresh, TrayView)> {
+        let mut queue = self.queue.lock();
+        let Some(refresh) = queue.pending.take() else {
+            queue.scheduled = false;
+            return None;
+        };
+        Some((refresh, queue.view))
+    }
+
+    fn schedule_failed(&self) {
+        self.queue.lock().scheduled = false;
+    }
 }
 
 pub struct Tray;
@@ -49,6 +127,59 @@ impl Tray {
     }
 
     pub fn update_systray(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
+        Self::request_refresh(app_handle, TrayRefresh::Full)
+    }
+
+    pub(crate) fn store_view<R: Runtime>(app_handle: &AppHandle<R>, view: TrayView) {
+        if let Some(state) = app_handle.try_state::<TrayViewState>() {
+            state.store(view);
+        } else {
+            let _ = app_handle.manage(TrayViewState::new(view));
+            if let Some(state) = app_handle.try_state::<TrayViewState>() {
+                state.store(view);
+            }
+        }
+    }
+
+    pub(crate) fn request_refresh(
+        app_handle: &AppHandle<tauri::Wry>,
+        refresh: TrayRefresh,
+    ) -> Result<()> {
+        if app_handle.try_state::<TrayViewState>().is_none() {
+            let view = Self::current_view(app_handle)?;
+            let _ = app_handle.manage(TrayViewState::new(view));
+        }
+        let state = app_handle
+            .try_state::<TrayViewState>()
+            .ok_or_else(|| anyhow::anyhow!("tray view state is not managed"))?;
+        if !state.request(refresh) {
+            return Ok(());
+        }
+
+        let handle = app_handle.clone();
+        if let Err(error) = app_handle.run_on_main_thread(move || Self::drain(&handle)) {
+            state.schedule_failed();
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    fn drain(app_handle: &AppHandle<tauri::Wry>) {
+        let Some(state) = app_handle.try_state::<TrayViewState>() else {
+            return;
+        };
+        while let Some((refresh, view)) = state.take() {
+            let result = match refresh {
+                TrayRefresh::Full => Self::render_systray_with_view(app_handle, view),
+                TrayRefresh::Part => Self::render_part_with_view(app_handle, view),
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, ?refresh, "failed to refresh the system tray");
+            }
+        }
+    }
+
+    fn render_systray_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
         let menu = Self::tray_menu(app_handle)?;
         match app_handle.tray_by_id(TRAY_ID) {
             Some(tray) => {
@@ -83,53 +214,59 @@ impl Tray {
             }
         }
 
-        Self::update_part(app_handle)?;
-
+        Self::render_part_with_view(app_handle, view)?;
         Ok(())
     }
 
-    pub fn update_part<R: Runtime>(app_handle: &AppHandle<R>) -> Result<()> {
-        let tray = match app_handle.tray_by_id(TRAY_ID) {
-            Some(tray) => tray,
-            None => return Ok(()),
-        };
+    pub fn update_part(app_handle: &AppHandle<tauri::Wry>) -> Result<()> {
+        Self::request_refresh(app_handle, TrayRefresh::Part)
+    }
 
-        let mode = Config::runtime()
-            .latest()
-            .config
-            .as_ref()
-            .and_then(|m| m.get("mode"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("rule")
-            .to_string();
-        let client = app_handle
-            .try_state::<ChimeraClient>()
-            .ok_or_else(|| anyhow::anyhow!("chimera client is not managed"))?;
-        let system_proxy = client.get_app_config()?.enable_system_proxy;
-        let tun_mode = client.get_clash_config()?.enable_tun_mode;
+    fn render_part_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
+        if app_handle.tray_by_id(TRAY_ID).is_none() {
+            return Ok(());
+        }
 
-        let state = match app_handle.try_state::<TrayState<R>>() {
+        let state = match app_handle.try_state::<TrayState<tauri::Wry>>() {
             Some(state) => state,
             None => return Ok(()),
         };
         let menu = state.menu.lock();
-        let _ = menu
-            .get("rule_mode")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(mode == "rule").ok());
-        let _ = menu
-            .get("global_mode")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(mode == "global").ok());
-        let _ = menu
-            .get("direct_mode")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(mode == "direct").ok());
-        let _ = menu
-            .get("system_proxy")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(system_proxy).ok());
+        let _ = menu.get("rule_mode").and_then(|item| {
+            item.as_check_menuitem()?
+                .set_checked(view.part.mode == Mode::Rule)
+                .ok()
+        });
+        let _ = menu.get("global_mode").and_then(|item| {
+            item.as_check_menuitem()?
+                .set_checked(view.part.mode == Mode::Global)
+                .ok()
+        });
+        let _ = menu.get("direct_mode").and_then(|item| {
+            item.as_check_menuitem()?
+                .set_checked(view.part.mode == Mode::Direct)
+                .ok()
+        });
+        let _ = menu.get("system_proxy").and_then(|item| {
+            item.as_check_menuitem()?
+                .set_checked(view.part.system_proxy)
+                .ok()
+        });
         let _ = menu
             .get("tun_mode")
-            .and_then(|item| item.as_check_menuitem()?.set_checked(tun_mode).ok());
+            .and_then(|item| item.as_check_menuitem()?.set_checked(view.part.tun).ok());
 
         Ok(())
+    }
+
+    fn current_view<R: Runtime>(app_handle: &AppHandle<R>) -> Result<TrayView> {
+        let client = app_handle
+            .try_state::<ChimeraClient>()
+            .ok_or_else(|| anyhow::anyhow!("chimera client is not managed"))?;
+        let app = client.get_app_config()?;
+        let clash = client.get_clash_config()?;
+
+        Ok(ApplicationEffectInputs::project(&app, &clash, None).tray_view())
     }
 
     pub fn on_menu_item_event(app_handle: &AppHandle, event: MenuEvent) {
@@ -161,5 +298,59 @@ impl Tray {
         {
             resolve::create_window(tray_icon.app_handle());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chimera_config::application::{ClashCore, ProxiesSelectorMode, TrayMenuMode};
+
+    fn tray_view(mode: Mode, tun: bool) -> TrayView {
+        TrayView {
+            menu: crate::client::effects::plan::TrayMenuDesired {
+                menu_mode: TrayMenuMode::Native,
+                selector_mode: ProxiesSelectorMode::Normal,
+                core: ClashCore::default(),
+            },
+            part: crate::client::effects::plan::TrayPartDesired {
+                mode,
+                system_proxy: false,
+                tun,
+                text: false,
+                traffic: false,
+            },
+        }
+    }
+
+    #[test]
+    fn queued_refresh_uses_the_latest_view_and_serializes_new_requests() {
+        let old = tray_view(Mode::Rule, false);
+        let latest = tray_view(Mode::Global, true);
+        let state = TrayViewState::new(old);
+
+        assert!(state.request(TrayRefresh::Part));
+        let (refresh, view) = state.take().unwrap();
+        assert_eq!(refresh, TrayRefresh::Part);
+        assert_eq!(view, old);
+
+        state.store(latest);
+        assert!(!state.request(TrayRefresh::Part));
+        assert_eq!(state.take(), Some((TrayRefresh::Part, latest)));
+        assert_eq!(state.take(), None);
+        assert!(state.request(TrayRefresh::Part));
+    }
+
+    #[test]
+    fn full_refresh_supersedes_queued_partial_refresh() {
+        let latest = tray_view(Mode::Global, true);
+        let state = TrayViewState::new(tray_view(Mode::Rule, false));
+
+        assert!(state.request(TrayRefresh::Part));
+        assert!(!state.request(TrayRefresh::Full));
+        state.store(latest);
+
+        assert_eq!(state.take(), Some((TrayRefresh::Full, latest)));
+        assert_eq!(state.take(), None);
     }
 }

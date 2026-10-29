@@ -183,7 +183,10 @@ impl State {
                 .iter()
                 .any(|effect| effect.kind() == EffectKind::Tray)
         {
-            effects.push(ApplicationEffect::Tray(TrayRefresh::Part));
+            effects.push(ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                self.desired.tray_view(),
+            ));
         }
         if effects.is_empty() {
             return;
@@ -216,11 +219,13 @@ impl State {
         }
         for mut effect in effects {
             let kind = effect.kind();
-            if matches!(
-                self.pending.get(&kind),
-                Some(ApplicationEffect::Tray(TrayRefresh::Full))
-            ) {
-                effect = ApplicationEffect::Tray(TrayRefresh::Full);
+            if let ApplicationEffect::Tray(refresh, _) = &mut effect
+                && matches!(
+                    self.pending.get(&kind),
+                    Some(ApplicationEffect::Tray(TrayRefresh::Full, _))
+                )
+            {
+                *refresh = TrayRefresh::Full;
             }
             let entry = self.entries.entry(kind).or_insert_with(|| Entry::new(kind));
             if changed.contains(&kind) {
@@ -832,22 +837,40 @@ mod tests {
     #[tokio::test]
     async fn profile_commit_notifies_the_tray_without_replaying_other_effects() {
         let (sender, mut receiver) = mpsc::unbounded_channel();
+        let initial = inputs();
         let effects = EffectsClient::spawn(EffectsArgs {
             port: Arc::new(RecordingEffectsPort { plans: sender }),
-            initial: inputs(),
+            initial: initial.clone(),
         })
         .await
         .expect("effects actor");
 
+        let mut latest = initial.clone();
+        latest.app.enable_tray_text = true;
+        CommitNotifications::application_committed(&effects, latest.app.clone(), Vec::new());
+        let config_plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("application commit effect plan")
+            .expect("recorded effect plan");
+        assert_eq!(
+            config_plan.effects(),
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                latest.tray_view(),
+            )]
+        );
+
         CommitNotifications::profiles_committed(&effects, Vec::new());
-        let plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+        let profile_plan = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
             .await
             .expect("profile commit effect plan")
             .expect("recorded effect plan");
-
         assert_eq!(
-            plan.effects(),
-            &[ApplicationEffect::Tray(TrayRefresh::Part)]
+            profile_plan.effects(),
+            &[ApplicationEffect::Tray(
+                TrayRefresh::Part,
+                latest.tray_view(),
+            )]
         );
         let _ = effects.shutdown().await;
     }
