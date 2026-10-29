@@ -53,6 +53,7 @@
 | LESSON-20261026-007 | 2026-10-26 | E2E / Dashboard     | Resize E2E hid a JSON key-order assertion defect behind cleanup; capture pre-cleanup evidence and compare objects structurally | Mitigated |
 | LESSON-20261027-001 | 2026-10-27 | E2E / Dashboard     | Resize E2E requested 680px but kept an 8-column grid; assert the measured four-column grid interval                            | Open      |
 | LESSON-20261027-002 | 2026-10-27 | Rust / concurrency  | Agent proxy rollback and stale-port repair must serialize with newer user settings                                             | Verified  |
+| LESSON-20261028-001 | 2026-10-28 | CI / Linux          | Ubuntu runner image dropped `webkit2gtk-driver`; choose the available WebKit driver package and verify against fresh CI        | Mitigated |
 
 ## 单条模板
 
@@ -87,6 +88,19 @@ _历史条目只按可追溯证据收录，不从既有 Git 历史自动推断�
 - 回归测试：`pnpm --filter @chimera/tauri-e2e typecheck`；`CHIMERA_E2E_ARTIFACT_DIR=/tmp/chimera-e2e-artifacts pnpm --filter @chimera/tauri-e2e exec wdio run ./wdio.conf.ts --spec ./specs/smoke.e2e.ts`，1 个 spec 中 5/5 用例通过。
 - 验证限制：完整 `pnpm --filter @chimera/tauri-e2e test:smoke` 仍为 2 个 spec 通过、2 个失败；proxy localization 的新增配置按钮 30 秒不可点击，legacy connections 页面在 hidden 文档下动画停在 0。它们尚未在隔离的可见 macOS runner 上复现；不能把整个 smoke suite 报告为通过。
 - 后续：在允许真实桌面窗口前台运行的 macOS runner 上重跑完整 smoke；只有当用例不验证视觉布局/动画时，才可跳过动画稳定等待。
+
+### LESSON-20261028-001：Ubuntu runner 更新后应选择可用的 WebKit 驱动包
+
+- 日期与时区：2026-10-28 America/Los_Angeles
+- 状态：Mitigated（工作流已改为按 apt 候选包选择驱动；新提交的 Ubuntu CI 尚待验证）
+- 严重度：Medium（Linux CI 在依赖安装阶段失败，阻止整轮 CI）
+- 模块：GitHub Actions / Linux Tauri dependencies
+- 关联证据：[PR #540 CI run 40632079560](https://github.com/MFSGA/Chimera/actions/runs/40632079560)，失败 job `122631703884`；同一 SHA 的 [Windows Desktop E2E run 40632079689](https://github.com/MFSGA/Chimera/actions/runs/40632079689) 通过。
+- 预期行为：Ubuntu runner 镜像更新后仍安装当前发行版提供的 WebKit WebDriver，并继续执行 Linux CI。
+- 确认根因：GitHub Ubuntu runner 已更新到 Ubuntu 26.04，apt 源不再提供 `webkit2gtk-driver`；依赖安装在运行源码检查之前以 package-not-found 失败。Ubuntu 24.04 仍使用旧包名，不能对所有 Ubuntu runner 固定采用新名字。
+- 修复与回归覆盖：`.github/workflows/ci.yaml` 先读取 `apt-cache policy webkit2gtk-driver` 的候选版本；有候选时安装旧包，无候选时安装 `webkitgtk-webdriver`。本地从实际 YAML 提取两个安装脚本并通过 ShellCheck、`bash -n`，用“旧包有候选”“候选为 none”“旧包不存在”三类 apt 元数据模拟确认选出的包名及安装参数；actionlint（关闭仓库中既有 shellcheck 集成告警）、Prettier 和 `git diff --check` 通过。该 CI 门禁仍需在推送后的 Ubuntu runner 上完成端到端验证。
+- 风险与回滚：只影响 Linux CI 测试依赖选择，不改变发布或产品二进制；若 Ubuntu 仓库更改包名，CI 依赖安装仍会明确失败并由最新 runner 输出诊断。回滚为恢复原固定包名，但不适用于已升级的 runner。
+- 后续：以更新提交 SHA 核对 Linux CI；通过后将本条状态更新为 Verified。
 
 ### LESSON-20261027-002：代理动作回滚与 stale-proxy 修复要串行化
 
