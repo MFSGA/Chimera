@@ -291,7 +291,12 @@ pub fn resolve_setup(app: &mut App) {
         create_window(app.app_handle());
     }
 
-    crate::core::storage::register_web_storage_listener(app.app_handle());
+    let app_shutdown = app.state::<crate::setup::AppShutdown>().clone();
+    crate::core::storage::register_web_storage_listener(
+        app.app_handle(),
+        app_shutdown.shutdown.child_token(),
+        app_shutdown.tasks.clone(),
+    );
 }
 
 /// resolve core version

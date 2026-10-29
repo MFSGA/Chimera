@@ -35,11 +35,12 @@ export const inspectUpdater = async (
 };
 
 export const getStorageItem = async (key: string) => {
-  return unwrapResult(await commands.getStorageItem(key));
+  const item = unwrapResult(await commands.getStorageItem(key));
+  return item.value;
 };
 
 export const setStorageItem = async (key: string, value: string) => {
-  unwrapResult(await commands.setStorageItem(key, value));
+  unwrapResult(await commands.setStorageItem(key, value, null));
 };
 
 export const removeStorageItem = async (key: string) => {
