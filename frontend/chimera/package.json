@@ -58,7 +58,7 @@
     "react-use": "17.6.1",
     "vaul": "1.1.2",
     "virtua": "0.53.3",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@emotion/react": "11.14.0",
