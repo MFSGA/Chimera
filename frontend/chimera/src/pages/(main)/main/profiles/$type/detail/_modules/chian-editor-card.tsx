@@ -1,9 +1,7 @@
 import {
-  scopedTransformsOf,
   useProfile,
   useRuntimeTransformDiagnostics,
   type LogSpan,
-  type ProfileDefinition_Deserialize,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { AnimatedItem } from '@chimera/ui/animated-item';
@@ -24,7 +22,6 @@ import { message } from '@/utils/notification';
 import {
   categoryProfiles,
   isChainProfile,
-  type ConfigProfile,
   type TransformProfile,
 } from '../../../_modules/utils';
 import {
@@ -92,40 +89,6 @@ const reconcileCandidates = (
   };
 };
 
-export default function ChianEditorCard({
-  profile,
-}: {
-  profile: ConfigProfile;
-}) {
-  const { replaceDefinition } = useProfile();
-
-  // The edited config item's own scoped transforms (File or Composition).
-  const transforms = useMemo(() => scopedTransformsOf(profile), [profile]);
-
-  // Keyed per profile so a draft cannot leak into another config whose baseline
-  // happens to be identical.
-  return (
-    <TransformChainEditor
-      key={profile.uid}
-      layout="stacked"
-      className="col-span-2 md:col-span-4"
-      taskKey={`update-chain-${profile.uid}`}
-      scopeUid={profile.uid}
-      transforms={transforms}
-      onApply={async (next) => {
-        // Rebuild the config definition with the reordered scoped transforms,
-        // preserving every other field, and replace it atomically.
-        const definition: ProfileDefinition_Deserialize = {
-          type: 'config',
-          config: { ...profile.config, transforms: next },
-        };
-
-        await replaceDefinition.mutateAsync({ uid: profile.uid, definition });
-      }}
-    />
-  );
-}
-
 /** Shared drag-and-drop editor for scoped and global transforms. */
 export function TransformChainEditor({
   transforms: currentTransforms,
@@ -134,6 +97,7 @@ export function TransformChainEditor({
   className,
   layout,
   scopeUid = null,
+  showTitle = true,
 }: {
   /** The persisted chain, in order. */
   transforms: string[];
@@ -142,6 +106,8 @@ export function TransformChainEditor({
   className?: string;
   layout: TransformChainLayout;
   scopeUid?: string | null;
+  /** The section header replaces the editor title on the detail page. */
+  showTitle?: boolean;
 }) {
   const {
     query: { data: profiles },
@@ -348,7 +314,7 @@ export function TransformChainEditor({
       data-layout={layout}
       className={cn('relative', className)}
     >
-      {layout === 'stacked' && (
+      {layout === 'stacked' && showTitle && (
         <CardHeader className="flex-col items-start gap-1">
           <h2 className="text-lg font-medium">
             {m.profile_chain_editor_title()}
