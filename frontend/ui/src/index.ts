@@ -42,3 +42,4 @@ export {
   SidebarToggleButton,
   useSidebar,
 } from './slider-sidebar';
+export * from './empty-state';

@@ -18,7 +18,7 @@ import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 import { useActiveProfile } from '../../../_modules/use-active-profile';
 import { useDeleteProfile } from '../../../_modules/use-delete-profile';
-import { isProxyProfile } from '../../../_modules/utils';
+import { hasMaterializedFile, isProxyProfile } from '../../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
 import ViewContent from './view-content';
@@ -131,6 +131,7 @@ export default function ActionCard({
   });
   const openLocally = useLockFn(openTask.execute);
   const isProxy = isProxyProfile(profile);
+  const hasFile = hasMaterializedFile(profile);
   const isPending = active.isPending || deletion.isPending;
 
   return (
@@ -185,21 +186,25 @@ export default function ActionCard({
         <span className="truncate">{m.profile_delete_title()}</span>
       </ActionButton>
 
-      <ViewContent profile={profile} asChild>
-        <ActionButton disabled={isPending}>
-          <FileOpenOutlineRounded className="size-4 shrink-0" />
-          <span className="truncate">{m.profile_view_content_title()}</span>
-        </ActionButton>
-      </ViewContent>
+      {hasFile && (
+        <>
+          <ViewContent profile={profile} asChild>
+            <ActionButton disabled={isPending}>
+              <FileOpenOutlineRounded className="size-4 shrink-0" />
+              <span className="truncate">{m.profile_view_content_title()}</span>
+            </ActionButton>
+          </ViewContent>
 
-      <ActionButton
-        disabled={isPending}
-        loading={openTask.isPending}
-        onClick={() => void openLocally()}
-      >
-        <FileOpenOutlineRounded className="size-4 shrink-0" />
-        <span className="truncate">{m.profile_open_locally_title()}</span>
-      </ActionButton>
+          <ActionButton
+            disabled={isPending}
+            loading={openTask.isPending}
+            onClick={() => void openLocally()}
+          >
+            <FileOpenOutlineRounded className="size-4 shrink-0" />
+            <span className="truncate">{m.profile_open_locally_title()}</span>
+          </ActionButton>
+        </>
+      )}
     </div>
   );
 }
