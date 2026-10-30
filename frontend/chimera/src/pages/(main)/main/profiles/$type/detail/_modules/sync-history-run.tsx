@@ -1,20 +1,12 @@
-import {
-  useProfileSyncLogs,
-  useProfileSyncRuns,
-  useProfileSyncStatus,
-  type RunDto,
-} from '@chimera/interface';
-import { cn } from '@chimera/ui';
+import { useProfileSyncLogs, type RunDto } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
-import { Card, CardContent, CardHeader } from '@chimera/ui/card';
+import { EmptyState } from '@chimera/ui/empty-state';
 import { CircularProgress } from '@chimera/ui/progress';
-import { useQueryClient } from '@tanstack/react-query';
+import { cn } from '@chimera/utils';
 import CancelRounded from '~icons/material-symbols/cancel-rounded';
 import CheckCircleRounded from '~icons/material-symbols/check-circle-rounded';
 import ErrorRounded from '~icons/material-symbols/error-rounded';
-import EventRepeatRounded from '~icons/material-symbols/event-repeat-rounded';
 import HistoryRounded from '~icons/material-symbols/history-rounded';
-import HistoryToggleOffRounded from '~icons/material-symbols/history-toggle-off-rounded';
 import HourglassTopRounded from '~icons/material-symbols/hourglass-top-rounded';
 import PersonRounded from '~icons/material-symbols/person-rounded';
 import ReportRounded from '~icons/material-symbols/report-rounded';
@@ -26,16 +18,9 @@ import SyncRounded from '~icons/material-symbols/sync-rounded';
 import UpdateRounded from '~icons/material-symbols/update-rounded';
 import WarningRounded from '~icons/material-symbols/warning-rounded';
 import dayjs from 'dayjs';
-import {
-  useEffect,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-} from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import LogLevelBadge from '@/pages/(main)/main/logs/_modules/log-level-badge';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
 import { formatDate } from '@/utils/date';
 import { hasDegradedEffects } from './sync-history-utils';
 
@@ -194,7 +179,7 @@ function StatusIcon({
   );
 }
 
-function Chip({
+export function Chip({
   icon: Icon,
   tonal,
   className,
@@ -222,7 +207,7 @@ function Chip({
   );
 }
 
-function Notice({
+export function Notice({
   tone,
   role,
   children,
@@ -250,7 +235,7 @@ function Notice({
   );
 }
 
-function Placeholder({
+export function Placeholder({
   icon: Icon,
   busy,
   className,
@@ -284,7 +269,7 @@ function Placeholder({
   );
 }
 
-function RunEntry({
+export function RunEntry({
   run,
   children,
   expanded,
@@ -368,226 +353,81 @@ function RunEntry({
   );
 }
 
-export function SyncHistoryCard({ uid }: { uid: string }) {
-  const status = useProfileSyncStatus(uid);
-  const history = useProfileSyncRuns(uid);
-  // undefined keeps the latest run open; an empty string is every run collapsed.
-  const [expansion, setExpansion] = useState<string | undefined>(undefined);
-  // Active inspection contains the current state; durable admission rows may
-  // still say admitted until their owner finalizes them.
+/** Merge durable and in-flight entries, newest first; preserve equal-sequence order. */
+export function mergeSyncRuns(
+  recorded: RunDto[] = [],
+  active: RunDto[] = [],
+): RunDto[] {
   const rows = new Map<string, RunDto>();
-  for (const page of history.data?.pages ?? []) {
-    for (const run of page.items) rows.set(run.id, run);
-  }
-  for (const run of status.data?.active ?? []) rows.set(run.id, run);
-  const runs = [...rows.values()].sort((a, b) =>
+  for (const run of recorded) rows.set(run.id, run);
+  for (const run of active) rows.set(run.id, run);
+  return [...rows.values()].sort((a, b) =>
     BigInt(a.admission_sequence) > BigInt(b.admission_sequence)
       ? -1
       : BigInt(a.admission_sequence) < BigInt(b.admission_sequence)
         ? 1
         : 0,
   );
-  const expanded = expansion ?? runs[0]?.id ?? '';
-  const selected = runs.find((run) => run.id === expanded);
-  const activeIds = status.data?.active.map((run) => run.id) ?? [];
-  const logs = useProfileSyncLogs(
-    uid,
-    selected?.id ?? null,
-    selected !== undefined && activeIds.includes(selected.id),
-  );
+}
 
-  // The history and logs are not polled. A run entering or leaving the active
-  // set is what changes them, so refresh both then (the logs once more to pick
-  // up the lines written after the last poll).
-  const queryClient = useQueryClient();
-  const activeKey = status.data ? activeIds.join() : undefined;
-  const previousActiveKey = useRef(activeKey);
-  useEffect(() => {
-    const previous = previousActiveKey.current;
-    previousActiveKey.current = activeKey;
-    if (previous === undefined || previous === activeKey) return;
-    queryClient.invalidateQueries({ queryKey: ['profile-sync-runs', uid] });
-    queryClient.invalidateQueries({ queryKey: ['profile-sync-logs', uid] });
-  }, [activeKey, queryClient, uid]);
-  const error = status.error ?? history.error ?? logs.error;
-
+/** The journal of the open run, read from its paged log query. */
+export function RunLogs({
+  logs,
+}: {
+  logs: ReturnType<typeof useProfileSyncLogs>;
+}) {
   return (
-    <Card
-      data-slot="profile-sync-history"
-      data-profile-uid={uid}
-      className="@container col-span-2 md:col-span-4"
+    <div
+      data-slot="profile-sync-logs"
+      className="bg-surface-variant/30 flex min-w-0 flex-col overflow-hidden rounded-2xl"
     >
-      <CardHeader className="flex-col items-start gap-1">
-        <div className="flex items-center gap-3">
-          <HistoryRounded className="text-primary size-6" aria-hidden="true" />
-          <h2 className="text-lg font-medium">
-            {m.profile_sync_history_title()}
-          </h2>
-        </div>
-
-        {status.data && (
-          <p className="text-on-surface-variant text-sm">
-            {m.profile_sync_retention({ count: status.data.history_limit })}
-          </p>
-        )}
-      </CardHeader>
-
-      <CardContent>
-        {status.data && (
-          <div
-            data-slot="profile-sync-summary"
-            className="flex flex-wrap items-center gap-2"
-          >
-            <Chip
-              tonal={status.data.scheduled}
-              icon={
-                status.data.scheduled
-                  ? EventRepeatRounded
-                  : HistoryToggleOffRounded
-              }
-            >
-              {status.data.scheduled
-                ? m.profile_sync_schedule_enabled()
-                : m.profile_sync_schedule_disabled()}
-            </Chip>
-
-            {status.data.next_run_at && (
-              <Chip icon={ScheduleRounded} className="tabular-nums">
-                {m.profile_sync_next_run({
-                  time: formatDate(status.data.next_run_at),
-                })}
-              </Chip>
-            )}
-          </div>
-        )}
-
-        {status.data?.journal_degraded && (
-          <Notice tone="warning" role="status">
-            {m.profile_sync_journal_degraded()}
-          </Notice>
-        )}
-
-        {status.data?.registration_error && (
-          <Notice tone="error" role="alert">
-            {status.data.registration_error}
-          </Notice>
-        )}
-
-        {error && (
-          <Notice tone="error" role="alert">
-            {formatError(error)}
-          </Notice>
-        )}
-
-        {history.isPending ? (
-          <Placeholder busy className="bg-surface-variant/30 rounded-3xl">
-            {m.profile_sync_loading()}
-          </Placeholder>
-        ) : runs.length === 0 ? (
-          <Placeholder
-            icon={HistoryToggleOffRounded}
-            className="bg-surface-variant/30 rounded-3xl"
-          >
-            {m.profile_sync_empty()}
-          </Placeholder>
-        ) : (
-          <>
-            <div className="divide-outline-variant divide-y">
-              {runs.map((run) => (
-                <RunEntry
-                  key={run.id}
-                  run={run}
-                  expanded={run.id === expanded}
-                  onToggle={() =>
-                    setExpansion(run.id === expanded ? '' : run.id)
-                  }
+      <div className="max-h-80 min-h-32 overflow-auto p-2">
+        {logs.isPending ? (
+          <Placeholder busy>{m.profile_sync_loading()}</Placeholder>
+        ) : logs.data?.pages.some((page) => page.items.length > 0) ? (
+          <ol className="divide-outline-variant/30 divide-y">
+            {logs.data.pages.flatMap((page) =>
+              page.items.map((entry) => (
+                <li
+                  key={entry.sequence}
+                  className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-3 px-2 py-2.5"
                 >
-                  <div
-                    data-slot="profile-sync-logs"
-                    className="bg-surface flex min-w-0 flex-col overflow-hidden rounded-2xl"
+                  <time
+                    dateTime={entry.time}
+                    className="text-on-surface-variant pt-1 font-mono text-[11px] leading-none tabular-nums"
                   >
-                    <div className="max-h-80 min-h-32 overflow-auto p-2">
-                      {logs.isPending ? (
-                        <Placeholder busy>
-                          {m.profile_sync_loading()}
-                        </Placeholder>
-                      ) : logs.data?.pages.some(
-                          (page) => page.items.length > 0,
-                        ) ? (
-                        <ol className="divide-outline-variant/30 divide-y">
-                          {logs.data.pages.flatMap((page) =>
-                            page.items.map((entry) => (
-                              <li
-                                key={entry.sequence}
-                                className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-start gap-x-3 px-2 py-2.5"
-                              >
-                                <time
-                                  dateTime={entry.time}
-                                  className={cn(
-                                    'text-on-surface-variant',
-                                    'pt-1',
-                                    'font-mono',
-                                    'text-[11px]',
-                                    'leading-none',
-                                    'tabular-nums',
-                                  )}
-                                >
-                                  {dayjs(entry.time).format('HH:mm:ss')}
-                                </time>
+                    {dayjs(entry.time).format('HH:mm:ss')}
+                  </time>
 
-                                <LogLevelBadge>{entry.level}</LogLevelBadge>
+                  <LogLevelBadge>{entry.level}</LogLevelBadge>
 
-                                <span
-                                  className={cn(
-                                    'min-w-0',
-                                    'wrap-anywhere',
-                                    'whitespace-pre-wrap',
-                                    'font-mono',
-                                    'text-xs',
-                                    'leading-relaxed',
-                                  )}
-                                >
-                                  {entry.fields.message ?? entry.fields.stage}
-                                </span>
-                              </li>
-                            )),
-                          )}
-                        </ol>
-                      ) : (
-                        <Placeholder icon={HistoryRounded}>
-                          {m.profile_sync_no_logs()}
-                        </Placeholder>
-                      )}
-                    </div>
-
-                    {logs.hasNextPage && (
-                      <Button
-                        variant="stroked"
-                        className="mx-2 mb-2 self-center"
-                        onClick={() => logs.fetchNextPage()}
-                        loading={logs.isFetchingNextPage}
-                      >
-                        {m.profile_sync_more_logs()}
-                      </Button>
-                    )}
-                  </div>
-                </RunEntry>
-              ))}
-            </div>
-
-            {history.hasNextPage && (
-              <Button
-                variant="stroked"
-                className="self-center"
-                onClick={() => history.fetchNextPage()}
-                loading={history.isFetchingNextPage}
-              >
-                {m.profile_sync_older()}
-              </Button>
+                  <span className="min-w-0 font-mono text-xs leading-relaxed wrap-anywhere whitespace-pre-wrap">
+                    {entry.fields.message ?? entry.fields.stage}
+                  </span>
+                </li>
+              )),
             )}
-          </>
+          </ol>
+        ) : (
+          <EmptyState
+            size="compact"
+            tone="normal"
+            icon={HistoryRounded}
+            message={m.profile_sync_no_logs()}
+          />
         )}
-      </CardContent>
-    </Card>
+      </div>
+
+      {logs.hasNextPage && (
+        <Button
+          variant="stroked"
+          className="mx-2 mb-2 self-center"
+          onClick={() => logs.fetchNextPage()}
+          loading={logs.isFetchingNextPage}
+        >
+          {m.profile_sync_more_logs()}
+        </Button>
+      )}
+    </div>
   );
 }

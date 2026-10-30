@@ -11,7 +11,7 @@ import FileSection from './_modules/file-section';
 import ProfileDetailHeader from './_modules/profile-detail-header';
 import ProfileDetailSkeleton from './_modules/profile-detail-skeleton';
 import SubscriptionSection from './_modules/subscription-section';
-import { SyncHistoryCard } from './_modules/sync-history-card';
+import SyncHistorySection from './_modules/sync-history-section';
 
 export const Route = createFileRoute('/(main)/main/profiles/$type/detail/$uid')(
   {
@@ -65,7 +65,7 @@ function RouteComponent() {
 
       <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-4">
         {getRemoteSource(profile) && <SubscriptionSection profile={profile} />}
-        {getRemoteSource(profile) && <SyncHistoryCard uid={uid} />}
+        {getRemoteSource(profile) && <SyncHistorySection uid={uid} />}
         <ActionCard type={type} profile={profile} />
         {isConfigItem(profile) && <ChianEditorCard profile={profile} />}
       </div>
