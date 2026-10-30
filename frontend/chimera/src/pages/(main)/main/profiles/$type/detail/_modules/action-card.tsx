@@ -1,21 +1,14 @@
-import {
-  getRemoteSource,
-  type ProfileQueryResultItem,
-} from '@chimera/interface';
+import { type ProfileQueryResultItem } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
-import { useNavigate } from '@tanstack/react-router';
 import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
-import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
 import type { ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
 import { useActiveProfile } from '../../../_modules/use-active-profile';
-import { useDeleteProfile } from '../../../_modules/use-delete-profile';
 import { isProxyProfile } from '../../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
-import SubscriptionUrlEditor from './subscription-url-editor';
 
 const ActionButton = ({
   className,
@@ -106,15 +99,9 @@ export default function ActionCard({
   type: string;
   profile: ProfileQueryResultItem;
 }) {
-  const navigate = useNavigate();
   const active = useActiveProfile(profile);
-  const deletion = useDeleteProfile(profile, {
-    onSuccess: async () => {
-      await navigate({ to: '/main/profiles/$type', params: { type } });
-    },
-  });
   const isProxy = isProxyProfile(profile);
-  const isPending = active.isPending || deletion.isPending;
+  const isPending = active.isPending;
 
   return (
     <div className="col-span-2 grid grid-cols-2 gap-4">
@@ -124,17 +111,6 @@ export default function ActionCard({
           <span className="truncate">{m.profile_name_editor_title()}</span>
         </ActionButton>
       </ProfileNameEditor>
-
-      {getRemoteSource(profile) && (
-        <SubscriptionUrlEditor profile={profile} asChild>
-          <ActionButton>
-            <EditSquareOutlineRounded className="size-4 shrink-0" />
-            <span className="truncate">
-              {m.profile_subscription_url_editor_label()}
-            </span>
-          </ActionButton>
-        </SubscriptionUrlEditor>
-      )}
 
       {isProxy && (
         <ActionButton
@@ -158,15 +134,6 @@ export default function ActionCard({
           <span className="truncate">{m.profile_menu_proxy_chains()}</span>
         </ActionButton>
       )}
-
-      <ActionButton
-        disabled={isPending}
-        loading={deletion.isPending}
-        onClick={() => void deletion.handleClick()}
-      >
-        <DeleteForeverOutlineRounded className="size-4 shrink-0" />
-        <span className="truncate">{m.profile_delete_title()}</span>
-      </ActionButton>
     </div>
   );
 }

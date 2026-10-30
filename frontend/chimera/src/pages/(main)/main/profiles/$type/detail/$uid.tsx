@@ -1,15 +1,16 @@
 import { getRemoteSource, isConfigItem, useProfile } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { EmptyState } from '@chimera/ui/empty-state';
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import * as m from '@/paraglide/messages';
 import { PROFILE_TYPE_NAMES, ProfileType } from '../../_modules/consts';
 import ActionCard from './_modules/action-card';
 import ChianEditorCard from './_modules/chian-editor-card';
+import DeleteSection from './_modules/delete-section';
 import FileSection from './_modules/file-section';
 import ProfileDetailHeader from './_modules/profile-detail-header';
 import ProfileDetailSkeleton from './_modules/profile-detail-skeleton';
-import SubscriptionCard from './_modules/subscription-card';
+import SubscriptionSection from './_modules/subscription-section';
 import { SyncHistoryCard } from './_modules/sync-history-card';
 
 export const Route = createFileRoute('/(main)/main/profiles/$type/detail/$uid')(
@@ -20,6 +21,7 @@ export const Route = createFileRoute('/(main)/main/profiles/$type/detail/$uid')(
 
 function RouteComponent() {
   const { type, uid } = Route.useParams();
+  const navigate = useNavigate();
   const { query } = useProfile();
   const profile = query.data?.items.find((item) => item.uid === uid);
 
@@ -62,13 +64,19 @@ function RouteComponent() {
       <ProfileDetailHeader type={type as ProfileType} profile={profile} />
 
       <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-4">
-        {getRemoteSource(profile) && <SubscriptionCard profile={profile} />}
+        {getRemoteSource(profile) && <SubscriptionSection profile={profile} />}
         {getRemoteSource(profile) && <SyncHistoryCard uid={uid} />}
         <ActionCard type={type} profile={profile} />
         {isConfigItem(profile) && <ChianEditorCard profile={profile} />}
       </div>
-      <div className="px-4 pb-4">
+      <div className="flex flex-col gap-4 px-4 pb-4">
         <FileSection profile={profile} />
+        <DeleteSection
+          profile={profile}
+          onDeleted={() =>
+            navigate({ to: '/main/profiles/$type', params: { type } })
+          }
+        />
       </div>
     </div>
   );
