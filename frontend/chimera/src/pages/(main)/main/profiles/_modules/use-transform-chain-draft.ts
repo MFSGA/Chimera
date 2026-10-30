@@ -221,6 +221,23 @@ export function useTransformChainDraft({
     [editable, publishDraft],
   );
 
+  // Add only from the inactive pool: a stale menu callback may never remove
+  // an already-enabled transform from this two-column draft.
+  const handleAdd = useCallback(
+    (uid: string) => {
+      if (!editable || savingRef.current || dragSessionRef.current) return;
+      const current = draftRef.current;
+      if (!current.inactive.includes(uid) || current.active.includes(uid)) {
+        return;
+      }
+      publishDraft({
+        active: [...current.active, uid],
+        inactive: current.inactive.filter((item) => item !== uid),
+      });
+    },
+    [editable, publishDraft],
+  );
+
   const handleToggle = useCallback(
     (uid: string) => {
       if (!editable || savingRef.current || dragSessionRef.current) return;
@@ -281,6 +298,7 @@ export function useTransformChainDraft({
     handleApply,
     handleReset,
     moveActive,
+    handleAdd,
     handleToggle,
     canDrag,
     beginDrag,

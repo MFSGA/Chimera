@@ -9,6 +9,7 @@ import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import { CircularProgress } from '@chimera/ui/progress';
 import { move } from '@dnd-kit/helpers';
 import { DragDropProvider } from '@dnd-kit/react';
+import FormatListNumberedRounded from '~icons/material-symbols/format-list-numbered-rounded';
 import WarningRounded from '~icons/material-symbols/warning-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { useMemo } from 'react';
@@ -17,6 +18,7 @@ import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { WHOLE_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
 import { message } from '@/utils/notification';
+import { TransformAddMenu } from './transform-add-menu';
 import {
   TransformChainColumn,
   type TransformChainLayout,
@@ -88,6 +90,7 @@ export function TransformChainEditor({
     handleApply,
     handleReset,
     moveActive,
+    handleAdd,
     handleToggle,
   } = chain;
 
@@ -192,6 +195,23 @@ export function TransformChainEditor({
           </p>
         </CardContent>
       )}
+
+      <CardContent
+        data-slot="profile-chain-editor-header"
+        className="flex items-center justify-between gap-3 pb-0"
+      >
+        <p className="text-on-surface-variant flex items-center gap-2 text-sm">
+          <FormatListNumberedRounded className="size-5" aria-hidden />
+          {m.profile_chain_editor_enabled_count({
+            count: chains.active.length,
+          })}
+        </p>
+        <TransformAddMenu
+          available={chains.inactive}
+          disabled={actionsDisabled}
+          onAdd={handleAdd}
+        />
+      </CardContent>
 
       <CardContent
         data-slot="profile-chain-editor-columns"
