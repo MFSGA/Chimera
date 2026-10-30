@@ -961,3 +961,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-utils -p chimera-core-manager --all-features` 在 macOS arm64 通过：core manager 117 passed、1 ignored；utils 31 passed；doc test 1 passed。新增的旧 v2 歧义不发信号与非法 v3 微秒测试均执行通过。`cargo +nightly clippy --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-utils -p chimera-core-manager --all-targets --all-features`、workspace fmt、Prettier 和两层 `git diff --check` 通过；Clippy 报告子模块现有 warnings。Linux/Windows `cargo check --tests` 已尝试，但缺少 `x86_64-linux-gnu-gcc` 和 `x86_64-w64-mingw32-gcc`，依赖 C 构建未能启动，所以两目标仍未验证；Service runtime CI 当前只跑 Clippy、不执行这些测试。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅改变临时 PID 元数据识别，不操作本机进程；若回滚到旧版 runtime，需确保没有 v3 PID 文件残留，否则旧解析器按 fail-closed 处理。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：PID identity 的兼容路径必须测试“时间标记相等但精度不足”的不确定分支，并断言不会调用 kill；Service CI 执行 Rust 单测的门禁属于独立工作流改动，本次未修改。
+
+### LESSON-20261030-003：Runtime 子模块依赖更新必须同步父工作区锁文件
+
+- 日期与时区：2026-10-30 US/Pacific
+- 状态：Mitigated（父工作区锁文件已更新；本机 `--locked` 全工作区测试通过，新提交 CI 待验证）
+- 严重度：Low（主仓后端门禁在依赖解析时失败，未运行 Rust 测试）
+- 模块：Rust workspace / Chimera Service runtime submodule / Cargo.lock
+- master commit / runtime submodule SHA / 平台与测试环境：失败主仓提交 `bf94ec58a6b5f4ab8d0b1dc955c4f20426460c6d`，runtime 指针 `3f57af32040402b37baf9826736a19a4086c2d27`；GitHub Actions Ubuntu、Windows、macOS。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：主仓 [CI run 41044914260](https://github.com/MFSGA/Chimera/actions/runs/41044914260)，三个平台的 `Test backend workspace` 均在 `cargo test --locked --manifest-path ./backend/Cargo.toml --workspace --all-features` 失败；Tauri E2E [run 41044914211](https://github.com/MFSGA/Chimera/actions/runs/41044914211) 通过。
+- 预期行为：更新 `backend/chimera-runtime` gitlink 时，主仓 `backend/Cargo.lock` 必须与实际路径依赖的 runtime manifest 一致，`cargo test --locked` 应无需改锁文件即可启动。
+- 真实异常、复现步骤与证据：三个平台日志均报告 `cannot update the lock file .../backend/Cargo.lock because --locked was passed`。本次子模块快进包含 `simd-json` 从 0.18.1 到 0.19.0 的依赖声明变更；主仓 backend workspace 通过路径依赖包含该 runtime crate，但根锁文件仍锁在 0.18.1。移除 `--locked` 本地解析后 Cargo 仅将这一个锁定包更新到 0.19.0。
+- 确认的根因与排除项：子模块 manifest 与父工作区锁文件失配是直接原因；失败发生在 Cargo 解析阶段，PID 修复测试本身尚未开始运行。`Chimera_Service` 三平台 Lint 通过，主仓 Tauri E2E 通过。
+- 修复提交、差异映射及保留的兼容性边界：将 `backend/Cargo.lock` 中 `simd-json` 更新到与 runtime 声明一致的 0.19.0；不改变其他包版本或 minimum-release-age 策略。该锁文件用于主仓 backend workspace，runtime 子模块另有自己的锁文件。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：以主仓已有的 locked backend workspace 命令作为锁文件一致性门禁；不新增或放宽测试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：无锁模式的 `cargo test --manifest-path ./backend/Cargo.toml --workspace --all-features` 仅将 `simd-json` 锁定版本更新到 0.19.0，完整 backend workspace 测试通过；随后 CI 同一入口 `pnpm test:backend`（执行 `cargo test --locked --manifest-path ./backend/Cargo.toml --workspace --all-features`）在本机通过。修复后新 SHA 的 GitHub 全平台 CI 仍待验证。
+- 风险/回滚和清理证据（如涉及宿主状态）：只更新 Cargo 锁文件，不修改运行时用户配置或宿主状态；若需回滚同步，需同时恢复旧 submodule gitlink 与旧锁文件。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次更新 runtime submodule 时检查其被主仓引用的 Cargo manifests，并在提交前运行 `pnpm test:backend`（其中 `--locked` 用于发现未同步的父锁文件）。本次未修改工作流。
