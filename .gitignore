@@ -42,6 +42,7 @@ release.sh
 !/docs/ref-alignment-guide.md
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
+!/docs/nixos.md
 !/docs/ref-alignment-profiles.md
 !/docs/ref-alignment-connections.md
 !/docs/tauri-e2e-minimal-architecture.md

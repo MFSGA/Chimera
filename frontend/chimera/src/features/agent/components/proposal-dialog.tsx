@@ -1,12 +1,7 @@
 import type { AgentProposal } from '@chimera/interface';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Modal, ModalContent, ModalTitle } from '@/components/ui/modal';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Modal, ModalContent, ModalTitle } from '@chimera/ui/modal';
 import * as m from '@/paraglide/messages';
 import { presentImpact } from '../model/presenter';
 

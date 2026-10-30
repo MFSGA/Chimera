@@ -1,6 +1,6 @@
+import HighlightText from '@chimera/ui/highlight-text';
 import { cn } from '@chimera/utils';
 import { createContext, Fragment, useContext } from 'react';
-import HighlightText from '@/components/ui/highlight-text';
 import { getLocale } from '@/paraglide/runtime';
 import { formatDate, formatRelativeTime } from '@/utils/date';
 import parseTraffic from '@/utils/parse-traffic';

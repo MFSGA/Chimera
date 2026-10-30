@@ -1,9 +1,5 @@
-import { Switch } from '@/components/ui/switch';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { Switch } from '@chimera/ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { useSystemServiceMode } from '@/features/system-service/use-system-service-mode';
 import * as m from '@/paraglide/messages';
 import {

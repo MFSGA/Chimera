@@ -3,28 +3,23 @@ import {
   useProfile,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
+import { AnimatedItem } from '@chimera/ui/animated-item';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input, NumericInput } from '@chimera/ui/input';
+import {
+  Modal,
+  ModalContent,
+  ModalTitle,
+  ModalTrigger,
+} from '@chimera/ui/modal';
+import { SwitchItem } from '@chimera/ui/switch';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useState, type ComponentProps } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { AnimatedItem } from '@/components/ui/animated-item';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input, NumericInput } from '@/components/ui/input';
-import {
-  Modal,
-  ModalContent,
-  ModalTitle,
-  ModalTrigger,
-} from '@/components/ui/modal';
-import { SwitchItem } from '@/components/ui/switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

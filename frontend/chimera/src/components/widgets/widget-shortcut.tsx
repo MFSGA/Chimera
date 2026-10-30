@@ -9,7 +9,10 @@ import {
   type CoreState,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import { useDndGridContext } from '@chimera/ui/dnd-grid';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { Link } from '@tanstack/react-router';
 import NetworkPingRounded from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
@@ -18,9 +21,6 @@ import {
   SystemProxyButton,
   TunModeButton,
 } from '@/components/settings/system-proxy';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import TextMarquee from '@/components/ui/text-marquee';
 import { getCoreStatusBadgeMessage } from '@/features/dashboard/core-service-status';
 import { getProxyStatus } from '@/features/dashboard/proxy-status';
 import useCoreIcon from '@/hooks/use-core-icon';

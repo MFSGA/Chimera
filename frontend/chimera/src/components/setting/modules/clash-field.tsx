@@ -1,5 +1,6 @@
 import { openThat } from '@chimera/interface';
 import { alpha, LoadingSwitch } from '@chimera/ui';
+import TextMarquee from '@chimera/ui/text-marquee';
 import ArrowForwardIos from '@mui/icons-material/ArrowForwardIos';
 import OpenInNewRounded from '@mui/icons-material/OpenInNewRounded';
 import Box from '@mui/material/Box';
@@ -11,7 +12,6 @@ import { SwitchProps } from '@mui/material/Switch';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { ChangeEvent, useState } from 'react';
-import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 
 export interface LabelSwitchProps extends SwitchProps {

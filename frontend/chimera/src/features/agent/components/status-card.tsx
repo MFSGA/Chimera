@@ -1,5 +1,5 @@
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import type { ReactNode } from 'react';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 
 export type AgentStatusRow = {
   label: string;

@@ -1,6 +1,6 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import type { ComponentProps } from 'react';
-import { Button } from '@/components/ui/button';
 
 export default function ActionButton({
   className,

@@ -1,5 +1,5 @@
+import { Button } from '@chimera/ui/button';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { Button } from '@/components/ui/button';
 import {
   SettingsCard,
   SettingsCardAnimatedItem,

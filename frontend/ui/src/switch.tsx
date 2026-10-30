@@ -1,4 +1,4 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { Switch as SwitchPrimitives } from 'radix-ui';
 import type { ComponentProps } from 'react';
 import { CircularProgress } from './progress';

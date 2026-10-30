@@ -1,7 +1,7 @@
+import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import { memo } from 'react';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,

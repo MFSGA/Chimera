@@ -6,9 +6,9 @@ import {
   openLogsDir,
   setCustomAppDir,
 } from '@chimera/interface';
+import { Button, type ButtonProps } from '@chimera/ui/button';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { Button, type ButtonProps } from '@/components/ui/button';
-import TextMarquee from '@/components/ui/text-marquee';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

@@ -1,15 +1,16 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { Slot } from 'radix-ui';
-import { createContext, useContext, type HTMLAttributes } from 'react';
+import { createContext, HTMLAttributes, useContext } from 'react';
 
-export const cardVariants = cva('overflow-hidden rounded-3xl text-on-surface', {
+export const cardVariants = cva('rounded-3xl text-on-surface overflow-hidden', {
   variants: {
     variant: {
-      basic: ['bg-surface shadow-sm dark:bg-surface'],
-      raised: ['bg-primary-container shadow-sm dark:bg-on-primary'],
+      basic: ['shadow-sm', 'bg-surface dark:bg-surface'],
+      raised: ['shadow-sm', 'bg-primary-container dark:bg-on-primary'],
       outline: [
-        'border border-outline-variant bg-surface dark:border-outline-variant dark:bg-surface',
+        'bg-surface dark:bg-surface',
+        'border border-outline-variant dark:border-outline-variant',
       ],
     },
   },
@@ -21,10 +22,11 @@ export const cardVariants = cva('overflow-hidden rounded-3xl text-on-surface', {
 export type CardVariantsProps = VariantProps<typeof cardVariants>;
 
 export const cardContentVariants = cva(['flex flex-col gap-4 p-4']);
+
 export type CardContentVariantsProps = VariantProps<typeof cardContentVariants>;
 
 export const cardHeaderVariants = cva(
-  ['flex items-center gap-4 px-4 text-xl'],
+  ['flex items-center gap-4 text-xl', 'px-4'],
   {
     variants: {
       variant: {
@@ -33,7 +35,7 @@ export const cardHeaderVariants = cva(
         outline: 'border-outline-variant dark:border-outline-variant',
       },
       divider: {
-        true: 'border-b py-4',
+        true: 'border-b py-4 ',
         false: 'pt-4',
       },
     },
@@ -43,10 +45,11 @@ export const cardHeaderVariants = cva(
     },
   },
 );
+
 export type CardHeaderVariantsProps = VariantProps<typeof cardHeaderVariants>;
 
 export const cardFooterVariants = cva(
-  ['flex flex-row-reverse items-center gap-4 px-2'],
+  ['flex flex-row-reverse items-center gap-4', 'px-2'],
   {
     variants: {
       variant: {
@@ -65,6 +68,7 @@ export const cardFooterVariants = cva(
     },
   },
 );
+
 export type CardFooterVariantsProps = VariantProps<typeof cardFooterVariants>;
 
 type CardContextType = {
@@ -103,10 +107,19 @@ export const Card = ({
   const Comp = asChild ? Slot.Root : 'div';
 
   return (
-    <CardContext.Provider value={{ variant, divider }}>
+    <CardContext.Provider
+      value={{
+        variant,
+        divider,
+      }}
+    >
       <Comp
-        className={cn(cardVariants({ variant }), className)}
-        data-slot="card-root"
+        className={cn(
+          cardVariants({
+            variant,
+          }),
+          className,
+        )}
         {...props}
       />
     </CardContext.Provider>
@@ -125,13 +138,7 @@ export const CardContent = ({
 }: CardContentProps) => {
   const Comp = asChild ? Slot.Root : 'div';
 
-  return (
-    <Comp
-      className={cn(cardContentVariants(), className)}
-      data-slot="card-content"
-      {...props}
-    />
-  );
+  return <Comp className={cn(cardContentVariants(), className)} {...props} />;
 };
 
 export type CardHeaderProps = HTMLAttributes<HTMLDivElement> &
@@ -143,52 +150,44 @@ export const CardHeader = ({
   divider,
   variant,
   className,
-  asChild,
   ...props
 }: CardHeaderProps) => {
   const context = useCardContext();
-  const Comp = asChild ? Slot.Root : 'div';
 
   return (
-    <Comp
+    <div
       className={cn(
         cardHeaderVariants({
-          divider: context.divider ?? divider,
-          variant: context.variant ?? variant,
+          divider: context?.divider ?? divider,
+          variant: context?.variant ?? variant,
         }),
         className,
       )}
-      data-slot="card-header"
       {...props}
     />
   );
 };
 
 export interface CardFooterProps
-  extends HTMLAttributes<HTMLDivElement>, CardFooterVariantsProps {
-  asChild?: boolean;
-}
+  extends HTMLAttributes<HTMLDivElement>, CardFooterVariantsProps {}
 
 export const CardFooter = ({
   divider,
   variant,
   className,
-  asChild,
   ...props
 }: CardFooterProps) => {
   const context = useCardContext();
-  const Comp = asChild ? Slot.Root : 'div';
 
   return (
-    <Comp
+    <div
       className={cn(
         cardFooterVariants({
-          divider: context.divider ?? divider,
-          variant: context.variant ?? variant,
+          divider: context?.divider ?? divider,
+          variant: context?.variant ?? variant,
         }),
         className,
       )}
-      data-slot="card-footer"
       {...props}
     />
   );

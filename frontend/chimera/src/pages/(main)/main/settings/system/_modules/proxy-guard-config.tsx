@@ -1,8 +1,8 @@
 import { useSetting } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { NumericInput } from '@chimera/ui/input';
 import { AnimatePresence } from 'motion/react';
 import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { NumericInput } from '@/components/ui/input';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';

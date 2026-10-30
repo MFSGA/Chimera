@@ -1,10 +1,10 @@
 import { useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { CircularProgress } from '@chimera/ui/progress';
 import { move } from '@dnd-kit/helpers';
 import { DragDropProvider } from '@dnd-kit/react';
 import { isEqual } from 'lodash-es';
 import type { ComponentProps } from 'react';
-import { CircularProgress } from '@/components/ui/progress';
 import * as m from '@/paraglide/messages';
 import { Route as IndexRoute } from '../index';
 import SortableProfileItem from './sortable-profile-item';

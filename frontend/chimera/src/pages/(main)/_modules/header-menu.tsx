@@ -1,8 +1,8 @@
+import { Button, type ButtonProps } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import { Link } from '@tanstack/react-router';
 import type { ComponentProps } from 'react';
 import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
-import { Button, type ButtonProps } from '@/components/ui/button';
 import { Action as AboutAction } from '@/pages/(main)/main/settings/about/route';
 import * as m from '@/paraglide/messages';
 import HeaderFileAction from './header-file-action';

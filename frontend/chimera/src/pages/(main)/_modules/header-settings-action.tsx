@@ -1,4 +1,5 @@
 import { useProxyMode, type ProxyMode } from '@chimera/interface';
+import { CircularProgress } from '@chimera/ui/progress';
 import type { PropsWithChildren } from 'react';
 import { useLanguage } from '@/components/providers/language-provider';
 import {
@@ -17,7 +18,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { CircularProgress } from '@/components/ui/progress';
 import {
   useSystemProxyAction,
   useTunModeAction,

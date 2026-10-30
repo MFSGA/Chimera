@@ -1,10 +1,10 @@
 import { useHotkeyFunctions, useHotkeys } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import EditOutlineRounded from '~icons/material-symbols/edit-outline-rounded';
 import ErrorRounded from '~icons/material-symbols/error-rounded';
 import { isEqual } from 'lodash-es';
 import { useEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

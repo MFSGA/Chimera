@@ -1,19 +1,14 @@
 import { commands, unwrapResult } from '@chimera/interface';
-import { useQuery } from '@tanstack/react-query';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import { useQuery } from '@tanstack/react-query';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,

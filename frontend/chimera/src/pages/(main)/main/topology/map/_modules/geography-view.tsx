@@ -1,10 +1,10 @@
 import type { Topology, Usage } from '@chimera/interface';
+import { ScrollArea } from '@chimera/ui/scroll-area';
 import { cn } from '@chimera/utils';
 import CheckRounded from '~icons/material-symbols/check-rounded';
 import { AnimatePresence, motion, useInView } from 'motion/react';
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import worldMap from '@/assets/maps/world-map.json';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { getLocale } from '@/paraglide/runtime';
 import {

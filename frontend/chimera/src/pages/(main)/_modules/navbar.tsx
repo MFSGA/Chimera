@@ -1,4 +1,6 @@
 import { useClashProxies } from '@chimera/interface';
+import AnimatedTabs, { AnimatedTabsItem } from '@chimera/ui/animated-tabs';
+import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import { Link, useMatchRoute } from '@tanstack/react-router';
 import Apps from '~icons/material-symbols/apps';
@@ -14,8 +16,6 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SmartToyRounded from '~icons/material-symbols/smart-toy-rounded';
 import TerminalRounded from '~icons/material-symbols/terminal-rounded';
 import { ComponentProps, ReactNode, useMemo } from 'react';
-import AnimatedTabs, { AnimatedTabsItem } from '@/components/ui/animated-tabs';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,

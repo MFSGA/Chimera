@@ -6,6 +6,10 @@ import {
   type ProfileDefinition_Deserialize,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { AnimatedItem } from '@chimera/ui/animated-item';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { CircularProgress } from '@chimera/ui/progress';
 import { move } from '@dnd-kit/helpers';
 import { DragDropProvider } from '@dnd-kit/react';
 import WarningRounded from '~icons/material-symbols/warning-rounded';
@@ -13,15 +17,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Notice } from '@/components/base';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { AnimatedItem } from '@/components/ui/animated-item';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { CircularProgress } from '@/components/ui/progress';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { WHOLE_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';

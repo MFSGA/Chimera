@@ -3,15 +3,15 @@ import {
   useClashRulesProvider,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
+import { Separator } from '@chimera/ui/separator';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { createFileRoute, Link, useLocation } from '@tanstack/react-router';
 import { motion } from 'motion/react';
 import type { ComponentProps } from 'react';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
-import { Button } from '@/components/ui/button';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
-import TextMarquee from '@/components/ui/text-marquee';
 import useIsMobile from '@/hooks/use-is-moblie';
 
 export const Route = createFileRoute('/(main)/main/providers')({

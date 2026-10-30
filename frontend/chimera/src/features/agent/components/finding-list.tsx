@@ -1,7 +1,7 @@
 import type { AgentFinding, AgentProbeFailure } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import { CheckCircleRounded, WarningAmberRounded } from '@mui/icons-material';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { presentFinding, presentProbe } from '../model/presenter';
 

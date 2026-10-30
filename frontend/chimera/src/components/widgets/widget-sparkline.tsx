@@ -28,6 +28,8 @@ import {
   useClashTraffic,
   type ClashConnectionsSnapshot,
 } from '@chimera/interface';
+import { Card, CardContent } from '@chimera/ui/card';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { cn } from '@chimera/utils';
 import ArrowDownwardRounded from '~icons/material-symbols/arrow-downward-rounded';
 import ArrowUpwardRounded from '~icons/material-symbols/arrow-upward-rounded';
@@ -35,9 +37,7 @@ import MemoryOutlineRounded from '~icons/material-symbols/memory-outline-rounded
 import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-rounded';
 import { filesize } from 'filesize';
 import type { ComponentProps, ComponentType } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Sparkline } from '@/components/ui/sparkline';
-import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 import type { WidgetComponentProps } from './consts';
 import { useWidgetConfig } from './provider';

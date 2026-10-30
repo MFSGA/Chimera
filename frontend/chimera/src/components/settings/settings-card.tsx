@@ -1,12 +1,7 @@
 import { cn } from '@chimera/ui';
+import { AnimatedItem } from '@chimera/ui/animated-item';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import type { ComponentProps } from 'react';
-import { AnimatedItem } from '@/components/ui/animated-item';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
 
 export function SettingsLabel({ className, ...props }: ComponentProps<'div'>) {
   return (

@@ -3,23 +3,18 @@ import {
   useClashInfo,
   useRuntimeProfile,
 } from '@chimera/interface';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { useEffect, useState } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError, sleep } from '@/utils';
 import { message } from '@/utils/notification';

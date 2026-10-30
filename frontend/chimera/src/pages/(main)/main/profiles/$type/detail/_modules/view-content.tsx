@@ -3,9 +3,9 @@ import {
   unwrapResult,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import type { ComponentProps } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

@@ -2,11 +2,11 @@ import type {
   AgentNetworkProbeRequest,
   AgentNetworkProbeResult,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
 import { PublicRounded } from '@mui/icons-material';
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import * as m from '@/paraglide/messages';
 
 export function NetworkProbeCard({

@@ -1,6 +1,6 @@
 import { cn } from '@chimera/ui';
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import useIsMobile from '@/hooks/use-is-moblie';
 import SettingsNavigate from './_modules/settings-navigate';
 

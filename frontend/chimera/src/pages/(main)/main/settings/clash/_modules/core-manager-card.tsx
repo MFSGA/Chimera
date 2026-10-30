@@ -7,6 +7,10 @@ import {
   type ClashCoresDetail,
   type UpdaterSummary,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { CircularProgress } from '@chimera/ui/progress';
+import TextMarquee from '@chimera/ui/text-marquee';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { cn } from '@chimera/utils';
 import ArrowRightAltRounded from '~icons/material-symbols/arrow-right-alt-rounded';
 import DeployedCodeUpdateOutlineRounded from '~icons/material-symbols/deployed-code-update-outline-rounded';
@@ -21,14 +25,6 @@ import {
   SettingsCardContent,
   SettingsCardFooter,
 } from '@/components/settings/settings-card';
-import { Button } from '@/components/ui/button';
-import { CircularProgress } from '@/components/ui/progress';
-import TextMarquee from '@/components/ui/text-marquee';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { OS } from '@/consts';
 import useCoreIcon from '@/hooks/use-core-icon';
 import { useLockFn } from '@/hooks/use-lock-fn';

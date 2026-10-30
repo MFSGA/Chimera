@@ -1,4 +1,7 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { useScrollArea } from '@chimera/ui/scroll-area';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import CloudDownloadRounded from '~icons/material-symbols/cloud-download-rounded';
 import FileOpenRounded from '~icons/material-symbols/file-open-rounded';
 import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
@@ -8,13 +11,6 @@ import {
   ProfileDialog,
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
-import { Button } from '@/components/ui/button';
-import { useScrollArea } from '@/components/ui/scroll-area';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';
 import { Route as ProfilesRoute } from '../../route';

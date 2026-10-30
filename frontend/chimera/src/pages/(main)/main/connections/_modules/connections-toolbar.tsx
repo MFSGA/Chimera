@@ -1,14 +1,10 @@
 import type { TrafficRange } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import ViewColumnRounded from '~icons/material-symbols/view-column-rounded';
 import type { ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import type { SearchFilter } from '../../_modules/traffic-filters';
 import ConnectionsFilters from './connections-filters';

@@ -7,6 +7,9 @@ import {
   type AgentNetworkProbeRequest,
   type AgentProposal,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent } from '@chimera/ui/card';
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import {
   HealthAndSafetyRounded,
   RefreshRounded,
@@ -15,9 +18,6 @@ import {
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 import { useState } from 'react';
 import { Notice } from '@/components/base';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { formatEnvInfos } from '@/utils';
 import { AuditHistoryCard } from './components/audit-history-card';

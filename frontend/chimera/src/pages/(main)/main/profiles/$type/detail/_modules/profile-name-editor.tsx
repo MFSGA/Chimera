@@ -1,21 +1,16 @@
 import { useProfile, type ProfileQueryResultItem } from '@chimera/interface';
-import { AnimatePresence } from 'motion/react';
-import { useState, type ComponentProps } from 'react';
-import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
 import {
   Modal,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import { AnimatePresence } from 'motion/react';
+import { useState, type ComponentProps } from 'react';
+import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

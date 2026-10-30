@@ -1,7 +1,7 @@
 import type { AgentActionRequest, AgentFinding } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import { AutoFixHighRounded, WarningAmberRounded } from '@mui/icons-material';
-import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import {
   presentAgentAction,

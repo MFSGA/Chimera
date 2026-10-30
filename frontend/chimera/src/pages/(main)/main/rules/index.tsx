@@ -1,5 +1,10 @@
 import { useClashRules } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import HighlightText from '@chimera/ui/highlight-text';
+import {
+  ScrollArea,
+  useScrollAreaViewportElement,
+} from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import {
   columnVisibilityFeature,
@@ -13,11 +18,6 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useMemo, useState } from 'react';
 import { ReturnButton } from '@/components/router/return-button';
 import { useEntryFocus } from '@/components/router/use-cross-navigate';
-import HighlightText from '@/components/ui/highlight-text';
-import {
-  ScrollArea,
-  useScrollAreaViewportElement,
-} from '@/components/ui/scroll-area';
 import {
   focusHighlightStyle,
   useFocusHighlight,

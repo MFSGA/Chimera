@@ -1,5 +1,6 @@
 import { openThat } from '@chimera/interface';
 import { alpha } from '@chimera/ui';
+import TextMarquee from '@chimera/ui/text-marquee';
 import DeleteRounded from '@mui/icons-material/DeleteRounded';
 import EditRounded from '@mui/icons-material/EditRounded';
 import OpenInNewRounded from '@mui/icons-material/OpenInNewRounded';
@@ -10,7 +11,6 @@ import Paper, { PaperProps } from '@mui/material/Paper';
 import { styled } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import { ReactElement, ReactNode } from 'react';
-import TextMarquee from '@/components/ui/text-marquee';
 
 type WebUrlLabels = {
   [label: string]: string | number | undefined | null;

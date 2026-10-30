@@ -3,14 +3,14 @@ import type {
   AgentNetworkSnapshot,
   AgentRoutingMode,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import {
   BuildRounded,
   RouteRounded,
   SettingsEthernetRounded,
   VpnLockRounded,
 } from '@mui/icons-material';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { presentRoutingMode } from '../model/presenter';
 

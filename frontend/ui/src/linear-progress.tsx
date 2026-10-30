@@ -5,7 +5,7 @@
  * 用于显示订阅使用量进度
  */
 
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import type { ComponentProps } from 'react';
 
 export interface LinearProgressProps extends ComponentProps<'div'> {

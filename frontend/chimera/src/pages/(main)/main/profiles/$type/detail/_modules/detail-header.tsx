@@ -1,8 +1,8 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
 import type { ComponentProps } from 'react';
-import { Button } from '@/components/ui/button';
 
 export default function DetailHeader({
   type,

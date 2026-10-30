@@ -1,5 +1,7 @@
 import { useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Separator } from '@chimera/ui/separator';
 import { Link, useMatchRoute } from '@tanstack/react-router';
 import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
 import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
@@ -9,8 +11,6 @@ import ChipLine from '~icons/mingcute/chip-line';
 import YamlIcon from '~icons/nonicons/yaml-16';
 import ScriptIcon from '~icons/streamline-plump/script-2-remix';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import * as m from '@/paraglide/messages';
 import { categoryProfiles } from '../$type/_modules/utils';
 import { ProfileType } from './consts';

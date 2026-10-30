@@ -1,26 +1,21 @@
 import { openThat, useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
-import { useMemo, type PropsWithChildren } from 'react';
-import CLASH_FIELD from '@/assets/json/clash-field.json';
-import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import TextMarquee from '@/components/ui/text-marquee';
+} from '@chimera/ui/modal';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import TextMarquee from '@chimera/ui/text-marquee';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
+import { useMemo, type PropsWithChildren } from 'react';
+import CLASH_FIELD from '@/assets/json/clash-field.json';
+import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 

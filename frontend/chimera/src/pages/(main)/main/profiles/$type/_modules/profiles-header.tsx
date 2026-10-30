@@ -1,8 +1,8 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import { Link } from '@tanstack/react-router';
 import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
-import { Button } from '@/components/ui/button';
 import useIsMobile from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../../_modules/consts';

@@ -1,7 +1,7 @@
 import type { AgentAuditHistoryView } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import { HistoryRounded, RefreshRounded } from '@mui/icons-material';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 
 const displayCode = (code: string) => code.replaceAll('_', ' ');

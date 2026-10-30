@@ -3,30 +3,21 @@ import {
   useClashInfo,
   useRuntimeProfile,
 } from '@chimera/interface';
-import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import ContentCopyRounded from '~icons/material-symbols/content-copy-rounded';
-import { useEffect, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+} from '@chimera/ui/modal';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import { writeText } from '@tauri-apps/plugin-clipboard-manager';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import ContentCopyRounded from '~icons/material-symbols/content-copy-rounded';
+import { useEffect, useState } from 'react';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError, sleep } from '@/utils';

@@ -1,5 +1,6 @@
 import { useSetting } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button, type ButtonProps } from '@chimera/ui/button';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import Crop54Outline from '~icons/material-symbols/crop-5-4-outline';
@@ -9,7 +10,6 @@ import PushPin from '~icons/material-symbols/push-pin';
 import PushPinOutline from '~icons/material-symbols/push-pin-outline';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, type ComponentProps } from 'react';
-import { Button, type ButtonProps } from '@/components/ui/button';
 import useWindowMaximized from '@/hooks/use-window-maximized';
 
 const appWindow = getCurrentWebviewWindow();

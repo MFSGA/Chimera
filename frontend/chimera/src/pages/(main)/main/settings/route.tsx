@@ -11,9 +11,9 @@
  */
 
 import { cn } from '@chimera/ui';
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import SettingsNavigate from './_modules/settings-navigate';
 

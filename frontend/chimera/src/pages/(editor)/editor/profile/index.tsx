@@ -5,6 +5,8 @@ import {
   useProfileContent,
   useRuntimeTransformDiagnostics,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { createFileRoute } from '@tanstack/react-router';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { ask } from '@tauri-apps/plugin-dialog';
@@ -12,8 +14,6 @@ import type { editor } from 'monaco-editor';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ProfileMonacoViewer from '@/components/profiles/profile-monaco-viewer';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import TextMarquee from '@/components/ui/text-marquee';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

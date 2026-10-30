@@ -1,5 +1,8 @@
 import { useClashRules } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import ListRounded from '~icons/material-symbols/lists-rounded';
 import {
@@ -9,8 +12,6 @@ import {
   type ReactNode,
 } from 'react';
 import z from 'zod';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Sidebar,
   SidebarLabelItem,
@@ -18,11 +19,6 @@ import {
   SidebarToggleButton,
   useSidebar,
 } from '@/components/ui/slider-sidebar';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
 import ProxyIcon from './_modules/proxy-icon';

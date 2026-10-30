@@ -2,13 +2,13 @@ import type {
   AgentActionRequest,
   AgentNetworkSnapshot,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent } from '@chimera/ui/card';
 import {
   BugReportRounded,
   ContentCopyRounded,
   ExpandMoreRounded,
 } from '@mui/icons-material';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { ActionPanel } from './action-panel';
 import { ProbeFailureList } from './finding-list';

@@ -1,10 +1,10 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { useScrollArea } from '@chimera/ui/scroll-area';
 import { Link } from '@tanstack/react-router';
 import ArrowBackIosNewRounded from '~icons/material-symbols/arrow-back-ios-new-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { useId, type ComponentProps } from 'react';
-import { Button } from '@/components/ui/button';
-import { useScrollArea } from '@/components/ui/scroll-area';
 
 const BackButton = () => {
   return (

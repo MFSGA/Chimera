@@ -1,14 +1,10 @@
 import { LegacyConnection as Connection } from '@chimera/interface';
 import { BaseDialog, BaseDialogProps, cn } from '@chimera/ui';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { sentenceCase } from 'change-case';
 import dayjs from 'dayjs';
 import { filesize } from 'filesize';
 import * as React from 'react';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 
 export type ConnectionDetailDialogProps = { item?: Connection.Item } & Omit<

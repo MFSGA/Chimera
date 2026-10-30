@@ -1,6 +1,6 @@
 import { flushSystemDnsCache } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

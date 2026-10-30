@@ -1,5 +1,11 @@
 import { useClashLogs } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import HighlightText from '@chimera/ui/highlight-text';
+import {
+  ScrollArea,
+  useScrollArea,
+  useScrollAreaViewportElement,
+} from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
@@ -11,12 +17,6 @@ import {
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
 import { ContextMenuItem } from '@/components/ui/context-menu';
-import HighlightText from '@/components/ui/highlight-text';
-import {
-  ScrollArea,
-  useScrollArea,
-  useScrollAreaViewportElement,
-} from '@/components/ui/scroll-area';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import LogLevelBadge from './_modules/log-level-badge';

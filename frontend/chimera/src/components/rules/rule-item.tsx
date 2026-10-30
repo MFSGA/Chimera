@@ -1,6 +1,6 @@
 import type { ClashRule } from '@chimera/interface';
+import HighlightText from '@chimera/ui/highlight-text';
 import { cn } from '@chimera/utils';
-import HighlightText from '@/components/ui/highlight-text';
 
 interface Props {
   index: number;

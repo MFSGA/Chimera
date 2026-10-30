@@ -20,15 +20,11 @@
 
 import { useClashProxies } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import BoltRounded from '~icons/material-symbols/bolt-rounded';
 import { useState } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { Route as NameRoute } from '../$name';

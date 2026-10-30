@@ -1,18 +1,13 @@
-import { useBlockTaskContext } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import { useBlockTaskContext } from '@/components/providers/block-task-provider';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,

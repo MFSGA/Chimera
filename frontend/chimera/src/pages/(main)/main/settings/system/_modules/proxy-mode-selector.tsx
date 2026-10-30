@@ -1,5 +1,5 @@
 import { useProxyMode, type ProxyMode } from '@chimera/interface';
-import AnimatedTabs, { AnimatedTabsItem } from '@/components/ui/animated-tabs';
+import AnimatedTabs, { AnimatedTabsItem } from '@chimera/ui/animated-tabs';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 

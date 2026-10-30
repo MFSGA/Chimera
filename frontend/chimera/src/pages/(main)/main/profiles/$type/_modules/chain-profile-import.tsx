@@ -4,23 +4,18 @@ import {
   type NewProfileRequest_Deserialize,
   type ProfileDefinition_Deserialize,
 } from '@chimera/interface';
-import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
-import { useMemo, useState } from 'react';
-import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
 import {
   Modal,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
+import { useMemo, useState } from 'react';
+import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

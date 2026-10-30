@@ -1,18 +1,8 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Modal, ModalClose, ModalContent, ModalTitle } from '@chimera/ui/modal';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import {
-  Modal,
-  ModalClose,
-  ModalContent,
-  ModalTitle,
-} from '@/components/ui/modal';
 import * as m from '@/paraglide/messages';
 import FilterChip from './filter-chip';
 

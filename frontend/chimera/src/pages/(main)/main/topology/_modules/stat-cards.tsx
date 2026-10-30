@@ -1,4 +1,6 @@
 import type { Dimension, TrafficReport } from '@chimera/interface';
+import { Card, type CardVariantsProps } from '@chimera/ui/card';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { cn } from '@chimera/utils';
 import AppsRounded from '~icons/material-symbols/apps-rounded';
 import CableRounded from '~icons/material-symbols/cable-rounded';
@@ -8,12 +10,6 @@ import DnsRounded from '~icons/material-symbols/dns-rounded';
 import LoginRounded from '~icons/material-symbols/login-rounded';
 import SwapVertRounded from '~icons/material-symbols/swap-vert-rounded';
 import type { ComponentType, ReactNode, SVGProps } from 'react';
-import { Card, type CardVariantsProps } from '@/components/ui/card';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import parseTraffic from '@/utils/parse-traffic';
 import { dimensionName } from '@/utils/traffic-usage';

@@ -10,7 +10,12 @@
       devShells = eachSystem (system:
         let
           pkgs = import nixpkgs { inherit system; };
-          isLinux = pkgs.stdenv.isLinux;
+          isLinux = pkgs.stdenv.hostPlatform.isLinux;
+          # Corepack supplies the repository-pinned pnpm version, but it does
+          # not create a pnpm executable in the immutable Nix store.
+          pnpm = pkgs.writeShellScriptBin "pnpm" ''
+            exec ${pkgs.corepack}/bin/corepack pnpm "$@"
+          '';
           runtimeLibs = with pkgs; lib.optionals isLinux [
             openssl
             gtk3
@@ -46,6 +51,7 @@
             packages = with pkgs; [
               nodejs_24
               corepack
+              pnpm
               deno
               git
               rustup

@@ -1,3 +1,4 @@
+import { useRipple } from '@chimera/ui/ripple';
 import { cn } from '@chimera/utils';
 import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import Check from '~icons/material-symbols/check-rounded';
@@ -16,7 +17,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useRipple } from './ripple';
 
 export const segmentedButtonVariants = cva(
   'relative inline-flex w-full items-stretch',
@@ -99,7 +99,7 @@ export type SegmentedButtonItemVariantsProps = VariantProps<
 >;
 
 const LazyRipple = lazy(() =>
-  import('./ripple').then((mod) => ({ default: mod.Ripple })),
+  import('@chimera/ui/ripple').then((mod) => ({ default: mod.Ripple })),
 );
 
 type SegmentedButtonVariant = NonNullable<

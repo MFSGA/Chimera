@@ -10,11 +10,11 @@
  * 使用 motion 的 AnimatePresence 实现进出场动画。
  */
 
+import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import DoneRounded from '~icons/material-symbols/done-rounded';
 import { AnimatePresence, motion } from 'motion/react';
-import { Button } from '@/components/ui/button';
 import { useDashboardContext } from '@/components/widgets/provider';
 import { WidgetConfigSaveStatus } from '@/components/widgets/widget-config-menu';
 import * as m from '@/paraglide/messages';

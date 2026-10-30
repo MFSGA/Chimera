@@ -13,12 +13,12 @@
 
 import { ProxyMode, useClashProxies, useProxyMode } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import BoxOutlineRounded from '~icons/material-symbols/box-outline-rounded';
 import DirectionsRunRounded from '~icons/material-symbols/directions-run-rounded';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
-import { Button } from '@/components/ui/button';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';

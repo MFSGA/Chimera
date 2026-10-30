@@ -3,6 +3,7 @@ import type {
   RuntimeTransformFailureDiagnostics,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import {
   pointerIntersection,
   type CollisionDetector,
@@ -16,7 +17,6 @@ import FormatListNumberedRounded from '~icons/material-symbols/format-list-numbe
 import LayersOutlineRounded from '~icons/material-symbols/layers-outline-rounded';
 import RemoveRounded from '~icons/material-symbols/remove-rounded';
 import { memo } from 'react';
-import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import { profileTypeOf, type TransformProfile } from '../../_modules/utils';
 import { PROFILE_TYPE_NAMES } from '../../../_modules/consts';

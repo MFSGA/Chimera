@@ -1,6 +1,6 @@
 import { useSetting } from '@chimera/interface';
+import { Slider } from '@chimera/ui/slider';
 import { useEffect, useState } from 'react';
-import { Slider } from '@/components/ui/slider';
 import * as m from '@/paraglide/messages';
 import {
   SettingsCard,

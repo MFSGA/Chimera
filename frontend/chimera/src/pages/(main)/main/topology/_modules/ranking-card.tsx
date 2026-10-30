@@ -1,8 +1,8 @@
 import type { Ranking } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card } from '@chimera/ui/card';
 import { AnimatePresence } from 'motion/react';
 import { useState, type ComponentType, type SVGProps } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { usageAmount } from '@/utils/traffic-usage';
 import { toggleFilter } from '../../_modules/traffic-filters';

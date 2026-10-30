@@ -1,9 +1,9 @@
 import { useProfile } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import CloseSmallOutlineRounded from '~icons/material-symbols/close-small-outline-rounded';
 import DownloadRounded from '~icons/material-symbols/download-rounded';
 import LinkRounded from '~icons/material-symbols/link-rounded';
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';

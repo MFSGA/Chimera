@@ -1,9 +1,9 @@
 import { type ClashProxiesQueryProxyItem } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import FlashOnRounded from '~icons/material-symbols/flash-on-rounded';
 import { useMemo, type ComponentProps, type MouseEvent } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import DelayChip from './delay-chip';
 

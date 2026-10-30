@@ -1,5 +1,7 @@
 import { useSetting } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { Link, useLocation } from '@tanstack/react-router';
 import DisplayExternalInput from '~icons/material-symbols/display-external-input-rounded';
 import FrameBugOutlineRounded from '~icons/material-symbols/frame-bug-outline-rounded';
@@ -9,8 +11,6 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import ViewQuilt from '~icons/material-symbols/view-quilt-rounded';
 import type { ComponentProps, ReactNode } from 'react';
 import ChimeraIcon from '@root/backend/tauri/icons/icon.png';
-import { Button } from '@/components/ui/button';
-import TextMarquee from '@/components/ui/text-marquee';
 import useCoreIcon from '@/hooks/use-core-icon';
 import * as m from '@/paraglide/messages';
 

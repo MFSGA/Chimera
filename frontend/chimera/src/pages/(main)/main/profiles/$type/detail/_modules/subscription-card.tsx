@@ -4,25 +4,16 @@ import {
   useProfileSyncStatus,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { LinearProgress } from '@chimera/ui/linear-progress';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import RuleSettingsRounded from '~icons/material-symbols/rule-settings-rounded';
 import dayjs from 'dayjs';
 import { filesize } from 'filesize';
 import { useMemo } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { LinearProgress } from '@/components/ui/linear-progress';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

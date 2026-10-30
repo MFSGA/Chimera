@@ -12,8 +12,8 @@
  * - 移动端（isMobile）：显示 ProxiesNavigate 作为独立页面
  */
 
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
-import { AppContentScrollArea } from '@/components/ui/scroll-area';
 import useIsMobile from '@/hooks/use-is-moblie';
 import ProxiesNavigate from './_modules/proxies-navigate';
 

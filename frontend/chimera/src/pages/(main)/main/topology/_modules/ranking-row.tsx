@@ -1,11 +1,7 @@
 import type { Metric, Usage } from '@chimera/interface';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { cn } from '@chimera/utils';
 import { motion } from 'motion/react';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import parseTraffic from '@/utils/parse-traffic';
 import { usageAmount, type UsageLabel } from '@/utils/traffic-usage';

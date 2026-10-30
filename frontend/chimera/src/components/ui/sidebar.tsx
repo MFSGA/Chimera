@@ -1,7 +1,7 @@
+import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { cn } from '@chimera/utils';
 import { ComponentProps, createContext, useContext } from 'react';
 import useIsMobile from '@/hooks/use-is-moblie';
-import { AppContentScrollArea } from './scroll-area';
 
 const SidebarContext = createContext<{
   isHiddenSide: boolean;

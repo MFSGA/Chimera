@@ -3,6 +3,7 @@ import {
   type ProfileQueryResultItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
 import { useNavigate } from '@tanstack/react-router';
 import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
@@ -11,7 +12,6 @@ import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outlin
 import FileOpenOutlineRounded from '~icons/material-symbols/file-open-outline-rounded';
 import type { ComponentProps } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

@@ -1,3 +1,7 @@
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Modal, ModalClose, ModalContent, ModalTitle } from '@chimera/ui/modal';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { Switch } from '@chimera/ui/switch';
 import { cn } from '@chimera/utils';
 import { move } from '@dnd-kit/helpers';
 import { DragDropProvider } from '@dnd-kit/react';
@@ -7,20 +11,6 @@ import type {
   ColumnVisibilityState,
 } from '@tanstack/react-table';
 import DragIndicatorRounded from '~icons/material-symbols/drag-indicator-rounded';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import {
-  Modal,
-  ModalClose,
-  ModalContent,
-  ModalTitle,
-} from '@/components/ui/modal';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Switch } from '@/components/ui/switch';
 import * as m from '@/paraglide/messages';
 
 function ColumnItem({

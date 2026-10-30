@@ -1,9 +1,8 @@
-import { cn } from '@chimera/ui';
+import { chains, cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { AnimatePresence, motion } from 'motion/react';
 import { Slot } from 'radix-ui';
 import { lazy, Suspense, useCallback } from 'react';
-import { chains } from '@/utils/chain';
 import { CircularProgress } from './progress';
 import { useRipple } from './ripple';
 

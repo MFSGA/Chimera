@@ -4,6 +4,17 @@ import {
   useClashSetting,
   useSetting,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { Input } from '@chimera/ui/input';
+import {
+  Modal,
+  ModalClose,
+  ModalContent,
+  ModalTitle,
+  ModalTrigger,
+} from '@chimera/ui/modal';
+import TextMarquee from '@chimera/ui/text-marquee';
 import AddRounded from '~icons/material-symbols/add-rounded';
 import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
 import DeleteRounded from '~icons/material-symbols/delete-rounded';
@@ -11,22 +22,6 @@ import EditSquareRounded from '~icons/material-symbols/edit-square-rounded';
 import OpenInNewRounded from '~icons/material-symbols/open-in-new-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useState, type PropsWithChildren } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import {
-  Modal,
-  ModalClose,
-  ModalContent,
-  ModalTitle,
-  ModalTrigger,
-} from '@/components/ui/modal';
-import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';

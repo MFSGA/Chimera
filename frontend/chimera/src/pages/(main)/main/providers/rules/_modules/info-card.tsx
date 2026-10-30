@@ -1,13 +1,8 @@
 import type { ClashRulesProviderQueryItem } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
 import dayjs from 'dayjs';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { useRulesProviderUpdate } from '../../_modules/use-rules-provider-update';

@@ -10,6 +10,8 @@ import {
   ExpandMore,
   SwitchItem,
 } from '@chimera/ui';
+import { Button, type ButtonProps } from '@chimera/ui/button';
+import { CircularProgress } from '@chimera/ui/progress';
 import Done from '@mui/icons-material/Done';
 import {
   Grid,
@@ -21,8 +23,6 @@ import {
 import NetworkPing from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
 import { useEffect, useState } from 'react';
-import { Button, type ButtonProps } from '@/components/ui/button';
-import { CircularProgress } from '@/components/ui/progress';
 import {
   useSystemProxyAction,
   useTunModeAction,

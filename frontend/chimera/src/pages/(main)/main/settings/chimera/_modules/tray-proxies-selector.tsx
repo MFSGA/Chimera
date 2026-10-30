@@ -1,6 +1,6 @@
 import { useSetting, type ProxiesSelectorMode } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
 import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,

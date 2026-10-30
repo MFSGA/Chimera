@@ -5,6 +5,9 @@ import {
   type ProfileQueryResultItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
@@ -15,15 +18,7 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
 import { ContextMenuItem } from '@/components/ui/context-menu';
-import TextMarquee from '@/components/ui/text-marquee';
 import * as m from '@/paraglide/messages';
 import { Route as IndexRoute } from '../index';
 import { useActiveProfile, useDeleteProfile } from './profile-actions';

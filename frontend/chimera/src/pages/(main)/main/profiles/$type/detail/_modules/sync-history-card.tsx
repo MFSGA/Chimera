@@ -5,6 +5,9 @@ import {
   type RunDto,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
+import { CircularProgress } from '@chimera/ui/progress';
 import { useQueryClient } from '@tanstack/react-query';
 import CancelRounded from '~icons/material-symbols/cancel-rounded';
 import CheckCircleRounded from '~icons/material-symbols/check-circle-rounded';
@@ -30,9 +33,6 @@ import {
   type ComponentType,
   type ReactNode,
 } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { CircularProgress } from '@/components/ui/progress';
 import LogLevelBadge from '@/pages/(main)/main/logs/_modules/log-level-badge';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

@@ -1,4 +1,4 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { motion } from 'motion/react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
 import type { ComponentProps } from 'react';

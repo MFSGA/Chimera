@@ -1,5 +1,5 @@
+import { Card } from '@chimera/ui/card';
 import { createFileRoute } from '@tanstack/react-router';
-import { Card } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import Notice from '../_modules/notice';
 import { useTrafficPage } from '../_modules/traffic-context';

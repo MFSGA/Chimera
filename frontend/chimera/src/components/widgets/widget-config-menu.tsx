@@ -1,17 +1,13 @@
+import { Button } from '@chimera/ui/button';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { Switch } from '@chimera/ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import RestartAltRounded from '~icons/material-symbols/restart-alt-rounded';
 import SwapHorizRounded from '~icons/material-symbols/swap-horiz-rounded';
 import TuneRounded from '~icons/material-symbols/tune-rounded';
 import { motion, useReducedMotion } from 'motion/react';
 import { Popover } from 'radix-ui';
 import { useEffect, useId, useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Switch } from '@/components/ui/switch';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import * as m from '@/paraglide/messages';
 import { useDashboardContext } from './provider';
 import {

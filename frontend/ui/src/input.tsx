@@ -1,14 +1,14 @@
 import { cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import {
+  ChangeEvent,
+  ComponentProps,
   createContext,
   isValidElement,
   useContext,
   useEffect,
   useMemo,
   useState,
-  type ChangeEvent,
-  type ComponentProps,
 } from 'react';
 
 export const inputContainerVariants = cva(
@@ -17,7 +17,7 @@ export const inputContainerVariants = cva(
     'cursor-pointer',
     'px-4 py-4 outline-hidden',
     // TODO: size variants, fix this
-    'flex h-14 items-center justify-between',
+    'flex items-center justify-between h-14',
     'dark:text-on-surface',
   ],
   {
@@ -42,7 +42,7 @@ export const inputVariants = cva(
   [
     'peer',
     'w-full border-none p-0',
-    'bg-transparent placeholder-transparent outline-hidden',
+    'bg-transparent outline-hidden',
     'transition-[margin] duration-200',
   ],
   {
@@ -56,7 +56,8 @@ export const inputVariants = cva(
         false: '',
       },
       haveLabel: {
-        true: '',
+        // the label sits where the placeholder would render
+        true: 'placeholder:text-transparent',
         false: '',
       },
     },
@@ -81,7 +82,7 @@ export type InputVariants = VariantProps<typeof inputVariants>;
 export const inputLabelVariants = cva(
   [
     'absolute',
-    'top-4 left-4',
+    'left-4 top-4',
     'pointer-events-none',
     'text-base select-none',
     // TODO: only transition position, not text color
@@ -104,8 +105,8 @@ export const inputLabelVariants = cva(
 
           // "before:absolute before:inset-0 before:content-['']",
           // "before:-z-10 before:-mx-1",
-          // 'before:bg-transparent ',
-          // 'before:inline-block',
+          // "before:bg-transparent ",
+          // "before:inline-block",
         ],
       },
       focus: {
@@ -138,7 +139,7 @@ export const inputLineVariants = cva('', {
   variants: {
     variant: {
       filled: [
-        'border-b-outline-variant absolute inset-x-0 bottom-0 w-full border-b',
+        'absolute inset-x-0 bottom-0 w-full border-b border-b-outline-variant',
         'transition-all duration-200',
         // pseudo elements be overlay parent element, will not affect the box size
         'after:absolute after:inset-x-0 after:bottom-0 after:z-10',
@@ -180,7 +181,7 @@ export const inputLabelFieldsetVariants = cva('pointer-events-none', {
         // different material web border color, i think this looks better
         'group-data-[state=closed]:border-outline-variant',
         'group-data-[state=open]:border-primary',
-        'peer-not-focus:border-primary-container',
+        'peer-not-focus:border-outline-variant',
         'peer-focus:border-primary',
         // dark must be prefixed
         'dark:group-data-[state=closed]:border-outline-variant',
@@ -204,7 +205,7 @@ export const inputLabelLegendVariants = cva('', {
     variant: {
       // only for outlined variant
       filled: 'hidden',
-      outlined: 'invisible ml-2 h-0 px-2 text-sm',
+      outlined: 'invisible ml-2 px-2 text-sm h-0',
     },
     haveValue: {
       true: '',
@@ -310,7 +311,7 @@ export const Input = ({
     }
 
     return false;
-  }, [children, label]);
+  }, [label, children]);
 
   useEffect(() => {
     if (props.value || props.defaultValue) {
@@ -470,8 +471,8 @@ export const NumericInput = ({
     return validated;
   };
 
-  const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const rawValue = event.target.value;
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    const rawValue = e.target.value;
 
     // Allow empty string
     if (rawValue === '') {
@@ -495,7 +496,7 @@ export const NumericInput = ({
     const numValue = Number(rawValue);
 
     // Check if it's a valid number
-    if (!Number.isNaN(numValue)) {
+    if (!isNaN(numValue)) {
       setInputValue(rawValue);
 
       // Only validate and callback when it's a complete number
@@ -514,7 +515,7 @@ export const NumericInput = ({
     }
 
     const numValue = Number(inputValue);
-    if (!Number.isNaN(numValue)) {
+    if (!isNaN(numValue)) {
       const validated = validateAndFormatValue(numValue);
       setInputValue(String(validated));
       onChange?.(validated);

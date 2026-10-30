@@ -25,6 +25,11 @@ import {
   type ClashProxiesQueryGroupItem,
 } from '@chimera/interface';
 import { useContainerBreakpointValue } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import {
+  useScrollAreaViewport,
+  useScrollAreaViewportElement,
+} from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import ArrowDownwardAltRounded from '~icons/material-symbols/arrow-downward-alt-rounded';
@@ -32,11 +37,6 @@ import ArrowUpwardAltRounded from '~icons/material-symbols/arrow-upward-alt-roun
 import Radar from '~icons/material-symbols/radar';
 import { filesize } from 'filesize';
 import { useCallback, useMemo, useRef } from 'react';
-import { Button } from '@/components/ui/button';
-import {
-  useScrollAreaViewport,
-  useScrollAreaViewportElement,
-} from '@/components/ui/scroll-area';
 import DelayTestButton from './_modules/delay-test-button';
 import GroupHeader from './_modules/group-header';
 import { useCurrentGroupConnection } from './_modules/hooks';

@@ -1,8 +1,9 @@
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import { type ComponentProps, type PropsWithChildren } from 'react';
 import { z } from 'zod';
-import { Button } from '@/components/ui/button';
 import {
   Sidebar,
   SidebarLabelItem,
@@ -10,11 +11,6 @@ import {
   SidebarToggleButton,
   useSidebar,
 } from '@/components/ui/slider-sidebar';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import { LogLevel } from './_modules/consts';
 

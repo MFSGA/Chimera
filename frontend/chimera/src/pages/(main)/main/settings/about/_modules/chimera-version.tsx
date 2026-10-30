@@ -1,26 +1,21 @@
 import { commands, useSetting } from '@chimera/interface';
-import { relaunch } from '@tauri-apps/plugin-process';
-import { PropsWithChildren, useEffect, useState } from 'react';
-import Markdown from 'react-markdown';
-import AnimatedLogo from '@/components/logo/animated-logo';
-import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
-import { LinearProgress } from '@/components/ui/progress';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { SwitchItem } from '@/components/ui/switch';
+} from '@chimera/ui/modal';
+import { LinearProgress } from '@chimera/ui/progress';
+import { ScrollArea } from '@chimera/ui/scroll-area';
+import { SwitchItem } from '@chimera/ui/switch';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { PropsWithChildren, useEffect, useState } from 'react';
+import Markdown from 'react-markdown';
+import AnimatedLogo from '@/components/logo/animated-logo';
+import { useChimeraUpdate } from '@/components/providers/chimera-update-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import {
   Action as AboutAction,

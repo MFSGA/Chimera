@@ -1,6 +1,6 @@
 import { cn } from '@chimera/ui';
+import HighlightText from '@chimera/ui/highlight-text';
 import { type ComponentProps } from 'react';
-import HighlightText from '@/components/ui/highlight-text';
 
 export default function LogLevelBadge({
   className,

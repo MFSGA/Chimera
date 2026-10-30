@@ -1,4 +1,6 @@
+import { Button } from '@chimera/ui/button';
 import { DndGridSource } from '@chimera/ui/dnd-grid';
+import { ScrollArea } from '@chimera/ui/scroll-area';
 import { SearchField } from '@chimera/ui/search-field';
 import { cn } from '@chimera/utils';
 import AddRounded from '~icons/material-symbols/add-rounded';
@@ -11,8 +13,6 @@ import SettingsEthernetRounded from '~icons/material-symbols/settings-ethernet-r
 import { cva } from 'class-variance-authority';
 import { useState, type ComponentType } from 'react';
 import { Drawer } from 'vaul';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   RENDER_MAP,
   WIDGET_MIN_SIZE_MAP,

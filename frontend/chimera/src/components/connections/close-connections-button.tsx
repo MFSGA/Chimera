@@ -1,11 +1,7 @@
 import { useClashConnections } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import CloseRounded from '~icons/material-symbols/close-rounded';
-import { Button } from '@/components/ui/button';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 

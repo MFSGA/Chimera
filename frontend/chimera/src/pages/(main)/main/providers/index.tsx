@@ -15,6 +15,10 @@ import {
   type ClashRulesProviderQueryItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent } from '@chimera/ui/card';
+import { LinearProgress } from '@chimera/ui/progress';
+import TextMarquee from '@chimera/ui/text-marquee';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import AllInboxRounded from '~icons/material-symbols/all-inbox-outline-rounded';
 import RefreshRounded from '~icons/material-symbols/refresh-rounded';
@@ -22,10 +26,6 @@ import dayjs from 'dayjs';
 import { filesize } from 'filesize';
 import type { ComponentProps, PropsWithChildren } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { LinearProgress } from '@/components/ui/progress';
-import TextMarquee from '@/components/ui/text-marquee';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

@@ -1,8 +1,8 @@
 import { cn } from '@chimera/ui';
+import { Button, type ButtonProps } from '@chimera/ui/button';
+import { CircularProgress } from '@chimera/ui/progress';
 import NetworkPing from '~icons/material-symbols/network-ping-rounded';
 import SettingsEthernet from '~icons/material-symbols/settings-ethernet-rounded';
-import { Button, type ButtonProps } from '@/components/ui/button';
-import { CircularProgress } from '@/components/ui/progress';
 import {
   useSystemProxyAction,
   useTunModeAction,

@@ -2,6 +2,8 @@ import {
   useClashConnections,
   type ClashConnectionItem,
 } from '@chimera/interface';
+import { Button } from '@chimera/ui/button';
+import HighlightText from '@chimera/ui/highlight-text';
 import { cn } from '@chimera/utils';
 import {
   columnOrderingFeature,
@@ -30,8 +32,6 @@ import {
   type RefObject,
 } from 'react';
 import ContentDisplay from '@/components/base/content-display';
-import { Button } from '@/components/ui/button';
-import HighlightText from '@/components/ui/highlight-text';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { connectionTableColumnsAtom } from '@/store';

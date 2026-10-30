@@ -1,6 +1,6 @@
 import { useClashConfig } from '@chimera/interface';
+import { Switch } from '@chimera/ui/switch';
 import { useMemo } from 'react';
-import { Switch } from '@/components/ui/switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';

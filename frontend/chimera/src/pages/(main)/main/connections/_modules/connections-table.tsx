@@ -1,3 +1,7 @@
+import {
+  useScrollAreaViewport,
+  useScrollAreaViewportElement,
+} from '@chimera/ui/scroll-area';
 import { cn } from '@chimera/utils';
 import {
   columnOrderingFeature,
@@ -28,10 +32,6 @@ import {
   type ComponentProps,
   type ReactNode,
 } from 'react';
-import {
-  useScrollAreaViewport,
-  useScrollAreaViewportElement,
-} from '@/components/ui/scroll-area';
 import { useLocalStorage } from '@/hooks/use-local-storage';
 import {
   focusHighlightStyle,

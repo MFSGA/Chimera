@@ -3,6 +3,7 @@ import {
   useTrafficReport,
   type ReportRequest,
 } from '@chimera/interface';
+import { ScrollArea } from '@chimera/ui/scroll-area';
 import { Link } from '@tanstack/react-router';
 import {
   useMemo,
@@ -18,7 +19,6 @@ import {
   NavigationSidebarItem,
   NavigationSidebarToggle,
 } from '@/components/ui/navigation-sidebar';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { SidebarProvider } from '@/components/ui/slider-sidebar';
 import * as m from '@/paraglide/messages';
 import { usageAmount } from '@/utils/traffic-usage';

@@ -1,3 +1,5 @@
+import { Button } from '@chimera/ui/button';
+import { Ripple, type RippleConfig } from '@chimera/ui/ripple';
 import { cn } from '@chimera/utils';
 import MenuOpenRounded from '~icons/material-symbols/menu-open-rounded';
 import { cva } from 'class-variance-authority';
@@ -11,8 +13,6 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { Button } from './button';
-import { Ripple, type RippleConfig } from './ripple';
 import { Sidebar, useSidebar } from './slider-sidebar';
 
 export const NAVIGATION_SIDEBAR_WIDTH = { open: 200, closed: 88 } as const;

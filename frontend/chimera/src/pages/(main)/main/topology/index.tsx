@@ -1,6 +1,6 @@
+import { Button } from '@chimera/ui/button';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { keepReturn } from '@/components/router/cross-navigation';
-import { Button } from '@/components/ui/button';
 import * as m from '@/paraglide/messages';
 import Notice from './_modules/notice';
 import RankingCard from './_modules/ranking-card';

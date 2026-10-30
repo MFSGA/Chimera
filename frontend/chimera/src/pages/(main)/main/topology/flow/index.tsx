@@ -1,9 +1,9 @@
+import { Button } from '@chimera/ui/button';
+import { Card } from '@chimera/ui/card';
 import { cn } from '@chimera/utils';
 import { createFileRoute } from '@tanstack/react-router';
 import ArrowDropDownRounded from '~icons/material-symbols/arrow-drop-down-rounded';
 import { lazy, Suspense } from 'react';
-import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import {
   DropdownMenu,
   DropdownMenuContent,

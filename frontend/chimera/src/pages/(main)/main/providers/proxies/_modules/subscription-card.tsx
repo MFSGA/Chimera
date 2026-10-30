@@ -1,7 +1,7 @@
 import type { ClashProxiesProviderQueryItem } from '@chimera/interface';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
+import { LinearProgress } from '@chimera/ui/progress';
 import { filesize } from 'filesize';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { LinearProgress } from '@/components/ui/progress';
 import * as m from '@/paraglide/messages';
 import { useProxiesSubscription } from '../../_modules/use-proxies-subscription';
 

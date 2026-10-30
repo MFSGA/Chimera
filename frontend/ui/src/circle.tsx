@@ -1,5 +1,5 @@
-import { cn } from '@chimera/ui';
-import type { ComponentProps } from 'react';
+import { cn } from '@chimera/utils';
+import { ComponentProps } from 'react';
 
 const BASE_STROKE_WIDTH = 10;
 const BASE_SIZE = 100;

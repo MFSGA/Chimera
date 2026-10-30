@@ -3,15 +3,10 @@ import {
   type Dimension,
   type TrafficQuery,
 } from '@chimera/interface';
+import { Modal, ModalClose, ModalContent, ModalTitle } from '@chimera/ui/modal';
+import { ScrollArea, useScrollAreaViewport } from '@chimera/ui/scroll-area';
 import { AnimatePresence } from 'motion/react';
 import { useCallback, useEffect, useRef } from 'react';
-import {
-  Modal,
-  ModalClose,
-  ModalContent,
-  ModalTitle,
-} from '@/components/ui/modal';
-import { ScrollArea, useScrollAreaViewport } from '@/components/ui/scroll-area';
 import * as m from '@/paraglide/messages';
 import { setFilter } from '../../_modules/traffic-filters';
 import Notice from './notice';

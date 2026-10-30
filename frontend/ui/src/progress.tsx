@@ -1,4 +1,4 @@
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import type { ComponentProps } from 'react';
 import { Circle, CircleSVG } from './circle';
 

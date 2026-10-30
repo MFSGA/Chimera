@@ -2,12 +2,12 @@ import type {
   AgentActionRequest,
   AgentNetworkSnapshot,
 } from '@chimera/interface';
+import { Card, CardContent, CardHeader } from '@chimera/ui/card';
 import {
   CheckCircleRounded,
   HealthAndSafetyRounded,
   WarningAmberRounded,
 } from '@mui/icons-material';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import * as m from '@/paraglide/messages';
 import { presentHealth } from '../model/presenter';
 import { RecommendationList } from './recommendation-list';

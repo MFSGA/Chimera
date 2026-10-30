@@ -1,23 +1,18 @@
 import { useCoreStatus } from '@chimera/interface';
-import { useTransition } from 'react';
-import {
-  ServerManualPromptDialogWrapper,
-  useServerManualPromptDialog,
-} from '@/components/setting/modules/service-manual-prompt-dialog';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/card';
+import { Button } from '@chimera/ui/button';
+import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
 import {
   Modal,
   ModalClose,
   ModalContent,
   ModalTitle,
   ModalTrigger,
-} from '@/components/ui/modal';
+} from '@chimera/ui/modal';
+import { useTransition } from 'react';
+import {
+  ServerManualPromptDialogWrapper,
+  useServerManualPromptDialog,
+} from '@/components/setting/modules/service-manual-prompt-dialog';
 import {
   getAppCoreStatusLabel,
   getServiceCoreTypeLabel,
