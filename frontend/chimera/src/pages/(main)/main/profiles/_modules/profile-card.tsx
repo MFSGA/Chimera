@@ -12,6 +12,7 @@ import TextMarquee from '@chimera/ui/text-marquee';
 import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
+import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
 import { AnimatePresence, motion } from 'motion/react';
 import type { ComponentProps } from 'react';
 import {
@@ -21,9 +22,11 @@ import {
 } from '@/components/providers/context-menu-provider';
 import * as m from '@/paraglide/messages';
 import { Route as IndexRoute } from '../$type/index';
+import ProfileCardAction from './profile-card-action';
 import { useActiveProfile } from './use-active-profile';
 import { useDeleteProfile } from './use-delete-profile';
-import { isProxyProfile } from './utils';
+import { hasMaterializedFile, isProxyProfile } from './utils';
+import ViewContent from './view-content';
 
 const Chip = ({ children, className, ...props }: ComponentProps<'span'>) => (
   <span
@@ -128,7 +131,7 @@ export default function ProfileCard({
               <Chip>{typeLabel}</Chip>
             </CardContent>
 
-            <CardFooter className="relative">
+            <CardFooter className="relative flex-row items-center justify-between gap-2">
               <Button className="flex items-center justify-center" asChild>
                 <Link
                   to="/main/profiles/$type/detail/$uid"
@@ -137,6 +140,20 @@ export default function ProfileCard({
                   {m.profile_view_details_title()}
                 </Link>
               </Button>
+              {hasMaterializedFile(profile) && (
+                <ProfileCardAction label={m.profile_view_content_title()}>
+                  <ViewContent
+                    profile={profile}
+                    icon
+                    className="size-9 shrink-0"
+                    disabled={isPending}
+                    data-slot="profile-card-view-content"
+                    aria-label={m.profile_view_content_title()}
+                  >
+                    <EditSquareOutlineRounded className="size-5" aria-hidden />
+                  </ViewContent>
+                </ProfileCardAction>
+              )}
             </CardFooter>
           </div>
         </Card>

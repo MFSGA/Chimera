@@ -1,5 +1,12 @@
 # ref 对齐进度
 
+## Profile 卡片文件入口与公共组件路径对齐（2026-10-30，工作区待提交）
+
+- 目标：固定 `ref` gitlink `1b5d73c53a7141d216a8a0a7751be38a295be059`，对齐 Profiles 公共 `view-content.tsx`、`profile-card-action.tsx` 的目录/职责，在 ProfileCard 卡片上提供 ref 同类的文件编辑入口。只处理前端展示与文件操作复用，不改主/legacy UI 共享后端、Agent、持久化或宿主网络。
+- 路径/符号映射：`ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/{view-content,profile-card-action}.tsx` → `frontend/chimera/src/pages/(main)/main/profiles/_modules/` 对应文件；`profile-card.tsx` 继续保留原卡片主体、详情链接、右键菜单与活跃状态。旧 `profiles/$type/detail/_modules/view-content.tsx` 迁至公共模块，未保留重复实现。
+- 兼容边界：Chimera `ViewContent` 仍使用现有 `commands.createEditorWindow`、`unwrapResult`、`useBlockTask`、`useLockFn` 和通知机制；ref 对应实现直接用 `rpc.createEditorWindow`。ref 的 `SharedTooltipTrigger` 未在 Chimera UI 包提供，`ProfileCardAction` 使用现有 `Tooltip/TooltipTrigger/TooltipContent` 做窄适配。只有 `hasMaterializedFile(profile)` 为真时显示内容编辑按钮，避免 composition 配置触发无文件异常。原有 `profile-card` 和详情入口定位属性不变。
+- 风险与回滚：L1 UI 增加卡片文件入口；不改 IPC 类型/用户存储，撤销卡片按钮和移动的公共组件即可回滚。真实桌面点击/窗口新建的 E2E 仍需补验；typecheck 和 web build 不能代替桌面交互验证。
+
 ## Transform Chain 行组件对齐（2026-10-30，本地进行中）
 
 - 目标：按固定 `ref` (`1b5d73c53a7141d216a8a0a7751be38a295be059`) 的文件名、目录与源码结构，移植 Profiles 公共 `step-list.tsx`、`compact-controls.tsx` 和 `transform-type-icon.tsx`；只将 `@nyanpasu/ui`、`@nyanpasu/utils` 映射到同等的 Chimera 包，并应用仓库 Prettier 格式。
