@@ -210,6 +210,7 @@
   "profile_subscription_expires_in": "{expires} に期限切れ",
   "profile_subscription_update": "更新",
   "profile_base_info_title": "基本情報",
+  "profile_detail_back": "{destination}に戻る",
   "profile_name_editor_title": "名前を編集",
   "profile_name_label": "ファイル名",
   "profile_update_option_edit": "更新オプション",

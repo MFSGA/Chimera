@@ -12,9 +12,9 @@ import {
   type AddProfileContextValue,
 } from '@/components/profiles/profile-dialog';
 import * as m from '@/paraglide/messages';
-import { ProfileType } from '../../_modules/consts';
-import { Route as ProfilesRoute } from '../../route';
-import { Action, Route as IndexRoute } from '../index';
+import { Action, Route as IndexRoute } from '../$type/index';
+import { Route as ProfilesRoute } from '../route';
+import { ProfileType } from './consts';
 
 type ImportType = NonNullable<AddProfileContextValue['type']>;
 

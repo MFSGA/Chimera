@@ -1,12 +1,9 @@
 import { getRemoteSource, isConfigItem, useProfile } from '@chimera/interface';
-import { Button } from '@chimera/ui/button';
-import TextMarquee from '@chimera/ui/text-marquee';
 import { createFileRoute } from '@tanstack/react-router';
-import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
+import { ProfileType } from '../../_modules/consts';
 import ActionCard from './_modules/action-card';
 import ChianEditorCard from './_modules/chian-editor-card';
-import DetailHeader from './_modules/detail-header';
-import ProfileNameEditor from './_modules/profile-name-editor';
+import ProfileDetailHeader from './_modules/profile-detail-header';
 import SubscriptionCard from './_modules/subscription-card';
 import { SyncHistoryCard } from './_modules/sync-history-card';
 
@@ -31,17 +28,7 @@ function RouteComponent() {
       data-slot="profile-detail"
       data-profile-uid={profile.uid}
     >
-      <DetailHeader type={type}>
-        <TextMarquee className="w-0 min-w-0 flex-1 text-lg font-bold">
-          {profile.name}
-        </TextMarquee>
-
-        <ProfileNameEditor profile={profile} asChild>
-          <Button icon className="shrink-0" data-slot="profile-name-edit">
-            <EditSquareOutlineRounded className="size-4" />
-          </Button>
-        </ProfileNameEditor>
-      </DetailHeader>
+      <ProfileDetailHeader type={type as ProfileType} profile={profile} />
 
       <div className="grid grid-cols-2 gap-4 p-4 md:grid-cols-4">
         {getRemoteSource(profile) && <SubscriptionCard profile={profile} />}

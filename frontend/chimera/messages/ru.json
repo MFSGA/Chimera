@@ -210,6 +210,7 @@
   "profile_subscription_expires_in": "{expires} истекает",
   "profile_subscription_update": "Обновить",
   "profile_base_info_title": "Основная информация",
+  "profile_detail_back": "Назад: {destination}",
   "profile_name_editor_title": "Редактировать название",
   "profile_name_label": "Название профиля",
   "profile_update_option_edit": "Опции подписки",

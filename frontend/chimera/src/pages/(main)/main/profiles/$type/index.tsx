@@ -1,5 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router';
-import ImportButton from './_modules/import-button';
+import ImportButton from '../_modules/import-button';
 import ProfilesHeader from './_modules/profiles-header';
 import ProfilesList from './_modules/profiles-list';
 
