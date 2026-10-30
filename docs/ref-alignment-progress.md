@@ -1,5 +1,14 @@
 # ref 对齐进度
 
+## Transform Chain 行组件对齐（2026-10-30，本地进行中）
+
+- 目标：按固定 `ref` (`1b5d73c53a7141d216a8a0a7751be38a295be059`) 的文件名、目录与源码结构，移植 Profiles 公共 `step-list.tsx`、`compact-controls.tsx` 和 `transform-type-icon.tsx`；只将 `@nyanpasu/ui`、`@nyanpasu/utils` 映射到同等的 Chimera 包，并应用仓库 Prettier 格式。
+- 非目标：不重写为 ref 的单列 `TransformChain`，不改动全局/单 Profile 草稿、拖拽排序、保存、运行时诊断或既有后端、IPC、用户数据、legacy UI、Agent 及宿主网络。
+- 参考映射：`ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/{step-list,compact-controls,transform-type-icon}.tsx` → `frontend/chimera/src/pages/(main)/main/profiles/_modules/` 下同名文件；`transform-chain-column.tsx` 的分组布局使用 `StageLabel`、`StepGroup`、`StepRowIcon`、`StepRowText`、`stepRowVariants` 和 `TransformTypeIcon`，原有增删/移动按钮改用 ref 的 `RowAction` 提供标签及 Tooltip。
+- 保留差异：Chimera 编辑器仍有启用/未启用两列、跨列拖放、逐项运行日志和诊断失败提示；上游 ref 是单列 enabled list。原有 `data-slot` 选择器、可用性约束与保存/重置入口保持不变。待真实桌面拖拽和按钮回归验证后，再评估将 `transform-chain-column.tsx` 收敛到 ref 的 `transform-chain-list.tsx` 内部结构。
+- 影响与风险：L1 前端视图/交互变化；无持久化 schema、共享 IPC 或系统副作用。回滚只需撤回这三个公共模块和列 UI 适配，不删除用户数据或改动 `ref` gitlink。
+- 实际验证：`pnpm typecheck`、`pnpm web:build`、`pnpm lint:oxlint`、`pnpm lint:frontend-boundaries`、改动文件 Prettier 和 `git diff --check` 均通过；E2E 工具单测 30/30、Profile 同步历史 5/5、Profile 查询 3/3 通过。未在本机执行真实桌面 UI/拖拽 E2E，不能将已有单测视作其替代。
+
 ## 当前迭代目标（2026-10-27）
 
 - 按固定本地 `ref/` 逐批将 Chimera 共享实现对齐上游。每批开始先同步远端 `master`、记录基线和符号映射；优先整段复制完整、相互依赖的上游模块，再做必要且可审查的品牌/平台适配，避免为缩小 diff 拆散迁移。

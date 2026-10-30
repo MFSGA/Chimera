@@ -3,7 +3,6 @@ import type {
   RuntimeTransformFailureDiagnostics,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
-import { Button } from '@chimera/ui/button';
 import {
   pointerIntersection,
   type CollisionDetector,
@@ -18,7 +17,16 @@ import LayersOutlineRounded from '~icons/material-symbols/layers-outline-rounded
 import RemoveRounded from '~icons/material-symbols/remove-rounded';
 import { memo } from 'react';
 import * as m from '@/paraglide/messages';
+import { RowAction } from './compact-controls';
 import { PROFILE_TYPE_NAMES } from './consts';
+import {
+  StageLabel,
+  StepGroup,
+  StepRowIcon,
+  StepRowText,
+  stepRowVariants,
+} from './step-list';
+import TransformTypeIcon from './transform-type-icon';
 import { profileTypeOf, type TransformProfile } from './utils';
 
 export type TransformChainLayout = 'stacked' | 'grouped';
@@ -81,13 +89,15 @@ function ItemContent({
           : undefined
       }
       className={cn(
-        'bg-surface-variant/40 flex min-w-0 items-center gap-3 rounded-2xl py-2.5 pr-2.5 pl-4 select-none',
+        compact
+          ? stepRowVariants({ interactive: draggable })
+          : 'bg-surface-variant/40 flex min-w-0 items-center gap-3 rounded-2xl py-2.5 pr-2.5 pl-4',
         // Only colours transition: dnd-kit animates the item's position itself,
         // and animating shadows or transforms on every card is costly while the
         // columns reflow.
-        'transition-colors motion-reduce:transition-none',
+        'transition-colors select-none motion-reduce:transition-none',
         'focus-visible:outline-primary focus-visible:outline-2 focus-visible:outline-offset-2',
-        compact && 'gap-2.5 rounded-xl py-2 pr-2 pl-3',
+        compact && 'gap-2.5 rounded-xl py-1.5 pr-2 pl-3',
         draggable &&
           'hover:bg-surface-variant/70 cursor-grab touch-none active:cursor-grabbing',
         dragging && 'bg-secondary-container scale-[1.02] shadow-lg',
@@ -104,76 +114,90 @@ function ItemContent({
         </span>
       )}
 
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium [overflow-wrap:anywhere]">
-          {profile.name}
-        </p>
-        {showType && (
-          <span
-            data-slot="profile-chain-editor-type"
-            className="bg-secondary-container/60 text-on-secondary-container mt-1 inline-block rounded-md px-1.5 py-0.5 text-xs"
-          >
-            {PROFILE_TYPE_NAMES[profileTypeOf(profile)]}
-          </span>
-        )}
-      </div>
+      {compact ? (
+        <>
+          <StepRowIcon>
+            <TransformTypeIcon type={profileTypeOf(profile)} />
+          </StepRowIcon>
+          <StepRowText
+            title={profile.name}
+            sub={
+              showType ? PROFILE_TYPE_NAMES[profileTypeOf(profile)] : undefined
+            }
+          />
+        </>
+      ) : (
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium [overflow-wrap:anywhere]">
+            {profile.name}
+          </p>
+          {showType && (
+            <span
+              data-slot="profile-chain-editor-type"
+              className="bg-secondary-container/60 text-on-secondary-container mt-1 inline-block rounded-md px-1.5 py-0.5 text-xs"
+            >
+              {PROFILE_TYPE_NAMES[profileTypeOf(profile)]}
+            </span>
+          )}
+        </div>
+      )}
 
       {active ? (
         <div className="flex shrink-0 items-center gap-1">
-          <Button
+          <RowAction
             type="button"
             icon
             disabled={actionsDisabled || index === 0}
             data-slot="transform-chain-move-up"
-            aria-label={m.profile_chain_editor_move_up({ name: profile.name })}
+            label={m.profile_chain_editor_move_up({ name: profile.name })}
             className="size-8"
             onClick={() => onMove(profile.uid, -1)}
           >
             <ArrowUpwardRounded className="size-4" aria-hidden />
-          </Button>
-          <Button
+          </RowAction>
+          <RowAction
             type="button"
             icon
             disabled={actionsDisabled || isLast}
             data-slot="transform-chain-move-down"
-            aria-label={m.profile_chain_editor_move_down({
+            label={m.profile_chain_editor_move_down({
               name: profile.name,
             })}
             className="size-8"
             onClick={() => onMove(profile.uid, 1)}
           >
             <ArrowDownwardRounded className="size-4" aria-hidden />
-          </Button>
-          <Button
+          </RowAction>
+          <RowAction
             type="button"
             icon
             disabled={actionsDisabled}
             data-slot="transform-chain-remove"
             data-ref-slot="profile-chain-editor-toggle"
             data-chain-action="remove"
-            aria-label={m.profile_chain_editor_remove_item({
+            label={m.profile_chain_editor_remove_item({
               name: profile.name,
             })}
             className="text-on-surface-variant size-9 focus-visible:outline-2 focus-visible:outline-offset-2"
             onClick={() => onToggle(profile.uid)}
           >
             <RemoveRounded className="size-5" aria-hidden />
-          </Button>
+          </RowAction>
         </div>
       ) : (
-        <Button
+        <RowAction
           type="button"
           icon
           disabled={actionsDisabled}
           data-slot="transform-chain-add"
           data-ref-slot="profile-chain-editor-toggle"
           data-chain-action="add"
-          aria-label={m.profile_chain_editor_add_item({ name: profile.name })}
+          label={m.profile_chain_editor_add_item({ name: profile.name })}
           className="text-on-surface-variant size-9 shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2"
           onClick={() => onToggle(profile.uid)}
         >
           <AddRounded className="size-5" aria-hidden />
-        </Button>
+        </RowAction>
       )}
     </div>
   );
@@ -239,6 +263,7 @@ export const TransformChainColumn = memo(function TransformChainColumn({
   const title = active
     ? m.profile_chain_editor_active_column()
     : m.profile_chain_editor_inactive_column();
+  const ColumnItems = compact ? StepGroup : 'div';
 
   return (
     <section
@@ -264,7 +289,11 @@ export const TransformChainColumn = memo(function TransformChainColumn({
           ) : (
             <LayersOutlineRounded className="text-primary size-5" aria-hidden />
           )}
-          <h3 className="text-base font-medium">{title}</h3>
+          {compact ? (
+            <StageLabel className="p-0">{title}</StageLabel>
+          ) : (
+            <h3 className="text-base font-medium">{title}</h3>
+          )}
           <span className="bg-surface-variant text-on-surface-variant rounded-lg px-2 py-0.5 text-xs tabular-nums">
             {profiles.length}
           </span>
@@ -276,12 +305,12 @@ export const TransformChainColumn = memo(function TransformChainColumn({
         </p>
       </div>
 
-      <div
+      <ColumnItems
         data-slot="profile-chain-editor-column-items"
         className={cn(
-          'grid min-h-24 content-start gap-3 pb-3',
+          'min-h-24 content-start pb-3',
+          compact ? 'gap-1.5' : 'grid gap-3',
           !active && !compact && 'sm:grid-cols-2',
-          compact && 'gap-1.5',
         )}
       >
         {profiles.length === 0 ? (
@@ -412,7 +441,7 @@ export const TransformChainColumn = memo(function TransformChainColumn({
             </div>
           ))
         )}
-      </div>
+      </ColumnItems>
     </section>
   );
 });
