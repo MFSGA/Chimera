@@ -5,8 +5,8 @@ import {
 } from '@chimera/interface';
 import { useMemo } from 'react';
 import * as m from '@/paraglide/messages';
+import { TransformChainEditor } from '../../../_modules/transform-chain-list';
 import { type ConfigProfile } from '../../../_modules/utils';
-import { TransformChainEditor } from './chian-editor-card';
 import { DetailSection } from './detail-section';
 
 /** The transform chain that applies only to one config item. */

@@ -2,7 +2,7 @@ import { useProfile } from '@chimera/interface';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import * as m from '@/paraglide/messages';
-import { TransformChainEditor } from '../$type/detail/_modules/chian-editor-card';
+import { TransformChainEditor } from '../_modules/transform-chain-list';
 
 export const Route = createFileRoute('/(main)/main/profiles/global')({
   component: RouteComponent,
