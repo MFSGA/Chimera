@@ -6,6 +6,7 @@ import { DragDropProvider } from '@dnd-kit/react';
 import { isEqual } from 'lodash-es';
 import type { ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
+import { WHOLE_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
 import { categoryProfiles } from '../../_modules/utils';
 import { Route as IndexRoute } from '../index';
 import SortableProfileItem from './sortable-profile-item';
@@ -58,6 +59,7 @@ export default function ProfilesList({
         {...props}
       >
         <DragDropProvider
+          sensors={WHOLE_ITEM_DRAG_SENSORS}
           onDragEnd={(event) => {
             const filteredUids = filteredProfiles.map((profile) => profile.uid);
             const nextFilteredUids = move(filteredUids, event);
@@ -90,7 +92,7 @@ export default function ProfilesList({
                 profiles={profiles}
                 isGlobal={globalTransforms.has(profile.uid)}
                 index={index}
-                disabled={sort.isPending}
+                disabled={sort.isPending || query.data?.current === profile.uid}
               />
             ))}
           </div>

@@ -12,7 +12,10 @@ import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
+import InfoOutlineRounded from '~icons/material-symbols/info-outline-rounded';
+import PowerSettingsNewRounded from '~icons/material-symbols/power-settings-new-rounded';
 import { AnimatePresence, motion } from 'motion/react';
+import { useRef } from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -20,6 +23,7 @@ import {
 } from '@/components/providers/context-menu-provider';
 import * as m from '@/paraglide/messages';
 import { Route as IndexRoute } from '../$type/index';
+import { ActiveGradient } from './active-gradient';
 import ProfileCardAction from './profile-card-action';
 import ProfileCardFeatures, { ProfileCardChip } from './profile-card-features';
 import ProfileCardSubscription, {
@@ -47,6 +51,7 @@ export default function ProfileCard({
   const isProxy = isProxyProfile(profile);
   const remote = getRemoteSource(profile);
   const featured = isProxy && activeProfile.isActive;
+  const cardRef = useRef<HTMLDivElement>(null);
 
   return (
     <RegisterContextMenu>
@@ -63,7 +68,7 @@ export default function ProfileCard({
           data-profile-active={String(activeProfile.isActive)}
           asChild
         >
-          <div>
+          <div ref={cardRef}>
             <AnimatePresence initial={false}>
               {isPending && (
                 <motion.div
@@ -97,6 +102,8 @@ export default function ProfileCard({
               />
             )}
 
+            {activeProfile.isActive && <ActiveGradient cardRef={cardRef} />}
+
             <CardHeader
               className="relative flex shrink-0 items-center justify-between gap-2"
               data-slot="profile-card-title"
@@ -116,6 +123,7 @@ export default function ProfileCard({
                 profile={profile}
                 profiles={profiles}
                 isGlobal={isGlobal}
+                compact={isProxy && !featured}
               />
               {remote ? (
                 <ProfileCardSubscription
@@ -127,15 +135,23 @@ export default function ProfileCard({
               ) : null}
             </CardContent>
 
-            <CardFooter className="relative flex shrink-0 flex-row items-center justify-between gap-2">
-              <Button className="flex items-center justify-center" asChild>
-                <Link
-                  to="/main/profiles/$type/detail/$uid"
-                  params={{ type, uid: profile.uid }}
+            <CardFooter className="relative flex shrink-0 flex-row items-center justify-between gap-1">
+              {isProxy && !activeProfile.isActive ? (
+                <Button
+                  variant="stroked"
+                  className="flex shrink-0 items-center gap-2 px-3 text-xs"
+                  disabled={isPending}
+                  data-slot="profile-card-activate"
+                  aria-label={m.profile_active_title()}
+                  onClick={() => void activeProfile.handleClick()}
                 >
-                  {m.profile_view_details_title()}
-                </Link>
-              </Button>
+                  <PowerSettingsNewRounded className="size-4" aria-hidden />
+                  {m.profile_active_title()}
+                </Button>
+              ) : (
+                <span />
+              )}
+
               <div className="flex shrink-0 items-center gap-1">
                 {remote && (
                   <ProfileCardUpdate profile={profile} disabled={isPending} />
@@ -157,6 +173,18 @@ export default function ProfileCard({
                     </ViewContent>
                   </ProfileCardAction>
                 )}
+                <ProfileCardAction label={m.profile_view_details_title()}>
+                  <Button icon className="size-9 shrink-0" asChild>
+                    <Link
+                      to="/main/profiles/$type/detail/$uid"
+                      params={{ type, uid: profile.uid }}
+                      data-slot="profile-card-details"
+                      aria-label={m.profile_view_details_title()}
+                    >
+                      <InfoOutlineRounded className="size-5" aria-hidden />
+                    </Link>
+                  </Button>
+                </ProfileCardAction>
               </div>
             </CardFooter>
           </div>

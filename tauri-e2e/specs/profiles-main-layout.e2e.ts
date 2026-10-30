@@ -216,6 +216,42 @@ describe('main profiles reference layout', () => {
     }
   });
 
+  // Contract: the imported Profile card exposes the ref-aligned action
+  // controls without allowing the active Profile to enter the sort gesture.
+  // This asserts DOM affordances only; a real activation and drag remain
+  // independent desktop interaction scenarios.
+  it('exposes accessible card actions and guards active Profile dragging', async () => {
+    assert.ok(profileUid);
+    const card = await $(
+      `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`,
+    );
+    await card.waitForDisplayed({ timeout: 15_000 });
+    const details = await card.$('[data-slot="profile-card-details"]');
+    assert.equal(await details.isExisting(), true);
+    assert.ok(await details.getAttribute('aria-label'));
+
+    const sortable = await $(
+      `[data-slot="profile-card-sortable"][data-profile-uid="${profileUid}"]`,
+    );
+    const isActive =
+      (await card.getAttribute('data-profile-active')) === 'true';
+    assert.equal(
+      await sortable.getAttribute('data-drag-disabled'),
+      String(isActive),
+    );
+
+    if (isActive) {
+      assert.equal(
+        await card.$('[data-slot="profile-card-gradient"]').isExisting(),
+        true,
+      );
+    } else {
+      const activate = await card.$('[data-slot="profile-card-activate"]');
+      assert.equal(await activate.isExisting(), true);
+      assert.ok(await activate.getAttribute('aria-label'));
+    }
+  });
+
   // Contract: at the fixed 1240x638 main-window viewport, Profile sidebar,
   // list, card, header and import action remain within measured layout bounds.
   // Missing elements or a geometry regression fails these assertions.

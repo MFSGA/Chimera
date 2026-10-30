@@ -30,6 +30,10 @@ export default function SortableProfileItem({
         'min-w-0 cursor-grab transition-opacity active:cursor-grabbing',
         isDragging && 'opacity-40',
       )}
+      data-slot="profile-card-sortable"
+      data-profile-uid={item.uid}
+      data-dragging={String(isDragging)}
+      data-drag-disabled={String(disabled)}
       layoutId={`profile-${item.uid}`}
       layout="position"
       initial={false}
