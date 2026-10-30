@@ -7,7 +7,7 @@
     "chimera_client": "v0.28.1",
     "chimera_client_alpha": "0.28.1-alpha+sha.9f4f19f",
     "clash_premium": "2023-09-05-gdcc8d87",
-    "clash_rs_alpha": "0.10.10-alpha+sha.8ab953b"
+    "clash_rs_alpha": "0.10.10-alpha+sha.cbba537"
   },
   "arch_template": {
     "mihomo": {
@@ -95,5 +95,5 @@
       "linux-armv7hf": "clash-rs-armv7-unknown-linux-gnueabihf"
     }
   },
-  "updated_at": "2026-10-29T01:47:17.082Z"
+  "updated_at": "2026-10-30T01:55:47.870Z"
 }
