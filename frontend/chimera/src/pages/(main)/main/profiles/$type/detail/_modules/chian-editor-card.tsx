@@ -26,7 +26,7 @@ import {
   isChainProfile,
   type ConfigProfile,
   type TransformProfile,
-} from '../../_modules/utils';
+} from '../../../_modules/utils';
 import {
   TransformChainColumn,
   type TransformChainLayout,

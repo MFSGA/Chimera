@@ -1,16 +1,16 @@
 import { Button } from '@chimera/ui/button';
 import { Card } from '@chimera/ui/card';
-import { cn } from '@chimera/utils';
-import { createFileRoute } from '@tanstack/react-router';
-import ArrowDropDownRounded from '~icons/material-symbols/arrow-drop-down-rounded';
-import { lazy, Suspense } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { cn } from '@chimera/utils';
+import { createFileRoute } from '@tanstack/react-router';
+import ArrowDropDownRounded from '~icons/material-symbols/arrow-drop-down-rounded';
+import { lazy, Suspense } from 'react';
 import * as m from '@/paraglide/messages';
 import { dimensionName } from '@/utils/traffic-usage';
 import {

@@ -588,6 +588,15 @@ importers:
       d3:
         specifier: 7.9.0
         version: 7.9.0
+      d3-array:
+        specifier: 3.2.4
+        version: 3.2.4
+      d3-scale:
+        specifier: 4.0.2
+        version: 4.0.2
+      d3-shape:
+        specifier: 3.2.0
+        version: 3.2.0
       lodash-es:
         specifier: 4.18.1
         version: 4.18.1
@@ -619,6 +628,15 @@ importers:
       '@types/d3':
         specifier: 7.4.3
         version: 7.4.3
+      '@types/d3-array':
+        specifier: 3.2.2
+        version: 3.2.2
+      '@types/d3-scale':
+        specifier: 4.0.9
+        version: 4.0.9
+      '@types/d3-shape':
+        specifier: 3.1.8
+        version: 3.1.8
       '@types/lodash-es':
         specifier: 4.17.12
         version: 4.17.12
@@ -628,6 +646,9 @@ importers:
       tailwind-merge:
         specifier: 3.7.0
         version: 3.7.0
+      unplugin-icons:
+        specifier: 24.0.0
+        version: 24.0.0(@svgr/core@8.1.0(supports-color@10.2.2)(typescript@7.0.2))(esbuild@0.28.2)(rolldown@1.2.15)(vite@8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(less@4.9.1(supports-color@10.2.2))(sass-embedded@1.105.1)(sass@1.105.1)(terser@5.48.0)(tsx@4.23.13)(yaml@2.9.0))
       vite:
         specifier: 8.3.5
         version: 8.3.5(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(less@4.9.1(supports-color@10.2.2))(sass-embedded@1.105.1)(sass@1.105.1)(terser@5.48.0)(tsx@4.23.13)(yaml@2.9.0)

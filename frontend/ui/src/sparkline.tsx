@@ -17,7 +17,7 @@
  * 4. 使用 requestAnimationFrame 驱动动画
  */
 
-import { cn } from '@chimera/ui';
+import { cn } from '@chimera/utils';
 import { deviation, max, mean } from 'd3-array';
 import { scaleLinear } from 'd3-scale';
 import { area, curveCatmullRom, line } from 'd3-shape';

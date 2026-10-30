@@ -7,6 +7,7 @@ import {
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import TextMarquee from '@chimera/ui/text-marquee';
 import { Link } from '@tanstack/react-router';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
@@ -18,10 +19,10 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import * as m from '@/paraglide/messages';
-import { Route as IndexRoute } from '../index';
-import { useActiveProfile, useDeleteProfile } from './profile-actions';
+import { Route as IndexRoute } from '../$type/index';
+import { useActiveProfile } from './use-active-profile';
+import { useDeleteProfile } from './use-delete-profile';
 import { isProxyProfile } from './utils';
 
 const Chip = ({ children, className, ...props }: ComponentProps<'span'>) => (

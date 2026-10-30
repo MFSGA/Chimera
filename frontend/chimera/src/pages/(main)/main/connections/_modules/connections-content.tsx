@@ -3,6 +3,7 @@ import {
   type TrafficRange,
   type TrafficScope,
 } from '@chimera/interface';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import CloseRounded from '~icons/material-symbols/close-rounded';
 import {
@@ -17,7 +18,6 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import type { SearchFilter } from '../../_modules/traffic-filters';

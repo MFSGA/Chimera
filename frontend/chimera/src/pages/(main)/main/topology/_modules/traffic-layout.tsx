@@ -3,7 +3,14 @@ import {
   useTrafficReport,
   type ReportRequest,
 } from '@chimera/interface';
+import {
+  NavigationSidebar,
+  NavigationSidebarContent,
+  NavigationSidebarItem,
+  NavigationSidebarToggle,
+} from '@chimera/ui/navigation-sidebar';
 import { ScrollArea } from '@chimera/ui/scroll-area';
+import { SidebarProvider } from '@chimera/ui/slider-sidebar';
 import { Link } from '@tanstack/react-router';
 import {
   useMemo,
@@ -13,13 +20,6 @@ import {
 } from 'react';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { keepReturn } from '@/components/router/cross-navigation';
-import {
-  NavigationSidebar,
-  NavigationSidebarContent,
-  NavigationSidebarItem,
-  NavigationSidebarToggle,
-} from '@/components/ui/navigation-sidebar';
-import { SidebarProvider } from '@/components/ui/slider-sidebar';
 import * as m from '@/paraglide/messages';
 import { usageAmount } from '@/utils/traffic-usage';
 import {

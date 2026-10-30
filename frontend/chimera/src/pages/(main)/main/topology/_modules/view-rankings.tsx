@@ -1,7 +1,4 @@
 import { Button } from '@chimera/ui/button';
-import { cn } from '@chimera/utils';
-import SettingsRounded from '~icons/material-symbols/settings-rounded';
-import { memo } from 'react';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -11,7 +8,10 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { cn } from '@chimera/utils';
+import SettingsRounded from '~icons/material-symbols/settings-rounded';
+import { memo } from 'react';
 import * as m from '@/paraglide/messages';
 import RankingCard from './ranking-card';
 import { RANKINGS, useTrafficPage } from './traffic-context';

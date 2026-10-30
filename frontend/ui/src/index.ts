@@ -29,3 +29,16 @@ export * from './tooltip';
 export * from './animated-tabs';
 export { default as AnimatedTabs } from './animated-tabs';
 export { default as TextMarquee } from './text-marquee';
+export * from './context-menu';
+export * from './dropdown-menu';
+export * from './segmented-button';
+export * from './navigation-sidebar';
+// The Material You Sparkline remains the root export for legacy dashboards.
+// Ref-style Sparkline is available at '@chimera/ui/sparkline'.
+export {
+  Sidebar as SliderSidebar,
+  SidebarLabelItem,
+  SidebarProvider,
+  SidebarToggleButton,
+  useSidebar,
+} from './slider-sidebar';

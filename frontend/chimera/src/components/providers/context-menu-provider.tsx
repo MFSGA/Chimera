@@ -1,4 +1,12 @@
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from '@chimera/ui/context-menu';
+import {
   ContentCopyRounded,
   ContentCutRounded,
   ContentPasteRounded,
@@ -20,14 +28,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuShortcut,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu';
 import * as m from '@/paraglide/messages';
 
 type ContextMenuRegistryValue = {

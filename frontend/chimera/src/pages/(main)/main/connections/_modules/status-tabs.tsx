@@ -9,7 +9,7 @@ import { cn } from '@chimera/ui';
 import {
   SegmentedButton,
   SegmentedButtonItem,
-} from '@/components/ui/segmented-button';
+} from '@chimera/ui/segmented-button';
 import * as m from '@/paraglide/messages';
 import { toTrafficFilters } from '../../_modules/traffic-filters';
 import type { ConnectionsSelection } from './connections-filters';

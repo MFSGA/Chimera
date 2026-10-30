@@ -1,11 +1,11 @@
-import { Link } from '@tanstack/react-router';
-import type { PropsWithChildren } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { Link } from '@tanstack/react-router';
+import type { PropsWithChildren } from 'react';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from '../main/profiles/_modules/consts';
 import { Action } from '../main/profiles/$type/index';

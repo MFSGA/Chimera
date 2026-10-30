@@ -12,8 +12,8 @@ import YamlIcon from '~icons/nonicons/yaml-16';
 import ScriptIcon from '~icons/streamline-plump/script-2-remix';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import * as m from '@/paraglide/messages';
-import { categoryProfiles } from '../$type/_modules/utils';
 import { ProfileType } from './consts';
+import { categoryProfiles } from './utils';
 
 const LinkButton = ({
   href,

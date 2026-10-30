@@ -1,12 +1,12 @@
 import { commands } from '@chimera/interface';
-import { Link } from '@tanstack/react-router';
-import type { PropsWithChildren } from 'react';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { Link } from '@tanstack/react-router';
+import type { PropsWithChildren } from 'react';
 import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';

@@ -1,5 +1,6 @@
 import { useClashLogs } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import HighlightText from '@chimera/ui/highlight-text';
 import {
   ScrollArea,
@@ -16,7 +17,6 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import LogLevelBadge from './_modules/log-level-badge';

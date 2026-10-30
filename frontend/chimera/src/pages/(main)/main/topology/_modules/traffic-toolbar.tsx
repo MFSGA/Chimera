@@ -1,5 +1,16 @@
 import type { Metric, TrafficRange, TrafficScope } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@chimera/ui/dropdown-menu';
+import {
+  SegmentedButton,
+  SegmentedButtonItem,
+} from '@chimera/ui/segmented-button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { cn } from '@chimera/utils';
 import ArrowDropDownRounded from '~icons/material-symbols/arrow-drop-down-rounded';
@@ -7,17 +18,6 @@ import LanOutlineRounded from '~icons/material-symbols/lan-outline-rounded';
 import PauseRounded from '~icons/material-symbols/pause-rounded';
 import PlayArrowRounded from '~icons/material-symbols/play-arrow-rounded';
 import type { PropsWithChildren } from 'react';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
-  SegmentedButton,
-  SegmentedButtonItem,
-} from '@/components/ui/segmented-button';
 import * as m from '@/paraglide/messages';
 import { beyondRetention } from '@/utils/traffic-retention';
 import { dimensionName } from '@/utils/traffic-usage';

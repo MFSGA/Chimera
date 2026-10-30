@@ -16,11 +16,9 @@ import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
-import {
-  useActiveProfile,
-  useDeleteProfile,
-} from '../../_modules/profile-actions';
-import { isProxyProfile } from '../../_modules/utils';
+import { useActiveProfile } from '../../../_modules/use-active-profile';
+import { useDeleteProfile } from '../../../_modules/use-delete-profile';
+import { isProxyProfile } from '../../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
 import ViewContent from './view-content';

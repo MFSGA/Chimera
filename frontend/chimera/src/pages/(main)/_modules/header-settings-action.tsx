@@ -1,11 +1,4 @@
 import { useProxyMode, type ProxyMode } from '@chimera/interface';
-import { CircularProgress } from '@chimera/ui/progress';
-import type { PropsWithChildren } from 'react';
-import { useLanguage } from '@/components/providers/language-provider';
-import {
-  ThemeMode,
-  useExperimentalThemeContext,
-} from '@/components/providers/theme-provider';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -17,7 +10,14 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { CircularProgress } from '@chimera/ui/progress';
+import type { PropsWithChildren } from 'react';
+import { useLanguage } from '@/components/providers/language-provider';
+import {
+  ThemeMode,
+  useExperimentalThemeContext,
+} from '@/components/providers/theme-provider';
 import {
   useSystemProxyAction,
   useTunModeAction,

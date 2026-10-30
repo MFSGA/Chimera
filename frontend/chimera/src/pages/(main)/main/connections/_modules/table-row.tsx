@@ -1,6 +1,7 @@
 import { type ClosedConnection } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { Card, CardContent, CardFooter, CardHeader } from '@chimera/ui/card';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import { Modal, ModalClose, ModalContent, ModalTitle } from '@chimera/ui/modal';
 import { ScrollArea } from '@chimera/ui/scroll-area';
 import { cn } from '@chimera/utils';
@@ -15,7 +16,6 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
 import { ruleLabel } from '../../_modules/traffic-filters';

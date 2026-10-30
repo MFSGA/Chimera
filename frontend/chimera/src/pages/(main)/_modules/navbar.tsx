@@ -1,6 +1,12 @@
 import { useClashProxies } from '@chimera/interface';
 import AnimatedTabs, { AnimatedTabsItem } from '@chimera/ui/animated-tabs';
 import { Button } from '@chimera/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@chimera/ui/dropdown-menu';
 import { cn } from '@chimera/utils';
 import { Link, useMatchRoute } from '@tanstack/react-router';
 import Apps from '~icons/material-symbols/apps';
@@ -16,12 +22,6 @@ import SettingsRounded from '~icons/material-symbols/settings-rounded';
 import SmartToyRounded from '~icons/material-symbols/smart-toy-rounded';
 import TerminalRounded from '~icons/material-symbols/terminal-rounded';
 import { ComponentProps, ReactNode, useMemo } from 'react';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useUiSwitch } from '@/features/ui-switch/use-ui-switch';
 import * as m from '@/paraglide/messages';
 

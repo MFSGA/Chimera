@@ -30,6 +30,7 @@
  */
 
 import { useKvStorage } from '@chimera/interface';
+import { ContextMenuItem } from '@chimera/ui/context-menu';
 import {
   DndGrid,
   DndGridProvider,
@@ -50,7 +51,6 @@ import {
   RegisterContextMenuContent,
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
-import { ContextMenuItem } from '@/components/ui/context-menu';
 import {
   DashboardItem,
   DEFAULT_ITEMS,

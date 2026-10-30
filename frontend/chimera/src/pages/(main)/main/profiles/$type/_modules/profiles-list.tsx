@@ -6,9 +6,9 @@ import { DragDropProvider } from '@dnd-kit/react';
 import { isEqual } from 'lodash-es';
 import type { ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
+import { categoryProfiles } from '../../_modules/utils';
 import { Route as IndexRoute } from '../index';
 import SortableProfileItem from './sortable-profile-item';
-import { categoryProfiles } from './utils';
 
 const EmptyList = ({ children }: { children?: React.ReactNode }) => (
   <div

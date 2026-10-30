@@ -1,13 +1,13 @@
 import { useClashConfig } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useCallback, useMemo } from 'react';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { useCallback, useMemo } from 'react';
 import * as m from '@/paraglide/messages';
 import {
   ItemContainer,

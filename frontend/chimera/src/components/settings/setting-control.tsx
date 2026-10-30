@@ -1,12 +1,12 @@
 import { Button } from '@chimera/ui/button';
-import { Switch } from '@chimera/ui/switch';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import { Switch } from '@chimera/ui/switch';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
 import {
   ItemContainer,
   ItemLabel,

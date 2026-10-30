@@ -2,7 +2,7 @@ import type { ProfileQueryResultItem } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useSortable } from '@dnd-kit/react/sortable';
 import { motion } from 'motion/react';
-import ProfileCard from './profile-card';
+import ProfileCard from '../../_modules/profile-card';
 
 export default function SortableProfileItem({
   item,

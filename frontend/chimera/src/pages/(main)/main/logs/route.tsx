@@ -1,16 +1,16 @@
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
-import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
-import { type ComponentProps, type PropsWithChildren } from 'react';
-import { z } from 'zod';
 import {
   Sidebar,
   SidebarLabelItem,
   SidebarProvider,
   SidebarToggleButton,
   useSidebar,
-} from '@/components/ui/slider-sidebar';
+} from '@chimera/ui/slider-sidebar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
+import { type ComponentProps, type PropsWithChildren } from 'react';
+import { z } from 'zod';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import { LogLevel } from './_modules/consts';
 

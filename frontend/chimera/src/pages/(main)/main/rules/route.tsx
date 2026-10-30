@@ -2,6 +2,13 @@ import { useClashRules } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { ScrollArea } from '@chimera/ui/scroll-area';
+import {
+  Sidebar,
+  SidebarLabelItem,
+  SidebarProvider,
+  SidebarToggleButton,
+  useSidebar,
+} from '@chimera/ui/slider-sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
 import ListRounded from '~icons/material-symbols/lists-rounded';
@@ -12,13 +19,6 @@ import {
   type ReactNode,
 } from 'react';
 import z from 'zod';
-import {
-  Sidebar,
-  SidebarLabelItem,
-  SidebarProvider,
-  SidebarToggleButton,
-  useSidebar,
-} from '@/components/ui/slider-sidebar';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
 import * as m from '@/paraglide/messages';
 import ProxyIcon from './_modules/proxy-icon';

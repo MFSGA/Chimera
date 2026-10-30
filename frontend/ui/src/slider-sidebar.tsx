@@ -1,4 +1,3 @@
-import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import MenuOpenRounded from '~icons/material-symbols/menu-open-rounded';
@@ -10,6 +9,7 @@ import {
   type ComponentProps,
   type PropsWithChildren,
 } from 'react';
+import { Button } from './button';
 
 const DEFAULT_SIDEBAR_WIDTH = {
   open: 280,

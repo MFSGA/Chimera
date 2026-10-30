@@ -1,12 +1,12 @@
 import { Button } from '@chimera/ui/button';
-import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
-import { useLanguage } from '@/components/providers/language-provider';
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+} from '@chimera/ui/dropdown-menu';
+import ArrowForwardIosRounded from '~icons/material-symbols/arrow-forward-ios-rounded';
+import { useLanguage } from '@/components/providers/language-provider';
 import * as m from '@/paraglide/messages';
 import type { Locale } from '@/paraglide/runtime';
 import { languageOptions } from '@/utils/language';
