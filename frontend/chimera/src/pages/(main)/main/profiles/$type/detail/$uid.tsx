@@ -6,6 +6,7 @@ import * as m from '@/paraglide/messages';
 import { PROFILE_TYPE_NAMES, ProfileType } from '../../_modules/consts';
 import ActionCard from './_modules/action-card';
 import ChianEditorCard from './_modules/chian-editor-card';
+import FileSection from './_modules/file-section';
 import ProfileDetailHeader from './_modules/profile-detail-header';
 import ProfileDetailSkeleton from './_modules/profile-detail-skeleton';
 import SubscriptionCard from './_modules/subscription-card';
@@ -65,6 +66,9 @@ function RouteComponent() {
         {getRemoteSource(profile) && <SyncHistoryCard uid={uid} />}
         <ActionCard type={type} profile={profile} />
         {isConfigItem(profile) && <ChianEditorCard profile={profile} />}
+      </div>
+      <div className="px-4 pb-4">
+        <FileSection profile={profile} />
       </div>
     </div>
   );

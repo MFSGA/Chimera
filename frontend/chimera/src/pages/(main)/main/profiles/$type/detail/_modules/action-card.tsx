@@ -9,19 +9,13 @@ import AccountTreeRounded from '~icons/material-symbols/account-tree-rounded';
 import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-outline-rounded';
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
-import FileOpenOutlineRounded from '~icons/material-symbols/file-open-outline-rounded';
 import type { ComponentProps } from 'react';
-import { useBlockTask } from '@/components/providers/block-task-provider';
-import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { formatError } from '@/utils';
-import { message } from '@/utils/notification';
 import { useActiveProfile } from '../../../_modules/use-active-profile';
 import { useDeleteProfile } from '../../../_modules/use-delete-profile';
-import { hasMaterializedFile, isProxyProfile } from '../../../_modules/utils';
+import { isProxyProfile } from '../../../_modules/utils';
 import ProfileNameEditor from './profile-name-editor';
 import SubscriptionUrlEditor from './subscription-url-editor';
-import ViewContent from './view-content';
 
 const ActionButton = ({
   className,
@@ -119,19 +113,7 @@ export default function ActionCard({
       await navigate({ to: '/main/profiles/$type', params: { type } });
     },
   });
-  const openTask = useBlockTask(`open-profile-${profile.uid}`, async () => {
-    try {
-      await profile.view?.();
-    } catch (error) {
-      await message(formatError(error), {
-        title: m.common_error(),
-        kind: 'error',
-      });
-    }
-  });
-  const openLocally = useLockFn(openTask.execute);
   const isProxy = isProxyProfile(profile);
-  const hasFile = hasMaterializedFile(profile);
   const isPending = active.isPending || deletion.isPending;
 
   return (
@@ -185,26 +167,6 @@ export default function ActionCard({
         <DeleteForeverOutlineRounded className="size-4 shrink-0" />
         <span className="truncate">{m.profile_delete_title()}</span>
       </ActionButton>
-
-      {hasFile && (
-        <>
-          <ViewContent profile={profile} asChild>
-            <ActionButton disabled={isPending}>
-              <FileOpenOutlineRounded className="size-4 shrink-0" />
-              <span className="truncate">{m.profile_view_content_title()}</span>
-            </ActionButton>
-          </ViewContent>
-
-          <ActionButton
-            disabled={isPending}
-            loading={openTask.isPending}
-            onClick={() => void openLocally()}
-          >
-            <FileOpenOutlineRounded className="size-4 shrink-0" />
-            <span className="truncate">{m.profile_open_locally_title()}</span>
-          </ActionButton>
-        </>
-      )}
     </div>
   );
 }
