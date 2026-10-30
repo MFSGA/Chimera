@@ -944,3 +944,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：最终 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::tray::tests -- --test-threads=1` 4/4；Cargo fmt、对齐文档 Prettier、`git diff --check` 通过。未构建/点击原生托盘菜单；推送后的跨平台 CI 尚未运行。
 - 风险/回滚和清理证据（如涉及宿主状态）：未创建窗口、托盘图标或修改系统网络/用户设置。回滚这次测试边界调整不改变产品数据。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：需要验证 macOS/Windows/Linux 原生菜单行为时使用运行在桌面主事件循环内的 E2E；普通 Rust worker-thread 测试只验证共享纯模型。未更改治理规则或 CI 工作流。
+
+### LESSON-20261030-002：兼容旧版 PID 标记时不能把秒级相等当作进程身份
+
+- 日期与时区：2026-10-30 US/Pacific
+- 状态：Mitigated（旧记录歧义 fail-closed 与精确标记格式已加入定向测试；远端 CI 与 Linux/Windows runner 尚未验证）
+- 严重度：Medium（身份判断过宽可能对同秒复用 PID 的其他进程发送终止信号）
+- 模块：Chimera Service runtime / process identity / crash recovery
+- master commit / runtime submodule SHA / ref SHA / 平台与测试环境：本地 master 基线 `d03b085a51ce3050356026b0e1e0ed9d04c16b4e`；开始实现时 runtime 基线 `ceee7f7df1d01b421fc75409ec667852b7cc7cda`，提交前已快进同步至 `70285e9ea7f3d6f3a66cfd6d33ed1d2c98811175`；ref runtime `e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34`；macOS arm64。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地定向 Rust 测试；当前改动尚未提交或推送，尚无新 SHA CI。
+- 预期行为：回收残留核心前必须能证明 PID 仍属于记录的进程；标记精度不足或可执行文件不可读时不得发送信号。
+- 真实异常、复现步骤与证据：上游 PID 重用修复比较进程启动时间，但 Darwin 源时间只有秒字段。集成子秒 token 后，首次兼容方案把旧 v2 秒值与当前身份的秒部分相等视为 `Same`；独立审查指出，若同一秒内 PID 被同名可执行文件复用，旧记录无法区分两次启动。新增回归用例以当前测试进程构造匹配秒值的 v2 记录，确认回收路径返回不确定且 kill closure 未执行。
+- 确认的根因与排除项：旧 v2 记录不包含微秒，信息论上不能恢复该进程在秒内的启动次序；可执行文件名也不能区分同名进程。不能以兼容性为由把部分时间戳匹配提升为所有权证明。
+- 修复提交、差异映射及保留的兼容性边界：新 macOS 记录用秒+微秒形成 v3 token；旧 v2 仍可解析，但若其秒 token 与当前进程的旧格式时间部分匹配，则标记为 `Uncertain` 并 fail-closed，不调用 kill。v3 解析同时拒绝大于等于 1,000,000 的微秒余数。代价是极少数仍存活且启动秒与旧记录相同的进程会令旧版残留清理失败关闭；这比误杀无关进程安全。PID 文件为短期 runtime 元数据，不涉及用户配置迁移。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：`chimera-utils` 中 `subsecond_reuse_is_distinct_while_legacy_seconds_remain_compatible` 断言秒级记录为 `Uncertain`；macOS `ambiguous_v2_pid_record_is_not_signaled` 确认 kill closure 未执行；`precise_darwin_pid_records_reject_out_of_range_microseconds` 覆盖非法 v3 token。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：`cargo +nightly test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-utils -p chimera-core-manager --all-features` 在 macOS arm64 通过：core manager 117 passed、1 ignored；utils 31 passed；doc test 1 passed。新增的旧 v2 歧义不发信号与非法 v3 微秒测试均执行通过。`cargo +nightly clippy --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-utils -p chimera-core-manager --all-targets --all-features`、workspace fmt、Prettier 和两层 `git diff --check` 通过；Clippy 报告子模块现有 warnings。Linux/Windows `cargo check --tests` 已尝试，但缺少 `x86_64-linux-gnu-gcc` 和 `x86_64-w64-mingw32-gcc`，依赖 C 构建未能启动，所以两目标仍未验证；Service runtime CI 当前只跑 Clippy、不执行这些测试。
+- 风险/回滚和清理证据（如涉及宿主状态）：仅改变临时 PID 元数据识别，不操作本机进程；若回滚到旧版 runtime，需确保没有 v3 PID 文件残留，否则旧解析器按 fail-closed 处理。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：PID identity 的兼容路径必须测试“时间标记相等但精度不足”的不确定分支，并断言不会调用 kill；Service CI 执行 Rust 单测的门禁属于独立工作流改动，本次未修改。
