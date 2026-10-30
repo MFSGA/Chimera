@@ -41,7 +41,9 @@ export default function ProfilesList({
     return <EmptyList>{String(query.error)}</EmptyList>;
   }
 
-  const categorized = categoryProfiles(query.data?.items ?? []);
+  const profiles = query.data?.items ?? [];
+  const globalTransforms = new Set(query.data?.global_transforms ?? []);
+  const categorized = categoryProfiles(profiles);
   const filteredProfiles = categorized[type as keyof typeof categorized] ?? [];
 
   if (filteredProfiles.length === 0) {
@@ -85,6 +87,8 @@ export default function ProfilesList({
               <SortableProfileItem
                 key={profile.uid}
                 item={profile}
+                profiles={profiles}
+                isGlobal={globalTransforms.has(profile.uid)}
                 index={index}
                 disabled={sort.isPending}
               />

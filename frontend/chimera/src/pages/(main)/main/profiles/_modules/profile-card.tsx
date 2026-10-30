@@ -1,7 +1,6 @@
 import {
   getRemoteSource,
   isConfigItem,
-  isTransformItem,
   type ProfileQueryResultItem,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
@@ -14,7 +13,6 @@ import DeleteForeverOutlineRounded from '~icons/material-symbols/delete-forever-
 import DragClickRounded from '~icons/material-symbols/drag-click-rounded';
 import EditSquareOutlineRounded from '~icons/material-symbols/edit-square-outline-rounded';
 import { AnimatePresence, motion } from 'motion/react';
-import type { ComponentProps } from 'react';
 import {
   RegisterContextMenu,
   RegisterContextMenuContent,
@@ -23,57 +21,43 @@ import {
 import * as m from '@/paraglide/messages';
 import { Route as IndexRoute } from '../$type/index';
 import ProfileCardAction from './profile-card-action';
+import ProfileCardFeatures, { ProfileCardChip } from './profile-card-features';
+import ProfileCardSubscription, {
+  ProfileCardTraffic,
+  ProfileCardUpdate,
+} from './profile-card-subscription';
 import { useActiveProfile } from './use-active-profile';
 import { useDeleteProfile } from './use-delete-profile';
 import { hasMaterializedFile, isProxyProfile } from './utils';
 import ViewContent from './view-content';
 
-const Chip = ({ children, className, ...props }: ComponentProps<'span'>) => (
-  <span
-    className={cn(
-      'bg-primary-container rounded-full px-3 py-1 text-xs font-bold whitespace-nowrap',
-      className,
-    )}
-    {...props}
-  >
-    {children}
-  </span>
-);
-
 export default function ProfileCard({
   profile,
+  profiles,
+  isGlobal,
 }: {
   profile: ProfileQueryResultItem;
+  profiles: ProfileQueryResultItem[];
+  isGlobal: boolean;
 }) {
   const { type } = IndexRoute.useParams();
   const activeProfile = useActiveProfile(profile);
   const deleteProfile = useDeleteProfile(profile);
   const isPending = activeProfile.isPending || deleteProfile.isPending;
   const isProxy = isProxyProfile(profile);
-
-  const typeLabel = (() => {
-    if (isConfigItem(profile)) {
-      if (profile.config.type === 'composition') return 'Composition';
-      return getRemoteSource(profile)
-        ? m.profile_remote_label()
-        : m.profile_local_label();
-    }
-    if (isTransformItem(profile) && profile.transform.type === 'overlay') {
-      return m.profile_merge_label();
-    }
-    if (isTransformItem(profile) && profile.transform.type === 'script') {
-      return profile.transform.runtime === 'lua'
-        ? m.profile_lua_label()
-        : m.profile_javascript_label();
-    }
-    return '';
-  })();
+  const remote = getRemoteSource(profile);
+  const featured = isProxy && activeProfile.isActive;
 
   return (
     <RegisterContextMenu>
       <RegisterContextMenuTrigger asChild>
         <Card
-          className="relative flex min-h-40 flex-col justify-between overflow-hidden"
+          className={cn(
+            'relative flex min-h-40 flex-col justify-between overflow-hidden',
+            // The desktop Profile layout contract caps card height at 260px.
+            // New subscription metrics scroll independently of the actions.
+            isProxy && 'h-60',
+          )}
           data-slot="profile-card"
           data-profile-uid={profile.uid}
           data-profile-active={String(activeProfile.isActive)}
@@ -114,24 +98,36 @@ export default function ProfileCard({
             )}
 
             <CardHeader
-              className="relative flex items-center justify-between gap-2"
+              className="relative flex shrink-0 items-center justify-between gap-2"
               data-slot="profile-card-title"
             >
               <TextMarquee className="z-10 min-w-0 flex-1">
                 {profile.name}
               </TextMarquee>
               {isProxy && activeProfile.isActive && (
-                <Chip className="z-10 shrink-0">
+                <ProfileCardChip className="z-10 shrink-0">
                   {m.profile_is_active_label()}
-                </Chip>
+                </ProfileCardChip>
               )}
             </CardHeader>
 
-            <CardContent className="relative">
-              <Chip>{typeLabel}</Chip>
+            <CardContent className="relative flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+              <ProfileCardFeatures
+                profile={profile}
+                profiles={profiles}
+                isGlobal={isGlobal}
+              />
+              {remote ? (
+                <ProfileCardSubscription
+                  profile={profile}
+                  featured={featured}
+                />
+              ) : isConfigItem(profile) ? (
+                <ProfileCardTraffic profile={profile} featured={featured} />
+              ) : null}
             </CardContent>
 
-            <CardFooter className="relative flex-row items-center justify-between gap-2">
+            <CardFooter className="relative flex shrink-0 flex-row items-center justify-between gap-2">
               <Button className="flex items-center justify-center" asChild>
                 <Link
                   to="/main/profiles/$type/detail/$uid"
@@ -140,20 +136,28 @@ export default function ProfileCard({
                   {m.profile_view_details_title()}
                 </Link>
               </Button>
-              {hasMaterializedFile(profile) && (
-                <ProfileCardAction label={m.profile_view_content_title()}>
-                  <ViewContent
-                    profile={profile}
-                    icon
-                    className="size-9 shrink-0"
-                    disabled={isPending}
-                    data-slot="profile-card-view-content"
-                    aria-label={m.profile_view_content_title()}
-                  >
-                    <EditSquareOutlineRounded className="size-5" aria-hidden />
-                  </ViewContent>
-                </ProfileCardAction>
-              )}
+              <div className="flex shrink-0 items-center gap-1">
+                {remote && (
+                  <ProfileCardUpdate profile={profile} disabled={isPending} />
+                )}
+                {hasMaterializedFile(profile) && (
+                  <ProfileCardAction label={m.profile_view_content_title()}>
+                    <ViewContent
+                      profile={profile}
+                      icon
+                      className="size-9 shrink-0"
+                      disabled={isPending}
+                      data-slot="profile-card-view-content"
+                      aria-label={m.profile_view_content_title()}
+                    >
+                      <EditSquareOutlineRounded
+                        className="size-5"
+                        aria-hidden
+                      />
+                    </ViewContent>
+                  </ProfileCardAction>
+                )}
+              </div>
             </CardFooter>
           </div>
         </Card>

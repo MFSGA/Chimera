@@ -8,6 +8,8 @@
     "build": "vite build",
     "generate:i18n": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --strategy custom-extension",
     "test:profile-sync-history": "tsx --test tests/profile-sync-history.test.ts",
+    "test:profile-card-quota": "tsx --test tests/dashboard-daily-utils.test.ts",
+    "test:profile-content-summary": "tsx --test tests/profile-content-summary.test.ts",
     "test:connections": "tsx --test tests/connections-model.test.ts",
     "test:localization": "tsx --test tests/localization.test.ts",
     "test:traffic": "tsx --test tests/traffic-search.test.ts tests/traffic-sankey-layout.test.ts tests/traffic-view-settings.test.ts ../interface/tests/traffic-report-query.test.ts",
@@ -59,6 +61,7 @@
     "react-use": "17.6.1",
     "vaul": "1.1.2",
     "virtua": "0.54.0",
+    "yaml": "2.9.1",
     "zod": "4.6.7"
   },
   "devDependencies": {

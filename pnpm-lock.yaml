@@ -409,6 +409,9 @@ importers:
       virtua:
         specifier: 0.54.0
         version: 0.54.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      yaml:
+        specifier: 2.9.1
+        version: 2.9.1
       zod:
         specifier: 4.6.7
         version: 4.6.7

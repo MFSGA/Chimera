@@ -6,10 +6,14 @@ import ProfileCard from '../../_modules/profile-card';
 
 export default function SortableProfileItem({
   item,
+  profiles,
+  isGlobal,
   index,
   disabled,
 }: {
   item: ProfileQueryResultItem;
+  profiles: ProfileQueryResultItem[];
+  isGlobal: boolean;
   index: number;
   disabled: boolean;
 }) {
@@ -30,7 +34,7 @@ export default function SortableProfileItem({
       layout="position"
       initial={false}
     >
-      <ProfileCard profile={item} />
+      <ProfileCard profile={item} profiles={profiles} isGlobal={isGlobal} />
     </motion.div>
   );
 }

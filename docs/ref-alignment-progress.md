@@ -1,5 +1,30 @@
 # ref 对齐进度
 
+## Profile 卡片 YAML 静态内容统计对齐（2026-10-31，工作区待提交）
+
+- 基线：只读固定 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059`。按相同路径/文件名迁入 `ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/{profile-content-summary.ts,profile-content-summary.worker.ts,use-profile-content-summary.ts,profile-card-content-summary.tsx}` → `frontend/chimera/src/pages/(main)/main/profiles/_modules/`。保留 YAML 静态 `proxies`、`proxy-groups`、`rules` 数量统计，**不扩展** providers 或 runtime transforms。
+- 端到端接线：`profile-card-subscription.tsx` 的 `ProfileCardTraffic` 仅对有磁盘文件的 Config 调用 `ProfileCardContentSummary`；通过 Chimera 原有 `useProfileContent(uid)` 使用已存在的 `readProfileFile` IPC 缓存，以 Web Worker 离线解析大文件；同 UID 和同内容在当前会话只汇总一次，内容变化后重新汇总。未知/不可解析时以 `—` 显示而非伪造零数量。Tooltip 以现有 `@chimera/ui/tooltip` 代替 ref `SharedTooltipTrigger`，图标、标签及 `profile-card-content-summary` 定位点保留。
+- 依赖与 i18n：为前端新增精确固定 `yaml@2.9.1` 显式依赖，离线更新 `pnpm-lock.yaml`，并移植 ref 的英、日、俄、简中、繁中五种语言静态计数/提示消息键。
+- 测试：新增 `frontend/chimera/tests/profile-content-summary.test.ts` 与 `pnpm --filter=chimera-ui test:profile-content-summary`。4 项测试覆盖静态计数、空映射、错误/重复键/不支持的字段结构和 YAML sequence alias，并对齐上游明确写为 null 的 scalar 应返回 unknown。`pnpm typecheck`、`pnpm web:build`、`pnpm lint:oxlint`、`pnpm lint:frontend-boundaries` 均通过；生产构建输出独立的 summary worker 资源。
+- 兼容与回滚：L1 纯前端统计/已有文件读取；保留全局/Scoped Transform 拖拽、现有卡片高度 240px 的独立滚动区域、后端 API/存储/Agent/legacy UI 与 `ref` gitlink。撤销这四个模块、卡片接线、依赖、翻译和测试即可回滚。尚未执行真实桌面卡片点击、滚动、排序/窗口 E2E；构建和单测不能替代它们。
+
+## Profiles 卡片订阅与流量展示对齐（2026-10-31，工作区待提交）
+
+- 目标：基于固定只读 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059`，对齐 Profiles 的 `profile-card-subscription.tsx`：远程文件订阅显示剩余额度/总量/超额/配额百分比，提供订阅更新按钮；本地 Config 显示最近 24 小时流量和可用的上下行细分。保持 Transform、Composition、远程/本地类型区分及现有配置查询。
+- 上游映射：`ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/profile-card-subscription.tsx` → Chimera 对应 `_modules/` 同名文件；`ref/frontend/nyanpasu/src/components/widgets/dashboard-daily-utils.ts` 中 `SubscriptionQuota`、`calculateSubscriptionQuota`、`subscriptionExpiryTimestamp` → `frontend/chimera/src/components/widgets/dashboard-daily-utils.ts` 的同名纯函数（仅迁入本批需要的部分），单测位于 `frontend/chimera/tests/dashboard-daily-utils.test.ts`，运行 `pnpm --filter=chimera-ui test:profile-card-quota`。
+- 业务适配：沿用 Chimera 的 `useProfile().update`、`useBlockTask`、错误通知和 `useTrafficReport`，保留 10 秒流量轮询与 ref 的 `last24_hours`/Profile filter；Tooltip 复用 Chimera UI，过期日期使用现有 `formatDate` 提取日期部分。Profile 卡片保留 `data-slot` 及激活/编辑/详情入口。考虑当前 `profiles-main-layout.e2e.ts` 的高度不超过 260px 的断言，Config 卡片限定为 240px、指标区滚动、标题与操作按钮固定可见。
+- 国际化：从 ref 同步五种语言的订阅与流量 11 个消息键，包含流量上下行带数值的文案。
+- 保留差异：原先尚未迁入上游 `profile-card-content-summary.tsx`/worker 的 YAML 文件静态计数，现已在独立批次迁入（见本文件前一节）；Chimera 的 Profile card 仍沿用现有双列导航布局及局部活跃态样式。无新增后端 IPC、持久化键或主机网络操作，也不触碰 `ref` gitlink。
+- 风险及回滚：L1 卡片展示、新增流量查询消费者和手动更新操作；撤销该组件、额度辅助函数、测试与卡片集成即可回滚，不删除任何用户数据。配额/过期日期单测 4/4、完整 TypeScript、Vite build、Oxlint、前端边界与国际化测试均通过；现有桌面卡片高度和真实订阅按钮/拖拽交互尚未在 GUI E2E 实测，不能以编译或工具单测替代。新测试已注册本地 npm 脚本，未擅自修改 CI workflow。
+
+## Profiles 卡片功能标签对齐（2026-10-31，工作区待提交）
+
+- 目标：以固定只读 `ref` 提交 `1b5d73c53a7141d216a8a0a7751be38a295be059` 为基线，将 `ref/frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/profile-card-features.tsx` 以同路径迁入 Chimera。保留上游 `ProfileCardFeatures`、`ProfileCardChip`、`sourceLabelOf`、更新周期紧凑标签与 scoped transforms 详情 Tooltip，按等价的本地接口、消息模块与组件包适配。
+- 接入位置：`frontend/chimera/src/pages/(main)/main/profiles/_modules/profile-card.tsx` 由原单一类型标签改用 `ProfileCardFeatures`，并保留活动 Profile 提示、卡片内容编辑按钮、详情链接和 `data-slot="profile-card"` 等测试定位点。`$type/_modules/profiles-list.tsx` 将现有查询的全部 Profile 集合和全局 Transform 标识传给 `sortable-profile-item.tsx`，不在每张卡片额外发起网络请求。
+- 国际化：从 ref 为英语、日语、简中、繁中和俄语补入来源类型、更新周期、Composition 来源数量、Scoped Transform 数量、全局使用标记的 10 个文案键。
+- 保留差异：Chimera 的双列 Transform 编辑器、卡片布局、原活跃状态背景、上下文菜单与文件编辑窗口操作保持不变；ref 的订阅配额、流量统计及卡片汇总仍待独立迁移，不因此批迁移冒充已经完成。不存在后端 IPC、持久化格式或主机网络改动。
+- 风险及回滚：L1 UI 标签展示及 tooltip 交互；可撤回新增模块、列表参数及翻译键恢复原类型标签。完整 TypeScript、Vite 构建、Oxlint 与前端边界检查通过；真实桌面卡片/拖拽 E2E 尚未执行。
+
 ## Profile 卡片文件入口与公共组件路径对齐（2026-10-30，工作区待提交）
 
 - 目标：固定 `ref` gitlink `1b5d73c53a7141d216a8a0a7751be38a295be059`，对齐 Profiles 公共 `view-content.tsx`、`profile-card-action.tsx` 的目录/职责，在 ProfileCard 卡片上提供 ref 同类的文件编辑入口。只处理前端展示与文件操作复用，不改主/legacy UI 共享后端、Agent、持久化或宿主网络。
