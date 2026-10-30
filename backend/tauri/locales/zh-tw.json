@@ -12,6 +12,7 @@
     "direct_mode": "直連模式",
     "global_mode": "全域模式",
     "rule_mode": "規則模式",
+    "script_mode": "腳本模式",
     "system_proxy": "系統代理",
     "tun_mode": "TUN 模式",
     "quit": "退出",

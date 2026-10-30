@@ -12,6 +12,7 @@
     "direct_mode": "Direct Mode",
     "global_mode": "Global Mode",
     "rule_mode": "Rule Mode",
+    "script_mode": "Script Mode",
     "system_proxy": "System Proxy",
     "tun_mode": "TUN Mode",
     "quit": "Quit",

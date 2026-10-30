@@ -58,6 +58,7 @@
 | LESSON-20261029-001 | 2026-10-29 | Shared KV / IPC | ref 在事件监听注册失败后仍开放读取；Chimera 增加重试与就绪门控，并用 23 项前端测试覆盖 | Mitigated |
 | LESSON-20261029-002 | 2026-10-29 | E2E / Storage | PR #548 新 IPC 返回 value/revision；Dashboard 用例仍按旧字符串合同读写，Windows hermetic 失败 | Mitigated |
 | LESSON-20261029-003 | 2026-10-29 | CI / Dependencies | PR #550 首次选中的 TanStack 版本仍在 24 小时 release-age 窗口；本地复用旧 pnpm store 未能替代新鲜验证，调整版本后精确 SHA CI/E2E 通过 | Verified |
+| LESSON-20261030-001 | 2026-10-30 | Rust / macOS testing | `muda::Menu` 在普通 Rust 测试线程 panic；用共享的纯菜单模型测试，原生托盘仍需桌面验证 | Mitigated |
 
 ## 单条模板
 
@@ -926,3 +927,20 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：PR #550 记录了对 1,641 个锁定条目的 fresh frozen-lockfile release-age 检查、`pnpm typecheck`、Chimera frontend build、Prettier、Oxlint 与 `git diff --check` 通过。精确合并 SHA 的[三平台 CI](https://github.com/MFSGA/Chimera/actions/runs/40895270778)和[Desktop E2E](https://github.com/MFSGA/Chimera/actions/runs/40895271111)通过。依赖更新不直接断言虚拟滚动行为。
 - 风险/回滚和清理证据（如涉及宿主状态）：仅更改依赖清单与 lockfile；若后续运行时回归，回退这两处依赖固定即可。没有触碰用户数据、主机设置或服务状态。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次依赖更新都先核对发布年龄，再使用新鲜 pnpm store 执行 frozen-lockfile 安装/年龄检查；锁定结果与 manifest 一致后再运行相关测试。此次未更改治理规则、工作流或 minimum-release-age 配置。
+
+### LESSON-20261030-001：macOS 原生菜单不能在普通 Rust 单测线程创建
+
+- 日期与时区：2026-10-30 US/Pacific
+- 状态：Mitigated（测试已改为验证生产构建与刷新共用的纯模式菜单模型；原生托盘 E2E 未运行）
+- 严重度：Low（测试策略限制，不是已确认的产品回归）
+- 模块：Rust / Tray / macOS testing
+- master commit / ref gitlink SHA / 平台与测试环境：本地 `master` 基线 `03a37e2966ded7f1a15aaf24525c529b5d8bd986`；ref `2c017d63bfec720017a9b57db629eeddd2c9cd3d`；macOS Rust unit-test harness。
+- 关联 Issue / PR / CI / 运行日志（脱敏）：本地命令 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::tray::tests -- --test-threads=1`；首次菜单构建测试在 `muda-0.20.0/src/platform_impl/macos/mod.rs:121` panic：`muda::Menu` can only be created on the main thread。
+- 预期行为：原生托盘菜单只能在真实应用主线程构建/操作；纯单测应覆盖可与平台 API 分离的菜单定义与状态决策，不把 mock runtime 当成系统主线程。
+- 真实异常、复现步骤与证据：在 Rust `#[test]` 中通过 `tauri::test::mock_app()` 构造 `MenuBuilder`，菜单创建在 muda 的 macOS 主线程断言处 panic；单线程参数不会让测试 harness 回到进程主线程。
+- 确认的根因与排除项：muda 0.20.0 的 macOS 菜单实现检查进程主线程，Tauri `MockRuntime` 不绕过该平台断言。错误发生在测试设置阶段，不是托盘业务菜单行为或模式切换失败。
+- 修复提交、差异映射及保留的兼容性边界：移除仅为菜单构造而添加的 Tauri test feature；菜单构建和 repaint 共用 `mode_menu_items` / `mode_menu_checks`，Rust 单测检查 Premium 才定义 Script 项及 Script/Direct 勾选结果。保留“native menu E2E 未验证”的限制说明。
+- 原实现失败、新实现通过的回归测试，及测试注册位置：首次原生菜单 mock 测试复现上述 panic；修正后的同一 `core::tray::tests` 套件覆盖队列行为、Premium 菜单项策略与模式勾选模型，注册于 `backend/tauri/src/core/tray/mod.rs` 单元测试。
+- 验证命令、实际用例数量、结果、未覆盖/跳过项：最终 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::tray::tests -- --test-threads=1` 4/4；Cargo fmt、对齐文档 Prettier、`git diff --check` 通过。未构建/点击原生托盘菜单；推送后的跨平台 CI 尚未运行。
+- 风险/回滚和清理证据（如涉及宿主状态）：未创建窗口、托盘图标或修改系统网络/用户设置。回滚这次测试边界调整不改变产品数据。
+- 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：需要验证 macOS/Windows/Linux 原生菜单行为时使用运行在桌面主事件循环内的 E2E；普通 Rust worker-thread 测试只验证共享纯模型。未更改治理规则或 CI 工作流。

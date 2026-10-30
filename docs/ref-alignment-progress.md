@@ -1786,6 +1786,16 @@ DIFF-001 至 DIFF-012 是此前基于
 - 非目标：本批不重做 Chimera 托盘菜单/代理子菜单、图标绘制、菜单模式、平台交互或 legacy UI presentation；不修改持久化配置、IPC wire format、Client/Service 生命周期或宿主代理/TUN 状态。
 - 基线：父仓库 `master` `456392d5a71a8184bdb4abc674005b25ab0401c2`；只读 `ref/` 为 `2fadf212f161417dcdf2f37d81a305a37ff918a4`，工作树干净。没有同步或修改 ref。
 - 路径与符号映射：`ref/backend/tauri/src/client/effects/plan.rs::{TrayMenuDesired,TrayPartDesired,TrayView}`、`client/effects/actor.rs` 的 Profile partial refresh、`client/effects/adapters.rs` 与 `core/tray/mod.rs` → Chimera 同路径。保留类型和字段名；`ApplicationEffect::Tray` 增加完整 `TrayView`，actor 将最新 view 与 refresh 一起交给 adapter。Chimera 的 `Handle::update_systray_part` 及 legacy event sink 也改走同一个 tray refresh queue。通过 typed Clash mode accessor 形成 snapshot，不再在 renderer 中读取 runtime YAML。
-- 部分范围与待收敛差异：独立复审确认队列的 merge/latest-view/scheduling 没有 P0–P2 逻辑问题；本批仍为 partial。当前 `render_systray_with_view` 调用静态 `tray_menu(app_handle)`，未消费 `view.menu`；Part renderer 只应用 mode、system-proxy、TUN，`text` 和 `traffic` 也尚未显示。固定 ref 的 `tray_menu(app_handle, &view)` 会按 core 构建 script 项、按 selector/menu mode 配置菜单，并在 repaint 中应用 tray text 等值。该菜单/渲染差异不得视为永久产品例外；后续托盘渲染迁移需消费完整 view，并在保留 Chimera 菜单 presentation、Client/Service 和 legacy 入口的前提下核对对应 menu actions。当前这批不宣称完整 ref tray 行为对齐。
+- 部分范围与待收敛差异：独立复审确认队列的 merge/latest-view/scheduling 没有 P0–P2 逻辑问题；本批仍为 partial。DIFF-066 已让 full menu 与 Part repaint 消费 `view.menu.core`，仅为 Clash Premium 显示并勾选 Script mode。`view.menu.selector_mode` 与 `menu_mode` 仍未接入，代理子菜单仍未按 ref 构建；Part renderer 的 `text` 和 `traffic` 也尚未显示。固定 ref 的 `tray_menu(app_handle, &view)` 还按 selector/menu mode 配置代理菜单，并在 repaint 中应用 tray text 等值。该菜单/渲染差异不得视为永久产品例外；后续托盘渲染迁移需消费完整 view，并在保留 Chimera 菜单 presentation、Client/Service 和 legacy 入口的前提下核对对应 menu actions。当前这批不宣称完整 ref tray 行为对齐。
 - 接口与风险：Rust 内部 effects adapter 契约由 `refresh_tray(refresh)` 变为 `refresh_tray(refresh, view)`；`ApplicationEffect::Tray` 由单 refresh 变为 refresh + snapshot。L2（共享 app/clash 状态驱动的 UI 托盘效果）；不改变配置存储或外部 IPC。回滚恢复旧 effect 变体、adapter 参数及原托盘刷新入口。
 - 验收及实际验证：托盘 queue 单测验证 Full 覆盖 Part、并发排队期间使用最新 snapshot，2/2；`client::effects::` effects/plan/actor/executor 定向测试 43/43；typed mode accessor 1/1；Rust fmt、LESSONS 与本记录 Prettier、`git diff --check` 通过。纯单测没有执行 Tauri main-thread scheduler/native menu；本机未做桌面 E2E。独立审查使用新上下文复核了实际 diff、ref SHA、队列和测试；其唯一 P2 结论为上述未消费菜单字段，按本条将其作为明确的后续收敛项，故本批标记为部分迁移。
+
+## DIFF-066：Tray 提供 Clash Premium 脚本模式菜单项
+
+- 目标：按 `ref` 的托盘菜单行为，仅在 Clash Premium 核心下显示 Script mode，并让菜单勾选状态和现有核心模式切换入口一致。
+- 非目标：本批不迁移代理组子菜单、WebView 菜单模式、复制代理环境变量、托盘图标/tooltip、text/traffic 显示或队列/发布状态机；不改变配置、IPC、Service 合同或宿主代理/TUN。
+- 基线与映射：只读 `ref/` HEAD `2c017d63bfec720017a9b57db629eeddd2c9cd3d`，工作区干净。`ref/backend/tauri/src/core/tray/mod.rs::tray_menu/repaint_part` 对应 `backend/tauri/src/core/tray/mod.rs::tray_menu/render_part_with_view`；`ClashCore::ClashPremium`、`Mode::Script` 和 `tray.script_mode` 采用上游语义。Chimera 的选择动作沿用现有 `feat::change_clash_mode`。
+- 影响接口与风险：只增加托盘原生菜单项和五种 Rust locale 的显示文案；无 IPC/持久化接口变化。L2（通过现有入口修改运行模式）。
+- 验收：定向 Rust 测试覆盖菜单构建与刷新共用的模式项定义和勾选模型；格式检查与推送后 CI 负责跨平台编译/回归验证。原生菜单点击和勾选显示未由纯单测证明；未执行原生菜单桌面 E2E 时明确记为未验证。
+- 本地验证：`cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib core::tray::tests -- --test-threads=1` 4/4；`cargo fmt --manifest-path backend/Cargo.toml --package chimera -- --check`、本记录与 LESSONS 的 Prettier、五个 locale JSON 解析、`git diff --check` 通过。原生托盘 E2E 未运行；这批新 SHA 的远程 CI/E2E 尚待推送后核验。
+- 回滚：恢复托盘菜单构建、模式勾选和事件映射，并移除五个 locale 中的 `tray.script_mode` 字段。

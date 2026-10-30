@@ -12,6 +12,7 @@
     "direct_mode": "ダイレクトモード",
     "global_mode": "グローバルモード",
     "rule_mode": "ルールモード",
+    "script_mode": "スクリプトモード",
     "system_proxy": "システムプロキシ",
     "tun_mode": "TUN モード",
     "quit": "終了",

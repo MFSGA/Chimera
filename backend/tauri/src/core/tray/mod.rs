@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use parking_lot::Mutex;
 use rust_i18n::t;
@@ -7,7 +9,7 @@ use tauri::{
     tray::{MouseButton, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 
-use chimera_config::clash::config::overrides::Mode;
+use chimera_config::{application::ClashCore, clash::config::overrides::Mode};
 
 use crate::{
     client::{
@@ -100,14 +102,79 @@ impl TrayViewState {
 
 pub struct Tray;
 
+#[derive(Clone, Copy)]
+struct ClashModeMenuItem {
+    id: &'static str,
+    mode: Mode,
+}
+
+const CLASH_MODE_MENU_ITEMS: [ClashModeMenuItem; 3] = [
+    ClashModeMenuItem {
+        id: "rule_mode",
+        mode: Mode::Rule,
+    },
+    ClashModeMenuItem {
+        id: "global_mode",
+        mode: Mode::Global,
+    },
+    ClashModeMenuItem {
+        id: "direct_mode",
+        mode: Mode::Direct,
+    },
+];
+
+const CLASH_PREMIUM_MODE_MENU_ITEMS: [ClashModeMenuItem; 4] = [
+    CLASH_MODE_MENU_ITEMS[0],
+    CLASH_MODE_MENU_ITEMS[1],
+    CLASH_MODE_MENU_ITEMS[2],
+    ClashModeMenuItem {
+        id: "script_mode",
+        mode: Mode::Script,
+    },
+];
+
+fn mode_menu_items(core: ClashCore) -> &'static [ClashModeMenuItem] {
+    if core == ClashCore::ClashPremium {
+        &CLASH_PREMIUM_MODE_MENU_ITEMS
+    } else {
+        &CLASH_MODE_MENU_ITEMS
+    }
+}
+
+fn mode_menu_label(mode: Mode) -> Cow<'static, str> {
+    match mode {
+        Mode::Rule => t!("tray.rule_mode"),
+        Mode::Global => t!("tray.global_mode"),
+        Mode::Direct => t!("tray.direct_mode"),
+        Mode::Script => t!("tray.script_mode"),
+    }
+}
+
+fn mode_menu_checks(core: ClashCore, mode: Mode) -> impl Iterator<Item = (&'static str, bool)> {
+    mode_menu_items(core)
+        .iter()
+        .map(move |item| (item.id, mode == item.mode))
+}
+
+fn update_mode_menu_checks<R: Runtime>(menu: &Menu<R>, core: ClashCore, mode: Mode) {
+    for (id, checked) in mode_menu_checks(core, mode) {
+        let _ = menu
+            .get(id)
+            .and_then(|menu_item| menu_item.as_check_menuitem()?.set_checked(checked).ok());
+    }
+}
+
 impl Tray {
-    pub fn tray_menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
-        let menu = MenuBuilder::new(app_handle)
+    fn tray_menu<R: Runtime>(app_handle: &AppHandle<R>, view: TrayView) -> Result<Menu<R>> {
+        let mut menu = MenuBuilder::new(app_handle)
             .text("open_window", t!("tray.dashboard"))
-            .separator()
-            .check("rule_mode", t!("tray.rule_mode"))
-            .check("global_mode", t!("tray.global_mode"))
-            .check("direct_mode", t!("tray.direct_mode"))
+            .separator();
+
+        for item in mode_menu_items(view.menu.core) {
+            menu = menu.check(item.id, mode_menu_label(item.mode));
+        }
+
+        let menu = menu
             .separator()
             .check("system_proxy", t!("tray.system_proxy"))
             .check("tun_mode", t!("tray.tun_mode"))
@@ -180,7 +247,7 @@ impl Tray {
     }
 
     fn render_systray_with_view(app_handle: &AppHandle<tauri::Wry>, view: TrayView) -> Result<()> {
-        let menu = Self::tray_menu(app_handle)?;
+        let menu = Self::tray_menu(app_handle, view)?;
         match app_handle.tray_by_id(TRAY_ID) {
             Some(tray) => {
                 tray.set_menu(Some(menu.clone()))?;
@@ -232,21 +299,7 @@ impl Tray {
             None => return Ok(()),
         };
         let menu = state.menu.lock();
-        let _ = menu.get("rule_mode").and_then(|item| {
-            item.as_check_menuitem()?
-                .set_checked(view.part.mode == Mode::Rule)
-                .ok()
-        });
-        let _ = menu.get("global_mode").and_then(|item| {
-            item.as_check_menuitem()?
-                .set_checked(view.part.mode == Mode::Global)
-                .ok()
-        });
-        let _ = menu.get("direct_mode").and_then(|item| {
-            item.as_check_menuitem()?
-                .set_checked(view.part.mode == Mode::Direct)
-                .ok()
-        });
+        update_mode_menu_checks(&menu, view.menu.core, view.part.mode);
         let _ = menu.get("system_proxy").and_then(|item| {
             item.as_check_menuitem()?
                 .set_checked(view.part.system_proxy)
@@ -275,6 +328,7 @@ impl Tray {
             "rule_mode" => feat::change_clash_mode(app_handle, "rule".to_string()),
             "global_mode" => feat::change_clash_mode(app_handle, "global".to_string()),
             "direct_mode" => feat::change_clash_mode(app_handle, "direct".to_string()),
+            "script_mode" => feat::change_clash_mode(app_handle, "script".to_string()),
             "system_proxy" => feat::toggle_system_proxy(app_handle),
             "tun_mode" => feat::toggle_tun_mode(app_handle),
             "open_app_config_dir" => crate::log_err!(ipc::open_app_config_dir()),
@@ -306,12 +360,12 @@ mod tests {
     use super::*;
     use chimera_config::application::{ClashCore, ProxiesSelectorMode, TrayMenuMode};
 
-    fn tray_view(mode: Mode, tun: bool) -> TrayView {
+    fn tray_view(core: ClashCore, mode: Mode, tun: bool) -> TrayView {
         TrayView {
             menu: crate::client::effects::plan::TrayMenuDesired {
                 menu_mode: TrayMenuMode::Native,
                 selector_mode: ProxiesSelectorMode::Normal,
-                core: ClashCore::default(),
+                core,
             },
             part: crate::client::effects::plan::TrayPartDesired {
                 mode,
@@ -325,8 +379,8 @@ mod tests {
 
     #[test]
     fn queued_refresh_uses_the_latest_view_and_serializes_new_requests() {
-        let old = tray_view(Mode::Rule, false);
-        let latest = tray_view(Mode::Global, true);
+        let old = tray_view(ClashCore::default(), Mode::Rule, false);
+        let latest = tray_view(ClashCore::default(), Mode::Global, true);
         let state = TrayViewState::new(old);
 
         assert!(state.request(TrayRefresh::Part));
@@ -343,8 +397,8 @@ mod tests {
 
     #[test]
     fn full_refresh_supersedes_queued_partial_refresh() {
-        let latest = tray_view(Mode::Global, true);
-        let state = TrayViewState::new(tray_view(Mode::Rule, false));
+        let latest = tray_view(ClashCore::default(), Mode::Global, true);
+        let state = TrayViewState::new(tray_view(ClashCore::default(), Mode::Rule, false));
 
         assert!(state.request(TrayRefresh::Part));
         assert!(!state.request(TrayRefresh::Full));
@@ -352,5 +406,49 @@ mod tests {
 
         assert_eq!(state.take(), Some((TrayRefresh::Full, latest)));
         assert_eq!(state.take(), None);
+    }
+
+    #[test]
+    fn script_mode_menu_item_is_only_defined_for_the_clash_premium_core() {
+        assert_eq!(
+            mode_menu_items(ClashCore::ClashPremium)
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            ["rule_mode", "global_mode", "direct_mode", "script_mode"]
+        );
+
+        for core in [
+            ClashCore::ClashRs,
+            ClashCore::ClashRsAlpha,
+            ClashCore::Mihomo,
+            ClashCore::MihomoAlpha,
+            ClashCore::ChimeraClient,
+            ClashCore::ChimeraClientAlpha,
+        ] {
+            assert!(
+                mode_menu_items(core)
+                    .iter()
+                    .all(|item| item.id != "script_mode"),
+                "{core:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mode_menu_check_tracks_script_and_other_modes() {
+        assert_eq!(
+            mode_menu_checks(ClashCore::ClashPremium, Mode::Script)
+                .filter_map(|(id, checked)| checked.then_some(id))
+                .collect::<Vec<_>>(),
+            ["script_mode"]
+        );
+        assert_eq!(
+            mode_menu_checks(ClashCore::ClashPremium, Mode::Direct)
+                .filter_map(|(id, checked)| checked.then_some(id))
+                .collect::<Vec<_>>(),
+            ["direct_mode"]
+        );
+        assert!(mode_menu_checks(ClashCore::Mihomo, Mode::Script).all(|(_, checked)| !checked));
     }
 }
