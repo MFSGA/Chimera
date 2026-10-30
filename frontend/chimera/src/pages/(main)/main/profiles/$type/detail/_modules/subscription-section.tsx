@@ -20,8 +20,11 @@ import { formatError } from '@/utils';
 import { formatDate } from '@/utils/date';
 import { message } from '@/utils/notification';
 import { DetailRow, DetailSection } from './detail-section';
+import { AutoUpdateSwitch, ProxySwitch } from './subscription-switches';
 import SubscriptionUrlEditor from './subscription-url-editor';
+import UpdateIntervalEditor from './update-interval-editor';
 import UpdateOptionEditor from './update-option-editor';
+import UserAgentEditor from './user-agent-editor';
 
 const clampPercentage = (value: number) => Math.min(100, Math.max(0, value));
 
@@ -76,6 +79,24 @@ export default function SubscriptionSection({
           value={remote.url}
         />
       </SubscriptionUrlEditor>
+      <UserAgentEditor profile={profile} asChild>
+        <DetailRow
+          label={m.profile_user_agent_label()}
+          value={
+            remote.option.user_agent || m.profile_detail_user_agent_default()
+          }
+        />
+      </UserAgentEditor>
+      {remote.option.update_interval_minutes > 0 && (
+        <UpdateIntervalEditor profile={profile} asChild>
+          <DetailRow
+            label={m.profile_update_interval_label()}
+            value={m.profile_detail_auto_update_every({
+              minutes: remote.option.update_interval_minutes,
+            })}
+          />
+        </UpdateIntervalEditor>
+      )}
       <Card>
         <CardContent>
           <div className="flex items-center justify-between text-sm font-bold">
@@ -141,6 +162,20 @@ export default function SubscriptionSection({
           </UpdateOptionEditor>
         </CardFooter>
       </Card>
+      <AutoUpdateSwitch
+        profile={profile}
+        intervalMinutes={remote.option.update_interval_minutes ?? 0}
+      />
+      <ProxySwitch
+        profile={profile}
+        channel="with_proxy"
+        checked={remote.option.with_proxy ?? false}
+      />
+      <ProxySwitch
+        profile={profile}
+        channel="self_proxy"
+        checked={remote.option.self_proxy ?? false}
+      />
     </DetailSection>
   );
 }
