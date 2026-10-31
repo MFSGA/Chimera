@@ -209,7 +209,7 @@ describe('main profile detail reference editors', () => {
             '[data-slot="modal-content"]',
           );
           const card = modalContent?.querySelector<HTMLElement>(
-            '[data-slot="card-root"]',
+            '[data-slot="profile-field-dialog"]',
           );
           const error = modalContent?.querySelector<HTMLElement>('.text-error');
           if (!modalContent || !card || !error) return false;
@@ -227,7 +227,7 @@ describe('main profile detail reference editors', () => {
       },
     );
 
-    const card = await modal.$('[data-slot="card-root"]');
+    const card = await modal.$('[data-slot="profile-field-dialog"]');
     const error = await modal.$('.text-error');
     const cardWidth = await card.getCSSProperty('width');
     const errorHeight = await error.getSize('height');

@@ -27,6 +27,7 @@ import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
 import ProfilesDndProvider from './_modules/profiles-dnd-provider';
 import ProfilesLayoutProvider from './_modules/profiles-layout-provider';
 import ProfilesNavigate from './_modules/profiles-navigate';
+import { subscriptionUrlSchema } from './_modules/subscription-url-schema';
 
 /**
  * URL search 参数类型定义
@@ -53,12 +54,7 @@ const asValidUrl = (value: unknown) => {
     return undefined;
   }
 
-  try {
-    new URL(value);
-    return value;
-  } catch {
-    return undefined;
-  }
+  return subscriptionUrlSchema.safeParse(value).success ? value : undefined;
 };
 
 export const Route = createFileRoute('/(main)/main/profiles')({

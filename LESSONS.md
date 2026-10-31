@@ -66,6 +66,11 @@
 | LESSON-20261031-005 | 2026-10-31 | Frontend / CI / i18n | 国际化测试把复数消息误当字符串，Ubuntu CI localization 失败；改为解析各分支并验证五语占位符 | Mitigated |
 | LESSON-20261031-006 | 2026-10-31 | CI / Linux RPM nightly | 夜间应用版本含 `-alpha`，RPM Version 字段不接受 `-`；按 ref 单独生成 Linux SemVer metadata 版本并纳入 CI | Mitigated |
 | LESSON-20261031-007 | 2026-10-31 | CI / macOS Deno | 夜间构建产物重命名因远程 JSR `@std/path` manifest 无法读取失败；本步骤改原生 `node:path` 并覆盖产物命名 | Mitigated |
+| LESSON-20261031-008 | 2026-10-31 | Profiles / Router / Windows E2E | 共享 ProfileCard 在独立 folder route 调用 `$type.useParams()` 导致主窗口 Invariant/Error Boundary；依 ref 从 item 推导详情类型 | Mitigated |
+| LESSON-20261031-009 | 2026-10-31 | Profile detail / E2E | 名称编辑校验动画测试寻找不存在的 `card-root`，实机 DOM 为 `w-96` 无稳定标记；使用 `profile-field-dialog` 并保留动画尺寸门禁 | Mitigated |
+| LESSON-20261031-010 | 2026-10-31 | Profiles / URL / ref alignment | `new URL()` 接受 FTP/File/JavaScript 等非订阅协议；共享 ref 的 HTTP(S) Zod schema 并加 CI 回归 | Mitigated |
+| LESSON-20261031-011 | 2026-10-31 | Profiles / Actor / remote import | 未知文件夹的远程导入曾先 Fetch 后拒绝；按 ref 在下载前校验，测试严格断言 Fetch 0 次 | Mitigated |
+| LESSON-20261031-012 | 2026-10-31 | NixOS / Btrfs / Rust tests | Tauri 测试二进制链接在 Btrfs `reserve_bytes` 阻塞；Cargo check 成功，完整 Client 测试待环境复验 | Open |
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
@@ -111,6 +116,32 @@
 
 - 日期：2026-10-31；状态：Mitigated（静态/单元验证通过，macOS runner 待复验）；模块：CI / macOS / Deno。2026-10-31 定时 [#41173121067](https://github.com/MFSGA/Chimera/actions/runs/41173121067) 中 macOS x86_64 的 `Rename updater files` 步骤在 `scripts/deno/upload-macos-updater.ts:1` 因 `JSR package version manifest for '@std/path@1.1.4' failed to load` 退出 1；同 SHA 手动 #41166406031 此步骤成功，明确为外部模块加载波动而非 Tauri 构建失败，不能据此认定 jsr.io 整体宕机。
 - 保留 ref `scripts/src/artifacts/upload-macos-updater.ts` 的 globby 遍历、`.app` 命名/架构插入和 `Deno.rename`，但路径 API 适配为 Deno 2 原生 `node:path`，移除此步骤的 `@std/path` JSR 网络请求。测试通过注入临时 build 目录复核 `.app.tar.gz`、`.sig`、`.dmg`、非 app 文件的重命名与保留；按该脚本**实际锁文件** `scripts/deno/deno.lock` 用 `deno test --frozen` 通过。其他 `npm:globby` 与 logger 网络依赖保留，独立发布后处理尚非完全离线；如其他外部服务错误再次发生，应独立归因，禁止把所有网络问题合并为同一种缺陷。
+
+### LESSON-20261031-008：跨兄弟路由复用的组件不能依赖其中一个子路由的严格 `useParams`
+
+- 日期：2026-10-31；状态：Mitigated（本地代码修复，Windows Profiles E2E 待复验）；模块：Profiles Router / Folder。证据：[Windows Profiles E2E #41158693777](https://github.com/MFSGA/Chimera/actions/runs/41158693777)，提交 `98fb1d2a`；`opens an actor-created folder route` 用例进入 `/main/profiles/folder/f...` 得到 `Invariant failed`，堆栈 `matchContext → useMatch`。该 spec 后续卡片/图标/渐进加载失败是页面落在错误边界后的连锁现象，不应通过放宽超时来掩盖。
+- `frontend/chimera/src/pages/(main)/main/profiles/_modules/profile-card.tsx::ProfileCard` 曾调用 `IndexRoute.useParams()`，该 hook 只在 `/main/profiles/$type/` 子路由激活时有效，但共享卡片还在独立文件夹 `$folderId` 视图使用。ref `1b5d73c53a7141d216a8a0a7751be38a295be059` 的 `profile-card.tsx` 用 `profileTypeOf(profile)` 推导详情路由。修复沿用此数据驱动方式并移除严格 hook；在实际文件夹 E2E 增详情链接 UID/类型路径断言。TS/生产构建不能证明挂载行为已通过，必须在新 SHA Windows suite 复验。
+
+### LESSON-20261031-009：E2E 定位必须对应真实渲染的稳定标记
+
+- 日期：2026-10-31；状态：Mitigated（本地修复完成，新 Windows runner 待复验）；模块：Profile Detail / Windows E2E。证据：同一 Profiles suite 的 `profiles-detail-main.e2e.ts` 在 5 秒内等不到字段动画；运行上传的诊断 HTML 显示错误 `.overflow-hidden.text-error` 已渲染、`height:auto; opacity:1`，但名称编辑器卡片只有 `w-96` 样式，没有测试查询的 `data-slot="card-root"`，因此旧断言必然失败，不是动画超时。
+- 参考 ref 的 `ProfileFieldDialog` 稳定 `data-slot="profile-field-dialog"`，给名称编辑器真实 `Card` 增加同名标记并更新 E2E 两处定位。保留 384px、错误高度、overflow、opacity 和原始 Profile 名持久化断言；无视觉、保存、业务 IPC 变更。需由实际 Windows E2E 复验，不能报告本机测试已覆盖渲染动画。
+
+### LESSON-20261031-010：URL 可解析不等于可作为远程订阅
+
+- 日期：2026-10-31；状态：Mitigated（纯单测及前端门禁通过，桌面 GUI 待验）；模块：Profiles / URL。参考固定 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059` 的 `subscription-url-schema.ts`，只允许 HTTP/HTTPS。`new URL('ftp://...')`、`new URL('file:///...')` 等依然能解析，不等于允许远程订阅；Chimera 快捷导入和 deep-link 之前用了过宽的语法验证。
+- 迁入共享 Zod 约束给快捷导入、URL 深链、现有新建/编辑 Profile 对话框；专项 `subscription-url-schema.test.ts` **3/3** 通过，并已注册 Ubuntu 前端 CI。**纠正安全事实**：Chimera 后端领域本已通过 `Profiles::validate` 拒绝 `UnsupportedRemoteUrlScheme`，因此原前端 URL 解析差异不构成后端任意协议落盘的证据，也不代表完整 SSRF 防护；HTTP(S) URL 的网络目标仍需由既有安全策略处理。
+
+### LESSON-20261031-011：远程导入目标文件夹必须在 Fetch 前检查
+
+- 日期：2026-10-31；状态：Mitigated（已实现 preflight，真实 Windows 网络流程待验）；模块：Profiles Actor / ImportRemote。旧 `validate_import_request` 验证远程 URL/Options，但缺少请求的 `folder` 参数；新 Profile 只能在 `CommitImported` 下载返回后调用 `join_folder`。因此无效文件夹不会落盘，但会发生不必要的远程抓取。
+- 固定 ref 的 `validate_import_request(...,folder:Option<&FolderId>)` 对候选 Config 先 `join_folder` 再 `next.validate()`，Chimera 补齐并在 Actor 注册 pending request/Fetch 前传入 `folder.as_ref()`；保留 `CommitImported` 二次校验以防期间文件夹被删除。将原负向 Client 测试中的 Mock Fetch 调整为 `expect_fetch().times(0)`，并核验 `FolderNotFound`、revision、Profile 集合及磁盘状态不变，构成“旧实现无法通过”的回归门禁。
+
+### LESSON-20261031-012：Btrfs 元数据紧张时，链接阻塞不等于 Rust 测试失败
+
+- 日期：2026-10-31；状态：Open（环境资源需维护者单独处理）；模块：NixOS / Btrfs / Rust 链接。`nix develop --command cargo test --manifest-path backend/Cargo.toml -p chimera --lib --no-run` 已完成 Rust 源码编译阶段，但新测试二进制的 `rust-lld` 链接长时间卡在 `D reserve_bytes` 内核等待。`/home` Btrfs 907GiB 总量、870GiB 已用（96%）；Metadata DUP 16.51GiB 分配、15.89GiB 已使用。Rust 编译输出未见本次源码错误，只有已有 warnings。
+- 已仅中止此次启动的 Cargo/Rustc/LLD（命令退出 143），本次不完整 `.tmp` 链接文件随进程退出消失；没有清理其他缓存、改 Btrfs balance 或系统配置。随后 `nix develop --command cargo check --manifest-path backend/Cargo.toml -p chimera --lib` 以及 `cargo check --tests --manifest-path backend/Cargo.toml -p chimera` 均以退出码 0 通过（后者包括新增 Rust 测试代码的编译验证），scoped Rustfmt 同样通过。
+- **限制**：`cargo check` 不能证明运行时 Actor/Client 事务正确。新增的 `expect_fetch().times(0)` 回归断言以及完整 Client 测试 86 项，在这次修改后尚未真正运行。需在空间充足的隔离 CI/Runner 完成复验；不能用先前编译的旧测试二进制冒充本次结果，也不可为了测试任意删除用户存量构建产物。
 
 ## 单条模板
 

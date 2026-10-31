@@ -7,6 +7,7 @@ import { useState } from 'react';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
+import { subscriptionUrlSchema } from './subscription-url-schema';
 
 export default function ProfileQuickImport({
   folder,
@@ -21,10 +22,8 @@ export default function ProfileQuickImport({
     event.preventDefault();
     const value = url.trim();
 
-    try {
-      new URL(value);
-    } catch {
-      message(m.profile_quick_import_placeholder(), {
+    if (!subscriptionUrlSchema.safeParse(value).success) {
+      void message(m.subscription_onboarding_invalid_protocol(), {
         title: m.common_error(),
         kind: 'error',
       });

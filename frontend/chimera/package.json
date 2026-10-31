@@ -12,6 +12,7 @@
     "test:profile-content-summary": "tsx --test tests/profile-content-summary.test.ts",
     "test:profile-card-gradient": "tsx --test tests/mesh-gradient.test.ts",
     "test:profile-layout": "tsx --test tests/profile-layout.test.ts tests/resolve-profile-drop.test.ts",
+    "test:subscription-url": "tsx --test tests/subscription-url-schema.test.ts",
     "test:connections": "tsx --test tests/connections-model.test.ts",
     "test:localization": "tsx --test tests/localization.test.ts",
     "test:traffic": "tsx --test tests/traffic-search.test.ts tests/traffic-sankey-layout.test.ts tests/traffic-view-settings.test.ts ../interface/tests/traffic-report-query.test.ts",

@@ -22,7 +22,6 @@ import {
   RegisterContextMenuTrigger,
 } from '@/components/providers/context-menu-provider';
 import * as m from '@/paraglide/messages';
-import { Route as IndexRoute } from '../$type/index';
 import { ActiveGradient } from './active-gradient';
 import ProfileCardAction from './profile-card-action';
 import ProfileCardFeatures, { ProfileCardChip } from './profile-card-features';
@@ -33,7 +32,7 @@ import ProfileCardSubscription, {
 import { ProfileMoveContextMenu, useProfileMove } from './profile-move-menu';
 import { useActiveProfile } from './use-active-profile';
 import { useDeleteProfile } from './use-delete-profile';
-import { hasMaterializedFile, isProxyProfile } from './utils';
+import { hasMaterializedFile, isProxyProfile, profileTypeOf } from './utils';
 import ViewContent from './view-content';
 
 export default function ProfileCard({
@@ -45,7 +44,6 @@ export default function ProfileCard({
   profiles: ProfileQueryResultItem[];
   isGlobal: boolean;
 }) {
-  const { type } = IndexRoute.useParams();
   const activeProfile = useActiveProfile(profile);
   const deleteProfile = useDeleteProfile(profile);
   const isPending = activeProfile.isPending || deleteProfile.isPending;
@@ -179,7 +177,10 @@ export default function ProfileCard({
                   <Button icon className="size-9 shrink-0" asChild>
                     <Link
                       to="/main/profiles/$type/detail/$uid"
-                      params={{ type, uid: profile.uid }}
+                      params={{
+                        type: profileTypeOf(profile),
+                        uid: profile.uid,
+                      }}
                       data-slot="profile-card-details"
                       aria-label={m.profile_view_details_title()}
                     >

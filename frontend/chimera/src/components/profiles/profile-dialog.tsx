@@ -22,6 +22,7 @@ import {
   useState,
 } from 'react';
 import { Controller, useForm } from 'react-hook-form';
+import { subscriptionUrlSchema } from '@/pages/(main)/main/profiles/_modules/subscription-url-schema';
 import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
@@ -337,7 +338,12 @@ export const ProfileDialog = ({
             <Controller
               name="url"
               control={control}
-              rules={{ required: 'This field is required' }}
+              rules={{
+                required: 'This field is required',
+                validate: (value) =>
+                  subscriptionUrlSchema.safeParse(value).success ||
+                  m.subscription_onboarding_invalid_protocol(),
+              }}
               render={({ field, fieldState }) => (
                 <TextField
                   {...commonProps}

@@ -654,12 +654,15 @@ impl ProfilesActor {
         }
     }
 
-    /// Validate URL/options against the live document without writing state/files.
+    /// Validate the URL, options and destination folder before starting any
+    /// remote download. The commit stage checks the folder again against the
+    /// latest document, so concurrent deletion cannot persist an orphan.
     fn validate_import_request(
         before: &Profiles,
         metadata: &ProfileMetadata,
         url: url::Url,
         option: RemoteProfileOptions,
+        folder: Option<&FolderId>,
     ) -> Result<(), ProfilesError> {
         let definition = Self::remote_import_definition(
             url,
@@ -677,12 +680,13 @@ impl ProfilesActor {
                 .expect("uid-derived path is always a valid managed path");
         }
         if !next.append_item(ProfileItem {
-            uid,
+            uid: uid.clone(),
             metadata: metadata.clone(),
             definition,
         }) {
             return Err(ProfilesError::Persist("uid collision".into()));
         }
+        Self::join_folder(&mut next, &uid, folder)?;
         next.validate().map_err(ProfilesError::ValidationFailed)?;
         Ok(())
     }
@@ -1882,9 +1886,13 @@ impl Actor for ProfilesActor {
                 reply,
             } => {
                 let before = Self::current_state(state);
-                if let Err(error) =
-                    Self::validate_import_request(&before, &metadata, url.clone(), option.clone())
-                {
+                if let Err(error) = Self::validate_import_request(
+                    &before,
+                    &metadata,
+                    url.clone(),
+                    option.clone(),
+                    folder.as_ref(),
+                ) {
                     let _ = reply.send(Err(error));
                     return Ok(());
                 }

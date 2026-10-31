@@ -3727,11 +3727,15 @@ mod tests {
     #[tokio::test]
     async fn remote_import_into_unknown_folder_rejects_without_persisting() {
         let dir = tempdir().unwrap();
+        // A stale folder selection must be rejected before opening the
+        // subscription connection, not only when committing its result.
+        let mut fetcher = MockSubscriptionFetcher::new();
+        fetcher.expect_fetch().times(0);
         let client = ProfilesClient::new(
             crate::state::mutation::MutationCoordinator::isolated(),
             temp_profiles_path(&dir),
             Arc::new(MockProfileFsPort::new()),
-            Arc::new(suggested_fetch("proxies: []\n", Some(120))),
+            Arc::new(fetcher),
             test_materialization_port(),
         )
         .await
@@ -3748,7 +3752,9 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert!(matches!(error, ProfilesError::ValidationFailed(_)));
+        assert!(matches!(error, ProfilesError::ValidationFailed(ref errors)
+            if errors.iter().any(|error| matches!(error,
+                chimera_config::profile::ProfileValidationError::FolderNotFound { .. }))));
         assert_eq!(client.snapshot().revision(), before.revision());
         assert_eq!(client.snapshot().items.len(), before.items.len());
         assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), original);

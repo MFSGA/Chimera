@@ -199,6 +199,38 @@ describe('main profiles reference layout', () => {
     await dialog.waitForDisplayed({ reverse: true, timeout: 15_000 });
   });
 
+  // Contract: an FTP URL is syntactically valid but not a remote subscription.
+  // The visible quick-import form must reject it without issuing a durable
+  // Profile mutation. No external URL is fetched by this isolated test.
+  it('rejects a non-HTTP quick-import URL without changing profiles', async () => {
+    const before = await invoke<unknown>('get_profiles');
+    const form = await $('[data-slot="profile-quick-import"]');
+    await form.waitForDisplayed({ timeout: 15_000 });
+    const input = await form.$('input[type="url"]');
+    await input.waitForDisplayed({ timeout: 15_000 });
+    const invalidUrl = 'ftp://example.invalid/not-a-subscription.yaml';
+    await input.setValue(invalidUrl);
+
+    const submit = await form.$('button[type="submit"]');
+    await submit.waitForClickable({ timeout: 15_000 });
+    await submit.click();
+
+    assert.equal(
+      await input.getValue(),
+      invalidUrl,
+      'Rejected URL must remain editable so the user can correct it',
+    );
+    assert.deepEqual(
+      await invoke<unknown>('get_profiles'),
+      before,
+      'Non-HTTP quick import must not create or change any Profile',
+    );
+    const clear = await form.$('button[type="button"]');
+    await clear.waitForClickable({ timeout: 15_000 });
+    await clear.click();
+    assert.equal(await input.getValue(), '');
+  });
+
   // Contract: a file-folder link has a distinct route, and opening it shows
   // exactly the test-owned member. The layout fixture is restored even if an
   // assertion fails; no real user document or subscription is touched.
@@ -246,6 +278,15 @@ describe('main profiles reference layout', () => {
         `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`,
       );
       await card.waitForDisplayed({ timeout: 15_000 });
+      const detailsLink = await card.$('[data-slot="profile-card-details"]');
+      await detailsLink.waitForDisplayed({ timeout: 15_000 });
+      const detailsHref = await detailsLink.getAttribute('href');
+      assert.ok(detailsHref, 'The folder card details link must have an href');
+      assert.equal(
+        new URL(detailsHref, 'http://tauri.localhost').pathname,
+        `/main/profiles/profile/detail/${profileUid}`,
+        'Cards in a folder must navigate by the Profile type, not the parent route',
+      );
       assert.equal(
         await $('[data-slot="profile-quick-import"]').isExisting(),
         true,

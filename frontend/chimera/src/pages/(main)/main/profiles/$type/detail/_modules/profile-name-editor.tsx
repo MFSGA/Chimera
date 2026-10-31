@@ -67,7 +67,7 @@ export default function ProfileNameEditor({
       <ModalTrigger {...props} />
 
       <ModalContent>
-        <Card className="w-96">
+        <Card className="w-96" data-slot="profile-field-dialog">
           <CardHeader>
             <ModalTitle>{m.profile_name_editor_title()}</ModalTitle>
           </CardHeader>
