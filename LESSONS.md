@@ -63,6 +63,7 @@
 | LESSON-20261031-002 | 2026-10-31 | Rust / Development | 无范围的 Cargo fmt 扫到 vendor 和 runtime 子模块；已仅还原非目标差异，改用指定包的格式检查 | Mitigated |
 | LESSON-20261031-003 | 2026-10-31 | NixOS / Rust tests | Nix glibc 2.42 测试解释器混用 GTK/WebKit glibc ≥2.43 导致测试进程启动失败；隔离新 loader 复验 80/80 | Mitigated |
 | LESSON-20261031-004 | 2026-10-31 | Profiles / DnD / TypeScript | 通用 DragDropProvider sensors 联合类型和 useSortable 数组类型不兼容，推导数组又触发 TS2883；显式取 Sortable hook 参数数组类型，完整 typecheck 通过 | Mitigated |
+| LESSON-20261031-005 | 2026-10-31 | Frontend / CI / i18n | 国际化测试把复数消息误当字符串，Ubuntu CI localization 失败；改为解析各分支并验证五语占位符 | Mitigated |
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
@@ -90,6 +91,13 @@
 - **复现**：首次将现有 `WHOLE_ITEM_DRAG_SENSORS` 与新增 `FOLDER_ITEM_DRAG_SENSORS` 直接传给 `useSortable` 时执行 `pnpm typecheck`，TS2322/TS2345 指出此前按 `DragDropProvider['sensors']` 声明的类型还允许 `(defaults) => sensors` 工厂，不符合 Sortable 的数组参数。移除注解依赖推断后编译又报 TS2883：推导涉及未公开的 dnd-kit abstract Plugin/PluginDescriptor 包路径，声明导出不稳定。
 - **修复与门禁**：从公开 `useSortable` Hook 签名取精确数组类型：`type SortableSensors = NonNullable<Parameters<typeof useSortable>[0]['sensors']>`，两个传感器常量显式标注此类型；保留 ref 的鼠标/笔 8px 距离和触摸默认激活约束。修改后 `pnpm typecheck`、前端生产构建、Oxlint、前端边界与现有 Profile 专项单测通过。
 - **限制**：代码级检查不能证明真实 WebDriver Pointer/Keyboard DnD 的触发距离、文件夹定位和侧栏导航；须在隔离桌面 Runner 上按 `docs/ref-alignment-progress.md` 所列流程复核。勿通过类型断言 `as any` 或删掉传感器检查绕过 TS 错误。
+
+### LESSON-20261031-005：国际化测试应兼容 Inlang 结构化复数消息
+
+- 日期：2026-10-31；状态：Mitigated（本地修复复验通过，远端新提交待验证）；模块：Frontend / CI / i18n。GitHub Actions [CI #41157996750](https://github.com/MFSGA/Chimera/actions/runs/41157996750) 的 `Lint (ubuntu-latest)` → `Test E2E harness and frontend models` 在 commit `98fb1d2a` 失败。
+- **可复现故障与根因**：`pnpm --filter=chimera-ui test:localization` 本地复现 `TypeError: message.matchAll is not a function`，原因是 `frontend/chimera/tests/localization.test.ts` 将整个 `messages/en.json` 断言为 `Record<string, string>`。新迁入的 `profile_folder_delete_description` 英文和俄文为 Paraglide/Inlang 有效的结构化 plural/select 分支数组，日文和中文为字符串；测试只处理字符串而非产品翻译非法，CI 在该步提前停止，后续 Linux Backend 测试未执行。
+- **最小修复、门禁与证据**：`placeholders` 对字符串直接扫描，对 plural/select 数组逐个 `match` 变体提取插值字段，使用集合去重排序。新增专用多分支用例，并核对日语、俄语、简体和繁体中文的全部 990 个键与英文插值一致。旧版测试本地复现 3/4，修改后 `test:localization` 6/6，通过完整 Ubuntu `Test E2E harness and frontend models` 脚本、TypeScript、Oxlint/边界检查和 Web 生产构建。未更改任何 locale 文案、CI 工作流或 Paraglide 配置。
+- **边界与后续**：本地通过不意味着原提交 `98fb1d2a` 的远程 CI 变绿；修复待单独提交、推送后由新 SHA 的 Ubuntu CI 验收。自动 Windows `smoke` E2E 并未选中 `profiles-main-layout.e2e.ts`，需用专门 `profiles` 运行验证文件夹 UI。
 
 ## 单条模板
 

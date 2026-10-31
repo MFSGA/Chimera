@@ -4,15 +4,35 @@ import { describe, it } from 'node:test';
 import { formatRelativeTime } from '../src/utils/date';
 import { normalizeLanguage, toI18nLanguage } from '../src/utils/language';
 
+type Message =
+  | string
+  | Array<{
+      declarations: string[];
+      selectors: string[];
+      match: Record<string, string>;
+    }>;
+
 const english = JSON.parse(
   readFileSync(new URL('../messages/en.json', import.meta.url), 'utf8'),
-) as Record<string, string>;
+) as Record<string, Message>;
 const japanese = JSON.parse(
   readFileSync(new URL('../messages/ja.json', import.meta.url), 'utf8'),
-) as Record<string, string>;
+) as Record<string, Message>;
 
-function placeholders(message: string) {
-  return [...message.matchAll(/\{([\w]+)\}/g)].map((match) => match[1]).sort();
+function placeholders(message: Message) {
+  // Paraglide accepts both simple strings and plural/select message variants.
+  // Compare the union of actual interpolation fields across every variant.
+  const branches =
+    typeof message === 'string'
+      ? [message]
+      : message.flatMap(({ match }) => Object.values(match));
+  return [
+    ...new Set(
+      branches.flatMap((value) =>
+        [...value.matchAll(/\{([\w]+)\}/g)].map((match) => match[1]),
+      ),
+    ),
+  ].sort();
 }
 
 describe('Japanese locale support', () => {
@@ -27,6 +47,51 @@ describe('Japanese locale support', () => {
         placeholders(english[key]),
         `Placeholder mismatch in ${key}`,
       );
+    }
+  });
+
+  it('supports plural/select translations without losing interpolation fields', () => {
+    assert.deepEqual(placeholders(english.profile_folder_delete_description), [
+      'count',
+    ]);
+    assert.deepEqual(placeholders(japanese.profile_folder_delete_description), [
+      'count',
+    ]);
+    assert.deepEqual(
+      placeholders([
+        {
+          declarations: ['input count'],
+          selectors: ['count'],
+          match: {
+            'count=one': '{count} item from {name}',
+            'count=other': '{count} items from {name}',
+          },
+        },
+      ]),
+      ['count', 'name'],
+    );
+  });
+
+  it('checks placeholders in the other supported locales, including Russian plurals', () => {
+    for (const locale of ['ru', 'zh-cn', 'zh-tw']) {
+      const messages = JSON.parse(
+        readFileSync(
+          new URL(`../messages/${locale}.json`, import.meta.url),
+          'utf8',
+        ),
+      ) as Record<string, Message>;
+      assert.deepEqual(
+        Object.keys(messages).sort(),
+        Object.keys(english).sort(),
+      );
+      for (const key of Object.keys(english)) {
+        if (key === '$schema' || key === 'language') continue;
+        assert.deepEqual(
+          placeholders(messages[key]),
+          placeholders(english[key]),
+          `Placeholder mismatch in ${locale}:${key}`,
+        );
+      }
     }
   });
 
