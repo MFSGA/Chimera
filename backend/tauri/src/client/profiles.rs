@@ -371,12 +371,25 @@ impl ProfilesClient {
         option: RemoteProfileOptions,
         update_interval_explicit: bool,
     ) -> Result<CommitReport, ProfilesError> {
+        self.import_into_folder(url, metadata, option, update_interval_explicit, None)
+            .await
+    }
+
+    pub async fn import_into_folder(
+        &self,
+        url: url::Url,
+        metadata: ProfileMetadata,
+        option: RemoteProfileOptions,
+        update_interval_explicit: bool,
+        folder: Option<FolderId>,
+    ) -> Result<CommitReport, ProfilesError> {
         self.call(
             |reply| ProfilesActorMessage::ImportRemote {
                 url,
                 metadata,
                 option,
                 update_interval_explicit,
+                folder,
                 reply,
             },
             None,
@@ -531,6 +544,7 @@ mod tests {
         NewProfileRequest {
             metadata: file_config_item("placeholder").metadata,
             definition: file_config_item("placeholder").definition,
+            folder: None,
         }
     }
 
@@ -1977,6 +1991,7 @@ mod tests {
                         custom_name: true,
                     },
                     definition: file_config_item("placeholder").definition,
+                    folder: None,
                 },
                 Some("proxies: []\n".to_string()),
             )
@@ -2026,6 +2041,7 @@ mod tests {
                 NewProfileRequest {
                     metadata: file_config_item("placeholder").metadata,
                     definition: file_config_item("placeholder").definition,
+                    folder: None,
                 },
                 Some("proxies: []\n".to_string()),
             )
@@ -2771,6 +2787,7 @@ mod tests {
                 NewProfileRequest {
                     metadata: item.metadata.clone(),
                     definition: item.definition,
+                    folder: None,
                 },
                 Some("-- lua".to_string()),
             )
@@ -2884,6 +2901,90 @@ mod tests {
 
     fn profile_order(profiles: &Profiles) -> Vec<&str> {
         profiles.items.keys().map(|uid| uid.0.as_str()).collect()
+    }
+
+    #[test]
+    fn legacy_new_profile_request_without_folder_defaults_to_no_folder() {
+        let item = file_config_item("legacy");
+        // Serialize existing metadata/definition rather than requiring the old
+        // client to know the new folder property.
+        let input = serde_json::json!({
+            "metadata": item.metadata,
+            "definition": item.definition,
+        });
+        let decoded: NewProfileRequest = serde_json::from_value(input).unwrap();
+        assert_eq!(decoded.folder, None);
+    }
+
+    #[tokio::test]
+    async fn add_joins_requested_folder_in_same_commit_and_persists() {
+        let (client, dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg1"])],
+                ungrouped: vec![ProfileId("cfg2".into())],
+            })
+            .await
+            .unwrap();
+        let before = client.snapshot().revision();
+        let mut request = add_placeholder_request();
+        request.folder = Some(FolderId("f1".into()));
+        let report = client
+            .add(request, Some("proxies: []\n".into()))
+            .await
+            .unwrap();
+        let uid = report.created.expect("new Config UID");
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert_eq!(
+            report.snapshot.folders[0].members,
+            vec![ProfileId("cfg1".into()), uid.clone()]
+        );
+        assert!(report.snapshot.validate().is_ok());
+        let file = std::fs::read_to_string(temp_profiles_path(&dir)).unwrap();
+        assert!(file.contains(&uid.0), "{file}");
+        let recovered: Profiles = serde_yaml_ng::from_str(&file).unwrap();
+        assert_eq!(recovered.folders, report.snapshot.folders);
+    }
+
+    #[tokio::test]
+    async fn add_to_missing_folder_has_no_commit_or_new_file() {
+        let (client, dir) = seeded_client().await;
+        let before = client.snapshot();
+        let original = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        let mut request = add_placeholder_request();
+        request.folder = Some(FolderId("missing".into()));
+        let error = client
+            .add(request, Some("proxies: []\n".into()))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProfilesError::ValidationFailed(ref errors)
+            if errors.iter().any(|item| matches!(item,
+                chimera_config::profile::ProfileValidationError::FolderNotFound { .. }))));
+        let after = client.snapshot();
+        assert_eq!(after.revision(), before.revision());
+        assert_eq!(after.items.len(), before.items.len());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn add_transform_into_folder_fails_atomically() {
+        let (client, dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &[])],
+                ungrouped: vec![ProfileId("cfg1".into()), ProfileId("cfg2".into())],
+            })
+            .await
+            .unwrap();
+        let original = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        let mut request = add_placeholder_request();
+        request.definition = overlay_item("placeholder").definition;
+        request.folder = Some(FolderId("f1".into()));
+        assert!(matches!(
+            client.add(request, Some("rules: []\n".into())).await,
+            Err(ProfilesError::ValidationFailed(_))
+        ));
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), original);
     }
 
     #[tokio::test]
@@ -3454,6 +3555,7 @@ mod tests {
                 NewProfileRequest {
                     metadata: item.metadata.clone(),
                     definition: item.definition,
+                    folder: None,
                 },
                 None,
             )
@@ -3581,6 +3683,75 @@ mod tests {
             );
             tokio::task::yield_now().await;
         }
+    }
+
+    #[tokio::test]
+    async fn remote_import_joins_folder_in_same_durable_commit() {
+        let dir = tempdir().unwrap();
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(suggested_fetch("proxies: []\n", Some(120))),
+            test_materialization_port(),
+        )
+        .await
+        .unwrap();
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &[])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let before = client.snapshot().revision();
+        let report = client
+            .import_into_folder(
+                url::Url::parse("https://example.com/sub").unwrap(),
+                import_metadata("Remote", true),
+                RemoteProfileOptions::default(),
+                false,
+                Some(FolderId("f1".into())),
+            )
+            .await
+            .unwrap();
+        let uid = report.created.expect("imported UID");
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert_eq!(report.snapshot.folders[0].members, vec![uid.clone()]);
+        assert!(report.snapshot.items.contains_key(&uid));
+        let stored = std::fs::read_to_string(temp_profiles_path(&dir)).unwrap();
+        let reloaded: Profiles = serde_yaml_ng::from_str(&stored).unwrap();
+        assert_eq!(reloaded.folders, report.snapshot.folders);
+    }
+
+    #[tokio::test]
+    async fn remote_import_into_unknown_folder_rejects_without_persisting() {
+        let dir = tempdir().unwrap();
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            temp_profiles_path(&dir),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(suggested_fetch("proxies: []\n", Some(120))),
+            test_materialization_port(),
+        )
+        .await
+        .unwrap();
+        let before = client.snapshot();
+        let original = std::fs::read(temp_profiles_path(&dir)).ok();
+        let error = client
+            .import_into_folder(
+                url::Url::parse("https://example.com/sub").unwrap(),
+                import_metadata("Remote", true),
+                RemoteProfileOptions::default(),
+                false,
+                Some(FolderId("missing".into())),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ProfilesError::ValidationFailed(_)));
+        assert_eq!(client.snapshot().revision(), before.revision());
+        assert_eq!(client.snapshot().items.len(), before.items.len());
+        assert_eq!(std::fs::read(temp_profiles_path(&dir)).ok(), original);
     }
 
     #[tokio::test]

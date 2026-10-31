@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query';
 import { unwrapResult } from '../utils/index.js';
 import {
+  type FolderId,
   type MutationOutcome,
   type NewProfileRequest_Deserialize,
   type ProfileDefinition_Deserialize,
@@ -99,6 +100,8 @@ export type CreateParams =
         name?: string | null;
         option?: RemoteProfileOptionsPatch_Deserialize | null;
         mode?: RemoteProfileImportMode;
+        /** Folder to receive the new Config in the same durable commit. */
+        folder?: FolderId | null;
       };
     }
   | {
@@ -162,6 +165,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
               params.data.name ?? null,
               params.data.option ?? null,
               params.data.mode,
+              params.data.folder ?? null,
             ]),
           );
         }
@@ -170,6 +174,7 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
             params.data.url,
             params.data.name ?? null,
             params.data.option ?? null,
+            params.data.folder ?? null,
           ]),
         );
       }

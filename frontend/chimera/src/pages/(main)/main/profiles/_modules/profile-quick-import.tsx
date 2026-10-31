@@ -1,4 +1,4 @@
-import { useProfile } from '@chimera/interface';
+import { useProfile, type FolderId } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import CloseSmallOutlineRounded from '~icons/material-symbols/close-small-outline-rounded';
 import DownloadRounded from '~icons/material-symbols/download-rounded';
@@ -8,7 +8,11 @@ import * as m from '@/paraglide/messages';
 import { formatError } from '@/utils';
 import { message } from '@/utils/notification';
 
-export default function ProfileQuickImport() {
+export default function ProfileQuickImport({
+  folder,
+}: {
+  folder?: FolderId | null;
+}) {
   const { create } = useProfile();
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,7 +35,7 @@ export default function ProfileQuickImport() {
       setLoading(true);
       await create.mutateAsync({
         type: 'url',
-        data: { url: value, option: null },
+        data: { url: value, option: null, folder: folder ?? null },
       });
       setUrl('');
       message(m.profile_quick_import_success_message(), {

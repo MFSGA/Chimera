@@ -50,9 +50,8 @@ export default function FolderNavItem({
         <Link
           ref={ref}
           role="link"
-          to="/main/profiles/$type"
-          params={{ type: 'profile' }}
-          hash={folder.id}
+          to="/main/profiles/folder/$folderId"
+          params={{ folderId: folder.id }}
           aria-label={`${folder.name}, ${folder.members.length}`}
         >
           <FolderRounded className="size-5 shrink-0" aria-hidden />

@@ -299,9 +299,12 @@ pub async fn import_profile(
     url: String,
     name: Option<String>,
     option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
+    folder: Option<chimera_config::profile::FolderId>,
 ) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
-    Ok(client.import_profile(url, name, option).await?)
+    Ok(client
+        .import_profile_to_folder(url, name, option, folder)
+        .await?)
 }
 
 #[tauri::command]
@@ -312,6 +315,7 @@ pub async fn import_profile_with_mode(
     name: Option<String>,
     mut option: Option<chimera_config::profile::RemoteProfileOptionsPatch>,
     mode: RemoteProfileImportMode,
+    folder: Option<chimera_config::profile::FolderId>,
 ) -> Result<MutationOutcome<chimera_config::profile::ProfileId>> {
     let url = url::Url::parse(&url).context("failed to parse the url")?;
     if matches!(mode, RemoteProfileImportMode::Direct) {
@@ -319,7 +323,9 @@ pub async fn import_profile_with_mode(
         patch.with_proxy = Some(false);
         patch.self_proxy = Some(false);
     }
-    Ok(client.import_profile(url, name, option).await?)
+    Ok(client
+        .import_profile_to_folder(url, name, option, folder)
+        .await?)
 }
 
 fn ensure_viewable_profile_file(

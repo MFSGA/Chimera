@@ -121,6 +121,10 @@ pub struct NewProfileRequest {
     pub metadata: ProfileMetadata,
     /// Add rewrites the materialized path to `{uid}.{ext}`.
     pub definition: ProfileDefinition,
+    /// Folder the new Config joins in the same durable commit.
+    #[serde(default)]
+    #[specta(optional)]
+    pub folder: Option<FolderId>,
 }
 
 #[derive(Debug, Clone)]
@@ -182,6 +186,7 @@ struct PendingImport {
     url: url::Url,
     option: RemoteProfileOptions,
     update_interval_explicit: bool,
+    folder: Option<FolderId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -315,6 +320,7 @@ pub enum ProfilesActorMessage {
         metadata: ProfileMetadata,
         option: RemoteProfileOptions,
         update_interval_explicit: bool,
+        folder: Option<FolderId>,
         reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
     },
     CommitImported {
@@ -1056,6 +1062,25 @@ impl ProfilesActor {
         }
     }
 
+    /// Attach a new Config to a folder before the source transaction commits.
+    /// Missing folders reject the entire add/import; never persist an orphan.
+    fn join_folder(
+        profiles: &mut Profiles,
+        uid: &ProfileId,
+        folder: Option<&FolderId>,
+    ) -> Result<(), ProfilesError> {
+        let Some(id) = folder else {
+            return Ok(());
+        };
+        let Some(target) = profiles.folders.iter_mut().find(|item| &item.id == id) else {
+            return Err(ProfilesError::ValidationFailed(vec![
+                ProfileValidationError::FolderNotFound { id: id.clone() },
+            ]));
+        };
+        target.members.push(uid.clone());
+        Ok(())
+    }
+
     fn canonical_extension(definition: &ProfileDefinition) -> &'static str {
         match definition {
             ProfileDefinition::Config { .. } => "yaml",
@@ -1370,6 +1395,7 @@ impl Actor for ProfilesActor {
                 let ext = Self::canonical_extension(&request.definition);
                 let canonical = ManagedProfilePath::new(format!("{uid}.{ext}"))
                     .expect("uid-derived path is always a valid managed path");
+                let folder = request.folder;
                 let mut definition = request.definition;
                 if let Some(source) = definition.source_mut() {
                     let materialized = source.materialized_mut();
@@ -1390,6 +1416,10 @@ impl Actor for ProfilesActor {
                             let mut next = before.clone();
                             if !next.append_item(item) {
                                 Err(ProfilesError::Persist("uid collision".into()))
+                            } else if let Err(error) =
+                                Self::join_folder(&mut next, &uid, folder.as_ref())
+                            {
+                                Err(error)
                             } else {
                                 Self::commit_with_resources(
                                     &myself,
@@ -1848,6 +1878,7 @@ impl Actor for ProfilesActor {
                 metadata,
                 option,
                 update_interval_explicit,
+                folder,
                 reply,
             } => {
                 let before = Self::current_state(state);
@@ -1868,6 +1899,7 @@ impl Actor for ProfilesActor {
                         url: url.clone(),
                         option: option.clone(),
                         update_interval_explicit,
+                        folder,
                     },
                 );
 
@@ -1996,6 +2028,10 @@ impl Actor for ProfilesActor {
                                 definition,
                             }) {
                                 Err(ProfilesError::Persist("uid collision".into()))
+                            } else if let Err(error) =
+                                Self::join_folder(&mut next, &uid, pending.folder.as_ref())
+                            {
+                                Err(error)
                             } else {
                                 // If the caller closed between the pre-check and
                                 // the first durable step, a complete valid profile

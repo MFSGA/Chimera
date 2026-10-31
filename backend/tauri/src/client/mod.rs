@@ -611,6 +611,16 @@ impl ChimeraClient {
         name: Option<String>,
         patch: Option<RemoteProfileOptionsPatch>,
     ) -> anyhow::Result<MutationOutcome<ProfileId>> {
+        self.import_profile_to_folder(url, name, patch, None).await
+    }
+
+    pub(crate) async fn import_profile_to_folder(
+        &self,
+        url: url::Url,
+        name: Option<String>,
+        patch: Option<RemoteProfileOptionsPatch>,
+        folder: Option<chimera_config::profile::FolderId>,
+    ) -> anyhow::Result<MutationOutcome<ProfileId>> {
         let update_interval_explicit = patch
             .as_ref()
             .and_then(|patch| patch.update_interval_minutes)
@@ -625,7 +635,7 @@ impl ChimeraClient {
         }
         let report = self
             .profiles_client()?
-            .import(
+            .import_into_folder(
                 url,
                 ProfileMetadata {
                     name,
@@ -634,6 +644,7 @@ impl ChimeraClient {
                 },
                 options,
                 update_interval_explicit,
+                folder,
             )
             .await?;
         let created = report

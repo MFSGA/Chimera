@@ -15,6 +15,7 @@ const profileName = `TDD Main Profile ${Date.now()}`;
 type ProfilesResponse = {
   current: string | null;
   items: Array<{ name: string; uid: string; type: 'config' | 'transform' }>;
+  folders?: Array<{ id: string; name: string; members: string[] }>;
 };
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
@@ -196,6 +197,77 @@ describe('main profiles reference layout', () => {
     );
     await browser.keys('Escape');
     await dialog.waitForDisplayed({ reverse: true, timeout: 15_000 });
+  });
+
+  // Contract: a file-folder link has a distinct route, and opening it shows
+  // exactly the test-owned member. The layout fixture is restored even if an
+  // assertion fails; no real user document or subscription is touched.
+  it('opens an actor-created folder route and restores the original layout', async () => {
+    assert.ok(profileUid);
+    const before = await invoke<ProfilesResponse>('get_profiles');
+    const previousFolders = before.folders ?? [];
+    const assigned = new Set(
+      previousFolders.flatMap((folder) => folder.members),
+    );
+    const originalLayout = {
+      folders: previousFolders,
+      ungrouped: before.items
+        .filter((item) => item.type === 'config' && !assigned.has(item.uid))
+        .map((item) => item.uid),
+    };
+    const folderName = `E2E Profile Folder ${Date.now()}`;
+    let createdId: string | undefined;
+    try {
+      createdId = committedValue(
+        await invoke<MutationOutcome<string>>('create_profile_folder', {
+          name: folderName,
+          members: [profileUid],
+        }),
+        'Create folder for the layout E2E',
+      );
+      await browser.waitUntil(
+        async () =>
+          (await invoke<ProfilesResponse>('get_profiles')).folders?.some(
+            (folder) =>
+              folder.id === createdId && folder.members.includes(profileUid!),
+          ) ?? false,
+        { timeout: 15_000 },
+      );
+
+      const link = await $(
+        `[data-slot="profiles-folder-nav-item"][data-folder="${createdId}"] a`,
+      );
+      await link.waitForClickable({ timeout: 15_000 });
+      await link.click();
+      const header = await $('[data-slot="profiles-folder-header"]');
+      await header.waitForDisplayed({ timeout: 15_000 });
+      assert.ok((await header.getText()).includes(folderName));
+      const card = await $(
+        `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`,
+      );
+      await card.waitForDisplayed({ timeout: 15_000 });
+      assert.equal(
+        await $('[data-slot="profile-quick-import"]').isExisting(),
+        true,
+        'The scoped import entry must be available on the folder route',
+      );
+    } finally {
+      // A response can be degraded or lost after the actor committed. Check
+      // the document by the test-owned unique name before deciding cleanup.
+      const persisted = await invoke<ProfilesResponse>('get_profiles');
+      if (
+        createdId ||
+        (persisted.folders ?? []).some((folder) => folder.name === folderName)
+      ) {
+        committedValue(
+          await invoke<MutationOutcome<null>>('set_profile_layout', {
+            layout: originalLayout,
+          }),
+          'Restore the original layout after folder route E2E',
+        );
+      }
+      await openMainRoute(targetPath);
+    }
   });
 
   // Contract: the persisted local Profile, overlay and JS transform use the

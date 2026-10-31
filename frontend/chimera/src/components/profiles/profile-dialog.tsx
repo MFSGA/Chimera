@@ -53,6 +53,8 @@ export type AddProfileContextValue = {
   name: string | null;
   desc: string | null;
   url: string;
+  /** Destination folder for newly created Config profiles. */
+  folder?: import('@chimera/interface').FolderId | null;
 };
 
 export const AddProfileContext = createContext<AddProfileContextValue | null>(
@@ -152,6 +154,7 @@ export const ProfileDialog = ({
           type: 'url',
           data: {
             url: data.url ?? '',
+            folder: addProfileCtx?.folder ?? null,
             option: data.option
               ? {
                   ...data.option,
@@ -163,6 +166,7 @@ export const ProfileDialog = ({
       } else {
         const request: NewProfileRequest_Deserialize = {
           metadata: { name: form.name, desc: form.desc || null },
+          folder: addProfileCtx?.folder ?? null,
           definition: {
             type: 'config',
             config: {

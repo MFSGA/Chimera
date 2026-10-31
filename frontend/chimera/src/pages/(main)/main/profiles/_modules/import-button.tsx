@@ -1,7 +1,9 @@
+import type { FolderId } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { useScrollArea } from '@chimera/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
+import { useMatch, useNavigate } from '@tanstack/react-router';
 import CloudDownloadRounded from '~icons/material-symbols/cloud-download-rounded';
 import FileOpenRounded from '~icons/material-symbols/file-open-rounded';
 import NoteStackAddRounded from '~icons/material-symbols/note-stack-add-rounded';
@@ -53,12 +55,15 @@ const SelectButton = ({
   </Tooltip>
 );
 
-export default function ImportButton() {
-  const { type } = IndexRoute.useParams();
-  const { action } = IndexRoute.useSearch();
+export default function ImportButton({ folder }: { folder?: FolderId | null }) {
+  // $type is not matched inside /folder/$folderId. Read the optional match,
+  // not a strict $type route hook, so the same import actions work on both.
+  const match = useMatch({ from: IndexRoute.id, shouldThrow: false });
+  const type = match?.params.type;
+  const action = match?.search.action;
   const { subscribeUrl, subscribeName, subscribeDesc } =
     ProfilesRoute.useSearch();
-  const navigate = IndexRoute.useNavigate();
+  const navigate = useNavigate();
   const { isScrolling } = useScrollArea();
   const [expanded, setExpanded] = useState(false);
   const [importType, setImportType] = useState<ImportType | null>(null);
@@ -92,11 +97,18 @@ export default function ImportButton() {
         name: subscribeName ?? null,
         desc: subscribeDesc ?? null,
         url: subscribeUrl,
+        folder: folder ?? null,
       };
     }
 
-    return { type: importType, name: null, desc: null, url: '' };
-  }, [importType, subscribeDesc, subscribeName, subscribeUrl]);
+    return {
+      type: importType,
+      name: null,
+      desc: null,
+      url: '',
+      folder: folder ?? null,
+    };
+  }, [folder, importType, subscribeDesc, subscribeName, subscribeUrl]);
 
   const closeImport = () => {
     setImportType(null);
@@ -119,7 +131,7 @@ export default function ImportButton() {
     }
   };
 
-  if (type !== ProfileType.Profile) return null;
+  if (type !== ProfileType.Profile && !folder) return null;
 
   return (
     <AddProfileContext.Provider value={contextValue}>

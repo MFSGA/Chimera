@@ -81,7 +81,7 @@
 
 - 日期：2026-10-31；状态：Mitigated（本机隔离复验成功，环境源配置未修改）；模块：NixOS / Rust / Test runner。基线 `master` `1ec76701` + Folder Layout 本地待提交改动，ref `1b5d73c53a7141d216a8a0a7751be38a295be059`。
 - **可复现故障**：`nix develop --command cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::set_layout_` 可完成 Rust 编译，但执行产物时报告 `/nix/store/...glibc-2.42.../lib/libc.so.6: version GLIBC_2.43/2.44 not found`，加载目标来自当前 Nix shell 中 GLib 2.88 / WebKitGTK 2.54 等动态库。属于测试启动器动态库不一致，而非业务断言失败。
-- **隔离缓解及证据**：只对测试进程以同机已有 `glibc-2.44` 的 `ld-linux-x86-64.so.2 --library-path <glibc-2.44-lib>:$LD_LIBRARY_PATH` 执行已编译 `chimera_lib` 测试二进制，`set_layout_` 3/3、`create_folder_` 2/2、新删除/旧排序回归及完整 `client::profiles::tests::` 80/80 通过。Specta 生成/一致性测试首次执行时子进程 `pnpm` spawn 返回 ENOENT；保持同一 loader，仅添加 `strace -f -qq -e trace=execve` 收集子进程证据时两个测试各 1/1 通过。尚未确认 `strace` 影响执行行为的原因，不宣称已根治。
+- **隔离缓解及证据**：只对测试进程以同机已有 `glibc-2.44` 的 `ld-linux-x86-64.so.2 --library-path <glibc-2.44-lib>:$LD_LIBRARY_PATH` 执行已编译 `chimera_lib` 测试二进制，原 Folder Layout Client 集合 80/80、随后添加 folder-scoped import 后 85/85 通过。Specta 生成/一致性测试在某次手动 loader 启动时子进程 `pnpm` spawn ENOENT；`strace -e trace=execve` 证实失败进程遍历的 PATH 不包含当前 Nix shell 下 Node/Corepack store `bin` 路径，故找不到 `pnpm`（与 TypeScript 输出无关）。在同一隔离测试进程中显式 `export PATH=<corepack-bin>:<node-bin>:$PATH` 后 `specta_export::tests::typescript_bindings_are_fresh` 1/1 通过；手动格式化本机生成的 `bindings.ts` 后官方一致性测试确认完全匹配。**未修改宿主 PATH、生成器代码和 devShell 配置，也不把之前 ENOENT 的导出测试记为通过。**
 - **限制与复查**：修复应是使 Nix dev-shell 所有运行时依赖统一 glibc ABI 的独立环境变更；本次不修改 flake/derivation、系统动态链接器或宿主设置，也不修改 CI 门禁。上述测试不能替代全平台 CI 或真实桌面 E2E；下次修改运行环境后复测原命令与子进程 Prettier，而不是长期依赖手动 loader。
 
 ### LESSON-20261031-004：Dnd-kit Sortable 的传感器配置类型需与 Hook 对齐

@@ -90,9 +90,10 @@ export const commands = {
       self_proxy: boolean | null;
       update_interval_minutes: RemoteSyncInterval | null;
     } | null,
+    folder: string | null,
   ) =>
     typedError<MutationOutcome<ProfileId>, string>(
-      __TAURI_INVOKE('import_profile', { url, name, option }),
+      __TAURI_INVOKE('import_profile', { url, name, option, folder }),
     ),
   importProfileWithMode: (
     url: string,
@@ -104,9 +105,16 @@ export const commands = {
       update_interval_minutes: RemoteSyncInterval | null;
     } | null,
     mode: RemoteProfileImportMode,
+    folder: string | null,
   ) =>
     typedError<MutationOutcome<ProfileId>, string>(
-      __TAURI_INVOKE('import_profile_with_mode', { url, name, option, mode }),
+      __TAURI_INVOKE('import_profile_with_mode', {
+        url,
+        name,
+        option,
+        mode,
+        folder,
+      }),
     ),
   viewProfile: (uid: string) =>
     typedError<null, string>(__TAURI_INVOKE('view_profile', { uid })),
@@ -2134,12 +2142,16 @@ export type NewProfileRequest_Deserialize = {
   metadata: ProfileMetadata_Deserialize;
   /**  Add rewrites the materialized path to `{uid}.{ext}`. */
   definition: ProfileDefinition_Deserialize;
+  /**  Folder the new Config joins in the same durable commit. */
+  folder?: FolderId | null;
 };
 
 export type NewProfileRequest_Serialize = {
   metadata: ProfileMetadata_Serialize;
   /**  Add rewrites the materialized path to `{uid}.{ext}`. */
   definition: ProfileDefinition_Serialize;
+  /**  Folder the new Config joins in the same durable commit. */
+  folder?: FolderId | null;
 };
 
 /**  The pipeline operator that produced a snapshot node. */
