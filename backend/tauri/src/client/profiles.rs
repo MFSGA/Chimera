@@ -8,8 +8,8 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context as _;
 use camino::Utf8PathBuf;
 use chimera_config::profile::{
-    ProfileDefinition, ProfileId, ProfileMetadata, ProfileMetadataPatch, Profiles,
-    RemoteProfileOptions, RemoteProfileOptionsPatch,
+    FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
+    Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use chimera_core::state::{PersistentStateManagerSetup, StateSnapshot};
 use ractor::{Actor, ActorRef, RpcReplyPort, rpc::CallResult};
@@ -123,7 +123,7 @@ impl ProfilesClient {
         let setup = PersistentStateManagerSetup::<Profiles, ProfilesFormat>::builder()
             .config_path(profiles_path)
             .assemble();
-        let manager = if should_load {
+        let mut manager = if should_load {
             setup
                 .load()
                 .await
@@ -134,6 +134,22 @@ impl ProfilesClient {
                 .await
                 .context("failed to initialize profiles persistent state manager")?
         };
+
+        // Match ref: invalid folder presentation metadata must not prevent
+        // loading an otherwise valid profile document. Persist the repair with
+        // one new durable generation before exposing the snapshot.
+        let mut loaded = manager.snapshot().as_ref().clone();
+        let repair = loaded.repair_folders();
+        if !repair.is_empty() {
+            tracing::warn!(?repair, "repaired malformed profile folders");
+            loaded
+                .bump_revision()
+                .context("failed to advance profiles revision after repairing folders")?;
+            manager
+                .upsert(loaded)
+                .await
+                .context("failed to persist repaired profile folders")?;
+        }
 
         let snapshot = manager.snapshot_handle();
         snapshot
@@ -280,6 +296,32 @@ impl ProfilesClient {
             .await
     }
 
+    /// Replace folders and display order using the same actor transaction as reorder.
+    pub async fn set_layout(&self, layout: ProfileLayout) -> Result<CommitReport, ProfilesError> {
+        self.call(
+            |reply| ProfilesActorMessage::SetLayout { layout, reply },
+            None,
+        )
+        .await
+    }
+
+    /// Create a folder around the given Config members in one transaction.
+    pub async fn create_folder(
+        &self,
+        name: String,
+        members: Vec<ProfileId>,
+    ) -> Result<(CommitReport, FolderId), ProfilesError> {
+        self.call(
+            |reply| ProfilesActorMessage::CreateFolder {
+                name,
+                members,
+                reply,
+            },
+            None,
+        )
+        .await
+    }
+
     pub async fn patch_metadata(
         &self,
         uid: ProfileId,
@@ -404,10 +446,10 @@ mod tests {
     };
     use chimera_config::profile::RemoteSyncInterval;
     use chimera_config::profile::{
-        ConfigDefinition, ExternalMode, ExternalProfilePath, FileConfig, LocalBinding,
+        ConfigDefinition, ExternalMode, ExternalProfilePath, FileConfig, FolderId, LocalBinding,
         ManagedProfilePath, MaterializedFile, OverlayTransform, ProfileDefinition, ProfileId,
-        ProfileMetadata, ProfileSource, Profiles, RemoteProfileOptions, ScriptRuntime,
-        ScriptTransform, SubscriptionInfo, TransformDefinition,
+        ProfileLayout, ProfileMetadata, ProfileSource, Profiles, RemoteProfileOptions,
+        ScriptRuntime, ScriptTransform, SubscriptionInfo, TransformDefinition,
     };
     use struct_patch::Patch as _;
     use tempfile::{TempDir, tempdir};
@@ -2828,6 +2870,247 @@ mod tests {
         );
     }
 
+    fn test_folder(
+        folder: &str,
+        name: &str,
+        members: &[&str],
+    ) -> chimera_config::profile::ProfileFolder {
+        chimera_config::profile::ProfileFolder {
+            id: FolderId(folder.into()),
+            name: name.into(),
+            members: members.iter().map(|uid| ProfileId((*uid).into())).collect(),
+        }
+    }
+
+    fn profile_order(profiles: &Profiles) -> Vec<&str> {
+        profiles.items.keys().map(|uid| uid.0.as_str()).collect()
+    }
+
+    #[tokio::test]
+    async fn set_layout_commits_folders_and_order_in_one_revision_and_persists() {
+        let (client, dir) = seeded_client().await;
+        let before = client.snapshot().revision();
+        let report = client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg2", "cfg1"])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert_eq!(
+            report.snapshot.folders,
+            vec![test_folder("f1", "Work", &["cfg2", "cfg1"])]
+        );
+        assert_eq!(
+            profile_order(&report.snapshot),
+            vec!["cfg2", "cfg1", "ovl1"]
+        );
+        assert!(!report.affects_current);
+        assert_eq!(client.snapshot().revision(), report.snapshot.revision());
+        let written = std::fs::read_to_string(temp_profiles_path(&dir)).unwrap();
+        assert!(written.contains("folders:"), "{written}");
+        let reloaded: Profiles = serde_yaml_ng::from_str(&written).unwrap();
+        assert_eq!(reloaded.folders, report.snapshot.folders);
+        assert_eq!(profile_order(&reloaded), profile_order(&report.snapshot));
+    }
+
+    #[tokio::test]
+    async fn set_layout_rejects_invalid_candidates_without_writing() {
+        let (client, dir) = seeded_client().await;
+        let before = client.snapshot();
+        let persisted = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        for layout in [
+            ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg1"])],
+                ungrouped: vec![],
+            },
+            ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg1", "cfg1"])],
+                ungrouped: vec![ProfileId("cfg2".into())],
+            },
+            ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["ovl1"])],
+                ungrouped: vec![ProfileId("cfg1".into()), ProfileId("cfg2".into())],
+            },
+            ProfileLayout {
+                folders: vec![test_folder("f1", " ", &[])],
+                ungrouped: vec![ProfileId("cfg1".into()), ProfileId("cfg2".into())],
+            },
+            ProfileLayout {
+                folders: vec![],
+                ungrouped: vec![
+                    ProfileId("cfg1".into()),
+                    ProfileId("cfg2".into()),
+                    ProfileId("ghost".into()),
+                ],
+            },
+        ] {
+            let error = client.set_layout(layout).await.unwrap_err();
+            assert!(
+                matches!(error, ProfilesError::ValidationFailed(_)),
+                "{error:?}"
+            );
+            let now = client.snapshot();
+            assert_eq!(now.revision(), before.revision());
+            assert_eq!(now.folders, before.folders);
+            assert_eq!(profile_order(&now), profile_order(&before));
+            assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), persisted);
+        }
+    }
+
+    #[tokio::test]
+    async fn set_layout_moves_members_between_existing_folders_in_one_commit() {
+        let (client, _dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![
+                    test_folder("f1", "A", &["cfg1"]),
+                    test_folder("f2", "B", &["cfg2"]),
+                ],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let before = client.snapshot().revision();
+        let report = client
+            .set_layout(ProfileLayout {
+                folders: vec![
+                    test_folder("f1", "A", &[]),
+                    test_folder("f2", "B", &["cfg2", "cfg1"]),
+                ],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert_eq!(
+            profile_order(&report.snapshot),
+            vec!["cfg2", "cfg1", "ovl1"]
+        );
+        assert_eq!(
+            report.snapshot.folders[1].members,
+            vec![ProfileId("cfg2".into()), ProfileId("cfg1".into())]
+        );
+    }
+
+    #[tokio::test]
+    async fn create_folder_moves_members_out_of_old_folder_and_commits_once() {
+        let (client, _dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Old", &["cfg1", "cfg2"])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let before = client.snapshot().revision();
+        let (report, minted_id) = client
+            .create_folder("New".into(), vec![ProfileId("cfg2".into())])
+            .await
+            .unwrap();
+        assert_eq!(report.snapshot.revision(), before + 1);
+        assert!(minted_id.0.starts_with('f'));
+        assert_ne!(minted_id, FolderId("f1".into()));
+        assert_eq!(
+            report.snapshot.folders,
+            vec![
+                test_folder("f1", "Old", &["cfg1"]),
+                test_folder(&minted_id.0, "New", &["cfg2"]),
+            ]
+        );
+        assert_eq!(
+            profile_order(&report.snapshot),
+            vec!["cfg1", "cfg2", "ovl1"]
+        );
+        assert!(!report.affects_current);
+    }
+
+    #[tokio::test]
+    async fn create_folder_rejects_invalid_names_and_members_without_committing() {
+        let (client, dir) = seeded_client().await;
+        let before = client.snapshot();
+        let stored = std::fs::read(temp_profiles_path(&dir)).unwrap();
+        for (name, members) in [
+            ("  ", vec![ProfileId("cfg1".into())]),
+            ("Bad", vec![ProfileId("ovl1".into())]),
+            ("Bad", vec![ProfileId("ghost".into())]),
+            (
+                "Bad",
+                vec![ProfileId("cfg1".into()), ProfileId("cfg1".into())],
+            ),
+        ] {
+            let error = client
+                .create_folder(name.into(), members)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, ProfilesError::ValidationFailed(_)),
+                "{error:?}"
+            );
+            assert_eq!(client.snapshot().revision(), before.revision());
+            assert_eq!(client.snapshot().folders, before.folders);
+            assert_eq!(std::fs::read(temp_profiles_path(&dir)).unwrap(), stored);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_config_removes_folder_member_without_deleting_folder() {
+        let (client, _dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg1", "cfg2"])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let report = client.delete(ProfileId("cfg1".into())).await.unwrap();
+        assert_eq!(
+            report.snapshot.folders,
+            vec![test_folder("f1", "Work", &["cfg2"])]
+        );
+        assert!(report.snapshot.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn old_reorder_api_preserves_folder_metadata_and_new_layout_can_restore_order() {
+        let (client, _dir) = seeded_client().await;
+        client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg1", "cfg2"])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        let report = client
+            .reorder(ReorderOp::ByList(vec![
+                ProfileId("ovl1".into()),
+                ProfileId("cfg2".into()),
+                ProfileId("cfg1".into()),
+            ]))
+            .await
+            .unwrap();
+        assert_eq!(
+            profile_order(&report.snapshot),
+            vec!["ovl1", "cfg2", "cfg1"]
+        );
+        assert_eq!(
+            report.snapshot.folders,
+            vec![test_folder("f1", "Work", &["cfg1", "cfg2"])]
+        );
+        let report = client
+            .set_layout(ProfileLayout {
+                folders: vec![test_folder("f1", "Work", &["cfg2", "cfg1"])],
+                ungrouped: vec![],
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            profile_order(&report.snapshot),
+            vec!["cfg2", "cfg1", "ovl1"]
+        );
+    }
+
     #[tokio::test]
     async fn reorder_move_and_by_list() {
         let (client, _dir) = seeded_client().await;
@@ -3087,6 +3370,53 @@ mod tests {
         });
         client.replace(profiles).await.unwrap();
         client.delete(ProfileId("comp".into())).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn startup_repairs_invalid_profile_folders_and_persists_the_repair() {
+        use chimera_config::profile::{FolderId, ProfileFolder};
+
+        let dir = tempdir().unwrap();
+        let path = temp_profiles_path(&dir);
+        let mut profiles = seeded_profiles();
+        for _ in 0..7 {
+            profiles.bump_revision().unwrap();
+        }
+        profiles.folders = vec![
+            ProfileFolder {
+                id: FolderId("work".into()),
+                name: "  ".into(),
+                members: vec![ProfileId("cfg1".into()), ProfileId("ghost".into())],
+            },
+            ProfileFolder {
+                id: FolderId("work".into()),
+                name: "Duplicate".into(),
+                members: vec![ProfileId("cfg2".into())],
+            },
+        ];
+        let body = serde_yaml_ng::to_string(&profiles).unwrap();
+        let raw = format!("_nyanpasu:\n  document: profiles\n  schema_revision: 4\n{body}");
+        std::fs::write(&path, raw).unwrap();
+
+        let client = ProfilesClient::new(
+            crate::state::mutation::MutationCoordinator::isolated(),
+            path.clone(),
+            Arc::new(MockProfileFsPort::new()),
+            Arc::new(MockSubscriptionFetcher::new()),
+            test_materialization_port(),
+        )
+        .await
+        .expect("invalid presentation folders must be repaired, not fatal");
+        let snapshot = client.snapshot();
+        assert_eq!(snapshot.revision(), 8);
+        assert_eq!(snapshot.folders.len(), 1);
+        assert_eq!(snapshot.folders[0].name, "Folder");
+        assert_eq!(snapshot.folders[0].members, vec![ProfileId("cfg1".into())]);
+        assert!(snapshot.validate().is_ok());
+        let persisted = std::fs::read_to_string(&path).unwrap();
+        assert!(!persisted.contains("ghost"), "{persisted}");
+        assert!(!persisted.contains("Duplicate"), "{persisted}");
+        assert!(persisted.contains("revision: 8"), "{persisted}");
     }
 
     #[tokio::test]

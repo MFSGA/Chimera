@@ -43,6 +43,8 @@ macro_rules! build_builder {
                 crate::ipc::view_profile,
                 crate::ipc::reorder_profile,
                 crate::ipc::reorder_profiles_by_list,
+                crate::ipc::set_profile_layout,
+                crate::ipc::create_profile_folder,
                 crate::ipc::activate_profile,
                 crate::ipc::set_profile_valid_fields,
                 crate::ipc::set_global_transforms,

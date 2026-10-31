@@ -82,6 +82,16 @@ export const mutations = {
     mutationFn: (input: Parameters<typeof commands.setGlobalTransforms>) =>
       commands.setGlobalTransforms(...input),
   }),
+  setProfileLayout: mutationOptions({
+    mutationKey: ['setProfileLayout'],
+    mutationFn: (input: Parameters<typeof commands.setProfileLayout>) =>
+      commands.setProfileLayout(...input),
+  }),
+  createProfileFolder: mutationOptions({
+    mutationKey: ['createProfileFolder'],
+    mutationFn: (input: Parameters<typeof commands.createProfileFolder>) =>
+      commands.createProfileFolder(...input),
+  }),
   reorderProfilesByList: mutationOptions({
     mutationKey: ['reorderProfilesByList'],
     mutationFn: (input: Parameters<typeof commands.reorderProfilesByList>) =>

@@ -4,9 +4,14 @@ import { CircularProgress } from '@chimera/ui/progress';
 import { move } from '@dnd-kit/helpers';
 import { DragDropProvider } from '@dnd-kit/react';
 import { isEqual } from 'lodash-es';
-import type { ComponentProps } from 'react';
+import { useRef, type ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
 import { WHOLE_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
+import {
+  NoMoreProfiles,
+  useListOverflows,
+} from '../../_modules/profiles-list-footer';
+import { useProgressiveCount } from '../../_modules/use-progressive-count';
 import { categoryProfiles } from '../../_modules/utils';
 import { Route as IndexRoute } from '../index';
 import SortableProfileItem from './sortable-profile-item';
@@ -29,6 +34,13 @@ export default function ProfilesList({
 }: Omit<ComponentProps<'div'>, 'children'>) {
   const { type } = IndexRoute.useParams();
   const { query, sort } = useProfile();
+  const profiles = query.data?.items ?? [];
+  const globalTransforms = new Set(query.data?.global_transforms ?? []);
+  const categorized = categoryProfiles(profiles);
+  const filteredProfiles = categorized[type as keyof typeof categorized] ?? [];
+  const gridRef = useRef<HTMLDivElement>(null);
+  const overflows = useListOverflows(gridRef, filteredProfiles.length);
+  const shown = useProgressiveCount(filteredProfiles.length);
 
   if (query.isLoading) {
     return (
@@ -41,11 +53,6 @@ export default function ProfilesList({
   if (query.isError) {
     return <EmptyList>{String(query.error)}</EmptyList>;
   }
-
-  const profiles = query.data?.items ?? [];
-  const globalTransforms = new Set(query.data?.global_transforms ?? []);
-  const categorized = categoryProfiles(profiles);
-  const filteredProfiles = categorized[type as keyof typeof categorized] ?? [];
 
   if (filteredProfiles.length === 0) {
     return <EmptyList />;
@@ -76,6 +83,7 @@ export default function ProfilesList({
           }}
         >
           <div
+            ref={gridRef}
             className={cn(
               'grid content-start gap-2',
               'md:grid-cols-2',
@@ -84,8 +92,10 @@ export default function ProfilesList({
               className,
             )}
             data-slot="profiles-navigate"
+            data-rendered-count={shown}
+            data-total-count={filteredProfiles.length}
           >
-            {filteredProfiles.map((profile, index) => (
+            {filteredProfiles.slice(0, shown).map((profile, index) => (
               <SortableProfileItem
                 key={profile.uid}
                 item={profile}
@@ -101,9 +111,7 @@ export default function ProfilesList({
         <div className="flex-1" />
       </div>
 
-      <div className="mb-4 flex h-16 items-center justify-center text-center text-sm text-gray-500">
-        {m.profile_no_more_profiles()}
-      </div>
+      {overflows && <NoMoreProfiles />}
     </>
   );
 }

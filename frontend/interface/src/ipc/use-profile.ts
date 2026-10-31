@@ -1,11 +1,18 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryKey,
+} from '@tanstack/react-query';
 import { unwrapResult } from '../utils/index.js';
 import {
   type MutationOutcome,
   type NewProfileRequest_Deserialize,
   type ProfileDefinition_Deserialize,
+  type ProfileDocument_Serialize,
   type ProfileId,
   type ProfileItem_Serialize,
+  type ProfileLayout,
   type ProfileMetadataPatch_Deserialize,
   type ProfileSource_Serialize,
   type RemoteProfileImportMode,
@@ -13,6 +20,7 @@ import {
 } from './bindings.js';
 import { mutations, queries } from './profile-bindings.js';
 import { remoteProfileDefinitionOf } from './profile-definition.js';
+import { applyProfileLayout } from './profile-folders.js';
 import { invokeMutation, invokeQuery } from './query-options.js';
 
 export const isConfigItem = (
@@ -74,6 +82,11 @@ export interface ProfileHelperFn {
 export type ProfileQueryResultItem = ProfileItem_Serialize &
   Partial<ProfileHelperFn>;
 
+/** Independent cache snapshot shape, not a recursive ReturnType<typeof useProfile>. */
+type ProfileQueryData = Omit<ProfileDocument_Serialize, 'items'> & {
+  items: ProfileQueryResultItem[];
+};
+
 export type ProfileQueryResult = NonNullable<
   ReturnType<typeof useProfile>['query']['data']
 >;
@@ -111,6 +124,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
   const setProfileValidFields = mutations.setProfileValidFields;
   const setGlobalTransformsMutation = mutations.setGlobalTransforms;
   const reorderProfilesByList = mutations.reorderProfilesByList;
+  const setProfileLayout = mutations.setProfileLayout;
+  const createProfileFolder = mutations.createProfileFolder;
   const deleteProfile = mutations.deleteProfile;
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: profilesOptions.queryKey });
@@ -252,6 +267,55 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     onSuccess: invalidate,
   });
 
+  // Match ref: serialize layout edits and keep the Profile list responsive.
+  // Domain refusals roll back the optimistic change; the final mutation
+  // invalidates the cache so the committed server document wins.
+  const setLayout = useMutation({
+    mutationKey: setProfileLayout.mutationKey,
+    scope: { id: 'profile-layout' },
+    mutationFn: async (layout: ProfileLayout) =>
+      unwrapResult(await invokeMutation(setProfileLayout, [layout])),
+    onMutate: async (layout) => {
+      const queryKey: QueryKey = profilesOptions.queryKey;
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<ProfileQueryData>(queryKey);
+      if (previous) {
+        queryClient.setQueryData<ProfileQueryData>(
+          queryKey,
+          applyProfileLayout(previous, layout),
+        );
+      }
+      return { previous };
+    },
+    onError: (_error, _layout, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData<ProfileQueryData>(
+          profilesOptions.queryKey,
+          context.previous,
+        );
+      }
+    },
+    onSettled: () => {
+      const queued = queryClient.isMutating({
+        mutationKey: setProfileLayout.mutationKey,
+      });
+      return queued > 1 ? undefined : invalidate();
+    },
+  });
+
+  const createFolder = useMutation({
+    mutationKey: createProfileFolder.mutationKey,
+    mutationFn: async ({
+      name,
+      members,
+    }: {
+      name: string;
+      members: ProfileId[];
+    }) =>
+      unwrapResult(await invokeMutation(createProfileFolder, [name, members])),
+    onSuccess: invalidate,
+  });
+
   const drop = useMutation({
     mutationKey: deleteProfile.mutationKey,
     mutationFn: async (uid: ProfileId) =>
@@ -270,6 +334,8 @@ export const useProfile = (options?: { without_helper_fn?: boolean }) => {
     setValidFields,
     setGlobalTransforms,
     sort,
+    setLayout,
+    createFolder,
     drop,
   };
 };

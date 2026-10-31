@@ -4,11 +4,12 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use chimera_config::profile::{
-    ConfigDefinition, ExternalMode, FileConfig, LocalBinding, ManagedProfilePath, MaterializedFile,
-    ProfileDefinition, ProfileDependencyIndex, ProfileId, ProfileItem, ProfileMetadata,
-    ProfileMetadataPatch, ProfileRevisionError, ProfileSource, ProfileValidationError, Profiles,
-    RemoteProfileOptions, RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime,
-    SubscriptionInfo, TransformDefinition,
+    ConfigDefinition, ExternalMode, FileConfig, FolderId, LocalBinding, ManagedProfilePath,
+    MaterializedFile, ProfileDefinition, ProfileDependencyIndex, ProfileFolder, ProfileId,
+    ProfileItem, ProfileLayout, ProfileMetadata, ProfileMetadataPatch, ProfileRevisionError,
+    ProfileSource, ProfileValidationError, Profiles, RemoteProfileOptions,
+    RemoteProfileOptionsPatch, RemoteSyncInterval, ScriptRuntime, SubscriptionInfo,
+    TransformDefinition,
 };
 use chimera_core::state::{PersistentStateManager, ReplaceIfVersionResult, Version};
 use chimera_core_manager::OperationId;
@@ -263,6 +264,17 @@ pub enum ProfilesActorMessage {
     Reorder {
         op: ReorderOp,
         reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
+    },
+    /// Replace folders and display order in a single durable commit.
+    SetLayout {
+        layout: ProfileLayout,
+        reply: RpcReplyPort<Result<CommitReport, ProfilesError>>,
+    },
+    /// Move selected members into a newly minted folder in one commit.
+    CreateFolder {
+        name: String,
+        members: Vec<ProfileId>,
+        reply: RpcReplyPort<Result<(CommitReport, FolderId), ProfilesError>>,
     },
     PatchMetadata {
         uid: ProfileId,
@@ -1035,6 +1047,15 @@ impl ProfilesActor {
         }
     }
 
+    fn generate_folder_id(existing: &Profiles) -> FolderId {
+        loop {
+            let candidate = FolderId(format!("f{}", nanoid::nanoid!(11)));
+            if existing.folders.iter().all(|folder| folder.id != candidate) {
+                return candidate;
+            }
+        }
+    }
+
     fn canonical_extension(definition: &ProfileDefinition) -> &'static str {
         match definition {
             ProfileDefinition::Config { .. } => "yaml",
@@ -1473,6 +1494,48 @@ impl Actor for ProfilesActor {
                     Ok(AffectsRule::Never)
                 })
                 .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::SetLayout { layout, reply } => {
+                let result = Self::run_state_write(&myself, state, move |profiles| {
+                    profiles
+                        .apply_layout(layout)
+                        .map_err(ProfilesError::ValidationFailed)?;
+                    Ok(AffectsRule::Never)
+                })
+                .await;
+                let _ = reply.send(result);
+            }
+            ProfilesActorMessage::CreateFolder {
+                name,
+                members,
+                reply,
+            } => {
+                // The actor owns all folder writes. The generated id remains
+                // unused until this mutation has finished committing.
+                let id = Self::generate_folder_id(&Self::current_state(state));
+                let folder_id = id.clone();
+                let result = Self::run_state_write(&myself, state, move |profiles| {
+                    let mut folders = profiles.folders.clone();
+                    for folder in &mut folders {
+                        folder.members.retain(|member| !members.contains(member));
+                    }
+                    folders.push(ProfileFolder { id, name, members });
+                    let placed: indexmap::IndexSet<&ProfileId> =
+                        folders.iter().flat_map(|folder| &folder.members).collect();
+                    let ungrouped = profiles
+                        .items
+                        .iter()
+                        .filter(|(uid, item)| item.definition.is_config() && !placed.contains(uid))
+                        .map(|(uid, _)| uid.clone())
+                        .collect();
+                    profiles
+                        .apply_layout(ProfileLayout { folders, ungrouped })
+                        .map_err(ProfilesError::ValidationFailed)?;
+                    Ok(AffectsRule::Never)
+                })
+                .await
+                .map(|report| (report, folder_id));
                 let _ = reply.send(result);
             }
             ProfilesActorMessage::PatchMetadata { uid, patch, reply } => {

@@ -59,6 +59,29 @@
 | LESSON-20261029-002 | 2026-10-29 | E2E / Storage | PR #548 新 IPC 返回 value/revision；Dashboard 用例仍按旧字符串合同读写，Windows hermetic 失败 | Mitigated |
 | LESSON-20261029-003 | 2026-10-29 | CI / Dependencies | PR #550 首次选中的 TanStack 版本仍在 24 小时 release-age 窗口；本地复用旧 pnpm store 未能替代新鲜验证，调整版本后精确 SHA CI/E2E 通过 | Verified |
 | LESSON-20261030-001 | 2026-10-30 | Rust / macOS testing | `muda::Menu` 在普通 Rust 测试线程 panic；用共享的纯菜单模型测试，原生托盘仍需桌面验证 | Mitigated |
+| LESSON-20261031-001 | 2026-10-31 | Profiles / ref | ref 布局函数允许未知 UID 插入；新增失败复现与最小存在性验证，21 项测试通过 | Mitigated |
+| LESSON-20261031-002 | 2026-10-31 | Rust / Development | 无范围的 Cargo fmt 扫到 vendor 和 runtime 子模块；已仅还原非目标差异，改用指定包的格式检查 | Mitigated |
+| LESSON-20261031-003 | 2026-10-31 | NixOS / Rust tests | Nix glibc 2.42 测试解释器混用 GTK/WebKit glibc ≥2.43 导致测试进程启动失败；隔离新 loader 复验 80/80 | Mitigated |
+
+### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
+
+- 日期：2026-10-31；状态：Mitigated；模块：Profiles / ref 迁移。基线 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059`，路径 `frontend/nyanpasu/src/pages/(main)/main/profiles/_modules/profile-layout.ts::moveProfileInLayout`。
+- 复现证据：在 Chimera 直接迁入 ref 函数后执行 `pnpm --filter=chimera-ui test:profile-layout`，21 项中 1 项失败：未知 UID `not-loaded` 被加入有效文件夹，与源代码注释的未知配置 no-op 约定不符；后端 `Profiles::apply_layout` 则拒绝未知配置。
+- 修正和防复发：只在纯函数中增加 folders/ungrouped 中存在 UID 的短路检查，保留其余上游实现及路径；同一测试集修复后 21/21 通过，Rust 配置领域 172/172 通过。测试入口 `frontend/chimera/tests/profile-layout.test.ts`，退回原函数会触发目标断言失败。
+- 限制与复查：当前尚未接通文件夹 UI 和 IPC，不能用此单测推断持久化/桌面拖拽正确；后续 ref 修改该函数时复核差异并在等价修正后收敛。
+
+### LESSON-20261031-002：格式化 Rust 时应限定包，避免触碰 vendor 与子模块
+
+- 日期：2026-10-31；状态：Mitigated；模块：Rust / Development。初始 `git status` 表明 vendor 与 runtime 子模块均干净。运行 `cargo fmt --all` 后，6 个 vendored WebDriver 文件和 `backend/chimera-runtime` 内 5 个 Rust 文件出现纯格式差异。
+- 已确认原因与恢复：`--all` 跨工作区格式化了本轮 Folder Layout 以外的源文件；通过精确 `git restore -- <path>` 和子模块内精确 restore 还原这些差异，随后 `git status`、`git -C backend/chimera-runtime status --porcelain` 验证它们干净。
+- 预防和验收：以后仅用 `cargo fmt --manifest-path backend/Cargo.toml -p chimera -p chimera-config -- --check` 检查受影响的包，修改范围在 Git diff 中逐项复核。该命令本轮已通过；未改变 vendor、子模块 gitlink、CI 或发布配置。
+
+### LESSON-20261031-003：混合 glibc 版本影响 Tauri 测试二进制启动
+
+- 日期：2026-10-31；状态：Mitigated（本机隔离复验成功，环境源配置未修改）；模块：NixOS / Rust / Test runner。基线 `master` `1ec76701` + Folder Layout 本地待提交改动，ref `1b5d73c53a7141d216a8a0a7751be38a295be059`。
+- **可复现故障**：`nix develop --command cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::set_layout_` 可完成 Rust 编译，但执行产物时报告 `/nix/store/...glibc-2.42.../lib/libc.so.6: version GLIBC_2.43/2.44 not found`，加载目标来自当前 Nix shell 中 GLib 2.88 / WebKitGTK 2.54 等动态库。属于测试启动器动态库不一致，而非业务断言失败。
+- **隔离缓解及证据**：只对测试进程以同机已有 `glibc-2.44` 的 `ld-linux-x86-64.so.2 --library-path <glibc-2.44-lib>:$LD_LIBRARY_PATH` 执行已编译 `chimera_lib` 测试二进制，`set_layout_` 3/3、`create_folder_` 2/2、新删除/旧排序回归及完整 `client::profiles::tests::` 80/80 通过。Specta 生成/一致性测试首次执行时子进程 `pnpm` spawn 返回 ENOENT；保持同一 loader，仅添加 `strace -f -qq -e trace=execve` 收集子进程证据时两个测试各 1/1 通过。尚未确认 `strace` 影响执行行为的原因，不宣称已根治。
+- **限制与复查**：修复应是使 Nix dev-shell 所有运行时依赖统一 glibc ABI 的独立环境变更；本次不修改 flake/derivation、系统动态链接器或宿主设置，也不修改 CI 门禁。上述测试不能替代全平台 CI 或真实桌面 E2E；下次修改运行环境后复测原命令与子进程 Prettier，而不是长期依赖手动 loader。
 
 ## 单条模板
 

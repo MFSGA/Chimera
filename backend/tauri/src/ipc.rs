@@ -507,6 +507,27 @@ pub async fn reorder_profiles_by_list(
         .await?)
 }
 
+/// Replace the full Config folder layout in a single profile mutation.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_profile_layout(
+    client: State<'_, ChimeraClient>,
+    layout: chimera_config::profile::ProfileLayout,
+) -> Result<MutationOutcome<()>> {
+    Ok(client.set_profile_layout(layout).await?)
+}
+
+/// Create a folder and return its server-generated stable id.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_profile_folder(
+    client: State<'_, ChimeraClient>,
+    name: String,
+    members: Vec<chimera_config::profile::ProfileId>,
+) -> Result<MutationOutcome<chimera_config::profile::FolderId>> {
+    Ok(client.create_profile_folder(name, members).await?)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn activate_profile(

@@ -118,6 +118,16 @@ export const commands = {
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('reorder_profiles_by_list', { list }),
     ),
+  /**  Replace the full Config folder layout in a single profile mutation. */
+  setProfileLayout: (layout: ProfileLayout) =>
+    typedError<MutationOutcome<null>, string>(
+      __TAURI_INVOKE('set_profile_layout', { layout }),
+    ),
+  /**  Create a folder and return its server-generated stable id. */
+  createProfileFolder: (name: string, members: ProfileId[]) =>
+    typedError<MutationOutcome<FolderId>, string>(
+      __TAURI_INVOKE('create_profile_folder', { name, members }),
+    ),
   activateProfile: (uid: string | null) =>
     typedError<MutationOutcome<null>, string>(
       __TAURI_INVOKE('activate_profile', { uid }),
@@ -1747,6 +1757,12 @@ export type ExternalMode = 'symlink' | 'mirror';
 /**  An absolute path outside the managed profile directory. */
 export type ExternalProfilePath = string;
 
+/**
+ *  Stable identifier of a profile folder. It is minted by the profiles actor and
+ *  never reused, so a folder keeps its identity across renames and reorders.
+ */
+export type FolderId = string;
+
 /**  What the address a destination was located by is to the outbound. */
 export type GeoBasis =
   /**  The outbound dialed this address. */
@@ -2305,6 +2321,7 @@ export type ProfileDocument_Deserialize = {
   current?: ProfileId | null;
   global_transforms?: ProfileId[];
   valid: string[];
+  folders?: ProfileFolder[];
   items: ProfileItem_Deserialize[];
 };
 
@@ -2312,7 +2329,19 @@ export type ProfileDocument_Serialize = {
   current?: ProfileId | null;
   global_transforms?: ProfileId[];
   valid: string[];
+  folders?: ProfileFolder[];
   items: ProfileItem_Serialize[];
+};
+
+/**
+ *  A user-named group of Config profiles. A Config profile belongs to at most
+ *  one folder; transforms are never members.
+ */
+export type ProfileFolder = {
+  id: FolderId;
+  name: string;
+  /**  Display order inside the folder. */
+  members: ProfileId[];
 };
 
 /**  Stable profile identifier. It is also the key used by [`Profiles::items`]. */
@@ -2332,6 +2361,15 @@ export type ProfileItem_Serialize = {
   uid: ProfileId;
 } & ProfileMetadata_Serialize &
   ProfileDefinition_Serialize;
+
+/**
+ *  The complete arrangement of Config profiles: every Config profile appears
+ *  exactly once, either inside a folder or in `ungrouped`.
+ */
+export type ProfileLayout = {
+  folders: ProfileFolder[];
+  ungrouped: ProfileId[];
+};
 
 /**  Public, user-editable profile metadata. */
 export type ProfileMetadata =

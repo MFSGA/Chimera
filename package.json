@@ -41,7 +41,7 @@
     "test:changed-parts": "deno test --frozen --config scripts/deno.jsonc scripts/src/ci/changed-parts_test.ts",
     "test:release-preflight": "deno test --frozen --allow-read --allow-write --allow-run --allow-env --config scripts/deno.jsonc scripts/src/ci/release-preflight_test.ts",
     "test:agent:intent": "tsx --test frontend/chimera/src/features/agent/model/intent-routing.test.ts frontend/chimera/src/features/agent/model/intent-resolution.test.ts",
-    "test:profiles:query": "tsx --test frontend/interface/tests/profile-content-query.test.ts",
+    "test:profiles:query": "tsx --test frontend/interface/tests/profile-content-query.test.ts frontend/interface/tests/profile-folders.test.ts frontend/interface/tests/profile-folder-mutation.test.ts",
     "test:manifest": "deno test --frozen --allow-read --allow-write --config scripts/deno.jsonc scripts/github-api_test.ts scripts/src/prepare/binaries_test.ts scripts/src/prepare/check_test.ts scripts/src/prepare/chimera-client-alpha_test.ts scripts/src/prepare/download_test.ts scripts/src/prepare/platform_test.ts scripts/src/prepare/progress_test.ts scripts/src/prepare/resources_test.ts scripts/src/prepare/versions_test.ts",
     "test:updater-manifest": "tsx --test scripts/updater-manifest.test.ts scripts/github-release.test.ts",
     "publish": "tsx scripts/publish.ts",

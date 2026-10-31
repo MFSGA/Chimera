@@ -28,8 +28,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, anyhow};
 use chimera_config::profile::{
-    ProfileDefinition, ProfileId, ProfileMetadata, ProfileMetadataPatch, ProfileSource, Profiles,
-    RemoteProfileOptions, RemoteProfileOptionsPatch,
+    FolderId, ProfileDefinition, ProfileId, ProfileLayout, ProfileMetadata, ProfileMetadataPatch,
+    ProfileSource, Profiles, RemoteProfileOptions, RemoteProfileOptionsPatch,
 };
 use struct_patch::Patch as _;
 
@@ -681,6 +681,31 @@ impl ChimeraClient {
             .await?;
         self.refresh_profiles();
         Ok(self.after_commit(&report).await)
+    }
+
+    /// Atomically persist the Profile folders and Config display order.
+    pub(crate) async fn set_profile_layout(
+        &self,
+        layout: ProfileLayout,
+    ) -> anyhow::Result<MutationOutcome<()>> {
+        let report = self.profiles_client()?.set_layout(layout).await?;
+        self.refresh_profiles();
+        Ok(self.after_commit(&report).await)
+    }
+
+    /// Create a folder and move Config members into it without a second write.
+    pub(crate) async fn create_profile_folder(
+        &self,
+        name: String,
+        members: Vec<ProfileId>,
+    ) -> anyhow::Result<MutationOutcome<FolderId>> {
+        let (report, folder) = self.profiles_client()?.create_folder(name, members).await?;
+        self.refresh_profiles();
+        Ok(MutationOutcome::from_parts(
+            folder,
+            self.collect_post_commit_degradations(&report).await,
+        )
+        .with_commit(report.receipt.clone()))
     }
 
     pub(crate) async fn refresh_profile(

@@ -14,7 +14,7 @@ const profileName = `TDD Main Profile ${Date.now()}`;
 
 type ProfilesResponse = {
   current: string | null;
-  items: Array<{ name: string; uid: string }>;
+  items: Array<{ name: string; uid: string; type: 'config' | 'transform' }>;
 };
 
 async function invoke<T>(command: string, args?: Record<string, unknown>) {
@@ -250,6 +250,58 @@ describe('main profiles reference layout', () => {
       assert.equal(await activate.isExisting(), true);
       assert.ok(await activate.getAttribute('aria-label'));
     }
+  });
+
+  // Contract: the Profile list eventually displays every config returned by
+  // the independent read-only get_profiles IPC, despite mounting six at a time.
+  // No reload or extra write is allowed to make a missing card appear. The
+  // existing test-owned fixture is sufficient; no extra Profiles are created.
+  it('eventually renders every persisted config card after progressive batches', async () => {
+    assert.ok(profileUid);
+    const profiles = await invoke<ProfilesResponse>('get_profiles');
+    const expected = profiles.items.filter(
+      (item) => item.type === 'config',
+    ).length;
+    assert.ok(expected > 0, 'The synthetic Profile was not persisted.');
+
+    let last = {
+      total: 0,
+      rendered: 0,
+      cards: 0,
+      foundFixture: false,
+    };
+    await browser.waitUntil(
+      async () => {
+        last = await browser.execute((uid) => {
+          const grid = document.querySelector<HTMLElement>(
+            '[data-slot="profiles-navigate"]',
+          );
+          const cards = grid?.querySelectorAll<HTMLElement>(
+            '[data-slot="profile-card"][data-profile-uid]',
+          );
+          return {
+            total: Number(grid?.dataset.totalCount ?? 0),
+            rendered: Number(grid?.dataset.renderedCount ?? 0),
+            cards: cards?.length ?? 0,
+            foundFixture: Array.from(cards ?? []).some(
+              (card) => card.dataset.profileUid === uid,
+            ),
+          };
+        }, profileUid);
+        return (
+          last.total === expected &&
+          last.rendered === expected &&
+          last.cards === expected &&
+          last.foundFixture
+        );
+      },
+      {
+        timeout: 15_000,
+        interval: 200,
+        timeoutMsg: () =>
+          `Progressive Profile list did not settle: expected ${expected}, observed ${JSON.stringify(last)}`,
+      },
+    );
   });
 
   // Contract: at the fixed 1240x638 main-window viewport, Profile sidebar,
