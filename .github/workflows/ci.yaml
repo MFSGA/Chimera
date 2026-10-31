@@ -201,6 +201,10 @@ jobs:
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
         run: pnpm test:release-preflight
 
+      - name: Test nightly package versions and macOS updater filenames
+        if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
+        run: pnpm test:nightly-build
+
       - name: Test updater manifest asset mapping
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.SCRIPTS == 'true'
         run: pnpm test:updater-manifest

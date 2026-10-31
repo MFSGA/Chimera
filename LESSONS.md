@@ -64,6 +64,8 @@
 | LESSON-20261031-003 | 2026-10-31 | NixOS / Rust tests | Nix glibc 2.42 测试解释器混用 GTK/WebKit glibc ≥2.43 导致测试进程启动失败；隔离新 loader 复验 80/80 | Mitigated |
 | LESSON-20261031-004 | 2026-10-31 | Profiles / DnD / TypeScript | 通用 DragDropProvider sensors 联合类型和 useSortable 数组类型不兼容，推导数组又触发 TS2883；显式取 Sortable hook 参数数组类型，完整 typecheck 通过 | Mitigated |
 | LESSON-20261031-005 | 2026-10-31 | Frontend / CI / i18n | 国际化测试把复数消息误当字符串，Ubuntu CI localization 失败；改为解析各分支并验证五语占位符 | Mitigated |
+| LESSON-20261031-006 | 2026-10-31 | CI / Linux RPM nightly | 夜间应用版本含 `-alpha`，RPM Version 字段不接受 `-`；按 ref 单独生成 Linux SemVer metadata 版本并纳入 CI | Mitigated |
+| LESSON-20261031-007 | 2026-10-31 | CI / macOS Deno | 夜间构建产物重命名因远程 JSR `@std/path` manifest 无法读取失败；本步骤改原生 `node:path` 并覆盖产物命名 | Mitigated |
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
@@ -98,6 +100,17 @@
 - **可复现故障与根因**：`pnpm --filter=chimera-ui test:localization` 本地复现 `TypeError: message.matchAll is not a function`，原因是 `frontend/chimera/tests/localization.test.ts` 将整个 `messages/en.json` 断言为 `Record<string, string>`。新迁入的 `profile_folder_delete_description` 英文和俄文为 Paraglide/Inlang 有效的结构化 plural/select 分支数组，日文和中文为字符串；测试只处理字符串而非产品翻译非法，CI 在该步提前停止，后续 Linux Backend 测试未执行。
 - **最小修复、门禁与证据**：`placeholders` 对字符串直接扫描，对 plural/select 数组逐个 `match` 变体提取插值字段，使用集合去重排序。新增专用多分支用例，并核对日语、俄语、简体和繁体中文的全部 990 个键与英文插值一致。旧版测试本地复现 3/4，修改后 `test:localization` 6/6，通过完整 Ubuntu `Test E2E harness and frontend models` 脚本、TypeScript、Oxlint/边界检查和 Web 生产构建。未更改任何 locale 文案、CI 工作流或 Paraglide 配置。
 - **边界与后续**：本地通过不意味着原提交 `98fb1d2a` 的远程 CI 变绿；修复待单独提交、推送后由新 SHA 的 Ubuntu CI 验收。自动 Windows `smoke` E2E 并未选中 `profiles-main-layout.e2e.ts`，需用专门 `profiles` 运行验证文件夹 UI。
+
+### LESSON-20261031-006：RPM 版本字段不能直接使用 nightly 的 prerelease 连字符
+
+- 日期：2026-10-31；状态：Mitigated（源码与隔离回归通过，新 SHA 的实机打包待验证）；模块：CI / Linux RPM。`[Entire] Build Developer Version` 的 [手动 #41166406031](https://github.com/MFSGA/Chimera/actions/runs/41166406031)、[定时 #41173121067](https://github.com/MFSGA/Chimera/actions/runs/41173121067) 同一 SHA `311c75c5` 在 Linux x86_64 和 Linux aarch64 报 `failed to bundle project: invalid version "0.15.3-alpha+311c75c"`，RPM 打包器限定字符排除了 `-`。Rust Release 编译及 `.deb` 阶段此前已到达，不能归因为 Rust/前端源码编译失败。
+- 参考 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059` 的 `scripts/src/release/prepare-nightly.ts`、`.github/workflows/deps-build-linux.yaml`：`--linux` 在 Tauri 生成配置中用 `0.15.3+alpha.<SHA7>`，而 `package.json` 保留原 updater 使用的 `-alpha+<SHA7>`；完整 Git SHA 固定切 7 位。该方案保留跨平台签名/updater 版本约定，且不触碰 stable 配置。
+- 本地 `scripts/prepare-nightly_test.ts` 使用临时 Git 仓库并调用真实脚本，对 Linux/default/NSIS 版本及 RPM 字符规则进行独立断言，旧代码会在 `--linux` 目标版本上失败；`pnpm test:nightly-build` 已通过。新的 `.github/workflows/ci.yaml` Ubuntu 脚本门禁执行这个测试，不能替代 GitHub Linux RPM/DEB 真正打包；交付后须查看新 SHA 的 Developer 构建和包安装/版本排序。
+
+### LESSON-20261031-007：macOS updater 后处理避免对 JSR 路径模块的非必要网络依赖
+
+- 日期：2026-10-31；状态：Mitigated（静态/单元验证通过，macOS runner 待复验）；模块：CI / macOS / Deno。2026-10-31 定时 [#41173121067](https://github.com/MFSGA/Chimera/actions/runs/41173121067) 中 macOS x86_64 的 `Rename updater files` 步骤在 `scripts/deno/upload-macos-updater.ts:1` 因 `JSR package version manifest for '@std/path@1.1.4' failed to load` 退出 1；同 SHA 手动 #41166406031 此步骤成功，明确为外部模块加载波动而非 Tauri 构建失败，不能据此认定 jsr.io 整体宕机。
+- 保留 ref `scripts/src/artifacts/upload-macos-updater.ts` 的 globby 遍历、`.app` 命名/架构插入和 `Deno.rename`，但路径 API 适配为 Deno 2 原生 `node:path`，移除此步骤的 `@std/path` JSR 网络请求。测试通过注入临时 build 目录复核 `.app.tar.gz`、`.sig`、`.dmg`、非 app 文件的重命名与保留；按该脚本**实际锁文件** `scripts/deno/deno.lock` 用 `deno test --frozen` 通过。其他 `npm:globby` 与 logger 网络依赖保留，独立发布后处理尚非完全离线；如其他外部服务错误再次发生，应独立归因，禁止把所有网络问题合并为同一种缺陷。
 
 ## 单条模板
 

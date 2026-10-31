@@ -25,6 +25,7 @@ const ROOT_PACKAGE_JSON_PATH = path.join(cwd, 'package.json');
 
 const isNSIS = Deno.args.includes('--nsis');
 const isMSI = Deno.args.includes('--msi');
+const isLinux = Deno.args.includes('--linux');
 const fixedWebview = Deno.args.includes('--fixed-webview');
 const disableUpdater = Deno.args.includes('--disable-updater');
 
@@ -48,10 +49,12 @@ async function resolveFixedWebviewPath() {
 
 async function getCurrentGitShortHash() {
   const gitResult = await new Deno.Command('git', {
-    args: ['rev-parse', '--short', 'HEAD'],
+    // The full object ID gives an identical seven-character build ID in
+    // shallow build jobs and full-history updater jobs.
+    args: ['rev-parse', 'HEAD'],
     stdout: 'piped',
   }).output();
-  return new TextDecoder().decode(gitResult.stdout).trim();
+  return new TextDecoder().decode(gitResult.stdout).trim().slice(0, 7);
 }
 
 async function main() {
@@ -96,9 +99,17 @@ async function main() {
   consola.debug(`Current git short hash: ${gitShortHash}`);
 
   const version = `${tauriConf.version}-alpha+${gitShortHash}`;
+  // Match ref: RPM/DEB bundle versions cannot contain `-`, but Tauri still
+  // requires SemVer. Build metadata is accepted by both package formats.
+  // Keep the updater/package.json version unchanged across platforms.
+  const linuxVersion = `${tauriConf.version}+alpha.${gitShortHash}`;
 
   consola.debug('Write tauri version to tauri.nightly.conf.json');
-  if (!isNSIS && !isMSI) tauriConf.version = version;
+  if (isLinux) {
+    tauriConf.version = linuxVersion;
+  } else if (!isNSIS && !isMSI) {
+    tauriConf.version = version;
+  }
   await writeJsonFile(TAURI_DEV_APP_CONF_PATH, tauriConf);
   consola.debug('tauri.nightly.conf.json updated');
 
