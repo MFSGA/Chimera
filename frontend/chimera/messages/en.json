@@ -961,5 +961,41 @@
   "profile_sync_older": "Older runs",
   "profile_sync_no_logs": "No journal entries",
   "profile_sync_more_logs": "More journal entries",
-  "profile_sync_dropped_logs": "{count} journal entries were dropped"
+  "profile_sync_dropped_logs": "{count} journal entries were dropped",
+  "profile_nav_all_profiles": "All profiles",
+  "profile_folder_new_title": "New folder",
+  "profile_folder_rename_title": "Rename folder",
+  "profile_folder_name_label": "Folder name",
+  "profile_folder_name_required": "Enter a folder name",
+  "profile_folder_delete_title": "Delete folder",
+  "profile_folder_delete_description": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} profile will move to Not in a folder.",
+        "countPlural=other": "{count} profiles will move to Not in a folder."
+      }
+    }
+  ],
+  "profile_folder_layout_failed": "Couldn't update the folders: {error}",
+  "profile_folder_section_ungrouped": "Not in a folder",
+  "profile_folder_empty_hint": "Drag profiles here",
+  "profile_folder_drag_instructions": "Press space to pick up. Use the arrow keys to move, space to drop, and escape to cancel.",
+  "profile_folder_announce_pickup": "Picked up {name}.",
+  "profile_folder_announce_move": "Moved {profile} to {folder}, position {position} of {total}.",
+  "profile_folder_announce_over": "{name} is over {folder}.",
+  "profile_folder_announce_drop": "Dropped {name}.",
+  "profile_folder_announce_cancel": "Cancelled moving {name}.",
+  "profile_folder_empty_title": "This folder is empty",
+  "profile_folder_empty_description": "Drop a profile on it in the sidebar, or import one here.",
+  "profile_folder_not_found": "This folder does not exist",
+  "profile_move_to_folder": "Move to folder",
+  "profile_move_new_folder": "New folder…",
+  "profile_move_remove_from_folder": "Remove from folder",
+  "profile_folder_move_up": "Move up",
+  "profile_folder_move_down": "Move down",
+  "profile_detail_more_actions": "More actions",
+  "profile_error_title": "Error",
+  "profile_group_config": "Configs"
 }

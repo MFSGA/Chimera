@@ -7,6 +7,8 @@ import { isEqual } from 'lodash-es';
 import { useRef, type ComponentProps } from 'react';
 import * as m from '@/paraglide/messages';
 import { WHOLE_ITEM_DRAG_SENSORS } from '@/utils/dnd-sensors';
+import { ProfileType } from '../../_modules/consts';
+import ProfileSections from '../../_modules/profile-sections';
 import {
   NoMoreProfiles,
   useListOverflows,
@@ -29,6 +31,19 @@ const EmptyList = ({ children }: { children?: React.ReactNode }) => (
 );
 
 export default function ProfilesList({
+  className,
+  ...props
+}: Omit<ComponentProps<'div'>, 'children'>) {
+  const { type } = IndexRoute.useParams();
+  return type === ProfileType.Profile ? (
+    <ProfileSections className={className} {...props} />
+  ) : (
+    <TransformList className={className} {...props} />
+  );
+}
+
+/** Keep the existing full-order persisted sorting for Transform tabs. */
+function TransformList({
   className,
   ...props
 }: Omit<ComponentProps<'div'>, 'children'>) {

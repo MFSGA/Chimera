@@ -30,6 +30,7 @@ import ProfileCardSubscription, {
   ProfileCardTraffic,
   ProfileCardUpdate,
 } from './profile-card-subscription';
+import { ProfileMoveContextMenu, useProfileMove } from './profile-move-menu';
 import { useActiveProfile } from './use-active-profile';
 import { useDeleteProfile } from './use-delete-profile';
 import { hasMaterializedFile, isProxyProfile } from './utils';
@@ -52,6 +53,7 @@ export default function ProfileCard({
   const remote = getRemoteSource(profile);
   const featured = isProxy && activeProfile.isActive;
   const cardRef = useRef<HTMLDivElement>(null);
+  const moveToFolder = useProfileMove(profile.uid);
 
   return (
     <RegisterContextMenu>
@@ -192,6 +194,9 @@ export default function ProfileCard({
       </RegisterContextMenuTrigger>
 
       <RegisterContextMenuContent>
+        {isProxy && (
+          <ProfileMoveContextMenu move={moveToFolder} disabled={isPending} />
+        )}
         {isProxy && (
           <ContextMenuItem
             disabled={isPending}

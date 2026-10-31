@@ -62,6 +62,7 @@
 | LESSON-20261031-001 | 2026-10-31 | Profiles / ref | ref 布局函数允许未知 UID 插入；新增失败复现与最小存在性验证，21 项测试通过 | Mitigated |
 | LESSON-20261031-002 | 2026-10-31 | Rust / Development | 无范围的 Cargo fmt 扫到 vendor 和 runtime 子模块；已仅还原非目标差异，改用指定包的格式检查 | Mitigated |
 | LESSON-20261031-003 | 2026-10-31 | NixOS / Rust tests | Nix glibc 2.42 测试解释器混用 GTK/WebKit glibc ≥2.43 导致测试进程启动失败；隔离新 loader 复验 80/80 | Mitigated |
+| LESSON-20261031-004 | 2026-10-31 | Profiles / DnD / TypeScript | 通用 DragDropProvider sensors 联合类型和 useSortable 数组类型不兼容，推导数组又触发 TS2883；显式取 Sortable hook 参数数组类型，完整 typecheck 通过 | Mitigated |
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
@@ -82,6 +83,13 @@
 - **可复现故障**：`nix develop --command cargo test --manifest-path backend/Cargo.toml -p chimera --lib client::profiles::tests::set_layout_` 可完成 Rust 编译，但执行产物时报告 `/nix/store/...glibc-2.42.../lib/libc.so.6: version GLIBC_2.43/2.44 not found`，加载目标来自当前 Nix shell 中 GLib 2.88 / WebKitGTK 2.54 等动态库。属于测试启动器动态库不一致，而非业务断言失败。
 - **隔离缓解及证据**：只对测试进程以同机已有 `glibc-2.44` 的 `ld-linux-x86-64.so.2 --library-path <glibc-2.44-lib>:$LD_LIBRARY_PATH` 执行已编译 `chimera_lib` 测试二进制，`set_layout_` 3/3、`create_folder_` 2/2、新删除/旧排序回归及完整 `client::profiles::tests::` 80/80 通过。Specta 生成/一致性测试首次执行时子进程 `pnpm` spawn 返回 ENOENT；保持同一 loader，仅添加 `strace -f -qq -e trace=execve` 收集子进程证据时两个测试各 1/1 通过。尚未确认 `strace` 影响执行行为的原因，不宣称已根治。
 - **限制与复查**：修复应是使 Nix dev-shell 所有运行时依赖统一 glibc ABI 的独立环境变更；本次不修改 flake/derivation、系统动态链接器或宿主设置，也不修改 CI 门禁。上述测试不能替代全平台 CI 或真实桌面 E2E；下次修改运行环境后复测原命令与子进程 Prettier，而不是长期依赖手动 loader。
+
+### LESSON-20261031-004：Dnd-kit Sortable 的传感器配置类型需与 Hook 对齐
+
+- 日期：2026-10-31；状态：Mitigated；模块：Profiles Folder UI / TypeScript / DnD。固定 `ref` `1b5d73c53a7141d216a8a0a7751be38a295be059`；对应本地 `frontend/chimera/src/utils/dnd-sensors.ts` 与 `.../$type/_modules/sortable-profile-item.tsx`、`.../_modules/folder-nav-item.tsx`。
+- **复现**：首次将现有 `WHOLE_ITEM_DRAG_SENSORS` 与新增 `FOLDER_ITEM_DRAG_SENSORS` 直接传给 `useSortable` 时执行 `pnpm typecheck`，TS2322/TS2345 指出此前按 `DragDropProvider['sensors']` 声明的类型还允许 `(defaults) => sensors` 工厂，不符合 Sortable 的数组参数。移除注解依赖推断后编译又报 TS2883：推导涉及未公开的 dnd-kit abstract Plugin/PluginDescriptor 包路径，声明导出不稳定。
+- **修复与门禁**：从公开 `useSortable` Hook 签名取精确数组类型：`type SortableSensors = NonNullable<Parameters<typeof useSortable>[0]['sensors']>`，两个传感器常量显式标注此类型；保留 ref 的鼠标/笔 8px 距离和触摸默认激活约束。修改后 `pnpm typecheck`、前端生产构建、Oxlint、前端边界与现有 Profile 专项单测通过。
+- **限制**：代码级检查不能证明真实 WebDriver Pointer/Keyboard DnD 的触发距离、文件夹定位和侧栏导航；须在隔离桌面 Runner 上按 `docs/ref-alignment-progress.md` 所列流程复核。勿通过类型断言 `as any` 或删掉传感器检查绕过 TS 错误。
 
 ## 单条模板
 

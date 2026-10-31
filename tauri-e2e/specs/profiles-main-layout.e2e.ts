@@ -170,6 +170,34 @@ describe('main profiles reference layout', () => {
     await importToggle.click();
   });
 
+  // Contract: the folder dialog validates the name locally and cannot
+  // mutate any Profile when the user enters only whitespace. This uses the
+  // existing isolated E2E fixture and never creates persistent test folders.
+  it('exposes a labeled folder dialog and rejects a blank name without writing', async () => {
+    const before = await invoke<unknown>('get_profiles');
+    const add = await $('[data-slot="profiles-folder-add"]');
+    await add.waitForClickable({ timeout: 15_000 });
+    assert.ok(await add.getAttribute('aria-label'));
+    await add.click();
+
+    const dialog = await $('[data-slot="folder-name-dialog"]');
+    await dialog.waitForDisplayed({ timeout: 15_000 });
+    const input = await dialog.$('input[aria-label]');
+    await input.waitForDisplayed({ timeout: 15_000 });
+    await input.setValue('   ');
+    const save = await dialog.$('button[form="folder-name-dialog-form"]');
+    await save.waitForClickable({ timeout: 15_000 });
+    await save.click();
+    assert.equal(await dialog.isDisplayed(), true);
+    assert.deepEqual(
+      await invoke<unknown>('get_profiles'),
+      before,
+      'Whitespace-only folder names must not change the durable document',
+    );
+    await browser.keys('Escape');
+    await dialog.waitForDisplayed({ reverse: true, timeout: 15_000 });
+  });
+
   // Contract: the persisted local Profile, overlay and JS transform use the
   // expected icon compositions and badges. DOM icon slots and classes provide
   // visual evidence; a missing type mapping fails its own assertion.

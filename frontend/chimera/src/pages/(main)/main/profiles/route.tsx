@@ -24,6 +24,8 @@ import { AppContentScrollArea } from '@chimera/ui/scroll-area';
 import { createFileRoute } from '@tanstack/react-router';
 import { AnimatedOutletPreset } from '@/components/router/animated-outlet';
 import { Sidebar, SidebarContent } from '@/components/ui/sidebar';
+import ProfilesDndProvider from './_modules/profiles-dnd-provider';
+import ProfilesLayoutProvider from './_modules/profiles-layout-provider';
 import ProfilesNavigate from './_modules/profiles-navigate';
 
 /**
@@ -82,37 +84,41 @@ export const Route = createFileRoute('/(main)/main/profiles')({
  */
 function RouteComponent() {
   return (
-    <Sidebar data-slot="profiles-container">
-      {/* 左侧侧边栏：配置类型导航 */}
-      <SidebarContent
-        className="bg-surface-variant/10"
-        data-slot="profiles-sidebar-scroll-area"
-      >
-        <ProfilesNavigate className="p-2" />
-      </SidebarContent>
+    <ProfilesLayoutProvider>
+      <ProfilesDndProvider>
+        <Sidebar data-slot="profiles-container">
+          {/* 左侧侧边栏：配置类型导航 */}
+          <SidebarContent
+            className="bg-surface-variant/10"
+            data-slot="profiles-sidebar-scroll-area"
+          >
+            <ProfilesNavigate className="p-2" />
+          </SidebarContent>
 
-      {/* 
+          {/*
         右侧内容区域：配置列表
         使用 AppContentScrollArea 提供统一的滚动管理
       */}
-      <AppContentScrollArea
-        className={cn(
-          'group/profiles-content flex-[3_1_auto]',
-          // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
-          'overflow-clip',
-        )}
-        data-slot="profiles-content-scroll-area"
-      >
-        <div
-          className={cn(
-            'container mx-auto w-full max-w-7xl',
-            'flex min-h-full flex-col',
-          )}
-          data-slot="profiles-content"
-        >
-          <AnimatedOutletPreset className="flex flex-1 flex-col" />
-        </div>
-      </AppContentScrollArea>
-    </Sidebar>
+          <AppContentScrollArea
+            className={cn(
+              'group/profiles-content flex-[3_1_auto]',
+              // 为 AnimatedOutletPreset 过渡动画保留 overflow-clip
+              'overflow-clip',
+            )}
+            data-slot="profiles-content-scroll-area"
+          >
+            <div
+              className={cn(
+                'container mx-auto w-full max-w-7xl',
+                'flex min-h-full flex-col',
+              )}
+              data-slot="profiles-content"
+            >
+              <AnimatedOutletPreset className="flex flex-1 flex-col" />
+            </div>
+          </AppContentScrollArea>
+        </Sidebar>
+      </ProfilesDndProvider>
+    </ProfilesLayoutProvider>
   );
 }

@@ -961,5 +961,43 @@
   "profile_sync_older": "Более ранние запуски",
   "profile_sync_no_logs": "Записей журнала нет",
   "profile_sync_more_logs": "Загрузить ещё записи",
-  "profile_sync_dropped_logs": "Записей журнала отброшено: {count}"
+  "profile_sync_dropped_logs": "Записей журнала отброшено: {count}",
+  "profile_nav_all_profiles": "Все профили",
+  "profile_folder_new_title": "Новая папка",
+  "profile_folder_rename_title": "Переименовать папку",
+  "profile_folder_name_label": "Название папки",
+  "profile_folder_name_required": "Введите название папки",
+  "profile_folder_delete_title": "Удалить папку",
+  "profile_folder_delete_description": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} профиль будет перемещён в «Без папки».",
+        "countPlural=few": "{count} профиля будут перемещены в «Без папки».",
+        "countPlural=many": "{count} профилей будут перемещены в «Без папки».",
+        "countPlural=other": "{count} профиля будут перемещены в «Без папки»."
+      }
+    }
+  ],
+  "profile_folder_layout_failed": "Не удалось обновить папки: {error}",
+  "profile_folder_section_ungrouped": "Вне папок",
+  "profile_folder_empty_hint": "Перетащите профили сюда",
+  "profile_folder_drag_instructions": "Нажмите пробел, чтобы взять элемент. Стрелками перемещайте, пробелом отпустите, Escape отменяет.",
+  "profile_folder_announce_pickup": "Взят элемент {name}.",
+  "profile_folder_announce_move": "{profile} перемещён в «{folder}», позиция {position} из {total}.",
+  "profile_folder_announce_over": "{name} находится над «{folder}».",
+  "profile_folder_announce_drop": "Элемент {name} отпущен.",
+  "profile_folder_announce_cancel": "Перемещение {name} отменено.",
+  "profile_folder_empty_title": "Эта папка пуста",
+  "profile_folder_empty_description": "Перетащите профиль на неё в боковой панели или импортируйте его здесь.",
+  "profile_folder_not_found": "Такой папки нет",
+  "profile_move_to_folder": "Переместить в папку",
+  "profile_move_new_folder": "Новая папка…",
+  "profile_move_remove_from_folder": "Убрать из папки",
+  "profile_folder_move_up": "Переместить вверх",
+  "profile_folder_move_down": "Переместить вниз",
+  "profile_detail_more_actions": "Дополнительные действия",
+  "profile_error_title": "Ошибка",
+  "profile_group_config": "Конфигурации"
 }

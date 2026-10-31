@@ -2,7 +2,9 @@ import { useProfile } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { Separator } from '@chimera/ui/separator';
+import { useDroppable } from '@dnd-kit/react';
 import { Link, useMatchRoute } from '@tanstack/react-router';
+import AddRounded from '~icons/material-symbols/add-rounded';
 import DescriptionOutlineRounded from '~icons/material-symbols/description-outline-rounded';
 import JavascriptRounded from '~icons/material-symbols/javascript-rounded';
 import LanguageRounded from '~icons/material-symbols/language-rounded';
@@ -13,6 +15,9 @@ import ScriptIcon from '~icons/streamline-plump/script-2-remix';
 import type { ComponentProps, PropsWithChildren, ReactNode } from 'react';
 import * as m from '@/paraglide/messages';
 import { ProfileType } from './consts';
+import FolderNavItem from './folder-nav-item';
+import { NAV_ALL_ID, PROFILE_DRAG_TYPE } from './resolve-profile-drop';
+import { useProfileLayout } from './use-profile-layout';
 import { categoryProfiles } from './utils';
 
 const LinkButton = ({
@@ -113,23 +118,69 @@ export default function ProfilesNavigate({
 }: Omit<ComponentProps<'div'>, 'children'>) {
   const { query } = useProfile();
   const categorized = categoryProfiles(query.data?.items ?? []);
+  const { layout, openCreateFolder } = useProfileLayout();
+  const folders = layout?.folders ?? [];
+  const { ref: allProfilesRef, isDropTarget: isAllProfilesDropTarget } =
+    useDroppable({ id: NAV_ALL_ID, accept: PROFILE_DRAG_TYPE });
 
   return (
     <div className={cn('flex flex-col gap-2', className)} {...props}>
-      {Object.entries(ROUTES).map(([profileType, route]) => (
-        <LinkButton key={route.href} href={route.href}>
-          <div className="size-8">{route.icon()}</div>
+      <div
+        className="flex items-center justify-between gap-1 px-2"
+        data-slot="profiles-folder-controls"
+      >
+        <span className="text-on-surface-variant text-xs font-medium">
+          {m.profile_group_config()}
+        </span>
+        <Button
+          icon
+          className="size-8"
+          aria-label={m.profile_folder_new_title()}
+          data-slot="profiles-folder-add"
+          onClick={() => openCreateFolder()}
+        >
+          <AddRounded className="size-5" aria-hidden />
+        </Button>
+      </div>
+      <div
+        ref={allProfilesRef}
+        data-drop-target={isAllProfilesDropTarget || undefined}
+      >
+        <LinkButton
+          href={ROUTES[ProfileType.Profile].href}
+          dataSlot="profiles-all-nav-item"
+        >
+          <div className="size-8">{ROUTES[ProfileType.Profile].icon()}</div>
           <div className="min-w-0 text-sm font-medium">
-            <p>{route.label}</p>
+            <p>{m.profile_nav_all_profiles()}</p>
             <p className="text-xs text-zinc-500">
               {m.profile_profile_label_count({
-                count:
-                  categorized[profileType as keyof typeof categorized].length,
+                count: categorized[ProfileType.Profile].length,
               })}
             </p>
           </div>
         </LinkButton>
+      </div>
+      {folders.map((folder, index) => (
+        <FolderNavItem key={folder.id} folder={folder} index={index} />
       ))}
+      <Separator />
+      {Object.entries(ROUTES)
+        .filter(([profileType]) => profileType !== ProfileType.Profile)
+        .map(([profileType, route]) => (
+          <LinkButton key={route.href} href={route.href}>
+            <div className="size-8">{route.icon()}</div>
+            <div className="min-w-0 text-sm font-medium">
+              <p>{route.label}</p>
+              <p className="text-xs text-zinc-500">
+                {m.profile_profile_label_count({
+                  count:
+                    categorized[profileType as keyof typeof categorized].length,
+                })}
+              </p>
+            </div>
+          </LinkButton>
+        ))}
 
       <Separator />
       <LinkButton
