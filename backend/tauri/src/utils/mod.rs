@@ -16,6 +16,8 @@ pub mod net;
 /// 4
 pub mod open;
 pub mod path;
+pub(crate) mod recovery_io;
+pub(crate) mod redb_ext;
 /// 6
 pub mod resolve;
 /// 3
