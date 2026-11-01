@@ -7,8 +7,14 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
-import { AnimatePresence, motion, useIsPresent, Variants } from 'motion/react';
-import { ComponentProps, useRef } from 'react';
+import {
+  AnimatePresence,
+  motion,
+  PresenceContext,
+  useIsPresent,
+  Variants,
+} from 'motion/react';
+import { ComponentProps, use, useMemo, useRef } from 'react';
 
 type TransitionDirection = 1 | -1;
 
@@ -22,32 +28,36 @@ export function getRouteRenderKey(matchId: string | undefined) {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+// Drive a whole CSS transform on the compositor, as in ref v2.0.1. A
+// settled page must drop the transform to preserve fixed descendants.
 const directionalSlideVariants = {
   forward: {
     initial: {
-      translateX: '30%',
+      transform: 'translateX(30%)',
       opacity: 0,
     },
     visible: {
-      translateX: '0%',
+      transform: 'translateX(0%)',
       opacity: 1,
+      transitionEnd: { transform: 'none' },
     },
     hidden: {
-      translateX: '-30%',
+      transform: 'translateX(-30%)',
       opacity: 0,
     },
   },
   backward: {
     initial: {
-      translateX: '-30%',
+      transform: 'translateX(-30%)',
       opacity: 0,
     },
     visible: {
-      translateX: '0%',
+      transform: 'translateX(0%)',
       opacity: 1,
+      transitionEnd: { transform: 'none' },
     },
     hidden: {
-      translateX: '30%',
+      transform: 'translateX(30%)',
       opacity: 0,
     },
   },
@@ -64,6 +74,12 @@ export function AnimatedOutlet({
   ...props
 }: ComponentProps<typeof motion.div>) {
   const isPresent = useIsPresent();
+
+  // Ref v2.0.1: exiting routed pages can re-render as router state changes.
+  // Preserve their leaving-page presence identity rather than letting each
+  // re-render replace it, which can strand the invisible outgoing DOM node.
+  const presence = use(PresenceContext);
+  const pagePresence = useMemo(() => presence, [presence?.isPresent]);
 
   const matches = useMatches();
   const prevMatches = useRef(matches);
@@ -171,9 +187,11 @@ export function AnimatedOutlet({
       data-route-present={isPresent ? 'true' : 'false'}
     >
       <RouterContextProvider router={renderedRouter}>
-        <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
-          <Outlet />
-        </ClashConnectionDetailsFreezeBoundary>
+        <PresenceContext value={pagePresence}>
+          <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
+            <Outlet />
+          </ClashConnectionDetailsFreezeBoundary>
+        </PresenceContext>
       </RouterContextProvider>
     </motion.div>
   );
@@ -216,7 +234,6 @@ export function AnimatedOutletPreset(props: ComponentProps<typeof motion.div>) {
       <AnimatedOutlet
         key={id}
         custom={direction}
-        layout="position"
         initial="initial"
         animate="visible"
         exit="hidden"

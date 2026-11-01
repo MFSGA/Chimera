@@ -63,7 +63,7 @@ const ProxyTitleRow = ({
   };
 
   return (
-    <CardHeader className="flex items-center gap-3">
+    <CardHeader className="flex items-center gap-3" data-slot="card-header">
       <span className="shrink-0 font-bold">
         {m.dashboard_widget_proxy_status()}
       </span>
@@ -308,7 +308,7 @@ export function CoreShortcutsWidget({
       onCloseClick={onCloseClick}
     >
       <Card className="flex size-full flex-col justify-between">
-        <CardHeader>
+        <CardHeader data-slot="card-header">
           <span className="shrink-0 font-bold">
             {m.dashboard_widget_core_status()}
           </span>
