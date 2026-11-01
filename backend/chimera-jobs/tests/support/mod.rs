@@ -11,6 +11,7 @@ const TEST_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 
 #[derive(Default)]
 pub struct Faults {
+    pub skip_recovery: AtomicBool,
     pub fail_admit: AtomicBool,
     pub uncertain_admit: AtomicBool,
     pub fail_finish: AtomicBool,
@@ -29,6 +30,9 @@ pub struct Store {
 }
 impl JobStore for Store {
     fn recover(&mut self, now: Timestamp) -> Result<(), Error> {
+        if self.faults.skip_recovery.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         self.inner.recover(now)
     }
     fn admit(&mut self, record: RunRecord) -> Result<RunRecord, Error> {
