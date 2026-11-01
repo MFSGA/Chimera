@@ -616,6 +616,31 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_manifest_symlink_restore_before_creating_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = paths(temp.path());
+        write(&paths.profiles_path(), "original\n");
+        fs::create_dir_all(paths.app_profiles_dir()).unwrap();
+        let source = paths.storage_path();
+        let backup = create_backup(&manual(&paths, StorageSource::File(&source))).unwrap();
+        let file = backup.path.join(MANIFEST_FILE);
+        let mut manifest = read_manifest(&backup);
+        manifest["symlinks"] = serde_json::json!([{
+            "path": "config/profiles/external.yaml",
+            "target": "C:\\private\\external.yaml"
+        }]);
+        fs::write(&file, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(backup.is_available());
+        let target = temp.path().join("no-partial-restore");
+        assert!(verify::restore_to_empty_sandbox(&backup, &target).is_err());
+        assert!(
+            !target.exists(),
+            "unsupported links must fail before creating a destination"
+        );
+    }
+
     #[test]
     fn sandbox_restore_never_overwrites_a_preexisting_destination() {
         let temp = tempfile::tempdir().unwrap();

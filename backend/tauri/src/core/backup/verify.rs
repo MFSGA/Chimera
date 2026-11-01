@@ -352,10 +352,19 @@ pub(super) fn restore_to_empty_sandbox(
     destination: &Path,
 ) -> Result<(), VerificationError> {
     verify_backup(backup)?;
+    let manifest = verify_at(&backup.path)?;
+    // Without a platform-specific symlink implementation, fail *before*
+    // creating a restore destination. A loop containing an unconditional
+    // return is also rejected by Windows Clippy (never_loop).
+    #[cfg(not(unix))]
+    if let Some(link) = manifest.symlinks.first() {
+        return Err(VerificationError::InvalidNode {
+            path: destination.join(&link.path),
+        });
+    }
     // Fail without modifying an existing target. This makes the helper safe
     // for explicit tempfile-based round-trip tests.
     fs::create_dir(destination).map_err(|error| io_error(destination, error))?;
-    let manifest = verify_at(&backup.path)?;
     for name in &manifest.directories {
         let path = destination.join(name);
         fs::create_dir(&path).map_err(|error| io_error(&path, error))?;
@@ -365,12 +374,10 @@ pub(super) fn restore_to_empty_sandbox(
         let dst = destination.join(&item.path);
         fs::copy(&src, &dst).map_err(|error| io_error(&dst, error))?;
     }
+    #[cfg(unix)]
     for link in &manifest.symlinks {
         let dst = destination.join(&link.path);
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&link.target, &dst).map_err(|error| io_error(&dst, error))?;
-        #[cfg(not(unix))]
-        return Err(VerificationError::InvalidNode { path: dst });
     }
     let links: HashSet<String> = manifest
         .symlinks
