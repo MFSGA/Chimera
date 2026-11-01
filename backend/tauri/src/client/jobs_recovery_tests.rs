@@ -135,9 +135,31 @@ async fn inaccessible_parent_is_not_treated_as_corrupt_journal() {
     fs::write(&parent, b"do not touch").unwrap();
     let path = parent.join("jobs.redb");
     let error = start_jobs(&path).await.unwrap_err();
-    assert!(matches!(error, super::Error::InspectStore { .. }));
+    // Unix reports NotADirectory while Windows can report NotFound for a
+    // child of a regular file. Both are a fail-closed IO error: neither is
+    // evidence that a jobs journal is corrupt and safe to rebuild.
+    assert!(
+        matches!(
+            &error,
+            super::Error::InspectStore { .. }
+                | super::Error::OpenStore {
+                    source: chimera_jobs::Error::JournalDirectory(_),
+                    ..
+                }
+        ),
+        "unexpected parent-path failure: {error:?}"
+    );
+    assert!(
+        !error.unusable_journal(),
+        "parent failure cannot trigger recovery"
+    );
     assert_eq!(fs::read(&parent).unwrap(), b"do not touch");
     assert!(!path.exists());
+    assert_eq!(
+        fs::read_dir(temp.path()).unwrap().count(),
+        1,
+        "no evidence or replacement file is created"
+    );
 }
 
 #[tokio::test]
