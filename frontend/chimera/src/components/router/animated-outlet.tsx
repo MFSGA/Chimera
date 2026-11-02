@@ -14,7 +14,7 @@ import {
   usePresence,
   Variants,
 } from 'motion/react';
-import { ComponentProps, use, useMemo, useRef } from 'react';
+import { ComponentProps, useRef } from 'react';
 
 type TransitionDirection = 1 | -1;
 
@@ -75,12 +75,6 @@ export function AnimatedOutlet({
   ...props
 }: ComponentProps<typeof motion.div>) {
   const [isPresent, safeToRemove] = usePresence();
-
-  // Ref v2.0.1: exiting routed pages can re-render as router state changes.
-  // Preserve their leaving-page presence identity rather than letting each
-  // re-render replace it, which can strand the invisible outgoing DOM node.
-  const presence = use(PresenceContext);
-  const pagePresence = useMemo(() => presence, [presence?.isPresent]);
 
   const matches = useMatches();
   const prevMatches = useRef(matches);
@@ -198,7 +192,11 @@ export function AnimatedOutlet({
       data-route-present={isPresent ? 'true' : 'false'}
     >
       <RouterContextProvider router={renderedRouter}>
-        <PresenceContext value={pagePresence}>
+        {/* The outer page owns the route slide. Do not register its nested
+            motion cards with that same exit barrier: a frozen leaving route
+            can keep an already-hidden page alive after the slide finishes.
+            Inner AnimatePresence instances still manage their own children. */}
+        <PresenceContext value={null}>
           <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
             <Outlet />
           </ClashConnectionDetailsFreezeBoundary>
