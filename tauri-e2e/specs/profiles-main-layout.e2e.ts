@@ -504,8 +504,10 @@ describe('main profiles reference layout', () => {
       const card = document.querySelector<HTMLElement>(
         '[data-slot="profile-card"]',
       );
-      const grid = document.querySelector<HTMLElement>(
-        '[data-slot="profiles-navigate"]',
+      // profiles-navigate is a flex section container, not the card grid.
+      // Measure the real responsive grid containing the visible fixture card.
+      const grid = card?.closest<HTMLElement>(
+        '[data-slot="profiles-active"], [data-slot="profiles-grid"]',
       );
       const header = document.querySelector<HTMLElement>(
         '[data-slot="profiles-header"]',
@@ -540,6 +542,7 @@ describe('main profiles reference layout', () => {
         cardHeight: cardRect.height,
         cardLeft: cardRect.left,
         contentLeft: contentRect.left,
+        gridDisplay: getComputedStyle(grid).display,
         gridColumns: getComputedStyle(grid).gridTemplateColumns,
         headerPosition: getComputedStyle(header).position,
         headerZIndex: getComputedStyle(header).zIndex,
@@ -556,10 +559,11 @@ describe('main profiles reference layout', () => {
     assert.equal(state.cardWidth >= 220 && state.cardWidth <= 420, true);
     assert.equal(state.cardHeight >= 150 && state.cardHeight <= 260, true);
     assert.equal(state.cardLeft >= state.contentLeft + 8, true);
+    assert.equal(state.gridDisplay, 'grid', JSON.stringify(state, null, 2));
     assert.equal(
       state.gridColumns.split(' ').length >= 3,
       true,
-      `Profile grid column contract failed: ${JSON.stringify(state, null, 2)}`,
+      `Profile card grid column contract failed: ${JSON.stringify(state, null, 2)}`,
     );
     assert.equal(state.headerPosition, 'sticky');
     assert.equal(state.headerZIndex, '50');
