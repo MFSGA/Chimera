@@ -279,7 +279,38 @@ describe('main profiles reference layout', () => {
       );
       await card.waitForDisplayed({ timeout: 15_000 });
       const detailsLink = await card.$('[data-slot="profile-card-details"]');
-      await detailsLink.waitForDisplayed({ timeout: 15_000 });
+      try {
+        await detailsLink.waitForDisplayed({ timeout: 15_000 });
+      } catch (cause) {
+        // Observe the failed route before finally restores the layout. This
+        // distinguishes a disappearing old route from a hidden new card.
+        const state = await browser.execute(() => ({
+          pathname: location.pathname,
+          routes: Array.from(
+            document.querySelectorAll<HTMLElement>('[data-route-present]'),
+          ).map((route) => ({
+            routeId: route.dataset.routeId ?? null,
+            present: route.dataset.routePresent,
+            opacity: getComputedStyle(route).opacity,
+            cards: Array.from(
+              route.querySelectorAll<HTMLElement>('[data-slot="profile-card"]'),
+            ).map((item) => ({
+              uid: item.dataset.profileUid ?? null,
+              bounds: {
+                width: item.getBoundingClientRect().width,
+                height: item.getBoundingClientRect().height,
+              },
+              detailLinks: item.querySelectorAll(
+                '[data-slot="profile-card-details"]',
+              ).length,
+            })),
+          })),
+        }));
+        throw new Error(
+          `Folder Profile details were not displayed; route state: ${JSON.stringify(state)}`,
+          { cause },
+        );
+      }
       const detailsHref = await detailsLink.getAttribute('href');
       assert.ok(detailsHref, 'The folder card details link must have an href');
       assert.equal(
@@ -525,7 +556,11 @@ describe('main profiles reference layout', () => {
     assert.equal(state.cardWidth >= 220 && state.cardWidth <= 420, true);
     assert.equal(state.cardHeight >= 150 && state.cardHeight <= 260, true);
     assert.equal(state.cardLeft >= state.contentLeft + 8, true);
-    assert.equal(state.gridColumns.split(' ').length >= 3, true);
+    assert.equal(
+      state.gridColumns.split(' ').length >= 3,
+      true,
+      `Profile grid column contract failed: ${JSON.stringify(state, null, 2)}`,
+    );
     assert.equal(state.headerPosition, 'sticky');
     assert.equal(state.headerZIndex, '50');
     assert.equal(state.importRightGap >= 8 && state.importRightGap <= 48, true);
