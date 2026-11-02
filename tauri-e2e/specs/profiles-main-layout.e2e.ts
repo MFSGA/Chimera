@@ -485,6 +485,54 @@ describe('main profiles reference layout', () => {
     await browser.execute(async () => {
       await document.fonts.ready;
     });
+
+    // A visible card can still be displaced by Motion's layout spring after
+    // moving between the folder and main Profile routes. In the Windows
+    // failure snapshot, the sortable wrapper had translate3d(-11px, 0, 0)
+    // while the test measured the card's left margin. Observe the actual
+    // transform reaching rest; never change the layout tolerance or sleep.
+    let lastCardFrame: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          const frame = await browser.execute(() => {
+            const card = document.querySelector<HTMLElement>(
+              '[data-slot="profile-card"]',
+            );
+            const sortable = card?.closest<HTMLElement>(
+              '[data-slot="profile-card-sortable"]',
+            );
+            if (!card || !sortable) return null;
+            const transform = getComputedStyle(sortable).transform;
+            const matrix = new DOMMatrixReadOnly(
+              transform === 'none' ? undefined : transform,
+            );
+            return {
+              transform,
+              left: card.getBoundingClientRect().left,
+              settled:
+                Math.abs(matrix.a - 1) < 0.0002 &&
+                Math.abs(matrix.d - 1) < 0.0002 &&
+                Math.abs(matrix.e) < 0.25 &&
+                Math.abs(matrix.f) < 0.25,
+            };
+          });
+          lastCardFrame = frame;
+          return frame?.settled === true;
+        },
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: 'The Profile card layout animation did not settle.',
+        },
+      );
+    } catch (cause) {
+      throw new Error(
+        `The Profile card layout animation did not settle: ${JSON.stringify(lastCardFrame)}`,
+        { cause },
+      );
+    }
+
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
