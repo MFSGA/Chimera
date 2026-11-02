@@ -16,20 +16,34 @@
 
 ```text
 Chimera Desktop
-       ↕
+      ↕
 Chimera Client (Rust client core)
-       ↕ VLESS / REALITY
-Chimera Proxy Server (Rust server core)
-       ↕
-AChimera · Proxy Wiki
+      ↕ VLESS + REALITY / other proxy protocols
+Chimera Server (Rust server core)
+
+Chimera Desktop
+      ↕ local IPC / service management
+Chimera Service (privileged local service)
+
+AChimera (Android client)
+      ↕ embedded Chimera Client core
+Chimera Server (Rust server core)
+
+Proxy Wiki (ecosystem documentation)
 ```
 
-- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust client core with Clash / Mihomo compatibility
-- [Chimera Proxy Server](https://github.com/MFSGA/Chimera_Service) — Pure Rust Xray-compatible server core
-- [AChimera](https://github.com/MFSGA/AChimera) — Android client
-- [Proxy Wiki](https://mfsga.github.io/Proxy_WIKI/) — documentation and deployment notes
+- [Chimera](https://github.com/MFSGA/Chimera) — cross-platform desktop application.
+- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust-native Clash / Mihomo-compatible proxy client core.
+- [Chimera Server](https://github.com/MFSGA/Chimera_Server) — Rust-native, Xray-oriented proxy server core.
+- [Chimera Service](https://github.com/MFSGA/Chimera_Service) — privileged local service, IPC, and proxy core process management.
+- [AChimera](https://github.com/MFSGA/AChimera) — experimental Android client built with Kotlin, Rust, and UniFFI.
+- [Proxy Wiki](https://github.com/MFSGA/Proxy_WIKI) — documentation and technical references for the Chimera ecosystem.
 
----
+Proxy Wiki collects documentation, implementation notes, deployment guides, and protocol references for the Chimera proxy ecosystem. It covers `Chimera_Client`, `Chimera`, `Chimera_Server`, `Chimera_Service`, and `AChimera`, alongside technical references and comparisons for common proxy protocols.
+
+The documentation is built with [mdBook](https://github.com/rust-lang/mdBook). It can be previewed locally during development or built as a static website for deployment.
+
+Published documentation: https://mfsga.github.io/Proxy_WIKI/
 
 ## 项目简介
 
