@@ -11,7 +11,7 @@ import {
   AnimatePresence,
   motion,
   PresenceContext,
-  useIsPresent,
+  usePresence,
   Variants,
 } from 'motion/react';
 import { ComponentProps, use, useMemo, useRef } from 'react';
@@ -71,9 +71,10 @@ function getDirectionalVariant(direction: TransitionDirection) {
 
 export function AnimatedOutlet({
   ref,
+  onAnimationComplete,
   ...props
 }: ComponentProps<typeof motion.div>) {
-  const isPresent = useIsPresent();
+  const [isPresent, safeToRemove] = usePresence();
 
   // Ref v2.0.1: exiting routed pages can re-render as router state changes.
   // Preserve their leaving-page presence identity rather than letting each
@@ -184,6 +185,16 @@ export function AnimatedOutlet({
     <motion.div
       ref={ref}
       {...props}
+      onAnimationComplete={(definition) => {
+        // An outgoing route may keep nested Motion descendants mounted under
+        // its frozen router. Release its own presence registration once its
+        // actual slide-out completes, rather than leaving a fully hidden old
+        // route (and its duplicate profile cards) mounted indefinitely.
+        if (!isPresent && definition === 'hidden') {
+          safeToRemove?.();
+        }
+        onAnimationComplete?.(definition);
+      }}
       data-route-present={isPresent ? 'true' : 'false'}
     >
       <RouterContextProvider router={renderedRouter}>
