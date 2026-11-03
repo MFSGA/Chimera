@@ -141,7 +141,11 @@ export default function TrafficLayout({
                           <Link
                             from="/main/topology"
                             to={to as never}
-                            search={withoutTrafficView as never}
+                            // Ref uses a search updater here. Windows E2E
+                            // observed that the resulting href omitted the
+                            // selected scope/metric; pass the visible layout's
+                            // current query explicitly instead.
+                            search={withoutTrafficView(search) as never}
                             state={keepReturn as never}
                           >
                             {content}
