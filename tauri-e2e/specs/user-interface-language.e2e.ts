@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ChainablePromiseElement } from 'webdriverio';
+import { markE2eStep } from './step-diagnostics.js';
 
 const mainSettingsPath = '/main/settings/user-interface';
 
@@ -270,6 +271,7 @@ async function waitForRouteMarker(
 }
 
 async function captureRouteMarker(handle: string): Promise<RouteMarker> {
+  markE2eStep('language', `capture ${handle} stable route marker`);
   try {
     return await waitForRouteMarker(handle, null, 750);
   } catch (cause) {
