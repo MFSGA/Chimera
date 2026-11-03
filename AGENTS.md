@@ -37,6 +37,28 @@ they do not replace them. GitHub workflow realities are summarized in
   An independent reviewer, with a fresh context, checks the real diff, reference
   mapping, tests, failure/recovery paths, host effects, and authorization.
   Self-review and a green build cannot substitute for applicable test evidence.
+- **Ref-first bug fixes:** compare the failing user flow, matching source, and
+  behavior with the pinned local `ref/` before editing shared code. Prefer
+  upstream structure and semantics. Diverge only when a reproducible ref bug
+  or a documented, necessary Chimera compatibility boundary is established;
+  preserve the evidence and a regression check. Do not redesign working ref
+  behavior merely to satisfy a failing test.
+- **Human-centered desktop E2E:** exercise visible controls through WebDriver
+  clicks, keyboard input, navigation, dragging, resizing, retry, and restart
+  as relevant; assert what a person can see and use. Do not substitute direct
+  DOM/React/cache writes, internal IPC commands, or implementation-only DOM
+  inspection for the action or its acceptance. Stable WebDriver element lookup
+  is allowed; raw DOM, IPC, and state snapshots are diagnostic or test setup/
+  cleanup aids, never proof of a user flow that was bypassed. Do not weaken
+  assertions, skip scenarios, or inflate timeouts just to turn CI green.
+- **Evidence-first CI triage:** identify the exact failing SHA/run/job and read
+  its logs; obtain and actually open relevant screenshots, videos, and failure
+  artifacts _before_ diagnosing root cause. Identify whether the image was
+  captured at failure time or after cleanup/re-navigation. Compare visible
+  evidence with logs, the pinned ref, and commit history; separate facts,
+  hypotheses, and confirmed causes. If an image is unavailable or too late,
+  disclose the gap and improve failure-time capture before drawing conclusions.
+  A passing retry or green CI alone does not establish a repaired user flow.
 - **Direct maintainer commands take priority over default agent workflow holds.**
   When the maintainer explicitly identifies the target ref and requests a manual
   integration or history rewrite, treat that as a scoped authorization and
