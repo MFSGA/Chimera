@@ -37,6 +37,16 @@ they do not replace them. GitHub workflow realities are summarized in
   An independent reviewer, with a fresh context, checks the real diff, reference
   mapping, tests, failure/recovery paths, host effects, and authorization.
   Self-review and a green build cannot substitute for applicable test evidence.
+- **Direct maintainer commands take priority over default agent workflow holds.**
+  When the maintainer explicitly identifies the target ref and requests a manual
+  integration or history rewrite, treat that as a scoped authorization and
+  decision to proceed, even if project-process review/CI evidence is pending.
+  Before acting, disclose pending/failed checks, verify the exact remote SHA,
+  preserve a recovery ref, and use an explicit `--force-with-lease` for rewrites.
+  Record this as a maintainer-directed exception, never as CI success or an
+  independent review. This does not waive GitHub-enforced protections, external
+  security constraints, or authorization for other branches, tags, releases,
+  secrets, host changes, or destructive data operations.
 - **Do not idle waiting for remote CI after local tests pass.** Once an authorized
   PR/push has started checks, record the run link and `pending` status, then
   immediately continue useful work that does not depend on those results:
@@ -44,9 +54,10 @@ they do not replace them. GitHub workflow realities are summarized in
   risk/rollback analysis, or another already-authorized task in an isolated
   worktree. Avoid repeated empty polling or holding the task open solely for CI.
   If no independent work remains, hand off the pending CI state and next steps.
-  CI pending is **not** success: do not merge/release before required checks and
-  approvals, do not promise background monitoring, and treat a discovered CI
-  failure as a blocker requiring diagnosis before delivery/merge.
+  CI pending is **not** success: do not perform routine/automated merges before
+  required checks and approvals; the explicit, recorded manual maintainer
+  exception above is the only project-process alternative. Do not promise
+  background monitoring or conceal any failure.
 - **History rewriting is allowed only inside an explicitly authorized scope.**
   Keep fixup commits while a defect is under investigation; after the final
   behavior is confirmed, related commits may be squashed or reorganized into a
@@ -61,9 +72,10 @@ they do not replace them. GitHub workflow realities are summarized in
   explicitly authorized. Create a local recovery reference unless the
   maintainer explicitly declines a backup. Sign rewritten commits with a key
   GitHub recognizes as verified, update an owned remote branch with
-  `--force-with-lease` (never plain `--force`), and rerun required CI and review
-  against every replacement SHA. Results from replaced SHAs do not authorize
-  merging the rewritten history.
+  `--force-with-lease` (never plain `--force`), and run/record CI and review
+  against every replacement SHA. Results from replaced SHAs do not transfer to
+  the new history; an explicit manual maintainer exception may authorize an
+  early ref update without representing those checks as passed.
 - Risk levels determine the required evidence and review, not a routine approval
   pause. The user's standing instruction authorizes ordinary, scoped code
   iterations—including L2 implementation, fixes, tests, independent review, and
@@ -82,8 +94,10 @@ they do not replace them. GitHub workflow realities are summarized in
   host-network mutations, privilege elevation, destructive data operations,
   release/sign/publish/tag actions, remote workflow dispatch, and rewriting shared
   or protected history. A request to implement code does not authorize merging to a
-  protected branch; merge only when the task asks for integration and all required
-  checks and repository approvals pass. Never bypass those controls.
+  protected branch; routine/automated merges need the required checks and
+  repository approvals. A direct, scoped maintainer instruction may override
+  documented workflow holds for a manual update as described above, but cannot
+  disable or bypass actual GitHub branch protections.
 - The L0/L1 constrained-automation limitation applies to unattended automation,
   not interactive, user-directed code work. When scopes overlap, use the highest
   risk category for review and verification.
