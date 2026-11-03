@@ -317,6 +317,15 @@ describe('main profiles reference layout', () => {
         // for an animated card even when a person can click its details icon.
         // If WebDriver cannot click, clickElement reports the actual hit
         // target/obstruction instead of silently weakening the acceptance.
+        // A user should be able to follow/copy this action's real destination.
+        // Validate that navigation target before physically clicking it.
+        const href = await detailsLink.getAttribute('href');
+        assert.ok(href, 'The visible Profile details link must have a URL.');
+        assert.equal(
+          new URL(href, await browser.getUrl()).pathname,
+          `/main/profiles/profile/detail/${profileUid}`,
+          'The folder card details link must target the Profile detail page.',
+        );
         await clickElement(detailsLink);
       } catch (cause) {
         // Capture the FAILED folder page before finally restores its layout;
@@ -372,10 +381,30 @@ describe('main profiles reference layout', () => {
           { cause },
         );
       }
-      const detail = await $(
-        `[data-slot="profile-detail"][data-profile-uid="${profileUid}"]`,
-      );
-      await detail.waitForDisplayed({ timeout: 15_000 });
+      const detailPath = `/main/profiles/profile/detail/${profileUid}`;
+      try {
+        await browser.waitUntil(
+          async () => new URL(await browser.getUrl()).pathname === detailPath,
+          {
+            timeout: 15_000,
+            timeoutMsg:
+              'Clicking Profile details did not navigate to the detail URL.',
+          },
+        );
+        const detail = await $(
+          `[data-slot="profile-detail"][data-profile-uid="${profileUid}"]`,
+        );
+        await detail.waitForDisplayed({ timeout: 15_000 });
+      } catch (cause) {
+        // The outer catch screenshots this state before finally restores the
+        // folder. Include the user-visible URL to distinguish a dead click
+        // from a detail page that opened but failed to render.
+        const observedUrl = await browser.getUrl().catch(() => 'unavailable');
+        throw new Error(
+          `The clicked Profile detail did not open; current URL: ${observedUrl}; cause: ${cause instanceof Error ? cause.message : String(cause)}`,
+          { cause },
+        );
+      }
       assert.equal(
         new URL(await browser.getUrl()).pathname,
         `/main/profiles/profile/detail/${profileUid}`,
