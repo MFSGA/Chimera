@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
-import { clickElement } from './interaction.js';
+import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 import {
   appliedValue,
@@ -289,15 +289,13 @@ describe('main profiles reference layout', () => {
         `//header[@data-slot="profiles-folder-header"][.//h1[normalize-space(.)="${folderName}"]]`,
       );
       await header.waitForDisplayed({ timeout: 15_000 });
-      // Locate the details control inside the folder page whose heading the
-      // user just opened. A global match may be the invisible exiting list.
-      // The visible header and its page container are an interaction anchor;
-      // no router internals or DOM snapshot determines whether the test passes.
-      const folderPage = await header.$('..');
-      const detailsSelector =
-        `[data-slot="profile-card"][data-profile-uid="${profileUid}"] ` +
-        '[data-slot="profile-card-details"]';
-      const detailsLink = folderPage.$(detailsSelector);
+      // The folder route can remount after the layout mutation settles.
+      // Never keep a link obtained from the header's parent: it can belong to
+      // a detached, exiting page that WebDriver will click without navigating.
+      // Query the current document by the accessible action and its real URL
+      // immediately before the user click, and require exactly one visible hit.
+      const detailsSelector = `a[aria-label][href="/main/profiles/profile/detail/${profileUid}"]`;
+      let detailsLink: WebdriverIO.Element | undefined;
       // Check the folder-scoped import control before opening details:
       // clicking the details link must leave the folder page.
       let importVisible = false;
@@ -319,6 +317,7 @@ describe('main profiles reference layout', () => {
         // target/obstruction instead of silently weakening the acceptance.
         // A user should be able to follow/copy this action's real destination.
         // Validate that navigation target before physically clicking it.
+        detailsLink = await displayedElement(detailsSelector);
         const href = await detailsLink.getAttribute('href');
         assert.ok(href, 'The visible Profile details link must have a URL.');
         assert.equal(
@@ -405,7 +404,7 @@ describe('main profiles reference layout', () => {
         let hitTest: unknown = 'unavailable';
         try {
           hitTest = await browser.execute(
-            (link: HTMLElement) => {
+            (link: HTMLElement, selector: string) => {
               const rect = link.getBoundingClientRect();
               const hit = document.elementFromPoint(
                 rect.left + rect.width / 2,
@@ -416,6 +415,8 @@ describe('main profiles reference layout', () => {
                   ?.closest('[data-route-present]')
                   ?.getAttribute('data-route-present') ?? null;
               return {
+                linkStillConnected: link.isConnected,
+                liveMatchingLinks: document.querySelectorAll(selector).length,
                 linkRoutePresent: route(link),
                 centerHitTag: hit?.tagName ?? null,
                 centerHitSlot:
@@ -428,7 +429,8 @@ describe('main profiles reference layout', () => {
                 ).length,
               };
             },
-            await detailsLink.getElement(),
+            await (detailsLink ?? $(detailsSelector)).getElement(),
+            detailsSelector,
           );
         } catch (diagnosticError) {
           hitTest = `unavailable: ${String(diagnosticError)}`;
