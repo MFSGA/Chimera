@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import { clickElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 import {
   appliedValue,
@@ -297,15 +298,26 @@ describe('main profiles reference layout', () => {
         `[data-slot="profile-card"][data-profile-uid="${profileUid}"] ` +
         '[data-slot="profile-card-details"]';
       const detailsLink = folderPage.$(detailsSelector);
+      // Check the folder-scoped import control before opening details:
+      // clicking the details link must leave the folder page.
+      let importVisible = false;
+      for (const form of await $$('[data-slot="profile-quick-import"]')) {
+        if (await form.isDisplayed()) {
+          importVisible = true;
+          break;
+        }
+      }
+      assert.ok(
+        importVisible,
+        'A person must be able to use the folder-scoped import control',
+      );
       try {
-        await browser.waitUntil(
-          async () => (await folderPage.$(detailsSelector)).isClickable(),
-          {
-            timeout: 15_000,
-            timeoutMsg:
-              'The folder member details action never became clickable.',
-          },
-        );
+        // This is a real mouse click on a visible action, followed below
+        // by checking the destination page. `isClickable()` can report false
+        // for an animated card even when a person can click its details icon.
+        // If WebDriver cannot click, clickElement reports the actual hit
+        // target/obstruction instead of silently weakening the acceptance.
+        await clickElement(detailsLink);
       } catch (cause) {
         // Capture the FAILED folder page before finally restores its layout;
         // afterTest screenshots otherwise show only the recovered main list.
@@ -356,22 +368,10 @@ describe('main profiles reference layout', () => {
           state = { diagnosticError: String(diagnosticError) };
         }
         throw new Error(
-          `Folder member was not visible/usable; screenshot: ${screenshot}; route evidence: ${JSON.stringify(state)}`,
+          `Folder member details could not be clicked; cause: ${cause instanceof Error ? cause.message : String(cause)}; screenshot: ${screenshot}; route evidence: ${JSON.stringify(state)}`,
           { cause },
         );
       }
-      let importVisible = false;
-      for (const form of await $$('[data-slot="profile-quick-import"]')) {
-        if (await form.isDisplayed()) {
-          importVisible = true;
-          break;
-        }
-      }
-      assert.ok(
-        importVisible,
-        'A person must be able to use the folder-scoped import control',
-      );
-      await detailsLink.click();
       const detail = await $(
         `[data-slot="profile-detail"][data-profile-uid="${profileUid}"]`,
       );
