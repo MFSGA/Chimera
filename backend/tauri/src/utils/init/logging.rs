@@ -107,7 +107,8 @@ pub fn init() -> Result<()> {
         }
     });
 
-    // if debug build, log to stdout and stderr with all levels
+    // In debug builds, also emit to the terminal at the configured filtered
+    // level (including app TRACE when requested), not every dependency TRACE.
     #[cfg(debug_assertions)]
     let terminal_layer = fmt::Layer::new()
         .with_ansi(std::io::stdout().is_terminal())
@@ -117,11 +118,15 @@ pub fn init() -> Result<()> {
         .with_line_number(true)
         .with_writer(std::io::stdout);
 
+    // Keep the debug terminal output behind the same reloadable EnvFilter as
+    // the file writer, as in ref. Attaching it directly to the subscriber
+    // bypasses the filter and floods E2E logs with third-party TRACE frames.
+    #[cfg(debug_assertions)]
+    let file_layer = file_layer.and_then(terminal_layer);
+
     let subscriber = tracing_subscriber::registry()
         .with(file_layer.with_filter(filter))
         .with(jobs.layer());
-    #[cfg(debug_assertions)]
-    let subscriber = subscriber.with(terminal_layer);
 
     log_tracer::LogTracer::init()?;
     tracing::subscriber::set_global_default(subscriber)
