@@ -7,7 +7,13 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router';
-import { AnimatePresence, motion, useIsPresent, Variants } from 'motion/react';
+import {
+  AnimatePresence,
+  motion,
+  PresenceContext,
+  usePresence,
+  Variants,
+} from 'motion/react';
 import { ComponentProps, useRef } from 'react';
 
 type TransitionDirection = 1 | -1;
@@ -22,32 +28,36 @@ export function getRouteRenderKey(matchId: string | undefined) {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+// Drive a whole CSS transform on the compositor, as in ref v2.0.1. A
+// settled page must drop the transform to preserve fixed descendants.
 const directionalSlideVariants = {
   forward: {
     initial: {
-      translateX: '30%',
+      transform: 'translateX(30%)',
       opacity: 0,
     },
     visible: {
-      translateX: '0%',
+      transform: 'translateX(0%)',
       opacity: 1,
+      transitionEnd: { transform: 'none' },
     },
     hidden: {
-      translateX: '-30%',
+      transform: 'translateX(-30%)',
       opacity: 0,
     },
   },
   backward: {
     initial: {
-      translateX: '-30%',
+      transform: 'translateX(-30%)',
       opacity: 0,
     },
     visible: {
-      translateX: '0%',
+      transform: 'translateX(0%)',
       opacity: 1,
+      transitionEnd: { transform: 'none' },
     },
     hidden: {
-      translateX: '30%',
+      transform: 'translateX(30%)',
       opacity: 0,
     },
   },
@@ -61,9 +71,10 @@ function getDirectionalVariant(direction: TransitionDirection) {
 
 export function AnimatedOutlet({
   ref,
+  onAnimationComplete,
   ...props
 }: ComponentProps<typeof motion.div>) {
-  const isPresent = useIsPresent();
+  const [isPresent, safeToRemove] = usePresence();
 
   const matches = useMatches();
   const prevMatches = useRef(matches);
@@ -168,12 +179,28 @@ export function AnimatedOutlet({
     <motion.div
       ref={ref}
       {...props}
+      onAnimationComplete={(definition) => {
+        // An outgoing route may keep nested Motion descendants mounted under
+        // its frozen router. Release its own presence registration once its
+        // actual slide-out completes, rather than leaving a fully hidden old
+        // route (and its duplicate profile cards) mounted indefinitely.
+        if (!isPresent && definition === 'hidden') {
+          safeToRemove?.();
+        }
+        onAnimationComplete?.(definition);
+      }}
       data-route-present={isPresent ? 'true' : 'false'}
     >
       <RouterContextProvider router={renderedRouter}>
-        <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
-          <Outlet />
-        </ClashConnectionDetailsFreezeBoundary>
+        {/* The outer page owns the route slide. Do not register its nested
+            motion cards with that same exit barrier: a frozen leaving route
+            can keep an already-hidden page alive after the slide finishes.
+            Inner AnimatePresence instances still manage their own children. */}
+        <PresenceContext value={null}>
+          <ClashConnectionDetailsFreezeBoundary frozen={!isPresent}>
+            <Outlet />
+          </ClashConnectionDetailsFreezeBoundary>
+        </PresenceContext>
       </RouterContextProvider>
     </motion.div>
   );
@@ -216,7 +243,6 @@ export function AnimatedOutletPreset(props: ComponentProps<typeof motion.div>) {
       <AnimatedOutlet
         key={id}
         custom={direction}
-        layout="position"
         initial="initial"
         animate="visible"
         exit="hidden"

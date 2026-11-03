@@ -1295,18 +1295,64 @@ describe('main dashboard reference layout', () => {
       };
     };
 
+    const readTrafficTriggerHitTest = async () =>
+      browser.execute(() => {
+        const trigger = document.querySelector<HTMLElement>(
+          '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
+        );
+        const bounds = trigger?.getBoundingClientRect();
+        const hit = bounds
+          ? document.elementFromPoint(
+              bounds.left + bounds.width / 2,
+              bounds.top + bounds.height / 2,
+            )
+          : null;
+        return {
+          pathname: location.pathname,
+          triggerPresent: trigger !== null,
+          triggerConnected: trigger?.isConnected ?? false,
+          triggerState: trigger?.getAttribute('data-state') ?? null,
+          ariaExpanded: trigger?.getAttribute('aria-expanded') ?? null,
+          bounds: bounds
+            ? {
+                x: Math.round(bounds.x),
+                y: Math.round(bounds.y),
+                width: Math.round(bounds.width),
+                height: Math.round(bounds.height),
+              }
+            : null,
+          hitTag: hit?.tagName ?? null,
+          hitSlot:
+            hit?.closest<HTMLElement>('[data-slot]')?.dataset.slot ?? null,
+          hitIsTrigger: Boolean(trigger && hit && trigger.contains(hit)),
+          editMode:
+            document.querySelector('[data-slot="dashboard-edit-save"]') !==
+            null,
+        };
+      });
+
     const ensureTrafficConfigOpen = async () => {
       if (!(await isTrafficConfigOpen())) {
         const trigger = await $(
           '[data-slot="widget-config-trigger"][data-widget-id="traffic-down"]',
         );
         await trigger.waitForDisplayed({ timeout: 5_000 });
+        const beforeClick = await readTrafficTriggerHitTest();
         await trigger.click();
-        await waitForObservedValue(
-          'Traffic widget config Popover expansion',
-          isTrafficConfigOpen,
-          Boolean,
-        );
+        try {
+          await waitForObservedValue(
+            'Traffic widget config Popover expansion',
+            isTrafficConfigOpen,
+            Boolean,
+          );
+        } catch (cause) {
+          const afterClick = await readTrafficTriggerHitTest();
+          const popover = await readTrafficConfigState();
+          throw new Error(
+            `Traffic widget Popover did not expand after WebDriver click: ${JSON.stringify({ beforeClick, afterClick, popover })}`,
+            { cause },
+          );
+        }
       }
       await waitForObservedValue(
         'Traffic widget controls and Popover state',

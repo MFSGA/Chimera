@@ -279,7 +279,38 @@ describe('main profiles reference layout', () => {
       );
       await card.waitForDisplayed({ timeout: 15_000 });
       const detailsLink = await card.$('[data-slot="profile-card-details"]');
-      await detailsLink.waitForDisplayed({ timeout: 15_000 });
+      try {
+        await detailsLink.waitForDisplayed({ timeout: 15_000 });
+      } catch (cause) {
+        // Observe the failed route before finally restores the layout. This
+        // distinguishes a disappearing old route from a hidden new card.
+        const state = await browser.execute(() => ({
+          pathname: location.pathname,
+          routes: Array.from(
+            document.querySelectorAll<HTMLElement>('[data-route-present]'),
+          ).map((route) => ({
+            routeId: route.dataset.routeId ?? null,
+            present: route.dataset.routePresent,
+            opacity: getComputedStyle(route).opacity,
+            cards: Array.from(
+              route.querySelectorAll<HTMLElement>('[data-slot="profile-card"]'),
+            ).map((item) => ({
+              uid: item.dataset.profileUid ?? null,
+              bounds: {
+                width: item.getBoundingClientRect().width,
+                height: item.getBoundingClientRect().height,
+              },
+              detailLinks: item.querySelectorAll(
+                '[data-slot="profile-card-details"]',
+              ).length,
+            })),
+          })),
+        }));
+        throw new Error(
+          `Folder Profile details were not displayed; route state: ${JSON.stringify(state)}`,
+          { cause },
+        );
+      }
       const detailsHref = await detailsLink.getAttribute('href');
       assert.ok(detailsHref, 'The folder card details link must have an href');
       assert.equal(
@@ -454,6 +485,54 @@ describe('main profiles reference layout', () => {
     await browser.execute(async () => {
       await document.fonts.ready;
     });
+
+    // A visible card can still be displaced by Motion's layout spring after
+    // moving between the folder and main Profile routes. In the Windows
+    // failure snapshot, the sortable wrapper had translate3d(-11px, 0, 0)
+    // while the test measured the card's left margin. Observe the actual
+    // transform reaching rest; never change the layout tolerance or sleep.
+    let lastCardFrame: unknown;
+    try {
+      await browser.waitUntil(
+        async () => {
+          const frame = await browser.execute(() => {
+            const card = document.querySelector<HTMLElement>(
+              '[data-slot="profile-card"]',
+            );
+            const sortable = card?.closest<HTMLElement>(
+              '[data-slot="profile-card-sortable"]',
+            );
+            if (!card || !sortable) return null;
+            const transform = getComputedStyle(sortable).transform;
+            const matrix = new DOMMatrixReadOnly(
+              transform === 'none' ? undefined : transform,
+            );
+            return {
+              transform,
+              left: card.getBoundingClientRect().left,
+              settled:
+                Math.abs(matrix.a - 1) < 0.0002 &&
+                Math.abs(matrix.d - 1) < 0.0002 &&
+                Math.abs(matrix.e) < 0.25 &&
+                Math.abs(matrix.f) < 0.25,
+            };
+          });
+          lastCardFrame = frame;
+          return frame?.settled === true;
+        },
+        {
+          timeout: 10_000,
+          interval: 100,
+          timeoutMsg: 'The Profile card layout animation did not settle.',
+        },
+      );
+    } catch (cause) {
+      throw new Error(
+        `The Profile card layout animation did not settle: ${JSON.stringify(lastCardFrame)}`,
+        { cause },
+      );
+    }
+
     const evidencePath = process.env.CHIMERA_E2E_EVIDENCE_PATH;
     if (evidencePath) {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
@@ -473,8 +552,10 @@ describe('main profiles reference layout', () => {
       const card = document.querySelector<HTMLElement>(
         '[data-slot="profile-card"]',
       );
-      const grid = document.querySelector<HTMLElement>(
-        '[data-slot="profiles-navigate"]',
+      // profiles-navigate is a flex section container, not the card grid.
+      // Measure the real responsive grid containing the visible fixture card.
+      const grid = card?.closest<HTMLElement>(
+        '[data-slot="profiles-active"], [data-slot="profiles-grid"]',
       );
       const header = document.querySelector<HTMLElement>(
         '[data-slot="profiles-header"]',
@@ -509,6 +590,7 @@ describe('main profiles reference layout', () => {
         cardHeight: cardRect.height,
         cardLeft: cardRect.left,
         contentLeft: contentRect.left,
+        gridDisplay: getComputedStyle(grid).display,
         gridColumns: getComputedStyle(grid).gridTemplateColumns,
         headerPosition: getComputedStyle(header).position,
         headerZIndex: getComputedStyle(header).zIndex,
@@ -525,7 +607,12 @@ describe('main profiles reference layout', () => {
     assert.equal(state.cardWidth >= 220 && state.cardWidth <= 420, true);
     assert.equal(state.cardHeight >= 150 && state.cardHeight <= 260, true);
     assert.equal(state.cardLeft >= state.contentLeft + 8, true);
-    assert.equal(state.gridColumns.split(' ').length >= 3, true);
+    assert.equal(state.gridDisplay, 'grid', JSON.stringify(state, null, 2));
+    assert.equal(
+      state.gridColumns.split(' ').length >= 3,
+      true,
+      `Profile card grid column contract failed: ${JSON.stringify(state, null, 2)}`,
+    );
     assert.equal(state.headerPosition, 'sticky');
     assert.equal(state.headerZIndex, '50');
     assert.equal(state.importRightGap >= 8 && state.importRightGap <= 48, true);
