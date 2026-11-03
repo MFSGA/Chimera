@@ -405,17 +405,12 @@ return config
 
     #[tokio::test]
     async fn lua_runner_enforces_memory_limit() {
+        // One allocation over the sandbox's cap isolates the memory guard.
+        // A million Lua loop iterations can hit the separate 750 ms time
+        // limit first on a loaded CI runner, without testing memory safety.
+        let source = format!("return string.rep('x', {})", LUA_MEMORY_LIMIT_BYTES + 1);
         let error = LuaRunner::new()
-            .run(request(
-                r#"
-local chunks = {}
-for i = 1, 1000000 do
-  chunks[i] = string.rep("x", 1024)
-end
-return config
-"#,
-                Mapping::new(),
-            ))
+            .run(request(&source, Mapping::new()))
             .await
             .unwrap_err()
             .to_string();
