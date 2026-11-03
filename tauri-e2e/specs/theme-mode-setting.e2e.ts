@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { displayedElement, focusElement } from './interaction.js';
+import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 
 const settingsPath = '/main/settings/user-interface';
@@ -27,16 +27,10 @@ async function readThemeMode(): Promise<ThemeMode> {
 }
 
 async function openThemeModeMenu() {
-  const trigger = await displayedElement(themeModeTrigger);
-  await focusElement(trigger);
-  await browser.keys('ArrowDown');
-  await browser.waitUntil(
-    async () =>
-      browser.execute(
-        () => document.querySelector('[role="menuitemcheckbox"]') !== null,
-      ),
-    { timeout: 15_000, timeoutMsg: 'The theme-mode menu did not open.' },
-  );
+  // Open the menu using a real pointer action instead of forcing focus
+  // through script; the Windows screenshot showed the menu open on timeout.
+  await clickElement(await displayedElement(themeModeTrigger));
+  await $('[role="menuitemcheckbox"]').waitForDisplayed({ timeout: 15_000 });
 }
 
 async function setThemeMode(mode: ThemeMode) {
@@ -50,9 +44,9 @@ async function setThemeMode(mode: ThemeMode) {
     themeModes.length,
     'Unexpected theme-mode options.',
   );
-  const option = options[themeModes.indexOf(mode)];
-  await focusElement(option);
-  await browser.keys('Enter');
+  // A user chooses the visible menu item with a pointer. Avoid injecting DOM
+  // focus and a synthetic keyboard path that obscures which action hung.
+  await clickElement(options[themeModes.indexOf(mode)]);
 
   await browser.waitUntil(async () => (await readThemeMode()) === mode, {
     timeout: 15_000,
