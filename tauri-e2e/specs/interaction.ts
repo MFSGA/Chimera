@@ -3,6 +3,22 @@ import { markE2eStep } from './step-diagnostics.js';
 
 type ElementTarget = ChainablePromiseElement | WebdriverIO.Element;
 
+/**
+ * Prepare the viewport for a real WebDriver user action. On Windows WebView2,
+ * WDIO's element.scrollIntoView() command repeatedly stalls for ~60 seconds
+ * even for already displayed controls. The page-side scroll only positions
+ * the target; the subsequent click is still a W3C physical mouse action.
+ */
+async function bringIntoViewport(target: WebdriverIO.Element) {
+  await browser.execute((node: Element) => {
+    node.scrollIntoView({
+      behavior: 'instant',
+      block: 'center',
+      inline: 'center',
+    });
+  }, target);
+}
+
 export async function displayedElement(selector: string, timeout = 15_000) {
   let current: WebdriverIO.Element | undefined;
   let matched = 0;
@@ -48,7 +64,7 @@ export async function displayedElement(selector: string, timeout = 15_000) {
 export async function focusElement(element: ElementTarget, timeout = 15_000) {
   const target = await element.getElement();
   await target.waitForDisplayed({ timeout });
-  await target.scrollIntoView({ block: 'center', inline: 'center' });
+  await bringIntoViewport(target);
 
   const focused = await browser.execute((node) => {
     const element = node as HTMLElement;
@@ -64,8 +80,8 @@ export async function focusElement(element: ElementTarget, timeout = 15_000) {
 export async function clickElement(element: ElementTarget, timeout = 15_000) {
   const target = await element.getElement();
   await target.waitForDisplayed({ timeout });
-  markE2eStep('pointer', 'scroll target into view');
-  await target.scrollIntoView({ block: 'center', inline: 'center' });
+  markE2eStep('pointer', 'position target in viewport');
+  await bringIntoViewport(target);
 
   try {
     // WDIO's element.click() has repeatedly returned only after ~60 seconds
