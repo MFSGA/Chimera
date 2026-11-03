@@ -30,9 +30,8 @@ async function readThemeMode(): Promise<ThemeMode> {
 }
 
 async function openThemeModeMenu() {
-  // The Windows screenshot showed the menu closed after a WebDriver click.
-  // If a pointer click did not open the trigger, try Radix's real keyboard
-  // shortcut on the focused trigger, never a synthetic DOM click.
+  // Open the menu through real pointer input, with Radix's keyboard
+  // shortcut only if the trigger is still closed. Never synthesize a DOM click.
   markE2eStep('theme', 'click theme menu trigger');
   const trigger = await displayedElement(themeModeTrigger);
   await clickElement(trigger);
@@ -42,9 +41,12 @@ async function openThemeModeMenu() {
   }
   markE2eStep('theme', 'wait for visible theme menu');
   try {
-    await displayedElement(
+    // This selector intentionally matches all three mode options.
+    // displayedElement() requires exactly ONE visible match and timed out
+    // even though the failure-time screenshot showed three visible options.
+    await $(
       '[data-slot="theme-mode-selector-menu"] [role="menuitemcheckbox"]',
-    );
+    ).waitForDisplayed({ timeout: 15_000 });
   } catch (cause) {
     // Record the open menu *before* the test's finally block restores the
     // original preference. The generic afterTest screenshot is too late.
