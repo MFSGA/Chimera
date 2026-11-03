@@ -281,9 +281,13 @@ describe('main profiles reference layout', () => {
       const link = await $(`//a[starts-with(@aria-label,"${folderName}, ")]`);
       await link.waitForClickable({ timeout: 15_000 });
       await link.click();
-      const header = await $('[data-slot="profiles-folder-header"]');
+      // The exiting page can still have an older folder header. Resolve the
+      // one with the exact name that a user sees after opening this folder,
+      // rather than asserting against the first match across both routes.
+      const header = await $(
+        `//header[@data-slot="profiles-folder-header"][.//h1[normalize-space(.)="${folderName}"]]`,
+      );
       await header.waitForDisplayed({ timeout: 15_000 });
-      assert.ok((await header.getText()).includes(folderName));
       // Locate the details control inside the folder page whose heading the
       // user just opened. A global match may be the invisible exiting list.
       // The visible header and its page container are an interaction anchor;
