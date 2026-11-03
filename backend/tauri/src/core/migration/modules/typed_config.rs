@@ -148,7 +148,9 @@ enum SharedClashFileState {
 
 fn typed_file_state(ctx: &Ctx) -> anyhow::Result<TypedFileState> {
     let application_exists = typed_path_exists(&ctx.application_config_path())?;
-    let session_exists = typed_path_exists(&ctx.session_state_path())?;
+    // Ref: recover session state before partial-file classification so bad
+    // window data is preserved even when other config files are absent.
+    let session_exists = read_session_state(ctx)?.is_some();
     let clash_state = classify_shared_clash_file(ctx)?;
 
     if !application_exists && !session_exists {
@@ -238,7 +240,7 @@ fn partial_typed_file_state(
 }
 
 fn typed_path_exists(path: &Path) -> anyhow::Result<bool> {
-    path.try_exists()
+    crate::core::corrupt::config_node_exists(path)
         .with_context(|| format!("failed to inspect typed config file {}", path.display()))
 }
 
@@ -293,6 +295,11 @@ fn looks_like_legacy_runtime_clash_mapping(value: &Value) -> bool {
     .any(|key| map.contains_key(Value::String((*key).to_string())))
 }
 
+fn read_session_state(ctx: &Ctx) -> anyhow::Result<Option<PersistentState>> {
+    crate::core::session_state::read(&ctx.session_state_path())
+        .context("failed to read or recover existing session state")
+}
+
 fn validate_existing_typed_files(ctx: &Ctx) -> anyhow::Result<()> {
     validate_existing_application_and_session(ctx)?;
     read_yaml::<ClashConfig>(&ctx.clash_config_path())
@@ -303,14 +310,13 @@ fn validate_existing_typed_files(ctx: &Ctx) -> anyhow::Result<()> {
 fn validate_existing_application_and_session(ctx: &Ctx) -> anyhow::Result<()> {
     read_yaml::<ChimeraAppConfig>(&ctx.application_config_path())
         .context("failed to validate existing application config")?;
-    read_yaml::<PersistentState>(&ctx.session_state_path())
-        .context("failed to validate existing session state")?;
+    read_session_state(ctx)?;
     Ok(())
 }
 
 fn read_legacy_verge(path: &Path) -> anyhow::Result<IVerge> {
     let mut merged = IVerge::template();
-    if !path.exists() {
+    if !typed_path_exists(path)? {
         return Ok(merged);
     }
 
@@ -332,7 +338,7 @@ fn read_legacy_clash_inputs(ctx: &Ctx) -> anyhow::Result<Mapping> {
 }
 
 fn merge_legacy_clash_file(merged: &mut Mapping, path: &Path) -> anyhow::Result<()> {
-    if !path.exists() {
+    if !typed_path_exists(path)? {
         return Ok(());
     }
 
@@ -491,6 +497,68 @@ mod tests {
     }
 
     #[test]
+    fn invalid_session_is_preserved_during_typed_config_baseline_detection() {
+        let (ctx, temp) = test_ctx();
+        write_yaml(&ctx.application_config_path(), &ChimeraAppConfig::default());
+        write_yaml(&ctx.clash_config_path(), &ClashConfig::default());
+        let application = std::fs::read(&ctx.application_config_path()).unwrap();
+        let clash = std::fs::read(&ctx.clash_config_path()).unwrap();
+        let raw = b"window_state: [invalid";
+        std::fs::write(ctx.session_state_path(), raw).unwrap();
+
+        assert_eq!(MIGRATOR.detect_baseline(&ctx).unwrap(), current_revision());
+        let restored: PersistentState = read_typed(&ctx.session_state_path());
+        assert!(restored.window_state.is_empty());
+        assert_eq!(
+            std::fs::read(ctx.application_config_path()).unwrap(),
+            application
+        );
+        assert_eq!(std::fs::read(ctx.clash_config_path()).unwrap(), clash);
+        let preserved = std::fs::read_dir(temp.path().join("config"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("session-state.yaml.corrupt-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(std::fs::read(&preserved[0]).unwrap(), raw);
+    }
+
+    #[test]
+    fn corrupt_session_in_partial_typed_config_is_preserved_before_rejection() {
+        let (ctx, temp) = test_ctx();
+        let raw = b"window_state: [invalid";
+        std::fs::write(ctx.session_state_path(), raw).unwrap();
+
+        let error = MIGRATOR.detect_baseline(&ctx).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("partial typed config migration state")
+        );
+        let restored: PersistentState = read_typed(&ctx.session_state_path());
+        assert!(restored.window_state.is_empty());
+        assert!(!ctx.application_config_path().exists());
+        assert!(!ctx.clash_config_path().exists());
+        let preserved = std::fs::read_dir(temp.path().join("config"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("session-state.yaml.corrupt-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(std::fs::read(&preserved[0]).unwrap(), raw);
+    }
+
+    #[test]
     fn application_and_session_with_legacy_clash_detect_repair_baseline() {
         let (ctx, _temp) = test_ctx();
         write_yaml(&ctx.application_config_path(), &ChimeraAppConfig::default());
@@ -536,6 +604,86 @@ mod tests {
             std::fs::read_to_string(ctx.clash_config_path()).unwrap(),
             "unexpected: true\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_application_link_is_not_mistaken_for_missing_typed_config() {
+        use std::os::unix::fs::symlink;
+        let (ctx, temp) = test_ctx();
+        let missing_target = temp.path().join("missing-application.yaml");
+        let path = ctx.application_config_path();
+        symlink(&missing_target, &path).unwrap();
+
+        let error = MIGRATOR.detect_baseline(&ctx).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("partial typed config migration state"),
+            "{error:#}"
+        );
+        assert!(error.to_string().contains("existing [application.yaml]"));
+        assert_eq!(std::fs::read_link(&path).unwrap(), missing_target);
+        assert!(!missing_target.exists());
+        assert!(!ctx.session_state_path().exists());
+        assert!(!ctx.clash_config_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_clash_link_is_not_treated_as_missing_legacy_input() {
+        use std::os::unix::fs::symlink;
+        let (ctx, temp) = test_ctx();
+        let missing_target = temp.path().join("missing-clash.yaml");
+        let path = ctx.clash_config_path();
+        symlink(&missing_target, &path).unwrap();
+
+        let error = MIGRATOR.detect_baseline(&ctx).unwrap_err();
+        assert!(error.to_string().contains("failed to read"), "{error:#}");
+        assert_eq!(std::fs::read_link(&path).unwrap(), missing_target);
+        assert!(!missing_target.exists());
+        assert!(!ctx.application_config_path().exists());
+        assert!(!ctx.session_state_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_legacy_verge_link_cannot_be_replaced_with_typed_defaults() {
+        use std::os::unix::fs::symlink;
+        let (mut ctx, temp) = test_ctx();
+        let target = temp.path().join("not-found-verge.yaml");
+        let path = ctx.chimera_config_path();
+        symlink(&target, &path).unwrap();
+
+        let error = SPLIT_LEGACY_CONFIG.run(&mut ctx).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("failed to read legacy config"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert!(!ctx.application_config_path().exists());
+        assert!(!ctx.session_state_path().exists());
+        assert!(!ctx.clash_config_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_legacy_clash_override_link_cannot_be_skipped() {
+        use std::os::unix::fs::symlink;
+        let (mut ctx, temp) = test_ctx();
+        let target = temp.path().join("not-found-overrides.yaml");
+        let path = ctx.clash_guard_overrides_path();
+        symlink(&target, &path).unwrap();
+
+        let error = SPLIT_LEGACY_CONFIG.run(&mut ctx).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("failed to read legacy clash overrides"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert!(!ctx.application_config_path().exists());
+        assert!(!ctx.session_state_path().exists());
+        assert!(!ctx.clash_config_path().exists());
     }
 
     #[test]

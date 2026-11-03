@@ -105,7 +105,10 @@ impl ClashConfigClient {
         bridge: Arc<dyn ClashLegacyBridge>,
         running_config: Arc<dyn RunningConfigPort>,
     ) -> anyhow::Result<Self> {
-        let should_load = config_path.exists();
+        // Ref's typed client fails on malformed config; also keep existing
+        // dangling links and inaccessible nodes from becoming default seeds.
+        let should_load = crate::core::corrupt::config_node_exists(config_path.as_std_path())
+            .with_context(|| format!("failed to inspect clash config {config_path}"))?;
         let setup = PersistentStateManagerSetup::<ClashConfig>::builder()
             .config_path(config_path)
             .assemble();
@@ -871,6 +874,89 @@ mod tests {
 
         assert!(client.get_typed().enable_tun_mode);
         assert_eq!(*mirrored_tun.lock().unwrap(), Some(true));
+    }
+
+    #[tokio::test]
+    async fn malformed_clash_config_fails_without_overwriting_or_resetting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clash-config.yaml");
+        let bad = b"enable_tun_mode: [invalid";
+        std::fs::write(&path, bad).unwrap();
+        let mirrored_tun = Arc::new(Mutex::new(None));
+        let result = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: mirrored_tun.clone(),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("invalid clash config must not load defaults");
+        };
+        assert!(format!("{error:#}").contains("failed to load clash"));
+        assert_eq!(std::fs::read(&path).unwrap(), bad);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(*mirrored_tun.lock().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_clash_link_fails_without_using_default_config() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clash-config.yaml");
+        let target = dir.path().join("missing.yaml");
+        symlink(&target, &path).unwrap();
+        let mirrored_tun = Arc::new(Mutex::new(None));
+        let result = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: mirrored_tun.clone(),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("dangling clash config link must be reported");
+        };
+        assert!(format!("{error:#}").contains("failed to load clash"));
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert!(!target.exists());
+        assert_eq!(*mirrored_tun.lock().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn valid_clash_link_preserves_existing_config_behavior() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real-clash.yaml");
+        let path = dir.path().join("clash-config.yaml");
+        let config = ClashConfig {
+            enable_tun_mode: true,
+            ..ClashConfig::default()
+        };
+        let original = serde_yaml::to_string(&config).unwrap();
+        std::fs::write(&target, &original).unwrap();
+        symlink(&target, &path).unwrap();
+        let mirrored_tun = Arc::new(Mutex::new(None));
+        let client = ClashConfigClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            ClashConfig::default(),
+            Arc::new(RecordingBridge {
+                mirrored_tun: mirrored_tun.clone(),
+            }),
+            Arc::new(TestRunningConfigBridge),
+        )
+        .await
+        .unwrap();
+        assert!(client.get_typed().enable_tun_mode);
+        assert_eq!(*mirrored_tun.lock().unwrap(), Some(true));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        assert_eq!(std::fs::read_link(path).unwrap(), target);
     }
 
     #[test]
