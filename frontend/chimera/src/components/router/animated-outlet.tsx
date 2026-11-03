@@ -195,6 +195,13 @@ export function AnimatedOutlet({
     <motion.div
       ref={ref}
       {...props}
+      // The exiting page stays mounted for its slide-out. Unlike a visible
+      // new route, that obsolete surface must not intercept pointer clicks
+      // on a new page's links while the two routes overlap.
+      style={{
+        ...props.style,
+        pointerEvents: isPresent ? props.style?.pointerEvents : 'none',
+      }}
       onAnimationComplete={(definition) => {
         // An outgoing route may keep nested Motion descendants mounted under
         // its frozen router. Release its own presence registration once its
