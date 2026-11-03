@@ -5,6 +5,7 @@ pub(crate) mod backup;
 pub mod clash;
 /// 8
 pub mod connection_interruption;
+pub(crate) mod corrupt;
 pub mod download;
 pub mod geo;
 /// 6

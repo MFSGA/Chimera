@@ -1,6 +1,7 @@
-use std::fs;
+use std::{fs, path::Path};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
+use serde::Serialize;
 
 use crate::{
     config::{chimera::IVerge, clash::IClashTemp, profile::profiles::Profiles},
@@ -23,28 +24,93 @@ pub fn init_config() -> Result<()> {
         }
     }));
 
-    crate::log_err!(dirs::clash_guard_overrides_path().map(|path| {
-        if !path.exists() {
-            help::save_yaml(&path, &IClashTemp::template().0, Some("# Clash Chimera"))?;
-        }
-        <Result<()>>::Ok(())
-    }));
+    crate::log_err!(
+        dirs::clash_guard_overrides_path()
+            .and_then(|path| { initialize_default_yaml(&path, &IClashTemp::template().0) })
+    );
 
-    crate::log_err!(dirs::chimera_config_path().map(|path| {
-        if !path.exists() {
-            help::save_yaml(&path, &IVerge::template(), Some("# Clash Chimera"))?;
-        }
-        <Result<()>>::Ok(())
-    }));
+    crate::log_err!(
+        dirs::chimera_config_path()
+            .and_then(|path| { initialize_default_yaml(&path, &IVerge::template()) })
+    );
 
-    crate::log_err!(dirs::profiles_path().map(|path| {
-        if !path.exists() {
-            help::save_yaml(&path, &Profiles::default(), Some("# Clash Chimera"))?;
-        }
-        <Result<()>>::Ok(())
-    }));
+    crate::log_err!(
+        dirs::profiles_path()
+            .and_then(|path| { initialize_default_yaml(&path, &Profiles::default()) })
+    );
 
     Ok(())
+}
+
+/// A dangling symlink is an existing config node, not an empty installation.
+/// This runs before the typed migration and must not erase links or evidence.
+fn initialize_default_yaml<T: Serialize>(path: &Path, template: &T) -> Result<()> {
+    if !crate::core::corrupt::config_node_exists(path)
+        .with_context(|| format!("failed to inspect startup config {}", path.display()))?
+    {
+        help::save_yaml(path, template, Some("# Clash Chimera"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod startup_file_tests {
+    use super::*;
+
+    #[test]
+    fn missing_legacy_file_gets_its_original_default_header() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("chimera-config.yaml");
+        initialize_default_yaml(&path, &IVerge::template()).unwrap();
+        let actual = std::fs::read_to_string(&path).unwrap();
+        assert!(actual.starts_with("# Clash Chimera\n\n"));
+        assert!(actual.contains("clash_core:"));
+    }
+
+    #[test]
+    fn existing_legacy_file_is_never_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("profiles.yaml");
+        std::fs::write(&path, b"existing: user-profile\n").unwrap();
+        initialize_default_yaml(&path, &Profiles::default()).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"existing: user-profile\n");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_legacy_config_symlink_is_not_replaced_by_a_default() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "chimera-config.yaml",
+            "clash-guard-overrides.yaml",
+            "profiles.yaml",
+        ] {
+            let path = temp.path().join(name);
+            let target = temp.path().join(format!("missing-{name}"));
+            symlink(&target, &path).unwrap();
+            initialize_default_yaml(&path, &IVerge::template()).unwrap();
+            assert_eq!(std::fs::read_link(&path).unwrap(), target);
+            assert!(!target.exists());
+        }
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_parent_shape_is_an_error_without_creating_a_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("parent-is-a-file");
+        std::fs::write(&parent, b"keep").unwrap();
+        let path = parent.join("chimera-config.yaml");
+        let error = initialize_default_yaml(&path, &IVerge::template()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to inspect startup config")
+        );
+        assert_eq!(std::fs::read(&parent).unwrap(), b"keep");
+    }
 }
 
 /// initialize app resources
