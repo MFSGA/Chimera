@@ -400,8 +400,41 @@ describe('main profiles reference layout', () => {
         // folder. Include the user-visible URL to distinguish a dead click
         // from a detail page that opened but failed to render.
         const observedUrl = await browser.getUrl().catch(() => 'unavailable');
+        // Failure-only hit testing: find whether an exiting animated page is
+        // still over the visible link. This is evidence, not a pass condition.
+        let hitTest: unknown = 'unavailable';
+        try {
+          hitTest = await browser.execute(
+            (link: HTMLElement) => {
+              const rect = link.getBoundingClientRect();
+              const hit = document.elementFromPoint(
+                rect.left + rect.width / 2,
+                rect.top + rect.height / 2,
+              );
+              const route = (node: Element | null) =>
+                node
+                  ?.closest('[data-route-present]')
+                  ?.getAttribute('data-route-present') ?? null;
+              return {
+                linkRoutePresent: route(link),
+                centerHitTag: hit?.tagName ?? null,
+                centerHitSlot:
+                  (hit as HTMLElement | null)?.dataset.slot ?? null,
+                centerHitRoutePresent: route(hit),
+                linkReceivesHit:
+                  hit === link || (hit !== null && link.contains(hit)),
+                exitingRoutes: document.querySelectorAll(
+                  '[data-route-present="false"]',
+                ).length,
+              };
+            },
+            await detailsLink.getElement(),
+          );
+        } catch (diagnosticError) {
+          hitTest = `unavailable: ${String(diagnosticError)}`;
+        }
         throw new Error(
-          `The clicked Profile detail did not open; current URL: ${observedUrl}; cause: ${cause instanceof Error ? cause.message : String(cause)}`,
+          `The clicked Profile detail did not open; current URL: ${observedUrl}; pointer evidence: ${JSON.stringify(hitTest)}; cause: ${cause instanceof Error ? cause.message : String(cause)}`,
           { cause },
         );
       }
