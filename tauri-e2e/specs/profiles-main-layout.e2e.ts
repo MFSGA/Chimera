@@ -284,26 +284,22 @@ describe('main profiles reference layout', () => {
       const header = await $('[data-slot="profiles-folder-header"]');
       await header.waitForDisplayed({ timeout: 15_000 });
       assert.ok((await header.getText()).includes(folderName));
-      const memberSelector = `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`;
-      let detailsLink: ReturnType<typeof $> | undefined;
+      // Locate the details control inside the folder page whose heading the
+      // user just opened. A global match may be the invisible exiting list.
+      // The visible header and its page container are an interaction anchor;
+      // no router internals or DOM snapshot determines whether the test passes.
+      const folderPage = await header.$('..');
+      const detailsSelector =
+        `[data-slot="profile-card"][data-profile-uid="${profileUid}"] ` +
+        '[data-slot="profile-card-details"]';
+      const detailsLink = folderPage.$(detailsSelector);
       try {
-        // WDIO's first matching element may belong to an outgoing animated
-        // page. Check what a person can see, not an internal route flag.
         await browser.waitUntil(
-          async () => {
-            for (const card of await $$(memberSelector)) {
-              if (!(await card.isDisplayed())) continue;
-              const link = await card.$('[data-slot="profile-card-details"]');
-              if (await link.isDisplayed()) {
-                detailsLink = link;
-                return true;
-              }
-            }
-            return false;
-          },
+          async () => (await folderPage.$(detailsSelector)).isClickable(),
           {
             timeout: 15_000,
-            timeoutMsg: 'The folder member was not visible or usable.',
+            timeoutMsg:
+              'The folder member details action never became clickable.',
           },
         );
       } catch (cause) {
@@ -360,10 +356,6 @@ describe('main profiles reference layout', () => {
           { cause },
         );
       }
-      assert.ok(
-        detailsLink,
-        'The folder member must offer a visible details action',
-      );
       let importVisible = false;
       for (const form of await $$('[data-slot="profile-quick-import"]')) {
         if (await form.isDisplayed()) {
@@ -375,7 +367,6 @@ describe('main profiles reference layout', () => {
         importVisible,
         'A person must be able to use the folder-scoped import control',
       );
-      await detailsLink.waitForClickable({ timeout: 15_000 });
       await detailsLink.click();
       const detail = await $(
         `[data-slot="profile-detail"][data-profile-uid="${profileUid}"]`,
@@ -404,11 +395,11 @@ describe('main profiles reference layout', () => {
           screenshot = `capture failed: ${String(error)}`;
         }
       }
+      // WebDriver's reporter does not expand Error.cause. Preserve the
+      // original failure text in the top-level message as well as its cause.
       throw new Error(
-        `Profile folder UI flow failed; screenshot: ${screenshot}`,
-        {
-          cause,
-        },
+        `Profile folder UI flow failed; screenshot: ${screenshot}; cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`,
+        { cause },
       );
     } finally {
       // A response can be degraded or lost after the actor committed. Check
