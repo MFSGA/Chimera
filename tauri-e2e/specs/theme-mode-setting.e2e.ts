@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
+import { markE2eStep } from './step-diagnostics.js';
 
 const settingsPath = '/main/settings/user-interface';
 const themeModeTrigger = '[data-slot="theme-mode-selector-trigger"]';
@@ -27,17 +28,40 @@ async function readThemeMode(): Promise<ThemeMode> {
 }
 
 async function openThemeModeMenu() {
-  // Open the menu using a real pointer action instead of forcing focus
-  // through script; the Windows screenshot showed the menu open on timeout.
-  await clickElement(await displayedElement(themeModeTrigger));
-  await $('[role="menuitemcheckbox"]').waitForDisplayed({ timeout: 15_000 });
+  // The Windows screenshot showed the menu closed after a WebDriver click.
+  // If a pointer click did not open the trigger, try Radix's real keyboard
+  // shortcut on the focused trigger, never a synthetic DOM click.
+  markE2eStep('theme', 'click theme menu trigger');
+  const trigger = await displayedElement(themeModeTrigger);
+  await clickElement(trigger);
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    markE2eStep('theme', 'open trigger with keyboard');
+    await browser.keys('ArrowDown');
+  }
+  markE2eStep('theme', 'wait for visible theme menu');
+  try {
+    await displayedElement(
+      '[data-slot="theme-mode-selector-menu"] [role="menuitemcheckbox"]',
+    );
+  } catch (cause) {
+    const expanded = await trigger
+      .getAttribute('aria-expanded')
+      .catch(() => null);
+    throw new Error(
+      `Theme mode menu was not visible; aria-expanded=${expanded}`,
+      { cause },
+    );
+  }
 }
 
 async function setThemeMode(mode: ThemeMode) {
   if ((await readThemeMode()) === mode) return;
 
   await openThemeModeMenu();
-  const options = await $$('[role="menuitemcheckbox"]');
+  markE2eStep('theme', 'select theme menu item');
+  const options = await $$(
+    '[data-slot="theme-mode-selector-menu"] [role="menuitemcheckbox"]',
+  );
   const optionCount = await options.length;
   assert.equal(
     optionCount,
@@ -48,6 +72,7 @@ async function setThemeMode(mode: ThemeMode) {
   // focus and a synthetic keyboard path that obscures which action hung.
   await clickElement(options[themeModes.indexOf(mode)]);
 
+  markE2eStep('theme', 'verify selected theme persisted');
   await browser.waitUntil(async () => (await readThemeMode()) === mode, {
     timeout: 15_000,
     timeoutMsg: `Theme mode did not become ${mode}.`,
@@ -56,8 +81,10 @@ async function setThemeMode(mode: ThemeMode) {
 
 describe('Chimera theme-mode preference', () => {
   it('persists a selected mode and restores the original value', async () => {
+    markE2eStep('theme', 'open settings route');
     await openUserInterfaceSettings();
 
+    markE2eStep('theme', 'read initial theme');
     const original = await readThemeMode();
     assert.ok(
       themeModes.includes(original),
@@ -66,12 +93,15 @@ describe('Chimera theme-mode preference', () => {
     const changed: ThemeMode = original === 'dark' ? 'light' : 'dark';
 
     try {
+      markE2eStep('theme', 'apply alternate theme');
       await setThemeMode(changed);
       assert.equal(await readThemeMode(), changed);
+      markE2eStep('theme', 'navigate away to dashboard');
       await openMainRoute('/main/dashboard');
       await openUserInterfaceSettings();
       assert.equal(await readThemeMode(), changed);
     } finally {
+      markE2eStep('theme', 'restore original theme');
       await setThemeMode(original);
       assert.equal(await readThemeMode(), original);
       await openMainRoute('/main/dashboard');
