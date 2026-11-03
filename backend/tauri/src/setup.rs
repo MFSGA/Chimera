@@ -40,13 +40,17 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     let paths = PathResolver::from_env().context("failed to resolve app paths")?;
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = tokio_util::task::TaskTracker::new();
-    let jobs = tauri::async_runtime::block_on(crate::client::jobs::start(
-        paths.jobs_path(),
-        crate::utils::init::jobs_capture(),
-        shutdown.child_token(),
-        &tasks,
-    ))
-    .context("failed to start the jobs owner")?;
+    let jobs = crate::startup_failure::report_boundary(
+        tauri::async_runtime::block_on(crate::client::jobs::start(
+            paths.jobs_path(),
+            crate::utils::init::jobs_capture(),
+            shutdown.child_token(),
+            &tasks,
+        ))
+        .context("failed to start the jobs owner"),
+        crate::startup_failure::StartupStage::Jobs,
+        &paths,
+    )?;
     app.manage(AppShutdown {
         shutdown: shutdown.clone(),
         tasks: tasks.clone(),
@@ -58,11 +62,21 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     ));
 
     let runtime_paths = RuntimePaths::from_resolver(&paths)?;
-    let mut migrations = crate::core::migration::Runner::with_paths(paths.clone(), false)
-        .context("failed to setup config migrations")?;
-    migrations
+    let mut migrations = crate::startup_failure::report_boundary(
+        crate::core::migration::Runner::with_paths(paths.clone(), false)
+            .context("failed to setup config migrations"),
+        crate::startup_failure::StartupStage::MigrationPrepare,
+        &paths,
+    )?;
+    let migration_result = migrations
         .run_pending()
-        .context("failed to run config migrations before client setup")?;
+        .context("failed to run config migrations before client setup");
+    crate::startup_failure::report_boundary_with_backup(
+        migration_result,
+        crate::startup_failure::StartupStage::MigrationRun,
+        &paths,
+        migrations.backup_info(),
+    )?;
 
     let legacy_lock = Arc::new(parking_lot::Mutex::new(()));
     let bridges = LegacyBridgeSet {
@@ -146,32 +160,36 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     let window: Arc<dyn WindowControl> = Arc::new(TauriWindowControl::new(app.handle().clone()));
 
-    let client = ChimeraClient::try_new_with_args(ClientSetupArgs {
-        paths,
-        runtime_paths: runtime_paths.clone(),
-        bridges,
-        core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
-            core_facade.clone(),
-        )),
-        service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
-            core_facade,
-        )),
-        profile_service,
-        system_dns: Arc::new(OsSystemDnsCache),
-        traffic_store,
-        jobs,
-        shutdown: app.state::<AppShutdown>().shutdown.child_token(),
-        tasks: app.state::<AppShutdown>().tasks.clone(),
-        ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        effects,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        system_proxy,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        accelerators,
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        window,
-    })?;
+    let client = crate::startup_failure::report_boundary(
+        ChimeraClient::try_new_with_args(ClientSetupArgs {
+            paths: paths.clone(),
+            runtime_paths: runtime_paths.clone(),
+            bridges,
+            core: Arc::new(crate::client::core_lifecycle::LegacyCoreBridge::new(
+                core_facade.clone(),
+            )),
+            service: Arc::new(crate::client::core_lifecycle::LegacyServiceBridge::new(
+                core_facade,
+            )),
+            profile_service,
+            system_dns: Arc::new(OsSystemDnsCache),
+            traffic_store,
+            jobs,
+            shutdown: app.state::<AppShutdown>().shutdown.child_token(),
+            tasks: app.state::<AppShutdown>().tasks.clone(),
+            ui_sink: Arc::new(TauriUiEventSink::new(app.handle().clone())),
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            effects,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            system_proxy,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            accelerators,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            window,
+        }),
+        crate::startup_failure::StartupStage::TypedClient,
+        &paths,
+    )?;
     rust_i18n::set_locale(client.get_app_config()?.language.as_str());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     tauri::async_runtime::spawn(hotkey_action_pump(hotkey_rx, client.clone()));

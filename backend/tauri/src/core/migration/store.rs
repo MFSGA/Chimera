@@ -1,5 +1,5 @@
 use super::{Ctx, MigrationState, MigrationStep, ModuleMigrator};
-use anyhow::{Context, bail};
+use anyhow::Context;
 use chrono::{SecondsFormat, Utc};
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -7,6 +7,23 @@ use std::{collections::BTreeMap, path::Path};
 
 pub const STORE_SCHEMA_VERSION: u64 = 2;
 pub const STORE_FILE_NAME: &str = "migration-state.yaml";
+
+/// The migration state must not be rewritten by a build that cannot read its schema.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SchemaError {
+    #[error("migration store schema {read} in {} is newer than supported {supported}; update the app first", path.display())]
+    Newer {
+        path: std::path::PathBuf,
+        read: u64,
+        supported: u64,
+    },
+    #[error("migration store schema {read} in {} is older than supported {supported}; migration cannot continue automatically", path.display())]
+    Older {
+        path: std::path::PathBuf,
+        read: u64,
+        supported: u64,
+    },
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct AppMigrationState {
@@ -58,19 +75,39 @@ impl Default for MigrationStore {
 
 impl MigrationStore {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        if !path.exists() {
+        Self::load_with(path, || std::fs::read_to_string(path))
+    }
+
+    fn load_with(
+        path: &Path,
+        read: impl FnMut() -> std::io::Result<String>,
+    ) -> anyhow::Result<Self> {
+        // Avoid treating an inaccessible migration state as a missing one.
+        if !crate::core::corrupt::config_node_exists(path)
+            .with_context(|| format!("failed to inspect migration state {}", path.display()))?
+        {
             return Ok(Self::default());
         }
 
-        let raw = std::fs::read_to_string(path)
+        let raw = crate::core::corrupt::retry_io(read)
             .with_context(|| format!("failed to read migration state {}", path.display()))?;
         let store: Self = serde_yaml_ng::from_str(&raw)
             .with_context(|| format!("failed to parse migration state {}", path.display()))?;
-        if store.store_schema_version != STORE_SCHEMA_VERSION {
-            bail!(
-                "unsupported migration store schema version {}",
-                store.store_schema_version
-            );
+        if store.store_schema_version > STORE_SCHEMA_VERSION {
+            return Err(SchemaError::Newer {
+                path: path.to_owned(),
+                read: store.store_schema_version,
+                supported: STORE_SCHEMA_VERSION,
+            }
+            .into());
+        }
+        if store.store_schema_version < STORE_SCHEMA_VERSION {
+            return Err(SchemaError::Older {
+                path: path.to_owned(),
+                read: store.store_schema_version,
+                supported: STORE_SCHEMA_VERSION,
+            }
+            .into());
         }
         Ok(store)
     }
@@ -238,6 +275,112 @@ fn timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_migration_state_link_must_not_load_as_fresh_install() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STORE_FILE_NAME);
+        let missing_target = dir.path().join("not-created.yaml");
+        symlink(&missing_target, &path).unwrap();
+
+        let error = MigrationStore::load(&path)
+            .err()
+            .expect("dangling migration-state symlink must not be a fresh install");
+        let io = error.root_cause().downcast_ref::<std::io::Error>().unwrap();
+        assert_eq!(io.kind(), std::io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read_link(&path).unwrap(), missing_target);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn incompatible_schema_reports_structured_revision_and_keeps_original_file() {
+        for (version, is_newer) in [(STORE_SCHEMA_VERSION + 1, true), (1, false)] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join(STORE_FILE_NAME);
+            let original = format!("store_schema_version: {version}\n");
+            std::fs::write(&path, &original).unwrap();
+            let error = MigrationStore::load(&path).unwrap_err();
+            let schema = error
+                .downcast_ref::<SchemaError>()
+                .expect("typed schema error");
+            match schema {
+                SchemaError::Newer {
+                    path: found,
+                    read,
+                    supported,
+                } if is_newer => assert_eq!(
+                    (found, *read, *supported),
+                    (&path, version, STORE_SCHEMA_VERSION)
+                ),
+                SchemaError::Older {
+                    path: found,
+                    read,
+                    supported,
+                } if !is_newer => assert_eq!(
+                    (found, *read, *supported),
+                    (&path, version, STORE_SCHEMA_VERSION)
+                ),
+                _ => panic!("unexpected schema classification: {schema:?}"),
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+            assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn state_reader_retries_transient_read_before_parsing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(STORE_FILE_NAME);
+        let mut expected = MigrationStore::default();
+        expected.set_last_succeeded(Version::new(2, 0, 0));
+        let raw = serde_yaml_ng::to_string(&expected).unwrap();
+        std::fs::write(&path, &raw).unwrap();
+        let mut attempts = 0;
+        let store = MigrationStore::load_with(&path, || {
+            attempts += 1;
+            if attempts == 1 {
+                Err(std::io::ErrorKind::Interrupted.into())
+            } else {
+                std::fs::read_to_string(&path)
+            }
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(store, expected);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn state_reader_reports_exhausted_and_permission_errors_without_renaming() {
+        use std::io;
+        for (kind, expected_attempts) in [
+            (io::ErrorKind::WouldBlock, 4),
+            (io::ErrorKind::PermissionDenied, 1),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(STORE_FILE_NAME);
+            let raw = "store_schema_version: 2\n";
+            std::fs::write(&path, raw).unwrap();
+            let mut attempts = 0;
+            let error = MigrationStore::load_with(&path, || {
+                attempts += 1;
+                Err(io::Error::new(kind, std::fmt::Error))
+            })
+            .unwrap_err();
+            let source = error
+                .downcast_ref::<io::Error>()
+                .expect("original IO source");
+            assert_eq!(source.kind(), kind);
+            assert!(source.get_ref().unwrap().is::<std::fmt::Error>());
+            assert!(error.to_string().contains(&path.display().to_string()));
+            assert_eq!(attempts, expected_attempts);
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), raw);
+            assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+    }
 
     #[test]
     fn atomic_write_replaces_existing_store() {

@@ -69,7 +69,10 @@ impl ApplicationClient {
         seed: ChimeraAppConfig,
         bridge: Arc<dyn VergeLegacyBridge>,
     ) -> anyhow::Result<Self> {
-        let should_load = config_path.exists();
+        // An existing but unreadable node, including a dangling symlink, must
+        // fail rather than silently substituting the legacy/default seed.
+        let should_load = crate::core::corrupt::config_node_exists(config_path.as_std_path())
+            .with_context(|| format!("failed to inspect application config {config_path}"))?;
         let setup = PersistentStateManagerSetup::<ChimeraAppConfig>::builder()
             .config_path(config_path)
             .assemble();
@@ -1330,5 +1333,91 @@ mod tests {
 
         assert!(!client.get_typed().enable_auto_check_update);
         assert_eq!(*mirrored.lock().unwrap(), Some(false));
+    }
+
+    #[tokio::test]
+    async fn malformed_application_config_fails_without_overwriting_or_resetting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("application.yaml");
+        let bad = b"enable_auto_check_update: [invalid";
+        std::fs::write(&path, bad).unwrap();
+        let mirrored = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn VergeLegacyBridge> = Arc::new(RecordingBridge {
+            legacy: ChimeraAppConfig::default(),
+            mirrored: mirrored.clone(),
+        });
+        let result = ApplicationClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("invalid application configuration must not load a default");
+        };
+        assert!(format!("{error:#}").contains("failed to load application"));
+        assert_eq!(std::fs::read(&path).unwrap(), bad);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(*mirrored.lock().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_application_link_fails_without_using_legacy_seed() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("application.yaml");
+        let target = dir.path().join("missing.yaml");
+        symlink(&target, &path).unwrap();
+        let mirrored = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn VergeLegacyBridge> = Arc::new(RecordingBridge {
+            legacy: ChimeraAppConfig::default(),
+            mirrored: mirrored.clone(),
+        });
+        let result = ApplicationClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("dangling application link must be reported");
+        };
+        assert!(format!("{error:#}").contains("failed to load application"));
+        assert_eq!(std::fs::read_link(&path).unwrap(), target);
+        assert!(!target.exists());
+        assert_eq!(*mirrored.lock().unwrap(), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn existing_application_link_still_loads_original_config() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real-application.yaml");
+        let path = dir.path().join("application.yaml");
+        let config = ChimeraAppConfig {
+            enable_auto_check_update: false,
+            ..ChimeraAppConfig::default()
+        };
+        let original = serde_yaml::to_string(&config).unwrap();
+        std::fs::write(&target, &original).unwrap();
+        symlink(&target, &path).unwrap();
+        let mirrored = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn VergeLegacyBridge> = Arc::new(RecordingBridge {
+            legacy: ChimeraAppConfig::default(),
+            mirrored: mirrored.clone(),
+        });
+        let client = ApplicationClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+        )
+        .await
+        .unwrap();
+        assert!(!client.get_typed().enable_auto_check_update);
+        assert_eq!(*mirrored.lock().unwrap(), Some(false));
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        assert_eq!(std::fs::read_link(path).unwrap(), target);
     }
 }

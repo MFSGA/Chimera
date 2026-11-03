@@ -3,9 +3,36 @@ use super::{
     ModuleKind, ModuleMigrator, StepCheck, current_version, fs, registry,
     store::{MigrationStore, ModuleState},
 };
-use crate::utils::path::PathResolver;
+use crate::{
+    core::backup::{
+        self, BackupInfo, BackupKind, BackupRequest, KEEP_MIGRATION_BACKUPS, MIGRATION_PREFIX,
+        StorageSource,
+    },
+    utils::path::PathResolver,
+};
 use anyhow::{Context, bail};
 use semver::Version;
+use time::OffsetDateTime;
+
+/// An on-disk revision written by a future build; never downgrade it.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RevisionError {
+    #[error("{} is stamped at revision {read}, but this build only knows revisions up to {supported}; the file was written by a newer version. Update to that version, or restore this file from a compatible backup.", path.display())]
+    NewerDocument {
+        path: std::path::PathBuf,
+        read: u64,
+        supported: u64,
+    },
+    #[error(
+        "migration state records {module} at revision {read}, but this build only knows revisions up to {supported}; the data was migrated by a newer version"
+    )]
+    NewerAppliedModule {
+        path: std::path::PathBuf,
+        module: String,
+        read: u64,
+        supported: u64,
+    },
+}
 
 #[derive(Debug)]
 pub struct Runner {
@@ -14,6 +41,7 @@ pub struct Runner {
     profile_migrations_enabled: bool,
     ctx: Ctx,
     store: MigrationStore,
+    backup: Option<BackupInfo>,
 }
 
 impl Default for Runner {
@@ -89,12 +117,21 @@ impl Runner {
         if matches!(advice, MigrationAdvice::Ignored | MigrationAdvice::Done) {
             return Ok(());
         }
+        self.ensure_backup()?;
         self.run_step(step)
     }
 
     pub fn run_pending(&mut self) -> anyhow::Result<()> {
         println!("Running migrations up to version: {}", self.target);
         self.ensure_known_revisions()?;
+        let has_pending = self
+            .modules()
+            .into_iter()
+            .flat_map(|module| module.steps())
+            .any(|step| self.advice_step(*step) == MigrationAdvice::Pending);
+        if has_pending {
+            self.ensure_backup()?;
+        }
         let mut first_error = None;
 
         for module in self.modules() {
@@ -134,7 +171,69 @@ impl Runner {
         self.store
             .flush_atomic(&self.ctx.state_path())
             .context("failed to persist successful migration state")?;
+        if let Err(error) = backup::prune_backups(
+            &self.ctx.paths().backups_dir(),
+            MIGRATION_PREFIX,
+            KEEP_MIGRATION_BACKUPS,
+        ) {
+            eprintln!("Failed to prune old migration backups: {error:#}");
+        }
         Ok(())
+    }
+
+    /// A committed snapshot is available for failure diagnostics only after
+    /// create_backup has successfully renamed its completed directory.
+    pub(crate) fn backup_info(&self) -> Option<&BackupInfo> {
+        self.backup.as_ref()
+    }
+
+    /// Snapshot all migration inputs before any pending step or document stamp
+    /// changes persistent configuration. Refuses to migrate if the snapshot fails.
+    /// Fresh installations with no existing data do not need a backup.
+    fn ensure_backup(&mut self) -> anyhow::Result<()> {
+        if self.backup.is_some() || self.has_nothing_to_protect()? {
+            return Ok(());
+        }
+        let storage_path = self.ctx.storage_path();
+        let info = backup::create_backup(&BackupRequest {
+            paths: self.ctx.paths(),
+            storage: StorageSource::File(&storage_path),
+            kind: BackupKind::Migration {
+                from: self.store.app.last_succeeded.as_ref(),
+                target: &self.target,
+            },
+            now: OffsetDateTime::now_utc(),
+        })
+        .context("failed to back up the config before migrating")?;
+        tracing::info!(path = %info.path.display(), "migration backup created before config rewrite");
+        self.backup = Some(info);
+        Ok(())
+    }
+
+    /// The first install has no existing config to protect. A migration-state
+    /// record created by baseline detection alone is not user source data.
+    fn has_nothing_to_protect(&self) -> anyhow::Result<bool> {
+        let storage_path = self.ctx.storage_path();
+        if crate::core::corrupt::config_node_exists(&storage_path)
+            .with_context(|| format!("failed to inspect {}", storage_path.display()))?
+        {
+            return Ok(false);
+        }
+        let config = self.ctx.paths().app_config_dir();
+        let entries = match std::fs::read_dir(config) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to list {}", config.display()));
+            }
+        };
+        for entry in entries {
+            let entry = entry.with_context(|| format!("failed to inspect {}", config.display()))?;
+            if entry.file_name() != super::store::STORE_FILE_NAME {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn with_context(target: Version, force: bool, ctx: Ctx) -> anyhow::Result<Self> {
@@ -155,6 +254,7 @@ impl Runner {
             profile_migrations_enabled,
             ctx,
             store,
+            backup: None,
         };
         runner.ensure_baselines()?;
         Ok(runner)
@@ -214,13 +314,14 @@ impl Runner {
             };
 
             match (file.schema_revision, entry) {
-                (Some(stamped), _) if stamped > head => bail!(
-                    "{} is stamped at revision {stamped}, but this build only knows revisions \
-                     up to {head}; the file was written by a newer version. Update to that \
-                     version, or restore {} from a backup made by this one.",
-                    path.display(),
-                    path.display()
-                ),
+                (Some(stamped), _) if stamped > head => {
+                    return Err(RevisionError::NewerDocument {
+                        path,
+                        read: stamped,
+                        supported: head,
+                    }
+                    .into());
+                }
                 (Some(stamped), None) => {
                     self.store
                         .modules
@@ -284,6 +385,7 @@ impl Runner {
                 if self.store.module_state(module.module()).applied_revision != head {
                     continue;
                 }
+                self.ensure_backup()?;
                 fs::write_document(&path, spec.document, head, file.payload, None)
                     .with_context(|| format!("failed to stamp the {} files", module.module()))?;
             }
@@ -308,11 +410,13 @@ impl Runner {
             let applied = self.store.module_state(module.module()).applied_revision;
             let head = head_revision(module);
             if applied > head {
-                bail!(
-                    "migration state records {} at revision {applied}, but this build only \
-                     knows revisions up to {head}; the data was migrated by a newer version",
-                    module.module()
-                );
+                return Err(RevisionError::NewerAppliedModule {
+                    path: self.ctx.state_path(),
+                    module: module.module().to_owned(),
+                    read: applied,
+                    supported: head,
+                }
+                .into());
             }
         }
         Ok(())
@@ -523,6 +627,7 @@ mod tests {
             profile_migrations_enabled: true,
             ctx: Ctx::new(config_dir, data_dir),
             store,
+            backup: None,
         }
     }
 
@@ -906,6 +1011,218 @@ mod tests {
         assert_eq!(
             std::fs::read(config.join("clash-config.yaml")).unwrap(),
             before
+        );
+    }
+
+    #[test]
+    fn pending_migration_snapshots_legacy_config_and_storage_before_rewrites() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir, data_dir);
+        let legacy = serde_yaml_ng::to_string(&crate::config::chimera::IVerge::template()).unwrap();
+        std::fs::write(paths.chimera_config_path(), &legacy).unwrap();
+        let storage = b"opaque closed storage file before migration";
+        std::fs::write(paths.storage_path(), storage).unwrap();
+
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        runner.run_pending().unwrap();
+
+        let snapshot = runner
+            .backup
+            .as_ref()
+            .expect("existing config must be snapshotted");
+        assert_eq!(
+            std::fs::read_to_string(snapshot.path.join("config/chimera-config.yaml")).unwrap(),
+            legacy
+        );
+        assert_eq!(
+            std::fs::read(snapshot.path.join("data/storage.db")).unwrap(),
+            storage
+        );
+        assert!(
+            !snapshot.path.join("config/application.yaml").exists(),
+            "backup must predate typed writes"
+        );
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(snapshot.path.join("manifest.json")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["kind"], "migration");
+        assert_eq!(
+            manifest["sources"]["config"],
+            paths.app_config_dir().to_str().unwrap()
+        );
+        assert!(paths.application_config_path().exists());
+        assert!(paths.session_state_path().exists());
+        assert!(paths.clash_config_path().exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn backup_failure_blocks_rewrites_and_retry_creates_a_snapshot() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir, data_dir);
+        let legacy = serde_yaml_ng::to_string(&crate::config::chimera::IVerge::template()).unwrap();
+        std::fs::write(paths.chimera_config_path(), &legacy).unwrap();
+        let external = temp.path().join("outside-backups");
+        std::fs::create_dir_all(&external).unwrap();
+        symlink(&external, paths.backups_dir()).unwrap();
+
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        let state_before = std::fs::read(paths.app_config_dir().join(STORE_FILE_NAME)).unwrap();
+        let error = runner
+            .run_pending()
+            .expect_err("unsafe backup destination must block migration");
+        assert!(format!("{error:#}").contains("failed to back up the config"));
+        assert_eq!(
+            std::fs::read_to_string(paths.chimera_config_path()).unwrap(),
+            legacy
+        );
+        assert_eq!(
+            std::fs::read(paths.app_config_dir().join(STORE_FILE_NAME)).unwrap(),
+            state_before
+        );
+        assert!(!paths.application_config_path().exists());
+        assert!(!paths.session_state_path().exists());
+        assert!(!paths.clash_config_path().exists());
+        assert!(std::fs::read_dir(&external).unwrap().next().is_none());
+        assert_eq!(std::fs::read_link(paths.backups_dir()).unwrap(), external);
+
+        std::fs::remove_file(paths.backups_dir()).unwrap();
+        runner.run_pending().unwrap();
+        let snapshot = runner.backup.as_ref().expect("retry needs a real backup");
+        assert_eq!(
+            std::fs::read_to_string(snapshot.path.join("config/chimera-config.yaml")).unwrap(),
+            legacy
+        );
+        assert!(!snapshot.path.join("config/application.yaml").exists());
+        assert!(paths.application_config_path().exists());
+    }
+
+    #[test]
+    fn a_storage_snapshot_failure_leaves_no_partial_and_blocks_typed_rewrites() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir, data_dir);
+        let legacy = serde_yaml_ng::to_string(&crate::config::chimera::IVerge::template()).unwrap();
+        std::fs::write(paths.chimera_config_path(), &legacy).unwrap();
+        std::fs::create_dir(paths.storage_path()).unwrap();
+
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        let error = runner.run_pending().unwrap_err();
+        assert!(format!("{error:#}").contains("failed to back up the config"));
+        assert!(runner.backup.is_none());
+        assert_eq!(
+            std::fs::read_to_string(paths.chimera_config_path()).unwrap(),
+            legacy
+        );
+        assert!(!paths.application_config_path().exists());
+        assert!(!paths.session_state_path().exists());
+        assert!(!paths.clash_config_path().exists());
+        assert!(paths.storage_path().is_dir());
+        assert_eq!(
+            std::fs::read_dir(paths.backups_dir()).unwrap().count(),
+            0,
+            "no completed or partial backup survives"
+        );
+    }
+
+    #[test]
+    fn a_failed_migration_keeps_the_pre_step_backup_and_never_marks_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir, data_dir);
+        let malformed = "enable_system_proxy: [broken yaml";
+        std::fs::write(paths.chimera_config_path(), malformed).unwrap();
+
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        let error = runner
+            .run_pending()
+            .expect_err("invalid legacy input must fail migration");
+        assert!(
+            format!("{error:#}").contains("failed to read legacy config"),
+            "{error:#}"
+        );
+        let backup = runner
+            .backup
+            .as_ref()
+            .expect("snapshot must survive a later step failure");
+        assert_eq!(
+            std::fs::read_to_string(backup.path.join("config/chimera-config.yaml")).unwrap(),
+            malformed
+        );
+        assert_eq!(
+            std::fs::read_to_string(paths.chimera_config_path()).unwrap(),
+            malformed
+        );
+        assert!(backup.path.join("manifest.json").is_file());
+        let state = MigrationStore::load(&paths.app_config_dir().join(STORE_FILE_NAME)).unwrap();
+        assert!(
+            state.app.last_succeeded.is_none(),
+            "failed migration cannot claim success"
+        );
+        assert!(
+            state
+                .tasks
+                .values()
+                .any(|entry| entry.state == MigrationState::Failed)
+        );
+        assert!(!paths.application_config_path().exists());
+        assert!(!paths.session_state_path().exists());
+        assert!(!paths.clash_config_path().exists());
+    }
+
+    #[test]
+    fn a_fresh_install_with_only_generated_baselines_needs_no_snapshot() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config");
+        let data = temp.path().join("data");
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::create_dir_all(&data).unwrap();
+        let paths = PathResolver::with_base_dirs(config, data);
+        let mut runner = Runner::with_paths(paths.clone(), false).unwrap();
+        runner.run_pending().unwrap();
+        assert!(runner.backup.is_none());
+        assert!(!paths.backups_dir().exists());
+        assert!(paths.application_config_path().exists());
+    }
+
+    #[test]
+    fn a_second_start_does_not_create_a_backup_without_pending_steps() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("config");
+        let data_dir = temp.path().join("data");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        let paths = PathResolver::with_base_dirs(config_dir, data_dir);
+        let legacy = serde_yaml_ng::to_string(&crate::config::chimera::IVerge::template()).unwrap();
+        std::fs::write(paths.chimera_config_path(), &legacy).unwrap();
+        let mut first = Runner::with_paths(paths.clone(), false).unwrap();
+        first.run_pending().unwrap();
+        assert!(first.backup.is_some());
+        let count = std::fs::read_dir(paths.backups_dir()).unwrap().count();
+        let mut second = Runner::with_paths(paths.clone(), false).unwrap();
+        second.run_pending().unwrap();
+        assert!(
+            second.backup.is_none(),
+            "a healthy restart should not create another snapshot"
+        );
+        assert_eq!(
+            std::fs::read_dir(paths.backups_dir()).unwrap().count(),
+            count
         );
     }
 

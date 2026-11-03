@@ -13,19 +13,20 @@
 ```text
 repository: https://github.com/libnyanpasu/clash-nyanpasu
 branch:     main
-commit:     2c017d63bfec720017a9b57db629eeddd2c9cd3d
-verified:   2026-10-29; fetched origin/main and matched GitHub API; signature valid
-previous gitlink: 2fadf212f161417dcdf2f37d81a305a37ff918a4
-nested runtime: e73b9f5cc2aa91ac74b4c71d0acc5b48e0fd2b34
+commit:     518bf49843e1f735380e11da1ebe2a85eb8ce8c6
+verified:   2026-10-31; fetched origin/main; local SHA and submodule checkout checked
+previous gitlink: 1b5d73c53a7141d216a8a0a7751be38a295be059
+nested runtime: 90ac364c9c52ea05d62f18f00b53be80b3b32144
 ```
 
-The target SHA is a direct child of the previous gitlink and was fetched from
-`origin/main`; GitHub's API confirmed the commit signature as valid. The
-reference root and checked-out nested submodules are clean. This upstream
-commit updates `meta-json-schema` from 1.19.32 to 1.19.33 and its lockfile
-entry. The pin records the reference implementation only; it does not
-automatically apply upstream dependency changes or product code to Chimera.
-Each shared feature still needs its own path and symbol review.
+The target is 17 commits ahead of the previous gitlink and was fetched from
+`origin/main`. The reference root and checked-out nested submodules are clean;
+no new GitHub API or signature verification was performed for this update.
+These commits include startup failure and corrupt-data recovery, jobs journal
+recovery, TUN stack capability changes, dependency updates, and the v2.0.1
+manifest. The pin records the reference implementation only; it does not
+automatically apply upstream dependencies or product code to Chimera. Each
+shared feature still needs its own path and symbol review.
 
 每个迁移切片开始前执行：
 
