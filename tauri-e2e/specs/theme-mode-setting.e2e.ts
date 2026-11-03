@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 import { markE2eStep } from './step-diagnostics.js';
@@ -44,11 +46,46 @@ async function openThemeModeMenu() {
       '[data-slot="theme-mode-selector-menu"] [role="menuitemcheckbox"]',
     );
   } catch (cause) {
-    const expanded = await trigger
-      .getAttribute('aria-expanded')
-      .catch(() => null);
+    // Record the open menu *before* the test's finally block restores the
+    // original preference. The generic afterTest screenshot is too late.
+    const artifactDir = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+    let screenshot = 'unavailable';
+    if (artifactDir) {
+      const file = path.join(
+        artifactDir,
+        `theme-menu-before-cleanup-${Date.now()}.png`,
+      );
+      try {
+        fs.mkdirSync(artifactDir, { recursive: true });
+        await browser.saveScreenshot(file);
+        screenshot = file;
+      } catch (error) {
+        screenshot = `capture failed: ${String(error)}`;
+      }
+    }
+    const state = await browser
+      .execute(() => ({
+        pathname: location.pathname,
+        expanded:
+          document
+            .querySelector('[data-slot="theme-mode-selector-trigger"]')
+            ?.getAttribute('aria-expanded') ?? null,
+        menuCount: document.querySelectorAll(
+          '[data-slot="theme-mode-selector-menu"]',
+        ).length,
+        checkboxCount: document.querySelectorAll('[role="menuitemcheckbox"]')
+          .length,
+        visibleCheckboxCount: Array.from(
+          document.querySelectorAll<HTMLElement>('[role="menuitemcheckbox"]'),
+        ).filter(
+          (item) =>
+            item.getBoundingClientRect().width > 0 &&
+            item.getBoundingClientRect().height > 0,
+        ).length,
+      }))
+      .catch((error) => ({ diagnosticError: String(error) }));
     throw new Error(
-      `Theme mode menu was not visible; aria-expanded=${expanded}`,
+      `Theme mode menu was not visible; state: ${JSON.stringify(state)}; screenshot: ${screenshot}`,
       { cause },
     );
   }
