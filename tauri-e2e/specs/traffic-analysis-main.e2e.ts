@@ -263,6 +263,14 @@ describe('main traffic analysis', () => {
     const flowLink = await $(
       '[data-slot="traffic-navigation-item"][href^="/main/topology/flow"]',
     );
+    await flowLink.waitForClickable({ timeout: 15_000 });
+    // A user following or copying this sidebar link must keep the visible
+    // Closed/Connections selection. Check the real link before navigating.
+    const flowHref = await flowLink.getAttribute('href');
+    assert.ok(flowHref, 'The Flow navigation link must have an href.');
+    const flowTarget = new URL(flowHref, 'http://tauri.localhost');
+    assert.equal(flowTarget.searchParams.get('scope'), 'closed');
+    assert.equal(flowTarget.searchParams.get('metric'), 'connections');
     await flowLink.click();
     await browser.waitUntil(
       async () =>
@@ -286,6 +294,12 @@ describe('main traffic analysis', () => {
     const mapLink = await $(
       '[data-slot="traffic-navigation-item"][href^="/main/topology/map"]',
     );
+    await mapLink.waitForClickable({ timeout: 15_000 });
+    const mapHref = await mapLink.getAttribute('href');
+    assert.ok(mapHref, 'The Map navigation link must have an href.');
+    const mapTarget = new URL(mapHref, 'http://tauri.localhost');
+    assert.equal(mapTarget.searchParams.get('scope'), 'closed');
+    assert.equal(mapTarget.searchParams.get('metric'), 'connections');
     await mapLink.click();
     await browser.waitUntil(
       async () =>

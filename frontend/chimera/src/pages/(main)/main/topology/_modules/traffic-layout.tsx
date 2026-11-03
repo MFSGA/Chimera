@@ -139,6 +139,7 @@ export default function TrafficLayout({
                         data-slot="traffic-navigation-item"
                         renderLink={(content) => (
                           <Link
+                            from="/main/topology"
                             to={to as never}
                             search={withoutTrafficView as never}
                             state={keepReturn as never}
