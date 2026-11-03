@@ -129,101 +129,87 @@ async function waitForRouteMarker(
   expected: RouteMarker | null,
   requiredStableMs: number,
 ): Promise<RouteMarker> {
-  const result = (await browser.executeAsync(
-    (expectedSignature, stableMs, timeoutMs, done) => {
-      let finished = false;
-      let previousSignature: string | null = null;
-      let stableSince = 0;
-      let marker: RouteMarker | null = null;
-      let observations = 0;
-      let missingMarkers = 0;
-      let exitingMarkers = 0;
-      const recentSignatures: string[] = [];
-      const startedAt = Date.now();
-      let sampleTimer: number | undefined;
+  // Poll from Node, not from WebView timers. Windows WebView2 may throttle
+  // timers in background windows; the previous executeAsync path returned only
+  // after roughly 60 seconds without a stable marker. Keep the same visible
+  // route identity and stability requirements outside those browser timers.
+  const expectedSignature = routeMarkerSignature(expected);
+  let marker: RouteMarker | null = null;
+  let observations = 0;
+  let missingMarkers = 0;
+  let exitingMarkers = 0;
+  let previousSignature: string | null = null;
+  let stableSince = 0;
+  const recentSignatures: string[] = [];
+  let diagnostics: unknown = null;
 
-      const signatureOf = (value: RouteMarker | null) => {
-        if (!value) return null;
-        const routes = value.routes.map(({ routeId, routeKey, present }) => [
-          routeId,
-          routeKey,
-          present,
-        ]);
-        return value.kind === 'legacy'
-          ? JSON.stringify([value.kind, value.pathname, routes, value.heading])
-          : JSON.stringify([value.kind, value.pathname, routes]);
-      };
-      const readMarker = (): RouteMarker | null => {
-        const isMain =
-          document.documentElement.classList.contains('chimera-main');
-        const selector = isMain
-          ? '[data-route-id][data-route-key]'
-          : '.page-transition[data-route-id][data-route-key]';
-        const routes = Array.from(
-          document.querySelectorAll<HTMLElement>(selector),
-        ).flatMap((element) => {
-          const routeId = element.getAttribute('data-route-id');
-          const routeKey = element.getAttribute('data-route-key');
-          const present = element.getAttribute('data-route-present') === 'true';
-          return routeId && routeKey ? [{ routeId, routeKey, present }] : [];
+  try {
+    await browser.waitUntil(
+      async () => {
+        const sample = await browser.execute(() => {
+          const isMain =
+            document.documentElement.classList.contains('chimera-main');
+          const selector = isMain
+            ? '[data-route-id][data-route-key]'
+            : '.page-transition[data-route-id][data-route-key]';
+          const routes = Array.from(
+            document.querySelectorAll<HTMLElement>(selector),
+          ).flatMap((element) => {
+            const routeId = element.getAttribute('data-route-id');
+            const routeKey = element.getAttribute('data-route-key');
+            const present =
+              element.getAttribute('data-route-present') === 'true';
+            return routeId && routeKey ? [{ routeId, routeKey, present }] : [];
+          });
+          const currentMarker: RouteMarker | null =
+            routes.length === 0
+              ? null
+              : isMain
+                ? { kind: 'main', pathname: location.pathname, routes }
+                : {
+                    kind: 'legacy',
+                    pathname: location.pathname,
+                    routes,
+                    heading:
+                      document.querySelector('h1')?.textContent?.trim() ?? null,
+                  };
+          return {
+            marker: currentMarker,
+            diagnostics: {
+              pathname: location.pathname,
+              title: document.title,
+              headingCount: document.querySelectorAll('h1').length,
+              routeElements: Array.from(
+                document.querySelectorAll(
+                  '.page-transition, [data-route-id][data-route-key]',
+                ),
+              ).map((element) => ({
+                tag: element.tagName,
+                className: element.getAttribute('class'),
+                slot: element.getAttribute('data-slot'),
+                routeId: element.getAttribute('data-route-id'),
+                routeKey: element.getAttribute('data-route-key'),
+                present: element.getAttribute('data-route-present'),
+                opacity: getComputedStyle(element).opacity,
+                children: element.children.length,
+              })),
+            },
+          };
         });
-        if (routes.length === 0) return null;
-        if (isMain) {
-          return { kind: 'main', pathname: location.pathname, routes };
-        }
-        const heading =
-          document.querySelector('h1')?.textContent?.trim() ?? null;
-        return { kind: 'legacy', pathname: location.pathname, routes, heading };
-      };
-      const diagnostics = () => ({
-        pathname: location.pathname,
-        title: document.title,
-        headingCount: document.querySelectorAll('h1').length,
-        routeElements: Array.from(
-          document.querySelectorAll(
-            '.page-transition, [data-route-id][data-route-key]',
-          ),
-        ).map((element) => ({
-          tag: element.tagName,
-          className: element.getAttribute('class'),
-          slot: element.getAttribute('data-slot'),
-          routeId: element.getAttribute('data-route-id'),
-          routeKey: element.getAttribute('data-route-key'),
-          present: element.getAttribute('data-route-present'),
-          opacity: getComputedStyle(element).opacity,
-          children: element.children.length,
-        })),
-      });
-      const finish = (ok: boolean) => {
-        if (finished) return;
-        finished = true;
-        if (timer !== undefined) window.clearTimeout(timer);
-        if (sampleTimer !== undefined) window.clearTimeout(sampleTimer);
-        done({
-          ok,
-          marker,
-          observations,
-          missingMarkers,
-          exitingMarkers,
-          recentSignatures,
-          stableForMs: previousSignature ? Date.now() - stableSince : 0,
-          diagnostics: ok ? undefined : diagnostics(),
-        });
-      };
-      const sample = () => {
-        if (finished) return;
+
         observations += 1;
-        marker = readMarker();
-        const signature = signatureOf(marker);
+        marker = sample.marker;
+        diagnostics = sample.diagnostics;
+        const signature = routeMarkerSignature(marker);
         const eligible =
           signature !== null &&
           !marker?.routes.some(({ present }) => !present) &&
           (expectedSignature === null || signature === expectedSignature);
+
         if (!eligible) {
           if (marker === null) missingMarkers += 1;
-          else if (marker.routes.some(({ present }) => !present)) {
+          else if (marker.routes.some(({ present }) => !present))
             exitingMarkers += 1;
-          }
           previousSignature = null;
           stableSince = 0;
         } else if (signature !== previousSignature) {
@@ -231,43 +217,29 @@ async function waitForRouteMarker(
           stableSince = Date.now();
           recentSignatures.push(signature);
           if (recentSignatures.length > 8) recentSignatures.shift();
-        } else if (Date.now() - stableSince >= stableMs) {
-          finish(true);
-          return;
+        } else if (Date.now() - stableSince >= requiredStableMs) {
+          return true;
         }
-
-        if (Date.now() - startedAt >= timeoutMs) {
-          finish(false);
-          return;
-        }
-        sampleTimer = window.setTimeout(sample, 100);
-      };
-      const timer = window.setTimeout(() => finish(false), timeoutMs);
-      sample();
-    },
-    routeMarkerSignature(expected),
-    requiredStableMs,
-    15_000,
-  )) as {
-    ok: boolean;
-    marker: RouteMarker | null;
-    observations: number;
-    missingMarkers: number;
-    exitingMarkers: number;
-    recentSignatures: string[];
-    stableForMs: number;
-    diagnostics?: unknown;
-  };
-
-  if (!result.ok || !result.marker) {
+        return false;
+      },
+      {
+        timeout: 15_000,
+        interval: 100,
+        timeoutMsg: 'The desktop route did not remain stable.',
+      },
+    );
+  } catch (cause) {
     const target = expected
-      ? `expected ${routeMarkerSignature(expected)}`
+      ? `expected ${expectedSignature}`
       : 'any non-exiting route';
     throw new Error(
-      `${handle} did not render ${target} for ${requiredStableMs}ms: observed ${JSON.stringify(result.marker)}, stable for ${result.stableForMs}ms after ${result.observations} samples (${result.missingMarkers} missing, ${result.exitingMarkers} exiting), recent ${JSON.stringify(result.recentSignatures)}, DOM ${JSON.stringify(result.diagnostics)}.`,
+      `${handle} did not render ${target} for ${requiredStableMs}ms: observed ${JSON.stringify(marker)}, stable for ${previousSignature ? Date.now() - stableSince : 0}ms after ${observations} samples (${missingMarkers} missing, ${exitingMarkers} exiting), recent ${JSON.stringify(recentSignatures)}, DOM ${JSON.stringify(diagnostics)}.`,
+      { cause },
     );
   }
-  return result.marker;
+
+  if (!marker) throw new Error(`${handle} stable route marker is missing.`);
+  return marker;
 }
 
 async function captureRouteMarker(handle: string): Promise<RouteMarker> {
