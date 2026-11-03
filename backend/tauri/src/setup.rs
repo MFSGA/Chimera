@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use chimera_traffic::{RedbTrafficStore, TrafficStore};
+use chimera_utils::process::{AtomicStopStrategy, StopStrategy};
 use tauri::Manager;
 
 use crate::{
@@ -87,9 +88,17 @@ pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
     app.manage(tokio::sync::RwLock::new(
         crate::core::updater::UpdaterManager::new(),
     ));
-    let local_control =
-        tauri::async_runtime::block_on(crate::core::actor_v2::local_host::build(&paths))
-            .context("failed to initialize the local core control plane")?;
+    let stop_strategy = Arc::new(AtomicStopStrategy::new(StopStrategy::default()));
+    app.manage(Arc::clone(&stop_strategy));
+    // The desktop executable handles windows_shutdown_helper_entry in main.rs.
+    let shutdown_helper =
+        std::env::current_exe().context("failed to resolve the desktop shutdown helper")?;
+    let local_control = tauri::async_runtime::block_on(crate::core::actor_v2::local_host::build(
+        &paths,
+        &shutdown_helper,
+        stop_strategy,
+    ))
+    .context("failed to initialize the local core control plane")?;
     let core_facade = Arc::new(crate::core::actor_v2::CoreFacade::new_local_with_control(
         local_control,
         runtime_paths.clone(),

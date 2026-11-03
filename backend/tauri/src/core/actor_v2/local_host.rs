@@ -3,48 +3,89 @@
 //! Chimera keeps its application paths and core selector, while the shared
 //! lifecycle transaction is owned by `chimera-core-manager`.
 
-#[cfg(target_os = "macos")]
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::Result as AnyResult;
 use camino::Utf8PathBuf;
 use chimera_core_manager::{
-    ControlOptions, CoreControl, CoreKind, CoreManager as RuntimeManager, CoreSpec, LocalIpcPolicy,
-    ManagerOptions,
+    ControlOptions, CoreControl, CoreKind, CoreManager, CoreSpec, LocalIpcPolicy, ManagerOptions,
+    native_store::{FsNativeStore, StoreOwner, legacy_kind},
 };
+use chimera_utils::process::AtomicStopStrategy;
+use snafu::{ResultExt, Snafu};
 
 use crate::{config::chimera::ClashCore, utils::path::PathResolver};
 
-/// Construct the local host from the application's resolved directories.
+#[derive(Debug, Snafu)]
+pub enum Error {
+    #[snafu(display("failed to inspect {}", path.display()))]
+    InspectConfig {
+        path: std::path::PathBuf,
+        source: std::io::Error,
+    },
+    #[snafu(display("failed to read core kind from {}", path.display()))]
+    ReadCoreKind {
+        path: std::path::PathBuf,
+        source: chimera_core_manager::native_store::StoreError,
+    },
+    #[snafu(display("failed to build core manager"))]
+    BuildManager { source: chimera_core_manager::Error },
+    #[snafu(display("path is not valid UTF-8: {}", path.display()))]
+    InvalidPath { path: std::path::PathBuf },
+}
+
+/// Builds the local core host with the stop strategy shared by its process supervisors.
 ///
-/// The private manager runtime directory holds epochs and effective configs;
-/// staging is a sibling because caller-owned config bytes are materialized
-/// only for one control operation. The core working directory remains the
-/// user's data directory so existing GeoIP and GeoSite assets stay visible.
-pub(crate) async fn build(paths: &PathResolver) -> Result<CoreControl> {
+/// # Errors
+/// Returns an error if configuration inspection or core manager construction fails.
+pub async fn build(
+    paths: &PathResolver,
+    shutdown_helper: &std::path::Path,
+    stop_strategy: Arc<AtomicStopStrategy>,
+) -> Result<CoreControl, Error> {
     let runtime_root = paths.app_config_dir().join("runtime");
-    let manager_options = ManagerOptions {
-        runtime_dir: Some(to_utf8(runtime_root.join("control"))?),
+    let options = ManagerOptions {
+        runtime_dir: Some(
+            to_utf8(runtime_root.join("control")).map_err(|path| Error::InvalidPath { path })?,
+        ),
         local_ipc_policy: LocalIpcPolicy::Disable,
-        #[cfg(windows)]
-        windows_shutdown_helper: Some(std::env::current_exe()?),
-        // A local macOS host may need the user to answer a DNS authorization
-        // dialog. Service hosts already run with administrator privileges.
+        windows_shutdown_helper: Some(shutdown_helper.to_owned()),
+        // Local macOS mode may require the user to authorize DNS changes.
         #[cfg(target_os = "macos")]
         dns_timeout: std::time::Duration::from_secs(60),
         ..ManagerOptions::default()
     };
+    let working_dir =
+        to_utf8(paths.app_data_dir().to_owned()).map_err(|path| Error::InvalidPath { path })?;
+    let config_path = paths.application_config_path();
+    let config_path = if config_path.try_exists().context(InspectConfigSnafu {
+        path: config_path.as_path(),
+    })? {
+        config_path
+    } else {
+        paths.chimera_config_path()
+    };
+    let native_store = Arc::new(FsNativeStore::new(
+        working_dir.clone(),
+        StoreOwner::current(),
+        legacy_kind(config_path.as_path()).context(ReadCoreKindSnafu {
+            path: config_path.as_path(),
+        })?,
+    ));
+    let manager = CoreManager::builder(options)
+        .native_store(native_store)
+        .stop_strategy(stop_strategy);
 
-    let manager = RuntimeManager::builder(manager_options);
     #[cfg(target_os = "macos")]
     let manager = manager.dns_controller(Arc::new(
         chimera_core_manager::dns::macos::MacosDnsController::new(
             "State:/Network/Service/chimera-dns/DNS".into(),
         ),
     ));
-    let manager = manager.build().await?;
-    let source_dir = to_utf8(runtime_root.join("staging"))?;
-    let working_dir = to_utf8(paths.app_data_dir().to_owned())?;
+
+    let manager = manager.build().await.context(BuildManagerSnafu)?;
+    let source_dir =
+        to_utf8(runtime_root.join("staging")).map_err(|path| Error::InvalidPath { path })?;
 
     Ok(CoreControl::spawn(
         manager,
@@ -55,7 +96,7 @@ pub(crate) async fn build(paths: &PathResolver) -> Result<CoreControl> {
 /// Resolve an application core choice to the executable identity understood
 /// by the shared process manager. `ChimeraClient` deliberately keeps its own
 /// kind even though it accepts the clash-rs command line.
-pub(crate) fn core_spec(core: &ClashCore) -> Result<CoreSpec> {
+pub(crate) fn core_spec(core: &ClashCore) -> AnyResult<CoreSpec> {
     core_spec_with(core, |core, core_type| {
         if *core == ClashCore::ChimeraClientAlpha {
             let binary_name = format!("chimera-client-alpha{}", std::env::consts::EXE_SUFFIX);
@@ -72,7 +113,7 @@ fn core_spec_with(
         &ClashCore,
         &chimera_utils::core::CoreType,
     ) -> std::io::Result<std::path::PathBuf>,
-) -> Result<CoreSpec> {
+) -> AnyResult<CoreSpec> {
     let core_type: chimera_utils::core::CoreType = core.into();
     let kind = match core {
         ClashCore::ClashPremium => CoreKind::ClashPremium,
@@ -81,7 +122,8 @@ fn core_spec_with(
         ClashCore::ChimeraClient => CoreKind::ChimeraClient,
         ClashCore::ChimeraClientAlpha => CoreKind::ChimeraClient,
     };
-    let binary_path = to_utf8(find_binary(core, &core_type)?)?;
+    let binary_path = to_utf8(find_binary(core, &core_type)?)
+        .map_err(|path| anyhow::anyhow!("path is not valid UTF-8: {}", path.to_string_lossy()))?;
 
     Ok(CoreSpec {
         kind,
@@ -91,9 +133,8 @@ fn core_spec_with(
     })
 }
 
-fn to_utf8(path: std::path::PathBuf) -> Result<Utf8PathBuf> {
+fn to_utf8(path: std::path::PathBuf) -> Result<Utf8PathBuf, std::path::PathBuf> {
     Utf8PathBuf::from_path_buf(path)
-        .map_err(|path| anyhow::anyhow!("path is not valid UTF-8: {}", path.to_string_lossy()))
 }
 
 #[cfg(test)]
@@ -106,7 +147,15 @@ mod tests {
         let paths =
             PathResolver::with_base_dirs(root.path().join("config"), root.path().join("data"));
 
-        let control = build(&paths).await.unwrap();
+        let control = build(
+            &paths,
+            &root.path().join("helper.exe"),
+            Arc::new(AtomicStopStrategy::new(
+                chimera_utils::process::StopStrategy::default(),
+            )),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(
             control.status().state,

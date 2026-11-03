@@ -71,6 +71,13 @@
 | LESSON-20261031-010 | 2026-10-31 | Profiles / URL / ref alignment | `new URL()` 接受 FTP/File/JavaScript 等非订阅协议；共享 ref 的 HTTP(S) Zod schema 并加 CI 回归 | Mitigated |
 | LESSON-20261031-011 | 2026-10-31 | Profiles / Actor / remote import | 未知文件夹的远程导入曾先 Fetch 后拒绝；按 ref 在下载前校验，测试严格断言 Fetch 0 次 | Mitigated |
 | LESSON-20261031-012 | 2026-10-31 | NixOS / Btrfs / Rust tests | Tauri 测试二进制链接在 Btrfs `reserve_bytes` 阻塞；Cargo check 成功，完整 Client 测试待环境复验 | Open |
+| LESSON-20261103-001 | 2026-11-03 | Runtime / Windows / ref | 原样迁入原生存储路径测试在 Windows 将 `/data/ui` 错判为正确路径；改为 `Utf8Path::join` 生成预期值，重新运行 12/12 通过 | Mitigated |
+
+### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
+
+- 证据：在 Windows Rust stable 1.99.0，初次运行 `cargo test -p chimera-core-manager --lib native_store::`，12 项中 2 项因预期 `/data/ui`、`/data/providers/local.yaml` 与实际 `/data\\ui` 等平台路径不同而失败；存储租约/迁移测试 10 项通过。
+- 修正：只调整 `crates/chimera-core-manager/src/native_store/paths.rs` 中的测试预期，使用 `Utf8Path::join` 生成同平台路径，未改变 `rewrite_paths` 生产逻辑。重新运行原生存储测试 12/12 通过，随后 Runtime 全库 121 通过、1 忽略。
+- 防复发：跨平台迁移参考用例要区分文件系统路径（平台分隔符）与 URL/代理传输路径（协议分隔符）；保留测试对 `/ws`、证书 PEM 和凭证字段不重写的断言。本轮未执行 Linux/macOS 真实桌面 E2E。
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
