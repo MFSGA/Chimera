@@ -1,5 +1,154 @@
 # ref 对齐进度
 
+## 2026-11-01：备份内容校验、隔离恢复与保留安全（ref v2.0.1；L2，未提交）
+
+- **本批目的/边界**：验证上轮 `core/backup.rs` 产生的迁移前快照确实可以还原升级前字节，而不只证明 `manifest.json` 存在。所有“恢复”仅在 `#[cfg(test)]` 的隔离 `tempfile` 目标目录运行；**没有向产品暴露覆盖用户配置的 restore 命令**，不触及真实配置、redb、Service/TUN、核心网络或窗口。独立 crash-reporter 仍待成套启动监督协议接线。
+- **ref 源码映射与有意扩展**：pinned `ref/backend/tauri/src/core/backup.rs::{Manifest,create_backup,prune_backups}` 只有来源、版本、类型、链接目标等元数据，**没有逐文件摘要清单**；Chimera `backend/tauri/src/core/backup.rs::{Manifest,write_backup,BackupInfo::is_available,prune_backups}` 在保留 ref 字段基础上新增 `format_version=1`、相对路径、长度和 SHA-256 的 `files`、以及 `directories`（包括空目录）。新增 `backend/tauri/src/core/backup/verify.rs::{scan_snapshot,verify_at,verify_backup}` 检查 staged 数据与完整 manifest 一致后才发布最终备份目录；再次确认可用性时逐文件读取并比对 hash、文件列表、目录结构、链接记录和安全相对路径，拒绝外部/不明目录节点与缺失数据。只提高意外损坏检测，**并不是经过独立签名的抗恶意篡改证明**：更改数据和 manifest 的恶意行为无法由同一备份内的 hash 单独防御。
+- **旧 ref 备份的兼容策略**：旧版未带校验字段的 `manifest.json` 不会被写坏或强制升级，但 `BackupInfo::is_available` 和故障报告不把这类无索引快照标为“已验证”。`prune_backups` 只在**实际 SHA-256 校验通过**时将快照计入保留数量、删除过期的已验证快照；损坏快照、旧 ref 格式、陌生目录和未归属 `.partial` 留给人工检查，防止不完整的新快照挤掉旧的可用副本。这种保守策略可能增加磁盘占用，后续需要用户明确可见的空间/保留与旧格式迁移方案。
+- **隔离恢复证据**：`backup/verify.rs::restore_to_empty_sandbox` 只在 `#[cfg(test)]` 编译，必须先验证备份，再以独占创建的空目标目录还原清单列出的 config、data、空目录、文件和（Unix）有记录的链接；再重新 hash 提取结果并检查链接目标。测试用真实 redb 数据库，在建立备份后改变原始键值，确认独立恢复目录仍能读到旧交易中的值；嵌套 Profile、空目录、符号链接目标字节与原文件均保留。损坏 hash、删除文件、额外文件、恶意 `../` 清单路径及没有 checksum 的 ref 旧清单全部在创建恢复目标目录**之前**被拒绝；已有目的目录永不覆盖。产品级恢复还需要进程停止/文件所有权、跨平台链接策略、用户明确确认及原子回滚。
+- **故障诊断验证**：`backend/tauri/src/startup_failure.rs::Report::from_error_with_backup` 保留现有调用，但底层 `is_available` 升级为真实逐文件校验。测试明确破坏一份本来正常的快照：不再展示 `backups_dir`；恢复原有字节后再次可见。旧版无索引文件不被伪称为已验证。
+- **运行验证**：macOS ARM64，`core::backup::tests` **20/20**、`startup_failure::tests` **6/6**、`core::migration::runner::tests` **21/21** 已在本轮最终代码通过；完整 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=4` 在最终代码上 **776 通过、0 失败、1 ignored**；Cargo check、Rust fmt、Prettier、`git diff --check` 的最后结果以本轮终验为准。第一次隔离链接恢复测试失败，原因是测试恢复扫描错误地沿用“备份目录不允许链接”的检查；已拆分为“备份禁止链接 / 仅隔离恢复允许 manifest 中声明的链接”，重新运行 20/20。初次编译也因 `BackupError::Verification` 增加了新的错误分支而需要更新 startup-failure 匹配，修复后已通过。
+- **合入风险与回滚**：L2，须额外审查较大配置或数据库的两轮 SHA 读取造成的启动性能开销、写入间隙/并发改写与 race、Unix 非 UTF-8 名称、Windows reparse/锁共享及链接恢复、旧 ref 备份格式增量兼容、磁盘空间不足和损坏备份保留策略。SHA 与清单同在备份根中，不能取代可信签名、独立的恢复校验或用户确认。本批回滚只需撤销 `core/backup.rs` 新增字段/校验、删除 `core/backup/verify.rs`、回退 prune 逻辑及关联单测；保留之前 Runner 事前备份门槛。无暂存、提交、推送或真实用户数据修改。
+
+## 2026-11-01：迁移前完整快照与失败阻断（ref v2.0.1；L2，未提交）
+
+- **目标、范围、非目标**：在 pinned ref `518bf49843e1f735380e11da1ebe2a85eb8ce8c6` 上关闭上轮审查 `HIGH/BLOCKER: no pre-migration backup` 的主要代码缺口：真实旧配置在任何待执行的修改步骤前创建完整配置树 + `storage.db` 文件快照，备份失败不得继续改写 typed 文件。本轮仅接通**Tauri 客户端拥有存储之前**的 `StorageSource::File` 迁移备份；不增加运行中 `Storage::export_to` 手动备份、不自动恢复或覆写旧配置、不自动提交、无特权/真实网络操作。备份仍由测试临时目录验证，生产路径装配在现有 `setup.rs` 的迁移 Runner。
+- **ref 路径/符号 → Chimera**：从 `ref/backend/tauri/src/core/backup.rs` 移植 `BackupKind`、`StorageSource`（暂仅 File）、`BackupRequest`、`BackupInfo`、`create_backup`、`prune_backups`、原子预留 `.partial` 与最终目录 rename、递归 config 快照、manifest JSON、符号链接仅登记不跟随、迁移前版本与时间戳、命名碰撞和保留数 3 的语义；新建 `backend/tauri/src/core/backup.rs`，由 `core/mod.rs` 声明。ref `nyanpasu_paths::PathResolver::{backups_dir,scripts_dir}` → `utils/path.rs::PathResolver` 同名路径 API（Chimera 标准 `PathBuf`）。ref `core/migration/runner.rs::{ensure_backup,has_nothing_to_protect,run_pending,run_migration}` → Chimera `core/migration/runner.rs` 的同名门槛与 `backup: Option<BackupInfo>`；在 pending 步骤前备份，也在无 pending 但需对已有 document 写 schema stamp 的分支备份，失败则直接返回源错误，不运行配置写入。在成功结束后按 ref 保留最新三个迁移备份；在仅由迁移 Runner 创建空基线的干净新安装中不生成备份，正常已升级再次启动不产生重复备份；**当前 Tauri `init_config` 先创建默认 legacy 文件，因此真实首次 GUI 启动可能仍对这些默认文件做一次快照，尚未做真实冷启动验证**。
+- **intentional safe delta**：Chimera `core::storage::Storage` 目前没有 ref 的 live redb `export_to`，所以只支持迁移前未持有的文件复制，不声称提供手动在线备份、运行中数据库一致性快照或跨进程独占。为减少无关数据被误删/越界复制，增强 ref 行为：备份目录、config 根目录和 storage 文件的符号链接/非普通节点被拒绝；备份文件树中的 symlink 只进 manifest、特殊非普通文件拒绝；`prune_backups` 只删有匹配 manifest 的完整目录，拒绝 symlink 根，不清除未知/可能仍有持有者的 `.partial`；`create_backup` 失败只清理自己本次预留的 partial。这些兼容与安全差异必须由 reviewer 和 Windows/Linux 文件系统测试复核。
+- **失败诊断桥接**：`core/migration/runner.rs::backup_info` 在成功提交快照后才可取；`setup.rs` 迁移失败交给 `startup_failure.rs::report_boundary_with_backup`，`Report::from_error_with_backup` 只在当前快照路径、父目录及 manifest 均仍为正规非链接节点时标记已确认的 `backups_dir`。`BackupError::{Io,InvalidNode}` 保持精确路径用于报告。**仍未**迁移 ref 的单独 crash-reporter GUI/子进程 IPC，stderr/log 仅提供诊断和备份路径。
+- **临时目录回归**：从 ref 对应 backup tests 移植/适配：manifest、时间、来源文件完整复制、无 storage、单秒命名碰撞、config/data 同树、symlink 不跟随、中途失败无残留、只 prune 已确认 backup、拒绝 backup/config/storage symlink；Runner 测试含先备份后写 typed、备份失败先停且重试成功、后续 step 失败仍保留快照并不标成功、存储节点异常失败清理、无旧数据跳过、健康重启不重复备份；诊断测试确保只有已提交且仍可用的快照才显示备份入口。macOS ARM64 经过真实运行的 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=4` **771 通过、0 失败、1 ignored**；本批定向备份 **14/14**、Runner **20/20**、诊断 **6/6** 在额外安全用例加入前已通过，新增测试均包含于最终完整库测试，不把 ignored、Windows/Linux 和 GUI E2E 计入成功。
+- **遗留风险与回滚**：正式上线前必须独立 reviewer 审查 snapshot 可恢复性、数据大小/磁盘耗尽、文件复制期间外部写入、Windows reparse/junction/rename/锁行为、Linux owner/权限、用户跨版本升级与中断重试；需 GUI 工具供用户安全查看与恢复旧快照，并引入真正的运行中 storage 在线导出。当前没有自动回退；备份成功仅意味着有真实迁移前快照，不保证自动恢复或所有并发来源的一致性。回滚本批需撤销 `core/backup.rs`、`core/mod.rs`、`utils/path.rs` 新路径、`migration/runner.rs` 备份钩子、`setup.rs` 与 `startup_failure.rs` 的对应报告适配，以及本次测试/记录；保持前轮 Jobs/session-state/typed I/O 修改。无暂存、提交或推送。
+
+## 2026-11-01：迁移整体验收、自查及 legacy 启动链接保护（未提交）
+
+- **范围与结论**：基于 Chimera `dd5cd88a`、ref v2.0.1 `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`、Runtime `2cb1160`，对前轮累计未提交的迁移、安全恢复、启动失败诊断进行代码自查与大范围单元测试。**尚无独立 reviewer；不得合并**。详细发现、证据、下一阶段准入顺序及回滚界限见 [2026-11-01 整体验收报告](design/2026-11-01-ref-acceptance.md)。
+- **[HIGH] 持续阻断**：Chimera `core/migration/runner.rs::run_pending` 仍缺少 ref `core/migration/runner.rs::ensure_backup` 的改写前完整配置/存储快照；单文件原子写入不足以保障跨模块失败时恢复升级前状态。此项属于源码证实的设计缺口/潜在数据损失风险，未在真实用户数据上故障注入，需在继续 crash-reporter 大迁移前完成备份模块及失败隔离验收。
+- **本轮修复**：`utils/init/mod.rs::init_config` 在 Tauri `setup`/迁移前对旧版 Verge、Clash guard、Profiles 创建默认文件时不再用 `path.exists()`（会误认悬空符号链接为缺失），改为可注入临时目录测试的 `initialize_default_yaml`，调用前轮 `core::corrupt::config_node_exists`；仍保留默认模板与注释头、既有配置不写入。新增四项测试覆盖缺失文件、已有文件、三种旧版配置悬空链接与异常父目录。其余启动错误在 logger/目录/窗口等早期出口仍未全部接通；本轮不擅自复制独立 GUI 或新备份格式。
+- **macOS ARM64 运行证据**：`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=4` **修复后 749 通过、0 失败、1 ignored**；`chimera-jobs --all-targets` **45 项通过**；`chimera-config` **172/172**、`chimera-core` **105/105**、`chimera-traffic` **103/103**（另 1 ignored）；四个前端包 `tsc --noEmit` 通过；E2E TypeScript 类型检查通过，E2E harness `test:unit` **30/30**。**未**执行真实 Tauri desktop E2E、Windows/Linux、Service/TUN、宿主网络或全部 features。最终 Rust fmt、Prettier、Cargo check 与 git diff 验证见当轮末次记录；未提交、未推送、未删除用户数据。
+
+## 2026-11-01：累计迁移整体验收与符号链接失效保护（自查，未提交）
+
+- 见本节下方的完整“整体验收与安全审查报告”：比对 ref v2.0.1 与当前 dirty tree，三项经修复前失败测试复现的迁移文件链接错误已修复；`core/migration/store.rs`、`core/migration/fs.rs` 统一使用不跟随链接的节点存在性校验，在原子写入前拒绝符号链接和非普通文件，保护原始节点。
+- 最终 macOS ARM64 上定向迁移 **80/80**、完整 `chimera --lib` **745/745**（另 1 项生成 IPC bindings 的 `#[ignore]` 继续跳过）、`chimera-jobs --all-features` **47/47**，且仅用临时数据夹具；最终质量工具结果按报告末次验收。核心未解决 HIGH：Chimera Runner 尚无 ref `ensure_backup` 迁移前验证门槛，**不能宣称具备可恢复备份，也不建议合入或发布**。独立 Reviewer、Windows/Linux、真实 Tauri GUI/E2E 与 crash-reporter 仍未完成。
+- 本批风险 L2，不涉及真实用户配置、系统代理/TUN、子模块内容改动、Git 提交或推送；上游与 Chimera 配置主动使用外部 symlink 的兼容策略尚待独立评估。
+
+### 2026-11-01：整体验收与安全审查报告（详细记录）
+
+> **决策：REQUEST_CHANGES（暂不建议合入或发布）**。本文件是本次编码会话中的**自查与测试报告，不是独立 Reviewer 的审批**；按 `docs/ai-review-checklist.md` 仍需另一上下文的独立审查及适用的维护者决策。
+
+### 目标、基线与边界
+
+- **目标**：对累计未提交的 Jobs journal、配置迁移 I/O、session-state、Application/Clash 失败保护和启动报告代码作链路审查，发现可证实的数据安全问题时最小修复，并在最终代码上执行更大范围回归。
+- **风险**：L2（持久化配置、迁移、错误分类/启动路径）；独立 crash-reporter / 移动大规模启动生命周期属于下一阶段架构设计，本批不直接迁移。
+- **主仓库**：`master` 的 `dd5cd88a`，本批只在既有未提交工作区修改；`ref` 固定 `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`（v2.0.1）、`backend/chimera-runtime` 固定 `2cb1160996f912b536418cb62bda470d097c1190`；没有提交、推送或修改两个子仓库内容。
+- **非目标**：不操作宿主系统网络、权限、真实配置目录、真正的用户备份，不发布、打包或启动桌面 GUI，不自动清理大型 `target` 缓存，也不重写 legacy UI / Agent / Client/Service 的共享业务实现。
+
+### 本批新确认并修复的缺陷
+
+| 结论 | 文件/符号 | 复现依据 | 修复与边界 |
+| --- | --- | --- | --- |
+| **[HIGH → FIXED]** 悬空 `migration-state.yaml` 被当成新安装 | `backend/tauri/src/core/migration/store.rs::MigrationStore::load_with` | 新增 `dangling_migration_state_link_must_not_load_as_fresh_install`：修复前 test exit 101，误返回默认迁移状态；这可能导致后续迁移用新状态覆盖链接，跳过真实版本审查 | 复用 `core::corrupt::config_node_exists` 的 `symlink_metadata`，节点存在必须尝试读取，失败保留原始 I/O 错误及链接。 |
+| **[HIGH → FIXED]** Profiles 文档读取器将悬空链接当作缺失文件 | `backend/tauri/src/core/migration/fs.rs::{try_exists,read_yaml_if_exists_with,read_document_with}` | 新增 `broken_document_link_must_not_be_mistaken_for_missing_file`：修复前 test exit 101；源读取返回 `NotFound` 后直接 `Ok(None)` | 新增 `read_string_if_exists_with`：仅当目标节点确实不存在时才返回 `None`；存在链接则保留原 `NotFound` I/O 错误，且不重建。两个 reader 共用这一路径。 |
+| **[MEDIUM → FIXED]** 迁移原子写入静默替换用户符号链接 | `backend/tauri/src/core/migration/fs.rs::atomic_write` | 新增 `atomic_write_preserves_existing_symlink_and_its_target`：修复前 test exit 101，实际写入返回 `Ok(())` 并替换链接节点，而非保留链接关系 | 在原子写入前对叶节点执行有限重试的 `symlink_metadata`；符号链接或非普通文件直接拒绝，保持原链接/目录内容；普通文件与不存在的新文件仍沿用原子写入。补 `atomic_write_rejects_directory_destination_without_touching_children`。此方案不是抵御恶意并发替换节点的完整沙箱。 |
+
+这三处修复只影响迁移文件节点的“读取缺失判定”与“写入目标校验”；保留原有序列化协议、迁移修订号、窗口和客户端事务模型。映射到 ref：`ref/backend/tauri/src/core/migration/{fs.rs,store.rs,runner.rs}`、`ref/backend/tauri/src/core/corrupt.rs`；此处使用已迁入的 `config_node_exists` 是 Chimera 为防止悬空链接数据误判所做的**有依据的安全补充**（ref v2.0.1 的相应 fs 路径仍使用 `try_exists` 或直接把 `NotFound` 当缺失）。
+
+### 仍未解决、阻止合入的事项
+
+#### [HIGH / BLOCKING] 迁移前缺少完整、可核实的备份门槛
+
+- **位置**：`backend/tauri/src/core/migration/runner.rs::run_pending`，新旧文件对比可见。Chimera 在 `ensure_known_revisions()` 后直接开始各模块的 `run_step`，没有保证用户数据已备份；迁移某模块失败后还可能继续处理其他模块。
+- **上游证据**：`ref/backend/tauri/src/core/migration/runner.rs::run_pending` 会检查 `has_pending` 并在写入前调用 `ensure_backup()`，备份失败则停止；完成后才按保留政策 prune。
+- **风险**：部分迁移已持久化、后续迁移失败或电源中断时，用户可能没有可信回退副本。当前 `startup_failure::Report.backups_dir=None` 的保守设计是正确的，但并不能替代备份。
+- **合入条件**：迁入 ref 的真实备份创建/验证、覆盖范围与路径、失败即停止、恢复/兼容与保留政策；至少有“备份失败时任何待迁移原始文件未修改”和“中途故障后备份可完整读取”的独立测试。不要仅添加备份目录名或空目录冒充备份。
+
+#### [MEDIUM / OPEN] 仍无独立的启动失败 GUI 与子进程报告合同
+
+- **位置**：`backend/tauri/src/startup_failure.rs::report_boundary` 只记录 `tracing`、stderr，并透传 `anyhow`；`setup.rs` 的四个后期入口已接线，但在 Tauri 初始化或 logger 之前失败的场景仍缺窗口。
+- **上游差异**：`ref/backend/tauri/src/{startup_failure.rs,setup.rs,lib.rs}`、`core/migration/child_result.rs` 和独立 crash-reporter 构成整体协议。Chimera 的现有 Tauri/legacy/Service/Agent composition root 不能直接替换。
+- **验收条件**：先定义进程间 JSON 合同、exit code、错误路径白名单、备份存在性、窗口显示失败后的 fallback；验证应用主窗口根本未创建时的对话框、退出与无数据修改。属于需要独立设计与必要审批的架构阶段。
+
+#### [MEDIUM / OPEN] 平台、外部链接兼容、真实启动验收
+
+- **位置**：`core/migration/fs.rs::atomic_write` 的叶节点预检与真实原子 rename 之间仍有 TOCTOU 窗口；父目录的符号链接与外部挂载规则未本批扩围处理。与之相邻的 `chimera-core::PersistentStateManager` 自己的落盘实现可能另有链接语义，尚未经过本次写入回归。
+- **条件**：先与用户数据兼容策略明确“主动将配置文件链接到外部位置”时应当拒绝、保留还是原地修改；针对 Application/Clash 的健康链接读取后更新补独立持久化测试；评审 Windows 重解析点/锁共享/权限、Linux 文件系统、macOS 完整桌面冷启动、主 UI / legacy UI / Agent 统一状态。不能因本地单元测试全绿而声称这些验收完成。
+
+#### [LOW / OPEN] 依赖与诊断安全
+
+- Chimera 仍是 `redb 4.3.0`，ref 使用 `4.4.0`，`CursorError` 适配缺失为已记录的有意差异；升级需要独立依赖与数据兼容验证。
+- 启动诊断输出包含完整错误链及本机配置路径。在引入日志附件、上传或 UI 复制功能前需单独检查敏感字段脱敏及日志保留策略；本批未发现真实敏感数据泄漏，也没有联网发送。
+
+### 实际执行的检查与限制
+
+测试环境为连接的 macOS ARM64 DevSpace，Cargo `--offline --locked`，使用已缓存的 Nix PATH、现有 Xcode SDK 以及 `/usr/bin/clang` 链接器；所有本批故障注入都使用临时目录：
+
+| 测试/命令 | 结果 |
+| --- | --- |
+| 三项核心反例（分别针对 state 链接、document 链接、atomic_write 链接） | 修复前各 **exit 101**，验证旧逻辑确有回归；见 `/tmp/chimera-review-pre-fix.log`、`/tmp/chimera-review-write-before.log` |
+| `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib core::migration` | 最终代码 **80/80**，见 `/tmp/chimera-review-migration-final.log` |
+| `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=1` | 最终代码 **745/745**，另 **1 项按原有 `#[ignore]` 跳过**，见 `/tmp/chimera-review-full-lib-final.log`。跳过项 `specta_export::tests::update_typescript_bindings` 会改写前端生成文件 |
+| `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera-jobs --all-features` | 全套（含文档测试）**47/47**，见 `/tmp/chimera-review-jobs.log` |
+
+后续的 `cargo check` / rustfmt / Prettier / Git diff 与前端类型/边界检查见最终验收输出；失败项不能在更新证据前填“通过”。本次未执行真正安装、签名、Windows/Linux、桌面 GUI WebDriver、系统网络/TUN/Service 变更测试；也未运行远端 CI。构建产物仅使用缓存，未清理其他工作区数据。
+
+### 后续实施顺序与回滚
+
+1. **先做备份门槛**：检查 `ref/backend/tauri/src/core/{backup.rs,migration/runner.rs}`，迁入备份范围、原子创建、失败不写任何数据、备份校验及保留策略；连接 `PathResolver` 和真实配置/数据存储，落地隔离端到端备份故障注入。
+2. **再做启动报告及独立界面**：按完整进程/错误协议迁移，保留 Chimera Service/Agent、legacy UI 与单一 shared API；禁止“GUI 没起时弹一个 Tauri 对话框”作为假完成。
+3. **再做发行前验收**：macOS 真实冷启动和失败窗口、Windows/Linux 平台规则与隔离 E2E、CI + 新上下文独立审查。当前结论仅为自查，**绝不视为 Review 已批准**。
+4. **本轮修复回滚**：只撤销 `core/migration/{fs.rs,store.rs}` 新增三项节点保护及回归测试；保留之前对齐的 I/O 重试、Jobs、session-state 和错误报告。所有变更尚未提交，两个 submodule 没有改动内容，切勿直接硬重置累计工作区。
+
+## 2026-10-31：启动失败的类型化分类与诊断报告（ref v2.0.1；部分迁移，未提交）
+
+- **目标与实际完成边界（L2，配置版本与启动错误合同）**：沿用本地已核对的 ref SHA `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`，建立不依赖字符串猜测的启动失败分类，并在生产启动的四个实际错误出口保留完整源链、已确认数据路径、冲突版本和 I/O 故障类型。本批**不**引入上游独立 crash-reporter、迁移子进程 IPC、提前启动的备份生成器或 GUI 恢复窗口；不重建/改写任何真实用户配置，也不将“可能的备份目录”当作已存在的备份。仍保留 Chimera 的 Tauri composition root、主/legacy UI、Agent 与 Client/Service API。
+- **ref 路径/符号 → Chimera 对应**：`ref/backend/tauri/src/startup_failure.rs::{FailureKind,StartupFailure,Report,StartupFailure::from_error}` 与 `ref/backend/tauri/src/core/migration/child_result.rs::{FailureStage,RevisionFailure,Failure::from_error}` → 新增 `backend/tauri/src/startup_failure.rs::{FailureKind,StartupStage,RevisionFailure,StartupFailure,Report,report_boundary}`；保留同名的非品牌模型/序列化 `snake_case`，阶段差异明确限定为 Chimera 已接入的 `Jobs / MigrationPrepare / MigrationRun / TypedClient`；该模块仅分类及诊断输出，不持久化报告或展示 GUI。完整 ref `FailureStage` 目前是子进程迁移协议，不能伪称已接通；新阶段类型是本地 compatibility adapter，待子进程迁移入口落地后收敛。
+- **从字符串错误到类型化来源**：`ref/backend/tauri/src/core/migration/store.rs::Error::{NewerSchema,OlderSchema}` → `backend/tauri/src/core/migration/store.rs::SchemaError::{Newer,Older}`，从读取的版本号返回源路径、读取和支持的版本；继续拒绝不兼容 schema，**未更改** `STORE_SCHEMA_VERSION=2` 或其写入格式。 `ref/backend/tauri/src/core/migration/runner.rs::Error::{NewerDocument,NewerAppliedRevision}` → `backend/tauri/src/core/migration/runner.rs::RevisionError::{NewerDocument,NewerAppliedModule}`；仅替换先前的 `bail!` 版本字符串，保留原有拒绝时机。 `StartupFailure::from_error` 在 `std::error::Error::source()` 链提取 `MigrationCheckError` 的实际路径、`session_state::Error::ReadState`、`corrupt::Error::PreserveEvidence` 和上述版本类型，再复用 `core::corrupt::error_io` 区分权限拒绝/短暂资源占用；其他来源降级为明确的阶段分类，不猜测文件路径。JSON roundtrip 已由单测检查。
+- **生产接线、对 GUI 的诚实限制**：`ref/backend/tauri/src/setup.rs` 与 `ref/backend/tauri/src/lib.rs` 负责分类及向独立 reporter 呈现；`backend/tauri/src/setup.rs` 当前仍返回 `anyhow::Result`，通过 `report_boundary(..., &PathResolver)` 分别包装 `client::jobs::start`、`migration::Runner::with_paths`、`run_pending`、`ChimeraClient::try_new_with_args`。只在错误时记录 `tracing::error!` 和 stderr 的路径/分类/原因，同时保留原始 `anyhow` 误差链供原 Tauri 调用方处理，**未变更**已启动服务、窗口、Agent、Core lifecycle 或实际退出策略。依旧可能有初始化早期尚未纳入上述四个边界的错误；没有可交互的错误窗口、备份按钮或 reporter 子进程。
+- **验证与失败修复**：macOS ARM64，使用缓存 Nix 工具链 + 本机 Xcode SDK，`cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib startup_failure::tests` **5/5** 通过（原始源链、未来/过旧 schema、未来文档和模块、权限/占用优先级、默认安全路径、序列化及无备份副作用）。`core::migration` **76/76** 通过，包括新增 `store::SchemaError` 数据不被改写的回归，以及原有未来修订拒绝测试；前轮恢复回归 `client::jobs::recovery_tests` **7/7**、`core::session_state::tests` **4/4**、`client::application::tests` **11/11**、`client::clash_config::tests` **11/11**。首次运行诊断测试为 4/5，失败因测试将 `tempfile::TempDir` 所有者立即丢弃后再次 `read_dir`；已保留临时目录对象并重跑 5/5，非产品逻辑出错。最后的 rustfmt、文档 Prettier 和 `git diff --check` 以末次验收为准。
+- **风险、回滚和下一步**：L2 独立 reviewer 仍需检查 Windows/Linux、真实 Tauri desktop 冷启动及失败 UI、更多 `setup` 出口、是否合适暴露路径/详情、真实迁移备份与崩溃时序；不能把本批自测称为跨平台发布验收。回滚本轮：还原 `backend/tauri/src/{lib.rs,setup.rs,core/migration/{store.rs,runner.rs}}` 的本轮片段，删除 `backend/tauri/src/startup_failure.rs` 并更新本记录；不影响之前 Jobs/session-state/配置 I/O 修改。根分支、ref 子模块、runtime 子模块均不提交/推送，也不操作真实用户数据。
+
+## 2026-10-31：Application / Clash 重要配置启动检查与失败保全（ref v2.0.1；未提交）
+
+- **目标、基线及风险（L2）**：在 ref `518bf49843e1f735380e11da1ebe2a85eb8ce8c6` 的重要用户配置“失败即停止、绝不自动重建”语义上，修复 Chimera 应用/Clash 配置路径检查会把悬空符号链接当作文件缺失、继而使用默认或 legacy seed 的风险。**只修改路径判定与相关回归测试**；不重置、不迁走 Application、Clash、Profiles 或原始 legacy 配置，不更改配置格式、运行核心、网络、TUN 或已有 legacy UI / Agent 共用接口。
+- **参考路径/符号映射与受约束差异**：`ref/backend/tauri/src/client/{application.rs,clash_config.rs}::{ApplicationClient,ClashConfigClient}::new` 均在已有文件出现但不可解析时报告加载错误，不进行自动损坏重建。Chimera 对应 `backend/tauri/src/client/{application.rs,clash_config.rs}::new` 保留 `PersistentStateManagerSetup::load/from_state`、legacy `VergeLegacyBridge/ClashLegacyBridge` 和 RuntimePatchCoordinator；仅把 `config_path.exists()` 换成 `crate::core::corrupt::config_node_exists` 并在错误链附上配置路径。它使用前轮已对齐的 `corrupt::retry_io` 和 `std::fs::symlink_metadata`，区分不存在（可使用原 seed）、存在（必须尝试读取）与访问失败（明确错误）。这是 ref 尚用 `Path::exists` 的 **有意安全补充**：悬空链接视为已有、必须报错；有效链接仍按此前行为加载且不修改目标。
+- **迁移前的失效保护**：`ref/backend/tauri/src/core/migration/modules/typed_config.rs::{typed_file_state,classify_shared_clash_file,read_legacy_verge,merge_legacy_clash_file}` → `backend/tauri/src/core/migration/modules/typed_config.rs`；当前 Chimera 不采用 ref 的独立 application / clash_config 文档模块和 stamped 格式，故保留本地 `typed_config` 与 `serde_yaml_ng` 兼容机制，只复用相同的错误保留策略。将 `typed_path_exists` 及两处旧文件输入检测改用上述无跟随节点检查，防止 `application.yaml`、`clash-config.yaml`、旧 `verge` 或守护覆盖文件是悬空链接时被默默跳过；失败返回原有迁移错误，不写入 typed 默认配置。
+- **验证**：macOS aarch64，使用缓存 Nix shell 工具链及本机 Xcode SDK/linker 环境变量执行 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 的定向过滤：`core::corrupt::tests` **3/3**、`client::application::tests` **11/11**、`client::clash_config::tests` **11/11**，并在最后修改旧版输入检查后重跑 `core::migration` **75/75**。测试覆盖普通/缺失节点、悬空链接、原始有效链接、损坏 YAML 不覆盖、legacy mirror 未初始化及旧版迁移不生成默认文件。所有文件是隔离 `tempfile`，无真实用户数据；主程序编译/格式检查结果以最终验收为准。
+- **明确未完成及回滚**：上游 `ref/backend/tauri/src/startup_failure.rs` + `backend/nyanpasu-crash-reporter` + `core/migration/child_result.rs` + 新的 `setup.rs/lib.rs` 启动监督形成完整链；Chimera 当前缺少相应进程报告协议且沿用自身 Tauri/Service/Agent/legacy 架构，不能只复制弹窗声称已覆盖启动失败。独立 reporter/UI、备份与迁移错误分类、跨平台早期失败和桌面 GUI/E2E 尚待有设计、测试与审查的后续批次。本批回滚时只撤销 `core/corrupt.rs::config_node_exists`、Application/Clash 两个 client 的检查、`core/migration/modules/typed_config.rs` 的本轮节点检查及其回归测试；先前 Jobs、session-state、安全读取迁移不受影响。无提交、推送、CI 或宿主特权操作。
+
+## 2026-10-31：session-state 启动损坏恢复（ref v2.0.1；未提交）
+
+- **目标 / 边界 / 风险 L2**：对齐 ref 固定 SHA `518bf49843e1f735380e11da1ebe2a85eb8ce8c6` 的可丢弃窗口/会话状态恢复，在迁移 Runner、typed-config 基线检测与 Chimera SessionStateClient 初始化中复用同一个 reader。损坏的 `session-state.yaml`、目录和符号链接先保全为不覆盖既有证据的 `.corrupt-UTC` 兄弟节点，然后写入默认状态；权限、瞬时 I/O 失败不自动恢复。仅针对窗口状态：**没有**为 application、Clash、Profiles、migration-state 或 KV 等其他用户配置开启自动重建，不改变其持久化结构、身份、权限或网络行为。
+- **路径 / 符号映射**：`ref/backend/tauri/src/core/session_state.rs::{read,read_with,reset,Error}` → 新增 `backend/tauri/src/core/session_state.rs`，沿用上游分级错误、`symlink_metadata`、`corrupt::{retry_io,retry_with_delay,preserve}`、默认 YAML 原子写回、50/100/200ms 退避；仅将 `nyanpasu_config::state` → `chimera_config::state`、`nyanpasu_utils::io` → 已有本地兼容 `crate::utils::recovery_io`，并因 Chimera 的迁移 fs 仍返回 `anyhow::Error` 而将 `Error::WriteDefault::source` 设为 `anyhow::Error`。声明 `backend/tauri/src/core/mod.rs::session_state` 模块。
+- **双入口完整接线**：`ref/backend/tauri/src/core/migration/modules/typed_config.rs::{typed_file_state,read_session_state,validate_existing_application_and_session}` → Chimera 同名文件；先调用 `read_session_state(ctx)?.is_some()`，**在** partial typed-config 检查之前恢复并保全，完整 typed config 的验证同用该 reader。不重置不存在的其他 config 文件，仍按原规则拒绝部分缺失。上游 `ref/backend/tauri/src/client/session_state.rs::SessionStateClient::new` → Chimera 同名 client，`spawn_blocking + blocking::join` 读取该共享 reader；正常文件优先于 legacy seed，缺失才使用原 seed，损坏则使用保全后的默认状态，初始化仍调用 Chimera 的 `PersistentStateManagerSetup::from_state`、`SessionStateActor`、`WindowLegacyBridge::prepare/apply`。**保留** Chimera 事务/CAS、legacy UI 窗口镜像和 agent 共用入口；不复制 ref 的无 legacy bridge 的状态管理重构或改变调用参数。
+- **测试执行及安全性**：在隔离 `tempfile` 临时目录完成：`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib core::session_state::tests` **4/4**（有界重试、权限失败不保全、目录保全、Unix 符号链接保全且不改目标）；`... client::session_state::tests` **4/4**（有效 typed 配置优先、损坏默认化和 legacy 镜像/恢复后 patch 持久化、缺失文件回退 legacy seed、三阶段迁移/客户端启动注入恢复）；`... core::migration` **71/71**（含新增 typed-config 基线检测对 full/partial 布局的保全测试和上轮 I/O 回归）。实际 Rust format、主程序 check 和 docs 检查见本次结尾验收。所有数据损坏注入均为临时路径，未检查/修改真实用户 config。
+- **局限、回滚与后续**：本批只完成 session-state 的自动恢复，不能宣称所有用户配置损坏均可恢复，也未执行 Windows 专属共享/锁违例测试、完整桌面 cold-start GUI E2E、Linux/Windows 符号链接/权限和真正的宿主文件锁测试。若必要，删除新增 `core/session_state.rs`、撤销 `core/mod.rs`、`client/session_state.rs` 和 `core/migration/modules/typed_config.rs` 的本批修改及相关记录；此前 Jobs journal 和配置迁移 I/O 修改保留。尚待独立 L2 diff/recovery 审查与跨平台 runner 验证；未提交、推送或触发 CI。
+
+## 2026-10-31：配置迁移文件 I/O 稳健性与原始错误保留（部分迁移，未提交）
+
+- **目标、基线和边界（L2）**：继续对齐 `ref` 固定 SHA `518bf49843e1f735380e11da1ebe2a85eb8ce8c6` 的启动数据恢复前置条件。本批只在 Chimera 已有的配置迁移 I/O 层增加临时错误的有界重试与错误保留，不对损坏的用户配置、migration-state、Profiles 或旧版配置执行自动重置、数据删除或新 schema 替换。测试路径均为 `tempfile` 隔离文件；保留 Main/Legacy/Agent、Chimera Client/Service、现有持久化布局和调用入口。
+- **ref → Chimera 路径及符号**：`ref/backend/tauri/src/core/migration/fs.rs::{try_exists,read_yaml_if_exists_with,read_document_with,atomic_write}` → `backend/tauri/src/core/migration/fs.rs` 同名实现；调用前轮已迁入的 `crate::core::corrupt::{retry_io,retry}` 和 `crate::utils::recovery_io::{classify,IoFailure}`，保持 Chimera `chimera_core::format`、`serde_yaml_ng`、`anyhow::Result`，不引入 Nyanpasu 尚未采用的 Chimera 错误类型。上游四个 YAML/document 注入式重试与权限失败回归测试也完整映射到同模块。`ref/backend/tauri/src/core/migration/store.rs::MigrationStore::{load,load_with}` → `backend/tauri/src/core/migration/store.rs`，保留公共 `anyhow::Result` 而复用上游 `load_with` 重试边界及两个原始错误来源测试。额外修正 `path.exists()` 会吞掉父路径访问错误的情况：用 `retry_io(|| path.try_exists())` 传播错误，避免误把不可读取的 migration-state 当成全新默认状态；属于有理由记录的局部 ref 差异。
+- **不变项、失败及回滚**：已有配置文档和迁移状态的解析、戳验证、原子替换格式与备份策略不改。短暂 `Interrupted`/`WouldBlock` 等最多重试三次（50/100/200ms），权限失败直接保留原始 `io::Error` 的 kind 和源链并返回错误；不创建 `.corrupt` 文件。对无新格式风险的原子目录创建及写入也复用同一重试策略，仍使用现有 `atomicwrites` 原子文件机制。若回滚，仅还原 `backend/tauri/src/core/migration/{fs.rs,store.rs}` 及本记录；保留前一轮 Jobs journal 迁移和 ref gitlink 不受影响。未提交、推送或触发 CI。
+- **验证限制**：本机 macOS ARM64，通过旧 Nix 缓存环境 + 已安装的 Xcode SDK 执行 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib core::migration`，**69/69 通过**，包含新增六项与原有 Runner、Profiles、typed config、stamp、store 回归；再以本轮最终命令核对 scoped cargo fmt、主程序 cargo check、Prettier 与 `git diff --check`。无法把迁移 I/O 回归误称为全部用户配置自动恢复、启动错误对话框、Windows/Linux 文件系统或完整 GUI E2E 验收。后续必须分别评估 `core/migration/runner.rs`、session state、typed client、storage/backup、startup failure UI 的差异和跨模块错误合同，必要时做独立设计与审查后再扩围。
+- **下一批待审**：ref 的 `core/session_state.rs` 在迁移和 client 构造前统一读取并保全可丢弃的窗口状态；Chimera 的 `SessionStateClient::new(path,seed,bridge)` 还承担 legacy mirror、CAS 和旧 UI 兼容路径，而且 `typed_config::validate_existing_application_and_session` 用共享 `read_yaml`。直接替换上游 client 会损坏这些合同；本批不接线自动 session-state 重建，以免制造“迁移前已重建但旧窗口桥不同步”的新风险。需先做完整临时目录分阶段迁移 + client 重启测试并独立审查。
+
+## 2026-10-31：Jobs journal 启动安全恢复（ref v2.0.1；本地未提交）
+
+- **目标 / 风险与基线**：L2（Jobs 持久化数据及应用启动）。沿用经检出的 ref `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`（nested runtime `90ac364c9c52ea05d62f18f00b53be80b3b32144`）的“先识别损坏、保留原始证据、仅重建可恢复的 Jobs journal”策略。无需权限提升，也不更改用户配置、存储格式、TUN、Service/Agent 或任何真实数据；仅对独立临时目录实施损坏测试。
+- **ref 路径与符号对齐**：`ref/backend/tauri/src/core/corrupt.rs::{error_io,is_link,retry_io,retry,preserve}` → `backend/tauri/src/core/corrupt.rs`，唯一业务适配是 `nyanpasu_core_manager::Error` → `chimera_core_manager::Error`；`ref/backend/tauri/src/client/jobs.rs::{start,start_service,open_store,Error::unusable_journal}` → 同名 Chimera Jobs client。恢复仅在 `JournalRecoveryDecode`、`JournalPruneDecode`、redb `Corrupt/Incompatible` 或非普通文件时触发，原路径先使用不可覆盖的 `.corrupt-UTC` 同级备份名保存，再启动空 journal；锁占用、权限、瞬时及未分类 I/O 故障直接失败，不会删除原件。Chimera 自有 `ProfileSyncStatus`、ProfileId/Source、客户端 API/Job execution 和 legacy/agent shared calls 全部保留。
+- **临时兼容边界**：上游 `ref/backend/nyanpasu-runtime/crates/nyanpasu-utils/src/io/mod.rs::{IoFailure,classify,transient_backoff}` 与 `.../redb_ext.rs::{RedbFailure,find_failure}` 对应 `backend/tauri/src/utils/{recovery_io.rs,redb_ext.rs}`。因为 Chimera 的 `chimera-utils` 在独立 gitlink `backend/chimera-runtime`，本批未改其子模块或 Service 依赖；以后 runtime utility 与应用 pin 可协调升级时再移出 Tauri。本地 `redb 4.3.0` 不含 ref `redb 4.4.0` 的 `CursorError`，仅省略该类型的适配与测试，保留 `StorageError` 原始错误分类，不升级 redb 或改数据库布局；待依赖收敛重查这一差异。原有上游版权/SPDX 保留在复制的 I/O 分类片段。
+- **失败 / 恢复证明**：从 `ref/backend/tauri/src/client/startup_recovery_tests.rs` 迁移 Jobs 的临时路径测试至 `backend/tauri/src/client/jobs_recovery_tests.rs`，覆盖外来垃圾数据、内部 JSON 无法解码、文件夹占用路径、不兼容 redb 表、被其他进程持有的文件；另外检查健康 journal 不误备份、父路径冲突不损坏原文件、权限失败不进入重建策略、Unix 符号链接只移动链接不触碰目标。完整上游 `utils/redb_ext` 与 `core/corrupt` 分类/保全单测保留，只有 redb 版本差异作最小调整。
+- **验证与剩余风险**：macOS aarch64，使用本机旧 Nix 工具链缓存、指定 Xcode SDK/linker 环境变量。`cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib` 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib client::jobs::recovery_tests` **7/7** 通过（含健康 journal 和 Unix 符号链接），同一 Tauri lib 的 `utils::recovery_io::tests` **2/2**、`utils::redb_ext::tests` **6/6**、`core::corrupt::tests` **1/1** 通过；`cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera-jobs --all-features` 全套 **47/47** 通过。`cargo fmt --manifest-path backend/Cargo.toml --package chimera --package chimera-jobs -- --check`、两个文档的 Prettier 检查和 `git diff --check` 通过。Tauri lib(test) 有既存非阻断 warning；未做 Windows/Linux 文件锁和符号链接行为、完整应用冷启动 GUI/E2E、权限真实故障注入或签名打包；这些仍需独立 Runner，不将单元/集成验证表述为生产环境跨平台验收。
+- **回滚与权限**：如需回滚，可还原 `backend/tauri/src/client/jobs.rs`、`core/mod.rs`、`utils/mod.rs` 与对应对齐记录并移除三个本地兼容模块及本轮测试文件；前一轮已经完成的 `chimera-jobs` typed-error 源文件和 ref gitlink 可按独立批次保留/回滚。用户没有授权提交或推送，本批只保留在本地工作区；没有操作系统网络、安装特权服务或真实用户 journal。
+
+## 2026-10-31：ref v2.0.1 基线与 Jobs journal 结构化错误（部分迁移，未提交）
+
+- **目标 / 范围**：从 `ref` 旧 gitlink `1b5d73c53a7141d216a8a0a7751be38a295be059` 快进到已 fetch 的 `origin/main` `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`（17 commits，v2.0.1），并先迁入启动恢复依赖的 Jobs journal 分类错误。更新后的 `ref` 工作区及嵌套子模块已检查为干净；`backend/nyanpasu-runtime` 从 `e73b9f5` 更新到 `90ac364c9c52ea05d62f18f00b53be80b3b32144`。没有修改 ref 内容或声称本次核验了上游 commit 签名。
+- **完整路径 / 符号映射**：`ref/backend/nyanpasu-runtime/crates/nyanpasu-jobs/src/{model.rs,runner.rs,storage/redb.rs}` → `backend/chimera-jobs/src/` 相同文件名，复制上游 `JournalOperation`、`Error::JournalDirectory/Open/Table/Transaction/Storage/Commit/Encode/Decode/RecoveryDecode/PruneDecode`、按操作保留原始错误链和 runner 的非 `Clone` Error 匹配；保留本地 crate 身份 `chimera-jobs`。`ref/.../tests/storage_errors.rs` → `backend/chimera-jobs/tests/storage_errors.rs`，仅替换测试 crate import；`tests/support/mod.rs` 添加上游的 `skip_recovery` fault injection；已有 `execution.rs`、`scheduling.rs` 两处改用 ref 的 `matches!` 检查以适应非 `PartialEq` 错误。没有改动二进制 journal 布局、存储位置、Profile 数据或 Job 执行/提交语义。
+- **风险与边界**：L2（后端持久化 journal 错误合同）。分类结构已迁入、原有运行/存储用例需保持通过，但 **自动备份与重建损坏 journal 尚未接入**；`backend/tauri/src/client/jobs.rs` 目前仍直接打开存储，未移植 ref `core/corrupt.rs` / `nyanpasu-utils::redb_ext` / startup error wiring。不能把部分基础迁移称为完整启动恢复，也不能把读权限、锁冲突、瞬时 IO 当作可删除的损坏数据。后续须首先移植 upstream 的类型化 `redb_ext`、无覆盖保全/重试和错误判断，覆盖数据证据保留及无损失败，再接入 Jobs 启动与整个应用启动路径；不要另造字符串错误判断器。保留 legacy UI / Agent / Chimera Client/Service 原有业务入口；本批没有修改其调用、网络、TUN 或用户持久化文件。
+- **验证**：已运行 `cargo test --offline --locked --manifest-path backend/Cargo.toml -p chimera-jobs --all-features`，包括新增 `storage_errors` 4/4、完整集成测试和 doc-test **47/47 通过**；`cargo fmt --manifest-path backend/Cargo.toml --package chimera-jobs -- --check`、`cargo check --offline --locked --manifest-path backend/Cargo.toml -p chimera --lib`、两份文档的 Prettier 检查和 `git diff --check` 均通过。主程序编译包含原有 229 条非阻断 warning。环境为 macOS ARM64，使用此前缓存的 Nix 工具链并仅为相关命令设置已有的 Xcode SDK 和 linker 路径。此前第一次 `cargo test` 的链接错误来自未找到 macOS SDK / `-liconv`，使用 `SDKROOT` 与 `CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=/usr/bin/clang` 修正后通过；未改系统全局配置。尚未执行完整 Tauri GUI / Windows / Linux 回归；单元/集成结果不能替代真实启动恢复与桌面 E2E。
+- **回滚与提交范围**：父仓库 `ref` gitlink 与本指南的基线可单独恢复到旧 SHA；Job 错误迁移可撤回对应三个源码文件、测试支持与测试文件，并恢复 `execution.rs` 和 `scheduling.rs` 的原断言。由于尚未接入自动重建，不改变真实用户 journal。所有修改仍在本地工作区，未提交、推送或触发 CI。
+
+
 ## Profiles 远程入组预检：无效文件夹不得触发 Fetch（2026-10-31，工作区待提交）
 
 - **目标、基线与边界（L2）**：在同一工作区保留前轮未提交的 folder route/E2E 修复和 HTTP(S) URL 输入校验。固定只读 ref `1b5d73c53a7141d216a8a0a7751be38a295be059`，主分支 `1d87c2a4`。当前 Actor 对 `ImportRemote` 先调用 `validate_import_request`，该方法只验证 URL/Options/文档，而 `folder` 要等异步下载完成、`CommitImported` 后续 `join_folder` 才检查。不存在的 folder 会发生不必要的订阅抓取，可能增加用户等待和外部请求。本批收敛到 ref 的下载前 folder 校验，保留提交时二次检查；不改变已有 Config/Folder 数据模型、Agent、legacy UI、文件物化、订阅获取服务、Runtime 或宿主网络配置。
