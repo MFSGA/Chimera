@@ -207,9 +207,11 @@ async function waitForRouteMarker(
           (expectedSignature === null || signature === expectedSignature);
 
         if (!eligible) {
-          if (marker === null) missingMarkers += 1;
-          else if (marker.routes.some(({ present }) => !present))
+          if (marker === null) {
+            missingMarkers += 1;
+          } else if (marker.routes.some(({ present }) => !present)) {
             exitingMarkers += 1;
+          }
           previousSignature = null;
           stableSince = 0;
         } else if (signature !== previousSignature) {
