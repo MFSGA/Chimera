@@ -18,6 +18,7 @@ pub mod migration;
 pub mod server;
 /// 2
 pub mod service;
+pub(crate) mod session_state;
 /// 1 todo: will use v2
 pub mod state;
 /// 10

@@ -51,21 +51,23 @@ impl SessionStateClient {
         seed: PersistentState,
         bridge: Arc<dyn WindowLegacyBridge>,
     ) -> anyhow::Result<Self> {
-        let should_load = config_path.exists();
+        // Share the startup recovery reader with migrations. A valid typed file
+        // wins over the legacy seed; an invalid one is preserved before reset.
+        let read_path = config_path.clone();
+        let persisted = crate::utils::blocking::join(
+            tokio::task::spawn_blocking(move || {
+                crate::core::session_state::read(read_path.as_std_path())
+            })
+            .await,
+        )
+        .context("failed to read or recover session state")?;
         let setup = PersistentStateManagerSetup::<PersistentState>::builder()
             .config_path(config_path)
             .assemble();
-        let manager = if should_load {
-            setup
-                .load()
-                .await
-                .context("failed to load session persistent state manager")?
-        } else {
-            setup
-                .from_state(seed)
-                .await
-                .context("failed to initialize session persistent state manager")?
-        };
+        let manager = setup
+            .from_state(persisted.unwrap_or(seed))
+            .await
+            .context("failed to initialize session persistent state manager")?;
         let snapshot = manager.snapshot_handle();
         let (actor_ref, _handle) = Actor::spawn(
             None,
@@ -347,5 +349,196 @@ mod tests {
             Some(980)
         );
         assert_eq!(*mirrored.lock().unwrap(), Some(Some(980)));
+    }
+
+    #[tokio::test]
+    async fn corrupted_session_is_preserved_and_default_is_mirrored_instead_of_legacy_seed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-state.yaml");
+        let invalid = b"window_state: [invalid";
+        std::fs::write(&path, invalid).unwrap();
+        let legacy = PersistentState {
+            window_state: BTreeMap::from([(
+                WindowLabel("main".into()),
+                WindowState {
+                    width: 640,
+                    height: 480,
+                    x: 1,
+                    y: 2,
+                    maximized: false,
+                    fullscreen: false,
+                },
+            )]),
+        };
+        let mirrored = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn WindowLegacyBridge> = Arc::new(RecordingBridge {
+            legacy,
+            mirrored: mirrored.clone(),
+        });
+
+        let client = SessionStateClient::new(
+            Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+        )
+        .await
+        .unwrap();
+        assert!(client.get_typed().window_state.is_empty());
+        assert_eq!(*mirrored.lock().unwrap(), Some(None));
+        let saved: PersistentState =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.window_state.is_empty());
+        let evidence = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("session-state.yaml.corrupt-")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(std::fs::read(&evidence[0]).unwrap(), invalid);
+
+        // A normal post-recovery mutation must still flow through the same
+        // actor, persistence coordinator and legacy window mirror.
+        let mut patch = PersistentState::new_empty_patch();
+        patch.window_state = Some(BTreeMap::from([(
+            WindowLabel("main".into()),
+            WindowState {
+                width: 875,
+                height: 600,
+                x: 3,
+                y: 4,
+                maximized: false,
+                fullscreen: false,
+            },
+        )]));
+        client.patch(patch).await.unwrap();
+        let written: PersistentState =
+            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            written
+                .window_state
+                .get(&WindowLabel("main".into()))
+                .map(|state| state.width),
+            Some(875)
+        );
+        assert_eq!(*mirrored.lock().unwrap(), Some(Some(875)));
+        assert_eq!(std::fs::read(&evidence[0]).unwrap(), invalid);
+    }
+
+    #[tokio::test]
+    async fn session_corruption_recovers_across_migration_and_client_startup() {
+        use crate::{core::migration::Runner, utils::path::PathResolver};
+        for corrupt_at in 0..3 {
+            let dir = tempfile::tempdir().unwrap();
+            let paths =
+                PathResolver::with_base_dirs(dir.path().join("config"), dir.path().join("data"));
+            std::fs::create_dir_all(paths.app_config_dir()).unwrap();
+            std::fs::create_dir_all(paths.app_data_dir()).unwrap();
+            std::fs::write(
+                paths.application_config_path(),
+                serde_yaml::to_string(&chimera_config::application::ChimeraAppConfig::default())
+                    .unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                paths.clash_config_path(),
+                serde_yaml::to_string(&chimera_config::clash::config::ClashConfig::default())
+                    .unwrap(),
+            )
+            .unwrap();
+            std::fs::write(
+                paths.session_state_path(),
+                serde_yaml::to_string(&PersistentState::default()).unwrap(),
+            )
+            .unwrap();
+            Runner::with_paths(paths.clone(), false)
+                .unwrap()
+                .run_pending()
+                .unwrap();
+            let path = paths.session_state_path();
+            let bad = b"window_state: [invalid";
+            for boundary in 0..3 {
+                if boundary == corrupt_at {
+                    std::fs::write(&path, bad).unwrap();
+                }
+                if boundary < 2 {
+                    Runner::with_paths(paths.clone(), false)
+                        .unwrap()
+                        .run_pending()
+                        .unwrap();
+                }
+            }
+            let mirrored = Arc::new(Mutex::new(None));
+            let bridge: Arc<dyn WindowLegacyBridge> = Arc::new(RecordingBridge {
+                legacy: PersistentState::default(),
+                mirrored: mirrored.clone(),
+            });
+            let client = SessionStateClient::new(
+                Utf8PathBuf::from_path_buf(path.clone()).unwrap(),
+                bridge.snapshot_legacy().unwrap(),
+                bridge,
+            )
+            .await
+            .unwrap();
+            assert!(client.get_typed().window_state.is_empty());
+            assert_eq!(*mirrored.lock().unwrap(), Some(None));
+            let evidence = std::fs::read_dir(path.parent().unwrap())
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("session-state.yaml.corrupt-")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(evidence.len(), 1, "stage {corrupt_at}");
+            assert_eq!(std::fs::read(&evidence[0]).unwrap(), bad);
+        }
+    }
+
+    #[tokio::test]
+    async fn missing_session_keeps_legacy_seed_without_creating_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-state.yaml");
+        let legacy = PersistentState {
+            window_state: BTreeMap::from([(
+                WindowLabel("main".into()),
+                WindowState {
+                    width: 640,
+                    height: 480,
+                    x: 1,
+                    y: 2,
+                    maximized: false,
+                    fullscreen: false,
+                },
+            )]),
+        };
+        let mirrored = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn WindowLegacyBridge> = Arc::new(RecordingBridge {
+            legacy,
+            mirrored: mirrored.clone(),
+        });
+        let client = SessionStateClient::new(
+            Utf8PathBuf::from_path_buf(path).unwrap(),
+            bridge.snapshot_legacy().unwrap(),
+            bridge,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            client
+                .get_typed()
+                .window_state
+                .get(&WindowLabel("main".into()))
+                .map(|state| state.width),
+            Some(640)
+        );
+        assert_eq!(*mirrored.lock().unwrap(), Some(Some(640)));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 }
