@@ -9,7 +9,7 @@ use tauri_plugin_deep_link::DeepLinkExt;
 
 use crate::{
     config::core::Config,
-    utils::{init, resolve},
+    utils::{init, path::PathResolver, resolve},
 };
 
 #[cfg(feature = "e2e")]
@@ -80,7 +80,10 @@ fn setup_frontend_console_bridge(app: &mut tauri::App) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> std::io::Result<()> {
-    crate::log_err!(init::init_config());
+    // Resolve once before startup initialization, then pass the same roots to
+    // configuration and the Tauri composition root (as in the pinned ref).
+    let paths = PathResolver::from_env().map_err(std::io::Error::other)?;
+    init::init_config(&paths).map_err(std::io::Error::other)?;
     if let Some(lang) = Config::verge().latest().language.clone() {
         let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
             .map(str::to_owned)
@@ -195,7 +198,7 @@ pub fn run() -> std::io::Result<()> {
         .setup(move |app| {
             specta_builder.mount_events(app);
 
-            setup::setup(app)?;
+            setup::setup(app, paths.clone())?;
             core::updater::recover_interrupted_update();
             core::clash::setup(app)?;
 
