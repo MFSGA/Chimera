@@ -46,10 +46,11 @@ pub fn get_portable_flag() -> bool {
     *crate::consts::IS_PORTABLE
 }
 
-pub fn app_config_dir() -> Result<PathBuf> {
+/// Discover the config root without creating directories. The startup owner
+/// explicitly creates base directories after resolving both roots.
+pub fn discover_config_dir() -> Result<PathBuf> {
     #[cfg(feature = "e2e")]
     if let Some(path) = e2e_dir("CHIMERA_E2E_CONFIG_DIR") {
-        create_dir_all(&path)?;
         return Ok(path);
     }
 
@@ -76,10 +77,13 @@ pub fn app_config_dir() -> Result<PathBuf> {
         None => suggest_config_dir(&APP_DIR_PLACEHOLDER)
             .ok_or(anyhow::anyhow!("failed to get the app config dir")),
     }
-    .and_then(|dir| {
-        create_dir_all(&dir)?;
-        Ok(dir)
-    })
+}
+
+/// Existing file/path consumers retain their original create-on-access behavior.
+pub fn app_config_dir() -> Result<PathBuf> {
+    let path = discover_config_dir()?;
+    create_dir_all(&path)?;
+    Ok(path)
 }
 
 /// profiles dir
@@ -106,7 +110,7 @@ pub fn profiles_path() -> Result<PathBuf> {
     Ok(app_config_dir()?.join(PROFILE_YAML))
 }
 
-fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
+pub(crate) fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
     let meta = fs::metadata(dir);
     if let Ok(meta) = meta {
         if !meta.is_dir() {
@@ -121,10 +125,10 @@ fn create_dir_all(dir: &PathBuf) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-pub fn app_data_dir() -> Result<PathBuf> {
+/// Discover the data root without creating directories.
+pub fn discover_data_dir() -> Result<PathBuf> {
     #[cfg(feature = "e2e")]
     if let Some(path) = e2e_dir("CHIMERA_E2E_DATA_DIR") {
-        create_dir_all(&path)?;
         return Ok(path);
     }
 
@@ -149,10 +153,13 @@ pub fn app_data_dir() -> Result<PathBuf> {
         None => suggest_data_dir(&APP_DIR_PLACEHOLDER)
             .ok_or(anyhow::anyhow!("failed to get the app data dir")),
     }
-    .and_then(|dir| {
-        create_dir_all(&dir)?;
-        Ok(dir)
-    })
+}
+
+/// Existing file/path consumers retain their original create-on-access behavior.
+pub fn app_data_dir() -> Result<PathBuf> {
+    let path = discover_data_dir()?;
+    create_dir_all(&path)?;
+    Ok(path)
 }
 
 /// logs dir

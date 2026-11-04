@@ -83,6 +83,7 @@ pub fn run() -> std::io::Result<()> {
     // Resolve once before startup initialization, then pass the same roots to
     // configuration and the Tauri composition root (as in the pinned ref).
     let paths = PathResolver::from_env().map_err(std::io::Error::other)?;
+    paths.create_base_dirs().map_err(std::io::Error::other)?;
     init::init_config(&paths).map_err(std::io::Error::other)?;
     if let Some(lang) = Config::verge().latest().language.clone() {
         let locale = crate::bridge::verge::locale_key_from_legacy(&lang)

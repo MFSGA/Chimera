@@ -2158,3 +2158,16 @@ Only the product naming, existing config formats and Chimera Client wiring remai
 - **Stage 3:** setup lifetime owners and cancellation, explicit ownership transfer on partial failure.
 - **Stage 4:** core/service startup reconciliation and runtime state, preserving Chimera Client and agent confirmation boundaries.
 - **Stage 5:** main/legacy window readiness, deep links, tray and shutdown ordering.
+
+## DIFF-070：启动顺序第 1b 阶段——纯路径发现与显式目录准备（部分对齐）
+
+- **目标与范围**：沿固定 `ref` 的 `PathResolver::discover` → `create_base_dirs` 边界，把 Tauri 入口从「解析路径时立即创建目录」调整为「一次发现 config/data 两个根目录，再显式准备目录」。这只是第一阶段的路径处理部分，**不是单实例启动顺序完全对齐**。风险等级 L2（启动路径、文件系统副作用）。
+- **基线**：Chimera 父提交 `9d31a8d0f523326fd62d518dfccebda62db7854e`（第 1 阶段）；只读 `ref` gitlink `518bf49843e1f735380e11da1ebe2a85eb8ce8c6`，工作区干净、未更新。
+- **映射**：`ref/backend/nyanpasu-paths/src/lib.rs::PathResolver::{discover,create_base_dirs}` → `backend/tauri/src/utils/path.rs::PathResolver::{from_env,create_base_dirs}`；`ref/backend/tauri/src/lib.rs::run` 的目录准备步骤 → Chimera `backend/tauri/src/lib.rs::run`。Chimera `backend/tauri/src/utils/dirs.rs` 将 `discover_config_dir` / `discover_data_dir` 分离为不写磁盘的读取路径，既有 `app_config_dir` / `app_data_dir` 仍保留旧的 create-on-access 兼容契约，不更改 IPC 和持久化路径。
+- **启动行为**：在已经注入同一份 `PathResolver` 的前提下，
+  1. `from_env` 只发现两个根目录，不创建 config/data/logs/cache/profiles；E2E 环境变量路径同样只发现，不立即创建。
+  2. `run` 显式调用 `create_base_dirs()`，配置和数据根目录均必须准备成功；profiles、logs 和 cache 为 best-effort。日志初始化与配置默认值创建仍使用同一份 resolver，属于之前阶段的改动。
+  3. 可选目录如果已被普通文件挡住，只记录错误、保留用户文件，不主动删除；这是对 ref 在该异常路径会先删除文件行为的一处保护性偏离。必要根目录也改用不会删除既有普通文件的 `std::fs::create_dir_all`：如果用户文件占用了根目录路径，启动明确报错并保留文件，而不是沿用旧 helper 的替换行为。这是针对数据损失风险的明确安全偏离；旧 `dirs::app_config_dir/app_data_dir` 兼容访问器本批未改。
+- **明确保留的差异与后续**：`ref` 在创建根目录前由独立 `single_instance::SingleInstance` 检查，Chimera 目前使用 Tauri `tauri_plugin_single_instance` 在 Builder 中检测并**转发二次启动到已有主/Legacy 窗口**。直接复制 ref 的前置锁会让二次启动无法正常唤起窗口；本阶段**不替换该插件、不改第二实例退出或深链接机制**，因此第二实例可能仍会在插件阻止它之前准备目录。若后续要对齐单实例时序，须先设计可验证的转发协议，覆盖 Windows/macOS/Linux、portable 和多用户边界，不能仅为了减少启动目录写入而退化既有体验。
+- **验证**：定向 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib utils::path::tests -- --test-threads=1` 包含显式且幂等的目录准备、必要目录失败时不创建另一根目录、必要根目录被普通文件占用时保护原始字节、可选叶目录文件保护以及原 config/data 路径布局。安全保护补强后，完整 `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=2` **782/782 通过、1 项既有忽略**，其中定向路径测试 **6/6 通过**；`cargo clippy --locked --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features` 通过（保留既有 warnings）；Rustfmt、Prettier 与 `git diff --check` 均通过。新 SHA 的远程 CI 与 Windows E2E 仍待运行；纯 Rust 单测不能证明原生单实例和真实桌面启动。
+- **回滚**：回退本批 `lib.rs`、`utils/dirs.rs`、`utils/path.rs` 与本条记录即可，保留第 1 阶段已验证的 `PathResolver` 注入；无 Schema、Service/TUN、用户网络状态或子模块变更。
