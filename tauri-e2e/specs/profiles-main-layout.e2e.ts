@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { MutationOutcome } from '../../frontend/interface/src/ipc/bindings.js';
+import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
 import {
   appliedValue,
@@ -231,10 +232,10 @@ describe('main profiles reference layout', () => {
     assert.equal(await input.getValue(), '');
   });
 
-  // Contract: a file-folder link has a distinct route, and opening it shows
-  // exactly the test-owned member. The layout fixture is restored even if an
-  // assertion fails; no real user document or subscription is touched.
-  it('opens an actor-created folder route and restores the original layout', async () => {
+  // Contract: a person can right-click a Profile, move it to a newly named
+  // folder, open the folder and use the card's details action. Read-only IPC
+  // is used only to identify and restore this spec's isolated test data.
+  it('creates a folder from the Profile menu and opens its visible member', async () => {
     assert.ok(profileUid);
     const before = await invoke<ProfilesResponse>('get_profiles');
     const previousFolders = before.folders ?? [];
@@ -248,87 +249,231 @@ describe('main profiles reference layout', () => {
         .map((item) => item.uid),
     };
     const folderName = `E2E Profile Folder ${Date.now()}`;
-    let createdId: string | undefined;
     try {
-      createdId = committedValue(
-        await invoke<MutationOutcome<string>>('create_profile_folder', {
-          name: folderName,
-          members: [profileUid],
-        }),
-        'Create folder for the layout E2E',
-      );
-      await browser.waitUntil(
-        async () =>
-          (await invoke<ProfilesResponse>('get_profiles')).folders?.some(
-            (folder) =>
-              folder.id === createdId && folder.members.includes(profileUid!),
-          ) ?? false,
-        { timeout: 15_000 },
-      );
-
-      const link = await $(
-        `[data-slot="profiles-folder-nav-item"][data-folder="${createdId}"] a`,
-      );
-      await link.waitForClickable({ timeout: 15_000 });
-      await link.click();
-      const header = await $('[data-slot="profiles-folder-header"]');
-      await header.waitForDisplayed({ timeout: 15_000 });
-      assert.ok((await header.getText()).includes(folderName));
-      const card = await $(
+      // Open the same context menu a user uses, rather than creating a folder
+      // through the backend IPC while bypassing the UI's query lifecycle.
+      const originalCard = await $(
         `[data-slot="profile-card"][data-profile-uid="${profileUid}"]`,
       );
-      await card.waitForDisplayed({ timeout: 15_000 });
-      const detailsLink = await card.$('[data-slot="profile-card-details"]');
+      await originalCard.waitForDisplayed({ timeout: 15_000 });
+      await originalCard.click({ button: 'right' });
+
+      const moveMenu = await $(
+        '//*[@role="menuitem" and contains(normalize-space(.),"移动到文件夹")]',
+      );
+      await moveMenu.waitForDisplayed({ timeout: 15_000 });
+      await moveMenu.click();
+      const newFolder = await $(
+        '//*[@role="menuitem" and contains(normalize-space(.),"新建文件夹")]',
+      );
+      await newFolder.waitForClickable({ timeout: 15_000 });
+      await newFolder.click();
+
+      const dialog = await $('[data-slot="folder-name-dialog"]');
+      await dialog.waitForDisplayed({ timeout: 15_000 });
+      const input = await dialog.$('input[aria-label]');
+      await input.waitForDisplayed({ timeout: 15_000 });
+      await input.setValue(folderName);
+      const save = await dialog.$('button[form="folder-name-dialog-form"]');
+      await save.waitForClickable({ timeout: 15_000 });
+      await save.click();
+      await dialog.waitForDisplayed({ reverse: true, timeout: 15_000 });
+
+      const link = await $(`//a[starts-with(@aria-label,"${folderName}, ")]`);
+      await link.waitForClickable({ timeout: 15_000 });
+      await link.click();
+      // The exiting page can still have an older folder header. Resolve the
+      // one with the exact name that a user sees after opening this folder,
+      // rather than asserting against the first match across both routes.
+      const header = await $(
+        `//header[@data-slot="profiles-folder-header"][.//h1[normalize-space(.)="${folderName}"]]`,
+      );
+      await header.waitForDisplayed({ timeout: 15_000 });
+      // The folder route can remount after the layout mutation settles.
+      // Never keep a link obtained from the header's parent: it can belong to
+      // a detached, exiting page that WebDriver will click without navigating.
+      // Query the current document by the accessible action and its real URL
+      // immediately before the user click, and require exactly one visible hit.
+      const detailsSelector = `a[aria-label][href="/main/profiles/profile/detail/${profileUid}"]`;
+      let detailsLink: WebdriverIO.Element | undefined;
+      // Check the folder-scoped import control before opening details:
+      // clicking the details link must leave the folder page.
+      let importVisible = false;
+      for (const form of await $$('[data-slot="profile-quick-import"]')) {
+        if (await form.isDisplayed()) {
+          importVisible = true;
+          break;
+        }
+      }
+      assert.ok(
+        importVisible,
+        'A person must be able to use the folder-scoped import control',
+      );
       try {
-        await detailsLink.waitForDisplayed({ timeout: 15_000 });
+        // This is a real mouse click on a visible action, followed below
+        // by checking the destination page. `isClickable()` can report false
+        // for an animated card even when a person can click its details icon.
+        // If WebDriver cannot click, clickElement reports the actual hit
+        // target/obstruction instead of silently weakening the acceptance.
+        // A user should be able to follow/copy this action's real destination.
+        // Validate that navigation target before physically clicking it.
+        detailsLink = await displayedElement(detailsSelector);
+        const href = await detailsLink.getAttribute('href');
+        assert.ok(href, 'The visible Profile details link must have a URL.');
+        assert.equal(
+          new URL(href, await browser.getUrl()).pathname,
+          `/main/profiles/profile/detail/${profileUid}`,
+          'The folder card details link must target the Profile detail page.',
+        );
+        await clickElement(detailsLink);
       } catch (cause) {
-        // Observe the failed route before finally restores the layout. This
-        // distinguishes a disappearing old route from a hidden new card.
-        const state = await browser.execute(() => ({
-          pathname: location.pathname,
-          routes: Array.from(
-            document.querySelectorAll<HTMLElement>('[data-route-present]'),
-          ).map((route) => ({
-            routeId: route.dataset.routeId ?? null,
-            present: route.dataset.routePresent,
-            opacity: getComputedStyle(route).opacity,
-            cards: Array.from(
-              route.querySelectorAll<HTMLElement>('[data-slot="profile-card"]'),
-            ).map((item) => ({
-              uid: item.dataset.profileUid ?? null,
-              bounds: {
-                width: item.getBoundingClientRect().width,
-                height: item.getBoundingClientRect().height,
-              },
-              detailLinks: item.querySelectorAll(
-                '[data-slot="profile-card-details"]',
-              ).length,
+        // Capture the FAILED folder page before finally restores its layout;
+        // afterTest screenshots otherwise show only the recovered main list.
+        let screenshot = 'not captured';
+        const artifactDir = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+        if (artifactDir) {
+          const file = path.join(
+            artifactDir,
+            `profile-folder-visibility-${process.env.GITHUB_RUN_ID ?? 'local'}-${Date.now()}.png`,
+          );
+          try {
+            fs.mkdirSync(artifactDir, { recursive: true });
+            await browser.saveScreenshot(file);
+            screenshot = file;
+          } catch (error) {
+            screenshot = `capture failed: ${String(error)}`;
+          }
+        }
+        // Raw DOM is strictly failure-only evidence, never the acceptance
+        // condition for this user interaction. A diagnostic failure must not
+        // discard the original visibility failure.
+        let state: unknown;
+        try {
+          state = await browser.execute(() => ({
+            pathname: location.pathname,
+            routes: Array.from(
+              document.querySelectorAll<HTMLElement>('[data-route-present]'),
+            ).map((route) => ({
+              routeId: route.dataset.routeId ?? null,
+              present: route.dataset.routePresent,
+              opacity: getComputedStyle(route).opacity,
+              cards: Array.from(
+                route.querySelectorAll<HTMLElement>(
+                  '[data-slot="profile-card"]',
+                ),
+              ).map((item) => ({
+                uid: item.dataset.profileUid ?? null,
+                displayed: getComputedStyle(item).display,
+                visibility: getComputedStyle(item).visibility,
+                bounds: {
+                  width: item.getBoundingClientRect().width,
+                  height: item.getBoundingClientRect().height,
+                },
+              })),
             })),
-          })),
-        }));
+          }));
+        } catch (diagnosticError) {
+          state = { diagnosticError: String(diagnosticError) };
+        }
         throw new Error(
-          `Folder Profile details were not displayed; route state: ${JSON.stringify(state)}`,
+          `Folder member details could not be clicked; cause: ${cause instanceof Error ? cause.message : String(cause)}; screenshot: ${screenshot}; route evidence: ${JSON.stringify(state)}`,
           { cause },
         );
       }
-      const detailsHref = await detailsLink.getAttribute('href');
-      assert.ok(detailsHref, 'The folder card details link must have an href');
+      const detailPath = `/main/profiles/profile/detail/${profileUid}`;
+      try {
+        await browser.waitUntil(
+          async () => new URL(await browser.getUrl()).pathname === detailPath,
+          {
+            timeout: 15_000,
+            timeoutMsg:
+              'Clicking Profile details did not navigate to the detail URL.',
+          },
+        );
+        const detail = await $(
+          `[data-slot="profile-detail"][data-profile-uid="${profileUid}"]`,
+        );
+        await detail.waitForDisplayed({ timeout: 15_000 });
+      } catch (cause) {
+        // The outer catch screenshots this state before finally restores the
+        // folder. Include the user-visible URL to distinguish a dead click
+        // from a detail page that opened but failed to render.
+        const observedUrl = await browser.getUrl().catch(() => 'unavailable');
+        // Failure-only hit testing: find whether an exiting animated page is
+        // still over the visible link. This is evidence, not a pass condition.
+        let hitTest: unknown = 'unavailable';
+        try {
+          hitTest = await browser.execute(
+            (link: HTMLElement, selector: string) => {
+              const rect = link.getBoundingClientRect();
+              const hit = document.elementFromPoint(
+                rect.left + rect.width / 2,
+                rect.top + rect.height / 2,
+              );
+              const route = (node: Element | null) =>
+                node
+                  ?.closest('[data-route-present]')
+                  ?.getAttribute('data-route-present') ?? null;
+              return {
+                linkStillConnected: link.isConnected,
+                liveMatchingLinks: document.querySelectorAll(selector).length,
+                linkRoutePresent: route(link),
+                centerHitTag: hit?.tagName ?? null,
+                centerHitSlot:
+                  (hit as HTMLElement | null)?.dataset.slot ?? null,
+                centerHitRoutePresent: route(hit),
+                linkReceivesHit:
+                  hit === link || (hit !== null && link.contains(hit)),
+                exitingRoutes: document.querySelectorAll(
+                  '[data-route-present="false"]',
+                ).length,
+              };
+            },
+            await (detailsLink ?? $(detailsSelector)).getElement(),
+            detailsSelector,
+          );
+        } catch (diagnosticError) {
+          hitTest = `unavailable: ${String(diagnosticError)}`;
+        }
+        throw new Error(
+          `The clicked Profile detail did not open; current URL: ${observedUrl}; pointer evidence: ${JSON.stringify(hitTest)}; cause: ${cause instanceof Error ? cause.message : String(cause)}`,
+          { cause },
+        );
+      }
       assert.equal(
-        new URL(detailsHref, 'http://tauri.localhost').pathname,
+        new URL(await browser.getUrl()).pathname,
         `/main/profiles/profile/detail/${profileUid}`,
-        'Cards in a folder must navigate by the Profile type, not the parent route',
+        'Opening folder card details must navigate to the Profile detail page',
       );
-      assert.equal(
-        await $('[data-slot="profile-quick-import"]').isExisting(),
-        true,
-        'The scoped import entry must be available on the folder route',
+    } catch (cause) {
+      // A failure at any earlier UI step (including the context menu) must
+      // leave an image of that state, before the cleanup returns to the list.
+      let screenshot = 'not captured';
+      const artifactDir = process.env.CHIMERA_E2E_ARTIFACT_DIR;
+      if (artifactDir) {
+        const file = path.join(
+          artifactDir,
+          `profile-folder-flow-${process.env.GITHUB_RUN_ID ?? 'local'}-${Date.now()}.png`,
+        );
+        try {
+          fs.mkdirSync(artifactDir, { recursive: true });
+          await browser.saveScreenshot(file);
+          screenshot = file;
+        } catch (error) {
+          screenshot = `capture failed: ${String(error)}`;
+        }
+      }
+      // WebDriver's reporter does not expand Error.cause. Preserve the
+      // original failure text in the top-level message as well as its cause.
+      throw new Error(
+        `Profile folder UI flow failed; screenshot: ${screenshot}; cause: ${cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)}`,
+        { cause },
       );
     } finally {
       // A response can be degraded or lost after the actor committed. Check
       // the document by the test-owned unique name before deciding cleanup.
       const persisted = await invoke<ProfilesResponse>('get_profiles');
       if (
-        createdId ||
         (persisted.folders ?? []).some((folder) => folder.name === folderName)
       ) {
         committedValue(
