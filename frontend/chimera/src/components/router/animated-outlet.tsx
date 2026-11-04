@@ -80,6 +80,9 @@ export function AnimatedOutlet({
   const prevMatches = useRef(matches);
 
   const router = useRouter();
+  // Match ref: freeze the state that belonged to the leaving page, not the
+  // already-committed destination route (its location and match IDs differ).
+  const prevState = useRef(router.state);
 
   // Frozen router for the exit animation, created once when isPresent becomes false
   const frozenRouterRef = useRef<typeof router | null>(null);
@@ -88,20 +91,19 @@ export function AnimatedOutlet({
 
   if (isPresent) {
     prevMatches.current = matches;
+    prevState.current = router.state;
     frozenRouterRef.current = null;
   } else {
     if (!frozenRouterRef.current) {
-      // Build patched matches: old route data (prevMatches) but new match IDs
-      const patched = [
-        ...matches.map((m, i) => ({
-          ...(prevMatches.current[i] || m),
-          id: m.id,
-        })),
-        ...prevMatches.current.slice(matches.length),
-      ];
-
-      // Snapshot of router state with old route's matches
-      const patchedState = { ...router.state, matches: patched };
+      // Keep the exact leaving matches and their IDs. Rewriting them to the
+      // incoming route IDs can render the old card under the new route state.
+      const frozenMatches = prevMatches.current;
+      const { resolvedLocation, location } = prevState.current;
+      const frozenState = {
+        ...prevState.current,
+        location: resolvedLocation ?? location,
+        matches: frozenMatches,
+      };
 
       // Helper: create a static frozen store for the exit animation.
       // useStore (@tanstack/react-store) needs .get() and .subscribe(); returning a
@@ -119,15 +121,14 @@ export function AnimatedOutlet({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const routerStores = (router as any).stores;
 
-      // Build patched match stores keyed by match ID and by route ID.
-      // <Match>/<Outlet> look up by matchId via router.stores.matchStores;
-      // useMatch({ from: routeId }) goes through router.stores.getRouteMatchStore(routeId).
+      // Adapt ref's frozen route-ID stores to the installed router's
+      // matchStores/matchesId API without changing the leaving route identity.
       const fakeMatchStores = new Map(routerStores.matchStores);
       const routeIdToFrozenStore = new Map<
         string,
         ReturnType<typeof frozenStore>
       >();
-      patched.forEach((m) => {
+      frozenMatches.forEach((m) => {
         const store = frozenStore(m);
         // The real matchStores entries carry a `routeId` property alongside the
         // store interface — mirror that so any code that reads it keeps working.
@@ -136,14 +137,29 @@ export function AnimatedOutlet({
         if (m.routeId) routeIdToFrozenStore.set(m.routeId, store);
       });
 
-      // Create fake stores with frozen match data (router.stores moved from router.__store in v1.168+)
+      // Freeze all route selectors together so the leaving Outlet cannot
+      // pick up the destination's matches during its exit animation.
       const fakeStores = Object.create(routerStores);
       Object.defineProperty(fakeStores, 'matches', {
-        value: frozenStore(patched),
+        value: frozenStore(frozenMatches),
         configurable: true,
       });
       Object.defineProperty(fakeStores, 'matchesId', {
-        value: frozenStore(patched.map((m) => m.id)),
+        value: frozenStore(frozenMatches.map((m) => m.id)),
+        configurable: true,
+      });
+      // Match ref's snapshot of route navigation state as well as match data.
+      // Otherwise exiting Outlet descendants still observe the incoming URL.
+      Object.defineProperty(fakeStores, 'location', {
+        value: frozenStore(frozenState.location),
+        configurable: true,
+      });
+      Object.defineProperty(fakeStores, 'resolvedLocation', {
+        value: frozenStore(frozenState.resolvedLocation),
+        configurable: true,
+      });
+      Object.defineProperty(fakeStores, 'status', {
+        value: frozenStore(frozenState.status),
         configurable: true,
       });
       Object.defineProperty(fakeStores, 'matchStores', {
@@ -164,7 +180,7 @@ export function AnimatedOutlet({
         configurable: true,
       });
       Object.defineProperty(fakeRouter, 'state', {
-        get: () => patchedState,
+        get: () => frozenState,
         configurable: true,
       });
 
