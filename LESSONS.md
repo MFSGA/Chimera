@@ -71,6 +71,14 @@
 | LESSON-20261031-010 | 2026-10-31 | Profiles / URL / ref alignment | `new URL()` 接受 FTP/File/JavaScript 等非订阅协议；共享 ref 的 HTTP(S) Zod schema 并加 CI 回归 | Mitigated |
 | LESSON-20261031-011 | 2026-10-31 | Profiles / Actor / remote import | 未知文件夹的远程导入曾先 Fetch 后拒绝；按 ref 在下载前校验，测试严格断言 Fetch 0 次 | Mitigated |
 | LESSON-20261031-012 | 2026-10-31 | NixOS / Btrfs / Rust tests | Tauri 测试二进制链接在 Btrfs `reserve_bytes` 阻塞；Cargo check 成功，完整 Client 测试待环境复验 | Open |
+| LESSON-20261103-001 | 2026-11-03 | Runtime / Windows / ref | 原样迁入原生存储路径测试在 Windows 将 `/data/ui` 错判为正确路径；改为 `Utf8Path::join` 生成预期值，重新运行 12/12 通过 | Mitigated |
+| LESSON-20261104-001 | 2026-11-04 | Rust workspace / Cargo target / pnpm store | 默认 D 盘耗尽导致完整测试链接失败；恢复空间后在默认位置完成全量测试，pnpm 元数据策略检查仍告警 | Mitigated |
+
+### LESSON-20261103-001：原生路径重写测试不能假定 Unix 分隔符
+
+- 证据：在 Windows Rust stable 1.99.0，初次运行 `cargo test -p chimera-core-manager --lib native_store::`，12 项中 2 项因预期 `/data/ui`、`/data/providers/local.yaml` 与实际 `/data\\ui` 等平台路径不同而失败；存储租约/迁移测试 10 项通过。
+- 修正：只调整 `crates/chimera-core-manager/src/native_store/paths.rs` 中的测试预期，使用 `Utf8Path::join` 生成同平台路径，未改变 `rewrite_paths` 生产逻辑。重新运行原生存储测试 12/12 通过，随后 Runtime 全库 121 通过、1 忽略。
+- 防复发：跨平台迁移参考用例要区分文件系统路径（平台分隔符）与 URL/代理传输路径（协议分隔符）；保留测试对 `/ws`、证书 PEM 和凭证字段不重写的断言。本轮未执行 Linux/macOS 真实桌面 E2E。
 
 ### LESSON-20261031-001：Profile Layout 未知 UID 不能静默插入文件夹
 
@@ -1061,3 +1069,16 @@ backend/Cargo.toml -p chimera --lib core::clash::proxies::tests:: -- --nocapture
 - 验证命令、实际用例数量、结果、未覆盖/跳过项：无锁模式的 `cargo test --manifest-path ./backend/Cargo.toml --workspace --all-features` 仅将 `simd-json` 锁定版本更新到 0.19.0，完整 backend workspace 测试通过；随后 CI 同一入口 `pnpm test:backend`（执行 `cargo test --locked --manifest-path ./backend/Cargo.toml --workspace --all-features`）在本机通过。修复后新 SHA 的 GitHub 全平台 CI 仍待验证。
 - 风险/回滚和清理证据（如涉及宿主状态）：只更新 Cargo 锁文件，不修改运行时用户配置或宿主状态；若需回滚同步，需同时恢复旧 submodule gitlink 与旧锁文件。
 - 关联重复事件、后续防复发措施、L3 门禁调整审批链接（如有）：每次更新 runtime submodule 时检查其被主仓引用的 Cargo manifests，并在提交前运行 `pnpm test:backend`（其中 `--locked` 用于发现未同步的父锁文件）。本次未修改工作流。
+
+### LESSON-20261104-001：完整工作区测试需同时检查 Cargo 输出盘和 pnpm store
+
+- 日期与时区：2026-11-04 Asia/Shanghai
+- 状态：Mitigated（恢复原盘空间后默认构建目录的 workspace 测试通过；pnpm 元数据策略检查仍有网络告警）
+- 严重度：Low（本地验证受环境资源影响；没有确认产品断言失败）
+- 模块：Rust workspace / Cargo target / pnpm dependency store
+- 关联运行日志（脱敏）：`cargo test --locked --quiet --manifest-path backend/Cargo.toml --workspace --all-features`。
+- 真实异常、复现步骤与证据：首次使用默认 `backend/target` 时，D 盘剩余空间约 1 MiB，Tauri 测试二进制链接报 `rustc-LLVM ERROR: IO failure on output stream: no space on device`，没有到达完整测试执行。使用临时 C 盘 target 后，工作区测试推进至 Tauri 777 项测试中的 696 进度；`specta_export::tests::typescript_bindings_are_fresh` 调用 pnpm 时，其提示 C 盘全局 store 无法硬链接到 D 盘工程并改用 `D:\.pnpm-store`，随后 `knip@6.44.1` tarball 请求多次超时。该次运行在反复重试前被中止，没有报告断言失败。
+- 确认的根因与排除项：链接 `ENOSPC` 是 D 盘空间不足；pnpm 的 store 实际落在 D 盘，跨盘构建 target 并未隔离依赖缓存的空间需求。tarball 超时出现在同一空间紧张的环境中，不能单凭它认定代码或依赖本身有缺陷。
+- 修复与验证：维护者已清出原构建盘空间；仅删除本次创建的临时 C 盘 Cargo target，按 `cargo metadata` 确认默认输出为 `backend/target` 后，`cargo test --locked --quiet --manifest-path backend/Cargo.toml --workspace --all-features` 在默认目录退出码 0。Tauri 测试二进制 **777 passed / 1 ignored**，其他 workspace 测试与 doctests 均通过；其中包含 local host 配置优先级/错误测试和启动诊断测试。`specta_export::tests::typescript_bindings_are_fresh` 的内部 pnpm 打印 supply-chain metadata fetch 超时及“可能需要安装”的警告，但随后 Prettier 成功处理生成文件，绑定相等断言通过（1/1）。发布版本快进后，pnpm 1,642 条锁文件策略检查通过；`pnpm test:manifest` 的 Deno 测试阶段因持续无输出被中止，相关 assertions 未验证。不要把 pnpm 内部元数据告警或未完成的 Deno 测试记成成功。
+- 防复发：运行全量 Cargo 测试前同时检查 `backend/target` 和 pnpm store 所在盘的剩余空间；若切换 `CARGO_TARGET_DIR`，仍需为项目盘上的 pnpm store 留出空间。代理/缓存失败时记录实际下载目标和有效 store，不把未完成运行称为测试通过。
+- 风险/回滚和清理证据：未触碰用户配置、宿主代理/TUN 或服务进程；清理目标仅为本次创建的临时 Cargo 构建目录。
