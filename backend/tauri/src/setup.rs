@@ -36,8 +36,7 @@ impl crate::service::profile_file::SelfProxyPortSource for LegacySelfProxyPort {
     }
 }
 
-pub fn setup(app: &mut tauri::App) -> anyhow::Result<()> {
-    let paths = PathResolver::from_env().context("failed to resolve app paths")?;
+pub fn setup(app: &mut tauri::App, paths: PathResolver) -> anyhow::Result<()> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let tasks = tokio_util::task::TaskTracker::new();
     let jobs = crate::startup_failure::report_boundary(

@@ -1,6 +1,7 @@
 use std::{
     fs,
     io::IsTerminal,
+    path::Path,
     sync::{
         OnceLock,
         mpsc::{self, Sender},
@@ -22,7 +23,7 @@ static JOB_LOG_CAPTURE: OnceLock<chimera_jobs::LogCapture> = OnceLock::new();
 
 use crate::{
     config::{self, chimera::logging::LoggingLevel, core::Config},
-    utils::dirs,
+    utils::path::PathResolver,
 };
 
 pub type ReloadSignal = (Option<config::chimera::LoggingLevel>, Option<usize>);
@@ -36,12 +37,10 @@ impl Channel {
 }
 
 /// initial instance global logger
-pub fn init() -> Result<()> {
+pub fn init(paths: &PathResolver) -> Result<()> {
     let jobs = crate::client::jobs::capture();
-    let log_dir = dirs::app_logs_dir().unwrap();
-    if !log_dir.exists() {
-        let _ = fs::create_dir_all(&log_dir);
-    }
+    let log_dir = paths.app_logs_dir();
+    fs::create_dir_all(&log_dir)?;
     let (log_level, log_max_files) = { (LoggingLevel::Debug, 7) }; // This is intended to capture config loading errors
     let (filter, filter_handle) = reload::Layer::new(
         EnvFilter::builder()
@@ -55,7 +54,7 @@ pub fn init() -> Result<()> {
     );
 
     // register the logger
-    let (appender, _guard) = get_file_appender(log_max_files)?;
+    let (appender, _guard) = get_file_appender(log_max_files, &log_dir)?;
     let (file_layer, file_handle) = reload::Layer::new(
         fmt::layer()
             .json()
@@ -92,7 +91,7 @@ pub fn init() -> Result<()> {
             }
 
             if let Some(max_files) = signal.1 {
-                let (appender, guard) = match get_file_appender(max_files) {
+                let (appender, guard) = match get_file_appender(max_files, &log_dir) {
                     Ok(x) => x,
                     Err(e) => {
                         error!("failed to create file appender: {}", e);
@@ -150,8 +149,7 @@ pub fn jobs_capture() -> chimera_jobs::LogCapture {
         .clone()
 }
 
-fn get_file_appender(max_files: usize) -> Result<(NonBlocking, WorkerGuard)> {
-    let log_dir = dirs::app_logs_dir().unwrap();
+fn get_file_appender(max_files: usize, log_dir: &Path) -> Result<(NonBlocking, WorkerGuard)> {
     let file_appender = tracing_appender::rolling::Builder::new()
         .filename_prefix("clash-chimera")
         .filename_suffix("app.log")
@@ -169,5 +167,36 @@ pub fn refresh_logger(signal: ReloadSignal) -> Result<()> {
             Ok(())
         }
         None => bail!("no logger channel"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn file_appender_uses_injected_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let log_dir = temp.path().join("only-these-logs");
+        fs::create_dir_all(&log_dir).unwrap();
+
+        let (mut writer, guard) = get_file_appender(7, &log_dir).unwrap();
+        writer.write_all(b"injected-log-root\n").unwrap();
+        drop(writer);
+        drop(guard);
+
+        let log_files: Vec<_> = fs::read_dir(&log_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect();
+        assert!(log_files.iter().any(|path| {
+            fs::read(path).is_ok_and(|bytes| {
+                bytes
+                    .windows(b"injected-log-root".len())
+                    .any(|part| part == b"injected-log-root")
+            })
+        }));
+        assert!(!temp.path().join("logs").exists());
     }
 }

@@ -2114,3 +2114,47 @@ DIFF-001 至 DIFF-012 是此前基于
 - 测试契约：`docs/testing/contracts/windows-core-graceful-shutdown.md` 定义初始状态、目标组与同控制台兄弟组的可观察结果、helper 失败注入、清理与未覆盖边界。用例使用真实 Windows Job Object 和控制台进程组，不把 fixture/unit 测试当成系统行为证据；它不覆盖生产隐藏控制台分配路径，也尚未验证实际 core 对 Ctrl+Break 的处理。runtime 子模块的测试尚未接入现有根仓 CI 门禁；本批不改 L3 workflow。
 - 已执行：ProcessKit 3.3.4 API 适配后，`cargo +nightly test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-utils --features process` 在 macOS arm64 通过（30 tests、1 doctest）；`cargo +nightly test --manifest-path backend/chimera-runtime/Cargo.toml -p chimera-core-manager --all-features` 通过（117 passed、1 ignored）；Service `--all-targets` 检查通过；`cargo +nightly check --manifest-path backend/Cargo.toml -p chimera --all-targets` 通过。`chimera-utils` 含测试目标的 `x86_64-pc-windows-gnu` 交叉检查通过，确认 Windows helper 与两个集成测试可编译；macOS 上 Windows 测试被 `cfg(windows)` 排除，因此不能据此声称控制台事件已运行通过。Service 的 Windows 全量交叉检查在依赖 `aws-lc-sys` 的 C 编译阶段因本机缺少 `x86_64-w64-mingw32-gcc` 停止，未到 Service Rust 代码；实际 Windows 集成运行仍待有 Windows runner 的环境。一开始的 3.3.4 编译尝试暴露 API 适配不完整，已修正为 ProcessKit 3 的 `ProcessEvents`/`ErrorKind` API，最终本地测试与 utility Windows 交叉检查均通过。
 - 收敛与 CI 后续：Windows runner 上确认两个真实子进程中仅目标收到 Ctrl+Break、缺失 helper 时快速走 Job Object 回退后，记录最终命令和结果。`pnpm test:backend` 不覆盖该 runtime 子模块，后续若要把该测试纳入 CI，需另行评估 L3 workflow 变更；本批不声称 CI 已执行这些断言。
+
+## DIFF-069：启动顺序第一阶段——路径所有权（部分对齐）
+
+**Reference:** pinned `ref` at `518bf49843e1f735380e11da1ebe2a85eb8ce8c6` (read-only).
+**Chimera base:** `19b1281de2fbc58186056699068931934decbe6b`.
+**Scope and risk:** L2, backend initialization sequencing and filesystem roots.
+**Goal:** prepare the Chimera launch path to use the *same* resolved config/data roots for pre-Tauri default configuration, logger creation and Tauri composition. This is **partial alignment**, not the complete upstream startup lifecycle.
+
+### Source mapping
+
+| `ref` implementation | Chimera implementation | Stage 1 outcome |
+| --- | --- | --- |
+| `backend/tauri/src/lib.rs::run`: `host_paths::discover` before other initialization | `backend/tauri/src/lib.rs::run`: `PathResolver::from_env` | Resolve once before `init_config`, pass to the Tauri setup closure |
+| `backend/nyanpasu-paths/src/lib.rs::PathResolver` | `backend/tauri/src/utils/path.rs::PathResolver` | Reuse existing Chimera resolver; do **not** change its persisted paths or branding |
+| `backend/tauri/src/utils/init/mod.rs::init_config(paths)` | `backend/tauri/src/utils/init/mod.rs::init_config(paths)` | Create legacy defaults only beneath the injected config root, retaining non-overwrite and best-effort semantics |
+| `backend/tauri/src/utils/init/logging.rs::init(..., paths)` | `backend/tauri/src/utils/init/logging.rs::init(paths)` | Use the injected data/log root for both initial appender and future appender rotation |
+| `backend/tauri/src/setup.rs::setup(..., paths, owners)` | `backend/tauri/src/setup.rs::setup(app, paths)` | Consume already-resolved paths; no independent path discovery in setup |
+| `backend/tauri/src/lib.rs`: logging failure exits before building Tauri | `backend/tauri/src/lib.rs::run` | Return the startup error before continuing when path resolution or logger initialization fails |
+
+Only the product naming, existing config formats and Chimera Client wiring remain adapted here. No public IPC or persisted schema changes.
+
+### Behavior and non-goals
+
+1. The production path is now `run → PathResolver::from_env → init_config(&paths) → logging::init(&paths) → initialize_default_configs(&paths) → Tauri setup(&paths)`.
+2. The initial defaults keep the existing `# Clash Chimera` header, existing YAML locations and corruption-evidence protections. Existing config files and symlinks must not be overwritten.
+3. **Not changed:** native single-instance implementation, command parsing, pre-Tauri subprocess migration, root directory creation semantics, process exit-code policy, crash reporter, task ownership, core/service start ordering, traffic storage, silent startup, main/legacy UI and Agent. Do not mistake the partial integration for upstream parity.
+4. **Known remaining difference:** Chimera's `PathResolver::from_env` still uses `utils::dirs`, which creates base directories during discovery; `ref` discovers without side effects, checks its single-instance lock, then creates roots. The current Chimera single-instance Tauri plugin remains unchanged. Aligning this boundary needs a separate stage and cold-start/double-launch platform testing.
+5. **Known remaining difference:** Chimera `main` still calls `run().unwrap()` instead of the ref's typed `ExitCode` and one-shot failure presentation, and `resolve_setup` still runs service/core/storage/resource initialization. Those changes require dedicated failure, restart and host-effect tests; avoid broad changes in this slice.
+
+### Acceptance / tests
+
+- Existing isolated defaults tests and a new unit test ensure all legacy YAML defaults are written beneath the injected config root and no unrelated data root is created by default initialization.
+- An unreadable config node, dangling symlink, and existing user config must retain the pre-existing recovery behavior.
+- Local macOS Rust verification on this slice: full `cargo test --locked --manifest-path backend/Cargo.toml -p chimera --lib -- --test-threads=2` passed **778/778**, with 1 pre-existing ignored generated-bindings writer test. Targeted startup file safety tests **5/5**, injected log appender **1/1**, path tests **2/2** and startup failure tests **6/6** passed. Rust formatting, `cargo clippy --locked --manifest-path backend/Cargo.toml -p chimera --all-targets --all-features` (success with pre-existing warnings), tracked-document Prettier and `git diff --check` passed. After tightening the log-content assertion, its focused test passed again. An initial full-suite run failed because the isolated worktree lacked a `pnpm` executable for an existing Specta freshness test; after supplying a temporary Corepack-backed `pnpm` wrapper, the entire suite passed without changing that test or generated bindings.
+- The full Windows E2E and macOS/Linux build matrix must be recorded against the new commit **before claiming a complete platform acceptance**. Pure Rust tests do not prove native single-instance or real service/TUN startup.
+- Scope rollback: revert this stage's commit. No changes to `ref` or submodule gitlinks.
+
+### Future stages (separate changes)
+
+- **Stage 1b:** ref-style pure path discovery and single-instance placement; avoid directory writes from a losing instance. Needs explicit Windows/macOS/Linux double-launch and portable-mode tests. Do not copy upstream directory-file replacement without assessing user-data impact.
+- **Stage 2:** migration order, safe preflight and structured failure reporting, preserving existing snapshots and recovery.
+- **Stage 3:** setup lifetime owners and cancellation, explicit ownership transfer on partial failure.
+- **Stage 4:** core/service startup reconciliation and runtime state, preserving Chimera Client and agent confirmation boundaries.
+- **Stage 5:** main/legacy window readiness, deep links, tray and shutdown ordering.

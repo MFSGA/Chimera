@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::{
     config::{chimera::IVerge, clash::IClashTemp, profile::profiles::Profiles},
-    utils::{dirs, help},
+    utils::{dirs, help, path::PathResolver},
 };
 
 mod logging;
@@ -14,30 +14,30 @@ pub use logging::refresh_logger;
 
 /// Initialize all the config files
 /// before tauri setup
-pub fn init_config() -> Result<()> {
-    // init log
-    logging::init().unwrap();
+pub fn init_config(paths: &PathResolver) -> Result<()> {
+    // Initialize the logger against the same resolved data root used by setup.
+    logging::init(paths)?;
     tracing::info!("initializing logging config...");
-    crate::log_err!(dirs::app_profiles_dir().map(|profiles_dir| {
-        if !profiles_dir.exists() {
-            let _ = fs::create_dir_all(&profiles_dir);
-        }
-    }));
+    initialize_default_configs(paths)
+}
 
-    crate::log_err!(
-        dirs::clash_guard_overrides_path()
-            .and_then(|path| { initialize_default_yaml(&path, &IClashTemp::template().0) })
-    );
+fn initialize_default_configs(paths: &PathResolver) -> Result<()> {
+    if let Err(error) = fs::create_dir_all(paths.app_profiles_dir()) {
+        tracing::error!(%error, "failed to create profiles directory");
+    }
 
-    crate::log_err!(
-        dirs::chimera_config_path()
-            .and_then(|path| { initialize_default_yaml(&path, &IVerge::template()) })
-    );
-
-    crate::log_err!(
-        dirs::profiles_path()
-            .and_then(|path| { initialize_default_yaml(&path, &Profiles::default()) })
-    );
+    crate::log_err!(initialize_default_yaml(
+        &paths.clash_guard_overrides_path(),
+        &IClashTemp::template().0,
+    ));
+    crate::log_err!(initialize_default_yaml(
+        &paths.chimera_config_path(),
+        &IVerge::template(),
+    ));
+    crate::log_err!(initialize_default_yaml(
+        &paths.profiles_path(),
+        &Profiles::default(),
+    ));
 
     Ok(())
 }
@@ -56,6 +56,34 @@ fn initialize_default_yaml<T: Serialize>(path: &Path, template: &T) -> Result<()
 #[cfg(test)]
 mod startup_file_tests {
     use super::*;
+
+    #[test]
+    fn default_config_initialization_uses_only_injected_config_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_dir = temp.path().join("isolated-config");
+        let data_dir = temp.path().join("untouched-data");
+        let paths = PathResolver::with_base_dirs(config_dir.clone(), data_dir.clone());
+        fs::create_dir_all(&config_dir).unwrap();
+
+        initialize_default_configs(&paths).unwrap();
+
+        assert!(paths.app_profiles_dir().is_dir());
+        for path in [
+            paths.clash_guard_overrides_path(),
+            paths.chimera_config_path(),
+            paths.profiles_path(),
+        ] {
+            assert!(
+                path.is_file(),
+                "startup did not initialize {}",
+                path.display()
+            );
+        }
+        assert!(
+            !data_dir.exists(),
+            "defaults must not resolve or create a separate data root"
+        );
+    }
 
     #[test]
     fn missing_legacy_file_gets_its_original_default_header() {
