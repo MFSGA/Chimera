@@ -90,7 +90,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
     "filesize": "11.0.28",
-    "meta-json-schema": "1.19.32",
+    "meta-json-schema": "1.19.33",
     "monaco-yaml": "5.5.1",
     "nanoid": "6.0.2",
     "postcss": "8.5.32",
