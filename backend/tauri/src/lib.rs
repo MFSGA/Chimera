@@ -34,6 +34,13 @@ mod setup;
 /// 8
 #[cfg(windows)]
 mod shutdown_hook;
+// Include the gate's unit tests in --all-features backend test runs, while
+// leaving it out of the production hermetic E2E executable.
+#[cfg(all(
+    any(target_os = "macos", target_os = "linux", windows),
+    any(not(feature = "e2e"), test)
+))]
+mod single_instance_activation;
 mod specta_export;
 mod startup_failure;
 mod state;
@@ -83,48 +90,14 @@ pub fn run() -> std::io::Result<()> {
     // Resolve once before startup initialization, then pass the same roots to
     // configuration and the Tauri composition root (as in the pinned ref).
     let paths = PathResolver::from_env().map_err(std::io::Error::other)?;
-    paths.create_base_dirs().map_err(std::io::Error::other)?;
-    init::init_config(&paths).map_err(std::io::Error::other)?;
-    if let Some(lang) = Config::verge().latest().language.clone() {
-        let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
-            .map(str::to_owned)
-            .unwrap_or_else(|| lang.to_ascii_lowercase());
-        rust_i18n::set_locale(&locale);
-    }
-
     let specta_builder = specta_export::build_specta_builder();
 
-    #[cfg(all(debug_assertions, not(feature = "e2e")))]
-    {
-        const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
-
-        match specta_builder.export(
-            specta_typescript::Typescript::default().header("/* oxlint-disable */\n// @ts-nocheck"),
-            SPECTA_BINDINGS_PATH,
-        ) {
-            Ok(_) => {
-                let npx_command = if cfg!(target_os = "windows") {
-                    "npx.cmd"
-                } else {
-                    "npx"
-                };
-                let output = std::process::Command::new(npx_command)
-                    .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
-                    .output()
-                    .expect("failed to format TypeScript bindings");
-                assert!(
-                    output.status.success(),
-                    "Prettier failed for TypeScript bindings"
-                );
-                specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)
-                    .expect("failed to normalize TypeScript bindings");
-                log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
-            }
-            Err(e) => {
-                panic!("Failed to export typescript bindings: {e}");
-            }
-        };
-    }
+    #[cfg(all(
+        any(target_os = "macos", target_os = "linux", windows),
+        not(feature = "e2e")
+    ))]
+    let secondary_activation =
+        std::sync::Arc::new(single_instance_activation::PendingWindowActivation::default());
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -140,10 +113,18 @@ pub fn run() -> std::io::Result<()> {
         not(feature = "e2e")
     ))]
     {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            resolve::create_window(app);
-        }));
+        // Tauri initializes plugins in registration order. Deep-link state must
+        // exist before the singleton starts accepting secondary CLI requests,
+        // including a second launch racing with the primary's startup.
         builder = builder.plugin(tauri_plugin_deep_link::init());
+        let activation = secondary_activation.clone();
+        builder = builder.plugin(tauri_plugin_single_instance::init(
+            move |app, _args, _cwd| {
+                if activation.request() {
+                    resolve::create_window(app);
+                }
+            },
+        ));
     }
 
     #[cfg(all(
@@ -197,6 +178,51 @@ pub fn run() -> std::io::Result<()> {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_global_shortcut::Builder::default().build())
         .setup(move |app| {
+            // Tauri initializes the single-instance plugin during build(),
+            // before running this setup callback. A losing instance forwards
+            // its CLI/deep link to the primary and exits without preparing
+            // config, logs, or generated development bindings.
+            paths.create_base_dirs().map_err(std::io::Error::other)?;
+            init::init_config(&paths).map_err(std::io::Error::other)?;
+            if let Some(lang) = Config::verge().latest().language.clone() {
+                let locale = crate::bridge::verge::locale_key_from_legacy(&lang)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| lang.to_ascii_lowercase());
+                rust_i18n::set_locale(&locale);
+            }
+
+            #[cfg(all(debug_assertions, not(feature = "e2e")))]
+            {
+                const SPECTA_BINDINGS_PATH: &str = "../../frontend/interface/src/ipc/bindings.ts";
+
+                match specta_builder.export(
+                    specta_typescript::Typescript::default().header("/* oxlint-disable */\n// @ts-nocheck"),
+                    SPECTA_BINDINGS_PATH,
+                ) {
+                    Ok(_) => {
+                        let npx_command = if cfg!(target_os = "windows") {
+                            "npx.cmd"
+                        } else {
+                            "npx"
+                        };
+                        let output = std::process::Command::new(npx_command)
+                            .args(["prettier", "--write", SPECTA_BINDINGS_PATH])
+                            .output()
+                            .expect("failed to format TypeScript bindings");
+                        assert!(
+                            output.status.success(),
+                            "Prettier failed for TypeScript bindings"
+                        );
+                        specta_export::normalize_typescript_bindings(SPECTA_BINDINGS_PATH)
+                            .expect("failed to normalize TypeScript bindings");
+                        log::debug!("Exported typescript bindings, path: {SPECTA_BINDINGS_PATH}");
+                    }
+                    Err(e) => {
+                        panic!("Failed to export typescript bindings: {e}");
+                    }
+                };
+            }
+
             specta_builder.mount_events(app);
 
             setup::setup(app, paths.clone())?;
@@ -267,6 +293,14 @@ pub fn run() -> std::io::Result<()> {
                         log::error!(target: "app", "failed to emit scheme request {url} to {target_label}: {error:?}");
                     }
                 });
+
+                // Flush a second-launch window request only after the Client,
+                // the Legacy/Main window state and the deep-link listener exist.
+                // The plugin still forwards CLI/URI arguments as before.
+                #[cfg(not(feature = "e2e"))]
+                if secondary_activation.mark_ready() {
+                    resolve::create_window(app.handle());
+                }
 
                 if let Some(url) = app
                     .deep_link()
