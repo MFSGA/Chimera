@@ -1,6 +1,23 @@
 import type { ChainablePromiseElement } from 'webdriverio';
+import { markE2eStep } from './step-diagnostics.js';
 
 type ElementTarget = ChainablePromiseElement | WebdriverIO.Element;
+
+/**
+ * Prepare the viewport for a real WebDriver user action. On Windows WebView2,
+ * WDIO's element.scrollIntoView() command repeatedly stalls for ~60 seconds
+ * even for already displayed controls. The page-side scroll only positions
+ * the target; the subsequent click is still a W3C physical mouse action.
+ */
+async function bringIntoViewport(target: WebdriverIO.Element) {
+  await browser.execute((node: Element) => {
+    node.scrollIntoView({
+      behavior: 'instant',
+      block: 'center',
+      inline: 'center',
+    });
+  }, target);
+}
 
 export async function displayedElement(selector: string, timeout = 15_000) {
   let current: WebdriverIO.Element | undefined;
@@ -47,7 +64,7 @@ export async function displayedElement(selector: string, timeout = 15_000) {
 export async function focusElement(element: ElementTarget, timeout = 15_000) {
   const target = await element.getElement();
   await target.waitForDisplayed({ timeout });
-  await target.scrollIntoView({ block: 'center', inline: 'center' });
+  await bringIntoViewport(target);
 
   const focused = await browser.execute((node) => {
     const element = node as HTMLElement;
@@ -63,10 +80,22 @@ export async function focusElement(element: ElementTarget, timeout = 15_000) {
 export async function clickElement(element: ElementTarget, timeout = 15_000) {
   const target = await element.getElement();
   await target.waitForDisplayed({ timeout });
-  await target.scrollIntoView({ block: 'center', inline: 'center' });
+  markE2eStep('pointer', 'position target in viewport');
+  await bringIntoViewport(target);
 
   try {
-    await target.click();
+    // WDIO's element.click() has repeatedly returned only after ~60 seconds
+    // on Windows WebView2, even when the visible switch did change. Use the
+    // same W3C mouse action sequence already exercised by the language spec:
+    // it is a real pointer move, press and release, not a DOM click shortcut.
+    markE2eStep('pointer', 'perform WebDriver mouse down and up');
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .move({ origin: target })
+      .down()
+      .pause(10)
+      .up()
+      .perform();
   } catch (error) {
     const diagnostics = await browser.execute((node) => {
       const element = node as HTMLElement;
@@ -111,7 +140,7 @@ export async function clickElement(element: ElementTarget, timeout = 15_000) {
 
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `WebDriver click failed: ${message}\n${JSON.stringify(diagnostics, null, 2)}`,
+      `WebDriver pointer action failed: ${message}\n${JSON.stringify(diagnostics, null, 2)}`,
     );
   }
 }

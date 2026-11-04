@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { clickElement, displayedElement } from './interaction.js';
 import { openMainRoute } from './main-window.js';
+import { markE2eStep } from './step-diagnostics.js';
 
 const targetPath = '/main/assistant';
 const artifactDirectory = path.resolve('.tmp');
@@ -234,6 +235,7 @@ describe('network assistant guided diagnosis', () => {
   });
 
   it('keeps a resolved network change pending until explicit confirmation', async () => {
+    markE2eStep('agent', 'read initial proxy snapshot');
     const initial = await invoke<AgentProxySnapshot>(
       'agent_get_network_snapshot',
     );
@@ -243,9 +245,11 @@ describe('network assistant guided diagnosis', () => {
       'the isolated stale-proxy fixture must start with its simulated proxy enabled',
     );
 
+    markE2eStep('agent', 'open supported intent card');
     await ensureIntentCard();
     const input = await displayedElement('[data-slot="agent-intent-input"]');
     await input.setValue('关闭残留代理');
+    markE2eStep('agent', 'submit supported intent');
     await clickElement(
       await displayedElement('[data-slot="agent-intent-submit"]'),
     );
@@ -264,6 +268,7 @@ describe('network assistant guided diagnosis', () => {
         '[data-slot="agent-intent-continue"]',
       );
       proposalAttempted = true;
+      markE2eStep('agent', 'open proposal dialog');
       await clickElement(continueButton);
       await browser.waitUntil(
         async () => (await $('body').getText()).includes('确认网络变更'),
@@ -350,6 +355,7 @@ describe('network assistant guided diagnosis', () => {
   });
 
   it('keeps technical details secondary and fits a narrow window', async () => {
+    markE2eStep('agent', 'expand technical summary');
     const summary = await displayedElement(
       '//summary[contains(., "技术详情")]',
     );
@@ -359,6 +365,7 @@ describe('network assistant guided diagnosis', () => {
     );
     assert.match(await $('body').getText(), /高级手动控制/);
 
+    markE2eStep('agent', 'resize window for narrow layout');
     await browser.setWindowSize(680, 720);
     const layout = await getLayoutState();
     assert.ok(layout.viewportWidth <= 700, JSON.stringify(layout));
@@ -552,7 +559,9 @@ describe('network assistant guided diagnosis', () => {
 
   // Contract: docs/testing/contracts/agent-history-ui.md
   it('shows privacy-safe action history and saves an explicit diagnosis', async () => {
+    markE2eStep('agent', 'verify action history');
     await verifyAgentAuditHistory();
+    markE2eStep('agent', 'capture diagnostic history');
     await captureAgentDiagnosticHistory();
   });
 });

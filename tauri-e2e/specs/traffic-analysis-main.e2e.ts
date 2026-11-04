@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { clickElement, displayedElement, focusElement } from './interaction.js';
 import { ensureMainWindow } from './main-window.js';
+import { markE2eStep } from './step-diagnostics.js';
 
 const sidebarToggleSelector =
   '[data-slot="traffic-page"] [data-slot="navigation-sidebar-toggle"]';
@@ -53,6 +54,7 @@ async function waitForSidebarToggleState(
 
 describe('main traffic analysis', () => {
   beforeEach(async () => {
+    markE2eStep('traffic', 'ensure main window and dashboard');
     await ensureMainWindow();
     await browser.setWindowSize(1280, 720);
 
@@ -85,6 +87,7 @@ describe('main traffic analysis', () => {
 
   /* Contract TRAFFIC-URL-STATE: visible controls own the route's traffic query. */
   it('opens from main navigation and carries scope and metric between analysis views', async () => {
+    markE2eStep('traffic', 'open traffic overview by visible navbar link');
     const trafficLink = await $(
       '[data-slot="app-navbar"] a[href="/main/topology"]',
     );
@@ -105,6 +108,7 @@ describe('main traffic analysis', () => {
       },
     );
 
+    markE2eStep('traffic', 'expand and collapse traffic sidebar');
     const sidebarToggle = await displayedElement(sidebarToggleSelector);
     const collapsedState = await readSidebarToggleState();
     const collapsedLabel = collapsedState?.label;
@@ -200,6 +204,7 @@ describe('main traffic analysis', () => {
     assert.equal(beforeClosedSelection.allChecked, true);
     assert.equal(beforeClosedSelection.closedChecked, false);
 
+    markE2eStep('traffic', 'select Closed scope');
     let closedSelection = beforeClosedSelection;
     try {
       const closedScope = await displayedElement(closedScopeSelector);
@@ -232,6 +237,7 @@ describe('main traffic analysis', () => {
       );
     }
 
+    markE2eStep('traffic', 'open metric menu and select Connections');
     const metricTrigger = await displayedElement(
       '[data-slot="traffic-metric-trigger"]',
     );
@@ -260,9 +266,18 @@ describe('main traffic analysis', () => {
       },
     );
 
+    markE2eStep('traffic', 'follow visible Flow link with selected query');
     const flowLink = await $(
       '[data-slot="traffic-navigation-item"][href^="/main/topology/flow"]',
     );
+    await flowLink.waitForClickable({ timeout: 15_000 });
+    // A user following or copying this sidebar link must keep the visible
+    // Closed/Connections selection. Check the real link before navigating.
+    const flowHref = await flowLink.getAttribute('href');
+    assert.ok(flowHref, 'The Flow navigation link must have an href.');
+    const flowTarget = new URL(flowHref, 'http://tauri.localhost');
+    assert.equal(flowTarget.searchParams.get('scope'), 'closed');
+    assert.equal(flowTarget.searchParams.get('metric'), 'connections');
     await flowLink.click();
     await browser.waitUntil(
       async () =>
@@ -283,9 +298,16 @@ describe('main traffic analysis', () => {
       },
     );
 
+    markE2eStep('traffic', 'follow visible Map link with selected query');
     const mapLink = await $(
       '[data-slot="traffic-navigation-item"][href^="/main/topology/map"]',
     );
+    await mapLink.waitForClickable({ timeout: 15_000 });
+    const mapHref = await mapLink.getAttribute('href');
+    assert.ok(mapHref, 'The Map navigation link must have an href.');
+    const mapTarget = new URL(mapHref, 'http://tauri.localhost');
+    assert.equal(mapTarget.searchParams.get('scope'), 'closed');
+    assert.equal(mapTarget.searchParams.get('metric'), 'connections');
     await mapLink.click();
     await browser.waitUntil(
       async () =>
