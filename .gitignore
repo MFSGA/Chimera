@@ -42,6 +42,7 @@ release.sh
 !/docs/ref-alignment-guide.md
 !/docs/ref-alignment-ui-input-search.md
 !/docs/ref-alignment-ui-glass-controls.md
+!/docs/ref-alignment-ui-segmented-glass.md
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
 !/docs/nixos.md
