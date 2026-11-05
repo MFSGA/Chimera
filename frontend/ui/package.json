@@ -19,7 +19,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test:unit": "node --test tests/ref-input-search-contract.test.cjs"
+    "test:unit": "node --test tests/ref-input-search-contract.test.cjs tests/ref-glass-control-group.test.cjs"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",
