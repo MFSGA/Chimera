@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { createServer, type Server } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { seedE2eDisabledAutoUpdate } from './e2e-update-preference.js';
 import { mergeWdioLogMaskingPatterns } from './privacy-safe-error.js';
 import {
   captureWindowsProxySettings,
@@ -179,6 +180,12 @@ if (configFixtureDirectory && !fs.existsSync(configFixtureMarker)) {
     );
   }
   fs.writeFileSync(configFixtureMarker, configFixtureDirectory);
+}
+
+// Only seed test-owned runtime config; the shipped application's default stays on.
+// Upgrade phases must retain their source-version configuration unchanged.
+if (!process.env.CHIMERA_E2E_UPGRADE_PHASE) {
+  seedE2eDisabledAutoUpdate(configDirectoryOverride);
 }
 
 type TauriBrowser = WebdriverIO.Browser & {

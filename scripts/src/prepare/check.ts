@@ -9,6 +9,7 @@ import {
   formatSpeed,
   ProgressRenderer,
 } from './progress.ts';
+import { prepareRetryDelayMs } from './retry.ts';
 import { createPrepareTasks, selectPrepareTasks, type Task } from './tasks.ts';
 import type { VersionManifest } from './types.ts';
 import { normalizeVersion } from './versions.ts';
@@ -55,6 +56,10 @@ async function runTask(
         note: `${attempt + 1}/${task.retry}`,
         version: task.version,
       });
+      const delayMs = prepareRetryDelayMs(err, attempt);
+      if (delayMs) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
     }
   }
 
