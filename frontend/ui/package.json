@@ -18,7 +18,8 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test:unit": "node --test tests/ref-slider-contract.test.cjs"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",
