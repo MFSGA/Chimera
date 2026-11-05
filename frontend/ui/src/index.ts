@@ -8,6 +8,7 @@ export * from './utils';
 export * from './materialYou';
 export * from './dnd-grid';
 export * from './drawer';
+export { default as DateTimeField } from './date-time-field';
 export * from './search-field';
 
 export * from './accordion';
@@ -46,6 +47,7 @@ export { Switch } from './switch';
 export * from './modal';
 export * from './popover';
 export * from './snackbar';
+export * from './shared-tooltip';
 export * from './tooltip';
 export * from './animated-tabs';
 export { default as AnimatedTabs } from './animated-tabs';
