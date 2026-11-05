@@ -2,6 +2,7 @@
 
 use std::{
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime},
 };
 
@@ -36,22 +37,52 @@ where
     }
 }
 
+// Windows clock ticks can repeat while parallel tests create named pipes.
+static NEXT_PIPE_ID: AtomicU64 = AtomicU64::new(0);
+
 fn unique_pipe_name() -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    pipe_name_with_nonce(nonce)
+}
+
+fn pipe_name_with_nonce(nonce: u128) -> PathBuf {
+    let sequence = NEXT_PIPE_ID.fetch_add(1, Ordering::Relaxed);
     PathBuf::from(format!(
-        r"\\.\pipe\clash-api-{}-{nonce}",
+        r"\\.\pipe\clash-api-{}-{nonce}-{sequence}",
         std::process::id()
     ))
+}
+
+#[test]
+fn concurrent_pipe_names_are_unique_even_with_a_frozen_clock() {
+    let names = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                scope.spawn(|| {
+                    (0..100)
+                        .map(|_| pipe_name_with_nonce(0))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().unwrap())
+            .collect::<std::collections::HashSet<_>>()
+    });
+    assert_eq!(names.len(), 800);
 }
 
 fn spawn_pipe_server(name: PathBuf, app: Router) -> tokio::task::JoinHandle<()> {
     let first = ServerOptions::new()
         .first_pipe_instance(true)
         .create(&name)
-        .unwrap();
+        .unwrap_or_else(|error| {
+            panic!("failed to create first named-pipe test listener {name:?}: {error}")
+        });
     tokio::spawn(async move {
         let mut server = first;
         loop {
