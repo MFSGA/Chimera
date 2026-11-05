@@ -10,40 +10,51 @@
 
 简体中文 | [English](README.en.md) | [Русский](README.ru.md) | [فارسی](README.fa.md)
 
-> **Chimera Proxy** — Rust-native desktop client for the Chimera proxy ecosystem.
+> **Chimera Proxy** 是 Chimera 代理生态的 Rust 原生桌面客户端。
 
 ## Chimera Ecosystem
 
-```text
-Chimera Desktop
-      ↕
-Chimera Client (Rust client core)
-      ↕ VLESS + REALITY / other proxy protocols
-Chimera Server (Rust server core)
+图中，应用到客户端核心表示集成或依赖；客户端到服务端表示网络协议通信；Proxy_Wiki 提供文档，不参与运行时。
 
-Chimera Desktop
-      ↕ local IPC / service management
-Chimera Service (privileged local service)
+```mermaid
+flowchart LR
+  subgraph apps[应用与设备]
+    direction TB
+    desktop["⭐ 当前项目：Chimera<br/>Tauri + React"]
+    android["AChimera<br/>Android + Kotlin"]
+    openwrt["OpenChimera<br/>OpenWrt"]
+  end
 
-AChimera (Android client)
-      ↕ embedded Chimera Client core
-Chimera Server (Rust server core)
+  client["Chimera_Client<br/>Rust 客户端核心"]
+  server["Chimera_Server<br/>Rust 服务端核心"]
+  wiki["Proxy_Wiki<br/>生态文档"]
 
-Proxy Wiki (ecosystem documentation)
+  desktop -->|可选核心：下载与管理| client
+  android -->|依赖 clash-lib；UniFFI 暴露接口| client
+  openwrt -->|打包核心并提供管理层| client
+  client -->|协议通信：VLESS / REALITY 等| server
+
+  classDef app fill:#eaf2ff,stroke:#5b8def,color:#17365d,stroke-width:1.5px
+  classDef core fill:#e9f8ef,stroke:#36a269,color:#17452b,stroke-width:1.5px
+  classDef serverNode fill:#fff1e6,stroke:#e58a3a,color:#5c3214,stroke-width:1.5px
+  classDef docs fill:#f3eaff,stroke:#9b70d6,color:#38245c,stroke-width:1.5px
+  classDef current fill:#dceaff,stroke:#1769ff,color:#082f6b,stroke-width:3px
+  class android,openwrt app
+  class desktop current
+  class client core
+  class server serverNode
+  class wiki docs
 ```
 
-- [Chimera](https://github.com/MFSGA/Chimera) — cross-platform desktop application.
-- [Chimera Client](https://github.com/MFSGA/Chimera_Client) — Rust-native Clash / Mihomo-compatible proxy client core.
-- [Chimera Server](https://github.com/MFSGA/Chimera_Server) — Rust-native, Xray-oriented proxy server core.
-- [Chimera Service](https://github.com/MFSGA/Chimera_Service) — privileged local service, IPC, and proxy core process management.
-- [AChimera](https://github.com/MFSGA/AChimera) — experimental Android client built with Kotlin, Rust, and UniFFI.
-- [Proxy Wiki](https://github.com/MFSGA/Proxy_WIKI) — documentation and technical references for the Chimera ecosystem.
+**当前项目适用系统：**
+![Windows](https://img.shields.io/badge/Windows-0078D6?logo=windows&logoColor=white) ![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 
-Proxy Wiki collects documentation, implementation notes, deployment guides, and protocol references for the Chimera proxy ecosystem. It covers `Chimera_Client`, `Chimera`, `Chimera_Server`, `Chimera_Service`, and `AChimera`, alongside technical references and comparisons for common proxy protocols.
-
-The documentation is built with [mdBook](https://github.com/rust-lang/mdBook). It can be previewed locally during development or built as a static website for deployment.
-
-Published documentation: https://mfsga.github.io/Proxy_WIKI/
+- [Chimera](https://github.com/MFSGA/Chimera) — Tauri、React 和 Rust 桌面代理管理应用。
+- [Chimera_Client](https://github.com/MFSGA/Chimera_Client) — Rust 客户端核心，基于 `clash-rs` 方向开发；桌面端、Android 和 OpenWrt 集成会使用它。
+- [Chimera_Server](https://github.com/MFSGA/Chimera_Server) — Rust 服务端核心，目标是部分兼容 Xray；目前重点完善入站能力。
+- [AChimera](https://github.com/MFSGA/AChimera) — Kotlin Android 客户端，依赖 `Chimera_Client` 的 `clash-lib`，并通过 UniFFI 调用 Rust 接口。
+- [OpenChimera](https://github.com/MFSGA/OpenChimera) — 将 `Chimera_Client` 打包为 OpenWrt 核心，并提供 UCI 配置和 procd 服务管理。
+- [Proxy_Wiki](https://github.com/MFSGA/Proxy_WIKI) — 项目、协议和部署文档。[在线阅读](https://mfsga.github.io/Proxy_WIKI/)
 
 ## 项目简介
 
