@@ -4,47 +4,13 @@ import ArrowRight from '~icons/material-symbols/arrow-right-rounded';
 import Check from '~icons/material-symbols/check-rounded';
 import RadioChecked from '~icons/material-symbols/radio-button-checked';
 import Radio from '~icons/material-symbols/radio-button-unchecked';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
 import { ComponentProps, createContext, useContext } from 'react';
-
-const MotionContent = ({
-  children,
-  className,
-  style,
-  ...props
-}: ComponentProps<typeof motion.div>) => {
-  return (
-    <motion.div
-      className={cn(
-        'relative z-50 w-full overflow-auto rounded',
-        'dark:text-on-surface',
-        'bg-inverse-on-surface dark:bg-surface',
-        'shadow-background shadow-sm',
-        'border-outline-variant/50 dark:border-outline-variant/15 border',
-        className,
-      )}
-      style={{
-        ...style,
-        maxHeight: 'var(--radix-popper-available-height)',
-        transformOrigin:
-          'var(--radix-dropdown-menu-content-transform-origin, ' +
-          'var(--radix-dropdown-menu-sub-content-transform-origin, ' +
-          'var(--radix-popper-transform-origin, top)))',
-      }}
-      initial={{ opacity: 0, scaleY: 0.9 }}
-      animate={{ opacity: 1, scaleY: 1 }}
-      exit={{ opacity: 0, scaleY: 0.9 }}
-      transition={{ type: 'spring', bounce: 0, duration: 0.35 }}
-      data-slot="main-dropdown-menu-motion-content"
-      {...props}
-    >
-      {children}
-    </motion.div>
-  );
-};
+import { MenuSurface } from './menu-surface';
 
 type WidthType = 'auto' | 'full';
+
 type AlignType = 'start' | 'center' | 'end';
 
 const DropdownMenuContext = createContext<{
@@ -83,7 +49,13 @@ export const DropdownMenu = ({
   });
 
   return (
-    <DropdownMenuContext.Provider value={{ open, width, align }}>
+    <DropdownMenuContext.Provider
+      value={{
+        open,
+        width,
+        align,
+      }}
+    >
       <DropdownMenuPrimitive.Root
         {...props}
         open={open}
@@ -106,9 +78,12 @@ export function DropdownMenuTrigger({
 }
 
 export const DropdownMenuGroup = DropdownMenuPrimitive.Group;
+
 export const DropdownMenuPortal = DropdownMenuPrimitive.Portal;
 
-const DropdownMenuSubContext = createContext<{ open: boolean } | null>(null);
+const DropdownMenuSubContext = createContext<{
+  open: boolean;
+} | null>(null);
 
 const useDropdownMenuSubContext = () => {
   const context = useContext(DropdownMenuSubContext);
@@ -136,7 +111,11 @@ export const DropdownMenuSub = ({
   });
 
   return (
-    <DropdownMenuSubContext.Provider value={{ open }}>
+    <DropdownMenuSubContext.Provider
+      value={{
+        open,
+      }}
+    >
       <DropdownMenuPrimitive.Sub {...props} open={open} onOpenChange={setOpen}>
         {children}
       </DropdownMenuPrimitive.Sub>
@@ -163,6 +142,7 @@ export function DropdownMenuSubTrigger({
       {...props}
     >
       {children}
+
       <ArrowRight className="text-outline-variant dark:text-outline size-6" />
     </DropdownMenuPrimitive.SubTrigger>
   );
@@ -180,7 +160,12 @@ export function DropdownMenuSubContent({
       {open && (
         <DropdownMenuPortal forceMount>
           <DropdownMenuPrimitive.SubContent {...props} asChild>
-            <MotionContent className={className}>{children}</MotionContent>
+            <MenuSurface
+              data-slot="main-dropdown-menu-motion-content"
+              className={className}
+            >
+              {children}
+            </MenuSurface>
           </DropdownMenuPrimitive.SubContent>
         </DropdownMenuPortal>
       )}
@@ -188,9 +173,9 @@ export function DropdownMenuSubContent({
   );
 }
 
-const DropdownMenuRadioGroupContext = createContext<{ value: string | null }>({
-  value: null,
-});
+const DropdownMenuRadioGroupContext = createContext<{
+  value: string | null;
+}>({ value: null });
 
 const useDropdownMenuRadioGroupContext = () => {
   const context = useContext(DropdownMenuRadioGroupContext);
@@ -244,7 +229,8 @@ export const DropdownMenuContent = ({
             {...props}
             asChild
           >
-            <MotionContent
+            <MenuSurface
+              data-slot="main-dropdown-menu-motion-content"
               className={className}
               style={{
                 width:
@@ -254,7 +240,7 @@ export const DropdownMenuContent = ({
               }}
             >
               {children}
-            </MotionContent>
+            </MenuSurface>
           </DropdownMenuPrimitive.Content>
         </DropdownMenuPrimitive.Portal>
       )}
@@ -269,7 +255,7 @@ export const DropdownMenuItem = ({
   return (
     <DropdownMenuPrimitive.Item
       className={cn(
-        'flex h-12 cursor-default items-center justify-between gap-2 p-4 outline-hidden',
+        'flex h-12 cursor-default items-center justify-start gap-2 p-4 outline-hidden',
         'cursor-pointer',
         'hover:bg-surface-variant',
         'dark:hover:bg-surface-variant',
@@ -300,6 +286,7 @@ export const DropdownMenuCheckboxItem = ({
       <DropdownMenuPrimitive.ItemIndicator className="absolute top-1/2 left-4 -translate-y-1/2">
         <Check className="text-primary" />
       </DropdownMenuPrimitive.ItemIndicator>
+
       {children}
     </DropdownMenuPrimitive.CheckboxItem>
   );
@@ -312,6 +299,7 @@ export const DropdownMenuRadioItem = ({
   ...props
 }: ComponentProps<typeof DropdownMenuPrimitive.RadioItem>) => {
   const context = useDropdownMenuRadioGroupContext();
+
   const selected = context.value === value;
 
   return (
@@ -330,11 +318,13 @@ export const DropdownMenuRadioItem = ({
       <DropdownMenuPrimitive.ItemIndicator>
         <RadioChecked className="text-primary" />
       </DropdownMenuPrimitive.ItemIndicator>
+
       {!selected && (
         <span>
           <Radio className="text-outline-variant dark:text-outline" />
         </span>
       )}
+
       <div className="flex-1">{children}</div>
     </DropdownMenuPrimitive.RadioItem>
   );

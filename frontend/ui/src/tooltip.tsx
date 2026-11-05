@@ -1,7 +1,7 @@
 import { cn } from '@chimera/utils';
 import { motion } from 'motion/react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
-import type { ComponentProps } from 'react';
+import type { ComponentProps, ReactNode } from 'react';
 
 export type TooltipProviderProps = ComponentProps<
   typeof TooltipPrimitive.Provider
@@ -41,6 +41,48 @@ export type TooltipContentProps = ComponentProps<
 };
 
 /** Render the ref-style translucent rounded tooltip surface. */
+type TooltipSide = NonNullable<TooltipContentProps['side']>;
+
+const BUBBLE_OFFSETS = {
+  top: { y: 4 },
+  right: { x: -4 },
+  bottom: { y: -4 },
+  left: { x: 4 },
+} satisfies Record<TooltipSide, object>;
+
+/** The bubble a tooltip shows, easing in from its trigger's side. */
+export function TooltipBubble({
+  side,
+  className,
+  children,
+}: {
+  side: TooltipSide;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const offset = BUBBLE_OFFSETS[side];
+
+  return (
+    <motion.div
+      className={cn(
+        'w-fit rounded-full border text-xs text-balance',
+        'dark:text-on-surface',
+        'backdrop-blur',
+        'bg-primary-container/10 dark:bg-primary/10',
+        'dark:border-surface-variant/30 border-inverse-surface/10',
+        'overflow-hidden px-3 py-1.5',
+        className,
+      )}
+      initial={{ opacity: 0, scale: 0.96, ...offset }}
+      animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96, ...offset }}
+      transition={{ duration: 0.14, ease: 'easeOut' }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 export function TooltipContent({
   className,
   children,
