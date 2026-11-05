@@ -26,6 +26,7 @@ export * from './slider';
 export { Switch } from './switch';
 export * from './modal';
 export * from './tooltip';
+export * from './snackbar';
 export * from './animated-tabs';
 export { default as AnimatedTabs } from './animated-tabs';
 export { default as TextMarquee } from './text-marquee';

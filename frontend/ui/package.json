@@ -18,7 +18,8 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test:snackbar": "node --test tests/ref-snackbar.test.cjs"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",
