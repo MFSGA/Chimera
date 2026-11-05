@@ -20,6 +20,6 @@ impl ChimeraClient {
     }
 
     pub(crate) async fn clash_api_client(&self) -> Result<ApiClient> {
-        ApiClient::new(self.active_clash_info().await?)
+        self.inner.core.clash_api_client().await
     }
 }

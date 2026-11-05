@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::Context;
 use backon::ExponentialBuilder;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -45,10 +46,14 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
     let endpoint: ws::ClashEndpointResolver = Arc::new(move || {
         let client = endpoint_client.clone();
         Box::pin(async move {
-            let binding = client.active_core_binding().await?;
+            let api = client.clash_api_client().await?;
+            let core_instance_id = api
+                .instance_id()
+                .context("the running core API has no instance identity")?
+                .to_owned();
             Ok(ws::ClashWsEndpoint {
-                info: binding.info,
-                core_instance_id: binding.instance_id,
+                api,
+                core_instance_id,
             })
         })
     });
@@ -65,7 +70,6 @@ pub fn setup<R: Runtime, M: Manager<R>>(manager: &M) -> anyhow::Result<()> {
         {
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
 
-            // TODO: clash-rs ws authorization is not working
             match ws_connector.start().await {
                 Ok(_) => {
                     tracing::info!(

@@ -231,6 +231,13 @@ pub(crate) trait CoreLifecyclePort: Send + Sync {
         Ok(self.effective_clash_info())
     }
 
+    /// Acquires the running controller API through the lifecycle owner. The
+    /// legacy default remains only for compatibility ports without a v2 host
+    /// endpoint; production bridges override it with an instance-bound client.
+    async fn clash_api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+        crate::core::clash::api::ApiClient::new(self.active_clash_info().await?)
+    }
+
     /// Resolves the controller and its process identity from one stable lifecycle observation.
     async fn active_core_binding(&self) -> anyhow::Result<ActiveCoreBinding> {
         let before = self.status().await?;

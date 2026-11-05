@@ -33,7 +33,7 @@ use crate::{
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
         clash::{
-            api::ApiClient,
+            api::{ApiClient, ApiLease},
             core::{CoreManager, RunType},
         },
         connection_interruption::ConnectionInterruptionService,
@@ -83,6 +83,7 @@ pub(crate) struct CoreFacade {
     manager: Arc<CoreManager>,
     local_runtime: Option<Arc<super::local_runtime::LocalRuntimeHost>>,
     service_endpoint: super::service_endpoint::ServiceEndpoint,
+    api_client: tokio::sync::Mutex<Option<ApiLease>>,
     outcome_uncertain: Arc<AtomicBool>,
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
@@ -258,6 +259,7 @@ impl CoreFacade {
             manager: Arc::new(CoreManager::new()),
             local_runtime: None,
             service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
+            api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -279,6 +281,7 @@ impl CoreFacade {
                 runtime_paths,
             ))),
             service_endpoint: super::service_endpoint::ServiceEndpoint::service_default(),
+            api_client: tokio::sync::Mutex::new(None),
             outcome_uncertain: Arc::new(AtomicBool::new(false)),
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
@@ -829,6 +832,57 @@ impl CoreFacade {
         self.manager.active_clash_info().await
     }
 
+    async fn active_control_endpoint(
+        &self,
+    ) -> anyhow::Result<(
+        Arc<dyn ControlEndpoint>,
+        chimera_ipc::api::core::v2::CoreApiConnection,
+    )> {
+        let local_runtime = self
+            .local_runtime
+            .as_ref()
+            .context("the compatibility core manager has no instance-bound API endpoint")?;
+        let endpoint: Arc<dyn ControlEndpoint> = match local_runtime.run_type() {
+            RunType::Normal => Arc::new(local_runtime.local_endpoint()),
+            RunType::Service => Arc::new(self.service_endpoint.clone()),
+            RunType::Elevated => anyhow::bail!("elevated core execution is not implemented"),
+        };
+        let connection = endpoint
+            .api_connection()
+            .await?
+            .context("the running core has no active API connection")?;
+        let status = endpoint.status().await?;
+        anyhow::ensure!(
+            matches!(
+                status.state.as_ref(),
+                Some(chimera_ipc::api::status::CoreStateDetail::Running { .. })
+            ),
+            "the core API is unavailable because the core is not running"
+        );
+        anyhow::ensure!(
+            status.instance_id.as_deref() == Some(connection.instance_id.as_str()),
+            "the core changed while resolving its API connection"
+        );
+        Ok((endpoint, connection))
+    }
+
+    pub(crate) async fn clash_api_client(&self) -> anyhow::Result<ApiClient> {
+        if self.local_runtime.is_none() {
+            return ApiClient::new(self.active_clash_info().await?);
+        }
+        let (endpoint, connection) = self.active_control_endpoint().await?;
+        let mut cached = self.api_client.lock().await;
+        if let Some(lease) = cached.as_ref() {
+            if lease.client.matches_binding(&connection) {
+                return Ok(lease.client.clone());
+            }
+        }
+        cached.take();
+        let client = ApiClient::from_connection(connection, endpoint)?;
+        *cached = Some(ApiLease::new(client.clone()));
+        Ok(client)
+    }
+
     /// Returns only the runtime port receipt that still matches the selected
     /// host's live status. `ClashInfo::port` is the controller port and is not
     /// evidence for the mixed-proxy listener.
@@ -1053,7 +1107,7 @@ impl CoreFacade {
     }
 
     pub(crate) async fn on_profile_change(&self, break_when: bool) {
-        let result = match self.active_clash_info().await.and_then(ApiClient::new) {
+        let result = match self.clash_api_client().await {
             Ok(api) => ConnectionInterruptionService::on_profile_change(&api, break_when).await,
             Err(error) => Err(error),
         };

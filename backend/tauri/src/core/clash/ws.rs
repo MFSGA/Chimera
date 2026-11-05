@@ -10,24 +10,19 @@ use std::{
 
 use anyhow::Context;
 use atomic_enum::atomic_enum;
-use futures_util::{StreamExt, future::BoxFuture};
+use futures_util::future::BoxFuture;
 use parking_lot::Mutex;
 use ractor::{Actor, ActorProcessingErr, ActorRef, RpcReplyPort, rpc::CallResult};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
-use tokio::{
-    sync::{mpsc::Receiver, watch},
-    task::JoinHandle,
-};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{client::IntoClientRequest, handshake::client::Request, protocol::Message},
-};
+use tokio::{sync::watch, task::JoinHandle};
+
+use crate::core::clash::api::{ApiClient, ApiStreamKind};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClashWsEndpoint {
-    pub info: crate::config::clash::ClashInfo,
+    pub api: ApiClient,
     pub core_instance_id: String,
 }
 
@@ -39,46 +34,6 @@ const MAX_MEMORY_HISTORY: usize = 32;
 const MAX_TRAFFIC_HISTORY: usize = 32;
 const MAX_LOGS_HISTORY: usize = 1024;
 const MAX_REASONABLE_MEMORY_BYTES: u64 = 16 * 1024_u64.pow(4);
-
-#[tracing::instrument]
-async fn connect_clash_server<T: serde::de::DeserializeOwned + Send + Sync + 'static>(
-    endpoint: Request,
-) -> anyhow::Result<Receiver<T>> {
-    let (stream, _) = connect_async(endpoint).await?;
-    let (_, mut read) = stream.split();
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
-    tokio::spawn(async move {
-        while let Some(msg) = read.next().await {
-            match msg {
-                Ok(Message::Text(text)) => match serde_json::from_str(&text) {
-                    Ok(data) => {
-                        let _ = tx.send(data).await;
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to deserialize json: {}", e);
-                    }
-                },
-                Ok(Message::Binary(bin)) => match serde_json::from_slice(&bin) {
-                    Ok(data) => {
-                        let _ = tx.send(data).await;
-                    }
-                    Err(e) => {
-                        tracing::error!("failed to deserialize json: {}", e);
-                    }
-                },
-                Ok(Message::Close(_)) => {
-                    tracing::info!("server closed connection");
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("failed to read message: {}", e);
-                }
-                _ => {}
-            }
-        }
-    });
-    Ok(rx)
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -703,13 +658,19 @@ impl ClashConnectionsActor {
         let binding = (state.endpoint)()
             .await
             .with_context(|| format!("{} API binding is unavailable", kind.path()))?;
-        let endpoint = ClashConnectionsConnector::endpoint(binding.info, kind.path())
-            .with_context(|| format!("failed to create {} endpoint", kind.path()))?;
-        log::debug!(
-            "connecting to clash {} ws server: {endpoint:?}",
+        anyhow::ensure!(
+            binding.api.instance_id() == Some(binding.core_instance_id.as_str()),
+            "the core changed while acquiring the {} API stream",
             kind.path()
         );
-        let mut rx = connect_clash_server::<serde_json::Value>(endpoint).await?;
+        let stream_kind = match kind {
+            ClashWsKind::Connections => ApiStreamKind::Connections,
+            ClashWsKind::Logs => ApiStreamKind::Logs,
+            ClashWsKind::Traffic => ApiStreamKind::Traffic,
+            ClashWsKind::Memory => ApiStreamKind::Memory,
+        };
+        log::debug!("connecting to clash {} websocket", kind.path());
+        let mut rx = binding.api.connect_ws(stream_kind).await?;
 
         if kind == ClashWsKind::Connections {
             state
@@ -895,24 +856,6 @@ impl ClashConnectionsConnector {
         }
     }
 
-    fn endpoint(info: crate::config::clash::ClashInfo, path: &str) -> anyhow::Result<Request> {
-        let (server, secret) = (info.server, info.secret);
-        let token = urlencoding::encode(secret.as_deref().unwrap_or_default());
-        let url = format!("ws://{server}/{path}?token={token}");
-        let mut request = url
-            .into_client_request()
-            .context("failed to create client request")?;
-        if let Some(secret) = secret {
-            request.headers_mut().insert(
-                "Authorization",
-                format!("Bearer {secret}")
-                    .parse()
-                    .context("failed to create header value")?,
-            );
-        }
-        Ok(request)
-    }
-
     pub async fn start(&self) -> anyhow::Result<()> {
         match self
             .actor_ref
@@ -1075,11 +1018,12 @@ mod tests {
         let endpoint: ClashEndpointResolver = Arc::new(|| {
             Box::pin(async {
                 Ok(ClashWsEndpoint {
-                    info: crate::config::clash::ClashInfo {
+                    api: ApiClient::new(crate::config::clash::ClashInfo {
                         port: 9090,
                         server: "127.0.0.1:9090".into(),
                         secret: None,
-                    },
+                    })
+                    .expect("test API client should build"),
                     core_instance_id: "test-core".into(),
                 })
             })

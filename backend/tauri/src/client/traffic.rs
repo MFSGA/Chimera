@@ -16,7 +16,7 @@ use super::{ChimeraClient, application::ApplicationClient, profiles::ProfilesCli
 use crate::client::core_lifecycle::CoreLifecyclePort;
 use crate::core::geo::GeodataMode;
 use crate::core::{
-    clash::{api::ApiClient, ws::ClashConnectionsFrame},
+    clash::ws::ClashConnectionsFrame,
     geo::{CoreGeodataBinding, CoreGeodataModeSource, CountryIndexSnapshot, GeoIndexClient},
     traffic::{
         Clock, LocalSourceIps, LocalSourceLocation, ProfileSelection, RetentionPolicy, TrafficArgs,
@@ -54,7 +54,12 @@ pub(super) struct ActiveCoreGeodataMode(pub(super) Arc<dyn CoreLifecyclePort>);
 impl CoreGeodataModeSource for ActiveCoreGeodataMode {
     async fn mode(&self) -> anyhow::Result<CoreGeodataBinding> {
         let binding = self.0.active_core_binding().await?;
-        let config = ApiClient::new(binding.info.clone())?.get_configs().await?;
+        let api = self.0.clash_api_client().await?;
+        anyhow::ensure!(
+            api.instance_id() == Some(binding.instance_id.as_str()),
+            "the core changed while acquiring its API client"
+        );
+        let config = api.get_configs().await?;
         let current = self.0.active_core_binding().await?;
         anyhow::ensure!(
             current.instance_id == binding.instance_id,

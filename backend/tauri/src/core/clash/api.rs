@@ -1,19 +1,19 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
+use futures_util::{Stream, StreamExt};
 use indexmap::IndexMap;
-use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_yaml::Mapping;
 use specta::Type;
-use tauri::http::HeaderMap;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
+use crate::core::actor_v2::control_endpoint::ControlEndpoint;
+
 /// TUN runtime projection returned by the running core's `GET /configs` endpoint.
-///
-/// Keep the field names aligned with upstream `clash_api::RuntimeTun`. This is
-/// intentionally limited to the fields Chimera currently consumes; serde
-/// ignores additional runtime fields until their shared callers need them.
+/// Keep this IPC-facing projection intentionally limited to fields Chimera
+/// currently consumes; serde ignores additional runtime fields.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, Type)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RuntimeTun {
@@ -57,224 +57,259 @@ pub struct ClashRuntimeConfig {
     pub tun: Option<RuntimeTun>,
 }
 
-/// A newtype wrapper for query parameters
-struct Query<T>(T);
-/// A newtype wrapper for request body
-struct Data<T>(T);
+const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_DELAY_URL: &str = "http://www.gstatic.com/generate_204";
 
-impl From<(reqwest::Method, &str)> for PerformRequest<(), ()> {
-    fn from((method, path): (reqwest::Method, &str)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: None,
-            query: None,
-        }
-    }
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ApiStreamKind {
+    Connections,
+    Logs,
+    Traffic,
+    Memory,
 }
 
-impl<T> From<(reqwest::Method, &str, Data<T>)> for PerformRequest<T, ()>
-where
-    T: Serialize,
-{
-    fn from((method, path, Data(data)): (reqwest::Method, &str, Data<T>)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: Some(data),
-            query: None,
-        }
-    }
-}
-
-impl<T> From<(reqwest::Method, &str, Query<T>)> for PerformRequest<(), T>
-where
-    T: Serialize,
-{
-    fn from((method, path, Query(query)): (reqwest::Method, &str, Query<T>)) -> Self {
-        Self {
-            method,
-            path: path.to_string(),
-            data: None,
-            query: Some(query),
-        }
-    }
-}
-
-/// The Request Parameters
-struct PerformRequest<D = (), Q = ()> {
-    method: reqwest::Method,
-    path: String,
-    query: Option<Q>,
-    data: Option<D>,
-}
-
+/// Compatibility adapter from the application's existing API/IPC DTOs to the
+/// shared Clash API client. Production instances are bound to the host's
+/// authoritative controller receipt; `new` is retained only for core startup
+/// readiness probes and tests that do not have a CoreControl endpoint.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
-    base_url: url::Url,
-    headers: HeaderMap,
+    client: chimera_clash_api::Client,
+    binding: Option<chimera_ipc::api::core::v2::CoreApiConnection>,
+    endpoint: Option<Arc<dyn ControlEndpoint>>,
+    revoked: CancellationToken,
+}
+
+impl std::fmt::Debug for ApiClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiClient")
+            .field("instance_id", &self.instance_id())
+            .field("revoked", &self.revoked.is_cancelled())
+            .finish_non_exhaustive()
+    }
 }
 
 impl ApiClient {
+    pub(crate) fn instance_id(&self) -> Option<&str> {
+        self.binding
+            .as_ref()
+            .map(|binding| binding.instance_id.as_str())
+    }
+
     pub(crate) fn new(info: crate::config::clash::ClashInfo) -> Result<Self> {
-        let base_url =
-            url::Url::parse(&format!("http://{}", info.server)).context("failed to parse host")?;
-        let mut headers = HeaderMap::new();
-        headers.insert("Content-Type", "application/json".parse()?);
-        if let Some(secret) = info.secret {
-            headers.insert("Authorization", format!("Bearer {secret}").parse()?);
+        let host = chimera_clash_api::Host::http(format!("http://{}", info.server))?;
+        Self::from_host(host, info.secret, false).context("failed to create Clash API client")
+    }
+
+    pub(crate) fn from_connection(
+        binding: chimera_ipc::api::core::v2::CoreApiConnection,
+        endpoint: Arc<dyn ControlEndpoint>,
+    ) -> Result<Self> {
+        anyhow::ensure!(
+            !binding.instance_id.is_empty(),
+            "the running core API has no stable instance identity"
+        );
+        use chimera_ipc::api::status::CoreControllerInfo;
+        let host = match &binding.controller {
+            CoreControllerInfo::Http(url) => chimera_clash_api::Host::url(url)?,
+            CoreControllerInfo::UnixSocket(path) => chimera_clash_api::Host::unix_socket(path),
+            CoreControllerInfo::NamedPipe(path) => chimera_clash_api::Host::named_pipe(path),
+        };
+        let mut client = Self::from_host(host, binding.secret.clone(), true)?;
+        client.binding = Some(binding);
+        client.endpoint = Some(endpoint);
+        Ok(client)
+    }
+
+    fn from_host(
+        host: chimera_clash_api::Host,
+        secret: Option<String>,
+        websocket_token_query: bool,
+    ) -> Result<Self> {
+        let mut builder = chimera_clash_api::Client::builder(host);
+        if let Some(secret) = secret {
+            builder = builder.secret(secret);
         }
-        Ok(Self { base_url, headers })
+        if websocket_token_query {
+            builder = builder.websocket_token_query_compatibility();
+        }
+        Ok(Self {
+            client: builder.build()?,
+            binding: None,
+            endpoint: None,
+            revoked: CancellationToken::new(),
+        })
+    }
+
+    pub(crate) fn matches_binding(
+        &self,
+        binding: &chimera_ipc::api::core::v2::CoreApiConnection,
+    ) -> bool {
+        !self.revoked.is_cancelled() && self.binding.as_ref() == Some(binding)
+    }
+
+    pub(crate) fn revoke(&self) {
+        self.revoked.cancel();
+    }
+
+    async fn check_binding(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.revoked.is_cancelled(),
+            "the Clash API capability belongs to a retired core instance"
+        );
+        let (Some(expected), Some(endpoint)) = (&self.binding, &self.endpoint) else {
+            return Ok(());
+        };
+        match endpoint.api_connection().await {
+            Ok(Some(current)) if current == *expected => Ok(()),
+            Ok(_) => {
+                self.revoke();
+                anyhow::bail!("the Clash API capability belongs to a retired core instance")
+            }
+            Err(error) => {
+                self.revoke();
+                Err(anyhow::anyhow!(
+                    "the running core API binding is unavailable: {error}"
+                ))
+            }
+        }
+    }
+
+    async fn execute<T, E>(
+        &self,
+        timeout: Duration,
+        operation: impl Future<Output = std::result::Result<T, E>>,
+    ) -> Result<T>
+    where
+        E: Into<anyhow::Error>,
+    {
+        let execution = async {
+            self.check_binding().await?;
+            let result = operation.await.map_err(Into::into);
+            self.check_binding().await?;
+            result
+        };
+        tokio::select! {
+            biased;
+            _ = self.revoked.cancelled() => {
+                anyhow::bail!("the Clash API capability belongs to a retired core instance")
+            }
+            result = tokio::time::timeout(timeout, execution) => {
+                result.map_err(|_| anyhow::anyhow!("Clash API operation timed out after {timeout:?}"))?
+            }
+        }
     }
 
     /// Wait until the applied core's HTTP controller is actually accepting
     /// authenticated requests. Process liveness alone is not API readiness.
     pub(crate) async fn wait_until_ready(&self, timeout: Duration) -> Result<()> {
-        let http_client = reqwest::ClientBuilder::new()
-            .no_proxy()
-            .timeout(Duration::from_secs(1))
-            .build()?;
-        let url = url::Url::options()
-            .base_url(Some(&self.base_url))
-            .parse("/configs")
-            .context("failed to create controller readiness URL")?;
         let deadline = tokio::time::Instant::now() + timeout;
 
         loop {
-            match http_client
-                .get(url.clone())
-                .headers(self.headers.clone())
-                .send()
-                .await
-                .and_then(reqwest::Response::error_for_status)
-            {
-                Ok(_) => return Ok(()),
-                Err(error) if tokio::time::Instant::now() >= deadline => {
+            match tokio::time::timeout(Duration::from_secs(1), self.get_configs()).await {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(error)) if tokio::time::Instant::now() >= deadline => {
                     return Err(error).context(format!(
-                        "Clash controller {} did not become ready within {timeout:?}",
-                        self.base_url
+                        "Clash controller did not become ready within {timeout:?}"
                     ));
                 }
-                Err(_) => {}
+                Err(_) if tokio::time::Instant::now() >= deadline => {
+                    anyhow::bail!("Clash controller did not become ready within {timeout:?}");
+                }
+                Ok(Err(_)) | Err(_) => {}
             }
 
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
-    #[instrument(skip_all, fields(
-        method = tracing::field::Empty,
-        url = tracing::field::Empty,
-        query = tracing::field::Empty,
-        data = tracing::field::Empty,
-    ))]
-    async fn perform_request<D, Q>(
-        &self,
-        param: impl Into<PerformRequest<D, Q>>,
-    ) -> Result<reqwest::Response>
-    where
-        Q: Serialize + core::fmt::Debug,
-        D: Serialize + core::fmt::Debug,
-    {
-        let PerformRequest {
-            method,
-            path,
-            data,
-            query,
-        } = param.into();
-        let opts = url::Url::options().base_url(Some(&self.base_url));
-        let url = opts.parse(&path).context("failed to parse path")?;
-
-        let span = tracing::Span::current();
-        span.record("method", tracing::field::display(&method));
-        span.record("url", tracing::field::display(&url));
-        span.record("query", tracing::field::debug(&query));
-        span.record("data", tracing::field::debug(&data));
-
-        async {
-            let http_client = reqwest::ClientBuilder::new().no_proxy().build()?;
-            let mut builder = http_client
-                .request(method.clone(), url.clone())
-                .headers(self.headers.clone());
-
-            if let Some(query) = &query {
-                builder = builder.query(query);
-            }
-            if let Some(data) = &data {
-                builder = builder.json(data);
-            }
-
-            let response = builder.send().await?;
-            if let Err(error) = response.error_for_status_ref() {
-                match error.status() {
-                    Some(StatusCode::BAD_REQUEST) => {
-                        let Ok(bytes) = response.bytes().await else {
-                            return Err(error.into());
-                        };
-                        let message: serde_json::Value = match serde_json::from_slice(&bytes) {
-                            Ok(value) => value,
-                            Err(_) => {
-                                serde_json::Value::String(String::from_utf8_lossy(&bytes).into())
-                            }
-                        };
-                        return Err(error).context(format!("message: {message}"));
-                    }
-                    _ => return Err(error).context("clash api error"),
-                }
-            }
-            Ok(response)
-        }
-        .await
-        .inspect_err(|error| tracing::error!(method = %method, url = %url, query = ?query, data = ?data, "failed to perform request: {:?}", error))
-    }
-
     pub(crate) async fn get_configs(&self) -> Result<ClashRuntimeConfig> {
-        Ok(self
-            .perform_request((Method::GET, "/configs"))
-            .await?
-            .json()
-            .await?)
+        let value = self
+            .execute(DEFAULT_API_TIMEOUT, self.client.configs_value())
+            .await?;
+        serde_json::from_value(value).context("failed to decode running core config")
     }
 
     pub(crate) async fn get_proxies(&self) -> Result<ProxiesRes> {
-        Ok(self
-            .perform_request((Method::GET, "/proxies"))
-            .await?
-            .json()
-            .await?)
+        let proxies = self
+            .execute(DEFAULT_API_TIMEOUT, self.client.proxies())
+            .await?;
+        let proxies = proxies
+            .into_iter()
+            .map(|(name, proxy)| {
+                let item = ProxyItem {
+                    name: proxy.name.to_string(),
+                    history: proxy
+                        .history
+                        .into_iter()
+                        .map(|history| ProxyItemHistory {
+                            time: history.time.to_rfc3339(),
+                            delay: history.delay,
+                        })
+                        .collect(),
+                    all: proxy
+                        .all
+                        .map(|names| names.into_iter().map(|name| name.to_string()).collect()),
+                    hidden: proxy.hidden.unwrap_or_default(),
+                    now: proxy.now.map(|name| name.to_string()),
+                    r#type: proxy.proxy_type,
+                    udp: proxy.udp,
+                    icon: proxy.icon,
+                };
+                (name.to_string(), item)
+            })
+            .collect();
+        Ok(ProxiesRes { proxies })
     }
 
     pub(crate) async fn get_connections(&self) -> Result<ConnectionsRes> {
-        Ok(self
-            .perform_request((Method::GET, "/connections"))
-            .await?
-            .json()
-            .await?)
+        let snapshot = self
+            .execute(DEFAULT_API_TIMEOUT, self.client.connections())
+            .await?;
+        Ok(ConnectionsRes {
+            connections: snapshot
+                .connections
+                .unwrap_or_default()
+                .into_iter()
+                .map(|connection| ConnectionItem {
+                    id: connection.id.to_string(),
+                    chains: connection.chains,
+                })
+                .collect(),
+        })
     }
 
     pub(crate) async fn delete_connections(&self, id: Option<&str>) -> Result<()> {
-        let path = match id {
-            Some(id) => format!("/connections/{id}"),
-            None => "/connections".to_string(),
-        };
-        self.perform_request((Method::DELETE, path.as_str()))
-            .await?;
-        Ok(())
+        match id {
+            Some(id) => {
+                self.execute(DEFAULT_API_TIMEOUT, self.client.close_connection_id(id))
+                    .await
+            }
+            None => {
+                self.execute(DEFAULT_API_TIMEOUT, self.client.close_all_connections())
+                    .await
+            }
+        }
     }
 
     pub(crate) async fn update_proxy(&self, group: &str, name: &str) -> Result<()> {
-        let path = format!("/proxies/{group}");
-        let mut data = HashMap::new();
-        data.insert("name", name);
-        self.perform_request((Method::PUT, path.as_str(), Data(data)))
-            .await?;
-        Ok(())
+        let group = chimera_clash_api::ProxyName::new(group);
+        let target = chimera_clash_api::ProxyName::new(name);
+        self.execute(
+            DEFAULT_API_TIMEOUT,
+            self.client.select_proxy(chimera_clash_api::ProxySelection {
+                group: &group,
+                target: &target,
+            }),
+        )
+        .await
     }
 
     pub(crate) async fn patch_configs(&self, config: &Mapping) -> Result<()> {
-        self.perform_request((Method::PATCH, "/configs", Data(config)))
-            .await?;
-        Ok(())
+        let patch = serde_json::to_value(config).context("failed to encode config patch")?;
+        self.execute(DEFAULT_API_TIMEOUT, self.client.patch_config_value(&patch))
+            .await
     }
 
     pub(crate) async fn get_proxy_delay(
@@ -282,23 +317,17 @@ impl ApiClient {
         name: String,
         test_url: Option<String>,
     ) -> Result<DelayRes> {
-        let path = format!("/proxies/{name}/delay");
-        let default_url = "http://www.gstatic.com/generate_204";
-        let test_url = test_url
-            .map(|value| {
-                if value.is_empty() {
-                    default_url.into()
-                } else {
-                    value
-                }
-            })
-            .unwrap_or(default_url.into());
-        let query = Query([("timeout", "10000"), ("url", &test_url)]);
-        Ok(self
-            .perform_request((Method::GET, path.as_str(), query))
-            .await?
-            .json()
-            .await?)
+        let query = delay_query(test_url)?;
+        let delay = self
+            .execute(
+                query.timeout + Duration::from_secs(5),
+                self.client
+                    .proxy_delay(&chimera_clash_api::ProxyName::new(name), &query),
+            )
+            .await?;
+        Ok(DelayRes {
+            delay: u64::from(delay.delay),
+        })
     }
 
     pub(crate) async fn get_group_delay(
@@ -306,23 +335,247 @@ impl ApiClient {
         group: String,
         url: Option<String>,
     ) -> Result<HashMap<String, u32>> {
-        let path = format!("/group/{group}/delay");
-        let default_url = "http://www.gstatic.com/generate_204";
-        let test_url = url
-            .map(|value| {
-                if value.is_empty() {
-                    default_url.into()
-                } else {
-                    value
+        let query = delay_query(url)?;
+        let delays = self
+            .execute(
+                query.timeout + Duration::from_secs(5),
+                self.client
+                    .group_delay(&chimera_clash_api::ProxyName::new(group), &query),
+            )
+            .await?;
+        Ok(delays
+            .into_iter()
+            .map(|(name, delay)| (name.to_string(), u32::from(delay)))
+            .collect())
+    }
+
+    pub(crate) async fn connect_ws(
+        &self,
+        kind: ApiStreamKind,
+    ) -> Result<tokio::sync::mpsc::Receiver<serde_json::Value>> {
+        match kind {
+            ApiStreamKind::Connections => {
+                let stream = self
+                    .execute(
+                        DEFAULT_API_TIMEOUT,
+                        self.client
+                            .connections_ws(chimera_clash_api::ConnectionStreamQuery::default()),
+                    )
+                    .await?;
+                Ok(forward_api_stream(
+                    self.clone(),
+                    stream,
+                    connection_snapshot_value,
+                ))
+            }
+            ApiStreamKind::Logs => {
+                let stream = self
+                    .execute(
+                        DEFAULT_API_TIMEOUT,
+                        self.client.logs_ws(chimera_clash_api::LogQuery::default()),
+                    )
+                    .await?;
+                Ok(forward_api_stream(
+                    self.clone(),
+                    stream,
+                    serialize_api_sample,
+                ))
+            }
+            ApiStreamKind::Traffic => {
+                let stream = self
+                    .execute(DEFAULT_API_TIMEOUT, self.client.traffic_ws())
+                    .await?;
+                Ok(forward_api_stream(
+                    self.clone(),
+                    stream,
+                    serialize_api_sample,
+                ))
+            }
+            ApiStreamKind::Memory => {
+                let stream = self
+                    .execute(DEFAULT_API_TIMEOUT, self.client.memory_ws())
+                    .await?;
+                Ok(forward_api_stream(
+                    self.clone(),
+                    stream,
+                    serialize_api_sample,
+                ))
+            }
+        }
+    }
+}
+
+fn forward_api_stream<T, S, F>(
+    api: ApiClient,
+    mut stream: S,
+    convert: F,
+) -> tokio::sync::mpsc::Receiver<serde_json::Value>
+where
+    T: Send + 'static,
+    S: Stream<Item = chimera_clash_api::Result<T>> + Unpin + Send + 'static,
+    F: Fn(T) -> Result<serde_json::Value> + Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::mpsc::channel(32);
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = api.revoked.cancelled() => break,
+                _ = sender.closed() => break,
+                item = stream.next() => match item {
+                    Some(Ok(sample)) => {
+                        if let Err(error) = api.check_binding().await {
+                            tracing::debug!(%error, "retired Clash API stream stopped");
+                            break;
+                        }
+                        match convert(sample) {
+                            Ok(value) => {
+                                let result = tokio::select! {
+                                    biased;
+                                    _ = api.revoked.cancelled() => break,
+                                    _ = sender.closed() => break,
+                                    result = sender.send(value) => result,
+                                };
+                                if result.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(error) => tracing::error!(%error, "failed to serialize Clash API stream sample"),
+                        }
+                    }
+                    Some(Err(error)) => {
+                        tracing::error!(%error, "failed to read Clash API websocket sample");
+                    }
+                    None => break,
                 }
-            })
-            .unwrap_or(default_url.into());
-        let query = Query([("timeout", "10000"), ("url", &test_url)]);
-        Ok(self
-            .perform_request((Method::GET, path.as_str(), query))
-            .await?
-            .json()
-            .await?)
+            }
+        }
+    });
+    receiver
+}
+
+fn serialize_api_sample<T: Serialize>(sample: T) -> Result<serde_json::Value> {
+    serde_json::to_value(sample).context("failed to serialize API sample")
+}
+
+fn connection_snapshot_value(
+    snapshot: chimera_clash_api::ConnectionsSnapshot,
+) -> Result<serde_json::Value> {
+    let mut value =
+        serde_json::to_value(snapshot).context("failed to serialize connection sample")?;
+    if let Some(connections) = value
+        .get_mut("connections")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for connection in connections {
+            let Some(object) = connection.as_object_mut() else {
+                continue;
+            };
+            let Some(extra) = object
+                .remove("_extra")
+                .and_then(|value| value.as_object().cloned())
+            else {
+                continue;
+            };
+            object.extend(extra);
+        }
+    }
+    Ok(value)
+}
+
+fn delay_query(url: Option<String>) -> Result<chimera_clash_api::DelayQuery> {
+    let url = url
+        .filter(|url| !url.is_empty())
+        .unwrap_or_else(|| DEFAULT_DELAY_URL.to_owned());
+    chimera_clash_api::DelayQuery::new(
+        url::Url::parse(&url).context("invalid delay test URL")?,
+        Duration::from_secs(10),
+    )
+    .context("invalid delay query")
+}
+
+/// Actor-owned lifecycle lease for the cached controller capability. The
+/// endpoint's ordered notifications wake revocation; periodic authority checks
+/// cover coalesced or lost events, as in ref's `actor_v2::ApiLease`.
+pub(crate) struct ApiLease {
+    pub(crate) client: ApiClient,
+    monitor: tokio::task::JoinHandle<()>,
+}
+
+impl std::fmt::Debug for ApiLease {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ApiLease")
+            .field("client", &self.client)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ApiLease {
+    pub(crate) fn new(client: ApiClient) -> Self {
+        use futures_util::StreamExt;
+
+        let monitored = client.clone();
+        let endpoint = monitored
+            .endpoint
+            .as_ref()
+            .expect("an API lease requires an instance-bound endpoint")
+            .clone();
+        let monitor = tokio::spawn(async move {
+            const MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
+            let subscription = tokio::time::timeout(MONITOR_TIMEOUT, endpoint.api_changes()).await;
+            let mut changes: crate::core::actor_v2::control_endpoint::ApiChanges =
+                match subscription {
+                    Ok(Ok(Some(changes))) => changes,
+                    Ok(Ok(None)) => Box::pin(futures_util::stream::pending()),
+                    Ok(Err(error)) => {
+                        tracing::warn!(host = ?endpoint.host(), "API lifecycle subscription failed: {error}");
+                        monitored.revoke();
+                        return;
+                    }
+                    Err(error) => {
+                        tracing::warn!(host = ?endpoint.host(), "API lifecycle subscription timed out: {error}");
+                        monitored.revoke();
+                        return;
+                    }
+                };
+            let mut authority_check = tokio::time::interval(Duration::from_secs(2));
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = monitored.revoked.cancelled() => return,
+                    event = changes.next() => match event {
+                        Some(Ok(())) => {}
+                        Some(Err(error)) => {
+                            tracing::warn!(host = ?endpoint.host(), "API lifecycle stream failed: {error}");
+                            monitored.revoke();
+                            return;
+                        }
+                        None => {
+                            tracing::warn!(host = ?endpoint.host(), "API lifecycle stream ended; revoking API access");
+                            monitored.revoke();
+                            return;
+                        }
+                    },
+                    _ = authority_check.tick() => {}
+                }
+                match tokio::time::timeout(MONITOR_TIMEOUT, monitored.check_binding()).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) | Err(_) => {
+                        monitored.revoke();
+                        return;
+                    }
+                }
+            }
+        });
+        Self { client, monitor }
+    }
+}
+
+impl Drop for ApiLease {
+    fn drop(&mut self) {
+        self.client.revoke();
+        self.monitor.abort();
     }
 }
 
@@ -389,9 +642,267 @@ pub struct DelayRes {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use std::time::Duration;
 
-    use super::{ApiClient, ClashRuntimeConfig};
+    use super::{ApiClient, ClashRuntimeConfig, forward_api_stream, serialize_api_sample};
+    use crate::core::actor_v2::control_endpoint::{
+        ApiChanges, ControlEndpoint, CoreStatusSnapshot, CoreSubmission, ExecutionHost,
+    };
+
+    struct MutableApiEndpoint {
+        binding: parking_lot::RwLock<Option<chimera_ipc::api::core::v2::CoreApiConnection>>,
+        changes: tokio::sync::watch::Sender<u64>,
+        subscribed: tokio::sync::Notify,
+    }
+
+    impl MutableApiEndpoint {
+        fn new(binding: chimera_ipc::api::core::v2::CoreApiConnection) -> Self {
+            let (changes, _) = tokio::sync::watch::channel(0);
+            Self {
+                binding: parking_lot::RwLock::new(Some(binding)),
+                changes,
+                subscribed: tokio::sync::Notify::new(),
+            }
+        }
+
+        fn replace_binding(&self, binding: chimera_ipc::api::core::v2::CoreApiConnection) {
+            *self.binding.write() = Some(binding);
+            self.changes.send_modify(|revision| *revision += 1);
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ControlEndpoint for MutableApiEndpoint {
+        async fn api_connection(
+            &self,
+        ) -> std::result::Result<
+            Option<chimera_ipc::api::core::v2::CoreApiConnection>,
+            chimera_core_manager::CoreError,
+        > {
+            Ok(self.binding.read().clone())
+        }
+
+        async fn api_changes(
+            &self,
+        ) -> std::result::Result<Option<ApiChanges>, chimera_core_manager::CoreError> {
+            self.subscribed.notify_one();
+            let receiver = self.changes.subscribe();
+            let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+                receiver.changed().await.ok()?;
+                Some((Ok(()), receiver))
+            });
+            Ok(Some(Box::pin(stream)))
+        }
+
+        fn host(&self) -> ExecutionHost {
+            ExecutionHost::Local
+        }
+
+        async fn submit(
+            &self,
+            _submission: CoreSubmission,
+        ) -> std::result::Result<
+            chimera_ipc::api::core::v2::OperationInfo,
+            chimera_core_manager::CoreError,
+        > {
+            unreachable!("the API binding test does not submit lifecycle commands")
+        }
+
+        async fn wait_operation(
+            &self,
+            _id: chimera_core_manager::OperationId,
+            _timeout: Duration,
+        ) -> Option<chimera_ipc::api::core::v2::OperationInfo> {
+            None
+        }
+
+        async fn status(
+            &self,
+        ) -> std::result::Result<CoreStatusSnapshot, chimera_core_manager::CoreError> {
+            unreachable!("the API binding test does not query host status")
+        }
+    }
+
+    #[tokio::test]
+    async fn bound_client_rejects_a_replaced_core_before_sending_a_request() {
+        use chimera_ipc::api::{core::v2::CoreApiConnection, status::CoreControllerInfo};
+
+        let first = CoreApiConnection {
+            instance_id: "first-instance".into(),
+            controller: CoreControllerInfo::Http("http://127.0.0.1:1/".into()),
+            secret: Some("first-secret".into()),
+        };
+        let endpoint = Arc::new(MutableApiEndpoint::new(first.clone()));
+        let api = ApiClient::from_connection(first, endpoint.clone())
+            .expect("bound API client should build");
+        let replacement = CoreApiConnection {
+            instance_id: "replacement-instance".into(),
+            controller: CoreControllerInfo::Http("http://127.0.0.1:1/".into()),
+            secret: Some("replacement-secret".into()),
+        };
+        endpoint.replace_binding(replacement);
+
+        let error = api
+            .get_configs()
+            .await
+            .expect_err("a retired capability must not send a request");
+        assert!(error.to_string().contains("retired core instance"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_change_cancels_an_inflight_controller_response() {
+        use chimera_ipc::api::{core::v2::CoreApiConnection, status::CoreControllerInfo};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("controller listener should bind");
+        let address = listener.local_addr().expect("controller address");
+        let response_started = Arc::new(tokio::sync::Notify::new());
+        let server_started = response_started.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("client should connect");
+            let mut request = [0_u8; 2048];
+            let read = stream
+                .read(&mut request)
+                .await
+                .expect("request should read");
+            assert!(read > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\nConnection: keep-alive\r\n\r\n{\"mode\":",
+                )
+                .await
+                .expect("partial response should write");
+            server_started.notify_one();
+            let mut closed = [0_u8; 1];
+            let _ = stream.read(&mut closed).await;
+        });
+
+        let binding = CoreApiConnection {
+            instance_id: "first-instance".into(),
+            controller: CoreControllerInfo::Http(format!("http://{address}/")),
+            secret: None,
+        };
+        let endpoint = Arc::new(MutableApiEndpoint::new(binding.clone()));
+        let endpoint_trait: Arc<dyn ControlEndpoint> = endpoint.clone();
+        let api = ApiClient::from_connection(binding, endpoint_trait)
+            .expect("bound API client should build");
+        let _lease = super::ApiLease::new(api.clone());
+        tokio::time::timeout(Duration::from_secs(1), endpoint.subscribed.notified())
+            .await
+            .expect("lease should subscribe to API lifecycle changes");
+
+        let request_api = api.clone();
+        let request = tokio::spawn(async move { request_api.get_configs().await });
+        tokio::time::timeout(Duration::from_secs(1), response_started.notified())
+            .await
+            .expect("controller should start a partial response");
+        endpoint.replace_binding(CoreApiConnection {
+            instance_id: "replacement-instance".into(),
+            controller: CoreControllerInfo::Http(format!("http://{address}/")),
+            secret: None,
+        });
+
+        let error = tokio::time::timeout(Duration::from_secs(1), request)
+            .await
+            .expect("revocation should cancel the in-flight request")
+            .expect("request task should finish")
+            .expect_err("retired API capability should fail");
+        assert!(error.to_string().contains("retired core instance"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn closing_api_stream_receiver_drops_the_upstream_stream() {
+        struct DropProbe(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let (dropped, upstream_dropped) = tokio::sync::oneshot::channel();
+        let probe = DropProbe(Some(dropped));
+        let stream = futures_util::stream::poll_fn(move |_| {
+            let _ = &probe;
+            std::task::Poll::<Option<chimera_clash_api::Result<serde_json::Value>>>::Pending
+        });
+        let api = ApiClient::new(crate::config::clash::ClashInfo {
+            port: 1,
+            server: "127.0.0.1:1".to_owned(),
+            secret: None,
+        })
+        .expect("API client should build");
+
+        let receiver = forward_api_stream(api, stream, serialize_api_sample::<serde_json::Value>);
+        drop(receiver);
+
+        tokio::time::timeout(Duration::from_secs(1), upstream_dropped)
+            .await
+            .expect("closing the receiver should drop the upstream stream")
+            .expect("upstream drop signal should be sent");
+    }
+
+    #[tokio::test]
+    async fn lifecycle_revocation_interrupts_backpressured_stream_delivery() {
+        struct DropProbe(Option<tokio::sync::oneshot::Sender<()>>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+
+        let (dropped, upstream_dropped) = tokio::sync::oneshot::channel();
+        let (blocked, delivery_blocked) = tokio::sync::oneshot::channel();
+        let probe = DropProbe(Some(dropped));
+        let mut blocked = Some(blocked);
+        let mut next = 0;
+        let stream = futures_util::stream::poll_fn(move |_| {
+            let _ = &probe;
+            let index = next;
+            next += 1;
+            if index == 32 {
+                if let Some(blocked) = blocked.take() {
+                    let _ = blocked.send(());
+                }
+            }
+            std::task::Poll::<Option<chimera_clash_api::Result<serde_json::Value>>>::Ready(Some(
+                Ok(serde_json::json!({ "index": index })),
+            ))
+        });
+        let api = ApiClient::new(crate::config::clash::ClashInfo {
+            port: 1,
+            server: "127.0.0.1:1".to_owned(),
+            secret: None,
+        })
+        .expect("API client should build");
+
+        let receiver = forward_api_stream(
+            api.clone(),
+            stream,
+            serialize_api_sample::<serde_json::Value>,
+        );
+        tokio::time::timeout(Duration::from_secs(1), delivery_blocked)
+            .await
+            .expect("the forwarding channel should fill")
+            .expect("blocked delivery signal should be sent");
+        assert_eq!(receiver.len(), 32, "the consumer must remain backpressured");
+
+        api.revoke();
+        tokio::time::timeout(Duration::from_secs(1), upstream_dropped)
+            .await
+            .expect("revocation should stop the backpressured stream worker")
+            .expect("upstream drop signal should be sent");
+    }
 
     #[tokio::test]
     async fn readiness_requires_an_responding_controller() {
