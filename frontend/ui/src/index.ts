@@ -43,3 +43,6 @@ export {
   useSidebar,
 } from './slider-sidebar';
 export * from './empty-state';
+export * from './action-swap-text';
+export * from './kbd';
+export * from './material-shape';
