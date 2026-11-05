@@ -153,14 +153,11 @@ export default function ConnectionsTable({
           size: 240,
           accessorFn: ({ metadata }) => metadata.host || metadata.destinationIP,
           cell: ({ row }) => (
-            <HighlightText
-              text={
-                row.original.metadata.host ||
+            <HighlightText searchText={searchTerm}>
+              {row.original.metadata.host ||
                 row.original.metadata.destinationIP ||
-                ''
-              }
-              search={searchTerm}
-            />
+                ''}
+            </HighlightText>
           ),
         },
         {
@@ -169,10 +166,9 @@ export default function ConnectionsTable({
           size: 140,
           accessorFn: ({ metadata }) => metadata.process,
           cell: ({ row }) => (
-            <HighlightText
-              text={row.original.metadata.process || ''}
-              search={searchTerm}
-            />
+            <HighlightText searchText={searchTerm}>
+              {row.original.metadata.process || ''}
+            </HighlightText>
           ),
         },
         {
@@ -214,10 +210,9 @@ export default function ConnectionsTable({
           size: 360,
           accessorFn: ({ chains }) => [...chains].reverse().join(' / '),
           cell: ({ row }) => (
-            <HighlightText
-              text={[...row.original.chains].reverse().join(' / ')}
-              search={searchTerm}
-            />
+            <HighlightText searchText={searchTerm}>
+              {[...row.original.chains].reverse().join(' / ')}
+            </HighlightText>
           ),
         },
         {
@@ -227,14 +222,11 @@ export default function ConnectionsTable({
           accessorFn: ({ rule, rulePayload }) =>
             rulePayload ? `${rule} (${rulePayload})` : rule,
           cell: ({ row }) => (
-            <HighlightText
-              text={
-                row.original.rulePayload
-                  ? `${row.original.rule} (${row.original.rulePayload})`
-                  : row.original.rule || ''
-              }
-              search={searchTerm}
-            />
+            <HighlightText searchText={searchTerm}>
+              {row.original.rulePayload
+                ? `${row.original.rule} (${row.original.rulePayload})`
+                : row.original.rule || ''}
+            </HighlightText>
           ),
         },
         {
