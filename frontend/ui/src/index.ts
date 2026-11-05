@@ -9,8 +9,10 @@ export * from './materialYou';
 export * from './dnd-grid';
 export * from './search-field';
 
+export * from './accordion';
 export * from './animated-item';
 export * from './button';
+export * from './chip';
 export * from './card';
 export * from './circle';
 export * from './linear-progress';
