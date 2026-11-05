@@ -100,6 +100,7 @@ export default function UpdaterDialog({
       onOk={handleUpdate}
       loading={pending}
       close={m.common_close()}
+      closeTestId="updater-dialog-close"
       ok={m.common_update()}
       divider
     >
