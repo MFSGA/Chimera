@@ -51,10 +51,14 @@ function makeClassVariants(base, settings = {}) {
 function execute(name, dependencies) {
   const module = { exports: {} };
   const run = new Function('require', 'module', 'exports', transpile(name));
-  run((id) => {
-    assert.ok(Object.hasOwn(dependencies, id), 'unexpected import: ' + id);
-    return dependencies[id];
-  }, module, module.exports);
+  run(
+    (id) => {
+      assert.ok(Object.hasOwn(dependencies, id), 'unexpected import: ' + id);
+      return dependencies[id];
+    },
+    module,
+    module.exports,
+  );
   return module.exports;
 }
 
