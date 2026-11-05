@@ -27,7 +27,6 @@
       "@interface/*": ["../interface/src/*"],
     },
     "jsxImportSource": "@emotion/react",
-    "customConditions": ["source"],
     // to solve the eroor
     // "ignoreDeprecations": "6.0",
   },

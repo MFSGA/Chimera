@@ -212,7 +212,16 @@ pub fn run() -> std::io::Result<()> {
             #[cfg(windows)]
             {
                 let app_handle = app.handle().clone();
+                let stop_strategy = std::sync::Arc::clone(
+                    app.state::<std::sync::Arc<chimera_utils::process::AtomicStopStrategy>>()
+                        .inner(),
+                );
                 shutdown_hook::setup_shutdown_hook(move || {
+                    // Forced Windows session shutdown must not wait for a graceful core exit.
+                    stop_strategy.store(
+                        chimera_utils::process::StopStrategy::Kill,
+                        std::sync::atomic::Ordering::Release,
+                    );
                     crate::log_err!(utils::exit::shutdown_before_exit_blocking(
                         &app_handle
                     ));

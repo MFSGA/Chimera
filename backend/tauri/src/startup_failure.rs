@@ -8,7 +8,6 @@
 
 use std::{error::Error as StdError, path::PathBuf};
 
-use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -39,6 +38,7 @@ pub(crate) enum StartupStage {
     Jobs,
     MigrationPrepare,
     MigrationRun,
+    CoreHost,
     TypedClient,
 }
 
@@ -113,10 +113,12 @@ impl StartupFailure {
             StartupStage::MigrationPrepare | StartupStage::MigrationRun => {
                 FailureKind::MigrationFailed
             }
+            StartupStage::CoreHost => FailureKind::Internal,
             StartupStage::TypedClient => FailureKind::UserConfig,
         };
         let mut path = None;
         let mut revision = None;
+        let mut host_user_config = false;
         let mut chain = Vec::new();
         let mut current = Some(error);
         while let Some(error) = current {
@@ -196,6 +198,28 @@ impl StartupFailure {
             {
                 path = Some(actual.clone());
             }
+            if let Some(host_error) =
+                error.downcast_ref::<crate::core::actor_v2::local_host::Error>()
+            {
+                match host_error {
+                    crate::core::actor_v2::local_host::Error::InspectConfig {
+                        path: actual,
+                        ..
+                    } => {
+                        path = Some(actual.clone());
+                    }
+                    crate::core::actor_v2::local_host::Error::ReadCoreKind {
+                        path: actual, ..
+                    } => {
+                        path = Some(actual.clone());
+                        host_user_config = true;
+                    }
+                    crate::core::actor_v2::local_host::Error::BuildManager { .. } => {}
+                    crate::core::actor_v2::local_host::Error::InvalidPath { path: actual } => {
+                        path = Some(actual.clone());
+                    }
+                }
+            }
             current = error.source();
         }
 
@@ -208,6 +232,7 @@ impl StartupFailure {
             _ if revision.as_ref().is_some_and(RevisionFailure::is_newer) => {
                 FailureKind::NewerVersion
             }
+            _ if host_user_config && stage == StartupStage::CoreHost => FailureKind::UserConfig,
             _ => default_kind,
         };
         let path = path.or_else(|| {
@@ -215,6 +240,7 @@ impl StartupFailure {
                 StartupStage::Jobs => paths.jobs_path(),
                 StartupStage::MigrationPrepare
                 | StartupStage::MigrationRun
+                | StartupStage::CoreHost
                 | StartupStage::TypedClient => paths.app_config_dir().to_owned(),
             })
         });
@@ -429,6 +455,43 @@ mod tests {
         assert_eq!(user.failure.kind, FailureKind::UserConfig);
         assert_eq!(user.failure.path, Some(paths.app_config_dir().to_owned()));
         assert!(!user.failure.detail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_typed_core_config_is_reported_at_the_host_boundary() {
+        let (temp, paths) = fixture();
+        let typed_config = paths.application_config_path();
+        std::fs::write(&typed_config, "invalid: [\n").unwrap();
+        std::fs::write(paths.chimera_config_path(), "core: mihomo\n").unwrap();
+        let result = crate::core::actor_v2::local_host::build(
+            &paths,
+            &temp.path().join("helper.exe"),
+            std::sync::Arc::new(chimera_utils::process::AtomicStopStrategy::new(
+                chimera_utils::process::StopStrategy::default(),
+            )),
+        )
+        .await;
+        let Err(error) = result else {
+            panic!("the malformed typed config must be rejected");
+        };
+
+        let report = Report::from_error(&error, StartupStage::CoreHost, &paths);
+        assert_eq!(report.failure.kind, FailureKind::UserConfig);
+        assert_eq!(report.failure.path, Some(typed_config));
+        assert!(report.failure.detail.contains("failed to read core kind"));
+    }
+
+    #[test]
+    fn invalid_host_path_reports_the_exact_path() {
+        let (_temp, paths) = fixture();
+        let actual = paths.app_data_dir().join("unrepresentable-native-path");
+        let error = crate::core::actor_v2::local_host::Error::InvalidPath {
+            path: actual.clone(),
+        };
+
+        let report = Report::from_error(&error, StartupStage::CoreHost, &paths);
+        assert_eq!(report.failure.kind, FailureKind::Internal);
+        assert_eq!(report.failure.path, Some(actual));
     }
 
     #[test]
