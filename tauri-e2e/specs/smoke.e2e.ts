@@ -112,6 +112,18 @@ describe('Chimera desktop smoke test', () => {
   });
 
   it('navigates from the sidebar to settings', async () => {
+    // Update checks can open a legitimate blocking dialog on startup.
+    // Dismiss it via its visible button, never by changing app state or DOM.
+    const updaterClose = await $('[data-testid="updater-dialog-close"]');
+    if (await updaterClose.isExisting()) {
+      await updaterClose.waitForClickable({ timeout: 15_000 });
+      await updaterClose.click();
+      await updaterClose.waitForDisplayed({
+        reverse: true,
+        timeout: 15_000,
+      });
+    }
+
     const settings = await $('[data-testid="sidebar-route-settings"]');
     await settings.waitForClickable({ timeout: 15_000 });
     await settings.click();
