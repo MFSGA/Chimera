@@ -570,6 +570,9 @@ importers:
 
   frontend/ui:
     dependencies:
+      '@chimera/hooks':
+        specifier: workspace:^
+        version: link:../hooks
       '@chimera/utils':
         specifier: workspace:^
         version: link:../utils
