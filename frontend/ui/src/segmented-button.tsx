@@ -1,9 +1,8 @@
-import { useRipple } from '@chimera/ui/ripple';
-import { cn } from '@chimera/utils';
+import { chains, cn } from '@chimera/utils';
 import { useControllableState } from '@radix-ui/react-use-controllable-state';
 import Check from '~icons/material-symbols/check-rounded';
 import { cva, type VariantProps } from 'class-variance-authority';
-import { motion } from 'motion/react';
+import { motion, useReducedMotion } from 'motion/react';
 import { ToggleGroup as ToggleGroupPrimitive } from 'radix-ui';
 import {
   ComponentProps,
@@ -14,9 +13,11 @@ import {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
+import { useRipple } from './ripple';
 
 export const segmentedButtonVariants = cva(
   'relative inline-flex w-full items-stretch',
@@ -34,6 +35,12 @@ export const segmentedButtonVariants = cva(
           'rounded-full',
           'bg-surface-variant/40 dark:bg-surface-variant/15',
           'transition-opacity',
+        ],
+        glass: [
+          'h-9 w-auto shrink-0 rounded-full bg-transparent dark:bg-transparent',
+          'transition-opacity',
+          '*:data-[slot=segmented-button-slider-pill]:rounded-full',
+          '**:data-[slot=segmented-button-item-state-layer]:rounded-full',
         ],
       },
       size: {
@@ -86,6 +93,11 @@ export const segmentedButtonItemVariants = cva(
           'text-on-surface-variant dark:text-on-surface-variant',
           'data-[state=on]:text-on-secondary-container dark:data-[state=on]:text-on-secondary-container',
         ],
+        glass: [
+          'rounded-full px-4 flex-none whitespace-nowrap',
+          'text-on-surface-variant dark:text-on-surface-variant',
+          'data-[state=on]:text-on-secondary-container dark:data-[state=on]:text-on-secondary-container',
+        ],
       },
     },
     defaultVariants: {
@@ -99,7 +111,7 @@ export type SegmentedButtonItemVariantsProps = VariantProps<
 >;
 
 const LazyRipple = lazy(() =>
-  import('@chimera/ui/ripple').then((mod) => ({ default: mod.Ripple })),
+  import('./ripple').then((mod) => ({ default: mod.Ripple })),
 );
 
 type SegmentedButtonVariant = NonNullable<
@@ -153,6 +165,7 @@ export const SegmentedButton = ({
   children,
   ...rest
 }: SegmentedButtonProps) => {
+  const reducedMotion = useReducedMotion();
   const rootRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
   const [pillRect, setPillRect] = useState<PillRect>(null);
@@ -194,7 +207,7 @@ export const SegmentedButton = ({
   );
 
   const measurePill = useCallback(() => {
-    if (resolvedVariant !== 'tabs') {
+    if (resolvedVariant !== 'tabs' && resolvedVariant !== 'glass') {
       setPillRect(null);
       return;
     }
@@ -214,10 +227,13 @@ export const SegmentedButton = ({
     const itemBox = target.getBoundingClientRect();
     const rootBox = root.getBoundingClientRect();
 
-    setPillRect({
-      x: itemBox.left - rootBox.left,
-      width: itemBox.width,
-    });
+    const x = itemBox.left - rootBox.left;
+    const width = itemBox.width;
+
+    // The first resize observation repeats the layout effect's measurement.
+    setPillRect((current) =>
+      current?.x === x && current.width === width ? current : { x, width },
+    );
   }, [resolvedVariant, currentValue]);
 
   useLayoutEffect(() => {
@@ -226,7 +242,9 @@ export const SegmentedButton = ({
 
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || resolvedVariant !== 'tabs') return;
+    if (!root || (resolvedVariant !== 'tabs' && resolvedVariant !== 'glass')) {
+      return;
+    }
 
     const observer = new ResizeObserver(() => measurePill());
     observer.observe(root);
@@ -236,16 +254,18 @@ export const SegmentedButton = ({
   }, [measurePill, resolvedVariant]);
 
   const showSliderPill =
-    resolvedVariant === 'tabs' && pillRect !== null && !!currentValue;
+    (resolvedVariant === 'tabs' || resolvedVariant === 'glass') &&
+    pillRect !== null &&
+    !!currentValue;
+
+  // Kept across renders, so measuring the pill does not re-render the items.
+  const context = useMemo(
+    () => ({ variant: resolvedVariant, currentValue, registerItemRef }),
+    [resolvedVariant, currentValue, registerItemRef],
+  );
 
   return (
-    <SegmentedButtonContext.Provider
-      value={{
-        variant: resolvedVariant,
-        currentValue,
-        registerItemRef,
-      }}
-    >
+    <SegmentedButtonContext.Provider value={context}>
       <ToggleGroupPrimitive.Root
         ref={rootRef}
         type="single"
@@ -273,9 +293,9 @@ export const SegmentedButton = ({
             initial={false}
             animate={{ x: pillRect!.x, width: pillRect!.width }}
             transition={
-              hasMeasured
-                ? { type: 'spring', bounce: 0.15, duration: 0.45 }
-                : { duration: 0 }
+              reducedMotion || !hasMeasured
+                ? { duration: 0 }
+                : { type: 'spring', bounce: 0.15, duration: 0.45 }
             }
             onAnimationStart={() => {
               if (!hasMeasured) setHasMeasured(true);
@@ -313,12 +333,7 @@ export const SegmentedButtonItem = ({
 
   const ripple = useRipple();
 
-  const handleClick = disabled
-    ? undefined
-    : (event: React.MouseEvent<HTMLButtonElement>) => {
-        onClick?.(event);
-        ripple.onClick(event);
-      };
+  const handleClick = disabled ? undefined : chains(onClick, ripple.onClick);
 
   const handleClear = useCallback(
     (key: React.Key) => {
@@ -345,7 +360,7 @@ export const SegmentedButtonItem = ({
       value={value}
       {...props}
     >
-      {variant === 'tabs' && (
+      {(variant === 'tabs' || variant === 'glass') && (
         <span
           aria-hidden
           data-slot="segmented-button-item-state-layer"

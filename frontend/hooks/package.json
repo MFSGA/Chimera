@@ -1,0 +1,21 @@
+{
+  "name": "@chimera/hooks",
+  "private": true,
+  "version": "0.27.1",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@chimera/constants": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0"
+  }
+}
