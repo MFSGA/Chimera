@@ -1,28 +1,60 @@
 import { cn } from '@chimera/utils';
-import { motion } from 'motion/react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
-import type { ComponentProps } from 'react';
+import {
+  createContext,
+  useContext,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 
-export type TooltipProviderProps = ComponentProps<
-  typeof TooltipPrimitive.Provider
->;
+const TooltipOpenContext = createContext(false);
 
-/** Provide zero-delay tooltips by default for desktop navigation controls. */
+export type TooltipProviderProps = Omit<
+  ComponentProps<typeof TooltipPrimitive.Provider>,
+  'delayDuration' | 'skipDelayDuration'
+> & {
+  openDelay?: number;
+  closeDelay?: number;
+};
+
 export function TooltipProvider({
-  delayDuration = 0,
+  openDelay = 120,
+  closeDelay = 300,
   ...props
 }: TooltipProviderProps) {
-  return <TooltipPrimitive.Provider delayDuration={delayDuration} {...props} />;
+  return (
+    <TooltipPrimitive.Provider
+      delayDuration={openDelay}
+      skipDelayDuration={closeDelay}
+      {...props}
+    />
+  );
 }
 
 export type TooltipProps = ComponentProps<typeof TooltipPrimitive.Root>;
 
-/** Render a tooltip root with a local zero-delay provider. */
-export function Tooltip({ children, ...props }: TooltipProps) {
+export function Tooltip({
+  open: controlledOpen,
+  defaultOpen = false,
+  onOpenChange,
+  ...props
+}: TooltipProps) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const open = controlledOpen ?? internalOpen;
+
   return (
-    <TooltipProvider>
-      <TooltipPrimitive.Root {...props}>{children}</TooltipPrimitive.Root>
-    </TooltipProvider>
+    <TooltipOpenContext.Provider value={open}>
+      <TooltipPrimitive.Root
+        {...props}
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (controlledOpen === undefined) setInternalOpen(nextOpen);
+          onOpenChange?.(nextOpen);
+        }}
+      />
+    </TooltipOpenContext.Provider>
   );
 }
 
@@ -34,38 +66,93 @@ export function TooltipTrigger(props: TooltipTriggerProps) {
   return <TooltipPrimitive.Trigger {...props} />;
 }
 
-export type TooltipContentProps = ComponentProps<
-  typeof TooltipPrimitive.Content
-> & {
-  layout?: boolean | 'position' | 'size' | 'preserve-aspect';
-};
+export type TooltipContentProps = Omit<
+  ComponentProps<typeof TooltipPrimitive.Content>,
+  'asChild' | 'forceMount'
+>;
 
 /** Render the ref-style translucent rounded tooltip surface. */
+type TooltipSide = NonNullable<TooltipContentProps['side']>;
+
+const BUBBLE_OFFSETS = {
+  top: { y: 4 },
+  right: { x: -4 },
+  bottom: { y: -4 },
+  left: { x: 4 },
+} satisfies Record<TooltipSide, object>;
+
+/** The bubble a tooltip shows, easing in from its trigger's side. */
+export function TooltipBubble({
+  side,
+  className,
+  children,
+}: {
+  side: TooltipSide;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const offset = BUBBLE_OFFSETS[side];
+
+  return (
+    <motion.div
+      className={cn(
+        'w-fit rounded-full border text-xs text-balance',
+        'dark:text-on-surface',
+        'backdrop-blur',
+        'bg-primary-container/10 dark:bg-primary/10',
+        'dark:border-surface-variant/30 border-inverse-surface/10',
+        'overflow-hidden px-3 py-1.5',
+        className,
+      )}
+      initial={{ opacity: 0, scale: 0.96, ...offset }}
+      animate={{ opacity: 1, scale: 1, x: 0, y: 0 }}
+      exit={{ opacity: 0, scale: 0.96, ...offset }}
+      transition={{ duration: 0.14, ease: 'easeOut' }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 export function TooltipContent({
   className,
   children,
-  layout = 'preserve-aspect',
-  sideOffset = 10,
+  side = 'top',
+  sideOffset = 8,
   ...props
 }: TooltipContentProps) {
+  const open = useContext(TooltipOpenContext);
+  // The portal stays mounted only while the tooltip is open or animating out.
+  // A closed tooltip mounting its portal re-renders it once more to find the
+  // container, which multiplies across grids of tooltip triggers.
+  const [present, setPresent] = useState(open);
+
+  if (open && !present) {
+    setPresent(true);
+  }
+
+  if (!present) {
+    return null;
+  }
+
   return (
-    <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Content
-        sideOffset={sideOffset}
-        className={cn(
-          'z-50 w-fit rounded-full text-xs text-balance',
-          'dark:text-on-surface',
-          'backdrop-blur-lg',
-          'bg-primary-container/20 dark:bg-primary/10',
-          'dark:shadow-inverse-on-surface/30 shadow-on-primary-container/30 shadow-sm',
-          className,
-        )}
-        {...props}
-      >
-        <motion.div className="overflow-hidden px-3 py-1.5 text-xs text-balance">
-          <motion.div layout={layout}>{children}</motion.div>
-        </motion.div>
-      </TooltipPrimitive.Content>
+    <TooltipPrimitive.Portal forceMount>
+      <AnimatePresence onExitComplete={() => setPresent(false)}>
+        {open ? (
+          <TooltipPrimitive.Content
+            key="tooltip-content"
+            forceMount
+            side={side}
+            sideOffset={sideOffset}
+            className="z-50"
+            {...props}
+          >
+            <TooltipBubble side={side} className={className}>
+              {children}
+            </TooltipBubble>
+          </TooltipPrimitive.Content>
+        ) : null}
+      </AnimatePresence>
     </TooltipPrimitive.Portal>
   );
 }

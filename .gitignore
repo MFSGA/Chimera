@@ -40,6 +40,11 @@ release.sh
 !/docs/ai-development-governance.md
 !/docs/ai-review-checklist.md
 !/docs/ref-alignment-guide.md
+!/docs/ref-alignment-glass-controls.md
+!/docs/ref-alignment-ui-primitives.md
+!/docs/ref-alignment-ui-menus.md
+!/docs/ref-alignment-ui-shared-foundations.md
+!/docs/ref-alignment-ui-tooltip.md
 !/docs/ui-header-alignment.md
 !/docs/macos-tun-authorization.md
 !/docs/nixos.md

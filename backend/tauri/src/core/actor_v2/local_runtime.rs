@@ -1263,6 +1263,20 @@ mod tests {
         status::{ConfigRevisionInfo, RevisionIdInfo},
     };
 
+    async fn build_local_control(
+        paths: &crate::utils::path::PathResolver,
+    ) -> chimera_core_manager::CoreControl {
+        local_host::build(
+            paths,
+            &paths.app_config_dir().join("helper.exe"),
+            Arc::new(chimera_utils::process::AtomicStopStrategy::new(
+                chimera_utils::process::StopStrategy::default(),
+            )),
+        )
+        .await
+        .unwrap()
+    }
+
     // Contract: with an isolated app root and a newly built local host, status
     // must come from CoreControl as stopped/normal; a host that silently kept
     // reading the unused legacy manager would not know its manager's timestamp.
@@ -1275,7 +1289,7 @@ mod tests {
             root.path().join("config"),
             root.path().join("data"),
         );
-        let control = local_host::build(&paths).await.unwrap();
+        let control = build_local_control(&paths).await;
         let runtime_paths = RuntimePaths::new(
             camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/clash.yaml"))
                 .unwrap(),
@@ -1414,7 +1428,7 @@ mod tests {
             root.path().join("config"),
             root.path().join("data"),
         );
-        let control = local_host::build(&paths).await.unwrap();
+        let control = build_local_control(&paths).await;
         let runtime_paths = RuntimePaths::new(
             camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/clash.yaml"))
                 .unwrap(),
@@ -1555,7 +1569,7 @@ mod tests {
             root.path().join("config"),
             root.path().join("data"),
         );
-        let control = local_host::build(&paths).await.unwrap();
+        let control = build_local_control(&paths).await;
         let runtime_paths = RuntimePaths::new(
             camino::Utf8PathBuf::from_path_buf(root.path().join("config/runtime/clash.yaml"))
                 .unwrap(),

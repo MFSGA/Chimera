@@ -1187,7 +1187,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-clash-api"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "backon",
  "chimera-utils",
@@ -1263,20 +1263,22 @@ dependencies = [
 
 [[package]]
 name = "chimera-core-manager"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "camino",
- "chimera-clash-api 1.0.1",
+ "chimera-clash-api 1.1.0",
  "chimera-service-core-metadata",
  "chimera-utils",
  "chrono",
  "enumset",
+ "libc",
  "parking_lot",
  "schemars 1.2.2",
  "serde",
  "serde_json",
  "serde_yaml_ng",
  "specta",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -1305,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-ipc"
-version = "1.10.2"
+version = "1.11.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1368,7 +1370,7 @@ dependencies = [
 
 [[package]]
 name = "chimera-service-core-metadata"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "constcat",
  "enumset",
@@ -1392,8 +1394,9 @@ dependencies = [
 
 [[package]]
 name = "chimera-utils"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
+ "atomic_enum",
  "backon",
  "camino",
  "chimera_utils",
