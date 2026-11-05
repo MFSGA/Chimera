@@ -18,7 +18,9 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "tsx --test tests/progress-switch.test.ts"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",
@@ -57,5 +59,6 @@
     "@types/d3-array": "3.2.2",
     "@types/d3-scale": "4.0.9",
     "@types/d3-shape": "3.1.8"
-  }
+  },
+  "private": true
 }

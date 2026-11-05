@@ -11,9 +11,9 @@ export * from './search-field';
 
 export * from './animated-item';
 export * from './button';
+export * from './glass-control-group';
 export * from './card';
 export * from './circle';
-export * from './linear-progress';
 export * from './progress';
 export * from './ripple';
 export * from './scroll-area';

@@ -2,7 +2,20 @@ import { chains, cn } from '@chimera/utils';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { AnimatePresence, motion } from 'motion/react';
 import { Slot } from 'radix-ui';
-import { lazy, Suspense, useCallback } from 'react';
+import {
+  cloneElement,
+  isValidElement,
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  type PropsWithChildren,
+  type ReactNode,
+} from 'react';
+import {
+  GlassControlGroupContext,
+  glassSurfaceVariants,
+} from './glass-surface';
 import { CircularProgress } from './progress';
 import { useRipple } from './ripple';
 
@@ -30,6 +43,11 @@ export const buttonVariants = cva(
           'shadow-xs hover:shadow-sm focus:shadow-sm',
           'bg-surface',
           'hover:bg-surface-variant',
+        ],
+        glass: [
+          glassSurfaceVariants(),
+          'h-11 px-6 text-on-surface-variant dark:text-on-surface-variant',
+          'hover:shadow-sm focus:shadow-sm hover:bg-surface-variant',
         ],
         stroked: [
           'px-6',
@@ -99,6 +117,11 @@ export const buttonVariants = cva(
         icon: true,
         className: 'w-14',
       },
+      {
+        variant: 'glass',
+        icon: true,
+        className: 'w-11',
+      },
     ],
     defaultVariants: {
       variant: 'basic',
@@ -109,6 +132,18 @@ export const buttonVariants = cva(
 );
 
 export type ButtonVariantsProps = VariantProps<typeof buttonVariants>;
+
+const glassGroupButtonVariants = cva('', {
+  variants: {
+    icon: {
+      true: null,
+      false: 'flex h-9 min-w-0 shrink-0 items-center gap-1 px-3',
+    },
+  },
+  defaultVariants: {
+    icon: false,
+  },
+});
 
 const LazyRipple = lazy(() =>
   import('./ripple').then((mod) => ({ default: mod.Ripple })),
@@ -132,10 +167,22 @@ export const Button = ({
   className,
   children,
   onClick,
-  disableRipple,
+  disableRipple = false,
   ...props
 }: ButtonProps) => {
   const Comp = asChild ? Slot.Root : 'button';
+  const glassGroup = useContext(GlassControlGroupContext);
+  const groupedGlass = variant === 'glass' && glassGroup;
+
+  const content = (value: ReactNode) => (
+    <span className="contents" data-slot="button-content">
+      {value}
+    </span>
+  );
+  const buttonChildren =
+    asChild && isValidElement<PropsWithChildren>(children)
+      ? cloneElement(children, {}, content(children.props.children))
+      : content(children);
 
   const ripple = useRipple();
 
@@ -156,10 +203,12 @@ export const Button = ({
     <Comp
       className={cn(
         buttonVariants({
-          variant,
+          variant: groupedGlass ? 'basic' : variant,
           disabled,
           icon,
         }),
+        groupedGlass && glassGroupButtonVariants({ icon }),
+        '[&:has(>[data-slot=button-loading])>[data-slot=button-content]]:invisible',
         className,
       )}
       onClick={handleClick}
@@ -167,7 +216,7 @@ export const Button = ({
       data-loading={String(Boolean(loading))}
       {...props}
     >
-      <Slot.Slottable>{children}</Slot.Slottable>
+      <Slot.Slottable>{buttonChildren}</Slot.Slottable>
 
       <AnimatePresence initial={false}>
         {loading && (
