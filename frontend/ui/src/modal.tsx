@@ -26,7 +26,7 @@ export function ModalTrigger({
   asChild,
   ...props
 }: ComponentProps<typeof DialogPrimitive.Trigger>) {
-  const { layoutId } = useModalContext();
+  const { open, layoutId } = useModalContext();
   const Comp = asChild ? Slot.Root : 'button';
 
   return (
@@ -49,6 +49,7 @@ export function ModalTrigger({
               maxHeight: 'min(100%, calc(4 * 100cqw))',
             }}
             data-slot="modal-trigger-placeholder"
+            layoutDependency={open}
             layout
             layoutId={layoutId}
           />
@@ -115,6 +116,7 @@ export function ModalContent({
               asChild
             >
               <motion.div
+                layoutDependency="modal-content"
                 layout
                 layoutId={layoutId}
                 initial={{ opacity: 0, scale: 0.95 }}
