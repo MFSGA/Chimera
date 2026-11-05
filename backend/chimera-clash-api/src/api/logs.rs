@@ -123,3 +123,18 @@ impl Client {
         .map(|socket| crate::WebSocketStream::new(socket, "structured_logs_ws"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_log_uses_mihomos_time_and_warn_spelling() {
+        let entry: StructuredLogEntry =
+            serde_json::from_str(r#"{"time":"12:34:56","level":"warn","message":"x","fields":[]}"#)
+                .unwrap();
+
+        assert_eq!(entry.time, NaiveTime::from_hms_opt(12, 34, 56).unwrap());
+        assert_eq!(entry.level, StructuredLogLevel::Warn);
+    }
+}

@@ -64,7 +64,7 @@ impl fmt::Display for Bytes {
     specta::Type,
 )]
 #[serde(transparent)]
-pub struct BytesPerSecond(#[serde(deserialize_with = "crate::stream::deserialize_number")] i64);
+pub struct BytesPerSecond(#[serde(deserialize_with = "chimera_serde::number_or_string")] i64);
 
 impl BytesPerSecond {
     pub const fn new(value: i64) -> Self {
@@ -126,5 +126,21 @@ impl Client {
         self.websocket(metadata, || self.get("/traffic"))
             .await
             .map(|socket| crate::WebSocketStream::new(socket, "traffic_ws"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn traffic_uses_all_four_signed_mihomo_fields() {
+        let traffic: Traffic =
+            serde_json::from_str(r#"{"up":-1,"down":2,"upTotal":3,"downTotal":4}"#).unwrap();
+
+        assert_eq!(traffic.up.get(), -1);
+        assert_eq!(traffic.down.get(), 2);
+        assert_eq!(traffic.up_total.unwrap().get(), 3);
+        assert_eq!(traffic.down_total.unwrap().get(), 4);
     }
 }

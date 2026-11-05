@@ -1147,13 +1147,17 @@ mod connection_detail_tests {
                 .metadata
                 .as_ref()
                 .unwrap()
+                .known
                 .inbound_user
                 .as_deref(),
             Some("example")
         );
         let serialized = serde_json::to_value(&next[0]).expect("serialize typed detail");
-        assert_eq!(serialized["metadata"]["unknownGeo"]["zone"], "test");
-        assert_eq!(serialized["customTag"]["from"], "core");
+        assert_eq!(
+            serialized["metadata"]["_extra"]["unknownGeo"]["zone"],
+            "test"
+        );
+        assert_eq!(serialized["_extra"]["customTag"]["from"], "core");
 
         derive_connection_details(&mut counters, &[], now + Duration::from_secs(1));
         let reused_id = derive_connection_details(

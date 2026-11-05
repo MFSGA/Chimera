@@ -7,24 +7,14 @@ use reqwest::Method;
 use crate::{Client, LogLevel, Result, retry::RequestMetadata};
 
 /// Open response value; mutation and subscription enums remain closed.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, chimera_serde::DeserializeUntagged, serde::Serialize, specta::Type,
+)]
 #[serde(untagged)]
 pub enum ConfigEnum<T> {
+    #[chimera_serde(kind = "string")]
     Known(T),
     Unknown(String),
-}
-
-impl<'de, T: serde::de::DeserializeOwned> serde::Deserialize<'de> for ConfigEnum<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        let value = <String as serde::Deserialize>::deserialize(deserializer)?;
-        let known = serde::de::value::StrDeserializer::<serde::de::value::Error>::new(&value);
-        Ok(match T::deserialize(known) {
-            Ok(value) => Self::Known(value),
-            Err(_) => Self::Unknown(value),
-        })
-    }
 }
 
 impl<T: AsRef<str>> ConfigEnum<T> {
@@ -560,6 +550,16 @@ pub struct TuicServerPatch {
 }
 
 impl Client {
+    /// `GET /configs` as returned, for cores whose response does not fit
+    /// [`RuntimeConfig`].
+    pub async fn configs_value(&self) -> Result<serde_json::Value> {
+        self.send_json(
+            RequestMetadata::new("configs_value", Method::GET, true),
+            || self.get("/configs"),
+        )
+        .await
+    }
+
     pub async fn configs(&self) -> Result<RuntimeConfig> {
         self.send_json(RequestMetadata::new("configs", Method::GET, true), || {
             self.get("/configs")
@@ -593,5 +593,51 @@ impl Client {
             || self.post("/configs/geo"),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_patch_serializes_as_an_empty_object() {
+        assert_eq!(
+            serde_json::to_string(&ConfigPatch::default()).unwrap(),
+            "{}"
+        );
+    }
+
+    #[test]
+    fn providing_tun_patch_also_sends_its_non_optional_enable_flag() {
+        let patch = ConfigPatch {
+            tun: Some(TunPatch::default()),
+            ..ConfigPatch::default()
+        };
+        assert_eq!(
+            serde_json::to_value(patch).unwrap(),
+            serde_json::json!({"tun": {"enable": false}})
+        );
+    }
+
+    #[test]
+    fn runtime_config_without_optional_tunnel_configs_is_backward_compatible() {
+        let value = serde_json::json!({
+            "port": 0, "socks-port": 0, "redir-port": 0, "tproxy-port": 0,
+            "mixed-port": 0, "tun": {}, "tuic-server": {}, "ss-config": "",
+            "vmess-config": "", "authentication": null, "skip-auth-prefixes": null,
+            "lan-allowed-ips": null, "lan-disallowed-ips": null, "allow-lan": false,
+            "bind-address": "*", "inbound-tfo": false, "inbound-mptcp": false,
+            "mode": "rule", "unified-delay": false, "log-level": "info", "ipv6": false,
+            "interface-name": "", "routing-mark": 0, "geox-url": {},
+            "geo-auto-update": false, "geo-update-interval": 0, "geodata-mode": false,
+            "geodata-loader": "", "geosite-matcher": "", "tcp-concurrent": false,
+            "find-process-mode": "off", "sniffing": false, "global-ua": "",
+            "etag-support": false, "keep-alive-idle": 0, "keep-alive-interval": 0,
+            "disable-keep-alive": false
+        });
+        let config: RuntimeConfig = serde_json::from_value(value).unwrap();
+        assert_eq!(config.tcptun_config, None);
+        assert_eq!(config.udptun_config, None);
     }
 }

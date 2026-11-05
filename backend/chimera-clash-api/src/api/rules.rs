@@ -77,7 +77,9 @@ impl From<String> for RuleProviderName {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, chimera_serde::DeserializeUntagged, serde::Serialize, specta::Type,
+)]
 pub enum RuleProviderBehavior {
     Domain,
     #[serde(rename = "IPCIDR")]
@@ -98,7 +100,9 @@ impl RuleProviderBehavior {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, chimera_serde::DeserializeUntagged, serde::Serialize, specta::Type,
+)]
 pub enum RuleFormat {
     YamlRule,
     TextRule,
@@ -184,5 +188,45 @@ impl Client {
             || Ok(self.request_url(Method::PUT, url.clone())),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rule_patch_serializes_indices_as_json_object_keys() {
+        let mut patch = RulePatch::new();
+        patch.set_disabled(12, true).set_disabled(3, false);
+        assert_eq!(
+            serde_json::to_value(patch).unwrap(),
+            serde_json::json!({"3": false, "12": true})
+        );
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::RuleProvider;
+
+    #[test]
+    fn optional_metadata_does_not_accept_invalid_present_values() {
+        for (key, value) in [
+            ("behavior", serde_json::json!(42)),
+            ("format", serde_json::json!({})),
+            ("type", serde_json::json!(false)),
+            ("vehicleType", serde_json::json!([])),
+            ("updatedAt", serde_json::json!("invalid")),
+            ("ruleCount", serde_json::json!("zero")),
+        ] {
+            let mut body = serde_json::json!({"name":"provider"});
+            body[key] = value;
+            assert!(
+                serde_json::from_value::<RuleProvider>(body).is_err(),
+                "{key}"
+            );
+        }
+        assert!(serde_json::from_value::<RuleProvider>(serde_json::json!({})).is_err());
     }
 }

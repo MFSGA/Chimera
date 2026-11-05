@@ -29,8 +29,8 @@ pub(crate) fn locate_source(
     index: Option<&dyn CountryLookup>,
     local: LocalSourceIps,
 ) -> String {
-    let source = meta.source_ip.as_deref().unwrap_or_default();
-    let ip = address(meta.source_ip.as_ref()).map(|ip| ip.to_canonical());
+    let source = meta.known.source_ip.as_deref().unwrap_or_default();
+    let ip = address(meta.known.source_ip.as_ref()).map(|ip| ip.to_canonical());
     let local_label = source.eq_ignore_ascii_case("local") || source.eq_ignore_ascii_case("lan");
     let local_source = local_label || ip.is_some_and(is_local);
     let ip = if local_source {
@@ -51,7 +51,7 @@ pub(crate) fn locate_source(
             .unwrap_or_else(|| UNKNOWN.to_owned()),
         // The core's code describes the original address, never the substituted public IP.
         None if local_source => UNKNOWN.to_owned(),
-        None => normalize_region(meta.source_geo_ip.iter().flatten()),
+        None => normalize_region(meta.known.source_geo_ip.iter().flatten()),
     }
 }
 
@@ -60,11 +60,11 @@ pub(crate) fn locate_source(
 fn destination(meta: &ConnectionMetadata, exit: Option<&str>) -> Option<(IpAddr, GeoBasis)> {
     if exit == Some(DIRECT)
         && is_tcp(meta)
-        && let Some(peer) = address(meta.remote_destination.as_ref())
+        && let Some(peer) = address(meta.known.remote_destination.as_ref())
     {
         return Some((peer, GeoBasis::Dialed));
     }
-    let ip = address(meta.destination_ip.as_ref())?;
+    let ip = address(meta.known.destination_ip.as_ref())?;
     Some((ip, destination_basis(meta, exit)))
 }
 
@@ -74,7 +74,7 @@ pub(crate) fn locate_destination(
     index: Option<&dyn CountryLookup>,
 ) -> (String, Option<GeoBasis>) {
     let Some(index) = index else {
-        let region = normalize_region(meta.destination_geo_ip.iter().flatten());
+        let region = normalize_region(meta.known.destination_geo_ip.iter().flatten());
         let basis = (region != UNKNOWN).then(|| destination_basis(meta, exit));
         return (region, basis);
     };
@@ -86,18 +86,18 @@ pub(crate) fn locate_destination(
 
 fn is_tcp(meta: &ConnectionMetadata) -> bool {
     matches!(
-        meta.network,
+        meta.known.network,
         Some(ConfigEnum::Known(ConnectionNetwork::Tcp))
     )
 }
 
 fn destination_basis(meta: &ConnectionMetadata, exit: Option<&str>) -> GeoBasis {
     let tcp = matches!(
-        meta.network,
+        meta.known.network,
         Some(ConfigEnum::Known(ConnectionNetwork::Tcp))
     );
-    let hosts = matches!(meta.dns_mode, Some(ConfigEnum::Known(DnsMode::Hosts)));
-    let no_host = meta.host.as_deref().is_none_or(str::is_empty);
+    let hosts = matches!(meta.known.dns_mode, Some(ConfigEnum::Known(DnsMode::Hosts)));
+    let no_host = meta.known.host.as_deref().is_none_or(str::is_empty);
     if (exit == Some(DIRECT) && !tcp) || no_host || (tcp && hosts) {
         GeoBasis::Dialed
     } else {

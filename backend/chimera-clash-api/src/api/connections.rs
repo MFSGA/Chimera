@@ -17,8 +17,23 @@ pub struct ConnectionsSnapshot {
     pub memory: Option<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+/// Type-only description of an arbitrary JSON value, used to give the `extra`
+/// maps below (see [`Connection::extra`], [`ConnectionMetadata::extra`]) a
+/// named, exportable specta shape. Never constructed or serialized itself;
+/// the actual runtime data stays `serde_json::Value`.
+#[derive(serde::Serialize, specta::Type)]
+#[serde(untagged)]
+pub enum JsonValue {
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<Option<JsonValue>>),
+    Object(indexmap::IndexMap<String, Option<JsonValue>>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase")]
+#[serde(from = "ConnectionWire")]
 pub struct Connection {
     pub id: Uuid,
     pub metadata: Option<ConnectionMetadata>,
@@ -30,10 +45,56 @@ pub struct Connection {
     pub provider_chains: Option<Vec<String>>,
     pub rule: String,
     pub rule_payload: String,
-    #[serde(flatten)]
-    // A recursive JSON extension must not be expanded inline by Specta.
-    #[specta(type = std::collections::HashMap<String, specta_typescript::Any>)]
+    /// Fields Mihomo returns that this type does not yet model. Deserializing
+    /// (from Mihomo) collects unknown keys here regardless of direction;
+    /// serializing (for our own IPC) emits them under this named key instead
+    /// of flattening them, so a future Mihomo field literally named `extra`
+    /// cannot collide with it.
+    #[serde(rename = "_extra")]
+    #[specta(type = indexmap::IndexMap<String, Option<JsonValue>>)]
     pub extra: indexmap::IndexMap<String, serde_json::Value>,
+}
+
+/// Deserialize-only mirror of [`Connection`], with unknown fields flattened
+/// the way Mihomo sends them. [`Connection`]'s `Deserialize` impl delegates
+/// here via `#[serde(from = "ConnectionWire")]` so serialization can use a
+/// different, named shape for `extra` (see [`Connection::extra`]).
+// Serialize registers the serde attributes that Specta needs for the wire schema;
+// the application serializes Connection instead. DeserializeMap bypasses flatten buffering.
+#[derive(serde::Serialize, chimera_serde::DeserializeMap, specta::Type)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionWire {
+    id: Uuid,
+    metadata: Option<ConnectionMetadata>,
+    upload: i64,
+    download: i64,
+    start: DateTime<FixedOffset>,
+    chains: Vec<String>,
+    #[serde(default)]
+    provider_chains: Option<Vec<String>>,
+    rule: String,
+    rule_payload: String,
+    #[serde(flatten)]
+    #[chimera_serde(extra)]
+    #[specta(type = indexmap::IndexMap<String, Option<JsonValue>>)]
+    extra: indexmap::IndexMap<String, serde_json::Value>,
+}
+
+impl From<ConnectionWire> for Connection {
+    fn from(wire: ConnectionWire) -> Self {
+        Self {
+            id: wire.id,
+            metadata: wire.metadata,
+            upload: wire.upload,
+            download: wire.download,
+            start: wire.start,
+            chains: wire.chains,
+            provider_chains: wire.provider_chains,
+            rule: wire.rule,
+            rule_payload: wire.rule_payload,
+            extra: wire.extra,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
@@ -92,8 +153,20 @@ pub enum DnsMode {
     Unknown,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
-pub struct ConnectionMetadata {
+/// Known `ConnectionMetadata` fields. Flattened into both [`ConnectionMetadata`]
+/// (serialize) and [`ConnectionMetadataWire`] (deserialize) so they are only
+/// defined once; see [`ConnectionMetadata::extra`] for the unknown-field split.
+#[derive(
+    chimera_serde::DeserializeFields,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Deserialize,
+    serde::Serialize,
+    specta::Type,
+)]
+pub struct ConnectionMetadataFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<crate::ConfigEnum<ConnectionNetwork>>,
     #[serde(rename = "type")]
@@ -167,10 +240,38 @@ pub struct ConnectionMetadata {
     #[serde(rename = "sniffHost")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sniff_host: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
+#[serde(from = "ConnectionMetadataWire")]
+pub struct ConnectionMetadata {
     #[serde(flatten)]
-    // A recursive JSON extension must not be expanded inline by Specta.
-    #[specta(type = std::collections::HashMap<String, specta_typescript::Any>)]
+    pub known: ConnectionMetadataFields,
+    /// See [`Connection::extra`].
+    #[serde(rename = "_extra")]
+    #[specta(type = indexmap::IndexMap<String, Option<JsonValue>>)]
     pub extra: indexmap::IndexMap<String, serde_json::Value>,
+}
+
+/// Deserialize-only mirror of [`ConnectionMetadata`]; see [`ConnectionWire`].
+// Keep the flattened Specta wire schema while decoding directly into known fields.
+#[derive(serde::Serialize, chimera_serde::DeserializeMap, specta::Type)]
+struct ConnectionMetadataWire {
+    #[serde(flatten)]
+    known: ConnectionMetadataFields,
+    #[serde(flatten)]
+    #[chimera_serde(extra)]
+    #[specta(type = indexmap::IndexMap<String, Option<JsonValue>>)]
+    extra: indexmap::IndexMap<String, serde_json::Value>,
+}
+
+impl From<ConnectionMetadataWire> for ConnectionMetadata {
+    fn from(wire: ConnectionMetadataWire) -> Self {
+        Self {
+            known: wire.known,
+            extra: wire.extra,
+        }
+    }
 }
 
 /// WebSocket sampling interval. Mihomo interprets it as decimal milliseconds.
@@ -258,24 +359,115 @@ impl Client {
 }
 
 mod optional_port {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+    use serde::{Deserializer, Serialize, Serializer};
+
     pub fn serialize<S: Serializer>(value: &Option<u16>, serializer: S) -> Result<S::Ok, S::Error> {
         value.map(|port| port.to_string()).serialize(serializer)
     }
+
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
     ) -> Result<Option<u16>, D::Error> {
-        #[derive(Deserialize)]
+        #[derive(chimera_serde::DeserializeUntagged)]
         #[serde(untagged)]
         enum Port {
-            Text(String),
+            Null,
             Number(u16),
+            #[chimera_serde(kind = "string")]
+            Text(#[serde(deserialize_with = "chimera_serde::from_str")] u16),
         }
-        Option::<Port>::deserialize(deserializer)?
-            .map(|port| match port {
-                Port::Text(text) => text.parse().map_err(D::Error::custom),
-                Port::Number(port) => Ok(port),
+        use serde::Deserialize;
+        Ok(match Port::deserialize(deserializer)? {
+            Port::Null => None,
+            Port::Number(value) | Port::Text(value) => Some(value),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_ports_follow_gos_string_encoding() {
+        let metadata: ConnectionMetadata = serde_json::from_str(
+            r#"{
+                "network":"tcp","type":"HTTP",
+                "sourceIP":"127.0.0.1","destinationIP":"1.1.1.1",
+                "sourceGeoIP":null,"destinationGeoIP":[],
+                "sourceIPASN":"","destinationIPASN":"AS13335",
+                "sourcePort":"1234","destinationPort":"443",
+                "inboundIP":"127.0.0.1","inboundPort":"7890",
+                "inboundName":"mixed","inboundUser":"","rematchName":"",
+                "host":"example.com","dnsMode":"normal","uid":0,
+                "process":"","processPath":"","specialProxy":"",
+                "specialRules":"","remoteDestination":"","dscp":0,"sniffHost":""
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.known.source_port, Some(1234));
+        assert_eq!(metadata.known.destination_port, Some(443));
+        assert_eq!(metadata.known.source_geo_ip, None);
+    }
+
+    #[test]
+    fn zero_connection_interval_is_rejected_before_the_go_ticker_can_panic() {
+        assert!(matches!(
+            ConnectionStreamQuery::new(Duration::ZERO),
+            Err(Error::InvalidArgument {
+                argument: "interval",
+                ..
             })
-            .transpose()
+        ));
+    }
+
+    #[test]
+    fn unknown_fields_deserialize_flattened_and_serialize_under_named_extra() {
+        let connection: Connection = serde_json::from_str(
+            r#"{
+                "id":"550e8400-e29b-41d4-a716-446655440000","upload":1,"download":2,
+                "start":"2026-09-07T12:00:00Z","chains":["DIRECT"],"rule":"Match","rulePayload":"",
+                "metadata":{"extension":{"nested":[1,"two"]}},
+                "newConnectionField":true
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            connection.extra.get("newConnectionField"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            connection.metadata.as_ref().unwrap().extra.get("extension"),
+            Some(&serde_json::json!({"nested": [1, "two"]}))
+        );
+
+        let serialized = serde_json::to_value(&connection).unwrap();
+        assert_eq!(serialized["_extra"]["newConnectionField"], true);
+        assert_eq!(
+            serialized["metadata"]["_extra"]["extension"]["nested"][1],
+            "two"
+        );
+        assert!(serialized.get("newConnectionField").is_none());
+        assert!(serialized["metadata"].get("extension").is_none());
+    }
+
+    #[test]
+    fn a_field_literally_named_extra_does_not_collide_with_the_named_wrapper() {
+        let connection: Connection = serde_json::from_str(
+            r#"{
+                "id":"550e8400-e29b-41d4-a716-446655440000","upload":1,"download":2,
+                "start":"2026-09-07T12:00:00Z","chains":["DIRECT"],"rule":"Match","rulePayload":"",
+                "extra":"mihomo-added-this"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(
+            connection.extra.get("extra"),
+            Some(&serde_json::json!("mihomo-added-this"))
+        );
+
+        let serialized = serde_json::to_value(&connection).unwrap();
+        assert_eq!(serialized["_extra"]["extra"], "mihomo-added-this");
     }
 }

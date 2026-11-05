@@ -525,3 +525,128 @@ fn normalize_base_url(mut base_url: Url) -> Result<Url> {
 
     Ok(base_url)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_port_is_ergonomic_and_base_url_is_normalized() {
+        let client = Client::new_http("127.0.0.1:9090/api").unwrap();
+
+        assert_eq!(client.base_url().as_str(), "http://127.0.0.1:9090/api/");
+        assert_eq!(
+            client
+                .get("/version")
+                .unwrap()
+                .build()
+                .unwrap()
+                .url()
+                .as_str(),
+            "http://127.0.0.1:9090/api/version"
+        );
+    }
+
+    #[test]
+    fn dynamic_path_segments_are_percent_encoded() {
+        let client = Client::new_http("127.0.0.1:9090/api").unwrap();
+        let url = client
+            .endpoint_with_segments("/proxies", ["a/b ?#%", "日本語"])
+            .unwrap();
+
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:9090/api/proxies/a%2Fb%20%3F%23%25/%E6%97%A5%E6%9C%AC%E8%AA%9E"
+        );
+
+        let detail = client
+            .endpoint_with_segments("/proxies", ["a/b", ""])
+            .unwrap();
+        assert_eq!(detail.as_str(), "http://127.0.0.1:9090/api/proxies/a%2Fb/");
+    }
+
+    #[test]
+    fn secret_is_redacted_in_debug_output_and_marked_sensitive() {
+        let client = Client::builder(Host::http("127.0.0.1:9090").unwrap())
+            .secret("do-not-log-me")
+            .build()
+            .unwrap();
+        let request = client.get("/version").unwrap().build().unwrap();
+
+        assert!(!format!("{client:?}").contains("do-not-log-me"));
+        assert!(request.headers()[AUTHORIZATION].is_sensitive());
+    }
+
+    #[test]
+    fn invalid_controller_urls_are_rejected() {
+        assert!(matches!(
+            Host::url("not a URL"),
+            Err(Error::InvalidBaseUrl { .. })
+        ));
+        assert!(matches!(
+            Host::url("ftp://127.0.0.1/api"),
+            Err(Error::UnsupportedUrlScheme { .. })
+        ));
+        assert!(matches!(
+            Host::url("http://127.0.0.1/api?secret=value"),
+            Err(Error::BaseUrlHasQueryOrFragment { .. })
+        ));
+    }
+
+    #[test]
+    fn absolute_endpoints_are_rejected() {
+        let client = Client::new_http("127.0.0.1:9090").unwrap();
+        assert!(matches!(
+            client.get("https://example.com/version"),
+            Err(Error::AbsoluteEndpoint { .. })
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_client_uses_a_synthetic_local_base_url_without_auth() {
+        let path = PathBuf::from(r"\\.\pipe\clash-api-test");
+        let client = Client::builder(Host::NamedPipe(path.clone()))
+            .secret("ignored-for-local-transports")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.host(), &Host::NamedPipe(path));
+        let request = client.get("/version").unwrap().build().unwrap();
+        assert_eq!(request.url().as_str(), "http://localhost/version");
+        assert!(!request.headers().contains_key(AUTHORIZATION));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn named_pipe_transport_is_rejected_off_windows() {
+        assert!(matches!(
+            Client::new_named_pipe("clash-api-test"),
+            Err(Error::UnsupportedTransport { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_socket_client_uses_a_synthetic_local_base_url_without_auth() {
+        let path = PathBuf::from("/tmp/clash-api-test.sock");
+        let client = Client::builder(Host::UnixSocket(path.clone()))
+            .secret("ignored-for-local-transports")
+            .build()
+            .unwrap();
+
+        assert_eq!(client.host(), &Host::UnixSocket(path));
+        let request = client.get("/version").unwrap().build().unwrap();
+        assert_eq!(request.url().as_str(), "http://localhost/version");
+        assert!(!request.headers().contains_key(AUTHORIZATION));
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn unix_socket_transport_is_rejected_off_unix() {
+        assert!(matches!(
+            Client::new_unix_socket("clash-api-test.sock"),
+            Err(Error::UnsupportedTransport { .. })
+        ));
+    }
+}

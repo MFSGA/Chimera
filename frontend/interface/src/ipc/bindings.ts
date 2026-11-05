@@ -1410,7 +1410,20 @@ export type Connection = Connection_Serialize | Connection_Deserialize;
 export type ConnectionMetadata =
   ConnectionMetadata_Serialize | ConnectionMetadata_Deserialize;
 
-export type ConnectionMetadata_Deserialize = {
+/**
+ *  Known `ConnectionMetadata` fields. Flattened into both [`ConnectionMetadata`]
+ *  (serialize) and [`ConnectionMetadataWire`] (deserialize) so they are only
+ *  defined once; see [`ConnectionMetadata::extra`] for the unknown-field split.
+ */
+export type ConnectionMetadataFields =
+  ConnectionMetadataFields_Serialize | ConnectionMetadataFields_Deserialize;
+
+/**
+ *  Known `ConnectionMetadata` fields. Flattened into both [`ConnectionMetadata`]
+ *  (serialize) and [`ConnectionMetadataWire`] (deserialize) so they are only
+ *  defined once; see [`ConnectionMetadata::extra`] for the unknown-field split.
+ */
+export type ConnectionMetadataFields_Deserialize = {
   network?: ConfigEnum<ConnectionNetwork> | null;
   type?: ConfigEnum<ConnectionType> | null;
   sourceIP?: string | null;
@@ -1436,35 +1449,59 @@ export type ConnectionMetadata_Deserialize = {
   remoteDestination?: string | null;
   dscp?: number | null;
   sniffHost?: string | null;
-} & { [key in string]: any };
+};
+
+/**
+ *  Known `ConnectionMetadata` fields. Flattened into both [`ConnectionMetadata`]
+ *  (serialize) and [`ConnectionMetadataWire`] (deserialize) so they are only
+ *  defined once; see [`ConnectionMetadata::extra`] for the unknown-field split.
+ */
+export type ConnectionMetadataFields_Serialize = {
+  network?: ConfigEnum<ConnectionNetwork> | null;
+  type?: ConfigEnum<ConnectionType> | null;
+  sourceIP?: string | null;
+  destinationIP?: string | null;
+  sourceGeoIP?: string[] | null;
+  destinationGeoIP?: string[] | null;
+  sourceIPASN?: string | null;
+  destinationIPASN?: string | null;
+  sourcePort?: string | null;
+  destinationPort?: string | null;
+  inboundIP?: string | null;
+  inboundPort?: string | null;
+  inboundName?: string | null;
+  inboundUser?: string | null;
+  rematchName?: string | null;
+  host?: string | null;
+  dnsMode?: ConfigEnum<DnsMode> | null;
+  uid?: number | null;
+  process?: string | null;
+  processPath?: string | null;
+  specialProxy?: string | null;
+  specialRules?: string | null;
+  remoteDestination?: string | null;
+  dscp?: number | null;
+  sniffHost?: string | null;
+};
+
+/**  Deserialize-only mirror of [`ConnectionMetadata`]; see [`ConnectionWire`]. */
+export type ConnectionMetadataWire =
+  ConnectionMetadataWire_Serialize | ConnectionMetadataWire_Deserialize;
+
+/**  Deserialize-only mirror of [`ConnectionMetadata`]; see [`ConnectionWire`]. */
+export type ConnectionMetadataWire_Deserialize =
+  ConnectionMetadataFields_Deserialize & { [key in string]: JsonValue | null };
+
+/**  Deserialize-only mirror of [`ConnectionMetadata`]; see [`ConnectionWire`]. */
+export type ConnectionMetadataWire_Serialize =
+  ConnectionMetadataFields_Serialize & { [key in string]: JsonValue | null };
+
+export type ConnectionMetadata_Deserialize = ConnectionMetadataWire_Deserialize;
 
 export type ConnectionMetadata_Serialize = {
-  network?: ConfigEnum<ConnectionNetwork> | null;
-  type?: ConfigEnum<ConnectionType> | null;
-  sourceIP?: string | null;
-  destinationIP?: string | null;
-  sourceGeoIP?: string[] | null;
-  destinationGeoIP?: string[] | null;
-  sourceIPASN?: string | null;
-  destinationIPASN?: string | null;
-  sourcePort?: string | null;
-  destinationPort?: string | null;
-  inboundIP?: string | null;
-  inboundPort?: string | null;
-  inboundName?: string | null;
-  inboundUser?: string | null;
-  rematchName?: string | null;
-  host?: string | null;
-  dnsMode?: ConfigEnum<DnsMode> | null;
-  uid?: number | null;
-  process?: string | null;
-  processPath?: string | null;
-  specialProxy?: string | null;
-  specialRules?: string | null;
-  remoteDestination?: string | null;
-  dscp?: number | null;
-  sniffHost?: string | null;
-} & { [key in string]: any };
+  /**  See [`Connection::extra`]. */
+  _extra: { [key in string]: JsonValue | null };
+} & ConnectionMetadataFields_Serialize;
 
 export type ConnectionNetwork = 'tcp' | 'udp' | 'all' | 'invalid';
 
@@ -1492,7 +1529,22 @@ export type ConnectionType =
   | 'Inner'
   | 'Unknown';
 
-export type Connection_Deserialize = {
+/**
+ *  Deserialize-only mirror of [`Connection`], with unknown fields flattened
+ *  the way Mihomo sends them. [`Connection`]'s `Deserialize` impl delegates
+ *  here via `#[serde(from = "ConnectionWire")]` so serialization can use a
+ *  different, named shape for `extra` (see [`Connection::extra`]).
+ */
+export type ConnectionWire =
+  ConnectionWire_Serialize | ConnectionWire_Deserialize;
+
+/**
+ *  Deserialize-only mirror of [`Connection`], with unknown fields flattened
+ *  the way Mihomo sends them. [`Connection`]'s `Deserialize` impl delegates
+ *  here via `#[serde(from = "ConnectionWire")]` so serialization can use a
+ *  different, named shape for `extra` (see [`Connection::extra`]).
+ */
+export type ConnectionWire_Deserialize = {
   id: string;
   metadata: ConnectionMetadata_Deserialize | null;
   upload: number;
@@ -1502,7 +1554,27 @@ export type Connection_Deserialize = {
   providerChains?: string[] | null;
   rule: string;
   rulePayload: string;
-} & { [key in string]: any };
+} & { [key in string]: JsonValue | null };
+
+/**
+ *  Deserialize-only mirror of [`Connection`], with unknown fields flattened
+ *  the way Mihomo sends them. [`Connection`]'s `Deserialize` impl delegates
+ *  here via `#[serde(from = "ConnectionWire")]` so serialization can use a
+ *  different, named shape for `extra` (see [`Connection::extra`]).
+ */
+export type ConnectionWire_Serialize = {
+  id: string;
+  metadata: ConnectionMetadata_Serialize | null;
+  upload: number;
+  download: number;
+  start: string;
+  chains: string[];
+  providerChains: string[] | null;
+  rule: string;
+  rulePayload: string;
+} & { [key in string]: JsonValue | null };
+
+export type Connection_Deserialize = ConnectionWire_Deserialize;
 
 export type Connection_Serialize = {
   id: string;
@@ -1514,7 +1586,15 @@ export type Connection_Serialize = {
   providerChains?: string[] | null;
   rule: string;
   rulePayload: string;
-} & { [key in string]: any };
+  /**
+   *  Fields Mihomo returns that this type does not yet model. Deserializing
+   *  (from Mihomo) collects unknown keys here regardless of direction;
+   *  serializing (for our own IPC) emits them under this named key instead
+   *  of flattening them, so a future Mihomo field literally named `extra`
+   *  cannot collide with it.
+   */
+  _extra: { [key in string]: JsonValue | null };
+};
 
 /**  The active core's controller endpoint without its private credential. */
 export type CoreControllerInfo =
@@ -2015,6 +2095,20 @@ export type IpsbResponse = {
 
 export type JournalDto =
   { kind: 'durable' } | { kind: 'degraded'; code: string };
+
+/**
+ *  Type-only description of an arbitrary JSON value, used to give the `extra`
+ *  maps below (see [`Connection::extra`], [`ConnectionMetadata::extra`]) a
+ *  named, exportable specta shape. Never constructed or serialized itself;
+ *  the actual runtime data stays `serde_json::Value`.
+ */
+export type JsonValue =
+  | boolean
+  | number
+  | null
+  | string
+  | (JsonValue | null)[]
+  | { [key in string]: JsonValue | null };
 
 export type LocalBinding = LocalBinding_Serialize | LocalBinding_Deserialize;
 

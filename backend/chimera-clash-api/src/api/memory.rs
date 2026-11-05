@@ -7,15 +7,12 @@ use crate::{Client, HttpStream, Result, retry::RequestMetadata};
     Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type,
 )]
 pub struct Memory {
-    #[serde(
-        rename = "inuse",
-        deserialize_with = "crate::stream::deserialize_number"
-    )]
+    #[serde(rename = "inuse", deserialize_with = "chimera_serde::number_or_string")]
     pub in_use: u64,
     #[serde(
         default,
         rename = "oslimit",
-        deserialize_with = "crate::stream::deserialize_number"
+        deserialize_with = "chimera_serde::number_or_string"
     )]
     pub os_limit: u64,
 }

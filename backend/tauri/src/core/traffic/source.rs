@@ -52,14 +52,14 @@ fn sample(
 ) -> Sample {
     let metadata = connection.metadata.as_ref();
     let process = metadata
-        .and_then(|meta| text(meta.process_path.as_ref()))
-        .or_else(|| metadata.and_then(|meta| text(meta.process.as_ref())));
+        .and_then(|meta| text(meta.known.process_path.as_ref()))
+        .or_else(|| metadata.and_then(|meta| text(meta.known.process.as_ref())));
     let target = metadata
-        .and_then(|meta| text(meta.host.as_ref()))
-        .or_else(|| metadata.and_then(|meta| text(meta.destination_ip.as_ref())));
+        .and_then(|meta| text(meta.known.host.as_ref()))
+        .or_else(|| metadata.and_then(|meta| text(meta.known.destination_ip.as_ref())));
     let inbound = metadata
-        .and_then(|meta| text(meta.inbound_user.as_ref()))
-        .or_else(|| metadata.and_then(|meta| text(meta.inbound_name.as_ref())));
+        .and_then(|meta| text(meta.known.inbound_user.as_ref()))
+        .or_else(|| metadata.and_then(|meta| text(meta.known.inbound_name.as_ref())));
     let source_region = metadata.map_or_else(
         || UNKNOWN.to_owned(),
         |meta| geo::locate_source(meta, index, local_source),
@@ -76,12 +76,12 @@ fn sample(
         dimensions: Dimensions {
             process: process.unwrap_or(UNKNOWN).replace('\\', "/"),
             source: metadata
-                .and_then(|meta| text(meta.source_ip.as_ref()))
+                .and_then(|meta| text(meta.known.source_ip.as_ref()))
                 .unwrap_or(UNKNOWN)
                 .to_owned(),
             target: target.unwrap_or(UNKNOWN).to_owned(),
             protocol: metadata
-                .and_then(|meta| meta.network.as_ref())
+                .and_then(|meta| meta.known.network.as_ref())
                 .map(network)
                 .filter(|value| !value.is_empty())
                 .unwrap_or(UNKNOWN)

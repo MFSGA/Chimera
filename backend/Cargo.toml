@@ -7,6 +7,8 @@ members = [
   "chimera-traffic",
   "chimera-jobs",
   "chimera-macro",
+  "chimera-serde",
+  "chimera-serde-derive",
   "tauri",
 ]
 # `chimera-runtime` is a submodule with its own workspace root. Keep it out of
@@ -66,3 +68,6 @@ chimera-core-manager = { path = 'chimera-runtime/crates/chimera-core-manager' } 
 chimera-utils = { path = 'chimera-runtime/crates/chimera-utils', features = [
   'specta',
 ] }
+
+[patch.crates-io]
+reqwest-websocket = { path = "vendor/reqwest-websocket" }

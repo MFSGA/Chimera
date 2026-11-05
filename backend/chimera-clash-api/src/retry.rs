@@ -164,3 +164,22 @@ fn is_transient(error: &Error) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exponential_retry_produces_exactly_the_configured_extra_attempts() {
+        let policy = ExponentialRetry::new(
+            2,
+            DelayRange {
+                min: Duration::from_millis(1),
+                max: Duration::from_millis(2),
+            },
+        );
+        let metadata = RequestMetadata::new("version", Method::GET, true);
+
+        assert_eq!(policy.delays(&metadata).count(), 2);
+    }
+}

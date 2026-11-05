@@ -146,7 +146,9 @@ pub struct Proxy {
     pub provider: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, chimera_serde::DeserializeUntagged, serde::Serialize, specta::Type,
+)]
 pub enum ProviderType {
     Proxy,
     Rule,
@@ -164,7 +166,9 @@ impl ProviderType {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize, specta::Type)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, chimera_serde::DeserializeUntagged, serde::Serialize, specta::Type,
+)]
 pub enum VehicleType {
     File,
     #[serde(rename = "HTTP")]
@@ -308,8 +312,43 @@ struct ProxyMap {
 }
 
 #[derive(serde::Deserialize)]
-struct ProxyList {
-    proxies: Vec<Proxy>,
+struct GroupList {
+    #[serde(deserialize_with = "deserialize_groups")]
+    proxies: IndexMap<ProxyName, Proxy>,
+}
+
+// Mihomo lists groups as an array and Meow as a name-indexed object; the two
+// JSON shapes are disjoint, so accepting both never misreads either core.
+fn deserialize_groups<'de, D>(
+    deserializer: D,
+) -> std::result::Result<IndexMap<ProxyName, Proxy>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct Groups;
+    impl<'de> serde::de::Visitor<'de> for Groups {
+        type Value = IndexMap<ProxyName, Proxy>;
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a proxy group array or name-indexed object")
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            let mut groups = IndexMap::new();
+            while let Some(group) = seq.next_element::<Proxy>()? {
+                groups.insert(group.name.clone(), group);
+            }
+            Ok(groups)
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            map: A,
+        ) -> std::result::Result<Self::Value, A::Error> {
+            serde::Deserialize::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+        }
+    }
+    deserializer.deserialize_any(Groups)
 }
 
 #[derive(serde::Deserialize)]
@@ -323,17 +362,17 @@ struct SelectProxyRequest<'a> {
 }
 
 impl Client {
-    pub async fn groups(&self) -> Result<Vec<Proxy>> {
-        let result: ProxyList = self
+    pub async fn groups(&self) -> Result<IndexMap<ProxyName, Proxy>> {
+        let result: GroupList = self
             .send_json(RequestMetadata::new("groups", Method::GET, true), || {
-                self.get("/group/")
+                self.get("/group")
             })
             .await?;
         Ok(result.proxies)
     }
 
     pub async fn group(&self, name: &ProxyName) -> Result<Proxy> {
-        let url = self.endpoint_with_segments("/group", [name.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/group", [name.as_str()])?;
         self.send_json(RequestMetadata::new("group", Method::GET, true), || {
             Ok(self.request_url(Method::GET, url.clone()))
         })
@@ -357,14 +396,14 @@ impl Client {
     pub async fn proxies(&self) -> Result<IndexMap<ProxyName, Proxy>> {
         let result: ProxyMap = self
             .send_json(RequestMetadata::new("proxies", Method::GET, true), || {
-                self.get("/proxies/")
+                self.get("/proxies")
             })
             .await?;
         Ok(result.proxies)
     }
 
     pub async fn proxy(&self, name: &ProxyName) -> Result<Proxy> {
-        let url = self.endpoint_with_segments("/proxies", [name.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/proxies", [name.as_str()])?;
         self.send_json(RequestMetadata::new("proxy", Method::GET, true), || {
             Ok(self.request_url(Method::GET, url.clone()))
         })
@@ -384,7 +423,7 @@ impl Client {
 
     pub async fn select_proxy(&self, selection: ProxySelection<'_>) -> Result<()> {
         let ProxySelection { group, target } = selection;
-        let url = self.endpoint_with_segments("/proxies", [group.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/proxies", [group.as_str()])?;
         self.send_empty(
             RequestMetadata::new("select_proxy", Method::PUT, false),
             || {
@@ -397,7 +436,7 @@ impl Client {
     }
 
     pub async fn clear_proxy_selection(&self, group: &ProxyName) -> Result<()> {
-        let url = self.endpoint_with_segments("/proxies", [group.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/proxies", [group.as_str()])?;
         self.send_empty(
             RequestMetadata::new("clear_proxy_selection", Method::DELETE, false),
             || Ok(self.request_url(Method::DELETE, url.clone())),
@@ -409,14 +448,14 @@ impl Client {
         let result: ProviderMap = self
             .send_json(
                 RequestMetadata::new("proxy_providers", Method::GET, true),
-                || self.get("/providers/proxies/"),
+                || self.get("/providers/proxies"),
             )
             .await?;
         Ok(result.providers)
     }
 
     pub async fn proxy_provider(&self, provider: &ProviderName) -> Result<ProxyProvider> {
-        let url = self.endpoint_with_segments("/providers/proxies", [provider.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/providers/proxies", [provider.as_str()])?;
         self.send_json(
             RequestMetadata::new("proxy_provider", Method::GET, true),
             || Ok(self.request_url(Method::GET, url.clone())),
@@ -425,7 +464,7 @@ impl Client {
     }
 
     pub async fn update_proxy_provider(&self, provider: &ProviderName) -> Result<()> {
-        let url = self.endpoint_with_segments("/providers/proxies", [provider.as_str(), ""])?;
+        let url = self.endpoint_with_segments("/providers/proxies", [provider.as_str()])?;
         self.send_empty(
             RequestMetadata::new("update_proxy_provider", Method::PUT, false),
             || Ok(self.request_url(Method::PUT, url.clone())),
@@ -449,10 +488,8 @@ impl Client {
         provider: &ProviderName,
         proxy: &ProxyName,
     ) -> Result<Proxy> {
-        let url = self.endpoint_with_segments(
-            "/providers/proxies",
-            [provider.as_str(), proxy.as_str(), ""],
-        )?;
+        let url =
+            self.endpoint_with_segments("/providers/proxies", [provider.as_str(), proxy.as_str()])?;
         self.send_json(
             RequestMetadata::new("provider_proxy", Method::GET, true),
             || Ok(self.request_url(Method::GET, url.clone())),
@@ -508,4 +545,26 @@ fn validate_expected_status(value: &str) -> Result<()> {
 
 fn parse_status(value: &str) -> Option<u16> {
     value.parse::<u16>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expected_status_validates_ranges() {
+        assert!(ExpectedStatus::new("200/204/401-429").is_ok());
+        assert!(ExpectedStatus::new("429-401").is_err());
+        assert!(ExpectedStatus::new("200/").is_err());
+    }
+
+    #[test]
+    fn proxy_delay_rejects_values_mihomos_int16_parser_cannot_hold() {
+        let query = DelayQuery::new(
+            Url::parse("https://example.com").unwrap(),
+            Duration::from_secs(40),
+        )
+        .unwrap();
+        assert!(query.validate_proxy_timeout().is_err());
+    }
 }
