@@ -1,25 +1,12 @@
-type HighlightTextProps =
-  | {
-      searchText: string;
-      className?: string;
-      children: string;
-      search?: never;
-      text?: never;
-    }
-  | {
-      search: string;
-      text: string;
-      className?: string;
-      searchText?: never;
-      children?: never;
-    };
-
-/** Highlight every case-insensitive occurrence of a search term. */
-export default function HighlightText(props: HighlightTextProps) {
-  const searchText = props.searchText ?? props.search;
-  const children = props.children ?? props.text;
-  const { className } = props;
-
+export default function HighlightText({
+  searchText,
+  className,
+  children,
+}: {
+  searchText: string;
+  className?: string;
+  children: string;
+}) {
   if (!searchText.trim()) {
     return <span className={className}>{children}</span>;
   }
