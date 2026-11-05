@@ -165,13 +165,19 @@ test('Drawer exit portal and overlay remain mounted during animation', () => {
   );
   assert.equal(content.props.children.props.children, 'Controls');
   f.setOpen(false);
-  assert.equal(f.ui.DrawerContent({ children: 'Closed' }).props.children, false);
+  assert.equal(
+    f.ui.DrawerContent({ children: 'Closed' }).props.children,
+    false,
+  );
 });
 
 test('Drawer inert, drag handle and reduced-motion presentation contracts', () => {
   for (const reducedMotion of [false, true]) {
     const f = makeFixture('drawer', { open: true, reducedMotion });
-    const panel = f.ui.__testSurface({ className: 'custom', children: 'Panel' });
+    const panel = f.ui.__testSurface({
+      className: 'custom',
+      children: 'Panel',
+    });
     assert.equal(panel.props.inert, false);
     assert.equal(panel.props['aria-hidden'], undefined);
     assert.match(panel.props.className, /custom/);
@@ -267,7 +273,10 @@ test('Popover surface applies inert, size, motion and top/bottom origin', () => 
       assert.deepEqual(top.props.initial, { opacity: 0 });
       assert.deepEqual(top.props.transition.duration, 0);
     } else {
-      assert.notEqual(top.props.initial.clipPath, bottom.props.initial.clipPath);
+      assert.notEqual(
+        top.props.initial.clipPath,
+        bottom.props.initial.clipPath,
+      );
       assert.equal(top.props.transition.duration, 0.26);
     }
     assert.equal(kind(top, 'motion.div').props['data-slot'], 'popover-content');
