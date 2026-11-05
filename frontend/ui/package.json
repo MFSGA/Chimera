@@ -18,7 +18,8 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test:unit": "node --test tests/ref-menu-surface.test.cjs"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",

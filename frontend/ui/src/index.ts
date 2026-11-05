@@ -24,6 +24,7 @@ export * from './slider';
 // Keep the legacy Material You SwitchItem at the root export.
 // The reference primitive SwitchItem is available from '@chimera/ui/switch'.
 export { Switch } from './switch';
+export * from './menu-surface';
 export * from './modal';
 export * from './tooltip';
 export * from './animated-tabs';
