@@ -20,6 +20,8 @@
     "lint:clippy": "cargo clippy --manifest-path ./backend/Cargo.toml --all-targets --all-features",
     "typecheck": "run-p typecheck:*",
     "typecheck:interface": "tsc -p frontend/interface/tsconfig.json --noEmit",
+    "typecheck:constants": "tsc -p frontend/constants/tsconfig.json --noEmit",
+    "typecheck:hooks": "tsc -p frontend/hooks/tsconfig.json --noEmit",
     "typecheck:utils": "tsc -p frontend/utils/tsconfig.json --noEmit",
     "typecheck:ui": "tsc -p frontend/ui/tsconfig.json --noEmit",
     "typecheck:chimera": "pnpm --filter=chimera-ui generate:i18n && tsc -p frontend/chimera/tsconfig.json --noEmit",

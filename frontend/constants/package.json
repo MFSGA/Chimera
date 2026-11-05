@@ -1,0 +1,12 @@
+{
+  "name": "@chimera/constants",
+  "private": true,
+  "version": "0.27.1",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}
