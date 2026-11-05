@@ -587,6 +587,16 @@ impl Client {
         .await
     }
 
+    /// Patch `/configs` with an open JSON object for compatibility callers
+    /// whose patch fields are generated dynamically at runtime.
+    pub async fn patch_config_value(&self, patch: &serde_json::Value) -> Result<()> {
+        self.send_empty(
+            RequestMetadata::new("patch_config_value", Method::PATCH, false),
+            || Ok(self.patch("/configs")?.json(patch)),
+        )
+        .await
+    }
+
     pub async fn update_geo_databases(&self) -> Result<()> {
         self.send_empty(
             RequestMetadata::new("update_geo_databases", Method::POST, false),
@@ -599,6 +609,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{Json, Router, http::StatusCode, routing::patch};
 
     #[test]
     fn empty_patch_serializes_as_an_empty_object() {
@@ -606,6 +617,36 @@ mod tests {
             serde_json::to_string(&ConfigPatch::default()).unwrap(),
             "{}"
         );
+    }
+
+    #[tokio::test]
+    async fn open_config_patch_preserves_dynamic_fields_and_uses_patch() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let app = Router::new().route(
+            "/configs",
+            patch(move |Json(body): Json<serde_json::Value>| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(body).expect("test receiver should remain open");
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = Client::new_http(format!("http://{address}")).unwrap();
+        let patch = serde_json::json!({
+            "tun": {"enable": true, "future-runtime-field": [1, 2]},
+            "unknown-runtime-field": {"kept": true}
+        });
+
+        client.patch_config_value(&patch).await.unwrap();
+
+        assert_eq!(rx.recv().await, Some(patch));
+        server.abort();
     }
 
     #[test]

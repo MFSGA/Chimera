@@ -90,6 +90,7 @@ pub struct Client {
     host: Host,
     base_url: Url,
     authorization: Option<HeaderValue>,
+    websocket_token_query: bool,
     retry_policy: SharedRetryPolicy,
 }
 
@@ -274,8 +275,20 @@ impl Client {
         F: Fn() -> Result<RequestBuilder>,
     {
         let operation = metadata.operation();
+        let websocket_token = self.websocket_token_query.then(|| {
+            self.authorization
+                .as_ref()
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .unwrap_or_default()
+                .to_owned()
+        });
         self.execute(&metadata, || async {
-            let response = make_request()?
+            let mut request = make_request()?;
+            if let Some(token) = websocket_token.as_deref() {
+                request = request.query(&[("token", token)]);
+            }
+            let response = request
                 .upgrade_with_named_pipe_retry()
                 .await
                 .map_err(|source| Error::WebSocket { operation, source })?;
@@ -352,6 +365,7 @@ pub struct ClientBuilder {
     host: Host,
     reqwest: reqwest::ClientBuilder,
     secret: Option<Secret>,
+    websocket_token_query: bool,
     retry_policy: SharedRetryPolicy,
 }
 
@@ -364,12 +378,21 @@ impl ClientBuilder {
                 .http1_only()
                 .retry(reqwest::retry::never()),
             secret: None,
+            websocket_token_query: false,
             retry_policy: Arc::new(NoRetry),
         }
     }
 
     pub fn secret(mut self, secret: impl Into<Secret>) -> Self {
         self.secret = Some(secret.into());
+        self
+    }
+
+    /// Also send the configured secret as the legacy `token` WebSocket query
+    /// parameter. Disabled by default; this is only for cores that require the
+    /// compatibility path in addition to the standard bearer header.
+    pub fn websocket_token_query_compatibility(mut self) -> Self {
+        self.websocket_token_query = true;
         self
     }
 
@@ -398,6 +421,7 @@ impl ClientBuilder {
             host,
             mut reqwest,
             secret,
+            websocket_token_query,
             retry_policy,
         } = self;
 
@@ -470,6 +494,7 @@ impl ClientBuilder {
             host,
             base_url,
             authorization,
+            websocket_token_query,
             retry_policy,
         })
     }

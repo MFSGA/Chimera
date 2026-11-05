@@ -348,6 +348,16 @@ impl Client {
         .await
     }
 
+    /// Compatibility form for callers that receive connection identifiers as
+    /// strings. Invalid identifiers are rejected before any request is sent.
+    pub async fn close_connection_id(&self, id: &str) -> Result<()> {
+        let id = Uuid::parse_str(id).map_err(|error| Error::InvalidArgument {
+            argument: "connection id",
+            message: error.to_string(),
+        })?;
+        self.close_connection(id).await
+    }
+
     /// Close every current connection. This is intentionally not auto-retried.
     pub async fn close_all_connections(&self) -> Result<()> {
         self.send_empty(
@@ -387,6 +397,18 @@ mod optional_port {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invalid_string_connection_id_is_rejected_locally() {
+        let client = Client::new_http("http://127.0.0.1:1").unwrap();
+        assert!(matches!(
+            client.close_connection_id("not-a-uuid").await,
+            Err(Error::InvalidArgument {
+                argument: "connection id",
+                ..
+            })
+        ));
+    }
 
     #[test]
     fn metadata_ports_follow_gos_string_encoding() {

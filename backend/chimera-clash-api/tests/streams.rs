@@ -4,10 +4,13 @@ use axum::{
     Router,
     body::Body,
     extract::{Query, WebSocketUpgrade, ws::Message as AxumMessage},
+    http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
 };
-use chimera_clash_api::{Client, ConnectionStreamQuery, LogLevel, LogQuery, StructuredLogLevel};
+use chimera_clash_api::{
+    Client, ConnectionStreamQuery, Host, LogLevel, LogQuery, StructuredLogLevel,
+};
 use chrono::NaiveTime;
 use futures_util::StreamExt;
 use indexmap::IndexMap;
@@ -92,6 +95,41 @@ async fn connections_http_is_a_snapshot_and_websocket_honors_interval() {
         .unwrap();
     let decoded = websocket.next().await.unwrap().unwrap();
     assert_eq!(decoded.memory, Some(3));
+    server.abort();
+}
+
+#[tokio::test]
+async fn websocket_token_query_compatibility_is_opt_in_and_keeps_bearer_auth() {
+    async fn websocket(
+        Query(query): Query<IndexMap<String, String>>,
+        headers: HeaderMap,
+        ws: WebSocketUpgrade,
+    ) -> impl IntoResponse {
+        assert_eq!(query.get("token").map(String::as_str), Some("secret-value"));
+        assert_eq!(
+            headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer secret-value")
+        );
+        ws.on_upgrade(|mut socket| async move {
+            socket
+                .send(AxumMessage::Text(r#"{"up":4,"down":9}"#.into()))
+                .await
+                .unwrap();
+        })
+    }
+
+    let (address, server) = spawn_server(Router::new().route("/traffic", get(websocket))).await;
+    let client = Client::builder(Host::http(address).unwrap())
+        .secret("secret-value")
+        .websocket_token_query_compatibility()
+        .build()
+        .unwrap();
+    let mut stream = client.traffic_ws().await.unwrap();
+    let sample = stream.next().await.unwrap().unwrap();
+
+    assert_eq!(sample.up.get(), 4);
     server.abort();
 }
 
