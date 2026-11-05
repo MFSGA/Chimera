@@ -71,6 +71,15 @@
 | `ref/frontend/nyanpasu/src/pages/(main)/main/connections/_modules/use-connection-rows.ts::useActiveConnectionRows`                   | Same Chimera relative path                                                                                   | Consumes typed `ClashConnection_Serialize` frames instead of history-derived, sample-period-assumed rates. Both Main and Legacy use this one hook via `ConnectionsContent`.                                                                                                                                                                                                          |
 | `chimera-clash-api::Connection::extra` / `ConnectionMetadata::extra`                                                                 | `backend/chimera-clash-api/src/api/connections.rs`                                                           | Restrict Specta's recursive JSON extension type to a string-keyed `any` map so known fields retain generated TS types without changing Serde `flatten` or raw extension data. Runtime payload and user data remain unchanged.                                                                                                                                                        |
 
+**Superseded API model note:** the app-side `chimera-clash-api` contract is now
+aligned to the pinned reference's `ConnectionWire` / `ConnectionMetadataWire`
+and `ConnectionMetadata.known` model. Unknown wire fields are decoded through
+the flattened reference serde derives and the typed IPC serialization uses the
+reference `_extra` shape. See [the API crate alignment record](ref-alignment-clash-api.md)
+for the path mapping and verification; the earlier “recursive JSON extension
+type” description above records the prior implementation, not the current
+contract.
+
 **Compatibility-only name corrections:** `frontend/interface` previously exported an unrelated historical snapshot as `ClashConnection` and a legacy namespace as `Connection`, colliding with the newly generated Reference domain types. The older helpers have been renamed `ClashConnectionsSnapshot` and `LegacyConnection` internally; the actual domain objects now retain upstream `ClashConnection` / `Connection` type names.
 
 **Evidence and limits:** The Clash Rust test subset (25 passed), checked-in Specta regeneration and `typescript_bindings_are_fresh` (1 passed), frontend `pnpm typecheck`, `pnpm lint:frontend-boundaries`, `pnpm web:build`, Connections model unit tests (9 passed) and E2E harness unit tests (17 passed) were run for this slice. New `tauri-e2e/specs/connections-detail-subscription.e2e.ts` was registered to `smoke`, built via `pnpm e2e:tauri:build`, and **actually passed (1/1)** in macOS WebKit 605.1.15 on 2026-10-10 using the isolated legacy E2E webview. It exercises native `__CHANNEL__:` subscribe/unsubscribe, not a user-click or real network payload. Previous Main and Legacy UI E2E suites did **not** pass because the macOS WebViews were hidden and animations never advanced. This change cannot claim a visible UI pass, real-core traffic rates, or browser SSE parity from its native IPC and unit test evidence.
