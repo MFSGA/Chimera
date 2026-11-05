@@ -25,12 +25,14 @@ export * from './slider';
 // The reference primitive SwitchItem is available from '@chimera/ui/switch'.
 export { Switch } from './switch';
 export * from './modal';
+export * from './popover';
 export * from './tooltip';
 export * from './animated-tabs';
 export { default as AnimatedTabs } from './animated-tabs';
 export { default as TextMarquee } from './text-marquee';
 export * from './context-menu';
 export * from './dropdown-menu';
+export * from './drawer';
 export * from './segmented-button';
 export * from './navigation-sidebar';
 // The Material You Sparkline remains the root export for legacy dashboards.
