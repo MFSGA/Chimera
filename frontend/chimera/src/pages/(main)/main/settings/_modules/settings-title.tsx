@@ -11,7 +11,7 @@
  * - 在移动端（md 以下）显示返回按钮，跳转至 /main/settings
  *
  * 实现说明：
- * - 使用 useScrollArea().offset.top 获取滚动距离（与 ref 一致）
+ * - 使用 useScrollArea().isPastHeader 读取共享滚动标志（与 ref 一致）
  * - 两个标题区域使用共享的 useId 作为 layoutId，确保 motion 识别为同一元素
  * - 动画时长和缓动曲线匹配 ref: 0.5s, [0.32, 0.72, 0, 1]
  */
@@ -81,11 +81,11 @@ export function SettingsTitle({
   children,
   ...props
 }: ComponentProps<'div'>) {
-  const { offset } = useScrollArea();
+  const { isPastHeader } = useScrollArea();
 
   const id = useId();
 
-  const showTopTitle = offset.top > 40;
+  const showTopTitle = isPastHeader;
 
   return (
     <>
