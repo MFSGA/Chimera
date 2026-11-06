@@ -220,6 +220,7 @@ jobs:
       - name: Test E2E harness and frontend models
         if: startsWith(matrix.targets.os, 'ubuntu-') && env.FRONTEND == 'true'
         run: |
+          pnpm --filter @chimera/ui test:unit
           pnpm --filter @chimera/tauri-e2e test:unit
           pnpm --filter chimera-ui test:connections
           pnpm --filter chimera-ui test:localization
