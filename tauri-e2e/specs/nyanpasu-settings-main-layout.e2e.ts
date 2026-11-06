@@ -146,4 +146,100 @@ describe('main Chimera settings reference layout', () => {
       await browser.saveScreenshot(evidencePath);
     }
   });
+
+  it('updates ScrollArea direction and sticky title on actual wheel input', async () => {
+    const viewport = await $(
+      '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+    );
+    await viewport.waitForDisplayed({ timeout: 15_000 });
+
+    const initial = await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"]',
+      );
+      const element = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!root || !element) {
+        throw new Error('The real settings ScrollArea viewport is missing.');
+      }
+      return {
+        availableScroll: element.scrollHeight - element.clientHeight,
+        scrollTop: element.scrollTop,
+        top: root.dataset.top,
+      };
+    });
+    assert.ok(
+      initial.availableScroll > 120,
+      'Settings page must actually overflow before wheel testing: ' +
+        JSON.stringify(initial),
+    );
+    assert.equal(initial.scrollTop, 0, JSON.stringify(initial));
+    assert.equal(initial.top, 'true');
+
+    // Real W3C WebDriver wheel actions, not direct DOM scrollTop assignment.
+    await browser
+      .action('wheel')
+      .scroll({ origin: viewport, deltaX: 0, deltaY: 220, duration: 250 })
+      .perform();
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const root = document.querySelector<HTMLElement>(
+            '[data-slot="settings-content-scroll-area"]',
+          );
+          const element = root?.querySelector<HTMLElement>(
+            '[data-slot="scroll-area-viewport"]',
+          );
+          const titles = document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-title"]',
+          );
+          return (
+            (element?.scrollTop ?? 0) > 40 &&
+            root?.dataset.top === 'false' &&
+            root?.dataset.scrollDirection === 'down' &&
+            titles[0]?.dataset.showTitle === 'true' &&
+            titles[1]?.dataset.showTitle === 'false'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'A real wheel-down action did not reveal the compact sticky Settings title.',
+      },
+    );
+
+    await browser
+      .action('wheel')
+      .scroll({ origin: viewport, deltaX: 0, deltaY: -1400, duration: 250 })
+      .perform();
+
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const root = document.querySelector<HTMLElement>(
+            '[data-slot="settings-content-scroll-area"]',
+          );
+          const element = root?.querySelector<HTMLElement>(
+            '[data-slot="scroll-area-viewport"]',
+          );
+          const titles = document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-title"]',
+          );
+          return (
+            element?.scrollTop === 0 &&
+            root?.dataset.top === 'true' &&
+            root?.dataset.scrollDirection === 'up' &&
+            titles[0]?.dataset.showTitle === 'false' &&
+            titles[1]?.dataset.showTitle === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg:
+          'A real wheel-up action did not restore the expanded Settings title.',
+      },
+    );
+  });
 });
