@@ -18,14 +18,9 @@ describe('main tooltip reference surface', () => {
   it('keeps ref padding on the animated inner surface', async () => {
     const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((element) => {
-      element.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          pointerType: 'mouse',
-        }),
-      );
-    }, firstSidebarLink);
+    // Exercise the user's actual pointer hover, not a synthetic DOM event.
+    // Radix Tooltip must open through WebDriver's mouse action.
+    await firstSidebarLink.moveTo();
 
     await browser.waitUntil(
       async () =>
