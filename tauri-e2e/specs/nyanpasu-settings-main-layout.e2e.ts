@@ -147,7 +147,7 @@ describe('main Chimera settings reference layout', () => {
     }
   });
 
-  it('updates ScrollArea direction and sticky title on actual wheel input', async () => {
+  it('updates ScrollArea direction and sticky title after WebDriver wheel actions', async () => {
     const viewport = await $(
       '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
     );
@@ -178,8 +178,8 @@ describe('main Chimera settings reference layout', () => {
     assert.equal(initial.top, 'true');
 
     // Use a visible point inside the right-hand viewport instead of relying
-    // on WebView2's element-origin wheel conversion. Keep the wheel action
-    // physical; the DOM is only used to verify target geometry and outcomes.
+    // on element-origin conversion. This is the embedded WebDriver wheel path,
+    // not trusted OS-wheel input; the DOM only measures target and results.
     const bounds = await browser.execute(() => {
       const element = document.querySelector<HTMLElement>(
         '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
@@ -215,8 +215,59 @@ describe('main Chimera settings reference layout', () => {
         JSON.stringify({ bounds, wheelPoint, wheelTarget }),
     );
 
-    // Diagnostic-only listeners: record the real wheel event, cancellation,
-    // and transient scrolls. They never synthesize scrolling or write scrollTop.
+    // The vendored embedded driver synthesizes an untrusted WheelEvent. First
+    // prove that canceling it suppresses the simulated scroll default action.
+    await browser.execute(() => {
+      const viewport = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      if (!viewport) {
+        throw new Error(
+          'Settings viewport vanished before wheel cancellation.',
+        );
+      }
+      viewport.dataset.e2eCancelWheelReceived = 'false';
+      viewport.dataset.e2eCancelWheelPrevented = 'false';
+      viewport.addEventListener(
+        'wheel',
+        (event) => {
+          viewport.dataset.e2eCancelWheelReceived = 'true';
+          event.preventDefault();
+          viewport.dataset.e2eCancelWheelPrevented = String(
+            event.defaultPrevented,
+          );
+        },
+        { once: true, capture: true },
+      );
+    });
+    await browser
+      .action('wheel')
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: 360,
+        duration: 0,
+      })
+      .perform();
+    const afterCancelledWheel = await browser.execute(() => {
+      const viewport = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      return {
+        scrollTop: viewport?.scrollTop ?? null,
+        received: viewport?.dataset.e2eCancelWheelReceived ?? null,
+        prevented: viewport?.dataset.e2eCancelWheelPrevented ?? null,
+      };
+    });
+    assert.deepEqual(
+      afterCancelledWheel,
+      { scrollTop: 0, received: 'true', prevented: 'true' },
+      'Canceling the delivered wheel event must suppress nested scrolling.',
+    );
+
+    // Diagnostic-only listeners: capture uncanceled WebDriver wheel delivery
+    // and transient scrolls. They never synthesize scrolling or set scrollTop.
     await browser.execute(() => {
       const root = document.querySelector<HTMLElement>(
         '[data-slot="settings-content-scroll-area"]',
@@ -298,7 +349,7 @@ describe('main Chimera settings reference layout', () => {
         {
           timeout: 15_000,
           timeoutMsg:
-            'A real wheel-down action did not reveal the compact sticky Settings title.',
+            'The embedded WebDriver wheel-down action did not reveal the compact sticky Settings title.',
         },
       );
     } catch (cause) {
@@ -335,7 +386,7 @@ describe('main Chimera settings reference layout', () => {
         };
       });
       throw new Error(
-        'Physical wheel-down failed: ' +
+        'Embedded WebDriver wheel-down failed: ' +
           JSON.stringify({ wheelPoint, wheelTarget, observed }),
         { cause },
       );
@@ -375,7 +426,7 @@ describe('main Chimera settings reference layout', () => {
       {
         timeout: 15_000,
         timeoutMsg:
-          'A real wheel-up action did not restore the expanded Settings title.',
+          'The embedded WebDriver wheel-up action did not restore the expanded Settings title.',
       },
     );
   });
