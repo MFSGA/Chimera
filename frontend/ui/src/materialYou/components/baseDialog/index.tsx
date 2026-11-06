@@ -19,6 +19,7 @@ export interface BaseDialogProps {
   title: ReactNode;
   open: boolean;
   close?: string;
+  closeTestId?: string;
   ok?: string;
   disabledOk?: boolean;
   contentStyle?: CSSProperties;
@@ -34,6 +35,7 @@ export const BaseDialog = ({
   title,
   open,
   close,
+  closeTestId,
   onClose,
   children,
   contentStyle,
@@ -218,6 +220,7 @@ export const BaseDialog = ({
             <div className={cn('m-2 flex justify-end gap-2', full && 'mx-6')}>
               {onClose && (
                 <Button
+                  data-testid={closeTestId}
                   disabled={loading || closeLoading}
                   loading={closeLoading || loading}
                   variant="outlined"
