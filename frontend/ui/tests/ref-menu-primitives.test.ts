@@ -42,9 +42,7 @@ test(
 
     try {
       const { MenuSurface } = await vite.ssrLoadModule('/src/menu-surface.tsx');
-      const { SearchField } = await vite.ssrLoadModule(
-        '/src/search-field.tsx',
-      );
+      const { SearchField } = await vite.ssrLoadModule('/src/search-field.tsx');
       const { Menubar, MenubarMenu, MenubarTrigger } =
         await vite.ssrLoadModule('/src/menubar.tsx');
       const {
