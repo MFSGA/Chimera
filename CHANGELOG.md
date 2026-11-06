@@ -1,3 +1,237 @@
+## [0.28.0] - 2026-11-06 03:39:25
+
+### ✅ Testing
+
+- **clash-api:** Give Windows pipe fixtures collision-proof names by @MFSGA
+
+- **e2e:** Require one visible theme option instead of unique menu item by @MFSGA in [#580](https://github.com/MFSGA/Chimera/pull/580)
+
+- **e2e:** Capture theme popup before cleanup on failure by @MFSGA in [#579](https://github.com/MFSGA/Chimera/pull/579)
+
+- **e2e:** Avoid slow WebDriver scroll command before mouse actions by @MFSGA
+
+- **e2e:** Poll language route stability outside WebView timers by @MFSGA in [#578](https://github.com/MFSGA/Chimera/pull/578)
+
+- **e2e:** Use native WebDriver mouse actions for visible controls by @MFSGA
+
+- **e2e:** Expose stage before long-running Windows UI actions by @MFSGA in [#577](https://github.com/MFSGA/Chimera/pull/577)
+
+- **e2e:** Retry theme menu via real keyboard and record stages by @MFSGA
+
+- **e2e:** Choose theme menu items through real pointer input by @MFSGA in [#576](https://github.com/MFSGA/Chimera/pull/576)
+
+- **e2e:** Click only the current visible Profile details link by @MFSGA
+
+- **e2e:** Record pointer hit evidence on detail navigation failure by @MFSGA in [#575](https://github.com/MFSGA/Chimera/pull/575)
+
+- **e2e:** Diagnose Profile detail navigation after real click by @MFSGA in [#574](https://github.com/MFSGA/Chimera/pull/574)
+
+- **e2e:** Click visible Profile folder details through WebDriver by @MFSGA in [#573](https://github.com/MFSGA/Chimera/pull/573)
+
+- **e2e:** Wait for the actual visible Profile folder heading by @MFSGA in [#572](https://github.com/MFSGA/Chimera/pull/572)
+
+- **e2e:** Target visible folder details and preserve failure cause by @MFSGA in [#571](https://github.com/MFSGA/Chimera/pull/571)
+
+- **e2e:** Exercise Profile folder navigation through visible UI by @MFSGA in [#570](https://github.com/MFSGA/Chimera/pull/570)
+
+- **e2e:** Stabilize Windows pointer and settings flows by @MFSGA
+
+- **e2e:** Exercise Profile folders through visible UI by @MFSGA
+
+- **e2e:** Await settled Profile card motion before layout check by @MFSGA
+
+- **e2e:** Measure the actual responsive Profile card grid by @MFSGA
+
+- **e2e:** Capture route and pointer hit evidence on layout failures by @MFSGA
+
+- **i18n:** Handle structured plural messages in locale checks by @MFSGA
+
+- **lua:** Isolate memory guard from instruction timeout by @MFSGA
+
+### ✨ Features
+
+- **api:** Add client compatibility endpoints by @MFSGA
+
+- **api:** Align Clash API with reference behavior by @MFSGA
+
+- **backup:** Create verifiable migration snapshots and safe restore by @MFSGA
+
+- **core:** Route requests through bound API client by @MFSGA
+
+- **core:** Align local host native store lifecycle by @MFSGA
+
+- **dashboard:** Settle layout selection after resize by @MFSGA
+
+- **frontend:** Add reference-aligned constants and hooks by @MFSGA
+
+- **jobs:** Preserve typed journal errors for safe recovery by @MFSGA
+
+- **migration:** Guard revision state and snapshot before applying steps by @MFSGA
+
+- **profiles:** Align folder routes and atomic scoped imports with ref by @MFSGA
+
+- **profiles:** Align folder sections and management UI with ref by @MFSGA
+
+- **profiles:** Align folder layout model actor IPC and query with ref by @MFSGA
+
+- **profiles:** Align card features subscription metrics and content summary with ref by @MFSGA
+
+- **profiles:** Align transform add menu with ref by @MFSGA
+
+- **profiles:** Align detail loading and missing states with ref by @MFSGA
+
+- **startup:** Report typed migration and client setup failures by @MFSGA
+
+- **storage:** Align window-scoped KV state with ref (#548) by @MFSGA
+
+- **system-proxy:** Align shared effects ownership with ref (#539) by @MFSGA
+
+- **traffic:** Align Flow topology with ref Sankey (#533) by @MFSGA
+
+- **tray:** Expose script mode for premium core by @MFSGA
+
+- **ui:** Add date-time field and shared tooltip dependencies by @MFSGA
+
+- **ui:** Port reference navigation, menus and reusable components by @MFSGA
+
+- **ui:** Align glass controls and progress primitives by @MFSGA
+
+### 🐛 Bug Fixes
+
+- **ci:** Align nightly Linux RPM versions and macOS updater paths by @MFSGA
+
+- **config:** Prevent silent reinitialization of unreadable app settings by @MFSGA
+
+- **deps:** Sync backend lock with runtime by @MFSGA
+
+- **e2e:** Isolate auto-update checks and improve transient download retries (#597) by @MFSGA in [#597](https://github.com/MFSGA/Chimera/pull/597)
+
+- **e2e:** Satisfy lint braces in route polling by @MFSGA
+
+- **jobs:** Preserve journal evidence on startup failures by @MFSGA
+
+- **logging:** Filter debug terminal output with the file layer by @MFSGA
+
+- **profiles:** Align remote imports and folder routes by @MFSGA
+
+- **recovery:** Classify IO and redb failures before preserving data by @MFSGA
+
+- **router:** Keep exiting routes out of pointer hit testing by @MFSGA
+
+- **router:** Freeze the outgoing route state like ref by @MFSGA
+
+- **router:** Retain exiting route presence across transitions by @MFSGA
+
+- **runtime:** Retain Lua guard and filtered debug logging by @MFSGA
+
+- **runtime:** Point service submodule to CI fix by @MFSGA
+
+- **runtime:** Align reused pid cleanup with upstream by @MFSGA
+
+- **session:** Share safe state recovery between migration and client by @MFSGA
+
+- **state:** Synchronize committed changes across windows by @MFSGA
+
+- **traffic:** Generate analysis links from visible query state by @MFSGA
+
+- **traffic:** Retain search state across analysis navigation by @MFSGA
+
+- **tray:** Serialize snapshot refreshes by @MFSGA
+
+- **ui:** Stabilize route transitions and traffic navigation by @MFSGA
+
+- **ui:** Isolate nested motion from routed exit barrier by @MFSGA
+
+- **ui:** Release exiting route presence after slide-out by @MFSGA
+
+- **updater:** Build stable release asset URLs by @MFSGA
+
+- **widgets:** Expose dashboard shortcut card headers by @MFSGA
+
+- **window:** Keep WebView2 visibility in sync (#540) by @MFSGA
+
+- **windows:** Gracefully stop managed cores by @MFSGA
+
+### 📚 Documentation
+
+- **api:** Record bound client integration by @MFSGA
+
+- **api:** Document reference alignment and verification by @MFSGA
+
+- **governance:** Require ref-first user E2E and CI visual evidence by @MFSGA
+
+- **governance:** Honor explicit maintainer-directed manual updates by @MFSGA in [#568](https://github.com/MFSGA/Chimera/pull/568)
+
+- **lessons:** Record dependency release-age failure by @MFSGA
+
+- **lessons:** Verify v0.27.1 release fixes by @MFSGA
+
+- **ref:** Record migration safety acceptance and remaining gaps by @MFSGA
+
+### 🔨 Refactor
+
+- **core:** Reuse core manager from runtime submodule by @MFSGA
+
+- **frontend:** Align shared menus and profile module paths with ref by @MFSGA
+
+- **profiles:** Align active card gradient and actions with ref by @MFSGA
+
+- **profiles:** Align card actions and content editor with ref by @MFSGA
+
+- **profiles:** Align transform chain row primitives with ref by @MFSGA
+
+- **profiles:** Extract shared transform chain draft and editor by @MFSGA
+
+- **profiles:** Align transform and used-by detail sections with ref by @MFSGA
+
+- **profiles:** Align subscription option controls with ref by @MFSGA
+
+- **profiles:** Align sync history modules with ref by @MFSGA
+
+- **profiles:** Align deletion and subscription sections with ref by @MFSGA
+
+- **profiles:** Align file detail section with ref by @MFSGA
+
+- **profiles:** Align import and detail header with ref by @MFSGA
+
+- **runtime:** Align service helper wiring with ref by @MFSGA
+
+- **startup:** Separate path discovery from directory creation by @MFSGA
+
+- **startup:** Reuse resolved paths across config logging and setup by @MFSGA
+
+- **ui:** Align shared UI primitives with ref and prepare NixOS by @MFSGA
+
+- **utils:** Reuse utility crate from runtime submodule by @MFSGA
+
+### 🧹 Miscellaneous Tasks
+
+- **deps:** Update dependency knip to v6.44.1 by @renovate-bot in [#558](https://github.com/MFSGA/Chimera/pull/558)
+
+- **deps:** Update rust crate redb to v4.4.0 by @renovate-bot
+
+- **deps:** Merge Knip 6.43 update by @MFSGA
+
+- **deps:** Merge Tauri package alignment by @MFSGA
+
+- **deps:** Align collection UI libraries with ref by @MFSGA
+
+- **deps:** Refresh frontend dependency set (#549) by @MFSGA
+
+- **deps:** Update tanstack-router monorepo (#535) by @MFSGA
+
+- **ref:** Sync upstream reference baseline by @MFSGA
+
+- **ref:** Sync baseline to upstream main by @MFSGA
+
+- **ref:** Sync upstream main to 8e1084e4 by @MFSGA
+
+- **ref:** Update baseline to eb81fda5 by @MFSGA
+
+---
+
+**Full Changelog**: https://github.com/MFSGA/Chimera/compare/v0.27.1...v0.28.0
+
 ## [0.27.1] - 2026-10-26 11:11:26
 
 ### 🐛 Bug Fixes
