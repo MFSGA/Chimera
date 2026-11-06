@@ -78,7 +78,7 @@ const LogLevelButton = ({
           onClick={handleClick}
           asChild
         >
-          <Link to="." search={{ level: inputLevel }}>
+          <Link to="/main/logs" search={{ level: inputLevel }}>
             <div className="text-md grid size-6 shrink-0 place-content-center">
               <Icon className="size-6" />
             </div>
