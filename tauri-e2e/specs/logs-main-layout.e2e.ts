@@ -15,7 +15,7 @@ describe('main logs reference layout', () => {
     await browser.setWindowSize(1240, 638);
   });
 
-  it('uses the ref sidebar, shared scroll area, and bottom search bar', async () => {
+  it('preserves the Chimera sidebar, scroll area, and bottom search bar', async () => {
     const input = await $('[data-slot="logs-search-input-field"]');
     await input.waitForDisplayed({ timeout: 15_000 });
 
@@ -80,5 +80,76 @@ describe('main logs reference layout', () => {
       fs.mkdirSync(path.dirname(evidencePath), { recursive: true });
       await browser.saveScreenshot(evidencePath);
     }
+  });
+
+  it('filters seven log levels via visible sidebar links', async () => {
+    const levels = [
+      'trace',
+      'debug',
+      'info',
+      'warning',
+      'error',
+      'fatal',
+      'unknown',
+    ] as const;
+
+    for (const level of levels) {
+      const entry = await $(
+        `[data-slot="logs-level-filter"][data-log-level="${level}"]`,
+      );
+      assert.equal(await entry.isExisting(), true, `Missing ${level} filter`);
+    }
+
+    const fatalFilter = await $(
+      '[data-slot="logs-level-filter"][data-log-level="fatal"]',
+    );
+    const fatalHref = await fatalFilter.getAttribute('href');
+    assert.ok(fatalHref, 'Fatal level must be a navigable link.');
+    const fatalUrl = new URL(fatalHref, 'http://tauri.localhost');
+    assert.equal(fatalUrl.pathname, targetPath);
+    assert.equal(fatalUrl.searchParams.get('level'), 'fatal');
+
+    await fatalFilter.waitForClickable({ timeout: 15_000 });
+    await fatalFilter.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            '[data-slot="logs-level-filter"][data-log-level="fatal"]',
+          );
+          return (
+            location.pathname === '/main/logs' &&
+            new URLSearchParams(location.search).get('level') === 'fatal' &&
+            selected?.getAttribute('data-active') === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Fatal filter left the logs route or was not selected.',
+      },
+    );
+
+    const allFilter = await $(
+      '[data-slot="logs-level-filter"][data-log-level="all"]',
+    );
+    await allFilter.waitForClickable({ timeout: 15_000 });
+    await allFilter.click();
+    await browser.waitUntil(
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            '[data-slot="logs-level-filter"][data-log-level="all"]',
+          );
+          return (
+            location.pathname === '/main/logs' &&
+            new URLSearchParams(location.search).get('level') === null &&
+            selected?.getAttribute('data-active') === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'All levels filter was not restored on the logs route.',
+      },
+    );
   });
 });
