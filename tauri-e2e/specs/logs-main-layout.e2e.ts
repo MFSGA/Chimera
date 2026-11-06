@@ -82,7 +82,6 @@ describe('main logs reference layout', () => {
     }
   });
 
-
   it('exposes all seven reference log levels and filters through visible links', async () => {
     const levels = [
       'trace',
@@ -127,5 +126,9 @@ describe('main logs reference layout', () => {
       async () => (await allFilter.getAttribute('data-active')) === 'true',
       { timeout: 15_000, timeoutMsg: 'All levels filter was not restored.' },
     );
+    const clearedLevel = await browser.execute(
+      () => new URLSearchParams(location.search).get('level'),
+    );
+    assert.equal(clearedLevel, null);
   });
 });
