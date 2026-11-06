@@ -177,11 +177,65 @@ describe('main Chimera settings reference layout', () => {
     assert.equal(initial.scrollTop, 0, JSON.stringify(initial));
     assert.equal(initial.top, 'true');
 
-    // Real W3C WebDriver wheel actions, not direct DOM scrollTop assignment.
+    // The failed runner snapshot was still at scrollTop=0. Target a point
+    // within visible scroll content instead of relying on the element center,
+    // which may overlap an interactive control. Use real W3C wheel input;
+    // do not set scrollTop or dispatch synthetic events.
+    const wheelOrigin = await browser.execute(() => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      if (!element) throw new Error('Settings viewport disappeared.');
+      const rect = element.getBoundingClientRect();
+      const x = Math.round(rect.left + rect.width * 0.42);
+      const y = Math.round(rect.top + rect.height * 0.83);
+      const hit = document.elementFromPoint(x, y);
+      return {
+        x,
+        y,
+        inside: hit === element || element.contains(hit),
+        hit: hit?.tagName ?? null,
+        slot: hit?.getAttribute('data-slot') ?? null,
+      };
+    });
+    assert.equal(
+      wheelOrigin.inside,
+      true,
+      'Wheel origin must hit the visible Settings scroll content: ' +
+        JSON.stringify(wheelOrigin),
+    );
+    console.log('[ScrollArea E2E] wheel origin:', wheelOrigin);
     await browser
       .action('wheel')
-      .scroll({ origin: viewport, deltaX: 0, deltaY: 220, duration: 250 })
+      .scroll({
+        // With no element origin WDIO uses viewport-relative CSS coordinates.
+        x: wheelOrigin.x,
+        y: wheelOrigin.y,
+        deltaX: 0,
+        deltaY: 480,
+        duration: 300,
+      })
       .perform();
+
+    const afterWheel = await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"]',
+      );
+      const element = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      const titles = document.querySelectorAll<HTMLElement>(
+        '[data-slot="settings-title"]',
+      );
+      return {
+        scrollTop: element?.scrollTop ?? null,
+        top: root?.dataset.top ?? null,
+        direction: root?.dataset.scrollDirection ?? null,
+        compactTitle: titles[0]?.dataset.showTitle ?? null,
+        expandedTitle: titles[1]?.dataset.showTitle ?? null,
+      };
+    });
+    console.log('[ScrollArea E2E] after wheel down:', afterWheel);
 
     await browser.waitUntil(
       async () =>
@@ -212,7 +266,13 @@ describe('main Chimera settings reference layout', () => {
 
     await browser
       .action('wheel')
-      .scroll({ origin: viewport, deltaX: 0, deltaY: -1400, duration: 250 })
+      .scroll({
+        x: wheelOrigin.x,
+        y: wheelOrigin.y,
+        deltaX: 0,
+        deltaY: -1800,
+        duration: 300,
+      })
       .perform();
 
     await browser.waitUntil(
