@@ -47,9 +47,8 @@ test(
         '/src/shared-tooltip.tsx',
       );
       const { TooltipBubble } = await vite.ssrLoadModule('/src/tooltip.tsx');
-      const { Button, buttonVariants } = await vite.ssrLoadModule(
-        '/src/button.tsx',
-      );
+      const { Button, buttonVariants } =
+        await vite.ssrLoadModule('/src/button.tsx');
       const { GlassControlGroup } = await vite.ssrLoadModule(
         '/src/glass-control-group.tsx',
       );
