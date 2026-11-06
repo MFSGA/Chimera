@@ -23,12 +23,26 @@ describe('main tooltip reference surface', () => {
     // showed that menu open, occluding subsequent hover. Dismiss it via a real
     // keyboard action and move the pointer to a safe content point first.
     await browser.keys('Escape');
+    // Observe the delivered event kind; Radix opens hover tooltips only for
+    // mouse pointer events, not generic/pen/touch pointer motion.
+    await browser.execute((link) => {
+      link.dataset.e2ePointerType = 'none';
+      link.dataset.e2ePointerTrusted = 'none';
+      link.dataset.e2ePointerMoves = '0';
+      link.addEventListener('pointermove', (event) => {
+        link.dataset.e2ePointerType = event.pointerType;
+        link.dataset.e2ePointerTrusted = String(event.isTrusted);
+        link.dataset.e2ePointerMoves = String(
+          Number(link.dataset.e2ePointerMoves ?? 0) + 1,
+        );
+      });
+    }, firstSidebarLink);
     await browser
-      .action('pointer')
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
       .move({ x: 1100, y: 420, duration: 0 })
       .perform();
     await browser
-      .action('pointer')
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
       .move({ origin: firstSidebarLink, duration: 0 })
       .perform();
 
@@ -51,6 +65,9 @@ describe('main tooltip reference surface', () => {
           topTag: top?.tagName ?? null,
           centerHitsTrigger: top === link || link.contains(top),
           triggerState: link.getAttribute('data-state'),
+          pointerType: link.dataset.e2ePointerType ?? null,
+          pointerTrusted: link.dataset.e2ePointerTrusted ?? null,
+          pointerMoves: link.dataset.e2ePointerMoves ?? null,
           tooltipCount: document.querySelectorAll('[role="tooltip"]').length,
           viewport: { width: innerWidth, height: innerHeight },
         };
