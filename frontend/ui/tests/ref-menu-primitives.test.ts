@@ -66,7 +66,7 @@ test(
       assert.match(surface, /rounded/);
 
       // SSR exercises the production SearchField structure, not keyboard focus.
-      // Without a matching search term, the clear action must not appear.
+      // An editable nonempty search retains a visible clear action.
       const basicSearch = renderToStaticMarkup(
         h(SearchField, {
           value: 'widgets',
