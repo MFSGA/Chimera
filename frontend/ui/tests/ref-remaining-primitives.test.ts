@@ -11,7 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 
 test(
-  'DateTimeField, SharedTooltip and TooltipBubble expose the reference contracts',
+  'DateTimeField, tooltip, glass controls and navigation sidebar preserve contracts',
   { timeout: 30_000 },
   async () => {
     const vite = await createServer({
@@ -47,6 +47,18 @@ test(
         '/src/shared-tooltip.tsx',
       );
       const { TooltipBubble } = await vite.ssrLoadModule('/src/tooltip.tsx');
+      const { Button, buttonVariants } =
+        await vite.ssrLoadModule('/src/button.tsx');
+      const { GlassControlGroup } = await vite.ssrLoadModule(
+        '/src/glass-control-group.tsx',
+      );
+      const { segmentedButtonVariants, segmentedButtonItemVariants } =
+        await vite.ssrLoadModule('/src/segmented-button.tsx');
+      const { SidebarProvider } = await vite.ssrLoadModule(
+        '/src/slider-sidebar.tsx',
+      );
+      const { NavigationSidebar, NAVIGATION_SIDEBAR_WIDTH } =
+        await vite.ssrLoadModule('/src/navigation-sidebar.tsx');
 
       const date = renderToStaticMarkup(
         h(DateTimeField, {
@@ -71,6 +83,45 @@ test(
       );
       assert.match(bubble, /Quick tip/);
       assert.match(bubble, /rounded-full/);
+
+      assert.match(buttonVariants({ variant: 'glass' }), /shadow-lg/);
+      assert.match(
+        segmentedButtonVariants({ variant: 'glass' }),
+        /segmented-button-slider-pill/,
+      );
+      assert.match(
+        segmentedButtonItemVariants({ variant: 'glass' }),
+        /whitespace-nowrap/,
+      );
+
+      const glassGroup = renderToStaticMarkup(
+        h(
+          GlassControlGroup,
+          { 'aria-label': 'Quick actions' },
+          h(Button, { variant: 'glass', disabled: true }, 'Search'),
+        ),
+      );
+      assert.match(glassGroup, /data-slot="glass-control-group"/);
+      assert.match(glassGroup, /aria-label="Quick actions"/);
+      assert.match(glassGroup, /data-loading="false"/);
+      assert.match(glassGroup, /Search/);
+
+      assert.deepEqual(NAVIGATION_SIDEBAR_WIDTH, { open: 200, closed: 88 });
+      const navigation = renderToStaticMarkup(
+        h(
+          SidebarProvider,
+          { defaultOpen: true },
+          h(
+            NavigationSidebar,
+            { 'aria-label': 'Sections' },
+            h('span', null, 'Workspace'),
+          ),
+        ),
+      );
+      assert.match(navigation, /data-slot="slider-sidebar-placeholder"/);
+      assert.match(navigation, /data-slot="navigation-sidebar"/);
+      assert.match(navigation, /aria-label="Sections"/);
+      assert.match(navigation, /Workspace/);
     } finally {
       await vite.close();
     }
