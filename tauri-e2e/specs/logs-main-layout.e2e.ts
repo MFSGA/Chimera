@@ -103,19 +103,31 @@ describe('main logs reference layout', () => {
     const fatalFilter = await $(
       '[data-slot="logs-level-filter"][data-log-level="fatal"]',
     );
+    const fatalHref = await fatalFilter.getAttribute('href');
+    assert.ok(fatalHref, 'Fatal level must be a navigable link.');
+    const fatalUrl = new URL(fatalHref, 'http://tauri.localhost');
+    assert.equal(fatalUrl.pathname, targetPath);
+    assert.equal(fatalUrl.searchParams.get('level'), 'fatal');
+
     await fatalFilter.waitForClickable({ timeout: 15_000 });
     await fatalFilter.click();
     await browser.waitUntil(
-      async () => (await fatalFilter.getAttribute('data-active')) === 'true',
-      { timeout: 15_000, timeoutMsg: 'Fatal filter was not selected.' },
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            '[data-slot="logs-level-filter"][data-log-level="fatal"]',
+          );
+          return (
+            location.pathname === '/main/logs' &&
+            new URLSearchParams(location.search).get('level') === 'fatal' &&
+            selected?.getAttribute('data-active') === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'Fatal filter left the logs route or was not selected.',
+      },
     );
-
-    const selected = await browser.execute(() => ({
-      pathname: location.pathname,
-      level: new URLSearchParams(location.search).get('level'),
-    }));
-    assert.equal(selected.pathname, targetPath);
-    assert.equal(selected.level, 'fatal');
 
     const allFilter = await $(
       '[data-slot="logs-level-filter"][data-log-level="all"]',
@@ -123,12 +135,21 @@ describe('main logs reference layout', () => {
     await allFilter.waitForClickable({ timeout: 15_000 });
     await allFilter.click();
     await browser.waitUntil(
-      async () => (await allFilter.getAttribute('data-active')) === 'true',
-      { timeout: 15_000, timeoutMsg: 'All levels filter was not restored.' },
+      async () =>
+        browser.execute(() => {
+          const selected = document.querySelector<HTMLElement>(
+            '[data-slot="logs-level-filter"][data-log-level="all"]',
+          );
+          return (
+            location.pathname === '/main/logs' &&
+            new URLSearchParams(location.search).get('level') === null &&
+            selected?.getAttribute('data-active') === 'true'
+          );
+        }),
+      {
+        timeout: 15_000,
+        timeoutMsg: 'All levels filter was not restored on the logs route.',
+      },
     );
-    const clearedLevel = await browser.execute(
-      () => new URLSearchParams(location.search).get('level'),
-    );
-    assert.equal(clearedLevel, null);
   });
 });
