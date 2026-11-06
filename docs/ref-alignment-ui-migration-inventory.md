@@ -367,3 +367,67 @@ and any accepted Chimera-only compatibility differences separately.
 
 Update these counts on each new `master`/gitlink baseline and replace path
 questions with grounded, per-feature status as code and test evidence arrives.
+
+## 2026-11-06 continuation — current master and next feature slices
+
+This section supersedes **only the old status and candidate priority**, not the
+original file-count snapshot above. Actual base:
+`master@9932f66ab7f2bc28e6bfa553edc0d502544faddb` (#612 is merged).
+Reference UI sources were read from the local **pinned**
+`ref@518bf49843e1f735380e11da1ebe2a85eb8ce8c6`. The reference
+checkout has a pre-existing modified nested `backend/nyanpasu-runtime`;
+no reference content, submodules, or user files were changed.
+
+### Implemented, and explicitly partial
+
+- `ref/frontend/ui/src/search-field.tsx` →
+  `frontend/ui/src/search-field.tsx`: Material Symbols search/close icons
+  with existing input, clear button, disabled, readonly, glass, accessible-name
+  and Escape contracts preserved; new SSR regression coverage.
+- `ref/frontend/ui/src/navigation-sidebar.tsx` →
+  `frontend/ui/src/navigation-sidebar.tsx`: use `./slider-sidebar` as in
+  ref, with `SidebarProvider`, rail-width, label and content SSR assertions.
+- `ref/frontend/nyanpasu/src/pages/(main)/main/logs/_modules/{consts.ts,log-level-badge.tsx}` →
+  corresponding `frontend/chimera` files: seven log levels
+  (`trace/debug/info/warning/error/fatal/unknown`), reference badge palette
+  and warning display. `main/logs/route.tsx` gains Material Symbols icons
+  and fixes level links to absolute `/main/logs`, preventing the known
+  wrong-page navigation when a visible filter is clicked.
+- `tauri-e2e/specs/logs-main-layout.e2e.ts`: verifies seven visible level
+  controls, click-to-select Fatal, click-to-reset All, pathname, URL search,
+  and selected state. Layout assertions intentionally describe the retained
+  Chimera `SliderSidebar` implementation rather than claiming a copied
+  ref sidebar.
+
+**Not yet aligned:** ref's Logs route uses `NavigationSidebar`,
+`ScrollArea`, `source=core|app|service` navigation and additional
+`_modules/file-logs.tsx`, `log-viewer.tsx`, `log-file-menu.tsx`,
+`logs-layout.tsx`. These require actual log-source hooks/typed client
+mapping, not a visual-only copy. Keep Chimera's Main/Legacy log routes
+working while that larger feature is migrated.
+
+**Checks executed on the current source tree:** shared UI unit 16/16, E2E
+harness unit 33/33, Legacy connections 9/9, TypeScript typecheck,
+Prettier, Oxlint, Stylelint, frontend boundary validation and main UI
+production build passed. The new Logs WebDriver spec **has not run as a
+desktop app in this local worktree**; exact-head GitHub CI/E2E, independent
+review and actual visible interaction evidence remain necessary.
+
+### Remaining UI migration order
+
+| Priority | Target and existing proposal | Required dependency and acceptance |
+| --- | --- | --- |
+| P0 | Complete Logs viewer, source chooser and file modules (partial #613) | Map actual app/core/service logs, preserve Legacy logs and state; verify live arrival, changing source/level and restart |
+| P1 | Shared ScrollArea, Tooltip and Modal (#590/#591/#595) | Re-extract only component deltas from pinned ref; verify keyboard/focus, portal, resize, reduced motion and Legacy overlays |
+| P1 | Slider, Sparkline and DnD Grid (#592/#593/#594) | Test pointer commit-on-release, keyboard adjustment, real drag and dashboard data invariants |
+| P2 | Profile Global/Inspect/Create pages and modules | First map typed profile API, edit/undo and persisted data; validate migration/restart and both UIs |
+| P2 | Proxy-group navigation and drag components | Preserve Core snapshots, latency/state updates and Legacy proxy selection; verify real user drag |
+| P3 | Clash Network/Control and System Proxy/Service settings | Explicit host-effect boundaries; mock contracts and approved disposable VM tests for proxy/TUN/Service |
+
+Draft #614 contains redundant content already on master from #612 plus the
+remaining UI candidate and unsigned GitHub API commits. Old #589–#595 PRs are
+also based on a stale mainline with unrelated backend/gitlink edits. **Do not**
+merge any of those full history trees into current master. Extract the exact
+ref-mapped functionality onto new signed commits, review its changed APIs and
+run complete exact-SHA tests before routine merge. Preserve the original dirty
+primary checkout, read-only ref, Legacy UI, Agent and v0.28.0 release tags.
