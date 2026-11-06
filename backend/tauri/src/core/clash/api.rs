@@ -74,7 +74,7 @@ pub(crate) enum ApiStreamKind {
 /// readiness probes and tests that do not have a CoreControl endpoint.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
-    client: chimera_clash_api::Client,
+    client: clash_api::Client,
     binding: Option<chimera_ipc::api::core::v2::CoreApiConnection>,
     endpoint: Option<Arc<dyn ControlEndpoint>>,
     revoked: CancellationToken,
@@ -98,7 +98,7 @@ impl ApiClient {
     }
 
     pub(crate) fn new(info: crate::config::clash::ClashInfo) -> Result<Self> {
-        let host = chimera_clash_api::Host::http(format!("http://{}", info.server))?;
+        let host = clash_api::Host::http(format!("http://{}", info.server))?;
         Self::from_host(host, info.secret, false).context("failed to create Clash API client")
     }
 
@@ -112,9 +112,9 @@ impl ApiClient {
         );
         use chimera_ipc::api::status::CoreControllerInfo;
         let host = match &binding.controller {
-            CoreControllerInfo::Http(url) => chimera_clash_api::Host::url(url)?,
-            CoreControllerInfo::UnixSocket(path) => chimera_clash_api::Host::unix_socket(path),
-            CoreControllerInfo::NamedPipe(path) => chimera_clash_api::Host::named_pipe(path),
+            CoreControllerInfo::Http(url) => clash_api::Host::url(url)?,
+            CoreControllerInfo::UnixSocket(path) => clash_api::Host::unix_socket(path),
+            CoreControllerInfo::NamedPipe(path) => clash_api::Host::named_pipe(path),
         };
         let mut client = Self::from_host(host, binding.secret.clone(), true)?;
         client.binding = Some(binding);
@@ -123,11 +123,11 @@ impl ApiClient {
     }
 
     fn from_host(
-        host: chimera_clash_api::Host,
+        host: clash_api::Host,
         secret: Option<String>,
         websocket_token_query: bool,
     ) -> Result<Self> {
-        let mut builder = chimera_clash_api::Client::builder(host);
+        let mut builder = clash_api::Client::builder(host);
         if let Some(secret) = secret {
             builder = builder.secret(secret);
         }
@@ -294,11 +294,11 @@ impl ApiClient {
     }
 
     pub(crate) async fn update_proxy(&self, group: &str, name: &str) -> Result<()> {
-        let group = chimera_clash_api::ProxyName::new(group);
-        let target = chimera_clash_api::ProxyName::new(name);
+        let group = clash_api::ProxyName::new(group);
+        let target = clash_api::ProxyName::new(name);
         self.execute(
             DEFAULT_API_TIMEOUT,
-            self.client.select_proxy(chimera_clash_api::ProxySelection {
+            self.client.select_proxy(clash_api::ProxySelection {
                 group: &group,
                 target: &target,
             }),
@@ -322,7 +322,7 @@ impl ApiClient {
             .execute(
                 query.timeout + Duration::from_secs(5),
                 self.client
-                    .proxy_delay(&chimera_clash_api::ProxyName::new(name), &query),
+                    .proxy_delay(&clash_api::ProxyName::new(name), &query),
             )
             .await?;
         Ok(DelayRes {
@@ -340,7 +340,7 @@ impl ApiClient {
             .execute(
                 query.timeout + Duration::from_secs(5),
                 self.client
-                    .group_delay(&chimera_clash_api::ProxyName::new(group), &query),
+                    .group_delay(&clash_api::ProxyName::new(group), &query),
             )
             .await?;
         Ok(delays
@@ -359,7 +359,7 @@ impl ApiClient {
                     .execute(
                         DEFAULT_API_TIMEOUT,
                         self.client
-                            .connections_ws(chimera_clash_api::ConnectionStreamQuery::default()),
+                            .connections_ws(clash_api::ConnectionStreamQuery::default()),
                     )
                     .await?;
                 Ok(forward_api_stream(
@@ -372,7 +372,7 @@ impl ApiClient {
                 let stream = self
                     .execute(
                         DEFAULT_API_TIMEOUT,
-                        self.client.logs_ws(chimera_clash_api::LogQuery::default()),
+                        self.client.logs_ws(clash_api::LogQuery::default()),
                     )
                     .await?;
                 Ok(forward_api_stream(
@@ -412,7 +412,7 @@ fn forward_api_stream<T, S, F>(
 ) -> tokio::sync::mpsc::Receiver<serde_json::Value>
 where
     T: Send + 'static,
-    S: Stream<Item = chimera_clash_api::Result<T>> + Unpin + Send + 'static,
+    S: Stream<Item = clash_api::Result<T>> + Unpin + Send + 'static,
     F: Fn(T) -> Result<serde_json::Value> + Send + 'static,
 {
     let (sender, receiver) = tokio::sync::mpsc::channel(32);
@@ -459,7 +459,7 @@ fn serialize_api_sample<T: Serialize>(sample: T) -> Result<serde_json::Value> {
 }
 
 fn connection_snapshot_value(
-    snapshot: chimera_clash_api::ConnectionsSnapshot,
+    snapshot: clash_api::ConnectionsSnapshot,
 ) -> Result<serde_json::Value> {
     let mut value =
         serde_json::to_value(snapshot).context("failed to serialize connection sample")?;
@@ -483,11 +483,11 @@ fn connection_snapshot_value(
     Ok(value)
 }
 
-fn delay_query(url: Option<String>) -> Result<chimera_clash_api::DelayQuery> {
+fn delay_query(url: Option<String>) -> Result<clash_api::DelayQuery> {
     let url = url
         .filter(|url| !url.is_empty())
         .unwrap_or_else(|| DEFAULT_DELAY_URL.to_owned());
-    chimera_clash_api::DelayQuery::new(
+    clash_api::DelayQuery::new(
         url::Url::parse(&url).context("invalid delay test URL")?,
         Duration::from_secs(10),
     )
@@ -831,7 +831,7 @@ mod tests {
         let probe = DropProbe(Some(dropped));
         let stream = futures_util::stream::poll_fn(move |_| {
             let _ = &probe;
-            std::task::Poll::<Option<chimera_clash_api::Result<serde_json::Value>>>::Pending
+            std::task::Poll::<Option<clash_api::Result<serde_json::Value>>>::Pending
         });
         let api = ApiClient::new(crate::config::clash::ClashInfo {
             port: 1,
@@ -875,9 +875,9 @@ mod tests {
                     let _ = blocked.send(());
                 }
             }
-            std::task::Poll::<Option<chimera_clash_api::Result<serde_json::Value>>>::Ready(Some(
-                Ok(serde_json::json!({ "index": index })),
-            ))
+            std::task::Poll::<Option<clash_api::Result<serde_json::Value>>>::Ready(Some(Ok(
+                serde_json::json!({ "index": index }),
+            )))
         });
         let api = ApiClient::new(crate::config::clash::ClashInfo {
             port: 1,
