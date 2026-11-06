@@ -2,8 +2,8 @@
 use std::time::Duration;
 
 use super::{LocalSourceIps, geo::CountryLookup};
-use chimera_clash_api::{ConfigEnum, Connection, ConnectionNetwork};
 use chimera_traffic::{Bytes, Dimensions, Frame, RuleKey, Sample};
+use clash_api::{ConfigEnum, Connection, ConnectionNetwork};
 
 use super::geo;
 use crate::core::clash::ws::ClashConnectionsFrame;

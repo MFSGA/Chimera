@@ -1,9 +1,9 @@
 //! Resolves connection regions from the core's local country index.
 use std::net::IpAddr;
 
-use chimera_clash_api::{ConfigEnum, ConnectionMetadata, ConnectionNetwork, DnsMode};
 use chimera_geodata::IpIndex;
 use chimera_traffic::{GeoBasis, normalize_region};
+use clash_api::{ConfigEnum, ConnectionMetadata, ConnectionNetwork, DnsMode};
 
 use super::LocalSourceIps;
 

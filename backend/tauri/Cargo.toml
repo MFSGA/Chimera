@@ -60,7 +60,9 @@ chimera-config = { path = "../chimera-config" }
 chimera-geodata = { path = "../chimera-geodata" }
 chimera-traffic = { path = "../chimera-traffic", features = ["specta"] }
 chimera-jobs = { path = "../chimera-jobs", features = ["specta"] }
-chimera-clash-api = { path = "../chimera-clash-api" }
+
+clash-api = { workspace = true }
+
 struct-patch = "0.14"
 
 nanoid = "0.5.0"
