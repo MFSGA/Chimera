@@ -56,7 +56,7 @@ async function runTask(
         note: `${attempt + 1}/${task.retry}`,
         version: task.version,
       });
-      const delayMs = prepareRetryDelayMs(err, attempt);
+      const delayMs = prepareRetryDelayMs(err, attempt, task.name);
       if (delayMs) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
