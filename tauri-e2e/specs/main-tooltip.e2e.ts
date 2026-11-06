@@ -18,22 +18,67 @@ describe('main tooltip reference surface', () => {
   it('keeps ref padding on the animated inner surface', async () => {
     const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
-    await browser.execute((element) => {
-      element.dispatchEvent(
-        new PointerEvent('pointermove', {
-          bubbles: true,
-          pointerType: 'mouse',
-        }),
-      );
+    // A WebDriver .moveTo() from the previous pointer position can sweep
+    // through the native Windows Settings menu. The failed desktop screenshot
+    // showed that menu open, occluding subsequent hover. Dismiss it via a real
+    // keyboard action and move the pointer to a safe content point first.
+    await browser.keys('Escape');
+    // Observe the delivered event kind; Radix opens hover tooltips only for
+    // mouse pointer events, not generic/pen/touch pointer motion.
+    await browser.execute((link) => {
+      link.dataset.e2ePointerType = 'none';
+      link.dataset.e2ePointerTrusted = 'none';
+      link.dataset.e2ePointerMoves = '0';
+      link.addEventListener('pointermove', (event) => {
+        link.dataset.e2ePointerType = event.pointerType;
+        link.dataset.e2ePointerTrusted = String(event.isTrusted);
+        link.dataset.e2ePointerMoves = String(
+          Number(link.dataset.e2ePointerMoves ?? 0) + 1,
+        );
+      });
     }, firstSidebarLink);
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .move({ x: 1100, y: 420, duration: 0 })
+      .perform();
+    await browser
+      .action('pointer', { parameters: { pointerType: 'mouse' } })
+      .move({ origin: firstSidebarLink, duration: 0 })
+      .perform();
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() =>
-          Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
-        ),
-      { timeout: 15_000, timeoutMsg: 'Tooltip did not open.' },
-    );
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() =>
+            Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
+          ),
+        { timeout: 15_000, timeoutMsg: 'Tooltip did not open.' },
+      );
+    } catch (cause) {
+      const observed = await browser.execute((link) => {
+        const rect = link.getBoundingClientRect();
+        const x = Math.round(rect.left + rect.width / 2);
+        const y = Math.round(rect.top + rect.height / 2);
+        const top = document.elementFromPoint(x, y);
+        return {
+          center: { x, y },
+          topTag: top?.tagName ?? null,
+          centerHitsTrigger: top === link || link.contains(top),
+          triggerState: link.getAttribute('data-state'),
+          pointerType: link.dataset.e2ePointerType ?? null,
+          pointerTrusted: link.dataset.e2ePointerTrusted ?? null,
+          pointerMoves: link.dataset.e2ePointerMoves ?? null,
+          tooltipCount: document.querySelectorAll('[role="tooltip"]').length,
+          viewport: { width: innerWidth, height: innerHeight },
+        };
+      }, firstSidebarLink);
+      throw new Error(
+        'Real WebDriver tooltip hover failed: ' + JSON.stringify(observed),
+        {
+          cause,
+        },
+      );
+    }
 
     const state = await browser.execute(() => {
       const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
