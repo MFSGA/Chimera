@@ -1,6 +1,6 @@
 import { cn } from '@chimera/utils';
-import CloseRounded from '@mui/icons-material/CloseRounded';
-import SearchRounded from '@mui/icons-material/SearchRounded';
+import CloseRounded from '~icons/material-symbols/close-rounded';
+import SearchRounded from '~icons/material-symbols/search-rounded';
 import { cva, type VariantProps } from 'class-variance-authority';
 import {
   ComponentProps,
