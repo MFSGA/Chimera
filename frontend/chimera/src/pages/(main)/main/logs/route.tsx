@@ -9,6 +9,14 @@ import {
 } from '@chimera/ui/slider-sidebar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
 import { createFileRoute, Link, Outlet } from '@tanstack/react-router';
+import ArticleRounded from '~icons/material-symbols/article-rounded';
+import BugReportRounded from '~icons/material-symbols/bug-report-rounded';
+import ErrorRounded from '~icons/material-symbols/error-rounded';
+import HelpRounded from '~icons/material-symbols/help-rounded';
+import InfoRounded from '~icons/material-symbols/info-rounded';
+import SearchRounded from '~icons/material-symbols/search-rounded';
+import StopCircleRounded from '~icons/material-symbols/stop-circle-rounded';
+import WarningRounded from '~icons/material-symbols/warning-rounded';
 import { type ComponentProps, type PropsWithChildren } from 'react';
 import { z } from 'zod';
 import { useIsMobileOrTablet } from '@/hooks/use-is-moblie';
@@ -22,10 +30,13 @@ export const Route = createFileRoute('/(main)/main/logs')({
 });
 
 const LogLevelIcon = {
-  [LogLevel.Debug]: () => '🐛',
-  [LogLevel.Info]: () => 'ℹ️',
-  [LogLevel.Warning]: () => '⚠️',
-  [LogLevel.Error]: () => '❌',
+  [LogLevel.Trace]: SearchRounded,
+  [LogLevel.Debug]: BugReportRounded,
+  [LogLevel.Info]: InfoRounded,
+  [LogLevel.Warning]: WarningRounded,
+  [LogLevel.Error]: ErrorRounded,
+  [LogLevel.Fatal]: StopCircleRounded,
+  [LogLevel.Unknown]: HelpRounded,
 } satisfies Record<LogLevel, React.FC>;
 
 const SidebarContent = ({ className, ...props }: ComponentProps<'div'>) => {
@@ -37,7 +48,7 @@ const LogLevelButton = ({
   children,
 }: PropsWithChildren<{ level?: LogLevel }>) => {
   const { level } = Route.useSearch();
-  const Icon = inputLevel ? LogLevelIcon[inputLevel] : () => '📋';
+  const Icon = inputLevel ? LogLevelIcon[inputLevel] : ArticleRounded;
   const { open, setOpen } = useSidebar();
   const isMobileOrTablet = useIsMobileOrTablet();
 
@@ -53,6 +64,8 @@ const LogLevelButton = ({
         <Button
           variant="fab"
           data-active={String(inputLevel === level)}
+          data-slot="logs-level-filter"
+          data-log-level={inputLevel ?? 'all'}
           className={cn(
             'h-12 min-w-0 px-3',
             'flex items-center gap-2',
@@ -67,7 +80,7 @@ const LogLevelButton = ({
         >
           <Link to="." search={{ level: inputLevel }}>
             <div className="text-md grid size-6 shrink-0 place-content-center">
-              <Icon />
+              <Icon className="size-6" />
             </div>
 
             <SidebarLabelItem className="capitalize">
