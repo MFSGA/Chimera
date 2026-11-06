@@ -73,7 +73,7 @@ pub struct ClashWsConnectionSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct ClashConnection {
     #[serde(flatten)]
-    pub connection: chimera_clash_api::Connection,
+    pub connection: clash_api::Connection,
     pub download_speed: u64,
     pub upload_speed: u64,
 }
@@ -109,14 +109,13 @@ fn derive_connection_details(
     let details = rows
         .iter()
         .filter_map(|raw| {
-            let connection: chimera_clash_api::Connection =
-                match serde_json::from_value(raw.clone()) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        tracing::debug!(%error, "skipping malformed connection detail");
-                        return None;
-                    }
-                };
+            let connection: clash_api::Connection = match serde_json::from_value(raw.clone()) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::debug!(%error, "skipping malformed connection detail");
+                    return None;
+                }
+            };
             let rate = |previous: i64, current: i64| -> u64 {
                 if elapsed <= 0.0 || current <= previous {
                     return 0;
