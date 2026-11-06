@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test:unit": "tsx --test tests/progress-switch.test.ts tests/ref-primitives.test.ts tests/ref-menu-primitives.test.ts tests/ref-remaining-primitives.test.ts tests/ref-highlight-text.test.ts"
+    "test:unit": "tsx --test tests/progress-switch.test.ts tests/ref-primitives.test.ts tests/ref-menu-primitives.test.ts tests/ref-remaining-primitives.test.ts tests/ref-highlight-text.test.ts tests/ref-modal-layout.test.cjs"
   },
   "dependencies": {
     "@chimera/utils": "workspace:^",
