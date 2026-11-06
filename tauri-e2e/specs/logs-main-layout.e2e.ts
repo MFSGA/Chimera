@@ -82,7 +82,7 @@ describe('main logs reference layout', () => {
     }
   });
 
-  it('exposes all seven reference log levels and filters through visible links', async () => {
+  it('filters seven log levels via visible sidebar links', async () => {
     const levels = [
       'trace',
       'debug',
