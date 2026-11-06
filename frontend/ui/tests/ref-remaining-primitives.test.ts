@@ -118,7 +118,7 @@ test(
           ),
         ),
       );
-      assert.match(navigation, /data-slot="slider-sidebar"/);
+      assert.match(navigation, /data-slot="slider-sidebar-placeholder"/);
       assert.match(navigation, /data-slot="navigation-sidebar"/);
       assert.match(navigation, /aria-label="Sections"/);
       assert.match(navigation, /Workspace/);
