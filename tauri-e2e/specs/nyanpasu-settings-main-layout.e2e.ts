@@ -177,42 +177,139 @@ describe('main Chimera settings reference layout', () => {
     assert.equal(initial.scrollTop, 0, JSON.stringify(initial));
     assert.equal(initial.top, 'true');
 
-    // Real W3C WebDriver wheel actions, not direct DOM scrollTop assignment.
-    await browser
-      .action('wheel')
-      .scroll({ origin: viewport, deltaX: 0, deltaY: 220, duration: 250 })
-      .perform();
-
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() => {
-          const root = document.querySelector<HTMLElement>(
-            '[data-slot="settings-content-scroll-area"]',
-          );
-          const element = root?.querySelector<HTMLElement>(
-            '[data-slot="scroll-area-viewport"]',
-          );
-          const titles = document.querySelectorAll<HTMLElement>(
-            '[data-slot="settings-title"]',
-          );
-          return (
-            (element?.scrollTop ?? 0) > 40 &&
-            root?.dataset.top === 'false' &&
-            root?.dataset.scrollDirection === 'down' &&
-            titles[0]?.dataset.showTitle === 'true' &&
-            titles[1]?.dataset.showTitle === 'false'
-          );
-        }),
-      {
-        timeout: 15_000,
-        timeoutMsg:
-          'A real wheel-down action did not reveal the compact sticky Settings title.',
+    // Use a visible point inside the right-hand viewport instead of relying
+    // on WebView2's element-origin wheel conversion. Keep the wheel action
+    // physical; the DOM is only used to verify target geometry and outcomes.
+    const bounds = await browser.execute(() => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"] [data-slot="scroll-area-viewport"]',
+      );
+      if (!element) throw new Error('Settings viewport disappeared.');
+      const rect = element.getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    });
+    const wheelPoint = {
+      x: Math.round(bounds.x + bounds.width * 0.65),
+      y: Math.round(bounds.y + bounds.height * 0.6),
+    };
+    const wheelTarget = await browser.execute(
+      (x, y) => {
+        const element = document.elementFromPoint(x, y);
+        const scrollArea = document.querySelector<HTMLElement>(
+          '[data-slot="settings-content-scroll-area"]',
+        );
+        return {
+          insideViewport:
+            element?.closest('[data-slot="scroll-area-viewport"]') ===
+            scrollArea?.querySelector('[data-slot="scroll-area-viewport"]'),
+          tagName: element?.tagName ?? null,
+        };
       },
+      wheelPoint.x,
+      wheelPoint.y,
+    );
+    assert.equal(
+      wheelTarget.insideViewport,
+      true,
+      'Wheel origin is not inside the Settings scroll viewport: ' +
+        JSON.stringify({ bounds, wheelPoint, wheelTarget }),
     );
 
+    // Diagnostic listener records whether the driver delivers an actual wheel
+    // event; it does not synthesize scrolling or count as acceptance evidence.
+    await browser.execute(() => {
+      const root = document.querySelector<HTMLElement>(
+        '[data-slot="settings-content-scroll-area"]',
+      );
+      root?.setAttribute('data-e2e-wheel-received', 'false');
+      document.addEventListener(
+        'wheel',
+        () => root?.setAttribute('data-e2e-wheel-received', 'true'),
+        { once: true, capture: true },
+      );
+    });
+
+    await browser
+      .action('pointer')
+      .move({ x: wheelPoint.x, y: wheelPoint.y, duration: 0 })
+      .perform();
     await browser
       .action('wheel')
-      .scroll({ origin: viewport, deltaX: 0, deltaY: -1400, duration: 250 })
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: 360,
+        duration: 0,
+      })
+      .perform();
+
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() => {
+            const root = document.querySelector<HTMLElement>(
+              '[data-slot="settings-content-scroll-area"]',
+            );
+            const element = root?.querySelector<HTMLElement>(
+              '[data-slot="scroll-area-viewport"]',
+            );
+            const titles = document.querySelectorAll<HTMLElement>(
+              '[data-slot="settings-title"]',
+            );
+            return (
+              (element?.scrollTop ?? 0) > 40 &&
+              root?.dataset.top === 'false' &&
+              root?.dataset.scrollDirection === 'down' &&
+              titles[0]?.dataset.showTitle === 'true' &&
+              titles[1]?.dataset.showTitle === 'false'
+            );
+          }),
+        {
+          timeout: 15_000,
+          timeoutMsg:
+            'A real wheel-down action did not reveal the compact sticky Settings title.',
+        },
+      );
+    } catch (cause) {
+      const observed = await browser.execute(() => {
+        const root = document.querySelector<HTMLElement>(
+          '[data-slot="settings-content-scroll-area"]',
+        );
+        const viewport = root?.querySelector<HTMLElement>(
+          '[data-slot="scroll-area-viewport"]',
+        );
+        const titles = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            '[data-slot="settings-title"]',
+          ),
+        );
+        return {
+          scrollTop: viewport?.scrollTop ?? null,
+          scrollHeight: viewport?.scrollHeight ?? null,
+          clientHeight: viewport?.clientHeight ?? null,
+          top: root?.dataset.top ?? null,
+          direction: root?.dataset.scrollDirection ?? null,
+          wheelReceived: root?.dataset.e2eWheelReceived ?? null,
+          titles: titles.map((element) => element.dataset.showTitle),
+        };
+      });
+      throw new Error(
+        'Physical wheel-down failed: ' +
+          JSON.stringify({ wheelPoint, wheelTarget, observed }),
+        { cause },
+      );
+    }
+
+    await browser
+      .action('wheel')
+      .scroll({
+        x: wheelPoint.x,
+        y: wheelPoint.y,
+        deltaX: 0,
+        deltaY: -1400,
+        duration: 0,
+      })
       .perform();
 
     await browser.waitUntil(
