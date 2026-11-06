@@ -18,17 +18,50 @@ describe('main tooltip reference surface', () => {
   it('keeps ref padding on the animated inner surface', async () => {
     const firstSidebarLink = await $('[data-slot="slider-sidebar"] a');
     await firstSidebarLink.waitForDisplayed({ timeout: 15_000 });
-    // Exercise the user's actual pointer hover, not a synthetic DOM event.
-    // Radix Tooltip must open through WebDriver's mouse action.
-    await firstSidebarLink.moveTo();
+    // A WebDriver .moveTo() from the previous pointer position can sweep
+    // through the native Windows Settings menu. The failed desktop screenshot
+    // showed that menu open, occluding subsequent hover. Dismiss it via a real
+    // keyboard action and move the pointer to a safe content point first.
+    await browser.keys('Escape');
+    await browser
+      .action('pointer')
+      .move({ x: 1100, y: 420, duration: 0 })
+      .perform();
+    await browser
+      .action('pointer')
+      .move({ origin: firstSidebarLink, duration: 0 })
+      .perform();
 
-    await browser.waitUntil(
-      async () =>
-        browser.execute(() =>
-          Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
-        ),
-      { timeout: 15_000, timeoutMsg: 'Tooltip did not open.' },
-    );
+    try {
+      await browser.waitUntil(
+        async () =>
+          browser.execute(() =>
+            Boolean(document.querySelector<HTMLElement>('[role="tooltip"]')),
+          ),
+        { timeout: 15_000, timeoutMsg: 'Tooltip did not open.' },
+      );
+    } catch (cause) {
+      const observed = await browser.execute((link) => {
+        const rect = link.getBoundingClientRect();
+        const x = Math.round(rect.left + rect.width / 2);
+        const y = Math.round(rect.top + rect.height / 2);
+        const top = document.elementFromPoint(x, y);
+        return {
+          center: { x, y },
+          topTag: top?.tagName ?? null,
+          centerHitsTrigger: top === link || link.contains(top),
+          triggerState: link.getAttribute('data-state'),
+          tooltipCount: document.querySelectorAll('[role="tooltip"]').length,
+          viewport: { width: innerWidth, height: innerHeight },
+        };
+      }, firstSidebarLink);
+      throw new Error(
+        'Real WebDriver tooltip hover failed: ' + JSON.stringify(observed),
+        {
+          cause,
+        },
+      );
+    }
 
     const state = await browser.execute(() => {
       const tooltip = document.querySelector<HTMLElement>('[role="tooltip"]');
