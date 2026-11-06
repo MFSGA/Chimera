@@ -81,4 +81,51 @@ describe('main logs reference layout', () => {
       await browser.saveScreenshot(evidencePath);
     }
   });
+
+
+  it('exposes all seven reference log levels and filters through visible links', async () => {
+    const levels = [
+      'trace',
+      'debug',
+      'info',
+      'warning',
+      'error',
+      'fatal',
+      'unknown',
+    ] as const;
+
+    for (const level of levels) {
+      const entry = await $(
+        `[data-slot="logs-level-filter"][data-log-level="${level}"]`,
+      );
+      assert.equal(await entry.isExisting(), true, `Missing ${level} filter`);
+    }
+
+    const fatalFilter = await $(
+      '[data-slot="logs-level-filter"][data-log-level="fatal"]',
+    );
+    await fatalFilter.waitForClickable({ timeout: 15_000 });
+    await fatalFilter.click();
+    await browser.waitUntil(
+      async () => (await fatalFilter.getAttribute('data-active')) === 'true',
+      { timeout: 15_000, timeoutMsg: 'Fatal filter was not selected.' },
+    );
+
+    const selected = await browser.execute(() => ({
+      pathname: location.pathname,
+      level: new URLSearchParams(location.search).get('level'),
+    }));
+    assert.equal(selected.pathname, targetPath);
+    assert.equal(selected.level, 'fatal');
+
+    const allFilter = await $(
+      '[data-slot="logs-level-filter"][data-log-level="all"]',
+    );
+    await allFilter.waitForClickable({ timeout: 15_000 });
+    await allFilter.click();
+    await browser.waitUntil(
+      async () => (await allFilter.getAttribute('data-active')) === 'true',
+      { timeout: 15_000, timeoutMsg: 'All levels filter was not restored.' },
+    );
+  });
 });
