@@ -42,6 +42,9 @@ test(
 
     try {
       const { MenuSurface } = await vite.ssrLoadModule('/src/menu-surface.tsx');
+      const { SearchField } = await vite.ssrLoadModule(
+        '/src/search-field.tsx',
+      );
       const { Menubar, MenubarMenu, MenubarTrigger } =
         await vite.ssrLoadModule('/src/menubar.tsx');
       const {
@@ -61,6 +64,59 @@ test(
       const surface = renderToStaticMarkup(h(MenuSurface, null, 'Options'));
       assert.match(surface, /Options/);
       assert.match(surface, /rounded/);
+
+      // SSR exercises the production SearchField structure, not keyboard focus.
+      // Without a matching search term, the clear action must not appear.
+      const basicSearch = renderToStaticMarkup(
+        h(SearchField, {
+          value: 'widgets',
+          onValueChange: () => {},
+          clearLabel: 'Clear search',
+          placeholder: 'Search widgets',
+        }),
+      );
+      assert.match(basicSearch, /data-slot="search-field"/);
+      assert.match(basicSearch, /type="search"/);
+      assert.match(basicSearch, /value="widgets"/);
+      assert.match(basicSearch, /aria-label="Search widgets"/);
+      assert.match(basicSearch, /data-slot="search-field-clear"/);
+      assert.match(basicSearch, /aria-label="Clear search"/);
+      assert.doesNotMatch(basicSearch, /shadow-lg/);
+
+      const glassSearch = renderToStaticMarkup(
+        h(SearchField, {
+          value: 'view',
+          onValueChange: () => {},
+          clearLabel: 'Clear',
+          variant: 'glass',
+        }),
+      );
+      assert.match(glassSearch, /shadow-lg/);
+      assert.match(glassSearch, /h-11/);
+
+      for (const inputProp of ['disabled', 'readOnly'] as const) {
+        const lockedSearch = renderToStaticMarkup(
+          h(SearchField, {
+            value: 'important',
+            onValueChange: () => {},
+            clearLabel: 'Clear',
+            [inputProp]: true,
+          }),
+        );
+        assert.doesNotMatch(lockedSearch, /data-slot="search-field-clear"/);
+      }
+
+      const labelledSearch = renderToStaticMarkup(
+        h(SearchField, {
+          value: '',
+          onValueChange: () => {},
+          clearLabel: 'Clear',
+          placeholder: 'Search widgets',
+          'aria-labelledby': 'search-caption',
+        }),
+      );
+      assert.match(labelledSearch, /aria-labelledby="search-caption"/);
+      assert.doesNotMatch(labelledSearch, /aria-label="Search widgets"/);
 
       const menubar = renderToStaticMarkup(
         h(Menubar, null, h(MenubarMenu, null, h(MenubarTrigger, null, 'File'))),
