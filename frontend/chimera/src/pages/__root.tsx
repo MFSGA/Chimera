@@ -5,6 +5,7 @@ import {
   type DegradationPhase,
 } from '@chimera/interface';
 import { cn } from '@chimera/ui';
+import { TooltipProvider } from '@chimera/ui/tooltip';
 import {
   createRootRoute,
   ErrorComponentProps,
@@ -196,7 +197,9 @@ export default function App() {
         <LanguageProvider>
           <ExperimentalThemeProvider>
             <CustomCssProvider>
-              <Outlet />
+              <TooltipProvider>
+                <Outlet />
+              </TooltipProvider>
             </CustomCssProvider>
           </ExperimentalThemeProvider>
           <TanStackRouterDevtools />
