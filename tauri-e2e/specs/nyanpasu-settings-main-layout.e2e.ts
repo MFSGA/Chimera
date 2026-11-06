@@ -224,8 +224,9 @@ describe('main Chimera settings reference layout', () => {
       const viewport = root?.querySelector<HTMLElement>(
         '[data-slot="scroll-area-viewport"]',
       );
-      if (!root || !viewport)
+      if (!root || !viewport) {
         throw new Error('Missing scroll diagnostics target');
+      }
       root.dataset.e2eWheelReceived = 'false';
       root.dataset.e2eScrollCount = '0';
       root.dataset.e2eMaxScrollTop = '0';
