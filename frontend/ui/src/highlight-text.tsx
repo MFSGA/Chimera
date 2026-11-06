@@ -1,3 +1,6 @@
+// The Node SSR unit runner uses the classic JSX transform for this package.
+import * as React from 'react';
+
 export default function HighlightText({
   searchText,
   className,
