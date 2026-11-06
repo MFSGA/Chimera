@@ -215,16 +215,45 @@ describe('main Chimera settings reference layout', () => {
         JSON.stringify({ bounds, wheelPoint, wheelTarget }),
     );
 
-    // Diagnostic listener records whether the driver delivers an actual wheel
-    // event; it does not synthesize scrolling or count as acceptance evidence.
+    // Diagnostic-only listeners: record the real wheel event, cancellation,
+    // and transient scrolls. They never synthesize scrolling or write scrollTop.
     await browser.execute(() => {
       const root = document.querySelector<HTMLElement>(
         '[data-slot="settings-content-scroll-area"]',
       );
-      root?.setAttribute('data-e2e-wheel-received', 'false');
+      const viewport = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-viewport"]',
+      );
+      if (!root || !viewport)
+        throw new Error('Missing scroll diagnostics target');
+      root.dataset.e2eWheelReceived = 'false';
+      root.dataset.e2eScrollCount = '0';
+      root.dataset.e2eMaxScrollTop = '0';
+      viewport.addEventListener('scroll', () => {
+        root.dataset.e2eScrollCount = String(
+          Number(root.dataset.e2eScrollCount ?? 0) + 1,
+        );
+        root.dataset.e2eMaxScrollTop = String(
+          Math.max(
+            Number(root.dataset.e2eMaxScrollTop ?? 0),
+            viewport.scrollTop,
+          ),
+        );
+      });
       document.addEventListener(
         'wheel',
-        () => root?.setAttribute('data-e2e-wheel-received', 'true'),
+        (event) => {
+          root.dataset.e2eWheelReceived = 'true';
+          root.dataset.e2eWheelDelta = String(event.deltaY);
+          root.dataset.e2eWheelTrusted = String(event.isTrusted);
+          root.dataset.e2eWheelCancelable = String(event.cancelable);
+          root.dataset.e2eWheelTarget =
+            (event.target as HTMLElement | null)?.tagName ?? 'unknown';
+          // Read the final defaultPrevented state after bubbling has finished.
+          queueMicrotask(() => {
+            root.dataset.e2eWheelCanceled = String(event.defaultPrevented);
+          });
+        },
         { once: true, capture: true },
       );
     });
@@ -291,6 +320,16 @@ describe('main Chimera settings reference layout', () => {
           top: root?.dataset.top ?? null,
           direction: root?.dataset.scrollDirection ?? null,
           wheelReceived: root?.dataset.e2eWheelReceived ?? null,
+          wheelDelta: root?.dataset.e2eWheelDelta ?? null,
+          wheelTrusted: root?.dataset.e2eWheelTrusted ?? null,
+          wheelCancelable: root?.dataset.e2eWheelCancelable ?? null,
+          wheelCanceled: root?.dataset.e2eWheelCanceled ?? null,
+          wheelTarget: root?.dataset.e2eWheelTarget ?? null,
+          scrollEventCount: root?.dataset.e2eScrollCount ?? null,
+          maxScrollTop: root?.dataset.e2eMaxScrollTop ?? null,
+          viewportOverflowY: viewport
+            ? getComputedStyle(viewport).overflowY
+            : null,
           titles: titles.map((element) => element.dataset.showTitle),
         };
       });
