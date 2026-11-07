@@ -1220,3 +1220,65 @@ the Clash StreamsActor, application/profile/effects state ownership,
 Unified RPC, and independent query/rpc/platform frontend layers.
 None is described as fully aligned until production implementation,
 compatibility and integration checks are complete.
+
+### 2026-11-07 direct upstream source import: runtime intent and controller-info DTO
+
+The user authorized **directly copying reference module contents, fixing
+Chimera-specific imports/dependencies, and compiling** rather than
+hand-reimplementing every algorithm. The first scoped batch was copied
+from the pinned clean `ref@8cf63276e387afc621d46b950ab72f9268f915e7`
+into the existing Windows worktree, and committed locally as
+`578b0357` (`refactor(core): import upstream runtime intent and
+controller info`).
+
+- Copied `ref/backend/nyanpasu-core/src/actor_v2/intent.rs` to
+  `backend/chimera-core/src/actor_v2/intent.rs`, changing only the
+  shared crate namespaces (`nyanpasu_core_manager` →
+  `chimera_core_manager`; `nyanpasu_utils` →
+  `chimera_utils`) and adding one **byte-preservation** unit test.
+  It retains the upstream `Arc<str>` to-be-committed document,
+  digest and pure builder. The former Tauri copy is a compatibility
+  re-export. **Production** `backend/tauri/src/core/actor_v2/local_runtime.rs`
+  now invokes the core builder for its actual reconcile candidate,
+  preserving the same serialized bytes and digest for submission.
+- Copied `ref/backend/nyanpasu-core/src/client/clash_info.rs` to
+  `backend/chimera-core/src/client/clash_info.rs`, adapting only
+  `nyanpasu_config` → `chimera_config`. Its five original tests
+  cover confirmed ports, configured fallback, unspecified-host
+  loopback and IPv6 formatting. The original
+  `backend/tauri/src/config/clash/mod.rs::ClashInfo` is now a
+  **production re-export of the core DTO**. Existing Chimera legacy
+  YAML projection, Agent, Service endpoints and IPC command still use
+  that same type without replacing their configuration policies.
+  An adapter test checks the previous three-field serialized wire
+  contract (`port`, `server`, `secret`).
+- Added only the required `chimera-core-manager`, `chimera-utils`
+  and `chimera-config` direct dependencies and their corresponding
+  entries in `backend/Cargo.lock`; no additional crate revision
+  or submodule was changed.
+
+**Verification:** independent `chimera-core --lib` **140/140
+passed**; Tauri runtime host **6/6**, API actor **9/9**,
+proxy module **14/14**, Agent core probe **3/3**,
+ClashInfo legacy-wire compatibility **1/1**, and Specta-generated
+TypeScript bindings freshness **1/1**. Interface and main/legacy
+TypeScript checks, frontend boundaries, query/profile/native
+tests **28/28**, E2E harness-only unit tests **33/33**,
+Rustfmt and `git diff --check` passed. The first Tauri build
+exceeded a command time window, while the incremental rerun
+completed successfully; no source compile failure remained.
+
+The code commit used the same **one-command `HUSKY=0`**
+workaround for the repo's uninstalled dated nightly and unavailable
+full Clippy dependency index, after running the listed independent
+checks. Do not claim Clippy or desktop/real-controller E2E passed.
+The pre-existing unrelated `pnpm-lock.yaml` deletion hunk remains
+unstaged and untouched; nothing was pushed or launched.
+
+**Still not fully copied:** ref's full `actor_v2` endpoint/actor
+hierarchy, `client` application lifecycle, state workflows,
+ProxiesActor, StreamsActor, Unified RPC and frontend package
+separation remain extensive dependency-coupled migrations. Continue
+by copying coherent upstream groups, adapting Chimera's runtime
+protocol and verifying their actual production ownership—not by
+blindly overwriting existing Chimera files.

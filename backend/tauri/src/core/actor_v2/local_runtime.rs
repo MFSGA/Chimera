@@ -460,12 +460,20 @@ impl LocalRuntimeHost {
 
         let config_bytes = Config::render_runtime_bytes(&config)?;
         let core_spec = local_host::core_spec(&target_core)?;
-        let digest = chimera_core_manager::payload_digest(&config_bytes);
         let local_ipc = LocalIpcSettings {
             policy: chimera_core_manager::LocalIpcPolicy::Disable,
             keep_http_controller: true,
         };
         let config_text: Arc<str> = String::from_utf8(config_bytes.clone())?.into();
+        // Use the ref's pure core-owned intent builder for the actual
+        // reconcile. Its digest and bytes are one immutable candidate.
+        let intent = chimera_core::actor_v2::intent::RuntimeIntentBuilder::build(
+            (&target_core).into(),
+            config_text,
+            local_ipc,
+        );
+        let digest = intent.digest.clone();
+        let config_text = intent.config_text.clone();
         let snapshot = Arc::new(RuntimeSnapshot::from_data(
             revision,
             target_core,
