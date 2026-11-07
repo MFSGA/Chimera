@@ -12,7 +12,7 @@ use chimera_core_manager::{
 use chimera_ipc::{
     api::{
         core::v2::{CoreCommandInfo, CoreOperationReq, CoreSubmitReq, OperationInfo},
-        status::{CoreInfos, RevisionIdInfo},
+        status::RevisionIdInfo,
     },
     client::{ClientError, shortcuts::Client},
 };
@@ -21,6 +21,7 @@ use super::control_endpoint::{
     CheckSubmission, CheckSupport, ControlEndpoint, CoreStatusSnapshot, CoreSubmission,
     ExecutionHost,
 };
+use chimera_core::actor_v2::endpoint::map_service_status;
 
 /// Service adapter using the app's shared IPC client.
 #[derive(Clone)]
@@ -244,31 +245,6 @@ fn app_core_kind_to_type(kind: CoreKind) -> Result<chimera_utils::core::CoreType
         }
     };
     Ok(CoreType::Clash(core_type))
-}
-
-fn map_service_status(infos: &CoreInfos) -> CoreStatusSnapshot {
-    CoreStatusSnapshot {
-        instance_id: infos.instance_id.clone(),
-        controller: infos.controller.clone(),
-        // A service without v2 detail cannot prove it is stopped. Never infer
-        // a stop proof from the coarser v1 state field.
-        state: infos.detail.clone(),
-        state_changed_at: infos.state_changed_at,
-        revision: infos.revision.as_ref().map(|revision| revision.id()),
-        source_hash: infos
-            .revision
-            .as_ref()
-            .map(|revision| revision.source_hash.clone()),
-        healthy: infos.health.as_ref().map(|health| {
-            matches!(
-                health.state,
-                chimera_ipc::api::status::CoreHealthState::Healthy
-            )
-        }),
-        // Keep applied identity unknown until the service projects it from the
-        // same manager snapshot as status; the requested type may lag a switch.
-        applied_kind: None,
-    }
 }
 
 #[cfg(test)]

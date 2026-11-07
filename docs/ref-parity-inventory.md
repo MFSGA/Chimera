@@ -70,3 +70,32 @@
 本批已通过独立 core **140/140**、Tauri runtime **6/6**、Actor V2 **9/9**、proxy **14/14**、Agent 探测 **3/3**、Specta **1/1**、前端测试 **28/28**及 E2E 框架单测 **33/33**。本地 Rustfmt、TypeScript/边界检查通过；完整 Clippy 与真实桌面/Service E2E **未验证**。
 
 这次复制的两个模块均已被 Tauri 生产路径实际引用，而非闲置副本；但尚未实现 `actor_v2` 其他服务 Actor、完整 Client/Workflow、Unified RPC 或跨平台端到端一致性。
+
+## 2026-11-07 Actor V2 Endpoint 公共契约迁移
+
+本地提交 `20cf593a`：从
+`ref/backend/nyanpasu-core/src/actor_v2/endpoint.rs`
+复制 **Endpoint 公共契约**进入
+`backend/chimera-core/src/actor_v2/endpoint.rs`，适配
+Chimera 的 crate 名称、CoreError 构造与
+`CoreStatusSnapshot.instance_id`。同时迁入 Local Host 操作结果与
+状态到 IPC 的映射，以及 Service Host 的 v2 状态投影。
+
+**实际调用路径已替换：** Tauri
+`core/actor_v2/control_endpoint.rs` 和
+`service_endpoint.rs` 现在使用 core 的统一
+`ControlEndpoint` trait、`CoreSubmission`、
+`CheckSubmission`、`ExecutionHost` 和状态类型/映射函数。
+Tauri 保留具体的 Windows/Local 与 Service IPC Host 适配。
+
+core 完整单测 **144/144**、Tauri Actor V2 **28/28**、
+代理 **14/14**、Agent 探测 **3/3**、Specta **1/1**、
+TypeScript 与前端边界以及 E2E 框架单测 **33/33**
+通过；没有执行桌面/真实 Service E2E 或宣称 Clippy 通过。
+
+**仍待完整复制/适配：** ref 的 CoreActor v2
+`mod.rs` mailbox/订阅泵、`facade.rs`、
+`service_actor.rs`、`local_host.rs`、
+`service_endpoint_factory.rs`，以及完整的实例所有权移交与
+应用状态协调。**不能因为公共契约已经迁入，就将 Actor V2
+整项标记为已对齐。**
