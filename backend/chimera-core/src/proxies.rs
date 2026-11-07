@@ -116,6 +116,9 @@ pub struct ProxySnapshotState<T> {
     generation: u64,
     checksum: Option<u32>,
     updated_at: u64,
+    /// Advances on every successful refresh, including an identical snapshot.
+    /// A failed concurrent read must not stale a newer successful read.
+    revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +135,7 @@ impl<T> ProxySnapshotState<T> {
             generation: 0,
             checksum: None,
             updated_at: 0,
+            revision: 0,
         }
     }
 
@@ -142,6 +146,7 @@ impl<T> ProxySnapshotState<T> {
             generation,
             checksum,
             updated_at,
+            revision: 0,
         }
     }
 
@@ -155,6 +160,23 @@ impl<T> ProxySnapshotState<T> {
 
     pub fn checksum(&self) -> Option<u32> {
         self.checksum
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Mark a failed read as unverified without changing the profile generation
+    /// or discarding the last displayed value. An overlapping successful read
+    /// takes precedence over an older failed read.
+    pub fn mark_unverified_if_revision(&mut self, generation: u64, revision: u64) -> bool {
+        if self.generation != generation || self.revision != revision {
+            return false;
+        }
+        self.checksum = None;
+        self.updated_at = 0;
+        self.revision = self.revision.wrapping_add(1);
+        true
     }
 
     pub fn is_fresh(&self, now: u64, max_age_seconds: u64) -> bool {
@@ -176,12 +198,14 @@ impl<T> ProxySnapshotState<T> {
         self.generation = self.generation.wrapping_add(1);
         self.checksum = None;
         self.updated_at = 0;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn replace(&mut self, value: T, checksum: u32, now: u64) {
         self.value = value;
         self.checksum = Some(checksum);
         self.updated_at = now;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     pub fn publish_if_generation(
@@ -198,6 +222,7 @@ impl<T> ProxySnapshotState<T> {
             // A successful identical refresh still makes this snapshot fresh;
             // no subscriber needs another copy or notification.
             self.updated_at = now;
+            self.revision = self.revision.wrapping_add(1);
             return SnapshotPublish::Unchanged;
         }
         self.replace(value, checksum, now);

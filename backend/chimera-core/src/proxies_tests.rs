@@ -250,6 +250,38 @@ fn proxy_cache_rejects_clock_rollback_and_empty_snapshots() {
     assert!(empty.is_fresh(103, 3));
 }
 
+#[test]
+fn failed_read_marks_only_its_own_revision_unverified() {
+    let mut cache = ProxySnapshotState::new("initial");
+    cache.replace("verified", 12, 100);
+    let generation = cache.generation();
+    let failed_read_revision = cache.revision();
+    assert!(cache.is_fresh(101, 3));
+
+    // An overlapping successful read, even with an unchanged checksum,
+    // must win over the earlier failed request.
+    assert_eq!(
+        cache.publish_if_generation(generation, "same", 12, 102),
+        SnapshotPublish::Unchanged
+    );
+    assert!(!cache.mark_unverified_if_revision(generation, failed_read_revision));
+    assert!(cache.is_fresh(103, 3));
+
+    let failed_read_revision = cache.revision();
+    assert!(cache.mark_unverified_if_revision(generation, failed_read_revision));
+    assert!(!cache.is_fresh(103, 3));
+    assert_eq!(cache.value(), &"verified");
+    assert!(!cache.mark_unverified_if_revision(generation, failed_read_revision));
+
+    // A failed read from an old profile cannot stale a new profile.
+    cache.invalidate();
+    cache.replace("new profile", 23, 105);
+    let revision = cache.revision();
+    assert!(!cache.mark_unverified_if_revision(generation, revision));
+    assert!(cache.is_fresh(105, 3));
+    assert_eq!(cache.value(), &"new profile");
+}
+
 struct RetiringEndpoint {
     binding: Mutex<CoreApiConnection>,
     checks: AtomicUsize,

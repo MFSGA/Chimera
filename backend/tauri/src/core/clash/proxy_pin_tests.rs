@@ -215,6 +215,103 @@ async fn rejected_selection_rereads_actual_route_without_replaying_the_put() {
 }
 
 #[tokio::test]
+async fn failed_selection_reread_invalidates_freshness_but_preserves_last_view() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(async move {
+        let mut paths = Vec::new();
+        // Legacy fetch retries reads and can issue independent provider/group
+        // GETs. Serve all of them until the mutation finishes; never replay PUT.
+        loop {
+            let (mut stream, _) = tokio::select! {
+                accepted = listener.accept() => accepted.unwrap(),
+                _ = &mut shutdown_rx => break,
+            };
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).await.unwrap();
+            let line = String::from_utf8_lossy(&buffer[..size])
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            let (status, body) = if line.starts_with("PUT /proxies/Auto ") {
+                ("409 Conflict", r#"{"message":"outcome unknown"}"#)
+            } else if line.starts_with("GET ") {
+                ("503 Service Unavailable", r#"{"message":"unavailable"}"#)
+            } else {
+                panic!("unexpected route: {line}");
+            };
+            paths.push(line);
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+        paths
+    });
+
+    let (sender, mut updates) = broadcast::channel(1);
+    let mut previous = Proxies::default();
+    previous.groups.push(ProxyGroupItem {
+        name: "Auto".into(),
+        now: Some("REJECT".into()),
+        ..Default::default()
+    });
+    let guard = Arc::new(RwLock::new(ProxiesGuard::test_guard(
+        previous,
+        Some(42),
+        chrono::Utc::now().timestamp() as u64,
+        0,
+        sender,
+    )));
+    let generation = guard.read().generation();
+    assert!(guard.read().is_updated());
+    let api = ApiClient::new(crate::config::clash::ClashInfo {
+        port: address.port(),
+        server: address.to_string(),
+        secret: None,
+    })
+    .unwrap();
+    let error = tokio::time::timeout(
+        TEST_DEADLINE,
+        (&guard).select_proxy(&api, generation, "Auto", "DIRECT"),
+    )
+    .await
+    .expect("mutation must complete")
+    .expect_err("original rejected PUT remains an error");
+    assert!(
+        error.to_string().contains("select_proxy") && error.to_string().contains("409"),
+        "original mutation error must survive the failed GET: {error:#}"
+    );
+    assert_eq!(guard.read().generation(), generation);
+    assert!(
+        !guard.read().is_updated(),
+        "failed GET must retire freshness"
+    );
+    assert_eq!(
+        guard.read().inner().groups[0].now.as_deref(),
+        Some("REJECT")
+    );
+    updates
+        .try_recv()
+        .expect("subscribers must be notified that cached state is unverified");
+    shutdown_tx
+        .send(())
+        .expect("server must still be listening");
+    let paths = tokio::time::timeout(TEST_DEADLINE, server)
+        .await
+        .expect("mock server should finish")
+        .unwrap();
+    assert_eq!(paths.iter().filter(|p| p.starts_with("PUT ")).count(), 1);
+    assert!(
+        paths.iter().any(|p| p.starts_with("GET /proxies ")),
+        "controller truth must be queried after the failed PUT"
+    );
+}
+
+#[tokio::test]
 async fn stale_proxy_generation_rejects_unpin_before_any_http_request() {
     let guard = guard();
     let previous = guard.read().generation();

@@ -204,6 +204,19 @@ impl ProxiesGuard {
         self.snapshot.ensure_generation(generation)
     }
 
+    fn revision(&self) -> u64 {
+        self.snapshot.revision()
+    }
+
+    fn mark_unverified_if_revision(&mut self, generation: u64, revision: u64) {
+        if self
+            .snapshot
+            .mark_unverified_if_revision(generation, revision)
+        {
+            self.notify_update();
+        }
+    }
+
     pub(crate) fn invalidate(&mut self) {
         self.snapshot.invalidate();
     }
@@ -708,14 +721,31 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
             return Ok(false);
         }
 
-        let proxies = Proxies::fetch(api).await?;
-        let buf = serde_json::to_string(&proxies)?;
-        let checksum = adler::adler32(buf.as_bytes())?;
-        let mut writer = self.write();
-        if writer.generation() != generation {
-            return Ok(false);
+        let revision = self.read().revision();
+        let result = async {
+            let proxies = Proxies::fetch(api).await?;
+            let buf = serde_json::to_string(&proxies)?;
+            let checksum = adler::adler32(buf.as_bytes())?;
+            Ok::<_, anyhow::Error>((proxies, checksum))
         }
-        Ok(writer.replace_if_generation(generation, proxies, checksum))
+        .await;
+        match result {
+            Ok((proxies, checksum)) => {
+                let mut writer = self.write();
+                if writer.generation() != generation {
+                    return Ok(false);
+                }
+                Ok(writer.replace_if_generation(generation, proxies, checksum))
+            }
+            Err(error) => {
+                // The controller may have applied an earlier mutation even
+                // when this read failed. Keep the last view, but never label
+                // it fresh. Do not override a newer successful concurrent read.
+                self.write()
+                    .mark_unverified_if_revision(generation, revision);
+                Err(error)
+            }
+        }
     }
 
     async fn select_proxy(

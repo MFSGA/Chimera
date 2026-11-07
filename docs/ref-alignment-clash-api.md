@@ -1787,3 +1787,41 @@ against the committed code completed on the Windows host:
   rpc/query/platform and the full architecture backlog remain open.
   Revert the two Rust changes and this documentation entry to roll back.
   The existing unrelated `pnpm-lock.yaml` diff is untouched.
+
+## 2026-11-07 ProxiesActor failed-reread freshness fence (partial)
+
+- **Verified reference:** official `libnyanpasu/clash-nyanpasu`
+  `main` via fresh `git ls-remote`, and local `ref`, both
+  `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`.
+  Reference `backend/nyanpasu-core/src/proxies.rs::State::refresh`
+  clears its cache when a controller reread fails.
+- **Production behavior / L2:** independent
+  `backend/chimera-core/src/proxies.rs::ProxySnapshotState`
+  now tracks a successful-refresh revision (also for unchanged checksums)
+  and can revoke freshness only if both the source profile generation and
+  captured revision still match. Tauri
+  `backend/tauri/src/core/clash/proxies.rs::update_if_generation`
+  uses that fence when the controller reread fails. It retains the
+  last UI view but marks it unverified and notifies subscribers; a newer
+  successful concurrent refresh cannot be invalidated by an older failure.
+  This production adapter is reached from the real selection/unpin IPC
+  operations. Rejected PUT/DELETE remains an error and is never replayed.
+- **Regression:** core test covers overlapping identical successful
+  refresh, stale failed read, duplicate invalidation, and old profile.
+  Tauri mock-controller covers a rejected PUT followed by failed
+  multi-endpoint GET/backoff, preserving the last view, invalidating
+  freshness, notifying UI and issuing exactly one PUT. The initial
+  mock failed due to the existing retrying provider/group GETs; the
+  corrected mock and error assertion were rerun successfully.
+  Core **175/175**, Tauri proxies **16/16**, Specta **1/1**,
+  Agent diagnostics **6/6**, interface **56/56**, main traffic
+  **16/16**, E2E harness **33/33**, full TypeScript, main/legacy
+  boundary, full Clippy (existing warnings), Rustfmt and diff checks passed.
+  Transient sidecar-free `TAURI_CONFIG` only; no desktop launch.
+- **Remaining:** the Tauri legacy guard retains its old displayed value
+  even when `is_updated()` becomes false; the ref actor clears its
+  snapshot entirely. A unified actor-owned cache, provider mutation,
+  TTL/coalescing, subscriptions, full CoreActor/StreamsActor/Client/
+  state/Unified RPC and frontend packages remain outstanding, as do
+  real Windows SCM/UAC/Service/main/legacy/Agent E2E tests.
+  No IPC wire, persistence, ref/runtime gitlink or lockfile changes.

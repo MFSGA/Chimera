@@ -557,3 +557,48 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   未改持久化、IPC wire 或 Service/runtime 子模块；
   本批仅两份后端 Rust 文件和两份文档可独立回滚，
   既有 `pnpm-lock.yaml` 未提交差异保持不变。
+
+## 2026-11-07 ProxiesActor：失败读回后缓存 freshness 失效（增量）
+
+**官方 ref：** 本轮直接 `git -C ref ls-remote origin refs/heads/main`
+核实官方 `libnyanpasu/clash-nyanpasu` main 与本地子模块
+均为 `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`；
+无 ref 或 runtime gitlink 变更。
+参考 `ref/backend/nyanpasu-core/src/proxies.rs::State::refresh`
+的失败清理和实例失效语义。
+
+- **生产问题 / L2：** 上轮代理 PUT/DELETE 失败后虽会读回真实状态，
+  但 GET 本身失败时 `ProxiesGuard` 仍可能把之前的路由快照
+  标为新鲜，导致 main/legacy 的短期缓存继续使用未经核实的选择。
+- **独立 core：** `backend/chimera-core/src/proxies.rs`
+  的 `ProxySnapshotState` 新增成功刷新 revision；
+  `mark_unverified_if_revision` 只在同 profile generation
+  且没有更新成功的刷新时撤销 checksum/freshness，不删除最后显示值、
+  不改变实例 generation；相同 checksum 的成功刷新也推进 revision。
+- **实际调用：** `backend/tauri/src/core/clash/proxies.rs`
+  的 `update_if_generation` 在 controller GET/组装失败后通过
+  core 标记缓存不可信并向订阅者发通知；并发的较新成功刷新
+  不会被旧失败响应抹掉。选择/取消固定的真实 IPC 调用沿用
+  此统一读回路径，写入失败仍保留原错误、不重试 PUT/DELETE。
+- **回归：** core 新增 revision 竞争、同 checksum 刷新、
+  旧代际隔离测试；Tauri mock-controller 模拟 409 PUT
+  加随后持续 503 的读回，检查保留旧显示值但 freshness
+  失效、通知订阅者、只发一次 PUT。初次测试因低估旧读回
+  adapter 的多路 GET 重试而超时，修正 mock 后又修正
+  错误字符串断言，最终通过。core **175/175**、
+  Tauri proxies **16/16**、Specta **1/1**、
+  Agent **6/6**、interface **56/56**、
+  main traffic **16/16**、E2E 框架 **33/33**，
+  完整 TypeScript、main/legacy IPC 边界和 Clippy
+  均通过（已有警告），Rustfmt/差异检查通过。
+  Tauri 测试使用临时 sidecar-free `TAURI_CONFIG`。
+- **剩余：** 与 ref 的完整 ProxiesActor 相比，此处仍保留
+  Tauri guard/legacy wire、历史缓存值及重试 adapter；
+  未迁移单一 mailbox、订阅、Provider mutation、TTL 合并、
+  完整 StreamsActor、CoreActor、Client/state、Unified RPC、
+  独立前端 rpc/query/platform 或真实 Windows/Service E2E。
+  失败读回的旧显示值仍可通过 `inner()` 获取，
+  但 `is_updated()` 明确为 false；后续完整 Actor
+  迁移时需进一步统一快照可见性和缓存失效通知。
+  无持久化或 IPC wire 变更，用户 `pnpm-lock.yaml`
+  差异未触碰。
