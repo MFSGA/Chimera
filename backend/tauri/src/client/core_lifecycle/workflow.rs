@@ -298,7 +298,7 @@ impl CoreLifecycleWorkflow {
 
     pub(super) fn service_restart_policy(
         &self,
-    ) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+    ) -> chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
         self.service.restart_policy()
     }
 

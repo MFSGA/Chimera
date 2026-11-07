@@ -47,13 +47,9 @@ const SERVICE_API_MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Service restart decisions now belong to the independent core;
 // this facade keeps only the OS/IPC mutation adapter.
-use chimera_core::actor_v2::service_policy::{ServiceRestartDecision, service_restart_decision};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ServiceRestartPolicySnapshot {
-    pub(crate) attempts: u8,
-    pub(crate) exhausted: bool,
-}
+use chimera_core::actor_v2::service_policy::{
+    ServiceRestartDecision, ServiceRestartPolicySnapshot, service_restart_decision,
+};
 
 #[derive(Debug)]
 pub(crate) struct CoreFacade {

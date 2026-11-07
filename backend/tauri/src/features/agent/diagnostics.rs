@@ -1,3 +1,4 @@
+use chimera_core::actor_v2::{service_policy::ServicePhase, service_status::ServiceHostStatus};
 use std::net::{IpAddr, Ipv6Addr};
 
 use chimera_ipc::{api::status::CoreState, types::ServiceStatus};
@@ -6,10 +7,7 @@ use sysproxy::Sysproxy;
 use tauri::{AppHandle, Manager};
 
 use crate::{
-    client::{
-        ChimeraClient,
-        core_lifecycle::{ServiceHostStatus, ServicePhase},
-    },
+    client::ChimeraClient,
     config::core::Config,
     core::{
         clash::{
