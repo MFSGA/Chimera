@@ -74,6 +74,7 @@ impl ChimeraClient {
             .await?
             .update_rule_provider(&clash_api::RuleProviderName::new(name))
             .await
+            .map_err(Into::into)
     }
 
     pub async fn proxy_providers(
@@ -91,5 +92,6 @@ impl ChimeraClient {
             .await?
             .update_proxy_provider(&clash_api::ProviderName::new(name))
             .await
+            .map_err(Into::into)
     }
 }

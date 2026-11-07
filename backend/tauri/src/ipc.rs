@@ -1607,7 +1607,8 @@ pub async fn clash_api_delete_connections(
         .clash_api_client()
         .await?
         .delete_connections(id.as_deref())
-        .await?)
+        .await
+        .map_err(anyhow::Error::from)?)
 }
 
 #[tauri::command]

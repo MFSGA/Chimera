@@ -445,7 +445,13 @@ mod tests {
             .get_configs()
             .await
             .expect_err("a retired capability must not send a request");
-        assert!(error.to_string().contains("retired core instance"));
+        assert!(
+            matches!(
+                error.downcast_ref::<chimera_core::actor_v2::api::ApiError>(),
+                Some(chimera_core::actor_v2::api::ApiError::Stale)
+            ),
+            "expected a typed stale API capability error, got {error:#}"
+        );
     }
 
     #[tokio::test]
@@ -508,7 +514,13 @@ mod tests {
             .expect("revocation should cancel the in-flight request")
             .expect("request task should finish")
             .expect_err("retired API capability should fail");
-        assert!(error.to_string().contains("retired core instance"));
+        assert!(
+            matches!(
+                error.downcast_ref::<chimera_core::actor_v2::api::ApiError>(),
+                Some(chimera_core::actor_v2::api::ApiError::Stale)
+            ),
+            "expected a typed stale API capability error, got {error:#}"
+        );
         server.abort();
     }
 

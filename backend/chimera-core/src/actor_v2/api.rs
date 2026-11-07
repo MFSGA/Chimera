@@ -33,6 +33,21 @@ pub trait CoreApiEndpoint: Send + Sync {
     fn host_label(&self) -> String;
 }
 
+/// Core-owned controller error semantics, matching ref's actor_v2::api.
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("the Clash API capability belongs to a retired instance")]
+    Stale,
+    #[error("the running core's API is unavailable: {0}")]
+    Unavailable(String),
+    #[error("Clash API operation timed out; a submitted mutation may have taken effect")]
+    Timeout,
+    #[error(transparent)]
+    Protocol(#[from] clash_api::Error),
+}
+
+pub type ApiResult<T> = std::result::Result<T, ApiError>;
+
 /// A single instance-bound read of the proxy view, matching ref's actor API.
 /// When `/group` is unavailable, its groups are inferred from `/proxies`.
 pub struct ProxySnapshot {
@@ -144,11 +159,10 @@ impl ApiClient {
         self.revoked.cancelled().await;
     }
 
-    pub async fn check_binding(&self) -> Result<()> {
-        anyhow::ensure!(
-            !self.revoked.is_cancelled(),
-            "the Clash API capability belongs to a retired core instance"
-        );
+    pub async fn check_binding(&self) -> ApiResult<()> {
+        if self.revoked.is_cancelled() {
+            return Err(ApiError::Stale);
+        }
         let (Some(expected), Some(endpoint)) = (&self.binding, &self.endpoint) else {
             return Ok(());
         };
@@ -156,39 +170,31 @@ impl ApiClient {
             Ok(Some(current)) if current == *expected => Ok(()),
             Ok(_) => {
                 self.revoke();
-                anyhow::bail!("the Clash API capability belongs to a retired core instance")
+                Err(ApiError::Stale)
             }
             Err(error) => {
                 self.revoke();
-                Err(anyhow::anyhow!(
-                    "the running core API binding is unavailable: {error}"
-                ))
+                Err(ApiError::Unavailable(error.to_string()))
             }
         }
     }
 
-    async fn execute<T, E>(
+    /// Preflight, full protocol read/decode, and postflight share one deadline.
+    /// No retry: a timed-out write may have been applied by the controller.
+    async fn execute<T>(
         &self,
         timeout: Duration,
-        operation: impl Future<Output = std::result::Result<T, E>>,
-    ) -> Result<T>
-    where
-        E: Into<anyhow::Error>,
-    {
-        let execution = async {
-            self.check_binding().await?;
-            let result = operation.await.map_err(Into::into);
-            self.check_binding().await?;
-            result
-        };
+        operation: impl Future<Output = clash_api::Result<T>>,
+    ) -> ApiResult<T> {
         tokio::select! {
             biased;
-            _ = self.revoked.cancelled() => {
-                anyhow::bail!("the Clash API capability belongs to a retired core instance")
-            }
-            result = tokio::time::timeout(timeout, execution) => {
-                result.map_err(|_| anyhow::anyhow!("Clash API operation timed out after {timeout:?}"))?
-            }
+            _ = self.revoked.cancelled() => Err(ApiError::Stale),
+            result = tokio::time::timeout(timeout, async {
+                self.check_binding().await?;
+                let result = operation.await;
+                self.check_binding().await?;
+                result.map_err(ApiError::Protocol)
+            }) => result.map_err(|_| ApiError::Timeout)?,
         }
     }
 
@@ -218,7 +224,7 @@ impl ApiClient {
     /// Typed protocol response for application-facing config queries, as in ref.
     /// Legacy runtime patch/agent paths continue to use the expanded snapshot
     /// below, which includes TUN and geodata extensions not in RuntimeConfig.
-    pub async fn configs(&self) -> Result<clash_api::RuntimeConfig> {
+    pub async fn configs(&self) -> ApiResult<clash_api::RuntimeConfig> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.configs())
             .await
     }
@@ -230,42 +236,42 @@ impl ApiClient {
         serde_json::from_value(value).context("failed to decode running core config")
     }
 
-    pub async fn version(&self) -> Result<clash_api::Version> {
+    pub async fn version(&self) -> ApiResult<clash_api::Version> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.version())
             .await
     }
 
-    pub async fn rules(&self) -> Result<Vec<clash_api::Rule>> {
+    pub async fn rules(&self) -> ApiResult<Vec<clash_api::Rule>> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.rules()).await
     }
 
     pub async fn rule_providers(
         &self,
-    ) -> Result<IndexMap<clash_api::RuleProviderName, clash_api::RuleProvider>> {
+    ) -> ApiResult<IndexMap<clash_api::RuleProviderName, clash_api::RuleProvider>> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.rule_providers())
             .await
     }
 
-    pub async fn update_rule_provider(&self, name: &clash_api::RuleProviderName) -> Result<()> {
+    pub async fn update_rule_provider(&self, name: &clash_api::RuleProviderName) -> ApiResult<()> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.update_rule_provider(name))
             .await
     }
 
     pub async fn proxy_providers(
         &self,
-    ) -> Result<IndexMap<clash_api::ProviderName, clash_api::ProxyProvider>> {
+    ) -> ApiResult<IndexMap<clash_api::ProviderName, clash_api::ProxyProvider>> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.proxy_providers())
             .await
     }
 
-    pub async fn update_proxy_provider(&self, name: &clash_api::ProviderName) -> Result<()> {
+    pub async fn update_proxy_provider(&self, name: &clash_api::ProviderName) -> ApiResult<()> {
         self.execute(DEFAULT_API_TIMEOUT, self.client.update_proxy_provider(name))
             .await
     }
 
     /// The complete data required to assemble a proxy view. Preflight,
     /// all network reads, decoding and postflight share one lifecycle lease.
-    pub async fn proxy_snapshot(&self) -> Result<ProxySnapshot> {
+    pub async fn proxy_snapshot(&self) -> ApiResult<ProxySnapshot> {
         self.execute(DEFAULT_API_TIMEOUT, async {
             let (proxies, providers, groups) = tokio::try_join!(
                 self.client.proxies(),
@@ -322,7 +328,7 @@ impl ApiClient {
         })
     }
 
-    pub async fn delete_connections(&self, id: Option<&str>) -> Result<()> {
+    pub async fn delete_connections(&self, id: Option<&str>) -> ApiResult<()> {
         match id {
             Some(id) => {
                 self.execute(DEFAULT_API_TIMEOUT, self.client.close_connection_id(id))
@@ -335,7 +341,7 @@ impl ApiClient {
         }
     }
 
-    pub async fn update_proxy(&self, group: &str, name: &str) -> Result<()> {
+    pub async fn update_proxy(&self, group: &str, name: &str) -> ApiResult<()> {
         let group = clash_api::ProxyName::new(group);
         let target = clash_api::ProxyName::new(name);
         self.execute(
@@ -352,6 +358,7 @@ impl ApiClient {
         let patch = serde_json::to_value(config).context("failed to encode config patch")?;
         self.execute(DEFAULT_API_TIMEOUT, self.client.patch_config_value(&patch))
             .await
+            .map_err(Into::into)
     }
 
     pub async fn get_proxy_delay(
@@ -617,5 +624,137 @@ impl Drop for ApiLease {
     fn drop(&mut self) {
         self.client.revoke();
         self.monitor.abort();
+    }
+}
+
+#[cfg(test)]
+mod typed_error_tests {
+    use super::{ApiChanges, ApiClient, ApiError, CoreApiEndpoint};
+    use chimera_ipc::api::{core::v2::CoreApiConnection, status::CoreControllerInfo};
+    use std::{
+        future::pending,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
+
+    struct Endpoint {
+        binding: Mutex<Option<CoreApiConnection>>,
+        unavailable: AtomicBool,
+        checks: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl CoreApiEndpoint for Endpoint {
+        async fn api_connection(&self) -> anyhow::Result<Option<CoreApiConnection>> {
+            self.checks.fetch_add(1, Ordering::SeqCst);
+            if self.unavailable.load(Ordering::SeqCst) {
+                anyhow::bail!("controller authority is offline");
+            }
+            Ok(self.binding.lock().expect("binding lock").clone())
+        }
+
+        async fn api_changes(&self) -> anyhow::Result<Option<ApiChanges>> {
+            Ok(None)
+        }
+
+        fn host_label(&self) -> String {
+            "test-endpoint".into()
+        }
+    }
+
+    fn bound() -> (ApiClient, Arc<Endpoint>) {
+        let binding = CoreApiConnection {
+            instance_id: "typed-api-errors".into(),
+            controller: CoreControllerInfo::Http("http://127.0.0.1:1/".into()),
+            secret: None,
+        };
+        let endpoint = Arc::new(Endpoint {
+            binding: Mutex::new(Some(binding.clone())),
+            unavailable: AtomicBool::new(false),
+            checks: AtomicUsize::new(0),
+        });
+        (
+            ApiClient::from_connection(binding, endpoint.clone()).unwrap(),
+            endpoint,
+        )
+    }
+
+    #[tokio::test]
+    async fn retired_instance_is_stale_before_any_mutation_and_stays_revoked() {
+        let (client, endpoint) = bound();
+        *endpoint.binding.lock().unwrap() = None;
+        let executed = Arc::new(AtomicBool::new(false));
+        let called = executed.clone();
+        let result = client
+            .execute(Duration::from_secs(1), async move {
+                called.store(true, Ordering::SeqCst);
+                Ok::<_, clash_api::Error>(())
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApiError::Stale)));
+        assert!(!executed.load(Ordering::SeqCst));
+        assert!(client.check_binding().await.is_err());
+        assert!(matches!(client.check_binding().await, Err(ApiError::Stale)));
+    }
+
+    #[tokio::test]
+    async fn authority_failure_is_unavailable_and_revokes_the_capability() {
+        let (client, endpoint) = bound();
+        endpoint.unavailable.store(true, Ordering::SeqCst);
+        let result = client
+            .execute(Duration::from_secs(1), async {
+                Ok::<_, clash_api::Error>(())
+            })
+            .await;
+
+        match result {
+            Err(ApiError::Unavailable(reason)) => {
+                assert!(reason.contains("controller authority is offline"));
+            }
+            other => panic!("expected unavailable authority: {other:?}"),
+        }
+        assert!(matches!(client.check_binding().await, Err(ApiError::Stale)));
+    }
+
+    #[tokio::test]
+    async fn timeout_is_distinct_from_protocol_failure() {
+        let client = ApiClient::new_unbound("127.0.0.1:1".into(), None).unwrap();
+        let timeout = client
+            .execute(
+                Duration::from_millis(15),
+                pending::<clash_api::Result<()>>(),
+            )
+            .await;
+        assert!(matches!(timeout, Err(ApiError::Timeout)));
+
+        let protocol = client
+            .execute(Duration::from_secs(1), async {
+                Err::<(), clash_api::Error>(clash_api::Error::InvalidArgument {
+                    argument: "fixture",
+                    message: "bad value".into(),
+                })
+            })
+            .await;
+        assert!(matches!(protocol, Err(ApiError::Protocol(_))));
+    }
+
+    #[tokio::test]
+    async fn postflight_rejects_completion_on_a_replaced_instance() {
+        let (client, endpoint) = bound();
+        let swap = endpoint.clone();
+        let result = client
+            .execute(Duration::from_secs(1), async move {
+                *swap.binding.lock().unwrap() = None;
+                Ok::<_, clash_api::Error>(())
+            })
+            .await;
+
+        assert!(matches!(result, Err(ApiError::Stale)));
+        assert_eq!(endpoint.checks.load(Ordering::SeqCst), 2);
+        assert!(client.revoked.is_cancelled());
     }
 }
