@@ -262,3 +262,55 @@ DNS/TUN 实机集成或完整 Clippy。
 才能宣称已发布 runtime 与该源码一致。
 本批只作本地提交，不推送、不发布、不声称完整上游
 Service/IPC/OS 进程控制架构已迁完。
+
+## 2026-11-07 runtime 默认分支合并 + core-owned ServiceProcessControl
+
+**最新源码核对：** 对 `libnyanpasu/nyanpasu-runtime` 的
+`a27c3fcc1ed57980034f25084613baa98efc01c4` 与公开
+`main@041b662fe6aae22a80302b190f49e762774dbf50`
+执行 GitHub compare，后者只前进 **6 个提交**，唯一修改文件为
+`rust-toolchain.toml`；本批迁移所参考的 runtime Service
+实现与最新上游代码相同。主仓库的 `ref` pin 没有擅自更新。
+
+**子模块合并完成：** `MFSGA/Chimera_Service` 默认分支实际为
+`main`（无 `master`）。在子模块
+`codex/ref-runtime-alignment-1107` 上检查/rebase
+`origin/main@305390f6`：共同祖先正是 `305390f6`，
+所以无需改写提交；以**非强制快进推送**合并到
+`origin/main@6a92c2ce5bd0f33d4f414c39c7e625349a510d21`。
+远端 SHA 已再次核对。子模块本地备份分支为
+`backup/runtime-pre-main-merge-20261107`。
+先前主仓库 `f579fe7c` 的 gitlink 已指向此 commit，
+现在对 GitHub CI 可以直接获取。只有源码发布与下载的
+`v1.11.1` Service 二进制是否匹配仍未证明。
+
+**主仓库代码提交 `9ced8884`：** 根据上游
+`ref/backend/nyanpasu-contracts/src/service.rs`，
+在独立 `backend/chimera-core/src/actor_v2/service_process.rs`
+建立 `ServiceProcessControl` 的命令/错误契约：
+`ServiceCommand`、`ServiceCommandError`、
+status JSON 解析、超时与仍在运行的区别。
+OS 端实现由
+`backend/tauri/src/core/service/control.rs`
+的 `ServiceOsProcess` 提供，执行安装、卸载、启动、
+停止、升级、重启及状态探测。独立 core 不引用 Tauri
+的提权或子进程 API；所有 Tauri facade、生命周期、
+IPC 状态观察及初始化调用方都直接使用该实现和 core
+的结构化错误，不再保留旧的直接命令 API。
+
+与上游差异明确保留为迁移工作，而非完成项：
+当前 Chimera Service CLI 支持单独的 restart 命令，因此
+进程端口暂提供 `restart_daemon`，其余类型对齐上游
+语义。完整上游 `ServiceActor` 的消息队列、
+会话结束保护、提权许可判定与 mutation 超时治理
+尚**未**迁移，`ServiceOsProcess` 不能代替完整 Actor。
+
+**验证：** core **163/163**，Tauri Service IPC
+**7/7**、生命周期 **33/33**、Actor V2 **28/28**、
+Agent probe **3/3** 和 diagnostics **6/6**，
+Specta **1/1**；Tauri 非测试配置 `cargo check`、
+完整前端 `pnpm typecheck`、UI **27/27**、
+E2E 框架 **33/33**、runtime 版本一致性、
+前端边界和 Rustfmt 通过。尚未执行真实
+Service/SCM/提权 E2E、全项目 Clippy；
+`v1.11.1` 已发布的二进制仍需单独更新/验证。
