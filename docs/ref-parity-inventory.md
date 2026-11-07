@@ -431,3 +431,39 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   main/legacy 桌面 UI E2E、断电/进程终止恢复以及跨平台集成。
   上游完整 ServiceActor ractor mailbox、watch/健康轮次与
   `CoreActor` 统一所有权仍未迁入；上述验证不证明全量 ref 已对齐。
+
+## 2026-11-07 Service 健康检查轮次令牌（增量，非完整 Actor）
+
+**官方 ref 基线** `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`：
+最新上游仅追加 `manifest/version.json` 的版本清单提交，
+此前 ServiceActor 行为仍以
+`ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+的 `SetHealthCheck` / `HealthCheck { round }` 为准。
+
+- **风险与目标 L2：** 真实 Tauri Service 监视线程执行缓慢状态探测后，
+  如 OS stop / uninstall 已成功，旧探测不得将已停止的 Service
+  再作为新的运行状态投影。不能只复制生成 token 的模型，必须在
+  当前生产状态发布路径使用。
+- **独立 core：** `backend/chimera-core/src/actor_v2/service_actor.rs`
+  新增 `ServiceHealthRounds`，原子地切换奇偶代际，重复 enable /
+  disable 幂等；旧代际在停用后以及再启动时均无效。新增 2 项
+  代际和旧响应测试，不改变现有命令超时/完成管理。
+- **真实宿主调用：** `backend/tauri/src/core/service/ipc.rs`
+  启动时取得 round；监视线程轮询、状态探测完成时，以及等待
+  endpoint-down 异步处理返回后再次校验，旧轮次不再更新
+  `ChimeraClient` 的 Service 状态。`control.rs` 的 OS stop /
+  uninstall **成功之后** 才调用 `stop_health_check` 同时注销
+  当前轮次并置停止标志；失败则不伪称已停。
+  新增一项通过真实宿主停止钩子撤销轮次的测试。
+- **验收：** core **172/172**，Service IPC **9/9**，CoreLifecycle
+  **33/33**，Actor V2 **30/30**，Specta 新鲜度 **1/1**；
+  完整 `pnpm typecheck`、main/legacy 边界、interface
+  **56/56**、Service runtime 版本一致性、Rustfmt、Git diff 检查、
+  全目标/特性 Clippy 均通过（有既有警告）。
+  使用临时 `TAURI_CONFIG` 排除缺少的打包 sidecar；未改变发布配置。
+- **仍待：** 这不是 ref 的完整单 mailbox/watch 所有权迁移；
+  真实 Windows SCM/UAC、进程快速 stop→start、Service 进程 crash、
+  探测结果与停止命令纳秒级竞争、桌面 main/legacy E2E 尚未验证。
+  Tauri 旧健康线程/全局 IPC 投影仍存在，必须在完整 ServiceActor
+  迁移时替换。无存储格式、Specta wire、前端协议改变。
+  后端代码可独立回滚三个文件，ref 指针已在独立提交中更新。

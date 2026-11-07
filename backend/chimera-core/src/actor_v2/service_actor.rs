@@ -7,7 +7,7 @@
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -273,6 +273,50 @@ impl ServiceCommandActor {
     }
 }
 
+/// A generation token for the host Service health loop, following upstream
+/// ServiceActor's SetHealthCheck/HealthCheck { round } contract. The complete
+/// ServiceActor mailbox is still pending: this prevents a returned stale
+/// probe from publishing a new observation after stop or monitor replacement.
+#[derive(Debug, Default)]
+pub struct ServiceHealthRounds {
+    revision: AtomicU64,
+}
+
+impl ServiceHealthRounds {
+    pub const fn new() -> Self {
+        Self {
+            revision: AtomicU64::new(0),
+        }
+    }
+
+    /// Idempotently enable/disable monitoring. Odd generations are enabled;
+    /// each transition invalidates all tokens from earlier generations.
+    pub fn set_enabled(&self, enabled: bool) -> Option<u64> {
+        loop {
+            let current = self.revision.load(Ordering::Acquire);
+            let was_enabled = current & 1 == 1;
+            if was_enabled == enabled {
+                return enabled.then_some(current);
+            }
+            let next = current
+                .checked_add(1)
+                .expect("Service health generation must not wrap");
+            if self
+                .revision
+                .compare_exchange(current, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return enabled.then_some(next);
+            }
+        }
+    }
+
+    /// A delayed probe or queued tick can only publish in its original round.
+    pub fn is_current(&self, round: u64) -> bool {
+        round & 1 == 1 && self.revision.load(Ordering::Acquire) == round
+    }
+}
+
 /// The coarse CoreState cannot prove a core is stopped: Starting/Restarting
 /// can project as Stopped. Only the v2 terminal detail is an ownership proof.
 fn uninstall_requires_stop(status: &StatusInfo<'_>) -> Result<bool> {
@@ -535,6 +579,44 @@ mod tests {
         assert!(!actor.daemon_not_running().await);
         assert!(actor.uninstall().await.is_err());
         assert!(fake.calls().is_empty());
+    }
+
+    #[test]
+    fn health_round_invalidates_stale_ticks_after_disable_and_restart() {
+        let rounds = ServiceHealthRounds::new();
+        assert!(!rounds.is_current(0));
+        let first = rounds.set_enabled(true).unwrap();
+        assert_eq!(
+            rounds.set_enabled(true),
+            Some(first),
+            "enabling twice is idempotent"
+        );
+        assert!(rounds.is_current(first));
+
+        assert_eq!(rounds.set_enabled(false), None);
+        assert!(
+            !rounds.is_current(first),
+            "late probes from a stopped monitor must be ignored"
+        );
+        assert_eq!(rounds.set_enabled(false), None);
+        let second = rounds.set_enabled(true).unwrap();
+        assert_ne!(first, second);
+        assert!(rounds.is_current(second));
+        assert!(
+            !rounds.is_current(first),
+            "previous monitor must not resurrect"
+        );
+    }
+
+    #[test]
+    fn disabled_round_never_accepts_an_in_flight_result() {
+        let rounds = ServiceHealthRounds::new();
+        let round = rounds.set_enabled(true).unwrap();
+        // Simulate a probe that began before the daemon was stopped.
+        rounds.set_enabled(false);
+        assert!(!rounds.is_current(round));
+        assert_eq!(rounds.set_enabled(true), Some(round + 2));
+        assert!(!rounds.is_current(round));
     }
 
     #[tokio::test]

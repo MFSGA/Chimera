@@ -138,7 +138,7 @@ impl ServiceProcessControl for ServiceOsProcess {
 
     async fn uninstall(&self) -> Result<(), ServiceCommandError> {
         run_service_command(ServiceCommand::Uninstall, vec!["uninstall".into()]).await?;
-        super::ipc::KILL_FLAG.store(true, std::sync::atomic::Ordering::Release);
+        super::ipc::stop_health_check();
         Ok(())
     }
 
@@ -148,7 +148,7 @@ impl ServiceProcessControl for ServiceOsProcess {
 
     async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
         run_service_command(ServiceCommand::Stop, vec!["stop".into()]).await?;
-        super::ipc::KILL_FLAG.store(true, std::sync::atomic::Ordering::Release);
+        super::ipc::stop_health_check();
         Ok(())
     }
 

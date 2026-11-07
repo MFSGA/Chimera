@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::{client::ChimeraClient, core::RunType};
 
-use chimera_core::service::compat::ServiceCompat;
+use chimera_core::{actor_v2::service_actor::ServiceHealthRounds, service::compat::ServiceCompat};
 
 #[derive(PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +27,14 @@ impl IpcState {
 static IPC_STATE: AtomicIpcState = AtomicIpcState::new(IpcState::Disconnected);
 pub(super) static KILL_FLAG: AtomicBool = AtomicBool::new(false);
 pub(super) static HEALTH_CHECK_RUNNING: AtomicBool = AtomicBool::new(false);
+static HEALTH_ROUNDS: ServiceHealthRounds = ServiceHealthRounds::new();
+
+/// The OS stop/uninstall already succeeded: invalidate all outstanding
+/// health probes before they can publish an obsolete Service observation.
+pub(super) fn stop_health_check() {
+    HEALTH_ROUNDS.set_enabled(false);
+    KILL_FLAG.store(true, Ordering::Release);
+}
 
 pub fn get_ipc_state() -> IpcState {
     IPC_STATE.load(Ordering::Relaxed)
@@ -228,10 +236,14 @@ fn claim_health_check(running: &AtomicBool) -> bool {
 
 fn spawn_health_check(client: ChimeraClient) {
     KILL_FLAG.store(false, Ordering::Release);
+    let round = HEALTH_ROUNDS
+        .set_enabled(true)
+        .expect("a started health monitor owns an enabled round");
     // Keep admission owned until the thread exits, including on unwind.
     struct RunningGuard;
     impl Drop for RunningGuard {
         fn drop(&mut self) {
+            HEALTH_ROUNDS.set_enabled(false);
             HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
         }
     }
@@ -243,16 +255,17 @@ fn spawn_health_check(client: ChimeraClient) {
             block_on(async {
                 let mut warned_ineligible = false;
                 loop {
-                    if KILL_FLAG.load(Ordering::Acquire) {
+                    if KILL_FLAG.load(Ordering::Acquire) || !HEALTH_ROUNDS.is_current(round) {
                         set_ipc_state(IpcState::Disconnected, &client);
                         break;
                     }
-                    warned_ineligible = health_check(warned_ineligible, &client).await;
+                    warned_ineligible = health_check(warned_ineligible, &client, round).await;
                     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
             })
         });
     if let Err(error) = spawn {
+        HEALTH_ROUNDS.set_enabled(false);
         HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
         tracing::error!(%error, "could not start service health monitor");
     }
@@ -294,9 +307,12 @@ fn target_ipc_state(
 }
 
 #[instrument(skip(client))]
-async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
+async fn health_check(warned: bool, client: &ChimeraClient, round: u64) -> bool {
     match super::control::probe_service_status().await {
         Ok(info) => {
+            if !HEALTH_ROUNDS.is_current(round) {
+                return warned;
+            }
             let runtime_owned = super::is_service_runtime_owned(&info);
             let (state, compat) = target_ipc_state(&info, runtime_owned);
             let ineligible_but_running =
@@ -328,10 +344,15 @@ async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
             if endpoint_down {
                 client.request_service_endpoint_down().await;
             }
-            client.observe_service_status(info);
+            if HEALTH_ROUNDS.is_current(round) {
+                client.observe_service_status(info);
+            }
             next_warned
         }
         Err(e) => {
+            if !HEALTH_ROUNDS.is_current(round) {
+                return warned;
+            }
             tracing::error!("IPC health check failed: {}", e);
             client.observe_service_probe_failure();
             if dispatch_disconnected(client) {
@@ -360,9 +381,9 @@ mod tests {
     };
 
     use super::{
-        IpcState, ServiceBackendObservation, WarnLevel, claim_health_check,
-        next_ineligible_warning_state, should_rebuild_for_ipc_event,
-        should_rebuild_for_ipc_transition, target_ipc_state,
+        HEALTH_ROUNDS, IpcState, KILL_FLAG, ServiceBackendObservation, WarnLevel,
+        claim_health_check, next_ineligible_warning_state, should_rebuild_for_ipc_event,
+        should_rebuild_for_ipc_transition, stop_health_check, target_ipc_state,
     };
     use crate::core::RunType;
     use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
@@ -393,6 +414,19 @@ mod tests {
                 },
             }),
         }
+    }
+
+    #[test]
+    fn successful_os_stop_revokes_any_pending_health_probe_round() {
+        // This is the actual host stop/uninstall hook, not merely the core
+        // generation primitive. A probe started before stop cannot publish.
+        let round = HEALTH_ROUNDS.set_enabled(true).unwrap();
+        KILL_FLAG.store(false, Ordering::Release);
+        assert!(HEALTH_ROUNDS.is_current(round));
+        stop_health_check();
+        assert!(!HEALTH_ROUNDS.is_current(round));
+        assert!(KILL_FLAG.load(Ordering::Acquire));
+        KILL_FLAG.store(false, Ordering::Release);
     }
 
     #[test]

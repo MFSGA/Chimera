@@ -1670,3 +1670,37 @@ against the committed code completed on the Windows host:
   mailbox, lifecycle state/watch ownership, bounded OS authorization and
   health epoch semantics are still pending; no user preferences or wire
   bindings were migrated in this slice.
+
+## 2026-11-07 Core-owned Service health rounds on the production host (partial)
+
+- **Verified upstream:** `main` / `ref` =
+  `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. Only a
+  manifest version edit is newly reachable from the prior baseline.
+  The behavior source remains ref
+  `backend/nyanpasu-core/src/actor_v2/service_actor.rs`:
+  `SetHealthCheck` enables a new round, and a `HealthCheck { round }`
+  from a disabled or superseded generation must not publish.
+- **Production slice / L2:** `backend/chimera-core/src/actor_v2/service_actor.rs`
+  now owns `ServiceHealthRounds` and atomic, idempotent generation
+  transitions. The Tauri monitor in
+  `backend/tauri/src/core/service/ipc.rs` acquires the token before its
+  first probe and rechecks it on tick/probe completion and after asynchronous
+  endpoint-down handling before observing Service status. The actual
+  `ServiceOsProcess::stop_daemon` and `uninstall` success paths in
+  `backend/tauri/src/core/service/control.rs` revoke the health round
+  and signal the monitor to exit. Failed OS commands do neither.
+- **Validation:** core library **172/172** (2 new health-generation tests),
+  Tauri Service IPC **9/9** (1 new real stop-hook test), CoreLifecycle
+  **33/33**, Actor V2 **30/30**, Specta binding freshness **1/1**;
+  full TypeScript typecheck, main/legacy IPC boundary, interface unit suite
+  **56/56**, Service runtime version gate, workspace Rustfmt, whitespace
+  validation, and all-target/all-features Clippy passed with existing warnings.
+  Testing used transient `TAURI_CONFIG` to avoid missing build sidecars,
+  without launching the desktop app or real Service.
+- **Limits / rollback:** no claim of full ServiceActor mailbox,
+  authoritative state/watch ownership, OS authorization or restart policy
+  parity. A stop racing after a token check and a fast stop→start still need
+  real Windows/Service E2E, alongside crash recovery and main/legacy/Agent
+  integration. This batch has no wire, persistence or front-end source
+  changes; revert the three backend files independently of the verified ref
+  gitlink update. The old host monitor remains transitional.
