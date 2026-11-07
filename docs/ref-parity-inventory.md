@@ -2,7 +2,7 @@
 
 **核对基线：** Chimera 本地分支 `codex/clash-api-ipc-dev-1106`，参考子模块 `ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`（2026-11-07，经官方 GitHub `refs/heads/main` 查询及祖先关系验证）。此 SHA 是本次核实时的官方 main，不保证未来仍为最新。此次仅更新基线，以下历史测试数字不代表在新 SHA 上重新执行。
 
-**目标：** 使 Chimera 在代码职责、协议契约、事务语义、可观察状态、前端交互以及运行时行为上尽量与 ref 对齐，同时保留 Chimera 品牌、独有功能、Agent、main/legacy 双 UI 和 `backend/chimera-runtime` 所绑定的服务协议。不要求两个项目的包名、文件数量或字节内容完全相同；不允许借助整体覆盖代码“达成”表面一致。
+**最新目标（用户已明确修改）：** 以 `ref` 的代码职责、协议契约、事务语义、状态、前端接口与运行时行为作为迁移基准。**无需保留 Chimera 旧架构、旧 API 或旧 Service IPC 的兼容性**；允许连同调用方和运行时执行破坏性替换，删除被取代的旧实现，不构造长期双轨适配。迁移仍应避免无关改动、用户数据意外损毁和未测试状态下的功能失效；不应因为复制文件或编译通过就宣称整个架构已对齐。Chimera 的产品身份可独立于底层旧协议。
 
 ## 核对方法
 
@@ -34,9 +34,9 @@
 | 2    | `backend/nyanpasu-core/src/proxies.rs`                                                                         | `backend/tauri/src/core/clash/proxies.rs` + 新的 `chimera-core/src/proxies.rs`                      | 迁移长生命周期 **ProxiesActor** 与单一快照/Provider 缓存、去重刷新、变更事件、选择/取消固定后重读及中断降级；以同一状态驱动 native 和 legacy |
 | 3    | `backend/nyanpasu-core/src/clash/ws.rs`                                                                        | `backend/tauri/src/core/clash/ws.rs`                                                                | 抽出实例绑定 Stream Actor、类型化帧、history/sequence、流量/内存/日志事件；Tauri 仅做 Channel/Event 桥接；保证断线重连和 Agent 统计连续性    |
 | 4    | `backend/nyanpasu-core/src/client/{application,application_workflow,profiles,system_proxy,hotkey,effects,...}` | `backend/tauri/src/client/` 和部分 `core/`                                                          | 将应用事务参与者、profiles、热键、系统代理、运行状态等核心流程迁到无 Tauri 依赖的 core；Tauri 提供 OS/UI adapter，保护 Chimera 特性          |
-| 5    | `backend/nyanpasu-core/src/state/{application,profiles,mutation,clash_config,...}`                             | `backend/chimera-core/src/state/`、`backend/tauri/src/config/`                                      | 迁移多参与者事务、持久化和失败结算、Profile jobs、状态变更广播；既有配置/迁移格式必须兼容                                                    |
+| 5    | `backend/nyanpasu-core/src/state/{application,profiles,mutation,clash_config,...}`                             | `backend/chimera-core/src/state/`、`backend/tauri/src/config/`                                      | 迁移多参与者事务、持久化和失败结算、Profile jobs、状态变更广播；允许新格式，必要时明确迁移用户数据而非保留旧 API                             |
 | 6    | `backend/nyanpasu-core/src/{service,logs,geo,traffic,storage,utils,profile_import,...}`                        | `backend/tauri/src/{core,client,feat,...}`，独立 `chimera-traffic`/`chimera-jobs`/`chimera-geodata` | 按职责迁移业务处理，不重写已有独立 crates；检验 service IPC、geo 缓存、traffic 持久化及恢复，保留用户数据                                    |
-| 7    | `backend/tauri/src/{unified_rpc.rs,adapters/}`                                                                 | `backend/tauri/src/ipc.rs`、`specta_export.rs`、`frontend/interface/src/ipc/`                       | 建立与 ref 对齐的可审计 Unified RPC/typed errors/transport；同时保留既有 Tauri IPC 作为兼容层，不能一次性删掉 Agent/legacy 依赖              |
+| 7    | `backend/tauri/src/{unified_rpc.rs,adapters/}`                                                                 | `backend/tauri/src/ipc.rs`、`specta_export.rs`、`frontend/interface/src/ipc/`                       | 以 ref Unified RPC/typed errors/transport 作为新契约，**同步迁移并删除**旧 Tauri 命令与调用方；不保留旧兼容层                                |
 | 8    | `frontend/{query,rpc,platform}/src`                                                                            | `frontend/interface/src`、`frontend/chimera/src`                                                    | 抽离 query/rpc/platform 层、统一缓存键、mutation 结果和失联处理；逐页迁移 main/legacy；测试窗口、系统代理、profiles、连接/流与设置           |
 | 9    | `frontend/nyanpasu/src`                                                                                        | `frontend/chimera/src`                                                                              | 按行为逐页检查差异；保留 Chimera 主题、标识、Agent 诊断及功能，避免换回 Nyanpasu 品牌                                                        |
 | 10   | 跨系统集成测试与文档                                                                                           | 现有 `frontend/chimera/tests`、`tauri-e2e` 等                                                       | Windows 主/旧 UI + Service 模式的真正端到端用例、实例切换/升级、数据迁移、权限、流量历史与回滚；再视 CI 能力扩展其他平台                     |
@@ -45,7 +45,7 @@
 
 1. 在原目录 `I:\mfsga\Chimera` 的当前分支操作；不使用替身 worktree，不修改 `ref` 工作树，也不改变 `backend/chimera-runtime` 的 gitlink（除非经过明确版本核对与必要性验证）。
 2. 先确认原始未提交差异，按路径和 hunk 精确暂存；绝不混入无关的 `pnpm-lock.yaml` 改动。
-3. 迁移**所有权和生产调用路径**，而不仅仅是复制 DTO 或改名。旧 UI/Agent 仍有调用时保留明确兼容投影。
+3. 迁移**所有权和生产调用路径**，而不仅仅是复制 DTO 或改名。同步修改旧 UI/Agent 调用点，删除被替代的旧接口与重复实现，不再新增兼容投影。
 4. 每段提交前运行独立 core、相关 Tauri Rust/Specta、interface/main/legacy TS、边界、相关单测、格式及差异检查。遇到无法执行的 Clippy、dated nightly 或真正桌面 E2E，明确标注未执行，不作通过声明。
 5. 对生命周期/写操作实施失败关闭：旧实例不执行新写入；未知回复不自动重试；缓存不乐观宣称提交；核心切换后旧响应不得覆盖新快照。
 6. 每一块逻辑独立 Git 本地提交，保留可审查的 Diff；不推送、不启动桌面程序。当前对齐状态不等同于全部完成，只有实际实现和对应集成测试通过后才可勾选项目。
@@ -131,3 +131,33 @@ Agent **3/3**、Specta 类型一致性 **1/1**，
 `CoreActor` mailbox、`CoreClient` 与 facade 对齐。
 Chimera 现有 Service IPC 和权限校验不同于上游，
 这些部分不能直接整文件覆盖后仅通过编译即宣称完成。
+
+## 2026-11-07 GitHub 分支推送与独立 core 版本门禁
+
+用户要求先把已有分支提交推送，再继续迁移，并明确**不再保留旧 Chimera 接口兼容层**。已将此前所有已验证本地提交推送至
+`origin/codex/clash-api-ipc-dev-1106`，推送后通过 `git ls-remote` 确认远端
+`89051f0f8c504888f0ae2e8b98761e35ce649e93` 与本地 SHA 相同；没有推送未提交的
+`pnpm-lock.yaml` 差异。
+
+随后本地代码提交 `9842d0d5` 将 Service 版本门禁的**完整实现与 7 项测试**
+从 `backend/tauri/src/core/service/compat.rs` **迁移**到
+`backend/chimera-core/src/service/compat.rs`，并删除原 Tauri 文件；
+Tauri Service IPC/状态观察/生命周期/启动更新和 IPC DTO 现在直接引用
+core 的 `ServiceCompat`、`parse_service_version`，不是再保留一份旧实现。
+依照 ref `backend/nyanpasu-core/src/service/compat.rs` 的纯 semver
+判定和 fail-closed 分类，将服务版本判断归于独立 core。新增直接依赖
+`semver`，按真实依赖更新 `backend/Cargo.lock`。
+
+**分阶段的版本约束：** 上游当前 Service 的最低版本为 `2.0.2`，但当前仓库实际打包的
+`backend/chimera-runtime/chimera_service` 仍为 Chimera 自身 `1.10.x` 版本；
+本批不伪造已经完成上游 Service 可执行文件迁移，仍按**当前实际可运行服务**
+设定 `REQUIRED_SERVICE_MIN = 1.10.1`。后续迁移 Service 二进制与
+新协议时应同时切换版本门禁；这是分阶段一致性，而非要求保留旧兼容层。
+
+**验证：** core 完整单测 **155/155**；Tauri Service IPC
+**7/7**、生命周期 **33/33**、Actor V2 **28/28**、
+Agent **3/3**、Specta 生成绑定一致性 **1/1**；
+前端相关单测 **28/28**、界面/main TypeScript 和前端边界、Rustfmt
+均通过。完整 Clippy 与真实 Service/桌面 E2E **未执行**。
+`ServiceActor` mailbox、OS 服务进程控制、核心所有权切换与 Unified RPC
+仍是待迁移任务。

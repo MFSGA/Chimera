@@ -1236,6 +1236,7 @@ dependencies = [
  "fs-err",
  "futures-util",
  "indexmap 2.14.2",
+ "semver 1.0.28",
  "serde",
  "serde_json",
  "serde_yaml",

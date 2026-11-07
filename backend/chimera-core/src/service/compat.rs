@@ -1,4 +1,7 @@
-//! Service daemon version compatibility gate.
+//! Service daemon version gate owned by the independent core.
+//! Adapted from ref/backend/nyanpasu-core/src/service/compat.rs.
+//! The minimum is tied to this checkout's bundled daemon until its service
+//! runtime is migrated, not to a discarded upstream binary version.
 //!
 //! Status payloads can remain decodable across incompatible daemon revisions,
 //! so service-mode eligibility must not rely on deserialization failures.
@@ -202,8 +205,7 @@ mod tests {
 
     #[test]
     fn required_min_never_exceeds_the_bundled_service_version() {
-        const MANIFEST: &str =
-            include_str!("../../../../chimera-runtime/chimera_service/Cargo.toml");
+        const MANIFEST: &str = include_str!("../../../chimera-runtime/chimera_service/Cargo.toml");
         let bundled = parse_package_version(MANIFEST);
 
         assert!(required_service_min() <= bundled);

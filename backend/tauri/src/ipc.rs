@@ -767,7 +767,7 @@ pub mod service {
         pub status: chimera_ipc::types::ServiceStatus,
         pub server: Option<chimera_ipc::api::status::StatusResBody<'a>>,
         pub phase: crate::client::core_lifecycle::ServicePhase,
-        pub compat: crate::core::service::compat::ServiceCompat,
+        pub compat: chimera_core::service::compat::ServiceCompat,
         pub runtime_owned: bool,
         pub restart_attempts: u8,
     }
