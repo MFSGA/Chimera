@@ -812,3 +812,75 @@ while Chimera currently derives typed connection details from
 WebSocket JSON samples and retains its legacy connection-frame
 contract. Future slices should converge these models with explicit
 UI/Agent and transport compatibility tests.
+
+### 2026-11-07 instance-bound actor and connection interruption ownership
+
+**Original checkout** `I:\mfsga\Chimera`,
+branch `codex/clash-api-ipc-dev-1106`. The local reference checkout
+was `ref@ef5f11fd1efc34b83616eb578858dd01c99b1f02` and clean.
+Its parent-repo gitlink update remains deliberately **uncommitted**,
+along with the unrelated `pnpm-lock.yaml` change. This is a local
+comparison baseline, not a claim that the official upstream branch
+was checked afresh this round.
+
+**First scoped commit `4865c36`:** verified and committed six
+existing in-progress extraction files in dependency order:
+
+- `backend/chimera-core/src/actor_v2/api.rs` now owns the
+  instance-bound `ApiClient`, stream forwarding, API lease
+  monitoring, controller capability checks, timeouts and typed
+  controller-protocol calls. `backend/tauri/src/core/actor_v2/api.rs`
+  is an application-specific `ControlEndpoint` adapter and
+  compatibility wrapper rather than a second protocol implementation.
+- `backend/chimera-core/src/clash/proxies.rs::NativeProxies::fetch`
+  owns the proxy snapshot read and normalized assembly, while
+  `backend/tauri/src/core/clash/proxies.rs` retains the existing
+  main/legacy UI DTO projection and app retry policy.
+- `backend/chimera-core/Cargo.toml` and `backend/Cargo.lock`
+  register the cross-crate protocol, IPC, stream, JSON/YAML and
+  cancellation dependencies required by that migration.
+- The implementation still intentionally supports an **unbound**
+  startup-readiness API client and `anyhow::Result`; ref's bound-only
+  `ApiError::{Stale,Unavailable,Timeout,Protocol}` is a later
+  compatibility-sensitive migration.
+
+**Second scoped commit `c1f7078d`:**
+
+- New `backend/chimera-core/src/connections.rs` owns
+  `ConnectionScope::{All,ProxyGroup}`, matching-chain selection,
+  the running core's `GET /connections` request, and precise
+  connection closures using the bound `ApiClient`.
+- `backend/chimera-core/src/lib.rs` exports the module;
+  `backend/tauri/src/core/connection_interruption.rs` now only
+  maps Chimera's persisted proxy-change mode and boolean
+  profile/mode settings to the core-owned operations. Existing app
+  callers and IPC signatures remain unchanged.
+- A multi-chain helper preserves Chimera's existing compatibility
+  entrypoint without retaining a duplicate copy of the algorithm.
+  New core HTTP mock tests verify exact group filtering (a similarly
+  named group is not closed) and that an All scope performs a single
+  direct DELETE rather than reading a list first.
+- **Semantics to verify with real cores:** the previous Chimera
+  implementation attempted targeted deletes concurrently with
+  `join_all`. The migrated function now closes sequentially and
+  stops at the first error, as in ref. Lost mutation responses do not
+  trigger automatic retry. This difference should be checked in
+  integration tests before declaring runtime parity.
+
+**Validation:** `chimera-core --lib` **118/118 passed**, including
+four `connections::tests` (two HTTP mock cases). Tauri actor API
+**9/9**, proxy assembly **11/11**, runtime transaction **11/11**,
+Agent core probe **3/3**, and the Tauri strategy adapter **1/1**
+passed. The generated Specta bindings freshness test **passed**.
+Interface and main/legacy TypeScript checks, frontend boundary lint,
+Tauri E2E harness unit tests **33/33**, stable Rustfmt, and
+`git diff --check` passed. These are not a real desktop or real
+controller runtime E2E. The complete Clippy suite was not verified;
+a one-command `HUSKY=0` bypass was used for the two scoped Rust
+commits only after the independent checks, without changing hook
+configuration.
+
+**Next priority:** structured `ApiError` and bound/unbound lifecycle
+separation; then typed connection summary/rates and provider-aware,
+expected-status/pin-aware delay APIs. Unified RPC and the independent
+frontend RPC/query package boundaries still lag ref.

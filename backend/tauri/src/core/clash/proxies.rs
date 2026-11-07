@@ -10,7 +10,9 @@ use std::sync::{Arc, OnceLock};
 use tokio::{sync::broadcast, try_join};
 use tracing::instrument;
 
-use crate::core::actor_v2::api::{ApiClient, ProxySnapshot};
+use crate::core::actor_v2::api::ApiClient;
+#[cfg(test)]
+use crate::core::actor_v2::api::ProxySnapshot;
 use crate::core::clash::{CLASH_API_DEFAULT_BACKOFF_STRATEGY, api};
 
 pub use chimera_core::clash::proxies::{
@@ -95,27 +97,16 @@ fn proxy_item(record: &Proxy) -> api::ProxyItem {
 /// Assembly and schema live in the independent core crate, not in this adapter.
 #[instrument(skip(api))]
 pub async fn fetch_native_proxies(api: &ApiClient) -> Result<NativeProxies> {
-    let ProxySnapshot {
-        proxies,
-        providers,
-        groups,
-    } = (|| api.proxy_snapshot())
+    (|| NativeProxies::fetch(api))
         .retry(*CLASH_API_DEFAULT_BACKOFF_STRATEGY)
-        .await?;
-    NativeProxies::from_responses(proxies, &providers, groups)
+        .await
 }
 
 impl Proxies {
     #[instrument(skip(api))]
     pub async fn fetch(api: &ApiClient) -> Result<Self> {
-        let ProxySnapshot {
-            proxies,
-            providers,
-            groups,
-        } = (|| api.proxy_snapshot())
-            .retry(*CLASH_API_DEFAULT_BACKOFF_STRATEGY)
-            .await?;
-        Self::from_responses(proxies, &providers, groups)
+        let native = fetch_native_proxies(api).await?;
+        Ok(Self::from_native(native))
     }
 
     /// Project ref's normalized proxy graph to the existing main/legacy UI

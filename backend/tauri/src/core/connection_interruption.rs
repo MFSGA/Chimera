@@ -1,106 +1,76 @@
+//! Chimera policy adapter; connection selection and close requests live in
+//! `chimera_core::connections` beside the core-owned Clash API capability.
+
 use anyhow::Result;
 use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
-use futures_util::future::join_all;
+use chimera_core::connections::{ConnectionScope, interrupt_by_chains, interrupt_connections};
 
 use crate::core::actor_v2::api::ApiClient;
-use crate::core::clash::api::ConnectionItem;
 
-/// Connection interruption service that handles closing connections based on configuration settings.
+/// Map the persisted app strategy to ref's core-owned connection scope.
+fn proxy_change_scope(strategy: ProxyChangeBreakMode, group: &str) -> Option<ConnectionScope> {
+    match strategy {
+        ProxyChangeBreakMode::Off => None,
+        ProxyChangeBreakMode::ProxyGroup => Some(ConnectionScope::ProxyGroup {
+            name: group.to_owned(),
+        }),
+        ProxyChangeBreakMode::All => Some(ConnectionScope::All),
+    }
+}
+
+/// Application compatibility surface for existing Tauri IPC and lifecycle calls.
 pub struct ConnectionInterruptionService;
 
 impl ConnectionInterruptionService {
-    /// Interrupt connections when proxy changes.
     pub async fn on_proxy_change(
         api: &ApiClient,
         break_when: ProxyChangeBreakMode,
         group: &str,
     ) -> Result<()> {
-        match break_when {
-            ProxyChangeBreakMode::Off => Ok(()),
-            ProxyChangeBreakMode::ProxyGroup => Self::interrupt_by_chain(api, &[group]).await,
-            ProxyChangeBreakMode::All => api.delete_connections(None).await,
+        match proxy_change_scope(break_when, group) {
+            Some(scope) => interrupt_connections(api, &scope).await,
+            None => Ok(()),
         }
     }
 
-    /// Interrupt connections when profile changes.
     pub async fn on_profile_change(api: &ApiClient, break_when: bool) -> Result<()> {
         if break_when {
-            api.delete_connections(None).await
+            interrupt_connections(api, &ConnectionScope::All).await
         } else {
             Ok(())
         }
     }
 
-    /// Interrupt connections when mode changes.
     pub async fn on_mode_change(api: &ApiClient, break_when: bool) -> Result<()> {
         if break_when {
-            api.delete_connections(None).await
+            interrupt_connections(api, &ConnectionScope::All).await
         } else {
             Ok(())
         }
     }
 
-    /// Interrupt only connections whose active proxy chain contains one of the supplied names.
-    pub async fn interrupt_by_chain(api: &ApiClient, chain: &[&str]) -> Result<()> {
-        let connections = api.get_connections().await?.connections;
-        let ids = connection_ids_for_chain(&connections, chain);
-        let results = join_all(ids.iter().map(|id| api.delete_connections(Some(id)))).await;
-
-        for result in results {
-            result?;
-        }
-        Ok(())
+    /// Keep the public compatibility entrypoint for multiple chain names.
+    pub async fn interrupt_by_chain(api: &ApiClient, chains: &[&str]) -> Result<()> {
+        interrupt_by_chains(api, chains).await
     }
-}
-
-fn connection_ids_for_chain(connections: &[ConnectionItem], chain: &[&str]) -> Vec<String> {
-    connections
-        .iter()
-        .filter(|connection| {
-            connection
-                .chains
-                .iter()
-                .any(|name| chain.iter().any(|expected| name == expected))
-        })
-        .map(|connection| connection.id.clone())
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::connection_ids_for_chain;
-    use crate::core::clash::api::ConnectionItem;
-
-    fn connection(id: &str, chains: &[&str]) -> ConnectionItem {
-        ConnectionItem {
-            id: id.to_owned(),
-            chains: chains.iter().map(|value| (*value).to_owned()).collect(),
-        }
-    }
+    use super::*;
 
     #[test]
-    fn chain_filter_only_selects_related_connections() {
-        let connections = vec![
-            connection("a", &["Node A", "Auto", "GLOBAL"]),
-            connection("b", &["Node B", "Fallback", "GLOBAL"]),
-            connection("c", &["DIRECT"]),
-        ];
-
-        let ids = connection_ids_for_chain(&connections, &["Auto"]);
-
-        assert_eq!(ids, vec!["a"]);
-    }
-
-    #[test]
-    fn chain_filter_matches_any_requested_chain_name_exactly() {
-        let connections = vec![
-            connection("a", &["Auto", "GLOBAL"]),
-            connection("b", &["Auto Backup", "GLOBAL"]),
-            connection("c", &["Fallback", "GLOBAL"]),
-        ];
-
-        let ids = connection_ids_for_chain(&connections, &["Auto", "Fallback"]);
-
-        assert_eq!(ids, vec!["a", "c"]);
+    fn persisted_change_policy_is_mapped_without_touching_the_controller() {
+        assert_eq!(proxy_change_scope(ProxyChangeBreakMode::Off, "Group"), None);
+        assert_eq!(
+            proxy_change_scope(ProxyChangeBreakMode::All, "Group"),
+            Some(ConnectionScope::All)
+        );
+        assert_eq!(
+            proxy_change_scope(ProxyChangeBreakMode::ProxyGroup, "Group"),
+            Some(ConnectionScope::ProxyGroup {
+                name: "Group".to_owned()
+            })
+        );
     }
 }
