@@ -212,6 +212,19 @@ fn unknown_proxy(name: &ProxyName) -> Proxy {
 }
 
 impl NativeProxies {
+    /// Read one controller snapshot and assemble its normalized graph in the
+    /// independent core crate, matching ref's core-owned proxy fetch path.
+    /// Retry policy is supplied by the caller to preserve app lifecycle rules.
+    #[tracing::instrument(skip(api))]
+    pub async fn fetch(api: &crate::actor_v2::api::ApiClient) -> Result<Self> {
+        let crate::actor_v2::api::ProxySnapshot {
+            proxies,
+            providers,
+            groups,
+        } = api.proxy_snapshot().await?;
+        Self::from_responses(proxies, &providers, groups)
+    }
+
     /// `group_list` is the core's own group list; `None` infers groups from
     /// every `/proxies` record with members.
     pub fn from_responses(
