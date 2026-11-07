@@ -45,30 +45,9 @@ const LOCAL_OPERATION_WAIT: Duration = Duration::from_secs(60);
 const LOCAL_OPERATION_HISTORY: usize = 64;
 const SERVICE_API_MONITOR_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServiceRestartDecision {
-    Ignore,
-    Restart { next_attempt: u8 },
-    Exhaust,
-}
-
-fn service_restart_decision(
-    status: chimera_ipc::types::ServiceStatus,
-    attempts: u8,
-    exhausted: bool,
-    budget: u8,
-) -> ServiceRestartDecision {
-    if exhausted || status != chimera_ipc::types::ServiceStatus::Stopped {
-        return ServiceRestartDecision::Ignore;
-    }
-    if attempts >= budget {
-        ServiceRestartDecision::Exhaust
-    } else {
-        ServiceRestartDecision::Restart {
-            next_attempt: attempts.saturating_add(1),
-        }
-    }
-}
+// Service restart decisions now belong to the independent core;
+// this facade keeps only the OS/IPC mutation adapter.
+use chimera_core::actor_v2::service_policy::{ServiceRestartDecision, service_restart_decision};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ServiceRestartPolicySnapshot {
