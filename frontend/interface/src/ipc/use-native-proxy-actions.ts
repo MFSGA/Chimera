@@ -81,6 +81,26 @@ export const useNativeProxyActions = () => {
     [performSelect],
   );
 
+  const { mutateAsync: performClearFixed, isPending: isClearingFixed } =
+    useMutation({
+      mutationKey: mutations.clearProxyFixed.mutationKey,
+      mutationFn: async ([group]: [string]) =>
+        unwrapResult(await invokeMutation(mutations.clearProxyFixed, [group])),
+      // A timeout or dropped IPC reply does not prove the DELETE failed.
+      // Re-read both views even on errors; never optimistically clear fixed.
+      onSettled: async () => {
+        await Promise.allSettled([
+          queryClient.refetchQueries({ queryKey: nativeKey, exact: true }),
+          queryClient.invalidateQueries({ queryKey: legacyKey, exact: true }),
+        ]);
+      },
+    });
+
+  const clearProxyFixed = useCallback(
+    (group: string) => performClearFixed([group]),
+    [performClearFixed],
+  );
+
   const updateProxiesDelay = useMutation({
     mutationFn: async ([name, url, provider, expected]: [
       string,
@@ -110,5 +130,5 @@ export const useNativeProxyActions = () => {
     },
   });
 
-  return { selectProxy, updateProxiesDelay };
+  return { selectProxy, clearProxyFixed, isClearingFixed, updateProxiesDelay };
 };

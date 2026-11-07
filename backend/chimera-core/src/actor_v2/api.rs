@@ -354,6 +354,16 @@ impl ApiClient {
         .await
     }
 
+    /// Remove a pin from a capable automatic group. A lost DELETE reply may
+    /// still mean the pin was removed; never retry the mutation automatically.
+    pub async fn clear_proxy_selection(&self, group: &ProxyName) -> ApiResult<()> {
+        self.execute(
+            DEFAULT_API_TIMEOUT,
+            self.client.clear_proxy_selection(group),
+        )
+        .await
+    }
+
     pub async fn patch_configs(&self, config: &Mapping) -> Result<()> {
         let patch = serde_json::to_value(config).context("failed to encode config patch")?;
         self.execute(DEFAULT_API_TIMEOUT, self.client.patch_config_value(&patch))
