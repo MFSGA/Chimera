@@ -1492,3 +1492,58 @@ and mailbox, not another status DTO. The user's approved
 `pnpm-lock.yaml` deletion hunk recurred during frontend checks,
 was discarded without staging, and the code was committed locally;
 no push occurred in this migration batch.
+
+### 2026-11-07 include the separately versioned Chimera runtime
+
+User-approved scope now **includes** `backend/chimera-runtime`
+with its own Git history. The source of truth is the main repository
+`ref@b7f54a4b` and its pinned
+`ref/backend/nyanpasu-runtime@a27c3fcc`, _not_ the older
+`chimera-runtime/ref@7509cbf8`.
+
+Committed on the runtime's local
+`codex/ref-runtime-alignment-1107` branch:
+`6a92c2ce5bd0f33d4f414c39c7e625349a510d21`.
+Five runtime files changed:
+
+- `chimera_service/src/main.rs`: copy and activate upstream
+  `run_until_signal` plus four regression tests. First Ctrl+C
+  now cancels the real `SERVER_SHUTDOWN_TOKEN` and awaits core
+  shutdown and pipe drain instead of dropping the handler Future;
+  second Ctrl+C stops waiting, with non-server CLI exit semantics
+  preserved.
+- `chimera_service/src/cmds/server.rs`: replace privileged
+  environment **values** logging with upstream environment-names-only
+  projection and a secret-redaction test.
+- `chimera_service/src/win_service.rs`: upstream Windows SCM
+  STOP_PENDING progress checkpoints every 2 seconds with a 90-second
+  reporting deadline, while awaiting actual handler completion.
+- `chimera_service/src/server/manager_bridge.rs` and
+  `chimera_ipc/src/api/core/v2.rs`: use the authoritative
+  platform executable suffix when checking Chimera stable/alpha
+  sidecar identity. The old cross-platform tests were incorrect
+  on Windows even though production lookup was correct.
+
+Validated after fixing test fixtures: runtime service **55/55**,
+IPC **14/14**, Core Manager **121/121** (one pre-existing ignored);
+runtime Service+IPC+Manager non-test `cargo check --locked`,
+workspace Rustfmt; host core **159/159**, Tauri Service IPC
+**7/7**, lifecycle **33/33**, Actor V2 **28/28**,
+Specta freshness **1/1**, full frontend typecheck,
+frontend boundaries, main Rustfmt and runtime version
+consistency check. No physical Service/SCM/UAC/DNS E2E, full
+Clippy pass, or binary release is claimed.
+
+**Important release limitation:** host
+`scripts/src/prepare/binaries.ts` downloads the binary by the
+Service crate's version (`v1.11.1` here), not by the Git
+submodule SHA. The local gitlink advancement alone does not
+replace any already released `v1.11.1` binary. Before this
+change ships, publish the runtime commit to an accessible
+remote ref, build and release matching new-version assets,
+update the IPC/Service version and version gate, and verify
+the downloaded binary actually carries the change.
+`pnpm check:service-runtime` checks manifest version equality
+only, and cannot establish the latter property. Main
+repository and runtime changes remain local until that
+release/publish sequence is intentionally performed.

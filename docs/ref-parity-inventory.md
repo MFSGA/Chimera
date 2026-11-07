@@ -43,7 +43,7 @@
 
 ## 每批迁移的验收门槛
 
-1. 在原目录 `I:\mfsga\Chimera` 的当前分支操作；不使用替身 worktree，不修改 `ref` 工作树，也不改变 `backend/chimera-runtime` 的 gitlink（除非经过明确版本核对与必要性验证）。
+1. 在原目录 `I:\mfsga\Chimera` 的当前分支操作；不使用替身 worktree，不修改 `ref` 工作树。用户已明确要求**同时迁移 `backend/chimera-runtime`**；新 runtime 提交经过独立测试后，主仓库必须更新其 gitlink，并明确后续发布资产和可获取性条件。
 2. 先确认原始未提交差异，按路径和 hunk 精确暂存；绝不混入无关的 `pnpm-lock.yaml` 改动。
 3. 迁移**所有权和生产调用路径**，而不仅仅是复制 DTO 或改名。同步修改旧 UI/Agent 调用点，删除被替代的旧接口与重复实现，不再新增兼容投影。
 4. 每段提交前运行独立 core、相关 Tauri Rust/Specta、interface/main/legacy TS、边界、相关单测、格式及差异检查。遇到无法执行的 Clippy、dated nightly 或真正桌面 E2E，明确标注未执行，不作通过声明。
@@ -201,3 +201,64 @@ E2E 框架单测 **33/33**、Rustfmt 通过。
 `ServiceCommandError` 端口、ServiceActor OS 命令 mailbox、
 权限/安装/升级/健康监测和 CoreActor 路由。此批仅转移
 实际状态所有权，不声称整个 ServiceActor 已完成迁移。
+
+## 2026-11-07 runtime Service 停机、日志与主仓库 gitlink 对齐
+
+用户明确要求 `backend/chimera-runtime` **也直接参考上游并参与实际迁移**。
+主仓库参考锁定 `ref@b7f54a4b`，其
+`backend/nyanpasu-runtime@a27c3fcc` 为本批上游依据；
+不能误用 Chimera runtime 自身较旧的
+`backend/chimera-runtime/ref@7509cbf8`。
+
+**独立 runtime 子模块：** 在
+`backend/chimera-runtime` 的本地工作分支
+`codex/ref-runtime-alignment-1107` 中提交
+`6a92c2ce5bd0f33d4f414c39c7e625349a510d21`。
+从上游
+`nyanpasu-runtime/nyanpasu_service/src/main.rs` 复制并接入
+`run_until_signal`（含 4 项测试），将原先收到 Ctrl+C
+就丢弃 `handler()` future 的做法改为：若 Service 已启动，
+取消真实 `SERVER_SHUTDOWN_TOKEN`、等待服务器完成
+core/DNS 关闭并排空管道，第二次信号允许结束等待；其他
+CLI 命令仍即时结束。此项变更**已经接入运行路径**。
+
+同一提交参考
+`nyanpasu-service-runtime/src/cmds/server.rs`：
+特权 Service 启动日志只输出 `std::env::vars_os()` 的
+**环境变量名称**，而非记录含凭据的值；独立测试验证
+用户名、密码和 token 值不会进入日志字段。
+参考上游 `nyanpasu_service/src/win_service.rs`：
+Windows SCM STOP_PENDING 以 2s 间隔刷新 checkpoint，
+最多报告 90s，期间等待正常 Service/core shutdown；
+之后停止伪造进度（仍等待真实 handler 结束）。
+另修正两项跨平台测试夹具使用
+`CoreType::get_executable_name()` 或
+`std::env::consts::EXE_SUFFIX`，避免 Windows 上把
+`.exe` 路径误当失败。这些更改同时涵盖
+`chimera_service` 与 `chimera_ipc`。
+
+**本批运行验证：** Windows runtime `chimera-service --bin`
+**55/55**、`chimera-ipc --lib` **14/14**、
+`chimera-core-manager --lib` **121/121**
+（另有原本标记 ignored 的 1 项）；Service/IPC/Manager
+`cargo check --locked`、整个 runtime Rustfmt 通过。
+主仓库 core **159/159**、Tauri Service IPC **7/7**、
+Lifecycle **33/33**、Actor V2 **28/28**、Specta **1/1**、
+完整 `pnpm typecheck`、前端边界、主仓库 Rustfmt、
+`pnpm check:service-runtime` 通过。
+**未执行**真实 Windows SCM / privileged Service、
+DNS/TUN 实机集成或完整 Clippy。
+
+**发布与合并前置条件（尚未完成）：**
+`scripts/src/prepare/binaries.ts` 根据
+`chimera_service/Cargo.toml` 的
+`v1.11.1` 下载远程已发布的 Chimera_Service sidecar；
+`scripts/check-service-runtime.ts` 只验证 Service/IPC 版本字符串相同，
+**不**验证新 gitlink 与实际 release 二进制是否对应。
+因此本批新源码不会自动进入已发布的 `v1.11.1` 安装包。
+必须先使 `6a92c2ce` 对应的子模块 commit 可由远端读取，
+随后构建、测试、发布匹配版本的新 Service 二进制、
+调整版本与所需最低版本门禁并验证 prepare/打包，
+才能宣称已发布 runtime 与该源码一致。
+本批只作本地提交，不推送、不发布、不声称完整上游
+Service/IPC/OS 进程控制架构已迁完。
