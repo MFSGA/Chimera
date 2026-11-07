@@ -54,7 +54,7 @@ pub(crate) struct CoreLifecycleOperationResult {
 
 use chimera_core::actor_v2::{
     service_policy::{ServicePhase, ServiceRestartPolicySnapshot},
-    service_status::ServiceHostStatus,
+    service_status::{ServiceHostStatus, ServiceHostWatch},
 };
 
 // OS-specific runtime ownership evidence enters the core through an input.
@@ -123,7 +123,7 @@ struct ApplicationWorkflowState {
     pending: VecDeque<Request>,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
-    service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
+    service_status: ServiceHostWatch,
     uncertain: bool,
     shutting_down: bool,
     shutdown_result: Option<Option<String>>,
@@ -136,7 +136,7 @@ struct ApplicationWorkflowArgs {
     workflow: CoreLifecycleWorkflow,
     next_id: Arc<AtomicU64>,
     status: Arc<parking_lot::Mutex<CoreLifecycleStatus>>,
-    service_status: tokio::sync::watch::Sender<ServiceHostStatus>,
+    service_status: ServiceHostWatch,
 }
 
 struct Response {
@@ -162,10 +162,8 @@ impl ApplicationWorkflowState {
     }
 
     fn publish_service_status(&self, info: chimera_ipc::types::StatusInfo<'static>) {
-        let previous = self.service_status.borrow().clone();
         let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        self.service_status
-            .send_replace(previous.observe_probe(info, runtime_owned, None));
+        self.service_status.observe_probe(info, runtime_owned, None);
     }
 
     fn publish_service_status_with_policy(
@@ -173,21 +171,17 @@ impl ApplicationWorkflowState {
         info: chimera_ipc::types::StatusInfo<'static>,
         policy: ServiceRestartPolicySnapshot,
     ) {
-        let previous = self.service_status.borrow().clone();
         let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
         self.service_status
-            .send_replace(previous.observe_probe(info, runtime_owned, Some(policy)));
+            .observe_probe(info, runtime_owned, Some(policy));
     }
 
     fn publish_service_phase(&self, phase: ServicePhase) {
-        let previous = self.service_status.borrow().clone();
-        self.service_status.send_replace(previous.with_phase(phase));
+        self.service_status.publish_phase(phase);
     }
 
     fn publish_service_probe_failure(&self) {
-        let previous = self.service_status.borrow().clone();
-        self.service_status
-            .send_replace(previous.on_probe_failure());
+        self.service_status.probe_failed();
     }
 
     async fn refresh_service_status(&mut self) -> anyhow::Result<ServiceHostStatus> {
@@ -198,11 +192,10 @@ impl ApplicationWorkflowState {
         let policy = workflow.service_restart_policy();
         match workflow.probe_service().await {
             Ok(info) => {
-                let previous = self.service_status.borrow().clone();
                 let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-                let status = previous.observe_probe(info, runtime_owned, Some(policy));
-                self.service_status.send_replace(status.clone());
-                Ok(status)
+                Ok(self
+                    .service_status
+                    .observe_probe(info, runtime_owned, Some(policy)))
             }
             Err(error) => {
                 self.publish_service_probe_failure();
@@ -1015,8 +1008,8 @@ impl CoreLifecycleClient {
         );
         let status = Arc::new(parking_lot::Mutex::new(CoreLifecycleStatus::default()));
         let next_id = Arc::new(AtomicU64::new(1));
-        let (service_status_tx, service_status_rx) =
-            tokio::sync::watch::channel(ServiceHostStatus::probing());
+        let service_status = ServiceHostWatch::new();
+        let service_status_rx = service_status.subscribe();
         let (actor_ref, _handle) = Actor::spawn(
             None,
             ApplicationWorkflowActor,
@@ -1024,7 +1017,7 @@ impl CoreLifecycleClient {
                 workflow,
                 next_id: next_id.clone(),
                 status: status.clone(),
-                service_status: service_status_tx,
+                service_status,
             },
         )
         .await?;

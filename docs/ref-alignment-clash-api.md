@@ -1710,3 +1710,42 @@ against the committed code completed on the Windows host:
 - **Baseline:** pinned `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. A fresh `ls-remote` against upstream `main` failed with a GitHub connection reset; no newer official SHA was verified and no gitlink change was made.
 - **Production behavior:** the host health loop in `backend/tauri/src/core/service/ipc.rs` no longer publishes a fresh `Disconnected` state on exit after its round was revoked by a successful stop/uninstall. That exit publication could race a later serialized Local/Service handoff even though the stale probe itself was fenced. The monitor now only relinquishes its admission token; synchronous lifecycle handoff owns IPC state publication. The shared `health_round_retired` decision is exercised by the actual stop-hook regression.
 - **Checks:** independent core **172/172**, Tauri Service IPC **9/9**, targeted Rustfmt and whitespace checks passed. The first Rustfmt check failed on test import layout and was corrected before the final passing check. Tauri tests used a temporary sidecar-free `TAURI_CONFIG` without changing production packaging. No physical Service/SCM/UAC, real desktop or cross-platform E2E was run; full ServiceActor mailbox/watch/session authorization remains pending. This is a one-file backend rollback, without wire or persistence changes.
+
+## 2026-11-07 Core-owned ServiceHostWatch, production lifecycle publisher (partial)
+
+- **Reference baseline:** official `libnyanpasu/clash-nyanpasu` main
+  and local `ref` verified at
+  `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`.
+  Upstream `backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+  holds a single ServiceActor `watch::Sender<ServiceHostStatus>`, deriving
+  readiness generation and publishing daemon observations from its mailbox.
+- **Production change / L2:** introduce
+  `backend/chimera-core/src/actor_v2/service_status.rs::ServiceHostWatch`
+  to own the watch sender, status projection, snapshots, and publications.
+  Atomic `send_modify` derives each status under the watch write lock to
+  prevent concurrent publishers from losing a generation. The real
+  `backend/tauri/src/client/core_lifecycle/mod.rs`
+  `ApplicationWorkflowState` delegates all daemon observation, probe failure,
+  explicit phase and refresh publications to this core owner; its production
+  constructor obtains the receiver from the core watch. Main/legacy UI and
+  Agent still consume the existing typed lifecycle/IPC status.
+- **Regression:** 2 new core watch tests cover subscriber notifications,
+  readiness generation through Unknown/Restarting/Stopped, and exhausted
+  restart policy latch until explicit rearm. Core **174/174**,
+  Tauri CoreLifecycle **33/33**, Actor V2 **30/30**,
+  Service IPC **9/9**, Agent diagnostics **6/6**,
+  Specta freshness **1/1**, interface tests **56/56**,
+  main UI traffic tests **16/16**, E2E harness unit tests **33/33**,
+  full TypeScript, frontend boundary, Service runtime version gate,
+  Rustfmt, whitespace and full Clippy all passed (existing warnings).
+  Initial rustfmt formatting mismatch was corrected and rechecked.
+  All Tauri testing used temporary `TAURI_CONFIG` without real desktop launch.
+- **Limitations / rollback:** lifecycle mailbox remains Tauri-owned and
+  supplies events; only the watch/data projection and publication are
+  core-owned. This is not the upstream unified ServiceActor mailbox,
+  host authorization, health scheduler, recovery control or CoreActor
+  ownership. Physical Windows SCM/UAC, real desktop/main/legacy/Agent
+  integration and cross-platform E2E were not run. No IPC wire, generated
+  TypeScript, persistence, OS adapter or runtime submodule changes; revert
+  the two Rust changes and this status entry. The unrelated
+  `pnpm-lock.yaml` worktree diff remains preserved.

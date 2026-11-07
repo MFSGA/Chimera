@@ -475,3 +475,45 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
 - **生产修复：** `backend/tauri/src/core/service/ipc.rs` 的旧健康线程在 OS stop/uninstall 撤销轮次后退出时，不再无条件调用 `set_ipc_state(Disconnected)`。此前即使轮次校验阻止了迟到探测结果，线程退出仍可能覆盖新的同步 Service/Local handoff；现在退出只释放 monitor admission，状态由生命周期/同步交接路径发布。引入 `health_round_retired` 统一退出判定，宿主 stop-hook 测试验证撤销前后判定。
 - **本批验收：** core 全量 **172/172**、Tauri Service IPC **9/9**、定向 Rustfmt 与 diff 空白检查通过。Tauri 使用临时 `TAURI_CONFIG` 排除缺失的打包 sidecar；第一次格式检查指出 import 换行问题，已修正并复检通过。
 - **限制：** 未证明真实 SCM/UAC 的 stop→start 竞态完全消失；ServiceActor mailbox/watch/授权与跨进程 E2E 仍未迁入。无新 wire/持久化/前端修改，回滚仅涉及该 Tauri IPC 文件及本段文档。保留用户已有 `pnpm-lock.yaml` 差异。
+
+## 2026-11-07 Service 状态 watch 发布所有权下沉 core（局部）
+
+**最新核实 ref：** 官方 `main` 与本地 `ref` 均为
+`a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`，子模块内部无修改。
+参考 `ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+由 ServiceActor 拥有 `watch::Sender<ServiceHostStatus>` 并负责投影、发布。
+本批只迁移状态 watch 的创建和发布职责；不宣称完整 Actor/mailbox 已迁移。
+
+- **生产路径与风险 L2：** 新增
+  `backend/chimera-core/src/actor_v2/service_status.rs::ServiceHostWatch`，
+  core 内部构造并持有 watch sender，提供订阅、快照、实际 daemon
+  探测、显式阶段和失败探测的状态发布。使用 `send_modify` 在一个
+  写锁内完成读/推导/发布，避免将来多个生产者覆盖 readiness generation。
+- `backend/tauri/src/client/core_lifecycle/mod.rs` 的
+  `ApplicationWorkflowState` 和 `ApplicationWorkflowArgs` 改为持有
+  core 的 `ServiceHostWatch`；生产 `spawn_with_profiles` 通过 core
+  创建 watch 并交给原有客户端订阅，真实
+  `ObserveService`、`ServiceProbeFailed`、
+  `RefreshServiceStatus`、`Completed` 与阶段通知委托 core
+  发布，不再由 Tauri 直接 `send_replace` 或推导状态。
+  Service OS owner、原 Client facade、Agent/main/legacy IPC
+  订阅和 DTO 均未改变。
+- **回归：** core 新增 2 项 watch 订阅/通知、Ready→过渡→Unknown→
+  Stopped→Ready 代际、exhausted 锁存及显式 rearm 的测试。
+  core 全量 **174/174**、Tauri 生命周期 **33/33**、
+  Actor V2 **30/30**、Service IPC **9/9**、Agent diagnostics
+  **6/6**、Specta 绑定新鲜度 **1/1**，interface **56/56**、
+  main UI traffic **16/16**、E2E 框架单测 **33/33**；
+  全量 TypeScript、main/legacy IPC 边界、Service runtime 版本
+  门禁、Rustfmt、完整 Clippy 和空白检查均通过（已有警告）。
+  Tauri 测试使用仅当前命令生效的 sidecar-free `TAURI_CONFIG`。
+  首次 Rustfmt 检查指出新代码排版差异，修复后复检通过。
+- **仍待：** 目前 Tauri 应用生命周期 Actor 仍是业务事件发送方，
+  只把 watch 对象/状态推导/发布移到 core，未合并为 ref 的
+  完整 ServiceActor ractor mailbox、单所有权的状态机、OS 端点
+  授权、健康定时调度及 CoreActor 统一实例管理。
+  完整 ProxiesActor、StreamsActor、Client workflows/state、
+  Unified RPC、前端 rpc/query/platform 和 main/legacy/Agent
+  实际 Windows/Service E2E 仍未完成。
+  无 wire/schema/持久化变化，回滚仅需该两份 Rust 文件和本段文档；
+  用户已有 `pnpm-lock.yaml` 差异未触碰。

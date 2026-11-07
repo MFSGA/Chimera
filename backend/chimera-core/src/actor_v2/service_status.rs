@@ -6,6 +6,66 @@ use super::service_policy::{
     ServicePhase, ServiceRestartPolicySnapshot, phase_for_probe, settled_readiness,
 };
 use crate::service::compat::ServiceCompat;
+use tokio::sync::watch;
+
+/// Single publisher for the ServiceActor status projection.
+///
+/// The application mailbox sends real daemon observations and lifecycle
+/// phases, but it no longer owns the watch channel or computes/publishes the
+/// derived readiness status. This narrows the gap to ref's ServiceActor
+/// watch ownership without relocating privileged OS control into the UI.
+#[derive(Debug)]
+pub struct ServiceHostWatch {
+    sender: watch::Sender<ServiceHostStatus>,
+}
+
+impl Default for ServiceHostWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ServiceHostWatch {
+    pub fn new() -> Self {
+        let (sender, _) = watch::channel(ServiceHostStatus::probing());
+        Self { sender }
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<ServiceHostStatus> {
+        self.sender.subscribe()
+    }
+
+    pub fn snapshot(&self) -> ServiceHostStatus {
+        self.sender.borrow().clone()
+    }
+
+    pub fn observe_probe(
+        &self,
+        info: chimera_ipc::types::StatusInfo<'static>,
+        runtime_owned: bool,
+        policy: Option<ServiceRestartPolicySnapshot>,
+    ) -> ServiceHostStatus {
+        // Read/derive/publish under one watch write guard: a future second
+        // producer cannot overwrite an intervening readiness generation.
+        let mut published = None;
+        self.sender.send_modify(|previous| {
+            let next = previous.observe_probe(info, runtime_owned, policy);
+            *previous = next.clone();
+            published = Some(next);
+        });
+        published.expect("watch update must execute")
+    }
+
+    pub fn publish_phase(&self, phase: ServicePhase) {
+        self.sender
+            .send_modify(|previous| *previous = previous.with_phase(phase));
+    }
+
+    pub fn probe_failed(&self) {
+        self.sender
+            .send_modify(|previous| *previous = previous.on_probe_failure());
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct ServiceHostStatus {
@@ -163,6 +223,81 @@ mod tests {
                 },
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn core_watch_publishes_lifecycle_events_to_existing_subscribers() {
+        let watch = ServiceHostWatch::new();
+        let mut receiver = watch.subscribe();
+        assert_eq!(receiver.borrow().phase, ServicePhase::Probing);
+
+        let ready = watch.observe_probe(observed(ServiceStatus::Running), true, None);
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().phase, ServicePhase::Ready);
+        assert_eq!(ready.ready_generation, 1);
+
+        watch.publish_phase(ServicePhase::Restarting);
+        receiver.changed().await.unwrap();
+        let restarting = receiver.borrow_and_update().clone();
+        assert_eq!(restarting.phase, ServicePhase::Restarting);
+        assert_eq!(restarting.ready_generation, 1);
+        assert!(restarting.settled_ready);
+
+        watch.probe_failed();
+        receiver.changed().await.unwrap();
+        let unknown = receiver.borrow_and_update().clone();
+        assert_eq!(unknown.phase, ServicePhase::Unknown);
+        assert_eq!(unknown.ready_generation, 1);
+        assert!(!unknown.runtime_owned);
+
+        watch.observe_probe(observed(ServiceStatus::Stopped), false, None);
+        receiver.changed().await.unwrap();
+        assert_eq!(
+            receiver.borrow_and_update().phase,
+            ServicePhase::DaemonStopped
+        );
+        assert!(!receiver.borrow().settled_ready);
+
+        watch.observe_probe(observed(ServiceStatus::Running), true, None);
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().ready_generation, 2);
+    }
+
+    #[tokio::test]
+    async fn core_watch_exhaustion_requires_an_explicit_policy_to_clear() {
+        let watch = ServiceHostWatch::new();
+        let mut receiver = watch.subscribe();
+        watch.observe_probe(
+            observed(ServiceStatus::Stopped),
+            false,
+            Some(ServiceRestartPolicySnapshot {
+                attempts: 3,
+                exhausted: true,
+            }),
+        );
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().phase, ServicePhase::Exhausted);
+
+        watch.probe_failed();
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().phase, ServicePhase::Exhausted);
+
+        watch.observe_probe(observed(ServiceStatus::Running), true, None);
+        receiver.changed().await.unwrap();
+        assert_eq!(receiver.borrow_and_update().phase, ServicePhase::Exhausted);
+
+        watch.observe_probe(
+            observed(ServiceStatus::Running),
+            true,
+            Some(ServiceRestartPolicySnapshot {
+                attempts: 0,
+                exhausted: false,
+            }),
+        );
+        receiver.changed().await.unwrap();
+        let recovered = receiver.borrow_and_update().clone();
+        assert_eq!(recovered.phase, ServicePhase::Ready);
+        assert_eq!(recovered.restart_attempts, 0);
     }
 
     #[test]
