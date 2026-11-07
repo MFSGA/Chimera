@@ -18,7 +18,7 @@ use specta::Type;
 use tauri_specta::Event;
 use tokio::{sync::watch, task::JoinHandle};
 
-use crate::core::clash::api::{ApiClient, ApiStreamKind};
+use crate::core::actor_v2::api::{ApiClient, ApiStreamKind};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ClashWsEndpoint {

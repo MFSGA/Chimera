@@ -8,10 +8,7 @@
  *   用于在 GroupHeader 中显示当前组的实时流量（下载/上传速度）
  */
 
-import {
-  useClashConnections,
-  type ClashProxiesQueryGroupItem,
-} from '@chimera/interface';
+import { useClashConnections, type ProxyGroup } from '@chimera/interface';
 import { useMemo } from 'react';
 
 /**
@@ -24,7 +21,7 @@ import { useMemo } from 'react';
  * @returns 经过当前组的连接对象，或 undefined
  */
 export function useCurrentGroupConnection(
-  currentGroup?: ClashProxiesQueryGroupItem,
+  currentGroup?: Pick<ProxyGroup, 'name'>,
 ) {
   const { data: clashConnections } = useClashConnections();
 

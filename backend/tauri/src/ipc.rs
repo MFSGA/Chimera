@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, anyhow};
+use indexmap::IndexMap;
 use specta_typescript::Any;
 
 use chimera_ipc::api::status::CoreState;
@@ -920,6 +921,19 @@ pub async fn get_proxies(
     Err(anyhow!("proxy snapshot changed repeatedly while refreshing").into())
 }
 
+/// Additive native proxy view for typed consumers. The legacy `get_proxies`
+/// command remains unchanged for both Chimera UIs and Agent integrations.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_native_proxies(
+    client: State<'_, ChimeraClient>,
+) -> Result<crate::core::clash::proxies::NativeProxies> {
+    let api = client.clash_api_client().await?;
+    crate::core::clash::proxies::NativeProxies::fetch(&api)
+        .await
+        .map_err(Into::into)
+}
+
 #[tauri::command]
 #[specta::specta]
 pub async fn select_proxy(
@@ -1502,8 +1516,53 @@ pub fn unsubscribe_clash_connection_details(
 #[specta::specta]
 pub async fn clash_api_get_configs(
     client: State<'_, ChimeraClient>,
-) -> Result<clash::api::ClashRuntimeConfig> {
-    Ok(client.clash_api_client().await?.get_configs().await?)
+) -> Result<clash::api::ClashApiConfig> {
+    Ok(client.clash_configs().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_version(
+    client: State<'_, ChimeraClient>,
+) -> Result<clash::api::ClashVersion> {
+    Ok(client.clash_version().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_rules(client: State<'_, ChimeraClient>) -> Result<clash::api::RulesRes> {
+    Ok(client.clash_rules().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_providers_rules(
+    client: State<'_, ChimeraClient>,
+) -> Result<clash::api::ProvidersRulesRes> {
+    Ok(client.clash_rule_providers().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_update_providers_rules(
+    client: State<'_, ChimeraClient>,
+    name: String,
+) -> Result<()> {
+    Ok(client.update_clash_rule_provider(name).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn clash_api_get_providers_proxies(
+    client: State<'_, ChimeraClient>,
+) -> Result<IndexMap<clash_api::ProviderName, clash::proxies::ProxyProviderSummary>> {
+    Ok(client.proxy_providers().await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn update_proxy_provider(client: State<'_, ChimeraClient>, name: String) -> Result<()> {
+    Ok(client.update_proxy_provider(name).await?)
 }
 
 #[tauri::command]

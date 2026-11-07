@@ -22,6 +22,7 @@ use chimera_core_manager::{CoreCommand, CoreCommandEnvelope, CoreErrorKind, Oper
 use futures::FutureExt;
 
 use super::{
+    api::{ApiClient, ApiLease},
     control_endpoint::{ControlEndpoint, CoreStatusSnapshot as HostStatusSnapshot},
     endpoint::CoreStatusSnapshot,
 };
@@ -32,10 +33,7 @@ use crate::{
     },
     config::{chimera::ClashCore, clash::ClashInfo, core::Config},
     core::{
-        clash::{
-            api::{ApiClient, ApiLease},
-            core::{CoreManager, RunType},
-        },
+        clash::core::{CoreManager, RunType},
         connection_interruption::ConnectionInterruptionService,
     },
     enhance::PostProcessingOutput,

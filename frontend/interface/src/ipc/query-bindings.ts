@@ -1,11 +1,20 @@
 import { mutationOptions, queryOptions } from '@tanstack/react-query';
 import { commands } from './bindings.js';
-import { PROFILES_QUERY_KEY } from './consts.js';
+import {
+  CLASH_CONFIG_QUERY_KEY,
+  CLASH_PROXIES_PROVIDER_QUERY_KEY,
+  CLASH_PROXIES_QUERY_KEY,
+  CLASH_RULES_PROVIDER_QUERY_KEY,
+  CLASH_RULES_QUERY_KEY,
+  CLASH_VERSION_QUERY_KEY,
+  NATIVE_PROXIES_QUERY_KEY,
+  PROFILES_QUERY_KEY,
+} from './consts.js';
 
 /**
- * Profile query and mutation descriptors corresponding to the generated
- * descriptors in ref. Chimera's Specta output currently generates commands
- * only, so keep this adapter outside the generated bindings file.
+ * Application query and mutation descriptors, parallel to ref's
+ * frontend/query/src/query-bindings.ts. Chimera Specta generates commands
+ * only, so keep typed query metadata outside generated bindings.
  */
 export const queries = {
   getProfiles: (...args: Parameters<typeof commands.getProfiles>) =>
@@ -18,9 +27,88 @@ export const queries = {
       queryKey: ['readProfileFile', ...args],
       queryFn: () => commands.readProfileFile(...args),
     }),
+  clashApiGetConfigs: (
+    ...args: Parameters<typeof commands.clashApiGetConfigs>
+  ) =>
+    queryOptions({
+      queryKey: [CLASH_CONFIG_QUERY_KEY, ...args],
+      queryFn: () => commands.clashApiGetConfigs(...args),
+    }),
+  getProxies: (...args: Parameters<typeof commands.getProxies>) =>
+    queryOptions({
+      queryKey: [CLASH_PROXIES_QUERY_KEY, ...args],
+      queryFn: () => commands.getProxies(...args),
+    }),
+  /** Native nodes/groups graph; keep its cache separate from legacy DTOs. */
+  getNativeProxies: (...args: Parameters<typeof commands.getNativeProxies>) =>
+    queryOptions({
+      queryKey: [NATIVE_PROXIES_QUERY_KEY, ...args],
+      queryFn: () => commands.getNativeProxies(...args),
+    }),
+  clashApiGetProxyDelay: (
+    ...args: Parameters<typeof commands.clashApiGetProxyDelay>
+  ) =>
+    queryOptions({
+      queryKey: ['clashApiGetProxyDelay', ...args],
+      queryFn: () => commands.clashApiGetProxyDelay(...args),
+    }),
+  clashApiGetGroupDelay: (
+    ...args: Parameters<typeof commands.clashApiGetGroupDelay>
+  ) =>
+    queryOptions({
+      queryKey: ['clashApiGetGroupDelay', ...args],
+      queryFn: () => commands.clashApiGetGroupDelay(...args),
+    }),
+  clashApiGetRules: (...args: Parameters<typeof commands.clashApiGetRules>) =>
+    queryOptions({
+      queryKey: [CLASH_RULES_QUERY_KEY, ...args],
+      queryFn: () => commands.clashApiGetRules(...args),
+    }),
+  clashApiGetVersion: (
+    ...args: Parameters<typeof commands.clashApiGetVersion>
+  ) =>
+    queryOptions({
+      queryKey: [CLASH_VERSION_QUERY_KEY, ...args],
+      queryFn: () => commands.clashApiGetVersion(...args),
+    }),
+  clashApiGetProvidersRules: (
+    ...args: Parameters<typeof commands.clashApiGetProvidersRules>
+  ) =>
+    queryOptions({
+      queryKey: [CLASH_RULES_PROVIDER_QUERY_KEY, ...args],
+      queryFn: () => commands.clashApiGetProvidersRules(...args),
+    }),
+  clashApiGetProvidersProxies: (
+    ...args: Parameters<typeof commands.clashApiGetProvidersProxies>
+  ) =>
+    queryOptions({
+      queryKey: [CLASH_PROXIES_PROVIDER_QUERY_KEY, ...args],
+      queryFn: () => commands.clashApiGetProvidersProxies(...args),
+    }),
 };
 
 export const mutations = {
+  selectProxy: mutationOptions({
+    mutationKey: ['selectProxy'],
+    mutationFn: (input: Parameters<typeof commands.selectProxy>) =>
+      commands.selectProxy(...input),
+  }),
+  patchRuntimeOverrides: mutationOptions({
+    mutationKey: ['patchRuntimeOverrides'],
+    mutationFn: (input: Parameters<typeof commands.patchRuntimeOverrides>) =>
+      commands.patchRuntimeOverrides(...input),
+  }),
+  clashApiUpdateProvidersRules: mutationOptions({
+    mutationKey: ['clashApiUpdateProvidersRules'],
+    mutationFn: (
+      input: Parameters<typeof commands.clashApiUpdateProvidersRules>,
+    ) => commands.clashApiUpdateProvidersRules(...input),
+  }),
+  updateProxyProvider: mutationOptions({
+    mutationKey: ['updateProxyProvider'],
+    mutationFn: (input: Parameters<typeof commands.updateProxyProvider>) =>
+      commands.updateProxyProvider(...input),
+  }),
   saveProfileFile: mutationOptions({
     mutationKey: ['saveProfileFile'],
     mutationFn: (input: Parameters<typeof commands.saveProfileFile>) =>

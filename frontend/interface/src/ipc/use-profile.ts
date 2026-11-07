@@ -19,9 +19,9 @@ import {
   type RemoteProfileImportMode,
   type RemoteProfileOptionsPatch_Deserialize,
 } from './bindings.js';
-import { mutations, queries } from './profile-bindings.js';
 import { remoteProfileDefinitionOf } from './profile-definition.js';
 import { applyProfileLayout } from './profile-folders.js';
+import { mutations, queries } from './query-bindings.js';
 import { invokeMutation, invokeQuery } from './query-options.js';
 
 export const isConfigItem = (

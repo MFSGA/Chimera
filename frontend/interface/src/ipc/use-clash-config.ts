@@ -1,11 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import {
-  commands,
-  type ClashRuntimeConfig,
-  type PatchRuntimeConfig,
-} from './bindings';
-import { CLASH_CONFIG_QUERY_KEY } from './consts';
+import type { PatchRuntimeConfig } from './bindings';
+import { mutations, queries } from './query-bindings.js';
+import { invokeMutation, unwrapQueryOptions } from './query-options.js';
 
 /**
  * A hook that manages fetching and updating the Clash configuration.
@@ -13,8 +10,8 @@ import { CLASH_CONFIG_QUERY_KEY } from './consts';
  * @remarks
  * This hook fetches the current Clash configuration using a query keyed by `['clash-config']`
  * and allows updates via an upsert mutation. The upsert mutation:
- * - Patches the core and application configuration through `commands.patchClashConfig`.
- * - On success, it invalidates the `['clash-config']` query so the UI reads the
+ * - Patches the runtime override through the classified mutation descriptor.
+ * - On success, it invalidates the shared config query key so the UI reads the
  *   value returned by the running core.
  *
  * @returns An object with:
@@ -39,10 +36,10 @@ export const useClashConfig = () => {
    *
    * @see useQuery - For additional configuration options and usage details.
    */
-  const query = useQuery<ClashRuntimeConfig | undefined>({
-    queryKey: [CLASH_CONFIG_QUERY_KEY],
-    queryFn: async () => unwrapResult(await commands.clashApiGetConfigs()),
-  });
+  const configOptions = queries.clashApiGetConfigs();
+  const query = useQuery(
+    unwrapQueryOptions(configOptions, configOptions.queryFn!),
+  );
 
   /**
    * Performs an upsert operation to update or insert the Clash configuration.
@@ -52,17 +49,18 @@ export const useClashConfig = () => {
    * `GET /configs` response.
    *
    * @returns A Promise resolving to the updated configuration, obtained by unwrapping the result of the
-   *          commands.patchClashConfig call.
+   *          the patchRuntimeOverrides mutation.
    */
   const upsert = useMutation({
-    mutationFn: async (payload: PatchRuntimeConfig) => {
-      return unwrapResult(await commands.patchRuntimeOverrides(payload));
-    },
-    onSuccess: () => {
-      return queryClient.invalidateQueries({
-        queryKey: [CLASH_CONFIG_QUERY_KEY],
-      });
-    },
+    mutationKey: mutations.patchRuntimeOverrides.mutationKey,
+    mutationFn: async (payload: PatchRuntimeConfig) =>
+      unwrapResult(
+        await invokeMutation(mutations.patchRuntimeOverrides, [payload]),
+      ),
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: queries.clashApiGetConfigs().queryKey,
+      }),
   });
 
   return {

@@ -8,7 +8,7 @@ export * from './use-runtime-transform-diagnostics';
 export * from './consts';
 
 export { commands } from './bindings';
-export { mutations, queries } from './profile-bindings';
+export { mutations, queries } from './query-bindings';
 export {
   MutationUnconfirmedError,
   invokeMutation,
@@ -16,8 +16,10 @@ export {
   unwrapQueryOptions,
 } from './query-options';
 export type * from './bindings';
-/** @deprecated Use ClashRuntimeConfig for values returned by the running core. */
-export type { ClashRuntimeConfig as ClashConfig } from './bindings';
+/** @deprecated Use ClashApiConfig for the running controller's config. */
+export type { ClashApiConfig as ClashConfig } from './bindings';
+/** @deprecated The extended runtime projection is backend-internal. */
+export type { ClashApiConfig as ClashRuntimeConfig } from './bindings';
 export * from './use-settings';
 export * from './use-clash-config';
 export * from './use-clash-core-config';
@@ -29,6 +31,8 @@ export * from './use-clash-rules-provider';
 export * from './use-proxy-mode';
 /** 8 */
 export * from './use-clash-proxies';
+export * from './use-native-proxies';
+export * from './use-native-proxy-actions';
 /** 9 */
 export * from './use-clash-cores';
 /** 10 */

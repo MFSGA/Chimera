@@ -17,10 +17,11 @@ import {
   CLASH_RULES_QUERY_KEY,
   CLASH_SETTINGS_QUERY_KEY,
   CLASH_VERSION_QUERY_KEY,
+  NATIVE_PROXIES_QUERY_KEY,
   PROFILES_QUERY_KEY,
   RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY,
 } from '../ipc/consts';
-import { queries } from '../ipc/profile-bindings';
+import { queries } from '../ipc/query-bindings';
 
 // Same internally tagged wire representation as ref's StateChangedEvent.
 // Kept outside generated Specta output until its generator runs.
@@ -31,11 +32,13 @@ type StateChanged =
   | { kind: 'proxies' }
   | { kind: 'runtime_transform_diagnostics' };
 
-const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
+/** Both graph representations must move together until the legacy UI retires. */
+export const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
   nyanpasu_config: [
     [CHIMERA_SETTING_QUERY_KEY],
     [CHIMERA_SYSTEM_PROXY_QUERY_KEY],
     [CLASH_PROXIES_QUERY_KEY],
+    [NATIVE_PROXIES_QUERY_KEY],
   ],
   clash_config: [
     [CLASH_SETTINGS_QUERY_KEY],
@@ -43,6 +46,7 @@ const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
     [CLASH_INFO_QUERY_KEY],
     [CLASH_CONFIG_QUERY_KEY],
     [CLASH_PROXIES_QUERY_KEY],
+    [NATIVE_PROXIES_QUERY_KEY],
     [CLASH_PROXIES_PROVIDER_QUERY_KEY],
     [CLASH_RULES_PROVIDER_QUERY_KEY],
     [CLASH_RULES_QUERY_KEY],
@@ -53,12 +57,17 @@ const mutationKeys: Record<StateChanged['kind'], QueryKey[]> = {
     [CLASH_VERSION_QUERY_KEY],
     [CLASH_INFO_QUERY_KEY],
     [CLASH_PROXIES_QUERY_KEY],
+    [NATIVE_PROXIES_QUERY_KEY],
     [CLASH_PROXIES_PROVIDER_QUERY_KEY],
     [CLASH_RULES_PROVIDER_QUERY_KEY],
     [CLASH_RULES_QUERY_KEY],
     [RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY],
   ],
-  proxies: [[CLASH_PROXIES_QUERY_KEY], [CLASH_PROXIES_PROVIDER_QUERY_KEY]],
+  proxies: [
+    [CLASH_PROXIES_QUERY_KEY],
+    [NATIVE_PROXIES_QUERY_KEY],
+    [CLASH_PROXIES_PROVIDER_QUERY_KEY],
+  ],
   runtime_transform_diagnostics: [[RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY]],
 };
 
@@ -71,6 +80,7 @@ export const MutationProvider = ({ children }: PropsWithChildren) => {
       [CLASH_SETTINGS_QUERY_KEY],
       [PROFILES_QUERY_KEY],
       [CLASH_PROXIES_QUERY_KEY],
+      [NATIVE_PROXIES_QUERY_KEY],
     ],
     [],
   );

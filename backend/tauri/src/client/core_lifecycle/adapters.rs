@@ -148,7 +148,7 @@ impl LegacyRunningConfigBridge {
         Self { core }
     }
 
-    async fn api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+    async fn api_client(&self) -> anyhow::Result<crate::core::actor_v2::api::ApiClient> {
         self.core.clash_api_client().await
     }
 }
@@ -339,7 +339,7 @@ impl CoreLifecyclePort for LegacyCoreBridge {
         self.facade().active_clash_info().await
     }
 
-    async fn clash_api_client(&self) -> anyhow::Result<crate::core::clash::api::ApiClient> {
+    async fn clash_api_client(&self) -> anyhow::Result<crate::core::actor_v2::api::ApiClient> {
         self.facade().clash_api_client().await
     }
 

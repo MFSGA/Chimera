@@ -1,4 +1,4 @@
-import { useClashProxies } from '@chimera/interface';
+import { useNativeProxies } from '@chimera/interface';
 import AnimatedTabs, { AnimatedTabsItem } from '@chimera/ui/animated-tabs';
 import { Button } from '@chimera/ui/button';
 import {
@@ -84,9 +84,7 @@ const MoblieNavbarContainer = ({
 };
 
 export const DefaultNavbar = () => {
-  const {
-    proxies: { data: proxies },
-  } = useClashProxies();
+  const { data: proxies } = useNativeProxies();
 
   const fristGroup = useMemo(() => {
     return proxies?.groups[0]?.name;
