@@ -93,6 +93,11 @@ export const mutations = {
     mutationFn: (input: Parameters<typeof commands.selectProxy>) =>
       commands.selectProxy(...input),
   }),
+  clearProxyFixed: mutationOptions({
+    mutationKey: ['clearProxyFixed'],
+    mutationFn: (input: Parameters<typeof commands.clearProxyFixed>) =>
+      commands.clearProxyFixed(...input),
+  }),
   patchRuntimeOverrides: mutationOptions({
     mutationKey: ['patchRuntimeOverrides'],
     mutationFn: (input: Parameters<typeof commands.patchRuntimeOverrides>) =>

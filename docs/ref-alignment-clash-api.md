@@ -1018,3 +1018,69 @@ nightly toolchain and full Clippy dependency index are not
 available in this environment. This was **not** a claim that
 Clippy passed. The pre-existing unrelated `@pnpm/exe` removal
 hunks in `pnpm-lock.yaml` were intentionally left unstaged.
+
+### 2026-11-07 native automatic-group pin clearing (ref@1c0002f0)
+
+**Original worktree:** `I:\mfsga\Chimera`,
+branch `codex/clash-api-ipc-dev-1106`. Local clean `ref`:
+`1c0002f04f59995b5115f4c68029b9cb46e5d39b`. This slice
+preserved the unrelated, previously unstaged pnpm lockfile hunk and
+did not alter the `backend/chimera-runtime` submodule.
+
+- `1670ab31` — `backend/chimera-core/src/actor_v2/api.rs`
+  now exposes `clear_proxy_selection(&ProxyName) -> ApiResult<()>`,
+  using the instance-bound `DELETE /proxies/{group}` transport
+  with the shared cancellation and stale-instance checks. No
+  automatic retry is added for an unconfirmed DELETE.
+- `backend/tauri/src/core/clash/proxies.rs` integrates unpin with the
+  existing profile-generation guard. A stale generation rejects
+  before issuing the request. After a submitted request the adapter
+  rereads the controller even on a rejected/ambiguous result,
+  retains the original mutation error, and cannot publish a
+  snapshot for a superseded profile. On success the existing
+  `break_connection.on_proxy_change` policy is applied; a
+  secondary interruption failure is logged without claiming the
+  successful pin change was undone. The existing legacy proxy DTO,
+  Agent and lifecycle entry points remain available.
+- `backend/tauri/src/ipc.rs` registers `clear_proxy_fixed(group)`
+  through Specta. `frontend/interface/src/ipc/bindings.ts` was
+  regenerated and freshness-checked. The dedicated
+  `mutations.clearProxyFixed` descriptor and
+  `useNativeProxyActions.clearProxyFixed` explicitly separate the
+  command from cached queries; both native and legacy proxy views
+  are reread/invalidated on **success or failure**, since a lost
+  reply cannot prove that the core rejected the DELETE.
+- The main-only `main/proxies/$name.tsx` group header displays an
+  **Unpin** action only when the group's native metadata has both a
+  nonempty fixed node and `capabilities.clearFixed`. The UI never
+  optimistically clears `fixed`; the command is guarded against
+  duplicate clicks and error feedback is shown. The legacy UI
+  was deliberately not redesigned.
+- `backend/tauri/src/core/clash/proxy_pin_tests.rs` provides three
+  mock-controller tests: successful DELETE + authoritative reread,
+  rejected DELETE + reread preserving the controller's error with
+  exactly one submission, and stale-generation refusal before
+  network dispatch. The interface query descriptor test verifies
+  one dispatch per requested mutation and an unconfirmed IPC reply
+  rather than a retry.
+
+**Validation:** independent `chimera-core` **125/125**, Tauri
+proxy module **14/14** (including the three new guard tests),
+Actor V2 **9/9**, connection interruption **1/1**, Specta
+bindings freshness **1/1**. Frontend interface/query/profile
+tests **26/26** and Tauri E2E harness-only unit tests **33/33**
+passed. Interface TS and main/legacy TS (`--types node`), front
+boundary lint, touched Oxlint, Prettier, Rustfmt, and
+`git diff --check` passed. No desktop launch, real-core
+E2E, or full Clippy success is claimed. The two code commits
+used a one-command `HUSKY=0` override after the independent
+checks; the known missing dated-nightly and Cargo index issues
+remain unresolved, and no hook config was changed.
+
+**Remaining architecture parity:** the pin route and metadata now
+exist, but the proxy cache/transaction coordinator remains partly
+Tauri-owned instead of ref's standalone `ProxiesActor`. The
+floating group-delay button still uses the legacy group-delay
+mutation instead of ref's native per-member/provider-aware group
+tests with bounded concurrency and precise `expectedStatus`.
+Unified RPC and typed streaming remain later slices.

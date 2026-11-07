@@ -36,9 +36,13 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import ArrowDownwardAltRounded from '~icons/material-symbols/arrow-downward-alt-rounded';
 import ArrowUpwardAltRounded from '~icons/material-symbols/arrow-upward-alt-rounded';
+import KeepOffRounded from '~icons/material-symbols/keep-off-rounded';
 import Radar from '~icons/material-symbols/radar';
 import { filesize } from 'filesize';
 import { useCallback, useMemo, useRef } from 'react';
+import { useLockFn } from '@/hooks/use-lock-fn';
+import { formatError } from '@/utils';
+import { message } from '@/utils/notification';
 import DelayTestButton from './_modules/delay-test-button';
 import GroupHeader from './_modules/group-header';
 import { useCurrentGroupConnection } from './_modules/hooks';
@@ -70,7 +74,8 @@ function RouteComponent() {
   const { name: proxyGroupName } = Route.useParams();
 
   const { data: proxies } = useNativeProxies();
-  const { selectProxy, updateProxiesDelay } = useNativeProxyActions();
+  const { selectProxy, clearProxyFixed, isClearingFixed, updateProxiesDelay } =
+    useNativeProxyActions();
   const { mutateAsync: mutateProxyDelay } = updateProxiesDelay;
 
   const { value: proxyMode } = useProxyMode();
@@ -86,6 +91,27 @@ function RouteComponent() {
 
   const groupName = currentGroup?.name;
   const selectable = currentGroup?.capabilities.select ?? false;
+
+  const handleClearFixed = useLockFn(async () => {
+    if (
+      !groupName ||
+      !currentGroup?.fixed ||
+      !currentGroup.capabilities.clearFixed
+    ) {
+      return;
+    }
+    try {
+      await clearProxyFixed(groupName);
+    } catch (error) {
+      await message(
+        `Unable to confirm pinned proxy removal: ${formatError(error)}`,
+        {
+          title: 'Unpin failed',
+          kind: 'error',
+        },
+      );
+    }
+  });
 
   const handleSelectProxy = useCallback(
     async (proxy: Proxy_Serialize) => {
@@ -162,6 +188,19 @@ function RouteComponent() {
       <GroupHeader>
         <div className="flex items-center gap-2">
           <div>{currentGroup?.name}</div>
+          {currentGroup?.fixed && currentGroup.capabilities.clearFixed && (
+            <Button
+              variant="stroked"
+              className="h-8 shrink-0 gap-1 px-2 text-sm"
+              data-slot="proxies-group-clear-fixed-button"
+              disabled={isClearingFixed}
+              onClick={handleClearFixed}
+              title="Clear pinned proxy"
+            >
+              <KeepOffRounded className="size-4" />
+              <span>Unpin</span>
+            </Button>
+          )}
 
           {/* 下载流量 */}
           <div className="flex items-center">

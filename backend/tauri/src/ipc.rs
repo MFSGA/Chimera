@@ -956,6 +956,30 @@ pub async fn select_proxy(
     Ok(())
 }
 
+/// Clear an automatic group's pinned node on the bound core. A missing
+/// mutation reply is unconfirmed, so never replay it automatically.
+#[tauri::command]
+#[specta::specta]
+pub async fn clear_proxy_fixed(group: String, client: State<'_, ChimeraClient>) -> Result<()> {
+    use crate::core::clash::proxies::{ProxiesGuard, ProxiesGuardExt};
+    let break_when = client.get_clash_config()?.break_connection.on_proxy_change;
+    let generation = ProxiesGuard::global().read().generation();
+    let api = client.clash_api_client().await?;
+    ProxiesGuard::global()
+        .clear_proxy_fixed(&api, generation, &group)
+        .await?;
+    handle::Handle::mutate_proxies();
+    if let Err(error) =
+        crate::core::connection_interruption::ConnectionInterruptionService::on_proxy_change(
+            &api, break_when, &group,
+        )
+        .await
+    {
+        tracing::warn!(%error, group, "pin removed, but connection interruption failed");
+    }
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn get_server_port() -> Result<u16> {

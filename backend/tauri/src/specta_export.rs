@@ -70,6 +70,7 @@ macro_rules! build_builder {
                 crate::ipc::get_proxies,
                 crate::ipc::get_native_proxies,
                 crate::ipc::select_proxy,
+                crate::ipc::clear_proxy_fixed,
                 crate::ipc::change_clash_core,
                 crate::ipc::get_core_status,
                 crate::ipc::get_core_lifecycle_status,

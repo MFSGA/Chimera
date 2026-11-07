@@ -244,6 +244,12 @@ export const commands = {
     ),
   selectProxy: (group: string, name: string) =>
     typedError<null, string>(__TAURI_INVOKE('select_proxy', { group, name })),
+  /**
+   *  Clear an automatic group's pinned node on the bound core. A missing
+   *  mutation reply is unconfirmed, so never replay it automatically.
+   */
+  clearProxyFixed: (group: string) =>
+    typedError<null, string>(__TAURI_INVOKE('clear_proxy_fixed', { group })),
   changeClashCore: (
     clashCore:
       | 'clash'

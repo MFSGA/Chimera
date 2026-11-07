@@ -407,3 +407,34 @@ test('runtime patch with missing IPC reply must not be automatically retried', a
     commands.patchRuntimeOverrides = oldPatch;
   }
 });
+
+test('clear fixed sends one mutation and a missing reply stays unconfirmed', async () => {
+  const previous = commands.clearProxyFixed;
+  const calls: string[] = [];
+  commands.clearProxyFixed = async (group) => {
+    calls.push(group);
+    return { status: 'ok', data: null };
+  };
+  try {
+    const action = mutations.clearProxyFixed;
+    assert.deepEqual(action.mutationKey, ['clearProxyFixed']);
+    assert.equal(unwrapResult(await invokeMutation(action, ['Auto'])), null);
+    assert.deepEqual(calls, ['Auto']);
+
+    commands.clearProxyFixed = async (group) => {
+      calls.push(group);
+      throw new Error('lost IPC reply after DELETE');
+    };
+    await assert.rejects(
+      () => invokeMutation(action, ['Auto']),
+      (error: unknown) => error instanceof MutationUnconfirmedError,
+    );
+    assert.deepEqual(
+      calls,
+      ['Auto', 'Auto'],
+      'one dispatch per explicit action',
+    );
+  } finally {
+    commands.clearProxyFixed = previous;
+  }
+});

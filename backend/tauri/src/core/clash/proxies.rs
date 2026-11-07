@@ -668,6 +668,10 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+#[path = "proxy_pin_tests.rs"]
+mod proxy_pin_tests;
+
 pub trait ProxiesGuardExt {
     async fn update_if_generation(&self, api: &ApiClient, generation: u64) -> Result<bool>;
     async fn select_proxy(
@@ -677,6 +681,7 @@ pub trait ProxiesGuardExt {
         group: &str,
         name: &str,
     ) -> Result<()>;
+    async fn clear_proxy_fixed(&self, api: &ApiClient, generation: u64, group: &str) -> Result<()>;
 }
 
 impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
@@ -709,6 +714,24 @@ impl ProxiesGuardExt for &Arc<RwLock<ProxiesGuard>> {
         api.update_proxy(group, name).await?;
         if !self.update_if_generation(api, generation).await? {
             anyhow::bail!("proxy snapshot changed while selection was in flight");
+        }
+        Ok(())
+    }
+
+    async fn clear_proxy_fixed(&self, api: &ApiClient, generation: u64, group: &str) -> Result<()> {
+        self.read().ensure_generation_matches(generation)?;
+        let mutation = api.clear_proxy_selection(&ProxyName::new(group)).await;
+        // A rejected/timeout DELETE may still have applied. Read the core's
+        // true state even on errors, without replacing an invalidated profile.
+        let refresh = self.update_if_generation(api, generation).await;
+        if let Err(error) = mutation {
+            if let Err(refresh_error) = refresh {
+                tracing::debug!(%refresh_error, "proxy refresh after unconfirmed unpin failed");
+            }
+            return Err(error.into());
+        }
+        if !refresh? {
+            anyhow::bail!("proxy snapshot changed while unpinning was in flight");
         }
         Ok(())
     }
