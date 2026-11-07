@@ -467,3 +467,11 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
   Tauri 旧健康线程/全局 IPC 投影仍存在，必须在完整 ServiceActor
   迁移时替换。无存储格式、Specta wire、前端协议改变。
   后端代码可独立回滚三个文件，ref 指针已在独立提交中更新。
+
+
+## 2026-11-07 失效健康线程退出时的 IPC 发布保护（后续增量）
+
+- **基线：** 本地 `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`；本轮尝试重新查询官方 `main` 时 GitHub 连接被重置，**未验证是否存在更新 SHA**，因此不移动 ref 指针。上游 ServiceActor 的 mailbox/round 取消是行为参照。
+- **生产修复：** `backend/tauri/src/core/service/ipc.rs` 的旧健康线程在 OS stop/uninstall 撤销轮次后退出时，不再无条件调用 `set_ipc_state(Disconnected)`。此前即使轮次校验阻止了迟到探测结果，线程退出仍可能覆盖新的同步 Service/Local handoff；现在退出只释放 monitor admission，状态由生命周期/同步交接路径发布。引入 `health_round_retired` 统一退出判定，宿主 stop-hook 测试验证撤销前后判定。
+- **本批验收：** core 全量 **172/172**、Tauri Service IPC **9/9**、定向 Rustfmt 与 diff 空白检查通过。Tauri 使用临时 `TAURI_CONFIG` 排除缺失的打包 sidecar；第一次格式检查指出 import 换行问题，已修正并复检通过。
+- **限制：** 未证明真实 SCM/UAC 的 stop→start 竞态完全消失；ServiceActor mailbox/watch/授权与跨进程 E2E 仍未迁入。无新 wire/持久化/前端修改，回滚仅涉及该 Tauri IPC 文件及本段文档。保留用户已有 `pnpm-lock.yaml` 差异。

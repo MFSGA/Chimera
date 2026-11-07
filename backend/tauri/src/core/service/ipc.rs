@@ -234,6 +234,10 @@ fn claim_health_check(running: &AtomicBool) -> bool {
         .is_ok()
 }
 
+fn health_round_retired(round: u64) -> bool {
+    KILL_FLAG.load(Ordering::Acquire) || !HEALTH_ROUNDS.is_current(round)
+}
+
 fn spawn_health_check(client: ChimeraClient) {
     KILL_FLAG.store(false, Ordering::Release);
     let round = HEALTH_ROUNDS
@@ -255,8 +259,10 @@ fn spawn_health_check(client: ChimeraClient) {
             block_on(async {
                 let mut warned_ineligible = false;
                 loop {
-                    if KILL_FLAG.load(Ordering::Acquire) || !HEALTH_ROUNDS.is_current(round) {
-                        set_ipc_state(IpcState::Disconnected, &client);
+                    if health_round_retired(round) {
+                        // A successful stop/uninstall invalidates this round.
+                        // Its late exit must not overwrite a newer synchronous
+                        // host handoff or a replacement monitor's IPC state.
                         break;
                     }
                     warned_ineligible = health_check(warned_ineligible, &client, round).await;
@@ -382,8 +388,9 @@ mod tests {
 
     use super::{
         HEALTH_ROUNDS, IpcState, KILL_FLAG, ServiceBackendObservation, WarnLevel,
-        claim_health_check, next_ineligible_warning_state, should_rebuild_for_ipc_event,
-        should_rebuild_for_ipc_transition, stop_health_check, target_ipc_state,
+        claim_health_check, health_round_retired, next_ineligible_warning_state,
+        should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition, stop_health_check,
+        target_ipc_state,
     };
     use crate::core::RunType;
     use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
@@ -423,9 +430,13 @@ mod tests {
         let round = HEALTH_ROUNDS.set_enabled(true).unwrap();
         KILL_FLAG.store(false, Ordering::Release);
         assert!(HEALTH_ROUNDS.is_current(round));
+        assert!(!health_round_retired(round));
         stop_health_check();
         assert!(!HEALTH_ROUNDS.is_current(round));
         assert!(KILL_FLAG.load(Ordering::Acquire));
+        assert!(health_round_retired(round));
+        // A retired monitor exits without dispatching a second disconnected
+        // transition; the serialized Service handoff owns that publication.
         KILL_FLAG.store(false, Ordering::Release);
     }
 

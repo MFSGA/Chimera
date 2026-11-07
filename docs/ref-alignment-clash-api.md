@@ -1704,3 +1704,9 @@ against the committed code completed on the Windows host:
   integration. This batch has no wire, persistence or front-end source
   changes; revert the three backend files independently of the verified ref
   gitlink update. The old host monitor remains transitional.
+
+## 2026-11-07 Retired Service health-monitor exit publication fence
+
+- **Baseline:** pinned `ref@a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. A fresh `ls-remote` against upstream `main` failed with a GitHub connection reset; no newer official SHA was verified and no gitlink change was made.
+- **Production behavior:** the host health loop in `backend/tauri/src/core/service/ipc.rs` no longer publishes a fresh `Disconnected` state on exit after its round was revoked by a successful stop/uninstall. That exit publication could race a later serialized Local/Service handoff even though the stale probe itself was fenced. The monitor now only relinquishes its admission token; synchronous lifecycle handoff owns IPC state publication. The shared `health_round_retired` decision is exercised by the actual stop-hook regression.
+- **Checks:** independent core **172/172**, Tauri Service IPC **9/9**, targeted Rustfmt and whitespace checks passed. The first Rustfmt check failed on test import layout and was corrected before the final passing check. Tauri tests used a temporary sidecar-free `TAURI_CONFIG` without changing production packaging. No physical Service/SCM/UAC, real desktop or cross-platform E2E was run; full ServiceActor mailbox/watch/session authorization remains pending. This is a one-file backend rollback, without wire or persistence changes.
