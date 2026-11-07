@@ -161,3 +161,43 @@ Agent **3/3**、Specta 生成绑定一致性 **1/1**；
 均通过。完整 Clippy 与真实 Service/桌面 E2E **未执行**。
 `ServiceActor` mailbox、OS 服务进程控制、核心所有权切换与 Unified RPC
 仍是待迁移任务。
+
+## 2026-11-07 ServiceActor 状态投影所有权实际迁移
+
+本地代码提交 `5191b34b`（基于已 rebase 的
+`codex/clash-api-ipc-dev-1106@75a1f8d3`），继续对齐
+`ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs` 的
+`ServiceHostStatus` 和 `ServicePhase` 状态机。
+
+- 新建 `backend/chimera-core/src/actor_v2/service_status.rs`：
+  **core 唯一拥有** Service daemon 状态投影、实际探测分类、
+  `ready_generation`、transitional/Unknown 状态、耗尽锁存与显式重启策略。
+  其中运行时所有权证据由 OS adapter 作为参数传入，而不是在独立 core
+  引用 Tauri 全局路径。没有新增 Tauri 类型兼容重导出。
+- 将 `ServiceRestartPolicySnapshot` 从 Tauri
+  `core/actor_v2/facade.rs` 移到
+  `chimera-core/src/actor_v2/service_policy.rs`，
+  Tauri facade、Client lifecycle port、workflow、Service adapter
+  直接使用 core 类型。
+- 删除 `backend/tauri/src/client/core_lifecycle/mod.rs`
+  原来的 `ServiceHostStatus` struct 和探测/状态推导 impl。
+  其生产消息处理改为 core 的 `observe_probe`、
+  `with_phase`、`on_probe_failure`；
+  Agent 诊断和 Tauri IPC 直接引用 core 的真实类型，
+  同时保持现有 Service 探测的 runtime-owner 证据检查。
+- 4 项新的 core 单测锁定“不可信探测不等于停止”、
+  ready generation、耗尽锁存必须由显式重启策略解除、
+  外部 runtime 不能直接 Ready 和 internal 状态不泄露到 IPC。
+
+**验收：** `chimera-core --lib` **159/159**，Tauri 生命周期
+**33/33**、Service IPC **7/7**、Actor V2 **28/28**、
+Agent 核心探测 **3/3**、Agent 诊断 **6/6**、
+Specta 绑定新鲜度 **1/1**，main/legacy TypeScript、
+前端边界检查、相关前端单测 **28/28**、
+E2E 框架单测 **33/33**、Rustfmt 通过。
+完整 Clippy、真实 Service/桌面 E2E 未执行。
+
+**仍待完成：** ref 的 `ServiceProcessControl`/
+`ServiceCommandError` 端口、ServiceActor OS 命令 mailbox、
+权限/安装/升级/健康监测和 CoreActor 路由。此批仅转移
+实际状态所有权，不声称整个 ServiceActor 已完成迁移。

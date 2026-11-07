@@ -1451,3 +1451,44 @@ twice; a subsequent 295-second run linked successfully and all
 Service E2E and no full Clippy pass were performed.
 The full upstream ServiceActor, OS process-control contract and
 CoreActor mailbox remain unported.
+
+### 2026-11-07 core-owned ServiceActor status projection
+
+**Local code commit:** `5191b34b`
+(`refactor(core): own ServiceActor status projection and readiness state`).
+This follows the user's preference to align ref's actual architecture,
+replace old callsites in place, and avoid compatibility DTOs.
+
+- Following `ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`,
+  extracted the one authoritative `ServiceHostStatus` definition
+  into `backend/chimera-core/src/actor_v2/service_status.rs`.
+  It now owns the actual probe → phase conversion, settled
+  readiness/generation, explicit restart-budget policy, terminal
+  exhaustion latch, transitional phases and unknown-probe behavior.
+  OS proof of runtime ownership is an explicit input so the
+  standalone core does not depend on Tauri globals.
+- Moved `ServiceRestartPolicySnapshot` from the Tauri facade
+  into core `actor_v2/service_policy.rs`, deleted both old
+  Tauri-owned type definitions and rewired facade, lifecycle
+  workflow, Service adapter, Agent diagnosis and IPC projection
+  directly to the core types, without new old-path re-exports.
+  The lifecycle actor publishes core state transitions, not its
+  own duplicate classifier implementation.
+- New core tests verify readiness generations across unreadable
+  probes and authoritative stops, finite-budget exhaustion and
+  explicit rearming, foreign-runtime non-readiness, wire
+  privacy and transitional-state honesty.
+
+**Validation:** core full **159/159**, Tauri client lifecycle
+**33/33**, Service IPC **7/7**, Actor V2 **28/28**,
+Agent core probe **3/3**, Agent diagnostics **6/6**,
+Specta TypeScript binding freshness **1/1**, frontend related
+**28/28**, E2E harness-only **33/33**, interface/main TS,
+frontend boundaries and Rustfmt. No actual privileged daemon
+was launched and full Clippy or desktop/service E2E was not run.
+
+Remaining dependency is the ref ServiceActor's full process control
+and mailbox, not another status DTO. The user's approved
+`pnpm-lock.yaml` deletion hunk recurred during frontend checks,
+was discarded without staging, and the code was committed locally;
+no push occurred in this migration batch.
