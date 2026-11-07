@@ -52,21 +52,7 @@ pub(crate) struct CoreLifecycleOperationResult {
     pub(crate) error: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, specta::Type)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ServicePhase {
-    Probing,
-    NotInstalled,
-    DaemonStopped,
-    Installing,
-    StartingDaemon,
-    Ready,
-    Incompatible,
-    Restarting,
-    Exhausted,
-    Uninstalling,
-    Unknown,
-}
+pub(crate) use chimera_core::actor_v2::service_policy::ServicePhase;
 
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub(crate) struct ServiceHostStatus {
@@ -78,6 +64,13 @@ pub(crate) struct ServiceHostStatus {
     pub(crate) compat: crate::core::service::compat::ServiceCompat,
     pub(crate) runtime_owned: bool,
     pub(crate) restart_attempts: u8,
+    /// Internal ref ServiceActor readiness fence; never exposed on the UI wire.
+    #[serde(skip)]
+    #[specta(skip)]
+    pub(crate) settled_ready: bool,
+    #[serde(skip)]
+    #[specta(skip)]
+    pub(crate) ready_generation: u64,
 }
 
 impl ServiceHostStatus {
@@ -91,22 +84,21 @@ impl ServiceHostStatus {
             compat: crate::core::service::compat::ServiceCompat::Unknown,
             runtime_owned: false,
             restart_attempts: 0,
+            settled_ready: false,
+            ready_generation: 0,
         }
     }
 
     fn from_probe(info: chimera_ipc::types::StatusInfo<'static>) -> Self {
-        use chimera_ipc::types::ServiceStatus;
-
         let compat = crate::core::service::compat::ServiceCompat::classify(&info);
         let runtime_owned = crate::core::service::is_service_runtime_owned(&info);
-        let phase = match info.status {
-            ServiceStatus::Running if compat.allows_service_backend() && runtime_owned => {
-                ServicePhase::Ready
-            }
-            ServiceStatus::Running => ServicePhase::Incompatible,
-            ServiceStatus::Stopped => ServicePhase::DaemonStopped,
-            ServiceStatus::NotInstalled => ServicePhase::NotInstalled,
-        };
+        let phase = chimera_core::actor_v2::service_policy::phase_for_probe(
+            info.status,
+            compat.allows_service_backend(),
+            runtime_owned,
+        );
+        let (settled_ready, ready_generation) =
+            chimera_core::actor_v2::service_policy::settled_readiness(false, 0, phase);
         Self {
             name: info.name,
             version: info.version,
@@ -116,6 +108,8 @@ impl ServiceHostStatus {
             compat,
             runtime_owned,
             restart_attempts: 0,
+            settled_ready,
+            ready_generation,
         }
     }
 
@@ -129,7 +123,21 @@ impl ServiceHostStatus {
             compat: crate::core::service::compat::ServiceCompat::Unknown,
             runtime_owned: false,
             restart_attempts: previous.restart_attempts,
+            settled_ready: previous.settled_ready,
+            ready_generation: previous.ready_generation,
         }
+    }
+
+    /// Apply upstream's settled-generation rule to the last published status.
+    /// An unreadable or transitional probe is not evidence of a new daemon.
+    fn settle_after(mut self, previous: &Self) -> Self {
+        (self.settled_ready, self.ready_generation) =
+            chimera_core::actor_v2::service_policy::settled_readiness(
+                previous.settled_ready,
+                previous.ready_generation,
+                self.phase,
+            );
+        self
     }
 
     fn with_restart_policy(
@@ -248,7 +256,8 @@ impl ApplicationWorkflowState {
         if previous.phase == ServicePhase::Exhausted {
             status.phase = ServicePhase::Exhausted;
         }
-        self.service_status.send_replace(status);
+        self.service_status
+            .send_replace(status.settle_after(&previous));
     }
 
     fn publish_service_status_with_policy(
@@ -256,12 +265,22 @@ impl ApplicationWorkflowState {
         info: chimera_ipc::types::StatusInfo<'static>,
         policy: crate::core::actor_v2::facade::ServiceRestartPolicySnapshot,
     ) {
-        self.service_status
-            .send_replace(ServiceHostStatus::from_probe(info).with_restart_policy(policy));
+        let previous = self.service_status.borrow().clone();
+        self.service_status.send_replace(
+            ServiceHostStatus::from_probe(info)
+                .with_restart_policy(policy)
+                .settle_after(&previous),
+        );
     }
 
     fn publish_service_phase(&self, phase: ServicePhase) {
         let current = self.service_status.borrow().clone();
+        let (settled_ready, ready_generation) =
+            chimera_core::actor_v2::service_policy::settled_readiness(
+                current.settled_ready,
+                current.ready_generation,
+                phase,
+            );
         self.service_status.send_replace(ServiceHostStatus {
             name: current.name,
             version: current.version,
@@ -271,6 +290,8 @@ impl ApplicationWorkflowState {
             compat: crate::core::service::compat::ServiceCompat::Unknown,
             runtime_owned: current.runtime_owned,
             restart_attempts: current.restart_attempts,
+            settled_ready,
+            ready_generation,
         });
     }
 
@@ -280,7 +301,8 @@ impl ApplicationWorkflowState {
         if previous.phase == ServicePhase::Exhausted {
             status.phase = ServicePhase::Exhausted;
         }
-        self.service_status.send_replace(status);
+        self.service_status
+            .send_replace(status.settle_after(&previous));
     }
 
     async fn refresh_service_status(&mut self) -> anyhow::Result<ServiceHostStatus> {
@@ -291,7 +313,10 @@ impl ApplicationWorkflowState {
         let policy = workflow.service_restart_policy();
         match workflow.probe_service().await {
             Ok(info) => {
-                let status = ServiceHostStatus::from_probe(info).with_restart_policy(policy);
+                let previous = self.service_status.borrow().clone();
+                let status = ServiceHostStatus::from_probe(info)
+                    .with_restart_policy(policy)
+                    .settle_after(&previous);
                 self.service_status.send_replace(status.clone());
                 Ok(status)
             }
@@ -1725,6 +1750,64 @@ mod tests {
 
     use super::*;
     use crate::{config::chimera::ClashCore, core::RunType};
+
+    #[test]
+    fn service_status_tracks_ready_generation_without_changing_ipc_fields() {
+        let mut current = ServiceHostStatus::probing();
+        assert!(!current.settled_ready);
+        assert_eq!(current.ready_generation, 0);
+
+        let mut ready = current.clone();
+        ready.phase = ServicePhase::Ready;
+        current = ready.settle_after(&current);
+        assert!(current.settled_ready);
+        assert_eq!(current.ready_generation, 1);
+
+        let mut unknown = current.clone();
+        unknown.phase = ServicePhase::Unknown;
+        current = unknown.settle_after(&current);
+        assert!(
+            current.settled_ready,
+            "failed probe cannot invent a stopped daemon"
+        );
+        assert_eq!(current.ready_generation, 1);
+
+        let mut stopped = current.clone();
+        stopped.phase = ServicePhase::DaemonStopped;
+        current = stopped.settle_after(&current);
+        assert!(!current.settled_ready);
+        assert_eq!(current.ready_generation, 1);
+
+        let mut restarted = current.clone();
+        restarted.phase = ServicePhase::Ready;
+        current = restarted.settle_after(&current);
+        assert!(current.settled_ready);
+        assert_eq!(current.ready_generation, 2);
+
+        let json = serde_json::to_value(&current).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("settled_ready"));
+        assert!(!json.as_object().unwrap().contains_key("ready_generation"));
+        assert_eq!(json["phase"], "ready");
+    }
+
+    #[test]
+    fn exhausted_service_probe_stays_latched_not_ready() {
+        let mut previous = ServiceHostStatus::probing();
+        previous.phase = ServicePhase::Ready;
+        previous = previous.settle_after(&ServiceHostStatus::probing());
+
+        let mut exhausted = previous.clone();
+        exhausted.phase = ServicePhase::Exhausted;
+        exhausted = exhausted.settle_after(&previous);
+        assert!(!exhausted.settled_ready);
+        assert_eq!(exhausted.ready_generation, 1);
+
+        let mut failed_probe = ServiceHostStatus::probe_failed(&exhausted);
+        failed_probe.phase = ServicePhase::Exhausted;
+        failed_probe = failed_probe.settle_after(&exhausted);
+        assert!(!failed_probe.settled_ready);
+        assert_eq!(failed_probe.ready_generation, 1);
+    }
 
     struct RecordingCore {
         events: Arc<Mutex<Vec<&'static str>>>,

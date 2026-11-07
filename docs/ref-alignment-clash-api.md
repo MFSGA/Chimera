@@ -1,5 +1,11 @@
 # Clash API crate ref-alignment record
 
+## 2026-11-07 reference baseline refresh
+
+- Current verified upstream `main` and local `ref` gitlink: `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866` (advanced from `8cf63276e387afc621d46b950ab72f9268f915e7`). The older SHA below is retained as historical evidence for the original API migration.
+- The upstream delta adds a Network Info dashboard widget and modifies network contracts, client traffic, Unified RPC, and frontend RPC bindings. **No Chimera production behavior has been migrated or validated for this delta.** Follow-up requires contract/error/cache review, Service/Agent compatibility, and targeted Rust/TS tests before claiming parity.
+- This baseline-only change does not update `backend/chimera-runtime`, generated Specta bindings, or the unrelated local `pnpm-lock.yaml` edit.
+
 ## Scope and decision
 
 - Objective: align Chimera's application-side Mihomo controller API crate with
@@ -1335,3 +1341,70 @@ orchestration, subscription pump and long-lived runtime ownership
 remain to be copied/adapted. Chimera's original
 `client/core_lifecycle` and Service IPC stack must be preserved
 until the new core-owned paths pass lifecycle and recovery tests.
+
+### 2026-11-07 upstream ServiceActor phase policy and settled readiness
+
+**Local code commit:** `7ecde9ec`
+(`refactor(core): own ref service phase and settled readiness policy`).
+The inspected, clean reference was
+`ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`,
+which had already been advanced by the repository's prior ref-sync
+commit before this migration batch began.
+
+**Reference-derived implementation:** the `ServicePhase` enum
+and its `readiness()` classification were copied from
+`ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+into the new independent
+`backend/chimera-core/src/actor_v2/service_policy.rs`.
+The phase's public discriminants and snake_case wire values are
+unchanged. The core now also owns the pure `settled_readiness`
+generation rule, the daemon-probe phase decision, and the
+finite-budget automatic-restart decision. A Chimera-specific
+additional check requires a **compatible, runtime-owning** Service
+before classifying a running daemon as `Ready`; it is not safe to
+copy the upstream implementation without that ownership proof.
+
+**Real production consumers:** Tauri
+`client/core_lifecycle/mod.rs` re-exports core's `ServicePhase`,
+uses `phase_for_probe`, and tracks upstream-like
+`settled_ready` / `ready_generation` on every probe,
+failure, transition and completed operation. Unknown and
+transitional phases do **not** turn a previously settled Ready
+into a stopped proof; a new ready generation requires an
+authoritative NotReady -> Ready transition. Both internal
+tracking fields are excluded from serde and Specta, preserving
+the existing main/legacy UI and Service IPC response shape.
+Tauri's `core/actor_v2/facade.rs` now invokes core-owned
+`service_restart_decision`; the bounded restart budget and
+uncertain-outcome mutation guard remain unchanged.
+
+**Specta nuance:** the generated
+`frontend/interface/src/ipc/bindings.ts` changed only by
+upstream documentation comments on the moved `ServicePhase`
+variants, not its discriminants or `ServiceHostStatus`
+fields. The initial freshness check failed until the binding
+was regenerated, after which freshness and TS checks passed.
+
+**Verification:** full `chimera-core --lib` **148/148**,
+Tauri core lifecycle **33/33**, Actor V2 **28/28**,
+proxies **14/14**, Agent probe **3/3**, Specta binding
+freshness **1/1**, frontend interface tests **28/28**,
+E2E harness-only tests **33/33**, interface and main/legacy
+TypeScript checks, frontend boundaries, Rustfmt, Prettier
+and Git whitespace validation passed. The two new Tauri
+tests verify readiness generation across unknown/stop/restart,
+exhausted-latch handling and unchanged serialized IPC fields.
+No real Service/desktop end-to-end execution or complete
+Clippy pass is claimed.
+
+**Explicit remaining work:** the 2,500-line ref
+`service_actor.rs` mailbox, OS `ServiceProcessControl`
+contract, health/upgrade/version-gate executor, bounded
+outstanding elevated helpers and `CoreActor` router/facade
+have **not** been copied wholesale. Ref's owned
+`ServiceProcessControl` and IPC client are incompatible with
+Chimera's current service bridge, so a blind replacement would
+bypass Chimera-specific authorization, runtime ownership and
+Agent integration. Their host transport must be adapted and
+validated as a separate migration batch. No push, app launch
+or change to unrelated `pnpm-lock.yaml` was made.

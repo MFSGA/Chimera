@@ -1,6 +1,6 @@
 # Chimera ↔ ref 全量架构对齐清单
 
-**核对基线：** Chimera 本地分支 `codex/clash-api-ipc-dev-1106`，已固定的干净参考子模块 `ref@8cf63276e387afc621d46b950ab72f9268f915e7`（2026-11-07）。此处对齐对象是**当前已固定的 ref 子模块**；不能据此宣称它是 GitHub 最新提交。
+**核对基线：** Chimera 本地分支 `codex/clash-api-ipc-dev-1106`，参考子模块 `ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`（2026-11-07，经官方 GitHub `refs/heads/main` 查询及祖先关系验证）。此 SHA 是本次核实时的官方 main，不保证未来仍为最新。此次仅更新基线，以下历史测试数字不代表在新 SHA 上重新执行。
 
 **目标：** 使 Chimera 在代码职责、协议契约、事务语义、可观察状态、前端交互以及运行时行为上尽量与 ref 对齐，同时保留 Chimera 品牌、独有功能、Agent、main/legacy 双 UI 和 `backend/chimera-runtime` 所绑定的服务协议。不要求两个项目的包名、文件数量或字节内容完全相同；不允许借助整体覆盖代码“达成”表面一致。
 
@@ -99,3 +99,35 @@ TypeScript 与前端边界以及 E2E 框架单测 **33/33**
 `service_endpoint_factory.rs`，以及完整的实例所有权移交与
 应用状态协调。**不能因为公共契约已经迁入，就将 Actor V2
 整项标记为已对齐。**
+
+## 2026-11-07 ServiceActor 状态策略迁入 core
+
+本地代码提交 `7ecde9ec`，参考
+`ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`。
+从上游 `backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+原样提取 `ServicePhase` 和 `readiness()`，在
+`backend/chimera-core/src/actor_v2/service_policy.rs`
+集中实现探测状态、settled readiness / ready generation 以及有上限的自动重启决策。
+
+**实际生产接线：**
+`backend/tauri/src/client/core_lifecycle/mod.rs`
+已重导出 core `ServicePhase` 并通过 core 规则处理
+Service 探测、超时未知、耗尽锁存和状态代际；
+`backend/tauri/src/core/actor_v2/facade.rs` 的自动重启决策
+也已由 core 接管。Chimera 保留“必须证明 Service
+真正拥有 Runtime 才能 Ready”的额外保护。
+内部 readiness/generation 字段 `serde(skip)` /
+`specta(skip)`，UI/Agent 对外字段不变。
+
+**验收：** 独立 core **148/148**、Tauri 生命周期
+**33/33**、Actor V2 **28/28**、代理 **14/14**、
+Agent **3/3**、Specta 类型一致性 **1/1**，
+前端测试 **28/28**、E2E 框架单测 **33/33**
+和 TS/格式/边界检查通过。完整 Clippy、
+实际 Service/桌面 E2E 尚未验证。
+
+**仍未完成：** 上游完整 `ServiceActor`（OS 进程控制、
+消息队列、版本门禁、自动重启和健康监测）、完整
+`CoreActor` mailbox、`CoreClient` 与 facade 对齐。
+Chimera 现有 Service IPC 和权限校验不同于上游，
+这些部分不能直接整文件覆盖后仅通过编译即宣称完成。
