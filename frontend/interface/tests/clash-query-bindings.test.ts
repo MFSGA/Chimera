@@ -40,27 +40,48 @@ test('proxy view and delay descriptors keep typed keys and arguments', async () 
       },
     } as Awaited<ReturnType<typeof commands.getProxies>>;
   };
-  commands.clashApiGetProxyDelay = async (name, url) => {
-    calls.push(`node:${name}:${url}`);
+  commands.clashApiGetProxyDelay = async (name, url, provider, expected) => {
+    calls.push(`node:${name}:${url}:${provider}:${expected}`);
     return { status: 'ok', data: { delay: 42 } };
   };
-  commands.clashApiGetGroupDelay = async (group, url) => {
-    calls.push(`group:${group}:${url}`);
+  commands.clashApiGetGroupDelay = async (group, url, expected) => {
+    calls.push(`group:${group}:${url}:${expected}`);
     return { status: 'ok', data: { DIRECT: 42 } };
   };
   try {
     const proxies = queries.getProxies();
-    const delay = queries.clashApiGetProxyDelay('DIRECT', null);
+    const delay = queries.clashApiGetProxyDelay('DIRECT', null, null, null);
+    const providerDelay = queries.clashApiGetProxyDelay(
+      'Shared node',
+      'https://example.test/check',
+      'Provider A',
+      '200/204',
+    );
     const group = queries.clashApiGetGroupDelay(
       'GLOBAL',
       'https://example.test/',
+      null,
     );
     assert.deepEqual(proxies.queryKey, [CLASH_PROXIES_QUERY_KEY]);
-    assert.deepEqual(delay.queryKey, ['clashApiGetProxyDelay', 'DIRECT', null]);
+    assert.deepEqual(delay.queryKey, [
+      'clashApiGetProxyDelay',
+      'DIRECT',
+      null,
+      null,
+      null,
+    ]);
+    assert.deepEqual(providerDelay.queryKey, [
+      'clashApiGetProxyDelay',
+      'Shared node',
+      'https://example.test/check',
+      'Provider A',
+      '200/204',
+    ]);
     assert.deepEqual(group.queryKey, [
       'clashApiGetGroupDelay',
       'GLOBAL',
       'https://example.test/',
+      null,
     ]);
     assert.equal(
       (await unwrapQueryOptions(proxies, proxies.queryFn!).queryFn()).global
@@ -71,14 +92,24 @@ test('proxy view and delay descriptors keep typed keys and arguments', async () 
       (await unwrapQueryOptions(delay, delay.queryFn!).queryFn()).delay,
       42,
     );
+    assert.equal(
+      (
+        await unwrapQueryOptions(
+          providerDelay,
+          providerDelay.queryFn!,
+        ).queryFn()
+      ).delay,
+      42,
+    );
     assert.deepEqual(
       await unwrapQueryOptions(group, group.queryFn!).queryFn(),
       { DIRECT: 42 },
     );
     assert.deepEqual(calls, [
       'proxies',
-      'node:DIRECT:null',
-      'group:GLOBAL:https://example.test/',
+      'node:DIRECT:null:null:null',
+      'node:Shared node:https://example.test/check:Provider A:200/204',
+      'group:GLOBAL:https://example.test/:null',
     ]);
   } finally {
     commands.getProxies = oldProxies;

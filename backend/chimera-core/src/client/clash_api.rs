@@ -4,6 +4,33 @@
 
 use crate::clash::api::{ClashApiConfig, RuleProviderItem};
 use anyhow::Result;
+use clash_api::{DelayQuery, ExpectedStatus};
+use std::time::Duration;
+
+/// Used only if neither the caller nor the app supplies a test URL.
+pub const FALLBACK_LATENCY_TEST_URL: &str = "http://www.gstatic.com/generate_204";
+
+/// Build one typed test query for direct, group and provider delay endpoints.
+///
+/// A caller-specified nonempty URL wins over the app default. The test timeout
+/// is always supplied explicitly by the caller; an invalid expected-status
+/// expression fails before any request is issued.
+pub fn delay_query(
+    url: Option<&str>,
+    expected: Option<&str>,
+    app_default_url: &str,
+    timeout: Duration,
+) -> Result<DelayQuery> {
+    let url = url
+        .filter(|value| !value.is_empty())
+        .or_else(|| (!app_default_url.is_empty()).then_some(app_default_url))
+        .unwrap_or(FALLBACK_LATENCY_TEST_URL);
+    let query = DelayQuery::new(url.parse()?, timeout)?;
+    Ok(match expected.filter(|value| !value.is_empty()) {
+        Some(value) => query.with_expected(ExpectedStatus::new(value)?),
+        None => query,
+    })
+}
 
 /// Convert the native protocol DTO at the facade boundary rather than inside
 /// the instance-bound API capability. Check every port narrowing explicitly.
@@ -41,6 +68,62 @@ pub fn rule_provider_item(provider: clash_api::RuleProvider) -> Result<RuleProvi
 #[cfg(test)]
 mod tests {
     use super::config_item;
+
+    #[test]
+    fn delay_query_prefers_caller_then_app_default_then_fallback() {
+        use std::time::Duration;
+        let timeout = Duration::from_millis(4200);
+        let direct = super::delay_query(
+            Some("https://example.test/check"),
+            None,
+            "https://app.example.test/generate_204",
+            timeout,
+        )
+        .unwrap();
+        assert_eq!(direct.url.as_str(), "https://example.test/check");
+        assert_eq!(direct.timeout, timeout);
+        assert!(direct.expected.is_none());
+
+        let app_default = super::delay_query(
+            Some(""),
+            None,
+            "https://app.example.test/generate_204",
+            timeout,
+        )
+        .unwrap();
+        assert_eq!(
+            app_default.url.as_str(),
+            "https://app.example.test/generate_204"
+        );
+
+        let fallback = super::delay_query(None, None, "", timeout).unwrap();
+        assert_eq!(fallback.url.as_str(), super::FALLBACK_LATENCY_TEST_URL);
+    }
+
+    #[test]
+    fn delay_query_validates_expected_status_and_timeout_before_transport() {
+        use std::time::Duration;
+        let query = super::delay_query(
+            None,
+            Some("200/204/401-429"),
+            "",
+            Duration::from_millis(3000),
+        )
+        .unwrap();
+        assert_eq!(query.expected.unwrap().as_str(), "200/204/401-429");
+
+        assert!(
+            super::delay_query(None, Some(""), "", Duration::from_secs(3))
+                .unwrap()
+                .expected
+                .is_none()
+        );
+        assert!(
+            super::delay_query(None, Some("not a status"), "", Duration::from_secs(3)).is_err()
+        );
+        assert!(super::delay_query(None, None, "", Duration::ZERO).is_err());
+        assert!(super::delay_query(None, None, "", Duration::from_secs(10_000_000)).is_err());
+    }
 
     #[test]
     fn config_projection_matches_ref_optional_fields_and_unknown_modes() {

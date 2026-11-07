@@ -56,8 +56,8 @@ export const withNativeDelaySample = (
  * Main native proxy view actions. No action closure is stored in Query data.
  * The legacy UI continues to use its compatibility hook and command schema.
  *
- * Chimera's current delay command accepts name and URL only; provider-aware
- * routing and expected-status support are separate backend migrations.
+ * Provider routing and expected status are passed to the core as typed
+ * delay parameters; the legacy UI may omit both without changing its behavior.
  */
 export const useNativeProxyActions = () => {
   const queryClient = useQueryClient();
@@ -82,9 +82,16 @@ export const useNativeProxyActions = () => {
   );
 
   const updateProxiesDelay = useMutation({
-    mutationFn: async ([name, url]: [string, string | null]) => {
+    mutationFn: async ([name, url, provider, expected]: [
+      string,
+      string | null,
+      string | null,
+      string | null,
+    ]) => {
       const result = unwrapResult(
-        await invokeQuery(queries.clashApiGetProxyDelay(name, url)),
+        await invokeQuery(
+          queries.clashApiGetProxyDelay(name, url, provider, expected),
+        ),
       );
       return {
         name,

@@ -1570,17 +1570,28 @@ pub async fn update_proxy_provider(client: State<'_, ChimeraClient>, name: Strin
 pub async fn clash_api_get_proxy_delay(
     name: String,
     url: Option<String>,
+    provider: Option<String>,
+    expected: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<clash::api::DelayRes> {
-    match client
+    let query = chimera_core::client::clash_api::delay_query(
+        url.as_deref(),
+        expected.as_deref(),
+        &client.get_app_config()?.default_latency_test,
+        std::time::Duration::from_secs(10),
+    )?;
+    let provider = provider
+        .filter(|value| !value.is_empty())
+        .map(clash_api::ProviderName::new);
+    let delay = client
         .clash_api_client()
         .await?
-        .get_proxy_delay(name, url)
+        .proxy_delay(&clash_api::ProxyName::new(name), provider.as_ref(), &query)
         .await
-    {
-        Ok(res) => Ok(res),
-        Err(err) => Err(err.into()),
-    }
+        .map_err(anyhow::Error::from)?;
+    Ok(clash::api::DelayRes {
+        delay: u64::from(delay.delay),
+    })
 }
 
 #[tauri::command]
@@ -1588,13 +1599,25 @@ pub async fn clash_api_get_proxy_delay(
 pub async fn clash_api_get_group_delay(
     group: String,
     url: Option<String>,
+    expected: Option<String>,
     client: State<'_, ChimeraClient>,
 ) -> Result<HashMap<String, u32>> {
-    Ok(client
+    let query = chimera_core::client::clash_api::delay_query(
+        url.as_deref(),
+        expected.as_deref(),
+        &client.get_app_config()?.default_latency_test,
+        std::time::Duration::from_secs(10),
+    )?;
+    let delays = client
         .clash_api_client()
         .await?
-        .get_group_delay(group, url)
-        .await?)
+        .group_delay(&clash_api::ProxyName::new(group), &query)
+        .await
+        .map_err(anyhow::Error::from)?;
+    Ok(delays
+        .into_iter()
+        .map(|(name, delay)| (name.to_string(), u32::from(delay)))
+        .collect())
 }
 
 #[tauri::command]

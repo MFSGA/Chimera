@@ -12,6 +12,10 @@ import { invokeMutation, invokeQuery } from './query-options.js';
 export type ClashDelayOptions = {
   url?: string;
   timeout?: number;
+  /** Optional provider healthcheck route, for normalized proxy consumers. */
+  provider?: string;
+  /** Expected HTTP status expression (for example, 200/204). */
+  expected?: string;
 };
 
 export type ClashProxiesQueryHelperFn = {
@@ -154,7 +158,12 @@ export const useClashProxies = () => {
       const [name, options] = args;
       const res = unwrapResult(
         await invokeQuery(
-          queries.clashApiGetProxyDelay(name, options?.url ?? null),
+          queries.clashApiGetProxyDelay(
+            name,
+            options?.url ?? null,
+            options?.provider ?? null,
+            options?.expected ?? null,
+          ),
         ),
       );
       return {
@@ -206,7 +215,11 @@ export const useClashProxies = () => {
       return (
         unwrapResult(
           await invokeQuery(
-            queries.clashApiGetGroupDelay(group, options?.url ?? null),
+            queries.clashApiGetGroupDelay(
+              group,
+              options?.url ?? null,
+              options?.expected ?? null,
+            ),
           ),
         ) ?? {}
       );

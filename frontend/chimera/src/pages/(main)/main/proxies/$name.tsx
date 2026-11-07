@@ -97,9 +97,14 @@ function RouteComponent() {
 
   const handleDelayTest = useCallback(
     async (proxy: Proxy_Serialize) => {
-      await mutateProxyDelay([proxy.name, currentGroup?.testUrl ?? null]);
+      await mutateProxyDelay([
+        proxy.name,
+        currentGroup?.testUrl ?? proxy.testUrl ?? null,
+        proxy.provider ?? proxy['provider-name'] ?? null,
+        currentGroup?.expectedStatus ?? proxy.expectedStatus ?? null,
+      ]);
     },
-    [mutateProxyDelay, currentGroup?.testUrl],
+    [mutateProxyDelay, currentGroup?.testUrl, currentGroup?.expectedStatus],
   );
 
   // 获取 AppContentScrollArea 的 viewportRef（用于同步虚拟滚动）

@@ -942,3 +942,79 @@ queries, pinned group testing, the ref's typed WebSocket stream
 boundary, client ownership, and Unified RPC remain incomplete.
 Next work should migrate those paths in small testable steps while
 preserving Chimera's Agent, main and legacy UI.
+
+### 2026-11-07 typed native delay API and provider-aware IPC (ref@1c0002f0)
+
+Original Windows checkout `I:\mfsga\Chimera`, branch
+`codex/clash-api-ipc-dev-1106`. The clean checked-in reference
+baseline for this slice was
+`1c0002f04f59995b5115f4c68029b9cb46e5d39b`.
+The migration was split into **two local commits**, with no push:
+
+- `6ce7eed5` (`refactor(core): align typed proxy and provider delay
+capabilities`): `backend/chimera-core/src/actor_v2/api.rs` now
+  owns a ref-shaped `proxy_delay(name, provider, query)` and
+  `group_delay(group, query)` API. A Provider name selects the
+  `/providers/proxies/{provider}/{name}/healthcheck` endpoint;
+  otherwise the plain `/proxies/{name}/delay` endpoint is used.
+  Each request uses the caller's complete `clash_api::DelayQuery`,
+  including `expected` and the query timeout plus five seconds of
+  lifecycle overhead; no mutation/read retry is introduced. The
+  legacy two-argument methods remain thin compatibility projections
+  over these typed core APIs.
+- `backend/chimera-core/src/client/clash_api.rs` now owns the
+  `delay_query` constructor, including ref's URL precedence
+  (nonempty caller URL, else app default, else gstatic fallback),
+  explicit timeout and expected-status syntax validation before
+  transport. Two unit tests cover the selection and validation.
+  A mock-controller test checks **three real wire routes** (direct
+  proxy, provider-specific healthcheck, group delay), encoded path,
+  URL, expected status and timeout parameters and single-request
+  delivery without automatic replay.
+- `e3ffe162` (`feat(proxies): route provider-aware delay tests
+through typed core IPC`): the existing
+  `clash_api_get_proxy_delay` IPC accepts optional `provider`
+  and `expected`, and `clash_api_get_group_delay` accepts optional
+  `expected`. Tauri resolves the application's saved default test
+  URL and delegates to typed `chimera-core` APIs. Results retain
+  the existing `DelayRes` and name-to-delay wire DTOs, and the
+  commands remain in the same Specta registration.
+- Specta regenerated `frontend/interface/src/ipc/bindings.ts`.
+  The legacy `use-clash-proxies.ts` mutation supplies null defaults
+  (or explicit caller options) so main/legacy remain compatible.
+  The native proxy action passes Provider and expected status;
+  `main/proxies/$name.tsx` supplies those from
+  `Proxy_Serialize.provider` / `provider-name` and the current
+  `ProxyGroup.expectedStatus` / node fallback. Group and node
+  test URLs are likewise passed explicitly. Query descriptor tests
+  verify argument forwarding and query-key separation for direct
+  and provider-aware calls.
+
+**Verification:** independent `chimera-core --lib` **125/125
+passed**, including two new delay-query tests and a real mock HTTP
+route test; Tauri actor_v2 API **9/9**, proxies **11/11**,
+connection interruption **1/1**, Specta generated bindings
+freshness **1/1**. Interface and main/legacy TypeScript checks
+passed with the usual `--types node` workaround for the app,
+frontend boundaries passed, interface query/profile/native tests
+**25/25** and E2E harness unit tests **33/33** passed. Rustfmt,
+touched TypeScript Oxlint and Prettier, and `git diff --check`
+passed. No desktop application or real-controller E2E test ran.
+
+**Still different from ref:** Chimera currently uses a fixed
+ten-second requested delay-test timeout, not ref's configurable
+`default_latency_timeout_ms`; a full group refresh remains
+legacy/IPC driven rather than ref's actor-managed node history;
+the pinned-group member-by-member delay test and clear-fixed
+mutation are not yet wired into main/legacy. Provider-scoped
+latency tests can update different underlying core histories,
+so full native-graph refresh semantics still need an end-to-end
+check. The typed WebSocket stream boundary and Unified RPC remain
+larger unfinished parts.
+
+The Rust/IPC code commits used a scoped `HUSKY=0` override
+after independent tests because the repository's required
+nightly toolchain and full Clippy dependency index are not
+available in this environment. This was **not** a claim that
+Clippy passed. The pre-existing unrelated `@pnpm/exe` removal
+hunks in `pnpm-lock.yaml` were intentionally left unstaged.

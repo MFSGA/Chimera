@@ -57,7 +57,7 @@ pub struct ProxySnapshot {
 }
 
 const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_DELAY_URL: &str = "http://www.gstatic.com/generate_204";
+const DELAY_DEADLINE_MARGIN: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 pub enum ApiStreamKind {
@@ -361,18 +361,59 @@ impl ApiClient {
             .map_err(Into::into)
     }
 
+    /// Ref-compatible native delay capability. Provider healthcheck routes and
+    /// expected HTTP statuses come from the typed query; only the controller's
+    /// protocol client performs the request, within its bounded deadline.
+    pub async fn proxy_delay(
+        &self,
+        name: &clash_api::ProxyName,
+        provider: Option<&clash_api::ProviderName>,
+        query: &clash_api::DelayQuery,
+    ) -> ApiResult<clash_api::Delay> {
+        let deadline = query.timeout + DELAY_DEADLINE_MARGIN;
+        match provider {
+            Some(provider) => {
+                self.execute(
+                    deadline,
+                    self.client.provider_proxy_delay(provider, name, query),
+                )
+                .await
+            }
+            None => {
+                self.execute(deadline, self.client.proxy_delay(name, query))
+                    .await
+            }
+        }
+    }
+
+    /// Native group-delay API preserves proxy-name ordering and typed errors.
+    pub async fn group_delay(
+        &self,
+        group: &clash_api::ProxyName,
+        query: &clash_api::DelayQuery,
+    ) -> ApiResult<IndexMap<clash_api::ProxyName, u16>> {
+        self.execute(
+            query.timeout + DELAY_DEADLINE_MARGIN,
+            self.client.group_delay(group, query),
+        )
+        .await
+    }
+
+    /// Existing Tauri/legacy compatibility entry point; the native request
+    /// itself is now implemented by the provider-aware core capability.
     pub async fn get_proxy_delay(
         &self,
         name: String,
         test_url: Option<String>,
     ) -> Result<DelayRes> {
-        let query = delay_query(test_url)?;
+        let query = crate::client::clash_api::delay_query(
+            test_url.as_deref(),
+            None,
+            crate::client::clash_api::FALLBACK_LATENCY_TEST_URL,
+            Duration::from_secs(10),
+        )?;
         let delay = self
-            .execute(
-                query.timeout + Duration::from_secs(5),
-                self.client
-                    .proxy_delay(&clash_api::ProxyName::new(name), &query),
-            )
+            .proxy_delay(&clash_api::ProxyName::new(name), None, &query)
             .await?;
         Ok(DelayRes {
             delay: u64::from(delay.delay),
@@ -384,13 +425,14 @@ impl ApiClient {
         group: String,
         url: Option<String>,
     ) -> Result<HashMap<String, u32>> {
-        let query = delay_query(url)?;
+        let query = crate::client::clash_api::delay_query(
+            url.as_deref(),
+            None,
+            crate::client::clash_api::FALLBACK_LATENCY_TEST_URL,
+            Duration::from_secs(10),
+        )?;
         let delays = self
-            .execute(
-                query.timeout + Duration::from_secs(5),
-                self.client
-                    .group_delay(&clash_api::ProxyName::new(group), &query),
-            )
+            .group_delay(&clash_api::ProxyName::new(group), &query)
             .await?;
         Ok(delays
             .into_iter()
@@ -532,17 +574,6 @@ fn connection_snapshot_value(
     Ok(value)
 }
 
-fn delay_query(url: Option<String>) -> Result<clash_api::DelayQuery> {
-    let url = url
-        .filter(|url| !url.is_empty())
-        .unwrap_or_else(|| DEFAULT_DELAY_URL.to_owned());
-    clash_api::DelayQuery::new(
-        url::Url::parse(&url).context("invalid delay test URL")?,
-        Duration::from_secs(10),
-    )
-    .context("invalid delay query")
-}
-
 /// Actor-owned lifecycle lease for the cached controller capability. The
 /// endpoint's ordered notifications wake revocation; periodic authority checks
 /// cover coalesced or lost events, as in ref's `actor_v2::ApiLease`.
@@ -680,6 +711,88 @@ mod typed_error_tests {
             ApiClient::from_connection(binding, endpoint.clone()).unwrap(),
             endpoint,
         )
+    }
+
+    #[tokio::test]
+    async fn native_delay_routes_provider_and_expected_status_without_replay() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            for index in 0..3 {
+                let (mut stream, _) =
+                    tokio::time::timeout(Duration::from_secs(2), listener.accept())
+                        .await
+                        .expect("client request timed out")
+                        .expect("mock controller accept failed");
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                paths.push(request.lines().next().unwrap().to_string());
+                let body = if index == 2 {
+                    r#"{"DIRECT":25}"#
+                } else {
+                    r#"{"delay":42}"#
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            paths
+        });
+        let api = ApiClient::new_unbound(address.to_string(), None).unwrap();
+        let query = crate::client::clash_api::delay_query(
+            Some("https://example.test/generate_204"),
+            Some("200/204"),
+            "",
+            Duration::from_millis(3200),
+        )
+        .unwrap();
+        let name = clash_api::ProxyName::new("Shared Node");
+        let provider = clash_api::ProviderName::new("Subscription A");
+
+        let direct = api.proxy_delay(&name, None, &query).await.unwrap();
+        let via_provider = api
+            .proxy_delay(&name, Some(&provider), &query)
+            .await
+            .unwrap();
+        let group = api
+            .group_delay(&clash_api::ProxyName::new("Auto"), &query)
+            .await
+            .unwrap();
+
+        assert_eq!(direct.delay, 42);
+        assert_eq!(via_provider.delay, 42);
+        assert_eq!(group.get(&clash_api::ProxyName::new("DIRECT")), Some(&25));
+
+        let paths = server.await.unwrap();
+        assert_eq!(paths.len(), 3, "exactly one request for each test");
+        for (index, request_line) in paths.iter().enumerate() {
+            let path_and_query = request_line.split_whitespace().nth(1).unwrap();
+            let url = url::Url::parse(&format!("http://localhost{path_and_query}")).unwrap();
+            let expected_path = match index {
+                0 => "/proxies/Shared%20Node/delay",
+                1 => "/providers/proxies/Subscription%20A/Shared%20Node/healthcheck",
+                _ => "/group/Auto/delay",
+            };
+            assert_eq!(url.path(), expected_path);
+            let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
+            assert_eq!(params.get("expected").map(|v| v.as_ref()), Some("200/204"));
+            assert_eq!(params.get("timeout").map(|v| v.as_ref()), Some("3200"));
+            assert_eq!(
+                params.get("url").map(|v| v.as_ref()),
+                Some("https://example.test/generate_204")
+            );
+        }
     }
 
     #[tokio::test]
