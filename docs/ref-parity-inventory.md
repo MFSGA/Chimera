@@ -395,3 +395,13 @@ ref gitlink 保持不变，也没有改动 runtime 子模块。
 
 本批只作本地提交，不推送、不启动桌面程序。无关的
 pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备份中。
+
+## 2026-11-07 ServiceActor 命令完成与停机证明（本批）
+
+**参考基线：** 官方 main 与 ref 均为 `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`。直接比对 `ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs` 的 `tracked`、`reap_outstanding`、`CommandSettled`、`DaemonNotRunning` 与 `Uninstall`。范围为 L2 Service OS 命令所有权及卸载安全，不声称已迁入完整 ractor mailbox。
+
+- `backend/chimera-core/src/actor_v2/service_actor.rs`（新增）与 `mod.rs`：独立 core 持有 Service 命令单一串行 lane、超时后不丢弃的 helper、取消调用者后的不确定结果标志、完成后 reaping 与新探测；OS probe 失败不伪造停止证明。卸载前要求 v2 `CoreStateDetail::Stopped`，Running 但无明细、仍在切换或探测失败均拒绝；若 daemon 正运行且 core 已停，先 stop、重新探测确认 OS stopped，才 uninstall。
+- `backend/tauri/src/core/actor_v2/facade.rs`：生产 `ServiceTransition` 的 install/update/start/restart/stop/uninstall/auto-restart 已经由 core-owned `ServiceCommandActor` 发起，`CoreFacade::probe_service`、`confirm_stopped` 与 transition admission 接入完成/停止证明。保留 Chimera Service IPC、Tauri OS executor、已有 host transition lock 和 restart policy。
+- 回归：core ServiceActor 7/7，涵盖命令超时/拒绝重入、调用者取消仍持有 helper、停止后才能卸载、未知状态拒绝卸载、假停止拒绝卸载、已停止免 stop；core 全量 170/170，Tauri lifecycle 33/33；Tauri 非测试 `cargo check` 与完整 `pnpm typecheck` 通过，定向 rustfmt、`git diff --check` 通过。Tauri 测试/检查仅命令行设置 `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'`，未改变生产配置。
+- **剩余：** 此处为 ServiceActor 的命令子集，尚未迁入单一 ractor mailbox、会话终止/权限检查、epoch 健康定时器、完整状态发布及上游端点恢复策略；未进行 Windows SCM/UAC/真实 Service 二进制 E2E、全量 Clippy、全部前端/UI E2E。单独 host 健康线程仍在过渡期。后续优先完成 mailbox/epoch 迁移，并在物理 Windows 环境验证命令超时与真实停机。
+- **回滚：** 仅回退上述三个后端文件；无持久化数据、IPC wire、前端 API 变更。未触碰已有 `pnpm-lock.yaml` 用户差异。

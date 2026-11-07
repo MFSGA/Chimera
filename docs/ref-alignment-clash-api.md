@@ -1638,3 +1638,10 @@ testing remain outstanding.
   No physical Service/desktop E2E or complete Clippy was run. Revert this
   bounded three-file Tauri Service change to roll back; no stored data
   changed.
+
+## 2026-11-07 ServiceActor command settlement and stopped-proof integration
+
+- **Reference:** verified official `main` and `ref` at `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`. Ported the command-ownership subset of upstream `service_actor.rs`, not the full ractor mailbox.
+- **Core and production:** new `chimera-core/src/actor_v2/service_actor.rs` owns a serialized Service OS command lane with retained elevated helper on timeout/caller cancellation, explicit `command_settled`, authoritative `daemon_not_running` and fail-closed uninstall guard using v2 `CoreStateDetail`. The Tauri facade's real ServiceTransition install/update/uninstall/start/restart/stop/auto-restart and Service probe/stop confirmation now call this core owner; Chimera Service IPC, OS adapter, existing host lock, branding and UIs remain intact.
+- **Regression:** 7/7 new core command tests; core library 170/170; Tauri lifecycle 33/33; non-test Tauri cargo check, complete pnpm typecheck, targeted rustfmt and whitespace check passed. Tauri tests/check use only transient `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'` to avoid missing packaging sidecars.
+- **Not yet parity:** full ServiceActor mailbox, session/authorization gates, health timer epochs, state/watch ownership, endpoint recovery and physical Windows SCM/UAC/Service E2E are outstanding. This batch changes no wire DTO, generated binding, main/legacy UI or persistent state. Revert the three backend files to roll back. Existing unrelated `pnpm-lock.yaml` changes were preserved.

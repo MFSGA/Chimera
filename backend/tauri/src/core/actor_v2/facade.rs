@@ -5,7 +5,7 @@
 //! protocol. The legacy manager remains only as a compatibility path for
 //! facades constructed without the production `LocalRuntimeHost`.
 
-use chimera_core::actor_v2::service_process::ServiceProcessControl;
+use chimera_core::actor_v2::{service_actor::ServiceCommandActor, service_process::ServiceCommand};
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -63,6 +63,7 @@ pub(crate) struct CoreFacade {
     local_operations: Arc<LocalOperationRegistry>,
     service_restart_attempts: Arc<AtomicU8>,
     service_restart_exhausted: Arc<AtomicBool>,
+    service_commands: Arc<ServiceCommandActor>,
 }
 
 pub(crate) struct ServiceTransition {
@@ -70,6 +71,7 @@ pub(crate) struct ServiceTransition {
     outcome_uncertain: Arc<AtomicBool>,
     restart_attempts: Arc<AtomicU8>,
     restart_exhausted: Arc<AtomicBool>,
+    service_commands: Arc<ServiceCommandActor>,
 }
 
 struct MutationReplyGuard {
@@ -239,6 +241,9 @@ impl CoreFacade {
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
+            service_commands: Arc::new(ServiceCommandActor::new(Arc::new(
+                crate::core::service::control::ServiceOsProcess,
+            ))),
         }
     }
 
@@ -261,11 +266,15 @@ impl CoreFacade {
             local_operations: Arc::new(LocalOperationRegistry::new()),
             service_restart_attempts: Arc::new(AtomicU8::new(0)),
             service_restart_exhausted: Arc::new(AtomicBool::new(false)),
+            service_commands: Arc::new(ServiceCommandActor::new(Arc::new(
+                crate::core::service::control::ServiceOsProcess,
+            ))),
         }
     }
 
     pub(crate) fn outcome_uncertain(&self) -> bool {
         self.outcome_uncertain.load(Ordering::Acquire)
+            || self.service_commands.has_unsettled_outcome()
             || self
                 .local_runtime
                 .as_ref()
@@ -1051,7 +1060,8 @@ impl CoreFacade {
     pub(crate) async fn probe_service(
         &self,
     ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        crate::core::service::control::probe_service_status()
+        self.service_commands
+            .probe()
             .await
             .map_err(anyhow::Error::from)
     }
@@ -1064,12 +1074,12 @@ impl CoreFacade {
     }
 
     pub(crate) async fn begin_service_transition(&self) -> anyhow::Result<ServiceTransition> {
-        if self.outcome_uncertain() {
-            anyhow::bail!(
-                "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
-            );
-        }
         let guard = crate::core::service::HOST_TRANSITION_LOCK.lock().await;
+        // A command may have finished after its caller timed out. Reap its
+        // helper before checking the uncertainty latch and admitting a new turn.
+        if !self.service_commands.command_settled().await {
+            anyhow::bail!("a previous elevated Service command is still running");
+        }
         if self.outcome_uncertain() {
             anyhow::bail!(
                 "previous lower core-host mutation has an uncertain outcome; restart the application before further mutations"
@@ -1080,6 +1090,7 @@ impl CoreFacade {
             outcome_uncertain: self.outcome_uncertain.clone(),
             restart_attempts: self.service_restart_attempts.clone(),
             restart_exhausted: self.service_restart_exhausted.clone(),
+            service_commands: self.service_commands.clone(),
         })
     }
 
@@ -1216,6 +1227,120 @@ async fn stop_service_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chimera_core::actor_v2::service_process::{ServiceCommandError, ServiceProcessControl};
+    use std::sync::atomic::AtomicUsize;
+
+    struct HeldServiceProcess {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        starts: AtomicUsize,
+        running_probe: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ServiceProcessControl for HeldServiceProcess {
+        async fn probe(&self) -> Result<String, ServiceCommandError> {
+            let info = chimera_ipc::types::StatusInfo {
+                name: std::borrow::Cow::Borrowed("chimera-service"),
+                version: std::borrow::Cow::Borrowed("1.11.1"),
+                status: if self.running_probe {
+                    chimera_ipc::types::ServiceStatus::Running
+                } else {
+                    chimera_ipc::types::ServiceStatus::Stopped
+                },
+                server: None,
+            };
+            Ok(serde_json::to_string(&info).unwrap())
+        }
+
+        async fn install(&self) -> Result<(), ServiceCommandError> {
+            Ok(())
+        }
+
+        async fn uninstall(&self) -> Result<(), ServiceCommandError> {
+            Ok(())
+        }
+
+        async fn start_daemon(&self) -> Result<(), ServiceCommandError> {
+            self.starts.fetch_add(1, Ordering::Release);
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(())
+        }
+
+        async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
+            Ok(())
+        }
+
+        async fn update(&self) -> Result<(), ServiceCommandError> {
+            Ok(())
+        }
+
+        async fn restart_daemon(&self) -> Result<(), ServiceCommandError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn facade_refuses_new_service_transition_until_cancelled_helper_settles() {
+        // A caller can abandon an elevated OS command without cancelling it.
+        // The facade must refuse another transition until the actor reaps it.
+        let process = Arc::new(HeldServiceProcess {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            starts: AtomicUsize::new(0),
+            running_probe: false,
+        });
+        let mut facade = CoreFacade::new_local();
+        facade.service_commands = Arc::new(ServiceCommandActor::with_timeout(
+            process.clone(),
+            Duration::from_secs(1),
+        ));
+        let facade = Arc::new(facade);
+
+        let command = {
+            let service_commands = facade.service_commands.clone();
+            tokio::spawn(async move { service_commands.command(ServiceCommand::Start).await })
+        };
+        process.started.notified().await;
+        command.abort();
+        let _ = command.await;
+        assert!(facade.outcome_uncertain());
+        assert!(
+            facade.begin_service_transition().await.is_err(),
+            "the facade must not admit another elevated command while one remains running"
+        );
+        assert_eq!(process.starts.load(Ordering::Acquire), 1);
+
+        process.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !facade.service_commands.command_settled().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the retained OS helper did not finish");
+        assert!(!facade.outcome_uncertain());
+        let _transition = facade.begin_service_transition().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn facade_does_not_confirm_stopped_from_a_running_os_probe() {
+        // A running daemon with no reliable core detail is not proof of stop.
+        let process = Arc::new(HeldServiceProcess {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+            starts: AtomicUsize::new(0),
+            running_probe: true,
+        });
+        let mut facade = CoreFacade::new_local();
+        facade.service_commands = Arc::new(ServiceCommandActor::with_timeout(
+            process,
+            Duration::from_secs(1),
+        ));
+        let mut transition = facade.begin_service_transition().await.unwrap();
+        assert!(transition.confirm_stopped().await.is_err());
+    }
 
     #[tokio::test]
     async fn local_operation_survives_waiter_cancellation_and_remains_queryable() {
@@ -1349,11 +1474,8 @@ impl ServiceTransition {
             return Ok(());
         }
 
-        let info = match tokio::time::timeout(
-            Duration::from_secs(5),
-            crate::core::service::control::probe_service_status(),
-        )
-        .await
+        let info = match tokio::time::timeout(Duration::from_secs(5), self.service_commands.probe())
+            .await
         {
             Ok(Ok(info)) => info,
             Ok(Err(error)) => {
@@ -1386,18 +1508,7 @@ impl ServiceTransition {
             }
         }
 
-        if let Err(error) = run_in_place_mutation(
-            self.outcome_uncertain.clone(),
-            "service auto-restart",
-            async {
-                crate::core::service::control::ServiceOsProcess
-                    .start_daemon()
-                    .await
-                    .map_err(anyhow::Error::from)
-            },
-        )
-        .await
-        {
+        if let Err(error) = self.service_commands.command(ServiceCommand::Start).await {
             tracing::warn!(%error, "service auto-restart failed");
         }
         Ok(())
@@ -1405,66 +1516,45 @@ impl ServiceTransition {
 
     pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service install", async {
-            crate::core::service::control::ServiceOsProcess
-                .install()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands
+            .command(ServiceCommand::Install)
+            .await
+            .map_err(Into::into)
     }
 
     pub(crate) async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
-            crate::core::service::control::ServiceOsProcess
-                .uninstall()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands.uninstall().await
     }
 
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service update", async {
-            crate::core::service::control::ServiceOsProcess
-                .update()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands
+            .command(ServiceCommand::Update)
+            .await
+            .map_err(Into::into)
     }
 
     pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service start", async {
-            crate::core::service::control::ServiceOsProcess
-                .start_daemon()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands
+            .command(ServiceCommand::Start)
+            .await
+            .map_err(Into::into)
     }
 
     pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service restart", async {
-            crate::core::service::control::ServiceOsProcess
-                .restart_daemon()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands
+            .command(ServiceCommand::Restart)
+            .await
+            .map_err(Into::into)
     }
 
     pub(crate) async fn stop_daemon(&mut self) -> anyhow::Result<()> {
-        run_in_place_mutation(self.outcome_uncertain.clone(), "service stop", async {
-            crate::core::service::control::ServiceOsProcess
-                .stop_daemon()
-                .await
-                .map_err(anyhow::Error::from)
-        })
-        .await
+        self.service_commands
+            .command(ServiceCommand::Stop)
+            .await
+            .map_err(Into::into)
     }
 
     pub(crate) async fn confirm_ready(&mut self, timeout: Duration) -> anyhow::Result<()> {
@@ -1473,11 +1563,8 @@ impl ServiceTransition {
     }
 
     pub(crate) async fn confirm_stopped(&mut self) -> anyhow::Result<()> {
-        let observation = crate::core::service::ipc::refresh_state_now()
-            .await
-            .context("failed to verify Chimera Service after stop")?;
-        if observation.status == chimera_ipc::types::ServiceStatus::Running {
-            anyhow::bail!("Chimera Service still reports running after stop");
+        if !self.service_commands.daemon_not_running().await {
+            anyhow::bail!("Chimera Service did not prove it stopped");
         }
         crate::core::service::ipc::mark_disconnected_now();
         Ok(())
