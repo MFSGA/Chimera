@@ -2,7 +2,7 @@
 
 ## 2026-11-07 reference baseline refresh
 
-- Current verified upstream `main` and local `ref` gitlink: `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866` (advanced from `8cf63276e387afc621d46b950ab72f9268f915e7`). The older SHA below is retained as historical evidence for the original API migration.
+- **Latest verified upstream `main` and local `ref` gitlink (2026-11-07):** `a8dd5d58ac86baa7a7e9333dc3332fe98755ef3b`. The previous `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866` is an ancestor; its only newly reachable upstream commit is `chore(manifest): update manifest [skip ci]`, touching `manifest/version.json` only. No new Rust/frontend architecture delta is introduced by this ref bump. Historical evidence below remains tied to the SHA it states.
 - The upstream delta adds a Network Info dashboard widget and modifies network contracts, client traffic, Unified RPC, and frontend RPC bindings. **No Chimera production behavior has been migrated or validated for this delta.** Follow-up requires contract/error/cache review, Service/Agent compatibility, and targeted Rust/TS tests before claiming parity.
 - This baseline-only change does not update `backend/chimera-runtime`, generated Specta bindings, or the unrelated local `pnpm-lock.yaml` edit.
 
