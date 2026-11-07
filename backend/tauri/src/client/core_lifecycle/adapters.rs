@@ -81,7 +81,9 @@ impl ServiceLifecyclePort for LegacyServiceBridge {
         self.facade.probe_service().await
     }
 
-    fn restart_policy(&self) -> crate::core::actor_v2::facade::ServiceRestartPolicySnapshot {
+    fn restart_policy(
+        &self,
+    ) -> chimera_core::actor_v2::service_policy::ServiceRestartPolicySnapshot {
         self.facade.service_restart_policy()
     }
 

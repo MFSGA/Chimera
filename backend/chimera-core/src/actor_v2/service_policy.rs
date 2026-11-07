@@ -73,6 +73,13 @@ pub fn settled_readiness(was_ready: bool, generation: u64, phase: ServicePhase) 
     }
 }
 
+/// Shared restart budget snapshot; the ServiceActor, not Tauri, owns its shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceRestartPolicySnapshot {
+    pub attempts: u8,
+    pub exhausted: bool,
+}
+
 /// Only an explicitly stopped daemon can be restarted. An Unknown probe
 /// or an already exhausted service cannot trigger an elevated command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
