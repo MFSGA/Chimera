@@ -18,7 +18,7 @@
  * - 配合 useScrollArea 的 content-bottom 检测，动态调整按钮位置
  */
 
-import { useClashProxies } from '@chimera/interface';
+import { useNativeProxyActions } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@chimera/ui/tooltip';
@@ -27,24 +27,27 @@ import { useState } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import * as m from '@/paraglide/messages';
-import { Route as NameRoute } from '../$name';
 
 /**
  * 延迟测试浮动按钮
  *
- * 使用 updateGroupDelay mutation 触发全部节点延迟测试，
+ * 使用原生代理组测试，固定组采用至多 8 个并发的单节点测试，
  * 完成后通过短暂的成功状态（isSuccess）反馈给用户。
  */
-export default function DelayTestButton() {
-  const { name } = NameRoute.useParams();
-
-  const { updateGroupDelay } = useClashProxies();
+export default function DelayTestButton({ groupName }: { groupName?: string }) {
+  const { testGroupDelay } = useNativeProxyActions();
 
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const blockTask = useBlockTask(`delay-group-test-${name}`, async () => {
-    await updateGroupDelay.mutateAsync([name]);
-  });
+  const blockTask = useBlockTask(
+    `delay-group-test-${groupName ?? 'unknown'}`,
+    async () => {
+      if (!groupName) {
+        throw new Error('Proxy group is unavailable');
+      }
+      await testGroupDelay(groupName);
+    },
+  );
 
   const handleClick = useLockFn(async () => {
     await blockTask.execute();
@@ -87,6 +90,7 @@ export default function DelayTestButton() {
             variant="fab"
             icon
             loading={blockTask.isPending}
+            disabled={!groupName}
             onClick={handleClick}
           >
             <BoltRounded className="size-6" />

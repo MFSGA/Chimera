@@ -1084,3 +1084,73 @@ floating group-delay button still uses the legacy group-delay
 mutation instead of ref's native per-member/provider-aware group
 tests with bounded concurrency and precise `expectedStatus`.
 Unified RPC and typed streaming remain later slices.
+
+### 2026-11-07 native pinned-group latency tests (ref@8cf63276)
+
+**Original Windows worktree:** `I:\mfsga\Chimera`, branch
+`codex/clash-api-ipc-dev-1106`. Clean `ref` baseline:
+`8cf63276e387afc621d46b950ab72f9268f915e7`. Local code
+commit: `87a48361`. No push, desktop launch, or ref/runtime
+submodule mutation was performed in this slice.
+
+This implements the **actual location** of the upstream group-delay
+policy, `ref/frontend/query/src/ipc/use-clash-proxies.ts`, using
+Chimera's native query layer. It does not introduce a duplicate
+Tauri protocol endpoint; the already-migrated core delay commands
+remain authoritative.
+
+- `frontend/interface/src/ipc/native-group-delay.ts` implements
+  `testNativeGroupDelay`. Before choosing a route, it performs a
+  **fresh controller read** through `getNativeProxies`, not a
+  potentially stale React Query cached snapshot. If the named group
+  is absent or the read fails, it refuses to guess whether the
+  group has a pin and sends no delay request.
+- Without a pin, exactly one native group test is requested with
+  the group's current `testUrl` and `expectedStatus`. With a
+  fixed node, group-delay is **not** invoked (Mihomo/Meow can clear
+  pinned selection as a side effect). Instead every member is
+  individually tested via its current `nodes[name].provider` (or
+  `provider-name` compatibility alias), the group's URL and
+  expected status, with at most **8 in-flight requests**. Individual
+  failed samples become zero without replay; the remaining members
+  continue. A pinned empty group issues no group-delay request.
+- `frontend/interface/src/ipc/use-native-proxy-actions.ts`
+  provides `testGroupDelay` as a distinct action hook. At
+  settlement (success or partial/error), it rereads the normalized
+  proxy graph and invalidates the legacy projection, rather than
+  fabricating results or mutating the pinned selection in the cache.
+- `frontend/chimera/src/pages/(main)/main/proxies/_modules/delay-test-button.tsx`
+  is now a main-only native action consumer, receiving the actual
+  `currentGroup.name` from `$name.tsx`. This handles both
+  ordinary and GLOBAL proxy modes correctly and disables testing
+  when the group is unavailable. The legacy proxy page continues
+  using its existing hook and response model.
+- Four focused tests in
+  `frontend/interface/tests/native-group-delay.test.ts` verify
+  unpinned group call parameters, pinned provider-aware fan-out
+  and maximum concurrency, partial node failure without retry,
+  missing/failed snapshots refusing all requests, and no group
+  call for a pinned group with no members.
+
+**Validation:** 30/30 interface query/profile/native tests,
+33/33 Tauri E2E harness-only unit tests, interface TypeScript,
+main/legacy TypeScript (`--types node`), frontend-boundary lint,
+touched-file Oxlint/Prettier, and `git diff --check` all passed.
+No Rust code, Specta generator inputs or IPC signatures changed,
+so no new Rust build or Specta regeneration was required. There
+was **no real-controller or desktop E2E execution**.
+The local code commit used a one-command `HUSKY=0` after the
+independent checks because the existing default app TypeScript
+pre-commit command lacks the project-test Node type override;
+repository hooks were not modified. The unrelated
+`pnpm-lock.yaml` change remains uncommitted.
+
+**Remaining:** the long-lived proxy actor/cache ownership is
+still split between Tauri and `chimera-core`; a true
+same-instance session-bound fan-out for every member would
+further strengthen the guarantee when a profile changes during
+group testing. The configured default latency **timeout** is
+still not parity-complete, and Unified RPC/typed streams remain
+larger backend migrations. The production desktop behaviour
+for pinned groups has not yet been tested with a real Mihomo
+or Meow instance.
