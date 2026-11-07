@@ -4,7 +4,6 @@ use std::{
 };
 
 use anyhow::Result;
-use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 use tracing::{instrument, warn};
 
@@ -176,12 +175,23 @@ impl IClashTemp {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, specta::Type, Serialize)]
-pub struct ClashInfo {
-    /// clash core port
-    pub port: u16,
-    /// same as `external-controller`
-    pub server: String,
-    /// clash secret
-    pub secret: Option<String>,
+// The public controller-info DTO is ref-owned in the independent core.
+// Keep the existing module path for Agent, IPC, legacy UI, and runtime facades.
+pub use chimera_core::client::clash_info::ClashInfo;
+
+#[cfg(test)]
+mod core_clash_info_contract_tests {
+    use super::{ClashInfo, IClashTemp};
+
+    #[test]
+    fn old_yaml_projection_and_core_owned_dto_keep_identical_ipc_fields() {
+        let info = IClashTemp::template().get_client_info();
+        let wire = serde_json::to_value(&info).unwrap();
+        assert_eq!(wire["port"], 7890);
+        assert_eq!(wire["secret"], "chimera");
+        assert!(wire["server"].as_str().unwrap().starts_with("127.0.0.1:"));
+        assert_eq!(wire.as_object().unwrap().len(), 3);
+        let typed: ClashInfo = serde_json::from_value(wire).unwrap();
+        assert_eq!(typed, info);
+    }
 }

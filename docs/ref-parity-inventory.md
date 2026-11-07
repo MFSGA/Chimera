@@ -57,3 +57,16 @@
 - `1f015cee` — 将 ProxySnapshotState 的版本、发布与时效判定移入 core；增加同 checksum/旧代际/时间回退和中途 Profile 切换测试。
 
 本轮独立 core 完整测试 **132/132**、Tauri 代理 **14/14**、Actor V2 **9/9**、Specta 生成类型检查通过；前端相关单测 **28/28**，E2E 测试框架单测 **33/33**。这些并不代表真实桌面应用、服务模式、跨平台或全量 ref 行为的端到端一致性。
+
+## 2026-11-07 上游源码直接复制与编译适配
+
+用户已授权采用“复制 `ref` 源文件 → 适配 Chimera crate/接口 → 编译并跑回归”的加速模式。已在原 Windows 仓库提交本地代码 `578b0357`：
+
+| 复制来源（`ref/` 下）                            | 目标位置（`backend/chimera-core/src/` 下） | 实际应用接线                                                                                                                   | 验证                                                                  |
+| ------------------------------------------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `backend/nyanpasu-core/src/actor_v2/intent.rs`   | `actor_v2/intent.rs`                       | Tauri 的 `actor_v2/local_runtime.rs` 使用 core `RuntimeIntentBuilder` 构造用于 reconcile 的原始字节和 digest；旧模块改为重导出 | 上游原生测试、字节原样保留测试、Tauri local runtime 恢复/确认用例     |
+| `backend/nyanpasu-core/src/client/clash_info.rs` | `client/clash_info.rs`                     | Tauri `config/clash/mod.rs` 旧 `ClashInfo` 类型改为 core 重导出，保留 YAML/Service/Agent 原有计算入口和三个 IPC 字段           | 5 项上游原生测试、旧 YAML 到 core DTO 的 wire 兼容测试、Specta 新鲜度 |
+
+本批已通过独立 core **140/140**、Tauri runtime **6/6**、Actor V2 **9/9**、proxy **14/14**、Agent 探测 **3/3**、Specta **1/1**、前端测试 **28/28**及 E2E 框架单测 **33/33**。本地 Rustfmt、TypeScript/边界检查通过；完整 Clippy 与真实桌面/Service E2E **未验证**。
+
+这次复制的两个模块均已被 Tauri 生产路径实际引用，而非闲置副本；但尚未实现 `actor_v2` 其他服务 Actor、完整 Client/Workflow、Unified RPC 或跨平台端到端一致性。
