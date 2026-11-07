@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     ops::Deref,
     sync::{
         Arc,
@@ -68,85 +68,11 @@ pub struct ClashWsConnectionSnapshot {
     pub connections: Option<Vec<serde_json::Value>>,
 }
 
-/// One core connection plus its derived rates, as in ref's detail contract.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ClashConnection {
-    #[serde(flatten)]
-    pub connection: clash_api::Connection,
-    pub download_speed: u64,
-    pub upload_speed: u64,
-}
-
-/// Latest full connection details, produced only while a UI subscriber exists.
-/// A single latest frame (not an unbounded event queue) follows ref's watch semantics.
-#[derive(Debug, Clone, Serialize, Type)]
-#[serde(rename_all = "camelCase")]
-pub struct ClashConnectionDetails {
-    pub sequence: u64,
-    pub connections: Vec<ClashConnection>,
-}
-
-#[derive(Default)]
-struct DetailCounters {
-    at: Option<Instant>,
-    connections: HashMap<String, (i64, i64)>,
-}
-
-/// Pure per-connection byte/sec derivation: time and the previous sample's
-/// counters are explicit, as in ref. Preserve the core model's extra fields.
-fn derive_connection_details(
-    counters: &mut DetailCounters,
-    rows: &[serde_json::Value],
-    at: Instant,
-) -> Vec<ClashConnection> {
-    let elapsed = counters
-        .at
-        .and_then(|last| at.checked_duration_since(last))
-        .map(|duration| duration.as_secs_f64())
-        .unwrap_or_default();
-    let mut next = HashMap::with_capacity(rows.len());
-    let details = rows
-        .iter()
-        .filter_map(|raw| {
-            let connection: clash_api::Connection = match serde_json::from_value(raw.clone()) {
-                Ok(value) => value,
-                Err(error) => {
-                    tracing::debug!(%error, "skipping malformed connection detail");
-                    return None;
-                }
-            };
-            let rate = |previous: i64, current: i64| -> u64 {
-                if elapsed <= 0.0 || current <= previous {
-                    return 0;
-                }
-                ((current.saturating_sub(previous)) as u64 as f64 / elapsed) as u64
-            };
-            let (download_speed, upload_speed) = counters
-                .connections
-                .get(&connection.id.to_string())
-                .map(|(before_down, before_up)| {
-                    (
-                        rate(*before_down, connection.download),
-                        rate(*before_up, connection.upload),
-                    )
-                })
-                .unwrap_or_default();
-            next.insert(
-                connection.id.to_string(),
-                (connection.download, connection.upload),
-            );
-            Some(ClashConnection {
-                connection,
-                download_speed,
-                upload_speed,
-            })
-        })
-        .collect();
-    counters.at = Some(at);
-    counters.connections = next;
-    details
-}
+// The wire DTO and pure counter derivation are owned by chimera-core.
+// Keep the original app-side names for Tauri/Specta consumers.
+pub use chimera_core::clash::connection_rates::{
+    ClashConnection, ClashConnectionDetails, DetailCounters, derive_connection_details,
+};
 
 /// Internal accounting frame. The instance id remains stable across transport reconnects and
 /// rotates only when the connector is explicitly restarted with a new core lifecycle.

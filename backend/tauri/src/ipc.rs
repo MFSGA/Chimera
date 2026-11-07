@@ -929,7 +929,7 @@ pub async fn get_native_proxies(
     client: State<'_, ChimeraClient>,
 ) -> Result<crate::core::clash::proxies::NativeProxies> {
     let api = client.clash_api_client().await?;
-    crate::core::clash::proxies::NativeProxies::fetch(&api)
+    crate::core::clash::proxies::fetch_native_proxies(&api)
         .await
         .map_err(Into::into)
 }

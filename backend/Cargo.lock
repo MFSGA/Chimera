@@ -1226,15 +1226,20 @@ dependencies = [
  "atomicwrites",
  "bon",
  "camino",
+ "chrono",
+ "clash-api",
  "dashmap",
  "fs-err",
  "indexmap 2.14.2",
  "serde",
+ "serde_json",
  "serde_yaml_ng",
+ "specta",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "url",
 ]
 
 [[package]]
