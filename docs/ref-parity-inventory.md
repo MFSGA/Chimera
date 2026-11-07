@@ -315,6 +315,49 @@ E2E 框架 **33/33**、runtime 版本一致性、
 Service/SCM/提权 E2E、全项目 Clippy；
 `v1.11.1` 已发布的二进制仍需单独更新/验证。
 
+## 2026-11-07 Service 健康监视器单实例与停止信号（本批）
+
+**参考基线：** 已核实官方 `libnyanpasu/clash-nyanpasu`
+`main@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`，
+对应 `ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+的 `SetHealthCheck` / 带 `round` 的 `HealthCheck` 与单一
+ServiceActor mailbox。**本批未迁入 mailbox**，只修复当前
+Tauri 生产宿主适配层在完整 Actor 落地前的并发缺口。
+
+**目标 / 风险 L2：** 健康检查只允许一个实例运行，Service
+停止或卸载成功后可靠发出停止信号，不允许旧启动线程在竞争中
+清除新状态。**非目标：** 不切换 Service IPC 协议、Service
+二进制、前端接口或主/旧 UI；不声明运行时实例所有权与 ref 全部一致。
+
+- `backend/tauri/src/core/service/ipc.rs`：
+  `ensure_health_check` 通过原子 CAS 在创建线程前取得所有权，
+  线程退出/异常退出由守卫释放；线程创建失败后可重试。
+  新增 12 个并发调用者的回归测试，证明只能有一个启动许可，
+  以及释放后允许下次启动。
+- `backend/tauri/src/core/service/control.rs`：
+  `ServiceOsProcess::stop_daemon` / `uninstall` 在 OS 命令
+  成功后用 Release store 发出停止标志，不再忽略弱 CAS 失败。
+- `backend/tauri/src/core/service/mod.rs`：
+  启动探测路径也统一使用 `ensure_health_check`，
+  避免绕过原子单实例入口。
+
+**本批验收：** Windows 主仓库 core 单测 **163/163**，
+Tauri Service IPC **8/8**（含并发准入测试）、Actor V2 **28/28**、
+CoreLifecycle **33/33**、Specta 类型新鲜度 **1/1**、
+完整 `pnpm typecheck`、前端 main/legacy 边界、定向 Rustfmt
+和 Git diff 空白检查均通过。
+Tauri 测试使用仅对命令生效的
+`TAURI_CONFIG='{"bundle":{"externalBin":[]}}'`，
+因为本地缺少打包用 sidecar 文件；没有改变生产打包配置。
+真实健康线程取消、Windows SCM/提权 Service、跨进程并发、
+真实桌面/Service E2E 和完整 Clippy **未验证**。
+
+**回滚 / 后续：** 可按本批代码提交回退三个 Tauri Service 文件；
+没有持久化数据迁移。继续迁移上游完整 ServiceActor mailbox，
+实现 `CommandSettled`、`DaemonNotRunning`、延迟超时操作追踪、
+健康监视器轮次取消和 facade 所有权/失败关闭验收。此批只修复
+在过渡期的单一宿主线程入口，不将 ServiceActor 主干标记完成。
+
 ## 2026-11-08 Clash WebSocket Streams Actor 迁入独立 core
 
 本批基于 ref@b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866，在隔离分支

@@ -196,9 +196,6 @@ pub async fn init_service(client: crate::client::ChimeraClient) {
         // owned by another runtime. The health loop remains fail-closed, but it
         // can observe a later service update/reinstall and reconnect without an
         // app restart.
-        ipc::spawn_health_check(client);
-        while !ipc::HEALTH_CHECK_RUNNING.load(std::sync::atomic::Ordering::Acquire) {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
+        ipc::ensure_health_check(client);
     }
 }

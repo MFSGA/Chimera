@@ -138,12 +138,7 @@ impl ServiceProcessControl for ServiceOsProcess {
 
     async fn uninstall(&self) -> Result<(), ServiceCommandError> {
         run_service_command(ServiceCommand::Uninstall, vec!["uninstall".into()]).await?;
-        let _ = super::ipc::KILL_FLAG.compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::Acquire,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        super::ipc::KILL_FLAG.store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -153,12 +148,7 @@ impl ServiceProcessControl for ServiceOsProcess {
 
     async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
         run_service_command(ServiceCommand::Stop, vec!["stop".into()]).await?;
-        let _ = super::ipc::KILL_FLAG.compare_exchange_weak(
-            false,
-            true,
-            std::sync::atomic::Ordering::Acquire,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        super::ipc::KILL_FLAG.store(true, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 

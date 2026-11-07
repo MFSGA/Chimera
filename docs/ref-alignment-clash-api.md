@@ -1601,3 +1601,40 @@ frontend TS typecheck, UI tests **27/27**, E2E harness
 **33/33**, frontend boundaries, runtime version gate and
 Rustfmt. Physical SCM, elevated daemon and full Clippy
 testing remain outstanding.
+
+## 2026-11-07 Service health-monitor host hardening (partial Actor V2 alignment)
+
+- **Reference:** verified upstream `main` and local `ref` are both
+  `b7f54a4b0baf06f86c2e1675b5c5f86f96b0b866`.
+  `ref/backend/nyanpasu-core/src/actor_v2/service_actor.rs`
+  serializes `SetHealthCheck` / `HealthCheck { round }` through a
+  ServiceActor mailbox. Chimera still runs a Tauri host-side monitor;
+  this change does **not** claim to port that actor.
+- **Objective / L2:** remove the load-before-spawn race that admitted two
+  health monitors, and make successful stop/uninstall reliably signal exit.
+  Non-goals: change Service IPC, runtime binary, persistent state,
+  generated application API, main/legacy UI, or Agent functionality.
+- **Production changes:** `backend/tauri/src/core/service/ipc.rs`
+  atomically claims monitor admission before thread spawn, releases the
+  claim on thread termination (including unwind), and restores eligibility
+  after thread spawn fails; `backend/tauri/src/core/service/mod.rs`
+  routes startup through the same admission method;
+  `backend/tauri/src/core/service/control.rs` signals monitor shutdown
+  with a Release store only after a successful OS stop/uninstall.
+  The existing Tauri Service state/probe path remains the shared production
+  consumer, not a stand-alone copied DTO.
+- **Tests:** core `--lib` **163/163**; Tauri Service IPC **8/8**
+  including a 12-caller concurrent admission test; Actor V2 **28/28**;
+  CoreLifecycle **33/33**; Specta bindings freshness **1/1**;
+  workspace `pnpm typecheck`, frontend boundaries, targeted rustfmt and
+  `git diff --check` passed. Tauri tests set a temporary
+  `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'` to avoid missing
+  packaging sidecars. The initial compile identified an unconverted
+  `init_service` caller and the final rerun passed after correcting it.
+- **Limitations / rollback:** the unit test proves the admission primitive,
+  not actual Windows SCM shutdown/restart or cross-process health checks.
+  Full ServiceActor mailbox, timed-out helper tracking, `CommandSettled`,
+  `DaemonNotRunning` and epoch-based timer invalidation remain pending.
+  No physical Service/desktop E2E or complete Clippy was run. Revert this
+  bounded three-file Tauri Service change to roll back; no stored data
+  changed.

@@ -220,27 +220,46 @@ pub(crate) fn request_reconcile(client: &ChimeraClient) {
     on_ipc_state_changed(get_ipc_state(), client);
 }
 
-pub(super) fn spawn_health_check(client: ChimeraClient) {
-    KILL_FLAG.store(false, Ordering::Relaxed);
-    std::thread::spawn(move || {
-        HEALTH_CHECK_RUNNING.store(true, Ordering::Release);
-        block_on(async {
-            let mut warned_ineligible = false;
-            loop {
-                if KILL_FLAG.load(Ordering::Acquire) {
-                    set_ipc_state(IpcState::Disconnected, &client);
-                    HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
-                    break;
+fn claim_health_check(running: &AtomicBool) -> bool {
+    running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+fn spawn_health_check(client: ChimeraClient) {
+    KILL_FLAG.store(false, Ordering::Release);
+    // Keep admission owned until the thread exits, including on unwind.
+    struct RunningGuard;
+    impl Drop for RunningGuard {
+        fn drop(&mut self) {
+            HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
+        }
+    }
+
+    let spawn = std::thread::Builder::new()
+        .name("chimera-service-health".into())
+        .spawn(move || {
+            let _running = RunningGuard;
+            block_on(async {
+                let mut warned_ineligible = false;
+                loop {
+                    if KILL_FLAG.load(Ordering::Acquire) {
+                        set_ipc_state(IpcState::Disconnected, &client);
+                        break;
+                    }
+                    warned_ineligible = health_check(warned_ineligible, &client).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 }
-                warned_ineligible = health_check(warned_ineligible, &client).await;
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        })
-    });
+            })
+        });
+    if let Err(error) = spawn {
+        HEALTH_CHECK_RUNNING.store(false, Ordering::Release);
+        tracing::error!(%error, "could not start service health monitor");
+    }
 }
 
 pub(crate) fn ensure_health_check(client: ChimeraClient) {
-    if !HEALTH_CHECK_RUNNING.load(Ordering::Acquire) {
+    if claim_health_check(&HEALTH_CHECK_RUNNING) {
         spawn_health_check(client);
     }
 }
@@ -326,7 +345,14 @@ async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, path::PathBuf};
+    use std::{
+        borrow::Cow,
+        path::PathBuf,
+        sync::{
+            Arc, Barrier,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
 
     use chimera_ipc::{
         api::status::{CoreInfos, CoreState, RuntimeInfos, StatusResBody},
@@ -334,8 +360,9 @@ mod tests {
     };
 
     use super::{
-        IpcState, ServiceBackendObservation, WarnLevel, next_ineligible_warning_state,
-        should_rebuild_for_ipc_event, should_rebuild_for_ipc_transition, target_ipc_state,
+        IpcState, ServiceBackendObservation, WarnLevel, claim_health_check,
+        next_ineligible_warning_state, should_rebuild_for_ipc_event,
+        should_rebuild_for_ipc_transition, target_ipc_state,
     };
     use crate::core::RunType;
     use chimera_core::service::compat::{REQUIRED_SERVICE_MIN, ServiceCompat};
@@ -366,6 +393,35 @@ mod tests {
                 },
             }),
         }
+    }
+
+    #[test]
+    fn concurrent_health_monitor_admission_has_one_owner_and_allows_restart() {
+        // A second ensure call must not start another monitor while the first
+        // thread is being spawned; the old load-then-store admitted both.
+        let running = AtomicBool::new(false);
+        let accepted = AtomicUsize::new(0);
+        let callers = 12;
+        let barrier = Arc::new(Barrier::new(callers));
+        std::thread::scope(|scope| {
+            for _ in 0..callers {
+                let barrier = Arc::clone(&barrier);
+                let running = &running;
+                let accepted = &accepted;
+                scope.spawn(move || {
+                    barrier.wait();
+                    if claim_health_check(running) {
+                        accepted.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(accepted.load(Ordering::Relaxed), 1);
+        assert!(!claim_health_check(&running));
+
+        // The monitor's exit guard relinquishes ownership for the next run.
+        running.store(false, Ordering::Release);
+        assert!(claim_health_check(&running));
     }
 
     #[test]
