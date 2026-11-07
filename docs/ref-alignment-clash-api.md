@@ -1547,3 +1547,57 @@ the downloaded binary actually carries the change.
 only, and cannot establish the latter property. Main
 repository and runtime changes remain local until that
 release/publish sequence is intentionally performed.
+
+### 2026-11-07 runtime main fast-forward and actual host process-control migration
+
+The latest public `libnyanpasu/nyanpasu-runtime/main` is
+`041b662fe6aae22a80302b190f49e762774dbf50`. A GitHub
+comparison against the pinned upstream commit
+`a27c3fcc1ed57980034f25084613baa98efc01c4`
+shows six intervening commits, touching **only**
+`rust-toolchain.toml`: the Service implementation used for
+this migration is still the latest upstream version.
+
+`MFSGA/Chimera_Service` uses **`main`**, not `master`.
+The clean runtime feature branch was rebased against the fresh
+`origin/main@305390f6` (a no-op, because it already had that
+parent), then fast-forward-pushed to
+`main@6a92c2ce5bd0f33d4f414c39c7e625349a510d21`,
+with remote SHA verification and no force push.
+The pre-merge feature SHA is preserved in the local
+`backup/runtime-pre-main-merge-20261107` branch.
+Main Chimera `f579fe7c` already pinned that exact runtime
+SHA, so the gitlink is now fetchable by ordinary submodule
+checkout. Release binary provenance is a separate unresolved
+issue: `prepare` still fetches the existing `v1.11.1` asset.
+
+Next main-repository code commit **`9ced8884`**:
+following `ref/backend/nyanpasu-contracts/src/service.rs`,
+moved the typed Service command and error vocabulary and the
+`ServiceProcessControl` trait into independent
+`chimera-core/src/actor_v2/service_process.rs`. It owns
+structured command-exit, status-exit, parse/UTF-8,
+elevation IO and timeout errors; failed probes cannot become
+a synthesized daemon stop. Four new core tests lock the
+error classification and typed command names.
+
+The production `backend/tauri/src/core/service/control.rs`
+now implements the core trait in `ServiceOsProcess`,
+using the existing OS-specific elevated child executor and
+post-stop IPC invalidation. All actual Tauri Service lifecycle
+and facade mutating call sites, startup, IPC observers and
+status probes were switched to that single adapter; the
+previous untyped command functions were removed rather than
+left as a second compatibility API. The standalone upstream
+ServiceActor mailbox and command timeout/permission/session
+supervision are **not** yet adopted, so this is a concrete
+port/contract migration, not a claim of complete parity.
+
+Validation on the integrated host: `chimera-core --lib`
+**163/163**, Tauri Service IPC **7/7**, lifecycle **33/33**,
+Actor V2 **28/28**, Agent probe **3/3**, diagnostics **6/6**,
+Specta freshness **1/1**, non-test `cargo check`, full
+frontend TS typecheck, UI tests **27/27**, E2E harness
+**33/33**, frontend boundaries, runtime version gate and
+Rustfmt. Physical SCM, elevated daemon and full Clippy
+testing remain outstanding.
