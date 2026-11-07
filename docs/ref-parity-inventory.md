@@ -405,3 +405,29 @@ pnpm-lock.yaml 改动按用户授权丢弃；原工作差异保留在 stash 备�
 - 回归：core ServiceActor 7/7，涵盖命令超时/拒绝重入、调用者取消仍持有 helper、停止后才能卸载、未知状态拒绝卸载、假停止拒绝卸载、已停止免 stop；core 全量 170/170，Tauri lifecycle 33/33；Tauri 非测试 `cargo check` 与完整 `pnpm typecheck` 通过，定向 rustfmt、`git diff --check` 通过。Tauri 测试/检查仅命令行设置 `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'`，未改变生产配置。
 - **剩余：** 此处为 ServiceActor 的命令子集，尚未迁入单一 ractor mailbox、会话终止/权限检查、epoch 健康定时器、完整状态发布及上游端点恢复策略；未进行 Windows SCM/UAC/真实 Service 二进制 E2E、全量 Clippy、全部前端/UI E2E。单独 host 健康线程仍在过渡期。后续优先完成 mailbox/epoch 迁移，并在物理 Windows 环境验证命令超时与真实停机。
 - **回滚：** 仅回退上述三个后端文件；无持久化数据、IPC wire、前端 API 变更。未触碰已有 `pnpm-lock.yaml` 用户差异。
+
+### 提交后补充核验（`be07ad9566641732af2e958156bb5edda032490d`）
+
+以上代码已经位于原分支 `codex/clash-api-ipc-dev-1106` 的本地提交，
+尚未推送。对提交后的实际调用链追加复核如下：
+
+- core `cargo +stable test --offline --locked -p chimera-core --lib`：
+  **170/170**，其中新 Service 命令单测 **7/7**。
+- Tauri（仅测试时通过 `TAURI_CONFIG` 排除缺失的打包 sidecar）：
+  `core::actor_v2::` **30/30**（含新增 facade 取消/停机证明 2 项），
+  `client::core_lifecycle::tests::` **33/33**，
+  `core::service::ipc::tests::` **8/8**，
+  Agent diagnostics **6/6**，Specta 绑定新鲜度 **1/1**；
+  非测试 `cargo +stable check --offline --locked -p chimera` 通过。
+- 完整 `pnpm typecheck`、`pnpm lint:frontend-boundaries`、
+  Rustfmt 和全工作区 `pnpm lint:clippy`（`--all-targets --all-features`）
+  通过，Clippy 仍存在已有警告。E2E 框架单测 **33/33**。
+- interface 测试首次从仓库根目录直接运行，**53/54 通过、1 个模块加载失败**：
+  `traffic-report-query.test.ts` 的 `@interface/utils` 未按子包 tsconfig 映射。
+  显式设置 `TSX_TSCONFIG_PATH=frontend/interface/tsconfig.json` 后，
+  完整 interface 测试 **56/56** 通过；main UI `test:traffic` **16/16**。
+  不将最初的执行失败冒称成功或把测试入口问题计为已修改源码。
+- **仍未验证：** 真正的 Windows SCM/UAC 提权、Service 二进制、
+  main/legacy 桌面 UI E2E、断电/进程终止恢复以及跨平台集成。
+  上游完整 ServiceActor ractor mailbox、watch/健康轮次与
+  `CoreActor` 统一所有权仍未迁入；上述验证不证明全量 ref 已对齐。

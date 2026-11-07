@@ -1645,3 +1645,28 @@ testing remain outstanding.
 - **Core and production:** new `chimera-core/src/actor_v2/service_actor.rs` owns a serialized Service OS command lane with retained elevated helper on timeout/caller cancellation, explicit `command_settled`, authoritative `daemon_not_running` and fail-closed uninstall guard using v2 `CoreStateDetail`. The Tauri facade's real ServiceTransition install/update/uninstall/start/restart/stop/auto-restart and Service probe/stop confirmation now call this core owner; Chimera Service IPC, OS adapter, existing host lock, branding and UIs remain intact.
 - **Regression:** 7/7 new core command tests; core library 170/170; Tauri lifecycle 33/33; non-test Tauri cargo check, complete pnpm typecheck, targeted rustfmt and whitespace check passed. Tauri tests/check use only transient `TAURI_CONFIG='{"bundle":{"externalBin":[]}}'` to avoid missing packaging sidecars.
 - **Not yet parity:** full ServiceActor mailbox, session/authorization gates, health timer epochs, state/watch ownership, endpoint recovery and physical Windows SCM/UAC/Service E2E are outstanding. This batch changes no wire DTO, generated binding, main/legacy UI or persistent state. Revert the three backend files to roll back. Existing unrelated `pnpm-lock.yaml` changes were preserved.
+
+### Post-commit verification supplement for `be07ad9566641732af2e958156bb5edda032490d`
+
+The scoped production command lane and tests are committed on the original
+`codex/clash-api-ipc-dev-1106` branch, without a push. Further checks
+against the committed code completed on the Windows host:
+
+- Rust core library **170/170** (7 new ServiceActor command tests);
+  Tauri Actor V2 **30/30** (including 2 new facade production-boundary tests),
+  CoreLifecycle **33/33**, Service IPC **8/8**, Agent diagnostics **6/6**,
+  Specta bindings freshness **1/1** and non-test `cargo check -p chimera`.
+- Whole-workspace TypeScript typecheck, main/legacy frontend IPC boundaries,
+  Rustfmt, and all-targets/all-features Clippy passed (existing warnings
+  remain). E2E harness unit tests **33/33** passed; they are not desktop E2E.
+- A first root-level interface test invocation passed 53/54 but failed to load
+  `traffic-report-query.test.ts` due to the unresolved
+  `@interface/utils` alias. With
+  `TSX_TSCONFIG_PATH=frontend/interface/tsconfig.json`, the entire interface
+  suite passed **56/56**; main UI traffic tests passed **16/16**. The first
+  invocation is recorded as failed, not retrospectively passed.
+- No physical Windows Service/SCM/UAC, real desktop main/legacy, real-core,
+  crash/recovery or cross-platform E2E was run. The remaining ref actor
+  mailbox, lifecycle state/watch ownership, bounded OS authorization and
+  health epoch semantics are still pending; no user preferences or wire
+  bindings were migrated in this slice.
