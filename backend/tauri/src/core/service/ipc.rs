@@ -51,14 +51,16 @@ impl ServiceBackendObservation {
 /// need an immediate host transition can then perform exactly one explicit
 /// rebuild against the freshly classified backend.
 pub(crate) async fn refresh_state_now() -> anyhow::Result<ServiceBackendObservation> {
-    let info =
-        match tokio::time::timeout(std::time::Duration::from_secs(5), super::control::status())
-            .await
-        {
-            Ok(Ok(info)) => info,
-            Ok(Err(error)) => return Err(error),
-            Err(_) => anyhow::bail!("service status probe timed out"),
-        };
+    let info = match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        super::control::probe_service_status(),
+    )
+    .await
+    {
+        Ok(Ok(info)) => info,
+        Ok(Err(error)) => return Err(error.into()),
+        Err(_) => anyhow::bail!("service status probe timed out"),
+    };
     let runtime_owned = super::is_service_runtime_owned(&info);
     let (state, compat) = target_ipc_state(&info, runtime_owned);
     IPC_STATE.store(state, Ordering::SeqCst);
@@ -274,7 +276,7 @@ fn target_ipc_state(
 
 #[instrument(skip(client))]
 async fn health_check(warned: bool, client: &ChimeraClient) -> bool {
-    match super::control::status().await {
+    match super::control::probe_service_status().await {
         Ok(info) => {
             let runtime_owned = super::is_service_runtime_owned(&info);
             let (state, compat) = target_ipc_state(&info, runtime_owned);
