@@ -11,6 +11,8 @@
 import {
   useClashProxiesProvider,
   useClashRulesProvider,
+  useUpdateClashProxiesProvider,
+  useUpdateClashRulesProvider,
   type ClashProxiesProviderQueryItem,
   type ClashRulesProviderQueryItem,
 } from '@chimera/interface';
@@ -155,7 +157,7 @@ const Proxies = ({ data }: { data: ClashProxiesProviderQueryItem }) => {
         <div className="flex items-center justify-between">
           <div className="bg-surface-variant text-secondary rounded-full px-2 py-1 text-[10px]">
             {m.providers_proxies_proxy_count_label({
-              count: data.proxies.length,
+              count: data.proxyCount,
             })}
           </div>
 
@@ -230,6 +232,8 @@ const Rules = ({ data }: { data: ClashRulesProviderQueryItem }) => {
 function RouteComponent() {
   const proxiesProvider = useClashProxiesProvider();
   const rulesProvider = useClashRulesProvider();
+  const updateProxiesProvider = useUpdateClashProxiesProvider();
+  const updateRulesProvider = useUpdateClashRulesProvider();
 
   const proxies = proxiesProvider.data
     ? Object.entries(proxiesProvider.data)
@@ -243,7 +247,9 @@ function RouteComponent() {
     }
 
     try {
-      await Promise.all(proxies.map(([_, data]) => data.mutate()));
+      await Promise.all(
+        proxies.map(([name]) => updateProxiesProvider.mutateAsync(name)),
+      );
     } catch (error) {
       console.error('Failed to update proxies provider', error);
       await message(`Update provider failed: \n ${formatError(error)}`, {
@@ -261,7 +267,9 @@ function RouteComponent() {
     }
 
     try {
-      await Promise.all(rules.map(([_, data]) => data.mutate()));
+      await Promise.all(
+        rules.map(([name]) => updateRulesProvider.mutateAsync(name)),
+      );
     } catch (error) {
       console.error('Failed to update rules provider', error);
       await message(`Update provider failed: \n ${formatError(error)}`, {

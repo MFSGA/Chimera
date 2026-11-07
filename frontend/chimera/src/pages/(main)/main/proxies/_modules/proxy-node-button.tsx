@@ -1,8 +1,9 @@
-import { type ClashProxiesQueryProxyItem } from '@chimera/interface';
+import { type Proxy_Serialize } from '@chimera/interface';
 import { Button } from '@chimera/ui/button';
 import { cn } from '@chimera/utils';
 import FlashOnRounded from '~icons/material-symbols/flash-on-rounded';
-import { useMemo, type ComponentProps, type MouseEvent } from 'react';
+import KeepRounded from '~icons/material-symbols/keep-rounded';
+import { memo, useMemo, type ComponentProps, type MouseEvent } from 'react';
 import { useBlockTask } from '@/components/providers/block-task-provider';
 import { useLockFn } from '@/hooks/use-lock-fn';
 import DelayChip from './delay-chip';
@@ -29,37 +30,43 @@ function FeatureChip({
   );
 }
 
-export default function ProxyNodeButton({
+/** Native nodes stay plain JSON; selection and delay are separate actions. */
+export default memo(function ProxyNodeButton({
   proxy,
+  selectable,
+  fixed = false,
+  onSelect,
+  onDelayTest,
   ...props
-}: Omit<ComponentProps<typeof Button>, 'onClick' | 'children'> & {
-  proxy: ClashProxiesQueryProxyItem;
+}: Omit<ComponentProps<typeof Button>, 'onClick' | 'children' | 'onSelect'> & {
+  proxy: Proxy_Serialize;
+  selectable: boolean;
+  fixed?: boolean;
+  onSelect: (proxy: Proxy_Serialize) => Promise<void>;
+  onDelayTest: (proxy: Proxy_Serialize) => Promise<void>;
 }) {
   const handleSelectProxy = useLockFn(async () => {
-    await proxy.mutateSelect();
+    if (!selectable) return;
+    await onSelect(proxy);
   });
 
   const delayTask = useBlockTask(
     `proxy-delay-check-${proxy.name.toLowerCase()}`,
     async () => {
-      await proxy.mutateDelay();
+      await onDelayTest(proxy);
     },
   );
 
   const handleDelayClick = useLockFn(
-    async (e: MouseEvent<HTMLButtonElement>) => {
-      e.preventDefault();
-      e.stopPropagation();
-
+    async (event: MouseEvent<HTMLButtonElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
       await delayTask.execute();
     },
   );
 
   const currentDelay = useMemo(() => {
-    if (!proxy.history || proxy.history.length === 0) {
-      return -1;
-    }
-
+    if (!proxy.history?.length) return -1;
     return proxy.history[proxy.history.length - 1].delay;
   }, [proxy.history]);
 
@@ -75,18 +82,32 @@ export default function ProxyNodeButton({
         'group-data-[active=false]:shadow-none',
         'group-data-[active=false]:hover:shadow-none',
         'group-data-[active=false]:hover:bg-surface-variant/30',
+        'data-[selectable=false]:cursor-default',
       )}
+      data-selectable={String(selectable)}
+      aria-disabled={!selectable}
       onClick={handleSelectProxy}
       {...props}
     >
-      <div className="flex items-center gap-2 px-2">
+      <div className="flex w-full items-center justify-between gap-2 px-2">
         <div className="truncate text-sm font-medium">{proxy.name}</div>
+        {fixed && (
+          <span
+            className="text-primary shrink-0"
+            data-slot="proxy-node-fixed-icon"
+            title="Pinned proxy"
+          >
+            <KeepRounded className="size-4" />
+          </span>
+        )}
       </div>
 
       <div className="flex w-full items-center justify-between gap-2 overflow-hidden px-2">
         <div className="flex items-center gap-1 overflow-hidden">
           <FeatureChip label={proxy.type} variant="type" />
           {proxy.udp && <FeatureChip label="UDP" />}
+          {proxy.xudp && <FeatureChip label="XUDP" />}
+          {proxy.tfo && <FeatureChip label="TFO" />}
         </div>
 
         <Button
@@ -107,4 +128,4 @@ export default function ProxyNodeButton({
       </div>
     </Button>
   );
-}
+});

@@ -55,6 +55,9 @@ export const RUNTIME_TRANSFORM_DIAGNOSTICS_QUERY_KEY =
  */
 export const CLASH_PROXIES_QUERY_KEY = 'clash-proxies';
 
+/** Normalized proxy graph: distinct from the legacy embedded-node response. */
+export const NATIVE_PROXIES_QUERY_KEY = 'getNativeProxies';
+
 /**
  * Clash rules query key, used by useClashRules hook
  */

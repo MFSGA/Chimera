@@ -1,14 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ClashDelayOptions } from '../service';
 import { unwrapResult } from '../utils';
 import {
-  commands,
   ProxyItemHistory,
   type Proxies_Serialize,
   type ProxyGroupItem_Serialize,
   type ProxyItem_Serialize,
 } from './bindings';
-import { CLASH_PROXIES_QUERY_KEY } from './consts';
+import { mutations, queries } from './query-bindings.js';
+import { invokeMutation, invokeQuery } from './query-options.js';
+
+export type ClashDelayOptions = {
+  url?: string;
+  timeout?: number;
+};
 
 export type ClashProxiesQueryHelperFn = {
   mutateDelay: (options?: ClashDelayOptions) => Promise<void>;
@@ -29,6 +33,24 @@ export interface ClashProxiesQuery extends Proxies_Serialize {
   groups: ClashProxiesQueryGroupItem[];
 }
 
+export const mergeGroupDelayHistory = <
+  T extends { name: string; history: ProxyItemHistory[] },
+>(
+  proxies: T[],
+  delays: Record<string, number>,
+): T[] =>
+  proxies.map((proxy) =>
+    Object.prototype.hasOwnProperty.call(delays, proxy.name)
+      ? {
+          ...proxy,
+          history: [
+            ...proxy.history,
+            { time: new Date().toISOString(), delay: delays[proxy.name] },
+          ],
+        }
+      : proxy,
+  );
+
 // Create a new proxy item with updated history
 const createUpdatedProxy = (
   proxy: ClashProxiesQueryProxyItem,
@@ -47,10 +69,11 @@ const createUpdatedProxy = (
 export const useClashProxies = () => {
   const queryClient = useQueryClient();
 
+  const proxiesOptions = queries.getProxies();
   const proxies = useQuery<ClashProxiesQuery | undefined>({
-    queryKey: [CLASH_PROXIES_QUERY_KEY],
+    queryKey: proxiesOptions.queryKey,
     queryFn: async () => {
-      const result = unwrapResult(await commands.getProxies());
+      const result = unwrapResult(await invokeQuery(proxiesOptions));
 
       if (!result) {
         return;
@@ -66,8 +89,22 @@ export const useClashProxies = () => {
           await updateProxiesDelay.mutateAsync([proxy.name, options]);
         },
         mutateSelect: async () => {
-          await commands.selectProxy(groupName, proxy.name);
-          await proxies.refetch();
+          unwrapResult(
+            await invokeMutation(mutations.selectProxy, [
+              groupName,
+              proxy.name,
+            ]),
+          );
+          await Promise.all([
+            queryClient.refetchQueries({
+              queryKey: proxiesOptions.queryKey,
+              exact: true,
+            }),
+            queryClient.invalidateQueries({
+              queryKey: queries.getNativeProxies().queryKey,
+              exact: true,
+            }),
+          ]);
         },
       });
 
@@ -101,19 +138,24 @@ export const useClashProxies = () => {
   });
 
   const getQueryData = () => {
-    return queryClient.getQueryData([CLASH_PROXIES_QUERY_KEY]) as
+    return queryClient.getQueryData(proxiesOptions.queryKey) as
       ClashProxiesQuery | undefined;
   };
 
   const setQueryData = (data: ClashProxiesQuery) => {
-    queryClient.setQueryData([CLASH_PROXIES_QUERY_KEY], data);
+    queryClient.setQueryData<ClashProxiesQuery | undefined>(
+      proxiesOptions.queryKey,
+      data,
+    );
   };
 
   const updateProxiesDelay = useMutation({
     mutationFn: async (args: [string, ClashDelayOptions?]) => {
       const [name, options] = args;
       const res = unwrapResult(
-        await commands.clashApiGetProxyDelay(name, options?.url ?? null),
+        await invokeQuery(
+          queries.clashApiGetProxyDelay(name, options?.url ?? null),
+        ),
       );
       return {
         name,
@@ -121,6 +163,11 @@ export const useClashProxies = () => {
       };
     },
     onSuccess: ({ name, delay }) => {
+      // The normalized view has its own index; never leave it stale after a
+      // successful legacy delay request.
+      void queryClient
+        .invalidateQueries({ queryKey: queries.getNativeProxies().queryKey })
+        .catch(console.error);
       const oldData = getQueryData();
 
       if (!oldData) {
@@ -158,7 +205,9 @@ export const useClashProxies = () => {
       const [group, options] = args;
       return (
         unwrapResult(
-          await commands.clashApiGetGroupDelay(group, options?.url ?? null),
+          await invokeQuery(
+            queries.clashApiGetGroupDelay(group, options?.url ?? null),
+          ),
         ) ?? {}
       );
     },
@@ -171,6 +220,9 @@ export const useClashProxies = () => {
       return intervalId;
     },
     onSuccess: (data) => {
+      void queryClient
+        .invalidateQueries({ queryKey: queries.getNativeProxies().queryKey })
+        .catch(console.error);
       const oldData = getQueryData();
 
       if (!oldData) {
@@ -182,31 +234,11 @@ export const useClashProxies = () => {
         ...oldData,
         global: {
           ...oldData.global,
-          all: oldData.global.all.map((proxy) =>
-            Object.prototype.hasOwnProperty.call(data, proxy.name)
-              ? createUpdatedProxy(proxy, {
-                  name: proxy.name,
-                  delay: data[proxy.name],
-                })
-              : {
-                  ...proxy,
-                  history: [],
-                },
-          ),
+          all: mergeGroupDelayHistory(oldData.global.all, data),
         },
         groups: oldData.groups.map((group) => ({
           ...group,
-          all: group.all.map((proxy) =>
-            Object.prototype.hasOwnProperty.call(data, proxy.name)
-              ? createUpdatedProxy(proxy, {
-                  name: proxy.name,
-                  delay: data[proxy.name],
-                })
-              : {
-                  ...proxy,
-                  history: [],
-                },
-          ),
+          all: mergeGroupDelayHistory(group.all, data),
         })),
       } satisfies ClashProxiesQuery;
 

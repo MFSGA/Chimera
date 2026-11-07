@@ -5,6 +5,7 @@
 //! retained behind a test-only compatibility constructor while callers finish
 //! migrating to the shared runtime contract.
 
+pub mod api;
 pub mod control_endpoint;
 pub mod endpoint;
 pub mod facade;

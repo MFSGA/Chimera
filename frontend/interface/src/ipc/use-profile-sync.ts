@@ -11,7 +11,7 @@ import {
   type ProfileSyncStatus,
   type RunCursorDto,
 } from './bindings';
-import { mutations } from './profile-bindings';
+import { mutations } from './query-bindings';
 
 const LIVE_INTERVAL = 2_000;
 const IDLE_INTERVAL = 60_000;

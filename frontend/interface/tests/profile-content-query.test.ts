@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { QueryClient } from '@tanstack/react-query';
 import { commands } from '../src/ipc/bindings.js';
-import { mutations, queries } from '../src/ipc/profile-bindings.js';
+import { mutations, queries } from '../src/ipc/query-bindings.js';
 import {
   invokeMutation,
   MutationUnconfirmedError,

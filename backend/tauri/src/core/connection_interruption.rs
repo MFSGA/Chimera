@@ -2,7 +2,8 @@ use anyhow::Result;
 use chimera_config::clash::config::clash_strategy::ProxyChangeBreakMode;
 use futures_util::future::join_all;
 
-use crate::core::clash::api::{ApiClient, ConnectionItem};
+use crate::core::actor_v2::api::ApiClient;
+use crate::core::clash::api::ConnectionItem;
 
 /// Connection interruption service that handles closing connections based on configuration settings.
 pub struct ConnectionInterruptionService;

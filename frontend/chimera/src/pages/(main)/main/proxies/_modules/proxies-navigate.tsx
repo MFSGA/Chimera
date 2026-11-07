@@ -13,7 +13,7 @@
  * - 后续可逐步替换为 ref 的虚拟化列表实现
  */
 
-import { useClashProxies } from '@chimera/interface';
+import { useNativeProxies } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { Link, useLocation } from '@tanstack/react-router';
@@ -26,9 +26,7 @@ import { CacheImage } from '@/components/ui/image';
  * 每个组是一个按钮，点击跳转到对应的组详情页。
  */
 export default function ProxiesNavigate() {
-  const {
-    proxies: { data: proxies },
-  } = useClashProxies();
+  const { data: proxies } = useNativeProxies();
 
   const location = useLocation();
 

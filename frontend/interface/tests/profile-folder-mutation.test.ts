@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { commands, type ProfileLayout } from '../src/ipc/bindings.js';
-import { mutations } from '../src/ipc/profile-bindings.js';
+import { mutations } from '../src/ipc/query-bindings.js';
 import {
   invokeMutation,
   MutationUnconfirmedError,

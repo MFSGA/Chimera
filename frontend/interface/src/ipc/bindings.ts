@@ -234,6 +234,14 @@ export const commands = {
     ),
   getProxies: () =>
     typedError<Proxies_Serialize, string>(__TAURI_INVOKE('get_proxies')),
+  /**
+   *  Additive native proxy view for typed consumers. The legacy `get_proxies`
+   *  command remains unchanged for both Chimera UIs and Agent integrations.
+   */
+  getNativeProxies: () =>
+    typedError<NativeProxies_Serialize, string>(
+      __TAURI_INVOKE('get_native_proxies'),
+    ),
   selectProxy: (group: string, name: string) =>
     typedError<null, string>(__TAURI_INVOKE('select_proxy', { group, name })),
   changeClashCore: (
@@ -278,9 +286,26 @@ export const commands = {
   setCustomAppDir: (path: string) =>
     typedError<null, string>(__TAURI_INVOKE('set_custom_app_dir', { path })),
   clashApiGetConfigs: () =>
-    typedError<ClashRuntimeConfig, string>(
-      __TAURI_INVOKE('clash_api_get_configs'),
+    typedError<ClashApiConfig, string>(__TAURI_INVOKE('clash_api_get_configs')),
+  clashApiGetVersion: () =>
+    typedError<ClashVersion, string>(__TAURI_INVOKE('clash_api_get_version')),
+  clashApiGetRules: () =>
+    typedError<RulesRes, string>(__TAURI_INVOKE('clash_api_get_rules')),
+  clashApiGetProvidersRules: () =>
+    typedError<ProvidersRulesRes, string>(
+      __TAURI_INVOKE('clash_api_get_providers_rules'),
     ),
+  clashApiUpdateProvidersRules: (name: string) =>
+    typedError<null, string>(
+      __TAURI_INVOKE('clash_api_update_providers_rules', { name }),
+    ),
+  clashApiGetProvidersProxies: () =>
+    typedError<
+      { [key in ProviderName]: ProxyProviderSummary_Serialize },
+      string
+    >(__TAURI_INVOKE('clash_api_get_providers_proxies')),
+  updateProxyProvider: (name: string) =>
+    typedError<null, string>(__TAURI_INVOKE('update_proxy_provider', { name })),
   clashApiGetProxyDelay: (name: string, url: string | null) =>
     typedError<DelayRes, string>(
       __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
@@ -1062,6 +1087,26 @@ export type ChimeraAppConfig_Serialize = {
   window_type: WindowType;
 };
 
+/**
+ *  Public controller config DTO. Fields and JSON names mirror ref's
+ *  `nyanpasu-core::clash::api::ClashConfig` (exported as ClashApiConfig).
+ *  The Rust name differs to avoid confusion with Chimera's persisted ClashConfig.
+ */
+export type ClashApiConfig = {
+  port: number | null;
+  mode: string | null;
+  ipv6: boolean | null;
+  'socket-port': number | null;
+  'allow-lan': boolean | null;
+  'log-level': string | null;
+  'mixed-port': number | null;
+  'redir-port': number | null;
+  'socks-port': number | null;
+  'tproxy-port': number | null;
+  'external-controller': string | null;
+  secret: string | null;
+};
+
 /**  Clash Related Config */
 export type ClashConfig = {
   /**  Clash Overrides config, used to patch clash config directly */
@@ -1232,25 +1277,20 @@ export type ClashInfo = {
   secret: string | null;
 };
 
-/**  Runtime state returned by the running core's `GET /configs` endpoint. */
-export type ClashRuntimeConfig = {
-  port: number | null;
-  mode: string | null;
-  'geodata-mode': boolean | null;
-  ipv6: boolean | null;
-  'socket-port': number | null;
-  'allow-lan': boolean | null;
-  'log-level': string | null;
-  'mixed-port': number | null;
-  'redir-port': number | null;
-  'socks-port': number | null;
-  'tproxy-port': number | null;
-  'external-controller': string | null;
-  secret: string | null;
+export type ClashRule = {
+  type: string;
+  payload: string;
+  proxy: string;
 };
 
 export type ClashStrategy = {
   external_controller_port_strategy: ExternalControllerPortStrategy;
+};
+
+export type ClashVersion = {
+  version: string;
+  premium: boolean | null;
+  meta: boolean | null;
 };
 
 export type ClashWsConnectionSnapshot = {
@@ -1745,6 +1785,11 @@ export type DegradationPhase =
   | 'system_effect'
   | 'ui_effect';
 
+export type DelayHistory = {
+  time: string;
+  delay: number;
+};
+
 export type DelayRes = {
   delay: number;
 };
@@ -2212,6 +2257,35 @@ export type MutationOutcome<T> =
       degradations: Degradation[];
     };
 
+/**
+ *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
+ *  the existing public `Proxies` remains a compatibility projection until
+ *  main and legacy consumers can switch together.
+ */
+export type NativeProxies = NativeProxies_Serialize | NativeProxies_Deserialize;
+
+/**
+ *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
+ *  the existing public `Proxies` remains a compatibility projection until
+ *  main and legacy consumers can switch together.
+ */
+export type NativeProxies_Deserialize = {
+  global: ProxyGroup | null;
+  groups: ProxyGroup[];
+  nodes: { [key in ProxyName]: Proxy_Deserialize };
+};
+
+/**
+ *  Internal normalized proxy graph. This follows ref's `Proxies` layout;
+ *  the existing public `Proxies` remains a compatibility projection until
+ *  main and legacy consumers can switch together.
+ */
+export type NativeProxies_Serialize = {
+  global: ProxyGroup | null;
+  groups: ProxyGroup[];
+  nodes: { [key in ProxyName]: Proxy_Serialize };
+};
+
 export type NetworkProbeRequest = {
   url: string;
   expected_status: number | null;
@@ -2610,6 +2684,14 @@ export type ProfileSyncStatus = {
   history_limit: number;
 };
 
+export type ProviderName = string;
+
+export type ProviderType = 'Proxy' | 'Rule' | string;
+
+export type ProvidersRulesRes = {
+  providers: { [key in string]: RuleProviderItem };
+};
+
 export type Proxies = Proxies_Serialize | Proxies_Deserialize;
 
 export type ProxiesSelectorMode = 'hidden' | 'normal' | 'submenu';
@@ -2630,12 +2712,42 @@ export type Proxies_Serialize = {
   direct: ProxyItem_Serialize;
 };
 
+/**  Common proxy fields with optional core-specific and group metadata. */
+export type Proxy = Proxy_Serialize | Proxy_Deserialize;
+
 export type ProxyChangeBreakMode =
   | 'off'
   /**  仅中断当前使用的代理组的连接 */
   | 'proxy_group'
   /**  中断所有连接 */
   | 'all';
+
+export type ProxyExtra = {
+  alive: boolean;
+  history: DelayHistory[];
+};
+
+/**
+ *  Normalized native group metadata, projected to the old UI shape at the
+ *  boundary. This intentionally matches ref's group record fields.
+ */
+export type ProxyGroup = {
+  name: ProxyName;
+  type: ProxyGroupKind;
+  all: ProxyName[];
+  now: ProxyName | null;
+  fixed: ProxyName | null;
+  testUrl: string | null;
+  expectedStatus: string | null;
+  hidden: boolean;
+  icon: string | null;
+  capabilities: ProxyGroupCapabilities;
+};
+
+export type ProxyGroupCapabilities = {
+  select: boolean;
+  clearFixed: boolean;
+};
 
 export type ProxyGroupItem =
   ProxyGroupItem_Serialize | ProxyGroupItem_Deserialize;
@@ -2678,6 +2790,19 @@ export type ProxyGroupItem_Serialize = {
   icon?: string | null;
 };
 
+/**
+ *  Native group kinds and capabilities follow ref; legacy UI serialization
+ *  remains a projection until the normalized nodes/groups IPC is migrated.
+ */
+export type ProxyGroupKind =
+  | 'Selector'
+  | 'URLTest'
+  | 'Fallback'
+  | 'LoadBalance'
+  | 'Relay'
+  | 'Smart'
+  | string;
+
 export type ProxyItem = ProxyItem_Serialize | ProxyItem_Deserialize;
 
 export type ProxyItemHistory = {
@@ -2705,6 +2830,99 @@ export type ProxyItem_Serialize = {
   type: string;
   udp: boolean;
   icon?: string | null;
+};
+
+export type ProxyName = string;
+
+/**
+ *  Provider metadata retained after assembling the application proxy view.
+ *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
+ */
+export type ProxyProviderSummary =
+  ProxyProviderSummary_Serialize | ProxyProviderSummary_Deserialize;
+
+/**
+ *  Provider metadata retained after assembling the application proxy view.
+ *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
+ */
+export type ProxyProviderSummary_Deserialize = {
+  name: ProviderName;
+  type: ProviderType;
+  vehicleType: VehicleType;
+  updatedAt: string | null;
+  subscriptionInfo: SubscriptionInfo_Deserialize | null;
+  proxyCount: number;
+};
+
+/**
+ *  Provider metadata retained after assembling the application proxy view.
+ *  This lives beside `Proxies`, matching ref's `clash/proxies.rs` ownership.
+ */
+export type ProxyProviderSummary_Serialize = {
+  name: ProviderName;
+  type: ProviderType;
+  vehicleType: VehicleType;
+  updatedAt: string | null;
+  subscriptionInfo: SubscriptionInfo_Serialize | null;
+  proxyCount: number;
+};
+
+/**  Common proxy fields with optional core-specific and group metadata. */
+export type Proxy_Deserialize = {
+  name: ProxyName;
+  type: string;
+  history: DelayHistory[];
+  extra?: { [key in string]: ProxyExtra } | null;
+  alive?: boolean | null;
+  udp: boolean;
+  uot?: boolean | null;
+  xudp?: boolean | null;
+  tfo?: boolean | null;
+  mptcp?: boolean | null;
+  smux?: boolean | null;
+  interface?: string | null;
+  'routing-mark'?: number | null;
+  'provider-name'?: string | null;
+  'dialer-proxy'?: string | null;
+  id?: string | null;
+  now?: ProxyName | null;
+  all?: ProxyName[] | null;
+  testUrl?: string | null;
+  expectedStatus?: string | null;
+  fixed?: ProxyName | null;
+  hidden?: boolean | null;
+  icon?: string | null;
+  emptyFallback?: ProxyName | null;
+  provider?: string | null;
+};
+
+/**  Common proxy fields with optional core-specific and group metadata. */
+export type Proxy_Serialize = {
+  name: ProxyName;
+  type: string;
+  history: DelayHistory[];
+  extra?: { [key in string]: ProxyExtra } | null;
+  alive?: boolean | null;
+  udp: boolean;
+  uot?: boolean | null;
+  xudp?: boolean | null;
+  tfo?: boolean | null;
+  mptcp?: boolean | null;
+  smux?: boolean | null;
+  interface?: string | null;
+  'routing-mark'?: number | null;
+  'provider-name'?: string | null;
+  'dialer-proxy'?: string | null;
+  id: string | null;
+  now: ProxyName | null;
+  all: ProxyName[] | null;
+  testUrl: string | null;
+  expectedStatus: string | null;
+  fixed: ProxyName | null;
+  hidden: boolean | null;
+  icon: string | null;
+  emptyFallback: ProxyName | null;
+  provider: string | null;
 };
 
 export type Ranking = {
@@ -2764,6 +2982,20 @@ export type ReportRequest = {
 export type RuleKey = {
   kind: string;
   payload: string;
+};
+
+export type RuleProviderItem = {
+  behavior: string | null;
+  format: string | null;
+  name: string;
+  ruleCount: number | null;
+  type: string | null;
+  updatedAt: string | null;
+  vehicleType: string | null;
+};
+
+export type RulesRes = {
+  rules: ClashRule[];
 };
 
 export type RunCursorDto = {
@@ -3011,6 +3243,39 @@ export type StorageValueChangedEvent = {
   revision: StorageRevision;
 };
 
+export type SubscriptionInfo =
+  SubscriptionInfo_Serialize | SubscriptionInfo_Deserialize;
+
+export type SubscriptionInfo_Deserialize =
+  | {
+      Upload?: number;
+    }
+  | ({
+      upload?: number;
+    } & {
+      Download?: number;
+    })
+  | ({
+      download?: number;
+    } & {
+      Total?: number;
+    })
+  | ({
+      total?: number;
+    } & {
+      Expire?: number;
+    })
+  | {
+      expire?: number;
+    };
+
+export type SubscriptionInfo_Serialize = {
+  Upload: number;
+  Download: number;
+  Total: number;
+  Expire: number;
+};
+
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type Topology = {
@@ -3171,6 +3436,8 @@ export type UsagePage = {
   other: Usage;
   next: UsageCursor | null;
 };
+
+export type VehicleType = 'File' | 'HTTP' | 'Compatible' | 'Inline' | string;
 
 export type WindowState = {
   width: number;

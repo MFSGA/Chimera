@@ -11,7 +11,7 @@
  * 用于规则页面的侧栏代理过滤列表，以及连接页面的侧栏代理过滤列表。
  */
 
-import { useClashProxies } from '@chimera/interface';
+import { useNativeProxies } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { useMemo } from 'react';
 import { CacheImage } from '@/components/ui/image';
@@ -23,9 +23,7 @@ import { CacheImage } from '@/components/ui/image';
  * @returns 代理图标（图片或文字 fallback）
  */
 export default function ProxyIcon({ groupName }: { groupName: string }) {
-  const {
-    proxies: { data: proxies },
-  } = useClashProxies();
+  const { data: proxies } = useNativeProxies();
 
   // 从代理数据中查找对应组的 icon
   const icon = useMemo(() => {

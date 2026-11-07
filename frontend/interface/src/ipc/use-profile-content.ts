@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { unwrapResult } from '../utils';
-import { mutations, queries } from './profile-bindings.js';
+import { mutations, queries } from './query-bindings.js';
 import { invokeMutation, unwrapQueryOptions } from './query-options.js';
 
 /**

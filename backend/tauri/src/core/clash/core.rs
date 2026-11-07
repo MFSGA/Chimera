@@ -747,7 +747,7 @@ impl CoreManager {
         self.run_core_from_product_inner(paths.product(), target_core, run_type)
             .await
             .map_err(RuntimeRestartError::Start)?;
-        api::ApiClient::new(snapshot.clash_info())
+        crate::core::actor_v2::api::ApiClient::new(snapshot.clash_info())
             .map_err(RuntimeRestartError::Start)?
             .wait_until_ready(Duration::from_secs(10))
             .await

@@ -20,9 +20,11 @@
  */
 
 import {
-  useClashProxies,
+  useNativeProxies,
+  useNativeProxyActions,
   useProxyMode,
-  type ClashProxiesQueryGroupItem,
+  type Proxy_Serialize,
+  type ProxyGroup,
 } from '@chimera/interface';
 import { useContainerBreakpointValue } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
@@ -67,20 +69,38 @@ function RouteComponent() {
   // 从路由参数中获取代理组名称
   const { name: proxyGroupName } = Route.useParams();
 
-  const {
-    proxies: { data: proxies },
-  } = useClashProxies();
+  const { data: proxies } = useNativeProxies();
+  const { selectProxy, updateProxiesDelay } = useNativeProxyActions();
+  const { mutateAsync: mutateProxyDelay } = updateProxiesDelay;
 
   const { value: proxyMode } = useProxyMode();
 
   // 查找当前选中的代理组（或 global 模式的 special 组）
-  const currentGroup = useMemo<ClashProxiesQueryGroupItem | undefined>(() => {
+  const currentGroup = useMemo<ProxyGroup | undefined>(() => {
     if (proxyMode.global) {
-      return proxies?.global;
+      return proxies?.global ?? undefined;
     }
 
     return proxies?.groups.find((group) => group.name === proxyGroupName);
   }, [proxies, proxyGroupName, proxyMode]);
+
+  const groupName = currentGroup?.name;
+  const selectable = currentGroup?.capabilities.select ?? false;
+
+  const handleSelectProxy = useCallback(
+    async (proxy: Proxy_Serialize) => {
+      if (!groupName || !selectable) return;
+      await selectProxy(groupName, proxy.name);
+    },
+    [groupName, selectable, selectProxy],
+  );
+
+  const handleDelayTest = useCallback(
+    async (proxy: Proxy_Serialize) => {
+      await mutateProxyDelay([proxy.name, currentGroup?.testUrl ?? null]);
+    },
+    [mutateProxyDelay, currentGroup?.testUrl],
+  );
 
   // 获取 AppContentScrollArea 的 viewportRef（用于同步虚拟滚动）
   const { viewportRef } = useScrollAreaViewport();
@@ -113,11 +133,11 @@ function RouteComponent() {
 
   // 滚动到当前选中节点（便于用户在列表中快速定位）
   const handleScrollToCurrentNode = useCallback(() => {
-    const index = currentGroup?.all?.findIndex(
-      (proxy) => proxy.name === currentGroup?.now,
+    const index = currentGroup?.all.findIndex(
+      (name) => name === currentGroup.now,
     );
 
-    if (index !== undefined) {
+    if (index !== undefined && index >= 0) {
       virtualizer.scrollToIndex(index, {
         align: 'center',
         behavior: 'smooth',
@@ -184,7 +204,8 @@ function RouteComponent() {
         }}
       >
         {virtualItems.map((virtualItem) => {
-          const proxy = currentGroup?.all?.[virtualItem.index];
+          const proxyName = currentGroup?.all[virtualItem.index];
+          const proxy = proxyName ? proxies?.nodes[proxyName] : undefined;
 
           if (!proxy) {
             return null;
@@ -204,7 +225,13 @@ function RouteComponent() {
               data-slot="proxies-virtual-item"
               data-active={String(proxy.name === currentGroup?.now)}
             >
-              <ProxyNodeButton proxy={proxy} />
+              <ProxyNodeButton
+                proxy={proxy}
+                selectable={selectable}
+                fixed={currentGroup?.fixed === proxy.name}
+                onSelect={handleSelectProxy}
+                onDelayTest={handleDelayTest}
+              />
             </div>
           );
         })}

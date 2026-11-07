@@ -11,7 +11,7 @@
  * - 内容区结构、空状态和代理组导航与 ref 保持一致
  */
 
-import { ProxyMode, useClashProxies, useProxyMode } from '@chimera/interface';
+import { ProxyMode, useNativeProxies, useProxyMode } from '@chimera/interface';
 import { cn } from '@chimera/ui';
 import { Button } from '@chimera/ui/button';
 import { AppContentScrollArea } from '@chimera/ui/scroll-area';
@@ -119,9 +119,9 @@ const Empty = () => {
  * - Rule/Script 模式且有组：侧栏 + 内容区
  */
 function RouteComponent() {
-  const {
-    proxies: { data: proxies },
-  } = useClashProxies();
+  // Navigation and its empty state share the normalized node/group query.
+  // The group detail and legacy actions retain their existing API for now.
+  const { data: proxies } = useNativeProxies();
 
   // 检查无代理组的情况
   const isNoProxies = !proxies?.groups?.length || proxies?.groups?.length === 0;
