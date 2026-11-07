@@ -282,7 +282,7 @@ function RouteComponent() {
       </div>
 
       {/* 浮动延迟测试按钮 */}
-      <DelayTestButton />
+      <DelayTestButton groupName={currentGroup?.name} />
     </>
   );
 }

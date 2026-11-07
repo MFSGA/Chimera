@@ -6,6 +6,7 @@ import type {
   NativeProxies_Serialize,
   Proxy_Serialize,
 } from './bindings.js';
+import { testNativeGroupDelay } from './native-group-delay.js';
 import { mutations, queries } from './query-bindings.js';
 import { invokeMutation, invokeQuery } from './query-options.js';
 
@@ -130,5 +131,46 @@ export const useNativeProxyActions = () => {
     },
   });
 
-  return { selectProxy, clearProxyFixed, isClearingFixed, updateProxiesDelay };
+  const { mutateAsync: testGroupDelay, isPending: isTestingGroupDelay } =
+    useMutation({
+      mutationKey: ['nativeGroupDelay'],
+      mutationFn: (groupName: string) =>
+        testNativeGroupDelay(groupName, {
+          // Always read controller state here: a pin may be added from an
+          // external dashboard while the React Query cache is still fresh.
+          refresh: async () =>
+            unwrapResult(await invokeQuery(queries.getNativeProxies())),
+          groupDelay: async (group, url, expected) =>
+            unwrapResult(
+              await invokeQuery(
+                queries.clashApiGetGroupDelay(group, url, expected),
+              ),
+            ) ?? {},
+          proxyDelay: async (name, provider, url, expected) => {
+            const result = unwrapResult(
+              await invokeQuery(
+                queries.clashApiGetProxyDelay(name, url, provider, expected),
+              ),
+            );
+            return result?.delay ?? 0;
+          },
+        }),
+      onSettled: async () => {
+        // The controller records the per-node history. Read its real state,
+        // including after partial failures, instead of writing fake samples.
+        await Promise.allSettled([
+          queryClient.refetchQueries({ queryKey: nativeKey, exact: true }),
+          queryClient.invalidateQueries({ queryKey: legacyKey, exact: true }),
+        ]);
+      },
+    });
+
+  return {
+    selectProxy,
+    clearProxyFixed,
+    isClearingFixed,
+    updateProxiesDelay,
+    testGroupDelay,
+    isTestingGroupDelay,
+  };
 };
