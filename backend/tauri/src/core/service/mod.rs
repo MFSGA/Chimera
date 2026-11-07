@@ -189,7 +189,7 @@ pub async fn init_service(client: crate::client::ChimeraClient) {
         return;
     }
 
-    if let Ok(status) = control::status().await
+    if let Ok(status) = control::probe_service_status().await
         && matches!(status.status, chimera_ipc::types::ServiceStatus::Running)
     {
         // Monitor any running daemon, even when it is currently incompatible or

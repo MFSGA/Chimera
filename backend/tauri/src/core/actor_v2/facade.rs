@@ -5,6 +5,8 @@
 //! protocol. The legacy manager remains only as a compatibility path for
 //! facades constructed without the production `LocalRuntimeHost`.
 
+use chimera_core::actor_v2::service_process::ServiceProcessControl;
+
 use std::{
     collections::{HashMap, VecDeque},
     future::Future,
@@ -1049,7 +1051,9 @@ impl CoreFacade {
     pub(crate) async fn probe_service(
         &self,
     ) -> anyhow::Result<chimera_ipc::types::StatusInfo<'static>> {
-        crate::core::service::control::status().await
+        crate::core::service::control::probe_service_status()
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     pub(crate) fn service_restart_policy(&self) -> ServiceRestartPolicySnapshot {
@@ -1347,7 +1351,7 @@ impl ServiceTransition {
 
         let info = match tokio::time::timeout(
             Duration::from_secs(5),
-            crate::core::service::control::status(),
+            crate::core::service::control::probe_service_status(),
         )
         .await
         {
@@ -1385,7 +1389,12 @@ impl ServiceTransition {
         if let Err(error) = run_in_place_mutation(
             self.outcome_uncertain.clone(),
             "service auto-restart",
-            async { crate::core::service::control::start_service_daemon().await },
+            async {
+                crate::core::service::control::ServiceOsProcess
+                    .start_daemon()
+                    .await
+                    .map_err(anyhow::Error::from)
+            },
         )
         .await
         {
@@ -1397,14 +1406,20 @@ impl ServiceTransition {
     pub(crate) async fn install_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service install", async {
-            crate::core::service::control::install_service_daemon().await
+            crate::core::service::control::ServiceOsProcess
+                .install()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }
 
     pub(crate) async fn uninstall_daemon(&mut self) -> anyhow::Result<()> {
         run_in_place_mutation(self.outcome_uncertain.clone(), "service uninstall", async {
-            crate::core::service::control::uninstall_service().await
+            crate::core::service::control::ServiceOsProcess
+                .uninstall()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }
@@ -1412,7 +1427,10 @@ impl ServiceTransition {
     pub(crate) async fn update_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service update", async {
-            crate::core::service::control::update_service().await
+            crate::core::service::control::ServiceOsProcess
+                .update()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }
@@ -1420,7 +1438,10 @@ impl ServiceTransition {
     pub(crate) async fn start_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service start", async {
-            crate::core::service::control::start_service_daemon().await
+            crate::core::service::control::ServiceOsProcess
+                .start_daemon()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }
@@ -1428,14 +1449,20 @@ impl ServiceTransition {
     pub(crate) async fn restart_daemon(&mut self) -> anyhow::Result<()> {
         self.rearm_restart_policy();
         run_in_place_mutation(self.outcome_uncertain.clone(), "service restart", async {
-            crate::core::service::control::restart_service_daemon().await
+            crate::core::service::control::ServiceOsProcess
+                .restart_daemon()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }
 
     pub(crate) async fn stop_daemon(&mut self) -> anyhow::Result<()> {
         run_in_place_mutation(self.outcome_uncertain.clone(), "service stop", async {
-            crate::core::service::control::stop_service().await
+            crate::core::service::control::ServiceOsProcess
+                .stop_daemon()
+                .await
+                .map_err(anyhow::Error::from)
         })
         .await
     }

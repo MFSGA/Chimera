@@ -1,5 +1,10 @@
+//! OS-specific implementation of core-owned ServiceProcessControl.
+
 use std::{ffi::OsString, time::Duration};
 
+use chimera_core::actor_v2::service_process::{
+    ServiceCommand, ServiceCommandError, ServiceProcessControl, parse_service_status,
+};
 use runas::Command as RunasCommand;
 
 use crate::utils::dirs::{app_config_dir, app_data_dir, app_install_dir};
@@ -11,61 +16,67 @@ const SERVICE_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 
-fn format_exit_failure(action: &str, status: std::process::ExitStatus) -> anyhow::Error {
-    anyhow::anyhow!(
-        "failed to {action}, exit code: {}, signal: {:?}",
-        status.code().unwrap_or(-1),
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ServiceOsProcess;
+
+fn process_exit(status: std::process::ExitStatus) -> (Option<i32>, Option<i32>) {
+    (status.code(), {
+        #[cfg(unix)]
         {
-            #[cfg(unix)]
-            {
-                status.signal().unwrap_or(0)
-            }
-            #[cfg(not(unix))]
-            {
-                0
-            }
+            status.signal()
         }
-    )
+        #[cfg(not(unix))]
+        {
+            None
+        }
+    })
 }
 
-async fn run_service_command(action: &str, args: Vec<OsString>) -> anyhow::Result<()> {
-    let action = action.to_owned();
-    let status = tokio::task::spawn_blocking({
+async fn run_service_command(
+    command: ServiceCommand,
+    args: Vec<OsString>,
+) -> Result<(), ServiceCommandError> {
+    let status = tokio::task::spawn_blocking(move || {
+        #[cfg(not(target_os = "macos"))]
+        {
+            RunasCommand::new(SERVICE_PATH.as_path())
+                .args(&args)
+                .gui(true)
+                .show(true)
+                .status()
+        }
         #[cfg(target_os = "macos")]
-        let action = action.clone();
-        move || {
-            #[cfg(not(target_os = "macos"))]
-            {
-                RunasCommand::new(SERVICE_PATH.as_path())
-                    .args(&args)
-                    .gui(true)
-                    .show(true)
-                    .status()
-            }
-            #[cfg(target_os = "macos")]
-            {
-                use crate::utils::sudo::sudo;
-                let args = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>();
-                match sudo(SERVICE_PATH.to_string_lossy(), &args) {
-                    Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
-                    Err(e) => {
-                        tracing::error!("failed to {}: {}", &action, e);
-                        Err(e)
-                    }
+        {
+            use crate::utils::sudo::sudo;
+            let args = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>();
+            match sudo(SERVICE_PATH.to_string_lossy(), &args) {
+                Ok(()) => Ok(std::process::ExitStatus::from_raw(0)),
+                Err(error) => {
+                    tracing::error!(%error, %command, "service elevation failed");
+                    Err(error)
                 }
             }
         }
     })
-    .await??;
+    .await
+    .map_err(|error| ServiceCommandError::RunElevated {
+        command,
+        source: std::io::Error::other(error),
+    })?
+    .map_err(|source| ServiceCommandError::RunElevated { command, source })?;
 
     if !status.success() {
-        return Err(format_exit_failure(&action, status));
+        let (exit_code, signal) = process_exit(status);
+        return Err(ServiceCommandError::ServiceCommandExit {
+            command,
+            exit_code,
+            signal,
+        });
     }
-
     Ok(())
 }
 
-pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> {
+pub async fn get_service_install_args() -> anyhow::Result<Vec<OsString>> {
     let user = {
         #[cfg(windows)]
         {
@@ -79,9 +90,7 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
     let data_dir = app_data_dir()?;
     let config_dir = app_config_dir()?;
     let app_dir = app_install_dir()?;
-
-    #[cfg(not(windows))]
-    let args: Vec<OsString> = vec![
+    Ok(vec![
         "install".into(),
         "--user".into(),
         user.into(),
@@ -91,82 +100,81 @@ pub async fn get_service_install_args() -> Result<Vec<OsString>, anyhow::Error> 
         config_dir.into(),
         "--nyanpasu-app-dir".into(),
         app_dir.into(),
-    ];
-
-    #[cfg(windows)]
-    let args: Vec<OsString> = vec![
-        "install".into(),
-        "--user".into(),
-        user.into(),
-        "--nyanpasu-data-dir".into(),
-        data_dir.into(),
-        "--nyanpasu-config-dir".into(),
-        config_dir.into(),
-        "--nyanpasu-app-dir".into(),
-        app_dir.into(),
-    ];
-
-    Ok(args)
+    ])
 }
 
-pub async fn install_service_daemon() -> anyhow::Result<()> {
-    run_service_command("install service", get_service_install_args().await?).await
-}
-
-pub async fn update_service() -> anyhow::Result<()> {
-    run_service_command("update service", vec!["update".into()]).await
-}
-
-pub async fn uninstall_service() -> anyhow::Result<()> {
-    run_service_command("uninstall service", vec!["uninstall".into()]).await?;
-    let _ = super::ipc::KILL_FLAG.compare_exchange(
-        false,
-        true,
-        std::sync::atomic::Ordering::Acquire,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    Ok(())
-}
-
-pub async fn start_service_daemon() -> anyhow::Result<()> {
-    run_service_command("start service", vec!["start".into()]).await
-}
-
-pub async fn stop_service() -> anyhow::Result<()> {
-    run_service_command("stop service", vec!["stop".into()]).await?;
-    let _ = super::ipc::KILL_FLAG.compare_exchange_weak(
-        false,
-        true,
-        std::sync::atomic::Ordering::Acquire,
-        std::sync::atomic::Ordering::Relaxed,
-    );
-    Ok(())
-}
-
-pub async fn restart_service_daemon() -> anyhow::Result<()> {
-    run_service_command("restart service", vec!["restart".into()]).await
-}
-
-#[tracing::instrument]
-pub async fn status<'a>() -> anyhow::Result<chimera_ipc::types::StatusInfo<'a>> {
-    let mut cmd = tokio::process::Command::new(SERVICE_PATH.as_path());
-    cmd.args(["status", "--json"]);
-    cmd.kill_on_drop(true);
-    #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    let output = tokio::time::timeout(SERVICE_STATUS_TIMEOUT, cmd.output())
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "query service status timed out after {} seconds",
-                SERVICE_STATUS_TIMEOUT.as_secs()
-            )
-        })??;
-    if !output.status.success() {
-        return Err(format_exit_failure("query service status", output.status));
+#[async_trait::async_trait]
+impl ServiceProcessControl for ServiceOsProcess {
+    async fn probe(&self) -> Result<String, ServiceCommandError> {
+        let mut cmd = tokio::process::Command::new(SERVICE_PATH.as_path());
+        cmd.args(["status", "--json"]);
+        cmd.kill_on_drop(true);
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        let output = tokio::time::timeout(SERVICE_STATUS_TIMEOUT, cmd.output())
+            .await
+            .map_err(|_| ServiceCommandError::TimedOut {
+                limit_ms: SERVICE_STATUS_TIMEOUT.as_millis() as u64,
+            })?
+            .map_err(|source| ServiceCommandError::RunServiceStatus { source })?;
+        if !output.status.success() {
+            let (exit_code, signal) = process_exit(output.status);
+            return Err(ServiceCommandError::ServiceStatusExit { exit_code, signal });
+        }
+        let raw = String::from_utf8(output.stdout)
+            .map_err(|source| ServiceCommandError::ServiceStatusNotUtf8 { source })?;
+        tracing::trace!("service status: {}", raw);
+        Ok(raw)
     }
 
-    let status = String::from_utf8(output.stdout)?;
-    tracing::trace!("service status: {}", status);
-    Ok(serde_json::from_str(&status)?)
+    async fn install(&self) -> Result<(), ServiceCommandError> {
+        let args = get_service_install_args().await.map_err(|error| {
+            ServiceCommandError::ResolveServiceDirs {
+                message: error.to_string(),
+            }
+        })?;
+        run_service_command(ServiceCommand::Install, args).await
+    }
+
+    async fn uninstall(&self) -> Result<(), ServiceCommandError> {
+        run_service_command(ServiceCommand::Uninstall, vec!["uninstall".into()]).await?;
+        let _ = super::ipc::KILL_FLAG.compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        Ok(())
+    }
+
+    async fn start_daemon(&self) -> Result<(), ServiceCommandError> {
+        run_service_command(ServiceCommand::Start, vec!["start".into()]).await
+    }
+
+    async fn stop_daemon(&self) -> Result<(), ServiceCommandError> {
+        run_service_command(ServiceCommand::Stop, vec!["stop".into()]).await?;
+        let _ = super::ipc::KILL_FLAG.compare_exchange_weak(
+            false,
+            true,
+            std::sync::atomic::Ordering::Acquire,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        Ok(())
+    }
+
+    async fn update(&self) -> Result<(), ServiceCommandError> {
+        run_service_command(ServiceCommand::Update, vec!["update".into()]).await
+    }
+
+    async fn restart_daemon(&self) -> Result<(), ServiceCommandError> {
+        run_service_command(ServiceCommand::Restart, vec!["restart".into()]).await
+    }
+}
+
+/// ServiceActor's typed probe-to-status boundary. The process adapter returns
+/// raw UTF-8; decoding belongs to the independent core.
+pub(crate) async fn probe_service_status()
+-> Result<chimera_ipc::types::StatusInfo<'static>, ServiceCommandError> {
+    let raw = ServiceOsProcess.probe().await?;
+    parse_service_status(&raw)
 }

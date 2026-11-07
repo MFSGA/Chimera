@@ -216,7 +216,7 @@ pub fn init_service(client: crate::client::ChimeraClient) -> Result<()> {
                 .unwrap_or(&false)
         };
         if enable_service {
-            match crate::core::service::control::status().await {
+            match crate::core::service::control::probe_service_status().await {
                 Ok(status) => {
                     tracing::info!(
                         "service mode is enabled and service is running, do a update check"
