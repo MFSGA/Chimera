@@ -306,13 +306,27 @@ export const commands = {
     >(__TAURI_INVOKE('clash_api_get_providers_proxies')),
   updateProxyProvider: (name: string) =>
     typedError<null, string>(__TAURI_INVOKE('update_proxy_provider', { name })),
-  clashApiGetProxyDelay: (name: string, url: string | null) =>
+  clashApiGetProxyDelay: (
+    name: string,
+    url: string | null,
+    provider: string | null,
+    expected: string | null,
+  ) =>
     typedError<DelayRes, string>(
-      __TAURI_INVOKE('clash_api_get_proxy_delay', { name, url }),
+      __TAURI_INVOKE('clash_api_get_proxy_delay', {
+        name,
+        url,
+        provider,
+        expected,
+      }),
     ),
-  clashApiGetGroupDelay: (group: string, url: string | null) =>
+  clashApiGetGroupDelay: (
+    group: string,
+    url: string | null,
+    expected: string | null,
+  ) =>
     typedError<{ [key in string]: number }, string>(
-      __TAURI_INVOKE('clash_api_get_group_delay', { group, url }),
+      __TAURI_INVOKE('clash_api_get_group_delay', { group, url, expected }),
     ),
   clashApiDeleteConnections: (id: string | null) =>
     typedError<null, string>(
