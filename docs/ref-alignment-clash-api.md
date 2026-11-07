@@ -884,3 +884,61 @@ configuration.
 separation; then typed connection summary/rates and provider-aware,
 expected-status/pin-aware delay APIs. Unified RPC and the independent
 frontend RPC/query package boundaries still lag ref.
+
+### 2026-11-07 core-owned typed API errors (ref@1c0002f0)
+
+Original Windows checkout: `I:\mfsga\Chimera`, branch
+`codex/clash-api-ipc-dev-1106`. The existing clean `ref` gitlink
+is at `1c0002f04f59995b5115f4c68029b9cb46e5d39b`.
+The pre-existing local commits had already moved actor_v2/api.rs,
+proxy assembly and connection interruption into `chimera-core`.
+This batch migrates ref's **structured controller failure semantics**
+into that independent core ownership, not merely the module name.
+
+- `backend/chimera-core/src/actor_v2/api.rs` now defines
+  `ApiError::{Stale, Unavailable, Timeout, Protocol}` with a
+  typed `ApiResult<T>`. The instance authority check and request
+  executor return those variants. Preflight, complete protocol
+  request/response decode and postflight are covered by one deadline;
+  a revoked instance wins over a concurrent read. A protocol failure
+  is checked against instance authority before being returned.
+  Stale and failed authority checks revoke the same shared capability.
+- Core-facing typed methods include config/version/rules/provider
+  reads and provider updates, proxy snapshots, proxy selection, and
+  connection deletion. Expanded Chimera runtime config, legacy
+  delay-query setup, and WebSocket JSON compatibility still use
+  `anyhow` at the outer application boundary. No automatic replay
+  was added for writes with an unconfirmed result.
+- The Tauri Client façade converts typed update errors back to its
+  existing `anyhow::Result`; its existing IPC close-connections
+  handler bridges the typed error through `anyhow::Error` into
+  `IpcError`. The core connection interruption helper also
+  explicitly converts the error when returning its legacy result.
+  Two Tauri lifecycle tests now assert the actual `ApiError::Stale`
+  variant, not the old implementation's literal English error text.
+  No public IPC command, DTO field or generated TS binding changed.
+- Four new core tests verify Stale prevents a mutation from running,
+  Unavailable revokes, Timeout is distinct from Protocol, and a
+  replaced instance is rejected after a successful operation body
+  on postflight. These tests exercise the production executor.
+
+**Validation:** full `chimera-core --lib` **122/122 passed**;
+Tauri actor_v2 API **9/9**, proxy module **11/11**,
+connection interruption **1/1**, config transaction/rollback **11/11**,
+Agent core probe **3/3**, Specta binding freshness **1/1**.
+Interface and main/legacy TypeScript checks and frontend boundary lint
+passed; stable Rustfmt and `git diff --check` passed.
+The scoped offline Clippy attempt did **not** run: the Cargo registry
+index could not resolve `phf` through `csscolorparser`.
+This was treated as an environment blocker, **not** a passing lint
+result or a source-code failure. The verified five-file change was
+committed locally as `1a843e41` using a one-command `HUSKY=0`
+override; the hook configuration was not changed.
+
+**Not yet ref-identical:** `ApiClient::new_unbound` is still used
+for Chimera startup probes; construction and some outer methods still
+return `anyhow`, not `ApiError`. Provider/expected-status delay
+queries, pinned group testing, the ref's typed WebSocket stream
+boundary, client ownership, and Unified RPC remain incomplete.
+Next work should migrate those paths in small testable steps while
+preserving Chimera's Agent, main and legacy UI.

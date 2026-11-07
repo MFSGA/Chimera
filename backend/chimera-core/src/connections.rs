@@ -17,7 +17,7 @@ pub enum ConnectionScope {
 /// connection is still open.
 pub async fn interrupt_connections(api: &ApiClient, scope: &ConnectionScope) -> Result<()> {
     match scope {
-        ConnectionScope::All => api.delete_connections(None).await,
+        ConnectionScope::All => Ok(api.delete_connections(None).await?),
         ConnectionScope::ProxyGroup { name } => interrupt_by_chains(api, &[name.as_str()]).await,
     }
 }
