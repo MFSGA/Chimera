@@ -22,13 +22,7 @@ use crate::core::clash::api::{ClashRuntimeConfig, ConnectionItem, ConnectionsRes
 const DEFAULT_API_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_DELAY_URL: &str = "http://www.gstatic.com/generate_204";
 
-/// A single instance-bound read of the proxy view, matching ref's actor API.
-/// When `/group` is unavailable, its groups are inferred from `/proxies`.
-pub(crate) struct ProxySnapshot {
-    pub proxies: IndexMap<clash_api::ProxyName, clash_api::Proxy>,
-    pub providers: IndexMap<clash_api::ProviderName, clash_api::ProxyProvider>,
-    pub groups: Option<IndexMap<clash_api::ProxyName, clash_api::Proxy>>,
-}
+pub(crate) use chimera_core::actor_v2::api::ProxySnapshot;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ApiStreamKind {
